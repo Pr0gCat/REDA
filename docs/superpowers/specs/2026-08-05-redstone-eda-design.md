@@ -31,14 +31,17 @@
 | 15 格內的線 | 有成本 | **完全免費** |
 | 扇出 | 越多越慢 | **延遲上免費**，只吃體積與繞線空間 |
 | 閘的扇入 | 串聯越多越慢 | **扇入不影響延遲**，但實體上限只有 4（實務 3） |
-| 製程變異 | 有 | **無**。拓撲相同即行為相同 |
-| 時序分析 | 統計估計 | **精確整數運算** |
+| 製程變異 | 有 | **無**，但**不等於**拓撲相同即行為相同 —— 見下方警告 |
+| 閘延遲 | 統計估計 | **精確整數 tick** |
+| 線延遲 | 統計估計 | 佈局後精確，佈局前仍須估計 |
 | 幾何 | 2.5D，層數固定 | **完全 3D，層數不限** |
+
+> **⚠️ 「拓撲相同即行為相同」在原版 1.20 是不成立的。** locational 電路確實存在（成因見 §4.1）。這句話只在「電路對更新順序免疫」的前提下成立，而**確保這個前提是編譯器的責任**，不是紅石送我們的禮物。整份文件對「精確時序分析」的樂觀，都建立在這個前提上。
 
 兩個直接後果：
 
 1. **延遲主要是佈局問題，不是邏輯問題。** abc 壓低邏輯深度之後，真正決定關鍵路徑長度的是「相鄰的閘擺得多遠」。
-2. **placement 不是連續優化，是離散約束滿足。** 成本函數的梯度處處為零，解析式 placer 直接失效。真正的目標是「關鍵路徑上每一跳都保持在 15 格內」，而非「線長總和最小」。
+2. **真正的目標是硬約束滿足，不是總線長最小化** —— 「關鍵路徑上每一跳都保持在 15 格內」，而非「線長總和最小」。這與傳統 placer 的優化方向不同（placer 的方法選擇見 §7.1，該處尚未定案）。
 
 理論下限因此可以明確定義：**總延遲 = 邏輯深度 × 1 tick，繞線貢獻 0**。品質指標就是「關鍵路徑上有幾跳被迫插了中繼器」。
 
@@ -61,6 +64,8 @@ clock_period ≥ max( 關鍵路徑 tick 數, burnout 下限 )
 **中繼器會重設訊號強度為 15 並強充能方塊**。對 v1 的 binary 邏輯無妨，但未來做 analog／SSD 時，中繼器對訊號強度運算是破壞性的，不能隨意插在類比路徑上。
 
 **衰減只發生在紅石粉之間**。訊號從紅石粉傳到方塊或元件時不衰減。距離模型要照這個算，不能一律 -1。
+
+**弱充能不能續傳**。只被紅石粉充能的方塊是**弱充能**，它**不能再去充能相鄰的紅石粉**。所以「一條線」不是自由的幾何物件 —— 每一段都必須以火把／中繼器／比較器這類主動元件收尾才能續傳。這是 cell library 與 router 的結構性約束，§2 表格裡「15 格內的線完全免費」是在這個前提下才成立的簡化。
 
 ---
 
@@ -158,8 +163,9 @@ VHDL
 
 三道防線：
 
-1. **對照 MCHPRS**（Rust 寫的高效能紅石伺服器）跑同一批電路比對。
-   **適用範圍限制**：MCHPRS 的 redpiler 是把紅石網路預先編譯，設計上不模擬 block update 順序。因此它只能當**邏輯功能**的對照組，**不能**用來驗證 update-order 敏感的行為（locational、BUD、0-tick）。那些只能靠黃金軌跡。
+1. **對照 MCHPRS**（Rust，MIT 授權）跑同一批電路比對。
+   **適用範圍比預期窄很多**：redpiler 認得的元件只有中繼器、比較器、火把、石按鈕、燈、拉桿、石壓板、紅石線，以及有 comparator override 的容器 —— **沒有活塞、沒有 observer、沒有 dropper、沒有 QC**，且明確不支援高訊號強度邏輯。它也是預先編譯的，設計上不模擬 block update 順序。
+   所以它只能對照**我們 v1 那批 cell 的邏輯功能**（剛好涵蓋，這是好消息），但**最需要交叉驗證的那些行為（QC、活塞、observer、locational、BUD、0-tick）它一項都驗不了**。那些只能靠黃金軌跡。
 2. **黃金軌跡**：真實遊戲中蓋測試電路，逐 tick 錄下狀態匯出。須涵蓋 QC 觸發、1-tick pulse、中繼器鎖存、比較器減法模式、觀察者鏈
 3. **社群 litematic** 當測試套件
 
@@ -229,9 +235,16 @@ lowering 是 `word → gate → phys → block`。
 
 LLVM 最惡名昭彰的 phase ordering 問題（pass 順序影響結果，最佳順序無解，只能人工調校 `-O2`），在 equality saturation 下不存在 —— 所有 rewrite 同時反覆套用，最後用成本函數抽取。沒有順序，因為沒有序列。
 
-equality saturation 在真實編譯器不普及的主因是成本模型不準，抽取時不知道哪個形式真的比較快。**紅石的成本是精確整數 tick，這個障礙不存在。**
+紅石相對 CMOS 的優勢是**閘延遲精確**（整數 tick，無統計成分），抽取時的比較基準比 CMOS 可靠。但要誠實：**線延遲在抽取當下仍是估計**（§6.2），所以「成本模型完全精確」這個說法不成立，不能拿它當選擇 equality saturation 的唯一理由。
 
-實務注意：e-graph 不接受 cycle，而電路有回授。切在暫存器邊界 —— 只在組合邏輯區塊內做 saturation，DFF 當 cut point。這與 STA 的切法一致。
+而 equality saturation 真正的障礙也不是成本模型，是 **e-graph 爆炸與不終止**。這點必須寫清楚：
+
+- egg 的 `Runner` 預設上限是 30 iterations / 10,000 nodes / 5 秒。**非平凡的問題幾乎都是撞上限停下，而不是真的 `Saturated`。**
+- 原始論文（Tate et al.）的措辭是 equality saturation「**obviates the need to worry about** optimization ordering」，不是消除；而其 canonizing property 明文以「**if the saturation engine terminates**」為前提，作者自承一般情況下可能不終止。
+
+所以我們選 equality saturation 的理由要重新表述為：**它把「順序」這個維度從人工調校變成預算問題**。預算夠就逼近最優，預算不夠就退化 —— 但退化是可觀測、可調整的（調 node limit / iteration limit），不像 pass ordering 那樣是黑箱。這仍然是划算的交易，只是沒有原本寫的那麼夢幻。
+
+實務注意：**e-graph 是接受 cycle 的**（一個 e-class 可以是自己的後代，這正是它表達力的來源）；受限的是 **extraction** —— 抽出的表達式必須無環，egg 的預設 extractor 會讓純環狀 e-class 拿不到成本而放棄。所以電路的回授不會炸掉 e-graph 本身。我們仍然切在暫存器邊界，但理由是**組合邏輯區塊本來就是 STA 的分析單位**，不是「e-graph 不吃 cycle」。
 
 ### 5.3 tech mapping 併入抽取
 
@@ -246,7 +259,11 @@ equality saturation 在真實編譯器不普及的主因是成本模型不準，
 | `-passes=` 手工排序的 pipeline | 不需要，e-graph 自己管 |
 | `PreservedAnalyses` 失效機制 | 不需要，e-graph 是非破壞性的，舊形式永遠留在等價類裡 |
 
-加一條技巧的成本應低於 LLVM 加一條 InstCombine pattern —— 不必煩惱它跟別的 pass 打架或該排在哪。這是「提煉迴圈是產品」這個主張的底氣。
+加一條技巧的成本應低於 LLVM 加一條 InstCombine pattern —— 不必煩惱它該排在哪個位置。這是「提煉迴圈是產品」這個主張的底氣。
+
+**但「零互動」是過度宣稱。** egg 預設啟用 `BackoffScheduler`，會暫時封禁匹配數爆炸的規則（預設 match limit 1000、ban 5 iterations）。加上共用的 node/time 預算，**規則之間確實會互相排擠** —— 一條匹配過廣的新 rule 可能把別的 rule 擠出這一輪。
+
+這不是 phase ordering（不依賴人工排序、結果不隨順序改變），但也不是無交互作用。實務後果是：`reda check-rule` 的 regression 檢查**必須跑全 benchmark**，不能只驗這條 rule 自己該改善的 case —— 否則排擠效應會無聲地讓別的電路變差。
 
 ---
 
@@ -254,31 +271,40 @@ equality saturation 在真實編譯器不普及的主因是成本模型不準，
 
 ### 6.1 複合成本
 
-egg 的 `CostFunction` 只要求 Cost 型別有序，不要求純量。各分量有自己的組合規則：
+egg 的 `CostFunction` 要求 `type Cost: PartialOrd + Debug + Clone` —— 不必是純量，所以複合成本可行，各分量有自己的組合規則：
 
 ```rust
 struct RedstoneCost {
     tick:    u32,   // 關鍵路徑延遲   → max 組合
-    volume:  u32,   // 3D 體積(方塊)  → sum 組合（DAG-aware）
-    cells:   u32,   // cell 數        → sum 組合（DAG-aware）
+    volume:  u32,   // 3D 體積(方塊)  → sum 組合（樹狀上界，見 §6.4）
+    cells:   u32,   // cell 數        → sum 組合（同上）
     fanout:  u32,   // 最大扇出       → max 組合
-    density: f32,   // cells/volume   → 導出，擁塞代理指標
+    density: ???,   // 擁塞代理       → 不可為浮點，見下方警告
 }
 ```
 
+> **⚠️ 兩個 egg 的實作地雷**
+>
+> 1. **`PartialOrd` 實際上被當全序用。** egg 的 `extract.rs` 是 `a.partial_cmp(b).unwrap()` —— **拿到互不可比的值或 `NaN` 就直接 panic**。`density` 若寫成 `f32` 的 `cells / volume`，在 `volume == 0` 時是 `inf` 或 `NaN`，只要它進入排序就會炸。**改用定點整數**（例如 `cells * 1024 / max(volume, 1)` 存成 `u32`），別讓浮點進到比較路徑。
+> 2. **預設 `Extractor` 的貪婪 DP 隱含要求成本 local 且對子成本單調。** 不滿足時**不會報錯**，只會安靜地給出非最佳解。我們的複合成本必須逐項確認單調性，並在測試裡對小電路與窮舉最優解比對。
+
 ### 6.2 用體積估計線延遲
 
-抽取當下不知道佈局，但**體積可以 bottom-up 算，而線長與體積相關**。3D 空間中體積 V 的子電路，其對外線長約在 `V^(1/3)` 量級（Rent's rule 的 3D 類比）：
+抽取當下不知道佈局，但**體積可以 bottom-up 算，而單一條線的長度與體積相關**。體積 V 的子電路，從它拉一條線出來的典型長度在 `V^(1/3)` 量級 —— 這是**純幾何的立方體邊長論證**：
 
 ```
-volume(n)      = cell_volume(n) + Σ volume(children)      // DAG-aware
+volume(n)      = cell_volume(n) + Σ volume(children)      // 樹狀近似，見下方警告
 wire_est(c)    = ceil( k · volume(c)^(1/3) / 15 )
 tick(n)        = 1 + max over children ( tick(c) + wire_est(c) )
 ```
 
-這把「子電路越大、拉出的線越長、要多插中繼器」編碼進純 bottom-up 的成本函數。
+這把「子電路越大、拉出的線越長、要多插中繼器」編碼進 bottom-up 的成本函數。係數 `k` 由 benchmark 校準：拿實際跑過 full P&R 的電路回歸取得。
 
-係數 `k` 由 benchmark 校準：拿實際跑過 full P&R 的電路回歸取得。這是估計，但驗證成本低 —— 跑一次 full P&R 就知道準不準。
+> **不要把這稱作 Rent's rule。** Rent's rule 是**計數律**（`T = t·g^p`，terminal 數 vs gate 數），不是長度律，指數 p 是經驗量（0.5–0.75）而非由維度決定。上面的 `V^(1/3)` 只是立方體邊長，與 Rent 無關。
+>
+> 兩者的關係是：對外**線數** ~ `g^p`，每條線**長度** ~ `g^(1/3)`，對外**總線長** ~ `g^(p+1/3)`。我們的公式估的是**單條線長**，所以 `V^(1/3)` 用在這裡是對的；但它**完全沒有捕捉到「子電路越大、對外連線數也越多」**這件事，而那正是擁塞的來源。
+>
+> 實務後果：`wire_est` 會系統性低估大子電路的繞線困難度，因為它只看一條線。這個缺口由 `density` 分量與 §8.6 的 P&R 回饋迴圈補，不能靠調 `k` 補 —— 調 `k` 只會把錯誤的函數形式硬擬合到 benchmark 上，內插看起來準、外插必崩。
 
 ### 6.3 扇出的不對稱
 
@@ -288,9 +314,13 @@ tick(n)        = 1 + max over children ( tick(c) + wire_est(c) )
 
 egg 預設抽取是樹狀 DP，會重複計價共享的子電路，嚴重高估面積。我們的網表是 DAG，共享子電路只需蓋一次。
 
-最優 DAG extraction 是 NP-hard。實務路線：ILP（小電路可求最優）／貪婪近似（大電路）。參考 egg 社群的 `extraction-gym` 的比較結論，不自行從頭試。
+> **§6.2 的 `volume` 公式就是樹狀的。** `volume(n) = cell_volume(n) + Σ volume(children)` 對子節點求和，共享子電路必然被重複計價。這不是筆誤可以修掉的東西 —— **DAG-awareness 原則上無法表達成 bottom-up 的 local cost function**，那正是 DAG extraction 為 NP-hard 的原因。所以 §6.2 的 `volume` 只能當「樹狀上界」用，真正的 DAG 面積要在抽取層處理。
 
-`tick` 分量不受影響 —— max 組合下重複計算不會出錯。**我們最在意的分量剛好最不受此坑影響。**
+最優 DAG extraction 是 NP-hard（可由 set cover 化約；另有結果指出無法在任意常數比例內近似）。
+
+**實務路線：以貪婪為主，不預設用 ILP。** `extraction-gym` 的實測（PR #16，220 個測例）顯示：bottom-up 貪婪總計約 3.4 秒，ILP-CBC 約 316 秒（**慢約 92 倍**），而 DAG cost 的幾何平均只改善約 **0.2%**；其原始碼裡 ILP 後端標註 `use_for_bench: false, // takes >10 hours sometimes`。花兩個數量級的時間換 0.2%，在我們「提煉迴圈要秒級」的前提下是完全不划算的交易。
+
+`tick` 分量不受此坑影響 —— max 組合下重複計算不會出錯。**我們最在意的分量剛好最不受影響。**
 
 ### 6.5 多目標排序
 
@@ -316,15 +346,32 @@ egg 預設抽取是樹狀 DP，會重複計價共享的子電路，嚴重高估�
 成本越複雜抽取越慢，而抽取在提煉迴圈裡跑上百次：
 
 - **fast**：只算 `tick` + `cells`，貪婪抽取。供 `reda check-rule`
-- **full**：完整複合成本 + ILP 抽取。供正式 benchmark
+- **full**：完整複合成本 + **較好的 DAG 近似演算法**（非 ILP，理由見 §6.4）。供正式 benchmark
+
+ILP 抽取只保留為研究用的離線選項 —— 用來偶爾量測「我們的貪婪離最優還差多少」，不進正常流程。
 
 ---
 
 ## 7. Placer
 
-### 7.1 為何不用 analytical placement
+### 7.1 方法未定案
 
-成本是階梯函數 `ceil(len/15)`，梯度處處為零 —— 從 3 格移到 12 格成本完全不變，優化器看不到方向。解析式方法失效，必須走離散路線。這是被成本模型逼出來的，不是偏好。
+> **本節先前的論證是錯的，已撤回。** 原本主張「成本是階梯函數 `ceil(len/15)`，梯度處處為零，所以 analytical placement 失效」。這個推論三層都不成立：
+>
+> 1. **解析式 placer 從來不對真目標函數求導。** HPWL 本身就是 max/min 組成的 piecewise-linear 不可微函數 —— 整個領域的做法就是換平滑代理（quadratic、log-sum-exp、weighted-average）。「目標不可微 ⇒ 解析式失效」被 analytical placement 的定義本身反駁。
+> 2. **`ceil(len/15)` 是 `len` 的單調遞增函數。** 要最小化它不需要 `ceil` 的梯度，只需要 `len` 的梯度，而 `len` 是連續的。
+> 3. **ASIC 的 buffer insertion 數量本質上就是 `ceil(len/L_opt)`**，跟每 15 格插一個中繼器是同一個數學結構，業界照用解析式流程不誤。
+>
+> 附帶一個不利情報：VPR（原本被引用來背書 SA）的 master 分支已在 2026-06 把 **analytical placement 設為預設流程**，理由是線長平均改善約 10%；傳統 SA 流程現在要明確指定才會跑。
+
+真正該考慮的障礙是**別的**，而且都還沒評估完：
+
+- **3D lattice 的 legalization**。解析式流程的 global placement 產生連續座標，之後要 legalize 到合法格點。紅石是 3D 格點 + 方塊佔位 + 元件朝向（中繼器／比較器／火把都有方向），legalizer 的難度遠高於 2D standard cell row。
+- **紅石的 net 有方向性語意**，不是對稱的 HPWL 問題 —— driver 到 sink 的強度預算是單向的，且中繼器插入會重設預算。
+- **目標是硬約束滿足**（每跳 ≤15）而非最小化總和，這與解析式流程的目標函數形式不同，但可以用約束懲罰項表達。
+- **tick 量化確實造成 timing 目標的大片 plateau**，讓 timing-driven net weighting 的訊號 piecewise-constant、對小位移不敏感。這是真實的困難，但正確的表述是「timing weighting 的訊號品質下降」，不是「方法失效」—— 而且 plateau 對模擬退火**同樣有害**（大片中性區 = 隨機遊走）。
+
+**待決策**：global placement 走解析式還是離散搜尋。這需要在階段 D 之前以小規模實驗決定，不在本文件定案。§7.2 的 datapath 程式化佈局與 hierarchical 分解則不受此決策影響，兩條路都適用。
 
 ### 7.2 分兩類處理
 
@@ -336,7 +383,11 @@ ALU、暫存器、移位器的 N 個 bit slice 結構相同。word dialect 保�
 
 **Random logic（控制邏輯）→ 模擬退火**
 
-狀態機、解碼、雜項控制沒有規則性，只能搜尋。SA 對離散／階梯成本天然適合（不需梯度），FPGA 界的 VPR 已驗證多年。成本函數可直接放**關鍵路徑實際 tick 數 + 擁塞估計**，不需 HPWL 這種代理指標。
+狀態機、解碼、雜項控制沒有規則性，只能搜尋（若 §7.1 決定走解析式，這部分改為 global placement 之後的 detailed placement）。
+
+> **成本函數不能直接放「關鍵路徑實際 tick 數」。** 這是先前寫錯的地方。SA 要跑 10⁶–10⁸ 次 move，**每次 move 重算一遍真實關鍵路徑在計算上不可行**，而且與 §10.7「提煉迴圈要秒級」直接衝突。VPR 用增量 bounding box + 週期性更新的 criticality 預算，正是為了避開這件事。
+>
+> 我們也必須用同樣的結構：**每次 move 只做增量的線長／hop 數更新，criticality 每隔 N 次 move 才重算一次。** 「不需要代理指標」這句話收回 —— 代理指標是效能上的必需品，不是傳統 EDA 的偷懶。
 
 **Hierarchical placement**：沿用 VHDL 的 module 階層，每個 module 先獨立擺成一塊，再擺 block。搜尋空間大幅縮小，結果對人類也可讀。
 
@@ -391,12 +442,14 @@ ALU、暫存器、移位器的 N 個 bit slice 結構相同。word dialect 保�
 
 ## 9. 記憶體
 
-`$mem` 是 Yosys 對 RTL 陣列的推斷結果，其參數（`ABITS`、`WIDTH`、埠數、`INIT`、`RD_CLK_ENABLE`）恰好就是 memory generator 的輸入規格。
+`$mem` 是 Yosys 對 RTL 陣列的推斷結果，其參數（`MEMID`、`ABITS`、`WIDTH`、`SIZE`、`OFFSET`、`INIT`、`RD_PORTS`／`WR_PORTS`、`RD_CLK_ENABLE`）恰好就是 memory generator 的輸入規格。
+
+**要攔截的是 `$mem_v2`，不是 legacy `$mem`** —— 現行 Yosys 發出的是前者。注意 `$mem_v2` **沒有 `RD_TRANSPARENT`**，該語意已由 `RD_TRANSPARENCY_MASK` + `RD_COLLISION_X_MASK` 取代。（中間過程的 `$memrd_v2` / `$memwr_v2` 由 `memory_collect` 合併成單一 `$mem_v2`。）
 
 - `$dff` → 一般 cell（中繼器鎖存做 D-latch，master-slave 兩級成 DFF，2 tick），走一般 P&R
 - `$mem` → **memory generator**，`word → phys` 的 lowering rule
 
-**不使用 Yosys 的 `memory_map`。** 它會把 256×8 的 RAM 展開成 2048 個 latch 加巨大 mux 樹，在紅石上是數萬方塊、讀取路徑十餘 tick，且被通用 P&R 隨機灑開。不可用。
+**不使用 Yosys 的 `memory_map`。** 它會把 256×8 的 RAM 展開成 word-wide 的**正反器**（256 個 width-8 `$dff`，不是 latch）加上位址解碼與巨大 mux 樹，在紅石上是數萬方塊、讀取路徑十餘 tick，且被通用 P&R 隨機灑開。不可用。
 
 memory generator **是 generator 不是 macro** —— 它是吃 depth/width 參數長出結構的程式碼，不是死的方塊陣列。這與 §10 的原則一致。
 
@@ -513,6 +566,16 @@ liberty 應以 **NOR 為主體，fan-in 上限 4、主力 3**（理由見 §2.1�
 
 liberty 同時必須標註 **burnout 約束**，讓 STA 能檢查時脈週期下限。
 
+#### abc 的實際能力比預期低
+
+「liberty 是我們唯一的干預點」這個說法要打折，因為 abc 對 liberty 的支援有硬限制：
+
+- **abc 的 liberty parser 會直接跳過所有 sequential cell、tristate cell、多輸出 cell。** 所以 **abc 不映射正反器** —— DFF 要另外走 `dfflibmap`，且應先跑 `dfflibmap` 再映射組合邏輯。
+- **`-constr` 只支援 `set_driving_cell` 與 `set_load` 兩行，完全沒有 SDC。** 沒有 clock period、沒有 input/output delay。也就是說 **abc 拿不到真正的時序約束**，我們只能靠 `-D` 丟一個延遲目標給它。
+- 缺 `time_unit` 時 abc 會**靜默**假設 1ns。單位一定要寫明，否則錯得無聲無息。
+
+實務後果：abc 給的是「在我們寫的 cell 成本下的低深度映射」，不是「滿足時序約束的最佳映射」。真正的時序收斂責任仍在我們自己的 e-graph 抽取與 P&R 迴圈，不能外包給 abc。
+
 ---
 
 ## 12. 開發階段
@@ -533,8 +596,28 @@ benchmark 套件在階段 A 末期即開始建立 —— 階段 A 用來驗證�
 
 ## 13. 已知限制
 
-1. **cost function 的線延遲是估計值。** `k` 係數靠 benchmark 校準，並靠 timing-driven 迴圈修正。e-graph 抽取出的是「該成本模型下的最優」，不是全域最優。
-2. **面積會被高估**（DAG extraction 的近似）。延遲不受影響。
-3. **擁塞無法進入抽取階段**，只能靠 `density` 代理與 P&R 迴圈回饋。
-4. **提煉無法自動化**，是持續的人力與智力投入。這是設計上的選擇，換得的是知識而非成品。
-5. **v1 產生的電路不使用 analog 編碼**，密度與延遲不會達到頂尖人類手刻的水準。差距由 gap analysis 量化，作為後續 rule 的來源。
+### 成本模型與抽取
+
+1. **線延遲是估計值**，且估計式只捕捉「單條線的長度」，沒捕捉「對外連線數隨規模成長」（§6.2）。靠 `density` 與 P&R 回饋補，不能靠調 `k` 補。
+2. **面積會被高估**（bottom-up 成本必然重複計價共享子電路，§6.4）。延遲不受影響。
+3. **擁塞無法進入抽取階段**，只能靠代理指標與迴圈回饋。
+4. **e-graph 會撞預算而非真的飽和**。egg 預設 30 iterations / 10k nodes / 5 秒，非平凡問題幾乎都是撞上限停下。equality saturation 的最優性保證以「引擎終止」為前提，我們多數時候不會滿足這個前提。
+5. **規則之間會經由 saturation 預算互相排擠**（`BackoffScheduler` + node limit，§5.4）。所以 `check-rule` 必須跑全 benchmark。
+
+### 外部工具鏈
+
+6. **ghdl-yosys-plugin 官方自述為 experimental / work in progress**，README 的「支援哪些 VHDL 功能」表格至今是 TODO，且有已知的 `rising_edge` 於 conditional expression、record 型別 inout port 等 issue。前端不自己寫這個決策仍然成立，但**「VHDL 進得來」不是可以假設的前提** —— walking skeleton 階段就要確認我們的 benchmark VHDL 全部能通過 GHDL，遇到不支援的構造要有繞道方案。
+7. **abc 拿不到真正的時序約束**（無 SDC，見 §11.3），時序收斂責任在我們自己。
+8. **MCHPRS 的可對照範圍僅限 v1 那批 cell 的邏輯功能**（§4.3）。
+
+### 方法論
+
+9. **§7.1 的 global placement 方法尚未定案。** 原本的否決理由已撤回，需要小規模實驗才能決定走解析式或離散搜尋。
+10. **等價性驗證的規模上限尚未評估。** 目前的計畫是「用模擬器跑等價性比對」，這對小電路可行，但窮舉輸入的成本隨位寬指數成長。大電路需要改用 SAT／BDD 形式化等價驗證或有界隨機測試 —— **本文件尚未決定切換的門檻與方法**，這是階段 C 之前必須補的缺口。
+11. **提煉無法自動化**，是持續的人力與智力投入。這是設計上的選擇，換得的是知識而非成品。
+12. **v1 不使用 analog 編碼**，密度與延遲不會達到頂尖人類手刻的水準。差距由 gap analysis 量化，作為後續 rule 的來源。
+
+### 事實基礎
+
+13. **本文件的紅石機制描述已經過查核並修正過一輪**，但仍有部分只能以 wiki 與舊版反編譯原始碼交叉驗證，未取得 1.20 逐字原始碼（§4.5）。**最終仲裁者是黃金軌跡的實測結果**，不是本文件。
+14. **方塊分類與載體規則（半磚等非完整方塊）尚未寫入本文件**，而它是 router DRC 與 cell library 的地基。查核進行中，補上前 §8.3 的「線間距 ≥2」只是保守佔位值。
