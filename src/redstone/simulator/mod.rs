@@ -40,116 +40,69 @@ pub enum SimulationError {
     UnsupportedComponent { position: Position, name: String },
 }
 
-/// 這個 kind 是不是本階段明確不支援、必須回報而非靜默忽略的元件。
+/// 本階段明確不支援、必須回報而非靜默忽略的元件種類，`find_unsupported_component`
+/// 掃描用。
 ///
 /// 這份清單刻意不含中繼器、比較器 —— 它們的功率規則已經由 `taxonomy`
 /// 完整處理；中繼器與比較器的延遲、鎖存（中繼器獨有）與排程優先權都已經
 /// 接上 `step`。
-fn is_unsupported_kind(kind: BlockKind) -> bool {
-    matches!(
-        kind,
-        BlockKind::Piston
-            | BlockKind::Observer
-            | BlockKind::Button
-            | BlockKind::PressurePlate
-            | BlockKind::WeightedPressurePlate
-            | BlockKind::Target
-            | BlockKind::DaylightDetector
-    )
-}
-
-/// 把扁平索引（YZX 順序，見 `World`）還原成座標。
-fn decode_flat_index(flat: usize, size_x: i32, size_z: i32) -> Position {
-    let layer = (size_x as usize) * (size_z as usize);
-    let y = (flat / layer) as i32;
-    let rem = flat % layer;
-    let z = (rem / size_x as usize) as i32;
-    let x = (rem % size_x as usize) as i32;
-    Position::new(x, y, z)
-}
+const UNSUPPORTED_KINDS: [BlockKind; 7] = [
+    BlockKind::Piston,
+    BlockKind::Observer,
+    BlockKind::Button,
+    BlockKind::PressurePlate,
+    BlockKind::WeightedPressurePlate,
+    BlockKind::Target,
+    BlockKind::DaylightDetector,
+];
 
 /// 世界裡第一個不支援的元件，連同它的原始方塊 ID。
 ///
-/// 只掃實際被放置的格子（透過 `cells()`），不是整個 palette —— palette
-/// 裡可能留著已經沒有任何格子在用的舊項目。
+/// 用 `World::positions_of`（`World::set` 增量維護的稀疏索引）取代掃過
+/// 整個 `cells()`——不支援的元件種類就那幾種，成本只跟「擺了幾個」成
+/// 正比。取扁平索引最小的那個，跟舊版線性掃描「回傳第一個碰到的」是
+/// 同一個順序（`positions_of` 依扁平索引遞增，也就是 YZX 掃描順序）。
 fn find_unsupported_component(world: &World) -> Option<(Position, String)> {
-    let (size_x, _size_y, size_z) = world.size();
-    let unsupported_by_index: Vec<bool> = world
-        .palette()
-        .entries()
+    let flat = UNSUPPORTED_KINDS
         .iter()
-        .map(|state| is_unsupported_kind(state.kind))
-        .collect();
-
-    for (flat, &palette_index) in world.cells().iter().enumerate() {
-        if !unsupported_by_index[palette_index as usize] {
-            continue;
-        }
-        let name = world
-            .palette()
-            .get(palette_index)
-            .expect("palette index referenced by a cell must exist")
-            .name
-            .clone();
-        return Some((decode_flat_index(flat, size_x, size_z), name));
-    }
-    None
+        .flat_map(|&kind| world.positions_of(kind))
+        .min()?;
+    let (x, y, z) = world.decode(flat);
+    let name = world.get(x, y, z).name.clone();
+    Some((Position::new(x, y, z), name))
 }
 
 /// 世界裡所有火把（立式與牆上）的位置。
 fn torch_positions(world: &World) -> Vec<Position> {
-    let (size_x, _size_y, size_z) = world.size();
-    let is_torch_by_index: Vec<bool> = world
-        .palette()
-        .entries()
-        .iter()
-        .map(|state| matches!(state.kind, BlockKind::Torch | BlockKind::WallTorch))
-        .collect();
-
     world
-        .cells()
-        .iter()
-        .enumerate()
-        .filter(|&(_, &palette_index)| is_torch_by_index[palette_index as usize])
-        .map(|(flat, _)| decode_flat_index(flat, size_x, size_z))
+        .positions_of(BlockKind::Torch)
+        .chain(world.positions_of(BlockKind::WallTorch))
+        .map(|flat| {
+            let (x, y, z) = world.decode(flat);
+            Position::new(x, y, z)
+        })
         .collect()
 }
 
 /// 世界裡所有中繼器的位置。
 fn repeater_positions(world: &World) -> Vec<Position> {
-    let (size_x, _size_y, size_z) = world.size();
-    let is_repeater_by_index: Vec<bool> = world
-        .palette()
-        .entries()
-        .iter()
-        .map(|state| state.kind == BlockKind::Repeater)
-        .collect();
-
     world
-        .cells()
-        .iter()
-        .enumerate()
-        .filter(|&(_, &palette_index)| is_repeater_by_index[palette_index as usize])
-        .map(|(flat, _)| decode_flat_index(flat, size_x, size_z))
+        .positions_of(BlockKind::Repeater)
+        .map(|flat| {
+            let (x, y, z) = world.decode(flat);
+            Position::new(x, y, z)
+        })
         .collect()
 }
 
 /// 世界裡所有比較器的位置。
 fn comparator_positions(world: &World) -> Vec<Position> {
-    let (size_x, _size_y, size_z) = world.size();
-    let is_comparator_by_index: Vec<bool> = world
-        .palette()
-        .entries()
-        .iter()
-        .map(|state| state.kind == BlockKind::Comparator)
-        .collect();
-
     world
-        .cells()
-        .iter()
-        .enumerate()
-        .filter(|&(_, &palette_index)| is_comparator_by_index[palette_index as usize])
-        .map(|(flat, _)| decode_flat_index(flat, size_x, size_z))
+        .positions_of(BlockKind::Comparator)
+        .map(|flat| {
+            let (x, y, z) = world.decode(flat);
+            Position::new(x, y, z)
+        })
         .collect()
 }
 

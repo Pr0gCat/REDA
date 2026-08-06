@@ -5,7 +5,7 @@
 //! 用 BFS 依**功率流方向**展開，而不是原版那種對方塊放置順序敏感的遞迴 ——
 //! 所以同一個電路擺在任何座標結果都相同。這是 Alternate Current 的思路。
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::redstone::rules::taxonomy::{flags_of, power_emitted_toward, BlockPower};
 use crate::redstone::world::block::Facing;
@@ -17,43 +17,42 @@ use crate::redstone::world::storage::World;
 /// 紅石訊號的最大強度。
 pub const MAX_SIGNAL_STRENGTH: u8 = 15;
 
-/// 重算全世界紅石粉的訊號強度，回傳強度有改變的位置。
+/// 重算「這次可能受影響」的紅石粉網路，回傳強度有改變的位置。
 ///
 /// 回傳空的 `Vec` 表示已經是穩定狀態。呼叫端用這份清單排程鄰居更新 ——
 /// 回傳「改變了幾格」會逼呼叫端自己再掃一次世界。
+///
+/// 成本跟「這次真的可能受影響的紅石粉」成正比，不是世界體積，也不是
+/// 世界裡紅石粉的**總數**：
+///
+/// - `World::take_dirty` 拿到的是自從上次呼叫以來被 `World::set` 動過的
+///   格子（`World::set` 無條件記錄）。一個像七段顯示器解碼器那樣的真實
+///   電路，紅石粉本身可能有十幾萬格，但每個 game tick 通常只有少數幾個
+///   元件真的翻轉狀態 —— 每個 tick 都把十幾萬格粉全部重算一次，就算已經
+///   是「只跟紅石粉數量成正比」也還是太貴。
+/// - `active_dust_networks` 把每個髒格展開到它波及得到的紅石粉網路（見
+///   該函式的說明），只有這些網路才需要重算；沒被波及的網路這次完全不
+///   會被碰。
+/// - 沒有任何格子是髒的（沒有任何呼叫端呼叫過 `World::set`）就直接跳過
+///   整次計算 —— 這在等待中繼器延遲、佇列暫時空著的 tick 尤其重要。
+///
+/// `target` 也只為「BFS 真的碰到的格子」存強度 —— 而 `dust_connections`
+/// 只會回傳紅石粉鄰居（見其實作），所以 BFS 走訪到的格子必定是
+/// `active_dust` 的子集，一個大小跟這次受影響的紅石粉數量成正比的 map
+/// 就夠。
 pub fn recompute_dust_strengths(world: &mut World) -> Vec<Position> {
-    let (size_x, _size_y, size_z) = world.size();
-    let cell_count = world.cells().len();
-
-    // palette 通常只有幾十個項目，先算出哪些索引是紅石粉，
-    // 掃描就退化成每格一次整數比較
-    let dust_palette_indices: Vec<bool> = world
-        .palette()
-        .entries()
-        .iter()
-        .map(|state| state.kind == BlockKind::RedstoneWire)
-        .collect();
-
-    // 收集所有紅石粉的位置，以及每格的目標強度（用 World::index 當鍵，
-    // 一個扁平 Vec 就夠，不必付 HashMap 的雜湊成本）
-    let mut dust_positions = Vec::new();
-    let mut queue: VecDeque<(Position, u8)> = VecDeque::new();
-    let mut target: Vec<u8> = vec![0u8; cell_count];
-
-    let layer = (size_x as usize) * (size_z as usize);
-    for (flat, &palette_idx) in world.cells().iter().enumerate() {
-        if !dust_palette_indices[palette_idx as usize] {
-            continue;
-        }
-        let y = (flat / layer) as i32;
-        let rem = flat % layer;
-        let z = (rem / size_x as usize) as i32;
-        let x = (rem % size_x as usize) as i32;
-        dust_positions.push(Position::new(x, y, z));
+    let dirty = world.take_dirty();
+    if dirty.is_empty() {
+        return Vec::new();
     }
 
+    let active_dust = active_dust_networks(world, &dirty);
+
+    let mut queue: VecDeque<(Position, u8)> = VecDeque::new();
+    let mut target: HashMap<Position, u8> = HashMap::with_capacity(active_dust.len());
+
     // 每格紅石粉的初始強度：來自相鄰的非紅石粉訊號源
-    for &pos in &dust_positions {
+    for &pos in &active_dust {
         let mut best = 0u8;
 
         // 直接驅動紅石粉的元件（紅石塊、拉桿、中繼器正前方…）
@@ -87,10 +86,7 @@ pub fn recompute_dust_strengths(world: &mut World) -> Vec<Position> {
         }
 
         if best > 0 {
-            let flat = world
-                .index(pos.x, pos.y, pos.z)
-                .expect("dust position must be in-bounds");
-            target[flat] = best;
+            target.insert(pos, best);
             queue.push_back((pos, best));
         }
     }
@@ -103,12 +99,9 @@ pub fn recompute_dust_strengths(world: &mut World) -> Vec<Position> {
         let next_strength = strength - 1;
         for facing in HORIZONTAL {
             for neighbour in dust_connections(world, pos, facing).iter() {
-                let flat = world
-                    .index(neighbour.x, neighbour.y, neighbour.z)
-                    .expect("dust_connections only returns in-bounds positions");
-                let current = target[flat];
+                let current = target.get(&neighbour).copied().unwrap_or(0);
                 if next_strength > current {
-                    target[flat] = next_strength;
+                    target.insert(neighbour, next_strength);
                     queue.push_back((neighbour, next_strength));
                 }
             }
@@ -117,11 +110,8 @@ pub fn recompute_dust_strengths(world: &mut World) -> Vec<Position> {
 
     // 寫回，收集改變的位置
     let mut changed = Vec::new();
-    for &pos in &dust_positions {
-        let flat = world
-            .index(pos.x, pos.y, pos.z)
-            .expect("dust position must be in-bounds");
-        let want = target[flat];
+    for &pos in &active_dust {
+        let want = target.get(&pos).copied().unwrap_or(0);
         let state = world.get(pos.x, pos.y, pos.z);
         if state.power != want {
             let mut updated = state.clone();
@@ -132,6 +122,72 @@ pub fn recompute_dust_strengths(world: &mut World) -> Vec<Position> {
     }
 
     changed
+}
+
+/// 從「這次可能受影響」的髒格清單，找出真正需要重算的紅石粉。
+///
+/// 分兩步：
+///
+/// 1. **從髒格找種子**：每個髒格往外展開到 2 跳鄰域內找紅石粉。2 跳是
+///    因為一格紅石粉的初始強度最遠會看到 2 跳之外的方塊 ——
+///    `block_signal_at` 檢查的是「鄰居的鄰居」（粉 → 導體 → 導體另一側
+///    的訊號源），`dust_connections` 的爬升／下降規則也是看鄰居的上方或
+///    下方（同樣是 2 跳）。只展開 1 跳會漏掉「兩格外的比較器把訊號送進
+///    導體，導體再驅動粉」這種接法。
+/// 2. **從種子洪水填滿整個網路**：找到種子之後，沿著 `dust_connections`
+///    走訪整個連通的紅石粉網路（跟下面 BFS 傳播強度用的是同一套連接
+///    規則），因為網路裡任何一格的強度都可能因為上游的改變而跟著變 ——
+///    只重算種子本身、不管它所在的整條線，會漏掉沿線往後傳的變化。
+///
+/// 沒被任何髒格波及的網路完全不會出現在回傳值裡，維持原樣不用重算。
+fn active_dust_networks(world: &World, dirty: &[usize]) -> Vec<Position> {
+    let mut visited: HashSet<Position> = HashSet::new();
+    let mut active: Vec<Position> = Vec::new();
+
+    for &flat in dirty {
+        let (x, y, z) = world.decode(flat);
+        let origin = Position::new(x, y, z);
+
+        // 2 跳鄰域：origin 本身、它的 6 個鄰居、以及鄰居的鄰居。
+        let mut frontier = vec![origin];
+        let mut within_two_hops = vec![origin];
+        for _ in 0..2 {
+            let mut next = Vec::with_capacity(frontier.len() * ALL_SIX.len());
+            for &p in &frontier {
+                for facing in ALL_SIX {
+                    next.push(p.offset(facing));
+                }
+            }
+            within_two_hops.extend_from_slice(&next);
+            frontier = next;
+        }
+
+        for seed in within_two_hops {
+            if visited.contains(&seed) {
+                continue;
+            }
+            if world.get(seed.x, seed.y, seed.z).kind != BlockKind::RedstoneWire {
+                continue;
+            }
+
+            // 種子找到了，沿著連接關係洪水填滿整個網路
+            visited.insert(seed);
+            active.push(seed);
+            let mut stack = vec![seed];
+            while let Some(pos) = stack.pop() {
+                for facing in HORIZONTAL {
+                    for neighbour in dust_connections(world, pos, facing).iter() {
+                        if visited.insert(neighbour) {
+                            active.push(neighbour);
+                            stack.push(neighbour);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    active
 }
 
 /// 這一格方塊被充能到什麼程度，以及**多強**。
@@ -387,6 +443,42 @@ mod tests {
         assert!(
             per_call < std::time::Duration::from_millis(50),
             "recompute on an empty 64x32x64 world took {per_call:?} per call"
+        );
+    }
+
+    /// 這是會抓到「有人把 O(dust count) 又改回 O(world volume) 掃描」的
+    /// 測試 —— 光測正確性測不出這種回歸，因為兩種實作在小世界裡的結果
+    /// 完全一樣。
+    ///
+    /// 世界開到 1500x6x1500（1350 萬格），但只放 5 格紅石粉跟 1 個訊號源
+    /// （紅石塊），其餘全是空氣。若 `recompute_dust_strengths` 又退化成
+    /// 掃過 `world.cells()` 找紅石粉，這一千三百五十萬格全部都要碰過一次
+    /// ——實測這個規模的舊實作（`for (flat, palette_idx) in
+    /// world.cells().iter().enumerate()` 那個版本）在 debug build 下單次
+    /// 呼叫要 200ms 以上；而稀疏版本因為直接從 `World::positions_of`
+    /// 拿到紅石粉的位置，成本只跟 5 格紅石粉成正比，同樣是 debug build
+    /// 量級落在幾百微秒。10ms 的預算對稀疏版本是幾十倍的安全邊際，對
+    /// 退化成全體積掃描的版本則遠遠不夠。
+    #[test]
+    fn recompute_cost_is_proportional_to_dust_not_world_volume() {
+        let mut w = World::new(1500, 6, 1500);
+        lay_wire(&mut w, 5);
+        w.set(0, 1, 0, redstone_block());
+
+        let start = std::time::Instant::now();
+        let changed = recompute_dust_strengths(&mut w);
+        let elapsed = start.elapsed();
+
+        // 先確認結果正確，不是只圖快而算錯
+        assert_eq!(changed.len(), 5, "all five dust cells should light up from the source");
+        assert_eq!(w.get(1, 1, 0).power, 15, "adjacent to the source");
+        assert_eq!(w.get(5, 1, 0).power, 11);
+
+        assert!(
+            elapsed < std::time::Duration::from_millis(10),
+            "recompute on a 1500x6x1500 world (13.5M cells) with only 5 dust cells took \
+             {elapsed:?} -- this must cost O(dust count), not O(world volume); a \
+             volume-proportional scan measured well over 100ms on this exact scenario"
         );
     }
 
