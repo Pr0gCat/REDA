@@ -43,7 +43,8 @@ pub enum SimulationError {
 /// 這個 kind 是不是本階段明確不支援、必須回報而非靜默忽略的元件。
 ///
 /// 這份清單刻意不含中繼器、比較器 —— 它們的功率規則已經由 `taxonomy`
-/// 完整處理，只是本階段的排程迴圈還不會主動觸發它們的延遲行為。
+/// 完整處理；中繼器的延遲、鎖存與排程優先權也已經接上 `step`，只有
+/// 比較器的排程迴圈本階段還沒做。
 fn is_unsupported_kind(kind: BlockKind) -> bool {
     matches!(
         kind,
@@ -114,6 +115,25 @@ fn torch_positions(world: &World) -> Vec<Position> {
         .collect()
 }
 
+/// 世界裡所有中繼器的位置。
+fn repeater_positions(world: &World) -> Vec<Position> {
+    let (size_x, _size_y, size_z) = world.size();
+    let is_repeater_by_index: Vec<bool> = world
+        .palette()
+        .entries()
+        .iter()
+        .map(|state| state.kind == BlockKind::Repeater)
+        .collect();
+
+    world
+        .cells()
+        .iter()
+        .enumerate()
+        .filter(|&(_, &palette_index)| is_repeater_by_index[palette_index as usize])
+        .map(|(flat, _)| decode_flat_index(flat, size_x, size_z))
+        .collect()
+}
+
 impl Simulator {
     /// 從一個世界建立模擬器，並讓它先穩定下來。
     ///
@@ -158,6 +178,7 @@ impl Simulator {
     /// 推進一個 game tick。回傳這一刻有多少格的狀態改變了。
     pub fn step(&mut self) -> usize {
         self.schedule_mismatched_torches();
+        self.schedule_mismatched_repeaters();
         self.advance_one_tick()
     }
 
@@ -173,10 +194,11 @@ impl Simulator {
 
         let mut game_ticks_run = 0u64;
         loop {
-            // 每一輪都先找出目前跟「應該是什麼狀態」不一致的火把並排程 ——
-            // 這樣才抓得到透過 `world_mut()` 做的外部修改，也才不會被
-            // burnout 期間「凍結」的火把騙成「已經清空佇列」。
+            // 每一輪都先找出目前跟「應該是什麼狀態」不一致的火把、中繼器並
+            // 排程 —— 這樣才抓得到透過 `world_mut()` 做的外部修改，也才不會
+            // 被 burnout 期間「凍結」的火把騙成「已經清空佇列」。
             self.schedule_mismatched_torches();
+            self.schedule_mismatched_repeaters();
 
             if self.queue.is_empty() {
                 return Ok(game_ticks_run);
@@ -231,13 +253,77 @@ impl Simulator {
 
         for tick in &due {
             self.work_done += 1;
-            if self.apply_torch_tick(tick.position, now) {
+            if self.apply_scheduled_tick(tick.position, now) {
                 changed += 1;
             }
         }
 
         changed += propagate::recompute_dust_strengths(&mut self.world).len();
         changed
+    }
+
+    /// 套用一筆到期的排程，依方塊種類分派給對應的元件邏輯。
+    fn apply_scheduled_tick(&mut self, position: Position, now: u64) -> bool {
+        match self.world.get(position.x, position.y, position.z).kind {
+            BlockKind::Torch | BlockKind::WallTorch => self.apply_torch_tick(position, now),
+            BlockKind::Repeater => self.apply_repeater_tick(position),
+            _ => false,
+        }
+    }
+
+    /// 找出輸出跟輸入不一致、既沒被鎖住也還沒排程的中繼器，依規則排入佇列。
+    ///
+    /// 跟火把一樣同時處理外部修改與漣漪效應；跟火把不一樣的地方是鎖存 ——
+    /// 被鎖住的中繼器就算輸入不一致也絕對不排程，因為鎖存本身是立即生效、
+    /// 不經過排程的。
+    fn schedule_mismatched_repeaters(&mut self) {
+        for position in repeater_positions(&self.world) {
+            if self.queue.is_scheduled(position) {
+                continue;
+            }
+            if component::repeater_is_locked(&self.world, position) {
+                continue;
+            }
+
+            let state = self.world.get(position.x, position.y, position.z);
+            let currently_lit = state.lit;
+            let desired = component::repeater_input_is_powered(&self.world, position);
+            if currently_lit == desired {
+                continue;
+            }
+
+            let turning_off = !desired;
+            let delay = component::repeater_delay_game_ticks(state);
+            let priority = component::repeater_priority(&self.world, position, turning_off);
+            self.queue.schedule(position, delay, priority);
+        }
+    }
+
+    /// 套用一個到期的中繼器排程。
+    ///
+    /// 開啟一律無條件套用 —— 這保證任何開脈衝至少會被拉長到一個完整延遲
+    /// 的長度；若那時輸入其實已經又斷電了，下一次
+    /// `schedule_mismatched_repeaters` 掃描會自然重新排一次關閉，這裡不用
+    /// 手動處理。關閉則在套用前重新檢查輸入 —— 輸入這時已經恢復供電的話
+    /// 就直接吞掉這次改變、維持現狀，這正是短於延遲的關脈衝會被吞掉的
+    /// 原因。兩條路徑都不是「特例邏輯」，只是老實問一次「這個方向的改變
+    /// 現在還成立嗎」。
+    fn apply_repeater_tick(&mut self, position: Position) -> bool {
+        let state = self.world.get(position.x, position.y, position.z).clone();
+        if state.kind != BlockKind::Repeater {
+            return false;
+        }
+        if component::repeater_is_locked(&self.world, position) {
+            return false;
+        }
+        if state.lit && component::repeater_input_is_powered(&self.world, position) {
+            return false;
+        }
+
+        let mut updated = state;
+        updated.lit = !updated.lit;
+        self.world.set(position.x, position.y, position.z, updated);
+        true
     }
 
     /// 套用一個到期的火把排程：翻轉狀態，除非它燒毀了。
@@ -309,6 +395,14 @@ mod tests {
     fn wall_torch(facing: Facing) -> BlockState {
         let mut state = named("minecraft:redstone_wall_torch", BlockKind::WallTorch);
         state.facing = Some(facing);
+        state
+    }
+
+    fn repeater(facing: Facing, delay: u8, lit: bool) -> BlockState {
+        let mut state = named("minecraft:repeater", BlockKind::Repeater);
+        state.facing = Some(facing);
+        state.delay = delay;
+        state.lit = lit;
         state
     }
 
@@ -461,5 +555,118 @@ mod tests {
             matches!(result, Err(SimulationError::Diverged { .. })),
             "a self-feeding ring of torches must never report Ok, got {result:?}"
         );
+    }
+
+    #[test]
+    fn a_repeater_delays_its_output_by_its_setting() {
+        // delay=2 的中繼器：輸入變化後 4 game tick 輸出才變
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, repeater(Facing::East, 2, false));
+
+        let mut simulator = Simulator::new(world);
+        assert!(!simulator.world().get(2, 0, 2).lit);
+
+        let mut on_lever = lever();
+        on_lever.lit = true;
+        simulator.world_mut().set(1, 0, 2, on_lever); // 中繼器西邊 -- 就是它的輸入
+
+        for tick in 1..=3 {
+            simulator.step();
+            assert!(
+                !simulator.world().get(2, 0, 2).lit,
+                "game tick {tick}: delay 是 2 redstone tick = 4 game tick，還不該變"
+            );
+        }
+
+        simulator.step();
+        assert!(
+            simulator.world().get(2, 0, 2).lit,
+            "第 4 個 game tick 之後應該已經開啟"
+        );
+    }
+
+    #[test]
+    fn a_repeater_does_not_pass_signal_backwards() {
+        // 訊號從前方進不去 -- 這是二極體的定義
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, repeater(Facing::East, 1, false));
+
+        // 前方（輸出端）放一個一直充能的紅石塊 -- 如果中繼器誤把它當輸入，
+        // 就會被觸發開啟
+        world.set(3, 0, 2, named("minecraft:redstone_block", BlockKind::RedstoneBlock));
+
+        let mut simulator = Simulator::new(world);
+        for _ in 0..10 {
+            simulator.step();
+        }
+
+        assert!(
+            !simulator.world().get(2, 0, 2).lit,
+            "power in front of a repeater must never be read as its input"
+        );
+    }
+
+    #[test]
+    fn a_locked_repeater_holds_its_output() {
+        // 鎖住之後輸入怎麼變輸出都不動
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, repeater(Facing::East, 1, true));
+
+        // 北側放一個已充能、面朝南（正對這個中繼器）的中繼器 -- 鎖住它。
+        // 它自己的輸入也持續供電，這樣它自己不會被排程關閉，鎖存才會
+        // 全程有效，不會半途因為鎖它的那個中繼器關掉而解除。
+        world.set(2, 0, 1, repeater(Facing::South, 1, true));
+        let mut lock_input = lever();
+        lock_input.lit = true;
+        world.set(2, 0, 0, lock_input);
+
+        let mut simulator = Simulator::new(world);
+        assert!(simulator.world().get(2, 0, 2).lit);
+
+        // 這個中繼器的輸入（西邊）從頭到尾都沒有訊號 -- 若沒被鎖住，
+        // 它會在一個 delay 之後關閉
+        for _ in 0..10 {
+            simulator.step();
+            assert!(
+                simulator.world().get(2, 0, 2).lit,
+                "a locked repeater must hold its output no matter what its input does"
+            );
+            assert!(
+                simulator.world().get(2, 0, 1).lit,
+                "the locking repeater's own input must stay powered throughout the test"
+            );
+        }
+    }
+
+    #[test]
+    fn a_repeater_swallows_a_pulse_shorter_than_its_delay() {
+        // 這應該是「排程中不重排」自然的結果，不是特例邏輯
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, repeater(Facing::East, 4, true)); // delay = 8 game tick
+
+        let mut on_lever = lever();
+        on_lever.lit = true;
+        world.set(1, 0, 2, on_lever.clone()); // 輸入一開始就穩定供電，跟輸出一致
+
+        let mut simulator = Simulator::new(world);
+        simulator.step(); // 沒有 mismatch，不會排程
+        assert!(simulator.world().get(2, 0, 2).lit);
+
+        // 輸入短暫斷電 1 個 game tick -- 遠短於 8 game tick 的延遲
+        let mut off_lever = lever();
+        off_lever.lit = false;
+        simulator.world_mut().set(1, 0, 2, off_lever);
+        simulator.step(); // 偵測到 mismatch，排程「關閉」在 8 game tick 之後
+
+        // 輸入立刻恢復，遠早於排定的關閉會觸發
+        simulator.world_mut().set(1, 0, 2, on_lever);
+
+        for _ in 0..10 {
+            simulator.step();
+            assert!(
+                simulator.world().get(2, 0, 2).lit,
+                "an off-pulse shorter than the delay must be swallowed entirely"
+            );
+        }
     }
 }
