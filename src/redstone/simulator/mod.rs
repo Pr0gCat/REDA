@@ -196,9 +196,7 @@ impl Simulator {
 
     /// 推進一個 game tick。回傳這一刻有多少格的狀態改變了。
     pub fn step(&mut self) -> usize {
-        self.schedule_mismatched_torches();
-        self.schedule_mismatched_repeaters();
-        self.schedule_mismatched_comparators();
+        self.settle_from_current_state();
         self.advance_one_tick()
     }
 
@@ -214,12 +212,13 @@ impl Simulator {
 
         let mut game_ticks_run = 0u64;
         loop {
-            // 每一輪都先找出目前跟「應該是什麼狀態」不一致的火把、中繼器並
-            // 排程 —— 這樣才抓得到透過 `world_mut()` 做的外部修改，也才不會
-            // 被 burnout 期間「凍結」的火把騙成「已經清空佇列」。
-            self.schedule_mismatched_torches();
-            self.schedule_mismatched_repeaters();
-            self.schedule_mismatched_comparators();
+            // 每一輪都先從目前的世界狀態重新安定下來：這代表「從呼叫端
+            // 現在讓世界處於的狀態安定下來」，而不是「處理佇列裡剛好排到
+            // 的東西」。少了紅石粉重算這一步，透過 `world_mut()` 做的外部
+            // 修改（例如翻轉拉桿）在電路裡沒有任何主動元件直接偵測得到
+            // 時 —— 純紅石粉線路就是這樣 —— 佇列會一直是空的，這裡就會
+            // 對著過期的粉強度回報「已經穩定」。
+            self.settle_from_current_state();
 
             if self.queue.is_empty() {
                 return Ok(game_ticks_run);
@@ -241,6 +240,23 @@ impl Simulator {
             self.advance_one_tick();
             game_ticks_run += 1;
         }
+    }
+
+    /// 從目前的世界狀態安定下來：先重算紅石粉強度，再排程任何因此變得
+    /// 跟輸入不一致的元件。
+    ///
+    /// 這是 `step` 與 `run_until_stable` 共用的一段 —— 兩者的差別只在於
+    /// 拿到這個結果之後要不要真的推進一個 game tick。**無條件重算**紅石
+    /// 粉強度是關鍵：呼叫端可能透過 `world_mut()` 直接改了拉桿之類的
+    /// 輸入，而電路裡不一定有火把、中繼器或比較器直接碰得到那個輸入 ——
+    /// 純紅石粉線路正是這樣。少了這一步，這些外部修改就只能等佇列裡剛好
+    /// 有別的排程「順便」觸發重算才會被看見；佇列若一直是空的，粉的
+    /// 強度就會一直停留在過期的值，而呼叫端永遠不會被告知。
+    fn settle_from_current_state(&mut self) {
+        propagate::recompute_dust_strengths(&mut self.world);
+        self.schedule_mismatched_torches();
+        self.schedule_mismatched_repeaters();
+        self.schedule_mismatched_comparators();
     }
 
     /// 找出目前狀態與「應該是什麼狀態」不一致的火把，把它們排入佇列。
@@ -885,6 +901,46 @@ mod tests {
         assert!(
             simulator.world().get(12, 1, 0).lit,
             "a repeater only cares whether its input has any signal, not how strong"
+        );
+    }
+
+    #[test]
+    fn changing_an_input_takes_effect_without_a_manual_step() {
+        // 呼叫端改了輸入之後直接 run_until_stable，就該看到新的結果。
+        // 先前這裡會靜靜地回報「已穩定」而電路還停在舊狀態 ——
+        // 一個回報穩定卻停在舊狀態的模擬器，比會報錯的更糟。
+        //
+        // 建一個「拉桿 -> 石頭 -> 粉」的最小電路，跑到穩定，
+        // 然後翻轉拉桿、直接 run_until_stable，確認粉跟著變。
+        let mut world = World::new(5, 5, 5);
+        world.set(0, 0, 0, lever()); // 拉桿一開始是關的
+        world.set(1, 0, 0, stone());
+        world.set(1, 1, 0, dust());
+
+        let mut simulator = Simulator::new(world);
+        simulator
+            .run_until_stable(50)
+            .expect("an already-off circuit is trivially stable");
+        assert_eq!(
+            simulator.world().get(1, 1, 0).power,
+            0,
+            "lever is off -- dust should carry no signal yet"
+        );
+
+        let mut on_lever = lever();
+        on_lever.lit = true;
+        simulator.world_mut().set(0, 0, 0, on_lever);
+
+        // 沒有中繼器、火把或比較器能靠排程佇列偵測到這次外部修改 --
+        // 佇列從頭到尾都是空的。直接呼叫 run_until_stable，不手動 step()。
+        simulator
+            .run_until_stable(50)
+            .expect("circuit must settle after the lever is flipped");
+
+        assert_eq!(
+            simulator.world().get(1, 1, 0).power,
+            15,
+            "flipping the lever must reach the dust without a manual step() in between"
         );
     }
 

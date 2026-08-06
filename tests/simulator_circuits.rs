@@ -6,14 +6,9 @@
 //! 每個電路都刻意在無關的元件之間留至少兩格空隙，避免火把或支撐塊意外
 //! 碰到不該碰的方塊，製造出電路本身沒有設計的訊號路徑。
 //!
-//! **踩到的模擬器邊角案例**：`run_until_stable` 只有在排程佇列非空時才
-//! 會重算紅石粉強度；如果電路裡沒有任何火把／中繼器／比較器能不透過
-//! 紅石粉、直接偵測到外部修改（NOR／OR 閘的最終那顆火把完全靠合併點的
-//! 粉才碰得到輸入，拉桿接一整條粉線更是連一顆主動元件都沒有），排程
-//! 佇列永遠是空的，粉的強度就會停留在過期的值，`run_until_stable` 也
-//! 永遠不會發現。解法是在每次外部修改後手動呼叫一次 `step()`（見
-//! `set_lever`）—— 它不看佇列是否為空，一定會重算一次紅石粉。細節與
-//! 是否該回報成 bug，見 `.superpowers/sdd/a2-gates-report.md`。
+//! `run_until_stable` 每一輪都會先從目前的世界狀態重新安定下來（含無
+//! 條件重算紅石粉強度），所以 `set_lever` 改了拉桿之後直接呼叫它就夠，
+//! 不需要另外手動 `step()` 去強制重算。
 
 use reda::redstone::simulator::position::Position;
 use reda::redstone::simulator::Simulator;
@@ -64,19 +59,10 @@ fn wall_torch(facing: Facing) -> BlockState {
 const MAX_TICKS: u64 = 200;
 
 /// 改變一顆拉桿的狀態，然後讓電路重新穩定下來。
-///
-/// **這裡故意先手動呼叫一次 `step()`。** `run_until_stable` 只在佇列
-/// 非空時才會重算紅石粉強度；如果電路裡沒有任何一個火把／中繼器／
-/// 比較器能直接（不透過紅石粉）偵測到這次外部修改 —— 例如 NOR／OR
-/// 閘完全靠合併點的粉把訊號送進最終那顆火把 —— 佇列會一直是空的，
-/// `run_until_stable` 就永遠不會發現粉的強度其實已經過期。單獨呼叫一次
-/// `step()` 無條件重算一次紅石粉，就能打破這個雞生蛋的僵局；細節見
-/// 檔案開頭的說明，以及 `a2-gates-report.md` 裡對這個現象的完整記錄。
 fn set_lever(simulator: &mut Simulator, position: Position, on: bool) {
     simulator
         .world_mut()
         .set(position.x, position.y, position.z, lever(on));
-    simulator.step();
     simulator
         .run_until_stable(MAX_TICKS)
         .expect("circuit must settle after changing an input");
