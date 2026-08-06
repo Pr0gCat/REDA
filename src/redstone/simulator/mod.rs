@@ -43,8 +43,8 @@ pub enum SimulationError {
 /// 這個 kind 是不是本階段明確不支援、必須回報而非靜默忽略的元件。
 ///
 /// 這份清單刻意不含中繼器、比較器 —— 它們的功率規則已經由 `taxonomy`
-/// 完整處理；中繼器的延遲、鎖存與排程優先權也已經接上 `step`，只有
-/// 比較器的排程迴圈本階段還沒做。
+/// 完整處理；中繼器與比較器的延遲、鎖存（中繼器獨有）與排程優先權都已經
+/// 接上 `step`。
 fn is_unsupported_kind(kind: BlockKind) -> bool {
     matches!(
         kind,
@@ -134,6 +134,25 @@ fn repeater_positions(world: &World) -> Vec<Position> {
         .collect()
 }
 
+/// 世界裡所有比較器的位置。
+fn comparator_positions(world: &World) -> Vec<Position> {
+    let (size_x, _size_y, size_z) = world.size();
+    let is_comparator_by_index: Vec<bool> = world
+        .palette()
+        .entries()
+        .iter()
+        .map(|state| state.kind == BlockKind::Comparator)
+        .collect();
+
+    world
+        .cells()
+        .iter()
+        .enumerate()
+        .filter(|&(_, &palette_index)| is_comparator_by_index[palette_index as usize])
+        .map(|(flat, _)| decode_flat_index(flat, size_x, size_z))
+        .collect()
+}
+
 impl Simulator {
     /// 從一個世界建立模擬器，並讓它先穩定下來。
     ///
@@ -179,6 +198,7 @@ impl Simulator {
     pub fn step(&mut self) -> usize {
         self.schedule_mismatched_torches();
         self.schedule_mismatched_repeaters();
+        self.schedule_mismatched_comparators();
         self.advance_one_tick()
     }
 
@@ -199,6 +219,7 @@ impl Simulator {
             // 被 burnout 期間「凍結」的火把騙成「已經清空佇列」。
             self.schedule_mismatched_torches();
             self.schedule_mismatched_repeaters();
+            self.schedule_mismatched_comparators();
 
             if self.queue.is_empty() {
                 return Ok(game_ticks_run);
@@ -267,6 +288,7 @@ impl Simulator {
         match self.world.get(position.x, position.y, position.z).kind {
             BlockKind::Torch | BlockKind::WallTorch => self.apply_torch_tick(position, now),
             BlockKind::Repeater => self.apply_repeater_tick(position),
+            BlockKind::Comparator => self.apply_comparator_tick(position),
             _ => false,
         }
     }
@@ -322,6 +344,51 @@ impl Simulator {
 
         let mut updated = state;
         updated.lit = !updated.lit;
+        self.world.set(position.x, position.y, position.z, updated);
+        true
+    }
+
+    /// 找出輸出跟「應該輸出多少」不一致、還沒排程的比較器，排入佇列。
+    ///
+    /// 跟中繼器一樣同時處理外部修改與漣漪效應；比較器沒有鎖存，所以少了
+    /// 中繼器那個「被鎖住就跳過」的檢查。
+    fn schedule_mismatched_comparators(&mut self) {
+        for position in comparator_positions(&self.world) {
+            if self.queue.is_scheduled(position) {
+                continue;
+            }
+
+            let state = self.world.get(position.x, position.y, position.z);
+            let desired = component::comparator_output(&self.world, position);
+            if state.power == desired {
+                continue;
+            }
+
+            let priority = component::comparator_priority(&self.world, position);
+            self.queue
+                .schedule(position, component::COMPARATOR_DELAY_GAME_TICKS, priority);
+        }
+    }
+
+    /// 套用一個到期的比較器排程：在套用當下重新計算應該輸出多少，寫回
+    /// `power` 與跟它一致的 `lit`（`power == 0` 就必須 `lit == false`）。
+    ///
+    /// 在套用當下（而不是排程當下）重新計算，理由跟中繼器的關閉路徑一樣：
+    /// 世界可能在排程期間又變了，這裡要老實反映「現在」該是什麼值。
+    fn apply_comparator_tick(&mut self, position: Position) -> bool {
+        let state = self.world.get(position.x, position.y, position.z).clone();
+        if state.kind != BlockKind::Comparator {
+            return false;
+        }
+
+        let desired = component::comparator_output(&self.world, position);
+        if desired == state.power {
+            return false;
+        }
+
+        let mut updated = state;
+        updated.power = desired;
+        updated.lit = desired > 0;
         self.world.set(position.x, position.y, position.z, updated);
         true
     }
@@ -402,6 +469,14 @@ mod tests {
         let mut state = named("minecraft:repeater", BlockKind::Repeater);
         state.facing = Some(facing);
         state.delay = delay;
+        state.lit = lit;
+        state
+    }
+
+    fn comparator(facing: Facing, power: u8, lit: bool) -> BlockState {
+        let mut state = named("minecraft:comparator", BlockKind::Comparator);
+        state.facing = Some(facing);
+        state.power = power;
         state.lit = lit;
         state
     }
@@ -668,5 +743,92 @@ mod tests {
                 "an off-pulse shorter than the delay must be swallowed entirely"
             );
         }
+    }
+
+    #[test]
+    fn a_comparator_output_settles_after_one_redstone_tick() {
+        // 拉桿 -> 比較器：延遲跟中繼器、火把一樣是 2 個 game tick
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, comparator(Facing::East, 0, false));
+        world.set(1, 0, 2, lever()); // 比較器西邊 -- 就是它的後方，拉桿一開始是關的
+
+        let mut simulator = Simulator::new(world);
+        assert_eq!(simulator.world().get(2, 0, 2).power, 0);
+
+        let mut on_lever = lever();
+        on_lever.lit = true;
+        simulator.world_mut().set(1, 0, 2, on_lever);
+
+        simulator.step();
+        assert_eq!(
+            simulator.world().get(2, 0, 2).power,
+            0,
+            "第 1 個 game tick 還不該變 -- 延遲是 2 個 game tick"
+        );
+
+        simulator.step();
+        assert_eq!(
+            simulator.world().get(2, 0, 2).power,
+            15,
+            "第 2 個 game tick 之後輸出應該已經到位"
+        );
+        assert!(simulator.world().get(2, 0, 2).lit);
+    }
+
+    #[test]
+    fn a_comparator_carries_an_analog_level_not_just_on_off() {
+        // rear 給 9，輸出必須是 9，不是 15 -- 硬編成開關就是把比較器做成中繼器
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, comparator(Facing::East, 0, false));
+
+        // 用 target 當靜態的類比訊號源：它不會被排程改變，純粹是測試用的
+        // 訊號源，跟其他測試用拉桿當固定 15 的訊號源是同一個道理。
+        let mut source = named("minecraft:target", BlockKind::Target);
+        source.power = 9;
+        world.set(1, 0, 2, source);
+
+        let mut simulator = Simulator::new(world);
+        simulator.step();
+        assert_eq!(simulator.world().get(2, 0, 2).power, 0, "還在延遲中");
+
+        simulator.step();
+        assert_eq!(
+            simulator.world().get(2, 0, 2).power,
+            9,
+            "類比訊號必須原樣傳遞，不能被鎖死成 15"
+        );
+        assert!(simulator.world().get(2, 0, 2).lit);
+    }
+
+    #[test]
+    fn lit_and_power_stay_consistent() {
+        // power == 0 必須 lit == false，反之亦然
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, comparator(Facing::East, 0, false));
+        world.set(1, 0, 2, lever());
+
+        let mut simulator = Simulator::new(world);
+        assert_eq!(simulator.world().get(2, 0, 2).power, 0);
+        assert!(!simulator.world().get(2, 0, 2).lit);
+
+        let mut on_lever = lever();
+        on_lever.lit = true;
+        simulator.world_mut().set(1, 0, 2, on_lever);
+        for _ in 0..4 {
+            simulator.step();
+        }
+        let powered = simulator.world().get(2, 0, 2);
+        assert!(powered.power > 0, "後方有訊號，power 應該非 0");
+        assert!(powered.lit, "power 非 0 就必須 lit == true");
+
+        let mut off_lever = lever();
+        off_lever.lit = false;
+        simulator.world_mut().set(1, 0, 2, off_lever);
+        for _ in 0..4 {
+            simulator.step();
+        }
+        let unpowered = simulator.world().get(2, 0, 2);
+        assert_eq!(unpowered.power, 0, "後方訊號消失，power 應該歸零");
+        assert!(!unpowered.lit, "power == 0 就必須 lit == false");
     }
 }

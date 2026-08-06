@@ -186,6 +186,131 @@ pub fn repeater_delay_game_ticks(state: &BlockState) -> u64 {
     redstone_ticks as u64 * 2
 }
 
+/// 比較器的後方輸入位置（`facing` 的反方向）。
+///
+/// 跟中繼器一樣是二極體的定義：主訊號只從正後方讀，正前方、側面都不算。
+/// 缺少 `facing` 的資料回傳 `None`，不猜方向。
+pub fn comparator_rear_position(state: &BlockState, pos: Position) -> Option<Position> {
+    state.facing.map(|facing| pos.offset(facing.opposite()))
+}
+
+/// 比較器兩側的輸入位置，用來讀比較訊號。
+///
+/// 缺少 `facing` 的資料回傳 `[None, None]`。
+pub fn comparator_side_positions(state: &BlockState, pos: Position) -> [Option<Position>; 2] {
+    match state.facing {
+        None => [None, None],
+        Some(facing) => {
+            let [a, b] = horizontal_side_directions(facing);
+            [Some(pos.offset(a)), Some(pos.offset(b))]
+        }
+    }
+}
+
+/// 這個比較器是不是減法模式。
+///
+/// `mode` 屬性缺席一律視為比較模式 —— 這是原版的預設值，也是 A1 階段
+/// 保留未建模屬性的直接後果：讀檔給什麼字串就照什麼字串判斷，缺席不猜。
+pub fn comparator_is_subtract_mode(state: &BlockState) -> bool {
+    state.extra_properties.get("mode").is_some_and(|mode| mode == "subtract")
+}
+
+/// 比較器後方讀進來的主訊號強度。
+///
+/// 跟中繼器的輸入一樣可以被兩種東西驅動：正後方元件直接送出的訊號，或是
+/// 正後方那格方塊本身被（其他來源）強充能。兩者都回傳實際的類比強度，
+/// 不是布林值 —— 硬編成「有訊號就 15」等於把比較器變成中繼器。
+fn comparator_rear_input(world: &World, pos: Position) -> u8 {
+    let state = world.get(pos.x, pos.y, pos.z);
+    let Some(facing) = state.facing else {
+        return 0;
+    };
+    let Some(rear_pos) = comparator_rear_position(state, pos) else {
+        return 0;
+    };
+
+    let rear_state = world.get(rear_pos.x, rear_pos.y, rear_pos.z);
+    let direct = power_emitted_toward(rear_state, facing);
+    if direct.drives_dust {
+        return direct.strength;
+    }
+
+    let (kind, strength) = block_signal_at(world, rear_pos);
+    if kind == BlockPower::Strong {
+        strength
+    } else {
+        0
+    }
+}
+
+/// 從某個位置讀進來的訊號強度，給比較器的側面輸入用。
+///
+/// **側面只接受強充能** —— 弱充能的方塊餵不進比較器。搞錯這條會產生
+/// 「模擬會動、遊戲裡不會動」的電路：紅石粉墊在側面方塊底下是很常見的
+/// 接法，在真實遊戲裡完全餵不進比較器，模擬器若照單全收就會跟遊戲行為
+/// 分歧。
+pub fn comparator_side_input(world: &World, pos: Position) -> u8 {
+    let (kind, strength) = block_signal_at(world, pos);
+    if kind == BlockPower::Strong {
+        strength
+    } else {
+        0
+    }
+}
+
+/// 比較器現在**應該**輸出多少（0..=15）。
+///
+/// 比較模式：任一側比後方強就輸出 0，否則原樣輸出後方的強度。
+/// 減法模式：輸出後方減掉兩側較強的那一個，下限是 0（`saturating_sub`，
+/// 不會繞回成一個很大的正數）。
+pub fn comparator_output(world: &World, pos: Position) -> u8 {
+    let state = world.get(pos.x, pos.y, pos.z).clone();
+    let rear = comparator_rear_input(world, pos);
+    let side = comparator_side_positions(&state, pos)
+        .into_iter()
+        .flatten()
+        .map(|side_pos| comparator_side_input(world, side_pos))
+        .max()
+        .unwrap_or(0);
+
+    if comparator_is_subtract_mode(&state) {
+        rear.saturating_sub(side)
+    } else if side > rear {
+        0
+    } else {
+        rear
+    }
+}
+
+/// 這個比較器該用哪個優先權排程。
+///
+/// 面對著另一個中繼器或比較器的背面或側面 —— 高優先權，確保它先於一般
+/// 元件解析，跟中繼器鏈的道理一樣。其餘情況用一般優先權。比較器沒有
+/// 鎖存，不像中繼器需要區分開啟／關閉兩級。
+pub fn comparator_priority(world: &World, pos: Position) -> TickPriority {
+    let state = world.get(pos.x, pos.y, pos.z);
+    let Some(facing) = state.facing else {
+        return TickPriority::Normal;
+    };
+
+    let front = pos.offset(facing);
+    let front_state = world.get(front.x, front.y, front.z);
+    let faces_back_or_side_of_diode = is_diode(front_state.kind)
+        && front_state
+            .facing
+            .is_some_and(|target_facing| target_facing != facing.opposite());
+
+    if faces_back_or_side_of_diode {
+        TickPriority::High
+    } else {
+        TickPriority::Normal
+    }
+}
+
+/// 比較器從被迫改變到真正輸出之間的延遲：固定 2 game tick（1 redstone
+/// tick），不像中繼器可以調整。
+pub const COMPARATOR_DELAY_GAME_TICKS: u64 = 2;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,6 +345,17 @@ mod tests {
         state.facing = Some(facing);
         state.delay = delay;
         state.lit = lit;
+        state
+    }
+
+    fn comparator(facing: Facing, mode: Option<&str>, power: u8, lit: bool) -> BlockState {
+        let mut state = named("minecraft:comparator", BlockKind::Comparator);
+        state.facing = Some(facing);
+        state.power = power;
+        state.lit = lit;
+        if let Some(mode) = mode {
+            state.extra_properties.insert("mode".to_string(), mode.to_string());
+        }
         state
     }
 
@@ -372,6 +508,128 @@ mod tests {
         assert!(
             !repeater_is_locked(&world, pos),
             "an unpowered diode at the side must not lock anything"
+        );
+    }
+
+    #[test]
+    fn a_comparator_reads_its_main_signal_from_behind() {
+        // 朝東的比較器，後方（主訊號）在它西邊
+        let pos = Position::new(5, 5, 5);
+        assert_eq!(
+            comparator_rear_position(&comparator(Facing::East, None, 0, false), pos),
+            Some(Position::new(4, 5, 5)),
+            "an east-facing comparator must read its main signal from the block to its west"
+        );
+    }
+
+    #[test]
+    fn mode_defaults_to_compare_when_the_property_is_absent() {
+        assert!(
+            !comparator_is_subtract_mode(&comparator(Facing::East, None, 0, false)),
+            "no mode property must mean compare mode, not subtract"
+        );
+    }
+
+    #[test]
+    fn subtract_mode_is_read_from_the_mode_property() {
+        assert!(comparator_is_subtract_mode(&comparator(
+            Facing::East,
+            Some("subtract"),
+            0,
+            false
+        )));
+        assert!(
+            !comparator_is_subtract_mode(&comparator(Facing::East, Some("compare"), 0, false)),
+            "an explicit compare property must not be misread as subtract"
+        );
+    }
+
+    #[test]
+    fn compare_mode_passes_the_rear_signal_when_no_side_is_stronger() {
+        let mut world = World::new(5, 5, 5);
+        let pos = Position::new(2, 0, 2);
+        world.set(pos.x, pos.y, pos.z, comparator(Facing::East, None, 0, false));
+
+        // 後方是另一個朝同方向的比較器，直接送出類比值 9（不是固定的 15，
+        // 才能抓到「硬編成開關」的錯誤實作）
+        world.set(1, 0, 2, comparator(Facing::East, None, 9, true));
+
+        // 兩側都是沒有被充能的石頭
+        world.set(2, 0, 1, stone());
+        world.set(2, 0, 3, stone());
+
+        assert_eq!(
+            comparator_output(&world, pos),
+            9,
+            "compare mode must pass the rear signal through unchanged"
+        );
+    }
+
+    #[test]
+    fn compare_mode_outputs_zero_when_a_side_is_stronger() {
+        let mut world = World::new(5, 5, 5);
+        let pos = Position::new(2, 0, 2);
+        world.set(pos.x, pos.y, pos.z, comparator(Facing::East, None, 0, false));
+        world.set(1, 0, 2, comparator(Facing::East, None, 9, true));
+
+        // 北側石頭被另一個比較器強充能到 12，比後方的 9 強
+        world.set(2, 0, 1, stone());
+        world.set(2, 0, 0, comparator(Facing::South, None, 12, true));
+        world.set(2, 0, 3, stone());
+
+        assert_eq!(
+            comparator_output(&world, pos),
+            0,
+            "a side stronger than the rear must zero the output in compare mode"
+        );
+    }
+
+    #[test]
+    fn subtract_mode_subtracts_the_strongest_side() {
+        // rear 12, side 5 -> 7
+        let mut world = World::new(5, 5, 5);
+        let pos = Position::new(2, 0, 2);
+        world.set(pos.x, pos.y, pos.z, comparator(Facing::East, Some("subtract"), 0, false));
+        world.set(1, 0, 2, comparator(Facing::East, None, 12, true));
+
+        world.set(2, 0, 1, stone());
+        world.set(2, 0, 0, comparator(Facing::South, None, 5, true));
+        world.set(2, 0, 3, stone());
+
+        assert_eq!(comparator_output(&world, pos), 7);
+    }
+
+    #[test]
+    fn subtract_mode_clamps_at_zero() {
+        // rear 3, side 9 -> 0，不是負數繞回
+        let mut world = World::new(5, 5, 5);
+        let pos = Position::new(2, 0, 2);
+        world.set(pos.x, pos.y, pos.z, comparator(Facing::East, Some("subtract"), 0, false));
+        world.set(1, 0, 2, comparator(Facing::East, None, 3, true));
+
+        world.set(2, 0, 1, stone());
+        world.set(2, 0, 0, comparator(Facing::South, None, 9, true));
+        world.set(2, 0, 3, stone());
+
+        assert_eq!(comparator_output(&world, pos), 0);
+    }
+
+    #[test]
+    fn a_weakly_powered_side_does_not_feed_the_comparator() {
+        // 這條錯了會產生「模擬會動、遊戲裡不會動」的電路
+        let mut world = World::new(5, 5, 5);
+        let side_pos = Position::new(2, 0, 1);
+        world.set(side_pos.x, side_pos.y, side_pos.z, stone());
+
+        // 粉墊在側面石頭上方 -- 只弱充能它
+        let mut dust = named("minecraft:redstone_wire", BlockKind::RedstoneWire);
+        dust.power = 15;
+        world.set(2, 1, 1, dust);
+
+        assert_eq!(
+            comparator_side_input(&world, side_pos),
+            0,
+            "a weakly powered block at the side must not feed the comparator"
         );
     }
 }
