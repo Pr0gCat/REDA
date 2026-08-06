@@ -241,13 +241,32 @@ pub fn load(path: &Path) -> Result<World, FormatError> {
     Ok(World::from_parts(size_x, size_y, size_z, palette, cells))
 }
 
+/// 這個方塊種類在 Minecraft 裡是否真的有 `facing` 屬性。
+///
+/// 寫出方塊沒有的屬性會讓 Minecraft 拒絕載入整個檔案，所以輸出前一律過濾。
+fn kind_has_facing(kind: BlockKind) -> bool {
+    matches!(
+        kind,
+        BlockKind::Repeater
+            | BlockKind::Comparator
+            | BlockKind::WallTorch
+            | BlockKind::Piston
+            | BlockKind::Lever
+    )
+}
+
+/// 這個方塊種類在 Minecraft 裡是否真的有 `type`（上/下/雙層）屬性。
+fn kind_has_slab_half(kind: BlockKind) -> bool {
+    matches!(kind, BlockKind::Slab)
+}
+
 /// 把我們的 `BlockState` 轉回 litematic 的 palette 項目。
 ///
 /// 只寫出該方塊真正擁有的 property —— 多寫會讓 Minecraft 拒絕載入。
 pub fn block_state_to_entry(state: &BlockState) -> PaletteEntry {
     let mut properties = HashMap::new();
 
-    if let Some(f) = state.facing {
+    if let Some(f) = state.facing.filter(|_| kind_has_facing(state.kind)) {
         let s = match f {
             Facing::North => "north",
             Facing::South => "south",
@@ -259,7 +278,7 @@ pub fn block_state_to_entry(state: &BlockState) -> PaletteEntry {
         properties.insert("facing".to_string(), s.to_string());
     }
 
-    if let Some(h) = state.half {
+    if let Some(h) = state.half.filter(|_| kind_has_slab_half(state.kind)) {
         let s = match h {
             SlabHalf::Top => "top",
             SlabHalf::Bottom => "bottom",
@@ -471,6 +490,46 @@ mod tests {
         assert!(
             messages[0] != messages[1] && messages[1] != messages[2],
             "each axis must produce a distinct message"
+        );
+    }
+
+    #[test]
+    fn facing_is_not_emitted_for_blocks_that_have_no_such_property() {
+        // 之後的佈局程式碼可能複製模板時誤設 facing；輸出必須過濾掉，
+        // 否則 Minecraft 會拒絕載入整個檔案
+        let mut stone = parse_block_name("minecraft:stone", &props(&[]));
+        stone.facing = Some(Facing::North);
+
+        let entry = block_state_to_entry(&stone);
+        assert!(
+            !entry.properties.contains_key("facing"),
+            "a plain solid block must not carry a facing property"
+        );
+    }
+
+    #[test]
+    fn slab_half_is_not_emitted_for_non_slabs() {
+        let mut stone = parse_block_name("minecraft:stone", &props(&[]));
+        stone.half = Some(SlabHalf::Top);
+
+        let entry = block_state_to_entry(&stone);
+        assert!(
+            !entry.properties.contains_key("type"),
+            "a non-slab must not carry a type property"
+        );
+    }
+
+    #[test]
+    fn facing_is_still_emitted_for_blocks_that_do_have_it() {
+        let rep = parse_block_name(
+            "minecraft:repeater",
+            &props(&[("facing", "east"), ("delay", "2"), ("powered", "false")]),
+        );
+        let entry = block_state_to_entry(&rep);
+        assert_eq!(
+            entry.properties.get("facing").map(String::as_str),
+            Some("east"),
+            "a repeater must keep its facing"
         );
     }
 }
