@@ -5,4 +5,5 @@
 //! **本階段不支援** quasi-connectivity、活塞、觀察者。碰到這些元件會明確
 //! 報錯，不會靜默忽略。
 
+pub mod connectivity;
 pub mod position;
