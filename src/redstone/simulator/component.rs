@@ -10,9 +10,9 @@
 //! 計入，計數降回門檻以下燒毀就解除。把 burnout 做成永久失效會逼著電路
 //! 收斂，讓模擬器在該回報「這個電路在振盪」的地方假裝穩定，那是錯的。
 
-use crate::redstone::rules::taxonomy::{power_emitted_toward, BlockPower};
+use crate::redstone::rules::taxonomy::BlockPower;
 use crate::redstone::simulator::position::Position;
-use crate::redstone::simulator::propagate::{block_power_at, block_signal_at};
+use crate::redstone::simulator::propagate::{block_power_at, block_signal_at, signal_from};
 use crate::redstone::simulator::schedule::TickPriority;
 use crate::redstone::world::block::{BlockKind, BlockState, Facing};
 use crate::redstone::world::storage::World;
@@ -134,19 +134,11 @@ pub fn repeater_is_locked(world: &World, pos: Position) -> bool {
 /// 只看正後方一格 —— 這正是它不會把訊號往回傳的原因。
 pub fn repeater_input_is_powered(world: &World, pos: Position) -> bool {
     let state = world.get(pos.x, pos.y, pos.z);
-    let Some(facing) = state.facing else {
-        return false;
-    };
     let Some(input_pos) = repeater_input_position(state, pos) else {
         return false;
     };
 
-    let input_state = world.get(input_pos.x, input_pos.y, input_pos.z);
-    if power_emitted_toward(input_state, facing).drives_dust {
-        return true;
-    }
-
-    block_signal_at(world, input_pos).0 == BlockPower::Strong
+    signal_from(world, input_pos, pos) > 0
 }
 
 /// 這個中繼器該用哪個優先權排程。
@@ -222,25 +214,11 @@ pub fn comparator_is_subtract_mode(state: &BlockState) -> bool {
 /// 不是布林值 —— 硬編成「有訊號就 15」等於把比較器變成中繼器。
 fn comparator_rear_input(world: &World, pos: Position) -> u8 {
     let state = world.get(pos.x, pos.y, pos.z);
-    let Some(facing) = state.facing else {
-        return 0;
-    };
     let Some(rear_pos) = comparator_rear_position(state, pos) else {
         return 0;
     };
 
-    let rear_state = world.get(rear_pos.x, rear_pos.y, rear_pos.z);
-    let direct = power_emitted_toward(rear_state, facing);
-    if direct.drives_dust {
-        return direct.strength;
-    }
-
-    let (kind, strength) = block_signal_at(world, rear_pos);
-    if kind == BlockPower::Strong {
-        strength
-    } else {
-        0
-    }
+    signal_from(world, rear_pos, pos)
 }
 
 /// 從某個位置讀進來的訊號強度，給比較器的側面輸入用。
@@ -612,6 +590,26 @@ mod tests {
         world.set(2, 0, 3, stone());
 
         assert_eq!(comparator_output(&world, pos), 0);
+    }
+
+    #[test]
+    fn a_comparator_side_still_rejects_weak_power() {
+        // 修正不能把側面的強充能限制一起放寬 —— 那是真實的遊戲行為。
+        // 直接貼著比較器側面的紅石粉本身不是「強充能的方塊」，側面依然
+        // 只認強充能。
+        let mut world = World::new(5, 5, 5);
+        let side_pos = Position::new(2, 0, 1);
+
+        let mut dust = named("minecraft:redstone_wire", BlockKind::RedstoneWire);
+        dust.power = 15;
+        world.set(side_pos.x, side_pos.y, side_pos.z, dust);
+
+        assert_eq!(
+            comparator_side_input(&world, side_pos),
+            0,
+            "dust directly at the side position is not a strongly-powered block \
+             and must not feed the comparator"
+        );
     }
 
     #[test]

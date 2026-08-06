@@ -801,6 +801,94 @@ mod tests {
     }
 
     #[test]
+    fn dust_laid_behind_a_repeater_feeds_it() {
+        // 拉桿 -> 粉 -> 中繼器 -> 粉。這是最常見的接法 —— 少了它模擬器
+        // 對任何真實電路都沒用。
+        //
+        // 拉桿在建構世界時就是開的：`Simulator::new` 會先做一次穩定計算，
+        // 這樣不必再靠 `run_until_stable` 去追一次外部改動造成的粉強度
+        // 快取落後 —— 那不是這裡要測的東西。
+        let mut world = World::new(6, 3, 3);
+        let mut on_lever = lever();
+        on_lever.lit = true;
+        world.set(0, 1, 0, on_lever);
+        world.set(1, 0, 0, stone());
+        world.set(1, 1, 0, dust()); // 中繼器正後方，跟中繼器同一層
+        world.set(2, 1, 0, repeater(Facing::East, 1, false));
+        world.set(3, 0, 0, stone());
+        world.set(3, 1, 0, dust()); // 中繼器的輸出端
+
+        let mut simulator = Simulator::new(world);
+
+        simulator
+            .run_until_stable(50)
+            .expect("a lever feeding dust into a repeater must settle");
+
+        assert!(
+            simulator.world().get(2, 1, 0).lit,
+            "dust laid directly behind a repeater, on the same level, must feed it"
+        );
+    }
+
+    #[test]
+    fn dust_behind_a_comparator_feeds_its_rear_input() {
+        // 粉的強度必須原樣進到比較器的後方輸入 —— 不能被壓成固定值。
+        let mut world = World::new(6, 3, 3);
+        let mut on_lever = lever();
+        on_lever.lit = true;
+        world.set(0, 1, 0, on_lever);
+        world.set(1, 0, 0, stone());
+        world.set(1, 1, 0, dust()); // 貼著拉桿，滿強度 15
+        world.set(2, 0, 0, stone());
+        world.set(2, 1, 0, dust()); // 再走一格，衰減成 14，緊貼比較器後方
+        world.set(3, 1, 0, comparator(Facing::East, 0, false));
+
+        let mut simulator = Simulator::new(world);
+
+        simulator
+            .run_until_stable(50)
+            .expect("a lever feeding dust into a comparator's rear must settle");
+
+        assert_eq!(
+            simulator.world().get(3, 1, 0).power,
+            14,
+            "the comparator's rear input must receive the dust's actual decayed \
+             strength, not a fixed constant"
+        );
+    }
+
+    #[test]
+    fn a_weak_signal_still_reaches_a_repeater() {
+        // 走了 10 格衰減到 5 的粉，中繼器仍然該被觸發 ——
+        // 中繼器只看有沒有訊號，不看強度。
+        let mut world = World::new(15, 3, 3);
+        let mut on_lever = lever();
+        on_lever.lit = true;
+        world.set(0, 1, 0, on_lever);
+        for x in 1..=11 {
+            world.set(x, 0, 0, stone());
+            world.set(x, 1, 0, dust());
+        }
+        world.set(12, 1, 0, repeater(Facing::East, 1, false));
+
+        let mut simulator = Simulator::new(world);
+
+        simulator
+            .run_until_stable(50)
+            .expect("a weak but present signal must still settle the repeater");
+
+        assert_eq!(
+            simulator.world().get(11, 1, 0).power,
+            5,
+            "sanity check: by the eleventh block the wire should have decayed to strength 5"
+        );
+        assert!(
+            simulator.world().get(12, 1, 0).lit,
+            "a repeater only cares whether its input has any signal, not how strong"
+        );
+    }
+
+    #[test]
     fn lit_and_power_stay_consistent() {
         // power == 0 必須 lit == false，反之亦然
         let mut world = World::new(5, 5, 5);

@@ -8,6 +8,7 @@
 use std::collections::VecDeque;
 
 use crate::redstone::rules::taxonomy::{flags_of, power_emitted_toward, BlockPower};
+use crate::redstone::world::block::Facing;
 use crate::redstone::simulator::connectivity::dust_connections;
 use crate::redstone::simulator::position::{Position, ALL_SIX, HORIZONTAL};
 use crate::redstone::world::block::BlockKind;
@@ -185,6 +186,45 @@ pub fn block_signal_at(world: &World, pos: Position) -> (BlockPower, u8) {
 /// 需要強度時用 `block_signal_at`。
 pub fn block_power_at(world: &World, pos: Position) -> BlockPower {
     block_signal_at(world, pos).0
+}
+
+/// 從 `source` 那一格傳到 `target` 的訊號強度。
+///
+/// 這是所有元件讀取輸入的唯一入口，涵蓋兩條路徑：
+///
+/// 1. **直接相鄰的紅石粉** —— 粉會驅動它指向的元件，而粉一定會指向
+///    相鄰的中繼器或比較器。這是最常見的接法。
+/// 2. **被充能的方塊** —— 強充能才能再驅動下游；弱充能不行。
+///
+/// 少了第一條，粉接中繼器這個最基本的接法就不會動。
+pub fn signal_from(world: &World, source: Position, target: Position) -> u8 {
+    let source_state = world.get(source.x, source.y, source.z);
+
+    // 路徑一：相鄰的紅石粉直接驅動
+    if source_state.kind == BlockKind::RedstoneWire {
+        return source_state.power;
+    }
+
+    // 路徑二：元件直接朝這個方向輸出
+    if let Some(direction) = direction_from(source, target) {
+        let output = power_emitted_toward(source_state, direction);
+        if output.drives_dust || output.block_power != BlockPower::None {
+            return output.strength;
+        }
+    }
+
+    // 路徑三：被強充能的方塊
+    let (kind, strength) = block_signal_at(world, source);
+    if kind == BlockPower::Strong {
+        return strength;
+    }
+
+    0
+}
+
+/// 從 `from` 看向 `to` 是哪個方向。兩者不相鄰時回傳 `None`。
+fn direction_from(from: Position, to: Position) -> Option<Facing> {
+    ALL_SIX.into_iter().find(|&facing| from.offset(facing) == to)
 }
 
 #[cfg(test)]
