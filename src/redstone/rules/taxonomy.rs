@@ -19,7 +19,7 @@
 //! 所有判定都是位元運算，沒有條件分支鏈 —— 為日後的 SIMD 與 GPU 保留空間。
 
 use crate::redstone::rules::java_1_20;
-use crate::redstone::world::block::{BlockKind, BlockState, SlabHalf};
+use crate::redstone::world::block::{BlockKind, BlockState, Facing, SlabHalf};
 
 /// 方塊行為的位元旗標。
 ///
@@ -241,11 +241,20 @@ pub fn power_emitted_by(state: &BlockState) -> PowerOutput {
             strength: state.power,
         },
 
-        // 中繼器與比較器：只對正前方輸出，強充能。
-        BlockKind::Repeater | BlockKind::Comparator if state.lit => PowerOutput {
+        // 中繼器：只對正前方輸出，強充能，固定 15。
+        BlockKind::Repeater if state.lit => PowerOutput {
             drives_dust: true,
             block_power: BlockPower::Strong,
             strength: 15,
+        },
+
+        // 比較器：只對正前方輸出，強充能，但強度是類比的（0..15），
+        // 存在 `state.power`。這是比較器存在的意義 —— 硬編成 15
+        // 等於把它變成一個開關。
+        BlockKind::Comparator if state.lit => PowerOutput {
+            drives_dust: true,
+            block_power: BlockPower::Strong,
+            strength: state.power,
         },
 
         // 火把：強充能正上方，弱充能其他相鄰（但**不含**它所附著的方塊）。
@@ -293,10 +302,79 @@ pub fn power_emitted_by(state: &BlockState) -> PowerOutput {
     }
 }
 
+/// 這個方塊往 `direction` 方向送出什麼訊號。
+///
+/// **方向性是紅石的核心語意，不是細節。** 兩個決定性的例子：
+///
+/// - **火把不充能它所附著的方塊。** 那正是火把能當反相器的原因 —— 若少了這條，
+///   火把塔會自己餵自己，反相器變成鎖存器。
+/// - **中繼器與比較器只對正前方輸出。** 否則它會變成四向分接器，並倒灌回自己的輸入。
+///
+/// `direction` 是**從這個方塊看出去**的方向。
+pub fn power_emitted_toward(state: &BlockState, direction: Facing) -> PowerOutput {
+    let full = power_emitted_by(state);
+    if full == PowerOutput::INERT {
+        return PowerOutput::INERT;
+    }
+
+    match state.kind {
+        // 中繼器與比較器：只有正前方
+        BlockKind::Repeater | BlockKind::Comparator => {
+            if state.facing == Some(direction) {
+                full
+            } else {
+                PowerOutput::INERT
+            }
+        }
+
+        // 立式火把：強充能正上方，弱充能其他方向，但**完全不碰下方**
+        // （下方就是它所附著的方塊）。
+        BlockKind::Torch => match direction {
+            Facing::Down => PowerOutput::INERT,
+            Facing::Up => full,
+            _ => PowerOutput {
+                block_power: BlockPower::Weak,
+                ..full
+            },
+        },
+
+        // 牆上火把：同理，但所附著的方塊在 `facing` 的**反方向**。
+        // （`facing` 記錄的是火把頭朝外的方向。）
+        BlockKind::WallTorch => {
+            let attached_to = state.facing.map(Facing::opposite);
+            if Some(direction) == attached_to {
+                PowerOutput::INERT
+            } else if direction == Facing::Up {
+                full
+            } else {
+                PowerOutput {
+                    block_power: BlockPower::Weak,
+                    ..full
+                }
+            }
+        }
+
+        // 紅石粉：**弱**充能腳下的方塊。水平方向的充能取決於粉的連接形狀，
+        // 由 `propagate` 依連接關係處理，這裡只回答垂直的部分。
+        BlockKind::RedstoneWire => match direction {
+            Facing::Down => full,
+            _ => PowerOutput::INERT,
+        },
+
+        // 紅石塊：驅動相鄰紅石粉但不充能任何方塊 —— `power_emitted_by` 已經
+        // 把 block_power 設成 None，所以各方向一致。
+        BlockKind::RedstoneBlock => full,
+
+        // 其餘（拉桿、按鈕、壓力板、觀察者、標靶、日光感測器）目前一律各向同性。
+        // 它們的方向性等各自的元件實作時再收斂。
+        _ => full,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::redstone::world::block::{BlockKind, BlockState, SlabHalf};
+    use crate::redstone::world::block::{BlockKind, BlockState, Facing, SlabHalf};
 
     fn named(kind: BlockKind, name: &str) -> BlockState {
         let mut b = BlockState::air();
@@ -554,6 +632,70 @@ mod tests {
             let f = flags_of(&b);
             assert!(!f.can_carry_dust(), "{name} must not hold dust");
             assert!(!f.is_conductive(), "{name} must not conduct");
+        }
+    }
+
+    #[test]
+    fn a_torch_does_not_power_the_block_it_stands_on() {
+        // 這是火把能當反相器的全部原因 —— 少了它，火把塔會自己餵自己
+        let mut torch = named(BlockKind::Torch, "minecraft:redstone_torch");
+        torch.lit = true;
+
+        assert_eq!(
+            power_emitted_toward(&torch, Facing::Down),
+            PowerOutput::INERT,
+            "a torch must not power its own support block"
+        );
+        assert_eq!(
+            power_emitted_toward(&torch, Facing::Up).block_power,
+            BlockPower::Strong,
+            "a torch strongly powers the block above it"
+        );
+        assert_eq!(
+            power_emitted_toward(&torch, Facing::North).block_power,
+            BlockPower::Weak,
+            "and weakly powers its other neighbours"
+        );
+    }
+
+    #[test]
+    fn a_wall_torch_does_not_power_the_wall_it_hangs_on() {
+        let mut torch = named(BlockKind::WallTorch, "minecraft:redstone_wall_torch");
+        torch.lit = true;
+        torch.facing = Some(Facing::East); // 頭朝東，所以附著在西邊的方塊上
+
+        assert_eq!(
+            power_emitted_toward(&torch, Facing::West),
+            PowerOutput::INERT,
+            "a wall torch must not power the block it is attached to"
+        );
+        assert_eq!(
+            power_emitted_toward(&torch, Facing::Up).block_power,
+            BlockPower::Strong
+        );
+    }
+
+    #[test]
+    fn a_repeater_only_outputs_forward() {
+        let mut rep = named(BlockKind::Repeater, "minecraft:repeater");
+        rep.lit = true;
+        rep.facing = Some(Facing::East);
+
+        assert_ne!(power_emitted_toward(&rep, Facing::East), PowerOutput::INERT);
+        for other in [Facing::North, Facing::South, Facing::West, Facing::Up, Facing::Down] {
+            assert_eq!(
+                power_emitted_toward(&rep, other),
+                PowerOutput::INERT,
+                "a repeater must not output toward {other:?} -- it would become a splitter"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unlit_component_emits_nothing_in_every_direction() {
+        let rep = named(BlockKind::Repeater, "minecraft:repeater");
+        for d in [Facing::North, Facing::South, Facing::East, Facing::West, Facing::Up, Facing::Down] {
+            assert_eq!(power_emitted_toward(&rep, d), PowerOutput::INERT);
         }
     }
 

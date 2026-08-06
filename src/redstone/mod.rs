@@ -2,3 +2,4 @@
 
 pub mod rules;
 pub mod world;
+pub mod simulator;

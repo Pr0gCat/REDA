@@ -41,6 +41,20 @@ pub enum Facing {
     Down,
 }
 
+impl Facing {
+    /// 相反方向。
+    pub fn opposite(self) -> Facing {
+        match self {
+            Facing::North => Facing::South,
+            Facing::South => Facing::North,
+            Facing::East => Facing::West,
+            Facing::West => Facing::East,
+            Facing::Up => Facing::Down,
+            Facing::Down => Facing::Up,
+        }
+    }
+}
+
 /// 半磚位於方塊格的哪一半。這決定它的頂面能不能承載東西。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SlabHalf {
