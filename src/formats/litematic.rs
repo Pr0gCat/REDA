@@ -187,21 +187,14 @@ pub fn load(path: &Path) -> Result<World, FormatError> {
 
     // Size 可以是負的，表示 region 往負方向延伸。取絕對值即可，
     // 因為我們只關心 bounding box 的形狀。
-    let size_x = region
-        .size
-        .x
-        .checked_abs()
-        .ok_or_else(|| FormatError::Nbt("region size out of range".to_string()))?;
-    let size_y = region
-        .size
-        .y
-        .checked_abs()
-        .ok_or_else(|| FormatError::Nbt("region size out of range".to_string()))?;
-    let size_z = region
-        .size
-        .z
-        .checked_abs()
-        .ok_or_else(|| FormatError::Nbt("region size out of range".to_string()))?;
+    let abs_axis = |value: i32, axis: &str| -> Result<i32, FormatError> {
+        value.checked_abs().ok_or_else(|| {
+            FormatError::Nbt(format!("region size.{axis} ({value}) is out of range"))
+        })
+    };
+    let size_x = abs_axis(region.size.x, "x")?;
+    let size_y = abs_axis(region.size.y, "y")?;
+    let size_z = abs_axis(region.size.z, "z")?;
 
     if size_x == 0 || size_y == 0 || size_z == 0 {
         return Err(FormatError::MissingField("Size".to_string()));
@@ -214,7 +207,14 @@ pub fn load(path: &Path) -> Result<World, FormatError> {
         index_map.push(palette.intern(state));
     }
 
-    let count = (size_x as usize) * (size_y as usize) * (size_z as usize);
+    let count = (size_x as usize)
+        .checked_mul(size_y as usize)
+        .and_then(|n| n.checked_mul(size_z as usize))
+        .ok_or_else(|| {
+            FormatError::Nbt(format!(
+                "region volume {size_x}x{size_y}x{size_z} overflows"
+            ))
+        })?;
     let bits = bits_per_entry(region.block_state_palette.len());
 
     // `fastnbt::LongArray` 不保證能直接當 `&[i64]` 用，先收成 Vec。
@@ -316,5 +316,22 @@ mod tests {
         let b = parse_block_name("minecraft:some_future_block", &props(&[]));
         assert_eq!(b.kind, BlockKind::Other);
         assert_eq!(b.name, "minecraft:some_future_block");
+    }
+
+    #[test]
+    fn axis_error_messages_name_the_axis() {
+        // 三個軸的錯誤訊息必須能分辨，否則損壞的檔案無從診斷
+        let messages: Vec<String> = ["x", "y", "z"]
+            .iter()
+            .map(|axis| format!("region size.{axis} ({}) is out of range", i32::MIN))
+            .collect();
+        assert_eq!(messages.len(), 3);
+        assert!(messages[0].contains("size.x"));
+        assert!(messages[1].contains("size.y"));
+        assert!(messages[2].contains("size.z"));
+        assert!(
+            messages[0] != messages[1] && messages[1] != messages[2],
+            "each axis must produce a distinct message"
+        );
     }
 }
