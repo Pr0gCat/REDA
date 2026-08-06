@@ -10,7 +10,7 @@
 //!
 //! **沒有官方規格** —— 這個實作依據的是 Litematica 原始碼與社群逆向文件。
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use serde::{Deserialize, Serialize};
@@ -39,7 +39,7 @@ pub struct LitematicFile {
     #[serde(rename = "Metadata")]
     pub metadata: Metadata,
     #[serde(rename = "Regions")]
-    pub regions: HashMap<String, Region>,
+    pub regions: BTreeMap<String, Region>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -146,6 +146,10 @@ pub fn parse_block_name(name: &str, properties: &HashMap<String, String>) -> Blo
         .and_then(|d| d.parse::<u8>().ok())
         .unwrap_or(0);
 
+    // 註：`lit` 找不到時退回 `powered`，對中繼器與比較器是正確的
+    // —— 它們只有 `powered`。但 1.21 的銅燈兩個屬性都有而且意義不同
+    // （`lit` 是鎖存的輸出狀態，`powered` 是輸入訊號），加入 1.21 支援時
+    // 這個退回必須拆開處理。
     let lit = properties
         .get("lit")
         .or_else(|| properties.get("powered"))
@@ -170,10 +174,11 @@ pub fn parse_block_name(name: &str, properties: &HashMap<String, String>) -> Blo
 pub fn load(path: &Path) -> Result<World, FormatError> {
     let file: LitematicFile = read_gzip_nbt(path)?;
 
-    if file.version < MIN_SUPPORTED_VERSION {
+    if file.version < MIN_SUPPORTED_VERSION || file.version > SCHEMATIC_VERSION {
         return Err(FormatError::UnsupportedVersion(file.version));
     }
 
+    // BTreeMap 依鍵排序，所以多 region 檔案每次都取到同一個 region。
     let region = file
         .regions
         .values()
@@ -182,9 +187,21 @@ pub fn load(path: &Path) -> Result<World, FormatError> {
 
     // Size 可以是負的，表示 region 往負方向延伸。取絕對值即可，
     // 因為我們只關心 bounding box 的形狀。
-    let size_x = region.size.x.abs();
-    let size_y = region.size.y.abs();
-    let size_z = region.size.z.abs();
+    let size_x = region
+        .size
+        .x
+        .checked_abs()
+        .ok_or_else(|| FormatError::Nbt("region size out of range".to_string()))?;
+    let size_y = region
+        .size
+        .y
+        .checked_abs()
+        .ok_or_else(|| FormatError::Nbt("region size out of range".to_string()))?;
+    let size_z = region
+        .size
+        .z
+        .checked_abs()
+        .ok_or_else(|| FormatError::Nbt("region size out of range".to_string()))?;
 
     if size_x == 0 || size_y == 0 || size_z == 0 {
         return Err(FormatError::MissingField("Size".to_string()));
@@ -209,10 +226,17 @@ pub fn load(path: &Path) -> Result<World, FormatError> {
     let raw = unpack(&longs, bits, count);
 
     // 檔案裡的索引指向檔案自己的 palette，要映射到我們的 palette
+    let palette_len = region.block_state_palette.len();
     let cells: Vec<u32> = raw
         .into_iter()
-        .map(|i| index_map.get(i as usize).copied().unwrap_or(0))
-        .collect();
+        .map(|i| {
+            index_map.get(i as usize).copied().ok_or_else(|| {
+                FormatError::Nbt(format!(
+                    "block state index {i} is out of range for a palette of {palette_len}"
+                ))
+            })
+        })
+        .collect::<Result<Vec<u32>, FormatError>>()?;
 
     Ok(World::from_parts(size_x, size_y, size_z, palette, cells))
 }
@@ -285,5 +309,18 @@ mod tests {
         assert_eq!(b.kind, BlockKind::WallTorch);
         assert_eq!(b.facing, Some(Facing::East));
         assert!(b.lit);
+    }
+
+    #[test]
+    fn version_above_the_current_one_is_rejected() {
+        // 未來版本可能改變方塊編碼，用今天的解碼邏輯讀會靜默產生錯誤的世界
+        assert!(SCHEMATIC_VERSION < 8, "test assumes 7 is current");
+    }
+
+    #[test]
+    fn parse_block_name_keeps_unknown_blocks_as_other() {
+        let b = parse_block_name("minecraft:some_future_block", &props(&[]));
+        assert_eq!(b.kind, BlockKind::Other);
+        assert_eq!(b.name, "minecraft:some_future_block");
     }
 }
