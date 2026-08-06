@@ -67,6 +67,81 @@ clock_period ≥ max( 關鍵路徑 tick 數, burnout 下限 )
 
 **弱充能不能續傳**。只被紅石粉充能的方塊是**弱充能**，它**不能再去充能相鄰的紅石粉**。所以「一條線」不是自由的幾何物件 —— 每一段都必須以火把／中繼器／比較器這類主動元件收尾才能續傳。這是 cell library 與 router 的結構性約束，§2 表格裡「15 格內的線完全免費」是在這個前提下才成立的簡化。
 
+### 2.2 方塊分類：DRC 的地基
+
+**Minecraft 沒有單一的 `isSolid` 屬性。** 紅石行為由三個**彼此獨立**的屬性決定，DRC 必須分成三個欄位建模：
+
+| 屬性 | 決定什麼 |
+|---|---|
+| **頂面支撐型別** | 能否承載紅石粉／中繼器／火把 |
+| **導電性** | 能否被充能並把訊號傳出去 |
+| 不透明度 | **只管光照，與紅石無關** |
+
+支撐型別是程式碼裡的 `SupportType` 三值 enum，對應 wiki 的白話術語：
+
+| 元件 | 需要的支撐 |
+|---|---|
+| 紅石粉 | `FULL`（+ 漏斗是硬編碼特例） |
+| **中繼器／比較器** | **`RIGID`** |
+| 落地火把 | `CENTER` |
+| 牆上火把 | 側面 `FULL` |
+
+> **⚠️ 中繼器的放置條件比紅石粉寬鬆，邏輯是反的。** 「能放紅石粉的地方才能放中繼器」是錯的直覺。三者不是包含關係，是獨立布林值。
+
+#### 導電性的反例（必須查表，不能用規則推導）
+
+- **完整方塊但非導體**：玻璃、幽光玻璃、發光石、海燈籠、TNT、冰、紅石塊、觀察者、活塞
+- **半透明但導體**：黏液塊
+- **Java 蜂蜜塊不導體、黏液塊導體** —— 最容易搞反的一組
+- 半磚／樓梯：**單層非導體**（上下皆然），**雙層半磚是導體**
+- 上半磚可承載紅石粉，下半磚不行；倒放樓梯可，正放不行
+
+#### 充能規則
+
+| | 定義 | 來源 |
+|---|---|---|
+| **強充能** | 可驅動相鄰紅石粉（含上下方） | 電源元件、已充能的中繼器／比較器 |
+| **弱充能** | **不能**驅動相鄰紅石粉；但能啟動機械、驅動朝外的中繼器／比較器 | **只有紅石粉** |
+
+- 紅石粉只充能**腳下**與**它指向**的方塊；不指向的側邊不充能。孤立的「十字」形紅石粉會對四個水平方向 + 下方共 5 處弱充能（**無意漏電最常見的來源**；1.16+ 可右鍵切成「點」形態，不對水平相鄰供電）
+- 紅石火把：**強**充能正上方，**弱**充能其他相鄰，但**排除它所附著的方塊**
+- 中繼器：只對正前方輸出，且是強充能
+- **比較器的側面輸入只接受強充能** —— 容易踩雷
+- **訊號打不進非導體方塊**：玻璃、上半磚「可以放中繼器」但「不能被中繼器打亮」
+
+#### 垂直傳播：非導體是向上單向導體
+
+- 導體方塊放在低處紅石粉的正上方會**切斷**垂直連接；非導體不會
+- **非導體方塊在 Java 版無法向下傳電** —— 所以半磚、玻璃、發光石、倒放樓梯是天生的**向上二極體**。wiki 收錄的 **Transparent Diode：1×2×3，0 tick**
+
+#### 對繞線的實際結論
+
+**平行線的最小 pitch 永遠是 2，換什麼載體都改不了** —— 兩格相鄰的紅石粉必定連成同一 net，那是紅石粉自己的性質。全方塊垂直堆疊同樣能達到 2 格/線的理論下限。**半磚不提高密度。**
+
+pitch 2 也不會串音：直線走向的紅石粉不對左右送電，就算送了也只是弱充能，而弱充能驅動不了紅石粉。**真正需要淨空環的是強充能節點**（中繼器／火把／比較器的輸出方塊），那會驅動上下左右所有相鄰紅石粉。
+
+**玻璃／半磚的正確用途是讓 pitch 2 在有中繼器時也安全**：實心分隔柱被中繼器指到會變強充能而串線，非導體永遠充不上電。建議配置 —— **每 2 格一條線，紅石粉鋪在實心方塊上，兩線之間的分隔柱用玻璃。**
+
+**半磚擋不了 QC。** QC 檢查的是「上方那一格有沒有收到訊號」，wiki 明說「even if that block is air」。放什麼都沒用。
+
+#### cell library 的起始數據
+
+| 元件 | 體積 | 延遲 |
+|---|---|---|
+| Redstone bridge（線路交叉） | 1×3×4 | **0** |
+| Repeater bridge（交叉，省垂直空間） | 2×3×3 | 1 tick（兩條線都加） |
+| Transparent diode（單向隔離） | 1×2×3 | **0** |
+| Component diode（中繼器） | 1×1×2 | 1–4 tick |
+| Block diode | 1×2×2 | 1 tick |
+| Redstone ladder（向上） | 1×2×N | 1 tick / 15 格 |
+| Redstone staircase（雙向） | 1×N×N | 1 tick / 15 格 |
+| Torch tower（向上） | 1×1×N | 1 tick / 2 格 |
+| Torch cascade（向下） | 1×2×N | 1 tick / 2 格 |
+
+**線路交叉是零延遲的**（redstone bridge，且不需要半磚）—— 這比原本的假設樂觀。但它有破功條件：**上層線若有中繼器指向中心方塊，會強充能而灌爆下層。**
+
+垂直走線則是半磚真正值得破例的地方：64 條線從第 0 層拉到第 15 層，用透明方塊 ladder 是 1920 格 / 0.1 s；只用全方塊的話，火把塔是 960 格但 **0.75 s**（還會反相 + burnout），階梯是 0.1 s 但 **14400 格**。延遲 ×7.5 或體積 ×7.5，二選一。
+
 ---
 
 ## 3. 整體流程
@@ -91,7 +166,23 @@ VHDL
 └──────────────────────────────────────┘
 ```
 
-前端不自己寫。VHDL 的 parser 與 RTL 合成是已解決的問題，重寫只會得到比 GHDL 差的結果，且與紅石無關。我們唯一保留的干預點是 **abc 的 liberty 檔由我們撰寫**，映射策略仍在掌握中。
+前端不自己寫，**而且不打包**。VHDL 的 parser 與 RTL 合成是已解決的問題，重寫只會得到比 GHDL 差的結果，且與紅石無關。
+
+**REDA 的入口是 Yosys JSON netlist（或 word dialect IR，見 §5.1），前端是使用者的事。** 這個界線的實際效果：
+
+- Yosys 沒有內建 VHDL 前端，VHDL 必須靠 experimental 的 ghdl-yosys-plugin，而它在 Windows 上取得困難（見 §13）。**把前端排除在相依鏈外，這個問題就從「REDA 跑不起來」降級成「使用者要自備 netlist」** —— 走 Verilog / Chisel / Amaranth 的人根本不會遇到。
+- 我們自己的 walking skeleton 仍需驗證「VHDL 真的進得來」，但那是開發環境的問題，不是使用者的部署問題。
+
+#### technology mapping 的分工（兩套 mapper 的界線）
+
+我們有兩個地方在做 technology mapping：abc 的 liberty 映射，以及 §5.3 的 e-graph 抽取。分工必須明確，否則實作階段一定撞車：
+
+| | 職責 |
+|---|---|
+| **abc + liberty** | 只做**結構映射到抽象 gate**（NOR / INV / BUF），提供一個合理的起始網表 |
+| **e-graph 抽取** | 做**實體結構選擇** —— 哪個紅石佈局實作這坨邏輯，成本是實測 tick |
+
+也就是說 **abc 不負責時序收斂**，liberty 不需要精確的 timing 表。原本「abc 給我們延遲最優映射」的說法收回 —— 理由見 §11.3（abc 拿不到真正的時序約束）。
 
 ---
 
@@ -277,6 +368,19 @@ lowering 是 `word → gate → phys → block`。
 
 **IR 設計約束**：word 層的位寬與規則結構資訊，在 lowering 到 gate 時必須以標註形式保留 —— datapath 的程式化佈局完全依賴它（見 §7.2）。
 
+**word dialect 是公開介面，不是內部表示。** REDA 有兩個入口：
+
+```
+Verilog / VHDL / SystemVerilog / Chisel / Amaranth ──► Yosys ──► JSON netlist ─┐
+                                                                (gate-level)    ├──► REDA
+圖形化編輯器 / 程式化生成 ─────────────────────────────► word dialect IR ───────┘
+                                                          (結構資訊完整)
+```
+
+第二個入口反而是**高品質入口** —— 經過 Yosys 合成後，word-level 的結構經常被打散重組（`a + b` 出來可能已不是可辨識的加法器）；而圖形編輯器裡使用者拖進來的方塊**明確就是一個 8-bit 加法器**，那個意圖是第一手無損的。
+
+所以 word dialect 的格式必須當成穩定的公開介面來設計與版本化。這也讓前端生態與我們解耦：接圖形介面、接其他 HDL、接程式化生成器，後端都不用改。
+
 ### 5.2 為什麼是 equality saturation
 
 LLVM 最惡名昭彰的 phase ordering 問題（pass 順序影響結果，最佳順序無解，只能人工調校 `-O2`），在 equality saturation 下不存在 —— 所有 rewrite 同時反覆套用，最後用成本函數抽取。沒有順序，因為沒有序列。
@@ -290,7 +394,31 @@ LLVM 最惡名昭彰的 phase ordering 問題（pass 順序影響結果，最佳
 
 所以我們選 equality saturation 的理由要重新表述為：**它把「順序」這個維度從人工調校變成預算問題**。預算夠就逼近最優，預算不夠就退化 —— 但退化是可觀測、可調整的（調 node limit / iteration limit），不像 pass ordering 那樣是黑箱。這仍然是划算的交易，只是沒有原本寫的那麼夢幻。
 
-實務注意：**e-graph 是接受 cycle 的**（一個 e-class 可以是自己的後代，這正是它表達力的來源）；受限的是 **extraction** —— 抽出的表達式必須無環，egg 的預設 extractor 會讓純環狀 e-class 拿不到成本而放棄。所以電路的回授不會炸掉 e-graph 本身。我們仍然切在暫存器邊界，但理由是**組合邏輯區塊本來就是 STA 的分析單位**，不是「e-graph 不吃 cycle」。
+實務注意：**e-graph 是接受 cycle 的**（一個 e-class 可以是自己的後代，這正是它表達力的來源）；受限的是 **extraction** —— 抽出的表達式必須無環。
+
+處理回授有兩條路，我們選第二條：
+
+- **切在暫存器邊界**（v1 的簡化）：只在組合區塊內 saturate，DFF 當 cut point。理由是組合區塊本來就是 STA 的分析單位。
+- **用延遲變數兼作 cycle-breaking**（Nextmap, PLDI 2026 的做法）：「sequential elements are modeled explicitly to permit valid feedback through registers, while combinational cycles are disallowed by bounded propagation delay variables」。**一個機制兩個用途** —— 我們本來就要在抽取階段追蹤關鍵路徑延遲，那個變數同時就是拓樸序，組合迴路自然被排除，而暫存器回授合法保留。
+
+第二條更乾淨，而且不必人為切斷電路。v1 可以先做第一條，但 IR 不該假設「e-graph 裡沒有 register」。
+
+### 5.2.1 規模控制：分區是必需品，不是優化
+
+先前工作的規模天花板有明確數據：E-morphic 論文總結先前工作「**no more than 40,000 e-nodes**」；E-Syn 在 10 個 EPFL benchmark 裡 **9 個 timeout 或 memory-out**；ROVER 最大的 e-graph 只有 17,493 nodes，那已經要 135 秒 ILP。
+
+而 Coward 的觀察讓靜態估算失效：「the final e-graph size is **not well correlated with the number of operators in the initial e-graph**」—— **不能從電路大小預測會不會爆**，只能靠執行期預算與優雅降級。
+
+必要的控制手段（按投報率）：
+
+1. **不追求 saturation，固定 5–13 iterations。** E-morphic 用 5、BoolE 用 10+3。沒有一個成功的系統真的跑到飽和。
+2. **分區。** EqMap 有三種現成切法可參考：`r2r`（register-to-register）、`arc-set`、`delay-paths`。
+3. **不要用 S-expression 當電路與 e-graph 之間的中介。** E-morphic 明確指出：「shared nodes must be **duplicated in S-expressions**」—— 這是指數級的隱形開銷，也是 E-Syn 在 9/10 benchmark 上炸掉的主因之一。要用唯一 node identifier 直接 DAG↔DAG 建圖。
+   （**注意區分**：§10.5 的 rule pattern 用 S-expression 字串是**沒問題**的 —— 那是幾個節點的小 pattern，不是整個電路的序列化。）
+4. **solution-space pruning**：每個 e-class 的走訪佇列只保留成本 ≤ 該 class 最小成本的 e-node。
+5. **conditional rewrite + 可達性分析**（Coward 的 live e-class analysis，實測 −48% 節點）。
+
+> **⚠️ 粒度警告**：Coward 明言 e-graph 在 **gate level** 有 scalability 問題，ROVER 的成功很大程度來自「一個 e-node = 一個 8-bit 加法器」的粗粒度。**我們的 dialect 粒度越粗越安全**；word 層的 saturation 會比 gate 層健康得多，這是把 word dialect 做扎實的另一個理由。
 
 ### 5.3 tech mapping 併入抽取
 
@@ -354,9 +482,21 @@ tick(n)        = 1 + max over children ( tick(c) + wire_est(c) )
 
 ### 6.3 扇出的不對稱
 
-紅石的扇出**延遲上免費、體積上不免費**。因此 `fanout` 只影響 `volume` 與 `density` 分量，**不影響 `tick` 分量**。這是成本模型必須與傳統 EDA 分道揚鑣之處。
+紅石的扇出**延遲上免費、體積上不免費**。因此 `fanout` 只影響 `volume` 與 `density` 分量，**不影響 `tick` 分量**。這是成本模型必須與傳統 EDA 分道揚鑣之處（所有 CMOS 的 e-graph EDA 工作都把 fanout 當延遲代價）。
+
+> **⚠️ 但 `fanout` 在 bottom-up 成本函數裡「算不出來」，不是「不夠準」。**
+>
+> fanout 的定義是「有多少個**被選中的** parent 引用這個節點」。bottom-up 的 `cost(enode, children_costs)` 只拿得到子成本，沒有 parent 資訊 —— 這是表達力問題，不是精度問題。
+>
+> 這一項只能在 **extraction 層**處理（見 §6.4）。在 `CostFunction` 裡放一個 `fanout` 欄位是自欺欺人。
 
 ### 6.4 DAG-aware 抽取
+
+**先講一個讓處境好很多的事實：我們的主目標剛好是 extraction 最容易的情況。**
+
+純 min-delay 的 greedy extraction **就是最優解** —— 延遲只看最長路徑，每個 e-class 各自挑延遲最小的實作即可，不存在跨 e-class 的取捨。所以 `tick` 單目標模式可以直接用 egg 原生 extractor，而且是真最優，不是近似。這同時是免費的 sanity check 與上界。
+
+需要 DAG-aware 的只有**面積類**分量（`volume`、`cells`、`fanout`）。
 
 egg 預設抽取是樹狀 DP，會重複計價共享的子電路，嚴重高估面積。我們的網表是 DAG，共享子電路只需蓋一次。
 
@@ -364,9 +504,36 @@ egg 預設抽取是樹狀 DP，會重複計價共享的子電路，嚴重高估�
 
 最優 DAG extraction 是 NP-hard（可由 set cover 化約；另有結果指出無法在任意常數比例內近似）。
 
-**實務路線：以貪婪為主，不預設用 ILP。** `extraction-gym` 的實測（PR #16，220 個測例）顯示：bottom-up 貪婪總計約 3.4 秒，ILP-CBC 約 316 秒（**慢約 92 倍**），而 DAG cost 的幾何平均只改善約 **0.2%**；其原始碼裡 ILP 後端標註 `use_for_bench: false, // takes >10 hours sometimes`。花兩個數量級的時間換 0.2%，在我們「提煉迴圈要秒級」的前提下是完全不划算的交易。
+#### 貪婪夠不夠？分工作負載，而我們落在壞的那一端
 
-`tick` 分量不受此坑影響 —— max 組合下重複計算不會出錯。**我們最在意的分量剛好最不受影響。**
+extraction-gym 社群的溫和說法是「貪婪其實差不多」，但 SmoothE 的對照表顯示它高度分裂 —— 相對 10 小時 CPLEX oracle 的 cost 增幅（平均／最差）：
+
+| 資料集 | egg greedy | 改良 greedy | 性質 |
+|---|---|---|---|
+| diospyros | 0.1% / 0.0% | 0.1% | 共享少 |
+| impress | 53.0% / **280%** | **0.0%** | 改良 greedy 救得回來 |
+| **rover**（datapath 合成） | 2.9% / **11.0%** | **2.9%（完全沒救回）** | 共享密集 |
+| tensat | 12.1% / **46.4%** | 11.9% | 共享密集 |
+
+**紅石的加法器、乘法器就是 rover 那一族**：共享子式密集的 datapath。而改良貪婪對這一類**完全沒有幫助**。
+
+#### 對策：把 extraction 外包，不要自己造
+
+`egraph-serialize`（MIT）約 20 行就能把 `egg::EGraph` 轉成 extraction-gym 的 JSON 格式，接上現成的 DAG-aware extractor。
+
+**首選 e-boost**（MIT、Rust、基於 egg）：平行貪婪 DAG + adaptive pruning + warm-started ILP，實測**比 vanilla ILP 快 558× 且品質好 5.6%**，optimality gap 0.21%，不需要 GPU，可用免費的 OR-Tools CP-SAT。
+
+> **⚠️ 求解器要用 HiGHS，不要用 CBC。** `good_lp` 預設走 `coin_cbc`，需要系統預裝 native library（README 只測過 Debian，**完全沒提 Windows**），且 egg 的 CBC infeasible issue 至今 open，實測在 ASIC 規模題目會回 spurious infeasible。HiGHS 全 MIT、CMake 從 source 編、不需系統預裝。
+
+ILP-CBC 那條原本的規劃收回：不只是慢，在我們的平台上根本裝不起來。
+
+#### `tick` 分量也被污染了
+
+先前這裡寫「tick 不受樹狀重複計價影響，我們最在意的分量剛好最不受影響」。**那是錯的，而且是我們自己造成的。**
+
+§6.2 的 `tick(n) = 1 + max(tick(c) + wire_est(c))` 依賴 `wire_est`，而 `wire_est` 依賴 `volume`。volume 被樹狀抽取高估 → wire_est 高估 → **tick 跟著高估**。引入 `wire_est` 的那一刻就把污染灌進了 tick。
+
+只有**關掉 `wire_est` 的純邏輯深度模式**才真的免疫（而那個模式的 greedy 恰好是最優的，見本節開頭）。
 
 ### 6.5 多目標排序
 
@@ -377,7 +544,13 @@ egg 預設抽取是樹狀 DP，會重複計價共享的子電路，嚴重高估�
 面積模式： volume > tick > cells
 ```
 
-字典序會拒絕「多花 1 tick 換體積減半」這類划算交易，因此保留 **ε 容忍**：`tick` 在最佳值 +ε 內視為同級，再比 volume。ε 由使用者指定。
+字典序會拒絕「多花 1 tick 換體積減半」這類划算交易，因此需要 ε 級距。
+
+> **⚠️ ε 不能實作成「容忍」，必須實作成「量化」。**
+>
+> 「tick 在最佳值 +ε 內視為同級」定義的關係**不具傳遞性**（a~b、b~c 但 a≁c），而 egg 的 extractor fixpoint 依賴傳遞比較。結果會是不收斂或結果隨迭代順序改變，**而且不會報錯**。
+>
+> 正確做法是量化：比較 `tick / ε` 的整數商。那仍是全序，傳遞性成立。
 
 ### 6.6 塞不進去的東西
 
@@ -391,10 +564,14 @@ egg 預設抽取是樹狀 DP，會重複計價共享的子電路，嚴重高估�
 
 成本越複雜抽取越慢，而抽取在提煉迴圈裡跑上百次：
 
-- **fast**：只算 `tick` + `cells`，貪婪抽取。供 `reda check-rule`
-- **full**：完整複合成本 + **較好的 DAG 近似演算法**（非 ILP，理由見 §6.4）。供正式 benchmark
+- **fast**：純 `tick`（關掉 `wire_est`），egg 原生貪婪抽取。**這個組合的貪婪恰好是最優的**，所以 fast 模式不是「品質換速度」，是「範圍換速度」。供 `reda check-rule`
+- **full**：完整複合成本 + e-boost 的 DAG-aware 抽取。供正式 benchmark
 
-ILP 抽取只保留為研究用的離線選項 —— 用來偶爾量測「我們的貪婪離最優還差多少」，不進正常流程。
+### 6.8 工程預算：重心在 extractor，不在 rewrite rules
+
+**extraction 佔 equality saturation end-to-end runtime 的 89.30%**（e-boost 實測），Coward 博論在三個章節重複「ILP solving dominated the runtime」。
+
+而 §5.3 把 technology mapping 併進抽取，等於把最貴的那一段**再乘上「每個邏輯功能有幾種實體實作」**。這條路可行（EqMap 已證明），但它決定了工程預算的分配：**效能優化的力氣應該約 80% 花在 extractor，不是 rewrite rules 或 saturation。**
 
 ---
 
@@ -441,14 +618,41 @@ ALU、暫存器、移位器的 N 個 bit slice 結構相同。word dialect 保�
 
 ## 8. Router
 
+### 8.0 前人正是死在這裡
+
+紅石自動 P&R 的既有工具全部卡在 **~60 cells 的 7-segment decoder**：PERSHING 的 router 從未跑完（論文表格標「still running」），續作 dewey 直接把這個電路從 benchmark 拿掉，MinecraftHDL 獨立地也在同一個電路上爆成 83×442 blocks。三個團隊、不同演算法、同一堵牆。
+
+**死因是漸進複雜度，不是實作品質。** PERSHING 論文寫明 3D Lee 是 `O(l·m·n)` per net：「When the number of logic cells and nets triples, the completion time increases by nearly an order of magnitude.」2016 年的 future work 就指出該換 **Mikami-Tabuchi line search（`O(L)`）**，2018 年的 dewey 仍列在 TODO —— **兩代人都知道要換，兩代人都沒換成。**
+
+PERSHING 提出的四項評估指標中，**Feasibility**（router 是否跑得完；跑不完的話設計者要手動修 violation，而那是 intractable）在社群裡從未被討論，但它才是所有既有工具真正失敗的地方。**這一項要進我們的 benchmark 指標。**
+
 ### 8.1 PathFinder（negotiated congestion routing）
 
-1. 每條 net 用 A\* 找路（3D 曼哈頓距離當 heuristic，非常準）
+1. 每條 net 找路（3D 曼哈頓距離是很準的下界）
 2. 允許暫時重疊
 3. 逐輪提高擁塞區域的通行代價
 4. rip-up & reroute 直到無衝突
 
 天然支援時序驅動：關鍵 net 給高優先權與低繞路容忍度，非關鍵 net 讓路。對應「非關鍵路徑愛拉多遠拉多遠」的策略。
+
+**單條 net 的搜尋演算法未定案**，但 A\*／Lee 這類逐格擴展是已知會撞牆的。要評估的候選：Mikami-Tabuchi line search、rectilinear Steiner tree（LogicLoom 用 FLUTE，是目前公開成果最大的紅石 P&R，做到 8-bit 計算器）。**這個決定比「用不用 GPU」重要得多**（見 §8.7）。
+
+### 8.7 GPU 加速：架構上預留，v1 不做
+
+紅石的繞線問題對 GPU 異常友善，理由有四：
+
+- **PathFinder 的輪內無相依** —— 同一輪裡所有 net 各自用當前擁塞代價獨立繞線，輪末才統一更新。平行維度是演算法自帶的。
+- **成本均勻，不需要 priority queue** —— 線長成本每步都是 1，均勻成本下 **wavefront BFS 就是最短路**。GPU 做 Dijkstra 最痛的就是 priority queue，我們繞過了。
+- **規則的密集 3D 格點** —— 不像真實 IC 的不規則 routing resource，記憶體存取模式友善。
+- **整數成本** —— 無浮點，整數吞吐好。
+
+主要困難是 **DRC 檢查會造成 warp divergence**（紅石粉相鄰規則、弱充能、載體要求、方向性都是分支）。對策是**預計算每個格點的可行方向 bitmask**，把繞線退化成查表 + 位元運算 —— 那個預計算本身也是資料平行的。
+
+**但 v1 不做**，理由是 §8.0：前人卡的是 `O(lmn)` 的漸進複雜度，而 **`O(lmn) → O(L)` 是質變，GPU 的常數倍加速是量變**。演算法沒換對，GPU 只是讓撞牆從 60 cells 延到 200 cells。而且沒有正確的 CPU 參考實作，GPU 版本的 bug 無從調起。
+
+**現在該做的零成本準備**：router 的核心資料結構寫成資料平行友善的形式 —— SoA 而非 AoS、避免指標追逐、成本用整數、格點狀態用扁平陣列。這對 CPU 版本本身就是好事（cache friendly、可用 rayon 平行），同時讓日後移植不必重寫。屆時 **wgpu** 是最務實的選擇（跨平台，Windows 走 DX12/Vulkan，不綁 NVIDIA）。
+
+（extraction 那邊不必先動 GPU：SmoothE 的 GPU 方案需要 A100 級的卡，而 e-boost 純 CPU 平行已經比 ILP 快 558×。）
 
 ### 8.2 中繼器插入
 
@@ -464,10 +668,29 @@ ALU、暫存器、移位器的 N 個 bit slice 結構相同。word dialect 保�
 
 ### 8.3 DRC 兩層
 
-- **第一層（繞線時）**：保守幾何規則 —— 線間距 ≥2（含對角）、紅石粉須有載體方塊、垂直爬升的階梯結構。擋掉九成問題且快。
+- **第一層（繞線時）**：幾何規則 —— 線間距、載體要求、垂直爬升結構、強充能節點的淨空環（見 §2.2）。擋掉九成問題且快。
 - **第二層（繞完後）**：**逐 net 注入-觀測**（§4.6 L5），對耦合類 bug 完備。
 
 兩層都需要。只靠第二層則每輪驗證太慢；只靠第一層則紅石的隱性耦合列不完。
+
+#### DRC 必須數字化，不能寫成分支
+
+方塊屬性是**三個彼此獨立的布林值**（§2.2），加上方向性、機械元件標記、支撐面型別，一個方塊可以壓進單一 `u16` flag word。於是判斷退化成位元運算：
+
+```
+can_carry_dust = below.flags & FLAG_SUPPORT_FULL
+conductive     = block.flags & FLAG_CONDUCTIVE
+```
+
+再進一步，「從格點 P 往方向 d 走是否合法」所牽涉的鄰域狀態是有限的 —— 把鄰域壓成 index，一張查表直接吐出「六個方向各自合法」的 6-bit mask。inner loop 變成查表 + 位元運算，無分支。
+
+這帶來三個超出效能的好處：
+
+1. **規則變成資料。** 1.20 與 1.21 的差異退化成「換一組常數表」，而不是 trait dispatch 或程式碼分支。§4.4 的 `rules` 版本化因此幾乎免費。
+2. **DRC 可以進入成本函數，而不只是當守門員。** 違規程度若是數字而非布林，router 就能**暫時容忍違規、逐輪加重代價** —— 也就是把 PathFinder 對擁塞做的事推廣成 **negotiated DRC**。這對前人卡死的那堵牆可能直接相關：硬性禁區會把 wavefront 切得支離破碎，成本化之後 wavefront 保持連通，router 可以先穿過去再協商出來。
+3. **無分支 = GPU 友善**，順帶解掉 §8.7 的 warp divergence 問題。
+
+（更遠的一個推論先記著不定案：違規程度若是連續量，就可被鬆弛與微分，那會讓 §7.1 的 global placement 選擇往解析式傾斜 —— DRC 懲罰項可以直接進 analytical placer 的目標函數。）
 
 ### 8.4 Clock
 
@@ -535,7 +758,25 @@ memory generator **是 generator 不是 macro** —— 它是吃 depth/width 參
 
 **REDA 距離人類手刻還差幾 tick。** 每加一條 rule 重跑整個 benchmark，差距縮小多少一目瞭然。
 
-benchmark 套件應早期建立：4-bit 加法器、7-seg 解碼、桶形移位器、ALU 等，每項備妥「VHDL 版本」與「社群最佳 litematic」兩份。這是唯一的客觀標尺。
+benchmark 套件應早期建立。可用的素材已經查清楚：
+
+**主標尺 —— ORE 2025 Bounty Board 的帶約束電路**（社群目前唯一接近「帶規格的參考電路集」的東西）：
+
+| 電路 | 社群給的約束 |
+|---|---|
+| Horizontal 8-bit CCA | ≤5 ticks in→out、每 bit ≤2 blocks 寬、≤8 blocks 高 |
+| 4-bit ALU | 2-tall，底層須 solid |
+| 32-bit Collatz | ≤20 ticks / iteration |
+| 5×5 Game of Life | ≤20 redstone ticks / cycle |
+| 2-bit 分支預測器 | ≤8 redstone ticks 響應 |
+
+**及格線 —— 7-segment decoder（~60 cells）**：PERSHING、dewey、MinecraftHDL 三個工具都在這裡翻車。**能編出它就已經超越所有既有的紅石自動 P&R 工具。**
+
+**回歸測試集**：Redstone-Compiler 的 `test/*.nbt` + `*.outputs.json`（MIT，可直接取用）。
+
+**參考量級**：ORE 的 Engineer 級門檻是 CPU「至少 10 ticks/cycle」；MPU 1–7 的跨代 clock 序列為 15→10→6→7→7→5→5 ticks。
+
+> **關於「與人類最佳解的差距」這個指標**：社群沒有公開的 size+latency 統一標準（ISA benchmark sheet 有 cycles/ticks/bytes 但**沒有 blocks 欄位**），CHUNGUS 2 甚至連可用的 world download 都找不到。所以 gap analysis 的對照組只能建立在**有明確尺寸/延遲標註的小型電路**上。若我們同時量測 size 與 latency 並公開，那本身就是社群目前不存在的東西。
 
 ### 10.4 rule 的兩種形式
 
@@ -652,7 +893,9 @@ benchmark 套件在階段 A 末期即開始建立 —— 階段 A 用來驗證�
 
 ### 外部工具鏈
 
-6. **ghdl-yosys-plugin 官方自述為 experimental / work in progress**，README 的「支援哪些 VHDL 功能」表格至今是 TODO，且有已知的 `rising_edge` 於 conditional expression、record 型別 inout port 等 issue。前端不自己寫這個決策仍然成立，但**「VHDL 進得來」不是可以假設的前提** —— walking skeleton 階段就要確認我們的 benchmark VHDL 全部能通過 GHDL，遇到不支援的構造要有繞道方案。
+6. **VHDL 前端不是可靠的相依。** ghdl-yosys-plugin 官方自述 experimental，README 的「支援哪些 VHDL 功能」表格至今是 TODO，已知會直接噴 Ada exception 的構造包括 unconstrained/nested array port、部分 generic、VHDL-2008 unary operator、`**`、shared variable。
+   **Windows 上更麻煩**：OSS CAD Suite 的 Windows 版**不含 GHDL 也不含 plugin**（issue 開了三年），唯一路徑是 MSYS2 的 `mingw-w64-ucrt-x86_64-yosys`（它把 plugin 編進 Yosys 本體，所以**不要下 `-m ghdl`**），而它卡在 Yosys 0.66 —— 0.67 換 CMake 後 build system 裡沒有 GHDL option。
+   **緩解**：§3 已把 REDA 的入口定在 netlist，所以這只影響「我們自己驗證 VHDL 路徑」的開發環境，不影響使用者。但 walking skeleton 仍須真的跑通一次，屆時要釘住 Yosys 版本並記錄平台步驟。
 7. **abc 拿不到真正的時序約束**（無 SDC，見 §11.3），時序收斂責任在我們自己。
 8. **MCHPRS 的可對照範圍僅限 v1 那批 cell 的邏輯功能**（§4.3）。
 
@@ -666,4 +909,71 @@ benchmark 套件在階段 A 末期即開始建立 —— 階段 A 用來驗證�
 ### 事實基礎
 
 13. **本文件的紅石機制描述已經過查核並修正過一輪**，但仍有部分只能以 wiki 與舊版反編譯原始碼交叉驗證，未取得 1.20 逐字原始碼（§4.5）。**最終仲裁者是黃金軌跡的實測結果**，不是本文件。
-14. **方塊分類與載體規則（半磚等非完整方塊）尚未寫入本文件**，而它是 router DRC 與 cell library 的地基。查核進行中，補上前 §8.3 的「線間距 ≥2」只是保守佔位值。
+14. **`fanout` 無法進入 bottom-up 成本函數**（表達力問題，§6.3），只能在 extraction 層處理。
+15. **e-graph 在 gate level 的 scalability 有明確前例警告**（§5.2.1）。我們的 gate dialect 是風險最高的一層。
+
+---
+
+## 14. 先行研究與定位
+
+### 14.1 紅石側：前人卡在哪
+
+| 專案 | 成果上限 | 授權 | 死因 |
+|---|---|---|---|
+| **PERSHING**（2016, MIT SIGTBD） | 4-bit counter，23 cells，1084 秒，0.49 Hz | BSD-2 | 3D Lee `O(lmn)`；7-seg decoder 未跑完 |
+| **dewey**（2018，C 重寫） | 同上，快 34× | BSD-2 | 規模零成長；**無 timing 分析**，連 fmax 都算不出 |
+| **MinecraftHDL**（2020, McGill） | 2-bit 7-seg | **無授權** | 7-seg driver 83×442 blocks，超過載入半徑；**明說因「wire delay 難以預測、timing 分析超出範圍」而放棄** |
+| **LogicLoom**（現役） | **8-bit 計算器**（目前公開最大） | — | force-directed placement + FLUTE Steiner + Dijkstra |
+| **Redstone-Compiler**（現役，Rust） | half-adder | **MIT** | README：「Currently, you can use only unittests」 |
+| **V2MC** | 無 demo | GPL-3.0 | 最後 commit：「Revamp fitter (brokenly)」 |
+
+**三件事值得記住：**
+
+1. **沒有任何工具做過驗證。** dewey 的 buffer 插入失敗時只印一行警告，`exit(1)` **被註解掉了** —— 它會靜默輸出壞電路。這正是 §4.6 存在的理由，也是為什麼階段 A 要先做模擬器。
+2. **沒有任何工具做過 timing-driven routing。** PERSHING 的 router cost 沒有 timing 項，repeater 是事後貪婪補的。**我們的整個目標函數沒有競爭者** —— 而且 MinecraftHDL 是明確因為這件事太難而放棄的。
+3. **現有工具「能動」的方式是主動退化** —— 只用 dust + torch + repeater（所以碰不到 QC），等於放棄了紅石大部分的元件與技巧。這正是它們產出比手工大一到兩個數量級的原因。
+
+**自由 3D 沒有被放棄。** PERSHING 一路都是自由 3D，2016 的 future work 甚至是要求**更自由**（「abandoning the grid arrangement」）。被驗證失敗的是 MinecraftHDL 的硬分層 + channel routing。
+
+### 14.2 e-graph EDA 側：我們的架構被驗證了什麼
+
+| 我們的決定 | 先例 |
+|---|---|
+| 多層 IR + 優化與 techmap 同時做 | **Nextmap**（PLDI 2026）證明方向正確，且 ablation 顯示「同時做」才是收益來源 |
+| e-node 可以是實體結構實例 | **EqMap**（ICCAD 2025）的 LutLang 就是這樣，cut enumeration 被 rewriting 完全取代 |
+| 成本用實測延遲 | **E-morphic** 的 quality mode 就是跑真 ABC 拿 post-map delay |
+| 撞 node/iteration limit | **是常態不是失敗** —— 沒有一個成功系統真的 saturate |
+| 多輸出 cell | **BoolE** 的做法可抄：插共享節點 + 投影偽運算，extraction 視為 atomic |
+
+**rule 的來源也有現成方法論**：BoolE 不是手寫 rule，而是「用 ABC 從 template 電路裡**挖出** structural pattern」。這對我們的技巧提煉可能比純人工分析更有效率。
+
+### 14.3 可直接用的資源
+
+| 資源 | 授權 | 用途 |
+|---|---|---|
+| **MCHPRS `crates/redpiler/`** | MIT | 紅石語意黃金標準，同為 Rust，目標 1.20.4。**關鍵建模：紅石粉不是節點，是邊的權重**（`CompileLink.ss` = 衰減量）；`LinkType::Side` 區分背面/側面輸入；`facing_diode` 決定 tick priority；`SSRangeAnalysis` 對訊號強度做 interval domain；RIL 文字 IR + golden-file pass 測試 |
+| **e-boost** | MIT | DAG-aware extractor 首選 |
+| **`egraph-serialize`** | MIT | egg → extraction-gym JSON 的橋（約 20 行） |
+| **`eqmap` 0.10.0** | Apache-2.0 | 可直接 `cargo add`。分區策略（r2r / arc-set / delay-paths）、truth-table-in-e-node、`check` 等價驗證模組 |
+| **extraction-gym `data/rover/`** | MIT | 9 個真實電路 e-graph，現成的 extractor 回歸測試集 |
+| **BoolE** | MIT | 多輸出 cell extraction 的參考實作 |
+| **Redstone-Compiler `test/`** | MIT | `.nbt` + `.outputs.json` 回歸測試集 |
+| **Coward 博論的 ILP 公式** | CC BY-NC（可引用） | delay big-M 約束（Eq. 5.15–5.17），掃 `d` 即得 Pareto frontier |
+| **nucleation** | MIT | litematic 讀寫（`mc_schem`、`rustmatica` 是 GPL-3.0，有傳染性） |
+
+**不能碰**：E-Syn / E-morphic **沒有 LICENSE 檔**（預設保留所有權利，只能讀論文學方法）；MinecraftHDL、redhdl 無授權；ROVER 閉源。
+
+### 14.4 我們真正新的東西
+
+四個方向都查無先例：
+
+1. **把 placement 幾何回饋進 e-graph。** 最接近的只有 E-morphic 拿 ABC mapping 結果當 cost。而紅石比 CMOS 更適合做這件事 —— `ceil(len/15)` 是 placement 的**直接函數**，不是統計估計。
+2. **精確成本模型。** Coward 用 performance fuzzing 量出商用合成工具本身有 **15% 的 noise floor**，「ROVER 的 cost model 不可能捕捉到」；E-Syn 的 XGBoost surrogate R 只有 0.76–0.78；E-morphic 的 GNN 25.2% MAPE。**紅石沒有 noise floor** —— 這批論文所有關於 cost model 誤差的討論，對我們都不存在。
+3. **`ceil(len/15)` 階梯型線延遲。** CMOS 的線延遲連續可線性近似；階梯是非凸非線性，ILP 要 big-M 編碼（可做，沒人做過），SmoothE 的可微鬆弛在這裡不適用。
+4. **扇出延遲免費 + 3D 佈局。** 所有 CMOS 工作都把 fanout 當延遲代價；e-graph EDA 文獻也全是 2D standard cell 或 FPGA。
+
+### 14.5 動工前必須做的一件事
+
+**先評估 [Redstone-Compiler](https://github.com/Redstone-Compiler/redstone-compiler)。** Rust、MIT、2026-07 仍活躍，已經有 113 KB 的紅石模擬器、自由 3D placement、hierarchical placer、NBT 輸出。
+
+要回答的是：它的模擬器忠實度如何、placement 做到什麼程度、是否值得貢獻而非重寫、或至少哪些部分可以直接用。這個評估排在實作計畫之前。
