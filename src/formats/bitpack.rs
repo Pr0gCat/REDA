@@ -25,7 +25,7 @@ pub fn bits_per_entry(palette_len: usize) -> u32 {
 /// 呼叫端用它驗證輸入長度，因為 `unpack` 對不足的輸入只會回傳 0，
 /// 不會報錯。
 pub fn required_longs(count: usize, bits: u32) -> usize {
-    (((count as u64) * (bits as u64) + 63) / 64) as usize
+    (((count as u64) * (bits as u64)).div_ceil(64)) as usize
 }
 
 /// 從 long array 解出 `count` 個項目。
@@ -36,7 +36,7 @@ pub fn required_longs(count: usize, bits: u32) -> usize {
 /// 若 `longs` 短於 `required_longs(count, bits)`，不足的項目一律為 0 ——
 /// 不會回傳部分拼湊的值。呼叫端應自行驗證長度並回報損壞的檔案。
 pub fn unpack(longs: &[i64], bits: u32, count: usize) -> Vec<u32> {
-    assert!(bits >= 1 && bits <= 32, "bits must be in 1..=32");
+    assert!((1..=32).contains(&bits), "bits must be in 1..=32");
     let mask: u64 = (1u64 << bits) - 1;
     let mut out = Vec::with_capacity(count);
 
@@ -73,12 +73,12 @@ pub fn unpack(longs: &[i64], bits: u32, count: usize) -> Vec<u32> {
 
 /// 把項目打包成 long array，使用與 `unpack` 相同的跨界慣例。
 pub fn pack(values: &[u32], bits: u32) -> Vec<i64> {
-    assert!(bits >= 1 && bits <= 32, "bits must be in 1..=32");
+    assert!((1..=32).contains(&bits), "bits must be in 1..=32");
     if values.is_empty() {
         return Vec::new();
     }
     let total_bits = (values.len() as u64) * (bits as u64);
-    let long_count = ((total_bits + 63) / 64) as usize;
+    let long_count = total_bits.div_ceil(64) as usize;
     let mut longs = vec![0u64; long_count];
     let mask: u64 = (1u64 << bits) - 1;
 

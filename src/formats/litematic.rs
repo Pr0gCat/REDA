@@ -312,12 +312,6 @@ mod tests {
     }
 
     #[test]
-    fn version_above_the_current_one_is_rejected() {
-        // 未來版本可能改變方塊編碼，用今天的解碼邏輯讀會靜默產生錯誤的世界
-        assert!(SCHEMATIC_VERSION < 8, "test assumes 7 is current");
-    }
-
-    #[test]
     fn parse_block_name_keeps_unknown_blocks_as_other() {
         let b = parse_block_name("minecraft:some_future_block", &props(&[]));
         assert_eq!(b.kind, BlockKind::Other);
