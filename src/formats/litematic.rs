@@ -5,7 +5,7 @@
 //! （**可以是負的**）、`BlockStatePalette`、`BlockStates`（LongArray）、
 //! `TileEntities`、`Entities`。
 //!
-//! 目前版本是 **7**（對應 MC 1.20.5+）；讀取時也接受 6，因為兩者的
+//! 目前版本是 **6**（對應 MC 1.20.1）；讀取時也接受 7，因為兩者的
 //! 方塊資料編碼完全相同，差別只在 TileEntity 內的 item stack NBT。
 //!
 //! **沒有官方規格** —— 這個實作依據的是 Litematica 原始碼與社群逆向文件。
@@ -21,10 +21,20 @@ use crate::redstone::world::block::{BlockKind, BlockState, Facing, SlabHalf};
 use crate::redstone::world::palette::Palette;
 use crate::redstone::world::storage::World;
 
-/// 目前寫出的 schematic 版本。
-pub const SCHEMATIC_VERSION: i32 = 7;
+/// 寫出時使用的 schematic 版本。
+///
+/// 用 6 而不是 7：版本 7 是為 MC 1.20.5+ 引入的，1.20.1 的 Litematica
+/// 會拒絕載入。兩者的**方塊資料編碼完全相同**，差別只在 TileEntity 內的
+/// item stack NBT —— 而我們根本不寫 TileEntity。所以寫 6 對 1.20.x 全系列
+/// 相容，1.20.5+ 也讀得懂。
+pub const SCHEMATIC_VERSION: i32 = 6;
+
+/// 讀取時接受的最高版本。我們寫 6，但社群的檔案可能是 7。
+pub const MAX_SUPPORTED_VERSION: i32 = 7;
+
 /// 讀取時接受的最低版本。
 pub const MIN_SUPPORTED_VERSION: i32 = 6;
+
 /// MC 1.20.1 的 data version。
 pub const DATA_VERSION_1_20: i32 = 3465;
 
@@ -212,7 +222,7 @@ pub fn parse_block_name(name: &str, properties: &HashMap<String, String>) -> Blo
 pub fn load(path: &Path) -> Result<World, FormatError> {
     let file: LitematicFile = read_gzip_nbt(path)?;
 
-    if file.version < MIN_SUPPORTED_VERSION || file.version > SCHEMATIC_VERSION {
+    if file.version < MIN_SUPPORTED_VERSION || file.version > MAX_SUPPORTED_VERSION {
         return Err(FormatError::UnsupportedVersion(file.version));
     }
 
@@ -702,5 +712,20 @@ mod tests {
         let entry = block_state_to_entry(&plate);
         assert_eq!(entry.properties.get("powered").map(String::as_str), Some("true"));
         assert!(!entry.properties.contains_key("power"));
+    }
+
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn written_version_is_loadable_by_the_target_minecraft_version() {
+        // 版本 7 是 1.20.5+ 才有的，1.20.1 的 Litematica 會拒絕載入。
+        // 我們寫的檔案必須能被目標版本讀取。
+        assert_eq!(
+            SCHEMATIC_VERSION, 6,
+            "writing version 7 produces files 1.20.1 Litematica refuses"
+        );
+        assert!(
+            MAX_SUPPORTED_VERSION >= SCHEMATIC_VERSION,
+            "we must be able to read back what we write"
+        );
     }
 }
