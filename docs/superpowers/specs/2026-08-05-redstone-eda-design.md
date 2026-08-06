@@ -254,9 +254,16 @@ VHDL
 
 三道防線：
 
-1. **對照 MCHPRS**（Rust，MIT 授權）跑同一批電路比對。
-   **適用範圍比預期窄很多**：redpiler 認得的元件只有中繼器、比較器、火把、石按鈕、燈、拉桿、石壓板、紅石線，以及有 comparator override 的容器 —— **沒有活塞、沒有 observer、沒有 dropper、沒有 QC**，且明確不支援高訊號強度邏輯。它也是預先編譯的，設計上不模擬 block update 順序。
-   所以它只能對照**我們 v1 那批 cell 的邏輯功能**（剛好涵蓋，這是好消息），但**最需要交叉驗證的那些行為（QC、活塞、observer、locational、BUD、0-tick）它一項都驗不了**。那些只能靠黃金軌跡。
+1. **對照 MCHPRS**（Rust，MIT 授權）。**它有兩套實作，用途完全不同，別搞混：**
+
+   | | 用途 |
+   |---|---|
+   | **`crates/redstone/`**<br>（`lib`, `wire/mod`, `wire/turbo`, `repeater`, `comparator`） | **vanilla 紅石語意的 Rust 參考實作** —— 伺服器正常模式跑的那套。這是我們最該讀的東西，同語言、MIT、目標 1.20.4。`wire/turbo.rs` 就是 RedstoneWireTurbo（為消除 locationality 而重寫的紅石粉傳播） |
+   | `crates/redpiler/` | 加速用的預編譯器。**不模擬 block update 順序**，且只認中繼器、比較器、火把、按鈕、燈、拉桿、壓板、紅石線與容器 —— 沒有活塞、observer、dropper、QC |
+
+   對照時要清楚自己在對照哪一套：`redstone/` 可作語意參考；`redpiler/` 只能驗**我們 v1 那批 cell 的邏輯功能**，**QC、活塞、observer、locational、BUD、0-tick 它一項都驗不了**，那些只能靠黃金軌跡。
+
+   另外 `crates/blocks/generated.rs`（206 KB）是完整的 blockstate 目錄，`crates/schematic` 可省下格式工作。
 2. **黃金軌跡**：真實遊戲中蓋測試電路，逐 tick 錄下狀態匯出。須涵蓋 QC 觸發、1-tick pulse、中繼器鎖存、比較器減法模式、觀察者鏈
 3. **社群 litematic** 當測試套件
 
@@ -323,7 +330,7 @@ QC 進場的時機是活塞記憶體與社群結構。屆時的原則是：結�
 
 一個實體結構可能**每一列真值表從 reset 開始都對，但串進大電路就壞** —— 因為它「能上電、不能放電」：某些 layout 的紅石網路從初始狀態被驅動時會正確亮起，但輸入撤除後放不掉。
 
-這是 Redstone-Compiler 踩過並解決的坑（§14.6）。對策是 **雙向 transition 掃描**：真值表跑一遍升序、再跑一遍降序，讓每個 row 都經歷「從別的狀態轉移過來」而非「從 reset 開始」。
+這是 Redstone-Compiler 踩過並解決的坑（§14.5）。對策是 **雙向 transition 掃描**：真值表跑一遍升序、再跑一遍降序，讓每個 row 都經歷「從別的狀態轉移過來」而非「從 reset 開始」。
 
 ```
 for mask in (0..2^n).chain((0..2^n).rev()):
@@ -615,7 +622,18 @@ ILP-CBC 那條原本的規劃收回：不只是慢，在我們的平台上根本
 - **目標是硬約束滿足**（每跳 ≤15）而非最小化總和，這與解析式流程的目標函數形式不同，但可以用約束懲罰項表達。
 - **tick 量化確實造成 timing 目標的大片 plateau**，讓 timing-driven net weighting 的訊號 piecewise-constant、對小位移不敏感。這是真實的困難，但正確的表述是「timing weighting 的訊號品質下降」，不是「方法失效」—— 而且 plateau 對模擬退火**同樣有害**（大片中性區 = 隨機遊走）。
 
+**一個實質的經驗證據偏向解析式**：唯一在遊戲裡做出大規模自動佈線的 LogicLoom 用的正是 **force-directed placement（解 `Ax = f + c`）+ FLUTE rectilinear Steiner tree** —— 恰好就是 PERSHING 在 future work 裡建議的兩件事（放棄格點佈局、用 MRST 取代純 Lee）。它沒有公布數字，所以不能當定量證據，但「這條路走得通」這件事有了實例。
+
+它同時示範了兩個不能照抄的地方：
+
+- **它把 cell 當成點質量**（原始碼裡就寫著 `// TODO: add size for x and z`），尺寸只在 spreading force 與 legalizer 裡出現。紅石的 cell 有實體 3D 體積，這個簡化在我們這裡不成立。
+- **它用稠密 LU 每輪每軸從頭重解**，那是硬性的規模天花板。走解析式就必須用稀疏 CG。
+
+它的 legalizer 是 Tetris 式的（往四個方向擴散找第一個合法位置），但**只在 force loop 失敗時才跑**，收斂時完全不 legalize，最後若仍有 overlap 就直接放棄。3D 格點 + 元件朝向的 legalization 仍然是這條路最硬的部分。
+
 **待決策**：global placement 走解析式還是離散搜尋。這需要在階段 D 之前以小規模實驗決定，不在本文件定案。§7.2 的 datapath 程式化佈局與 hierarchical 分解則不受此決策影響，兩條路都適用。
+
+**若走解析式，Steiner tree 用 flute3**（OpenROAD Attic，**BSD-3-Clause**），不要用 LogicLoom 移植的那份 —— 那份原始碼是 Attribution Assurance License（要求執行時顯著顯示歸屬），在該專案裡被重新授權成 MIT 且移除了標示。兩者的查表資料逐位元相同，取乾淨的那份即可。
 
 ### 7.2 分兩類處理
 
@@ -679,7 +697,7 @@ PERSHING 提出的四項評估指標中，**Feasibility**（router 是否跑得�
 
 **訊號強度必須是繞線搜尋狀態的一部分**，`(位置, 訊號強度)` 一起當 visited key。強度耗盡時就在該處插中繼器並重設為 15，繼續搜尋。
 
-這個設計來自 Redstone-Compiler（已驗證可行，見 §14.6），而它比「事後貪婪補中繼器」好在兩點：
+這個設計來自 Redstone-Compiler（已驗證可行，見 §14.5），而它比「事後貪婪補中繼器」好在兩點：
 
 - **前人失敗的模式正是事後補。** PERSHING 在 routing 之後才貪婪插 repeater，論文自承有「pathological cases 導致訊號無法 buffer，必須整條重繞」。把強度納入搜尋狀態就不會產生無法 buffer 的路徑 —— 不合法的路徑根本不會被展開。
 - **強度預算與延遲自然耦合**：每插一個中繼器就是 +1 tick，所以搜尋在最小化路徑長度的同時就在最小化延遲，不需要另一套機制。
@@ -800,7 +818,16 @@ benchmark 套件應早期建立。可用的素材已經查清楚：
 | 5×5 Game of Life | ≤20 redstone ticks / cycle |
 | 2-bit 分支預測器 | ≤8 redstone ticks 響應 |
 
-**及格線 —— 7-segment decoder（~60 cells）**：PERSHING、dewey、MinecraftHDL 三個工具都在這裡翻車。**能編出它就已經超越所有既有的紅石自動 P&R 工具。**
+**門檻座標（查證後修正）**：
+
+| 里程碑 | 規模 | 狀態 |
+|---|---|---|
+| 4-bit counter | 23 cells | **文獻上真正繞完的最大紀錄**（PERSHING，1084 秒） |
+| 7-segment decoder | 63 cells | **從來沒有工具繞完過** —— PERSHING 標「routing did not complete」、MinecraftHDL 產出 83×442 blocks 超過載入半徑 |
+
+所以 63-cell 不是「及格線」，是**沒人到達過的線**。**繞完 23 cells 就追平文獻紀錄，繞完 63 cells 就是這個領域的第一次。**
+
+（唯一可能越過的是 LogicLoom —— 遊戲內截圖顯示數百格見方的自動佈線結果，但它**沒有公布任何 gate 數、尺寸或延遲**，也沒有可重現的 artifact，所以無法納入比較。）
 
 **回歸測試集**：Redstone-Compiler 的 `test/*.nbt` + `*.outputs.json`（MIT，可直接取用）。
 
@@ -1001,7 +1028,7 @@ benchmark 套件在階段 A 末期即開始建立 —— 階段 A 用來驗證�
 | **Coward 博論的 ILP 公式** | CC BY-NC（可引用） | delay big-M 約束（Eq. 5.15–5.17），掃 `d` 即得 Pareto frontier |
 | **nucleation** | MIT | litematic 讀寫（`mc_schem`、`rustmatica` 是 GPL-3.0，有傳染性） |
 
-**不能碰**：E-Syn / E-morphic **沒有 LICENSE 檔**（預設保留所有權利，只能讀論文學方法）；MinecraftHDL、redhdl 無授權；ROVER 閉源。
+**不能碰**：E-Syn / E-morphic **沒有 LICENSE 檔**（預設保留所有權利，只能讀論文學方法）；MinecraftHDL、redhdl、veristone 無授權；ROVER 閉源。RedstoneBuilder 無 LICENSE 檔，且夾帶了來自無授權專案的 `.schem` 檔（經 blob SHA-1 比對確認）—— 它的 Litematica bit-packing 邏輯正確且值得參考規格，但**照格式自己寫，不要複製檔案**。
 
 ### 14.4 我們真正新的東西
 
@@ -1057,3 +1084,17 @@ benchmark 套件在階段 A 末期即開始建立 —— 階段 A 用來驗證�
 一個人維護、bus factor 1、有過 13 個月空窗、零外部貢獻、fork 數 0。
 
 **唯一的正面佐證**：它的 IR 分層（Logical 帶 width/Add/Mux/Register\<N\> ↔ Routable 純 scalar gate）與我們的 word/gate 分層對得上 —— 這是四層設計在紅石 target 上站得住腳的一個獨立證據。
+
+### 14.6 一個關於「綠色 CI」的警惕
+
+RedstoneBuilder 是最值得記住的反例：它**真的會編譯、CI 全綠、124 個測試通過、零 `todo!()`**，README 的功能表打滿勾。但：
+
+- **PathFinder 的協商機制實際失效** —— `present_cost` 每代開頭被清空，A\* 讀到的永遠是 0，第 2 代以後逐位元重播第 1 代
+- **STA 只有 arrival time**，沒有 slack、沒有 critical path；遇到 cycle 靜默回傳空結果然後回報成功
+- **timing 在 P&R 之前跑**，router 拿不到任何 slack
+- **D 正反器的 Q 恆為 ON**（火把沒有輸入所以永遠亮），而 sequential 在 README 裡標著 ✅
+- 招牌設計（8-bit ALU、8-bit adder）**全部在 `#[ignore]` 裡**，CI 實際驗證過的最大電路是 4-bit adder
+
+**EDA 詞彙正確，EDA 行為不正確。** 這正是本文件 §10.7 堅持 `check-rule` 要跑全 benchmark、以及 §4.6 要求逐 net 注入-觀測的理由 —— 綠色的測試套件本身不保證任何事，只有**跑真電路、量真數字**才算數。
+
+我們自己的 benchmark 必須產出可公開查核的數字（gate 數、blocks 尺寸、tick 延遲、以及 §8.0 的 Feasibility），而不是通過/失敗的布林值。
