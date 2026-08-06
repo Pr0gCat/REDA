@@ -68,8 +68,9 @@ pub fn recompute_dust_strengths(world: &mut World) -> usize {
         // 強充能的方塊也能驅動相鄰的紅石粉
         for facing in ALL_SIX {
             let neighbour = pos.offset(facing);
-            if block_power_at(world, neighbour) == BlockPower::Strong {
-                best = MAX_SIGNAL_STRENGTH;
+            let (kind, strength) = block_signal_at(world, neighbour);
+            if kind == BlockPower::Strong {
+                best = best.max(strength);
             }
         }
 
@@ -112,38 +113,64 @@ pub fn recompute_dust_strengths(world: &mut World) -> usize {
     changed
 }
 
-/// 這一格方塊被充能到什麼程度。
+/// 這一格方塊被充能到什麼程度，以及**多強**。
 ///
-/// 只有**強充能**的方塊能再驅動相鄰的紅石粉；弱充能的不行 —— 這是繞線時
-/// 每段線都必須以主動元件收尾的原因。
-pub fn block_power_at(world: &World, pos: Position) -> BlockPower {
+/// `block_power_at` 只回答種類，這個版本連強度一起回答。比較器透過方塊
+/// 傳出的是 0..15 的類比值 —— 只回傳「強充能」會把它壓成 15，等於把
+/// 比較器變成一個開關。
+///
+/// 回傳 `(BlockPower::None, 0)` 表示沒有充能。
+pub fn block_signal_at(world: &World, pos: Position) -> (BlockPower, u8) {
     let state = world.get(pos.x, pos.y, pos.z);
     if !flags_of(state).is_conductive() {
-        return BlockPower::None;
+        return (BlockPower::None, 0);
     }
 
-    let mut best = BlockPower::None;
+    let mut best_kind = BlockPower::None;
+    let mut best_strength = 0u8;
 
     for facing in ALL_SIX {
         let neighbour = pos.offset(facing);
         let neighbour_state = world.get(neighbour.x, neighbour.y, neighbour.z);
-        // 鄰居是往「朝向我們」的方向送出，也就是 facing 的反方向
         let output = power_emitted_toward(neighbour_state, facing.opposite());
 
         match output.block_power {
-            BlockPower::Strong => return BlockPower::Strong,
-            BlockPower::Weak => best = BlockPower::Weak,
+            BlockPower::Strong => {
+                // 強充能勝過弱充能；同為強充能時取較大的強度
+                if best_kind != BlockPower::Strong || output.strength > best_strength {
+                    best_kind = BlockPower::Strong;
+                    best_strength = output.strength;
+                }
+            }
+            BlockPower::Weak => {
+                if best_kind == BlockPower::None {
+                    best_kind = BlockPower::Weak;
+                    best_strength = output.strength;
+                } else if best_kind == BlockPower::Weak && output.strength > best_strength {
+                    best_strength = output.strength;
+                }
+            }
             BlockPower::None => {}
         }
     }
 
-    best
+    (best_kind, best_strength)
+}
+
+/// 這一格方塊被充能到什麼程度。
+///
+/// 只有**強充能**的方塊能再驅動相鄰的紅石粉；弱充能的不行 —— 這是繞線時
+/// 每段線都必須以主動元件收尾的原因。
+///
+/// 需要強度時用 `block_signal_at`。
+pub fn block_power_at(world: &World, pos: Position) -> BlockPower {
+    block_signal_at(world, pos).0
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::redstone::world::block::{BlockKind, BlockState};
+    use crate::redstone::world::block::{BlockKind, BlockState, Facing};
 
     fn named(name: &str, kind: BlockKind) -> BlockState {
         let mut b = BlockState::air();
@@ -282,5 +309,53 @@ mod tests {
 
         let changed_again = recompute_dust_strengths(&mut w);
         assert_eq!(changed_again, 0, "a second pass changes nothing");
+    }
+
+    #[test]
+    fn a_strongly_powered_block_passes_on_the_real_strength_not_fifteen() {
+        // 比較器透過方塊傳出的是類比值。壓成 15 等於把比較器變成開關。
+        let mut w = World::new(10, 5, 10);
+
+        // 石頭當被充能的方塊，粉在它旁邊
+        w.set(5, 1, 5, stone());
+        w.set(6, 0, 5, stone());
+        w.set(6, 1, 5, dust());
+
+        // 比較器在石頭西邊，朝東（指向石頭），輸出強度 7。
+        // （Facing 是全域座標系：East 是 +x，比較器在 x=4、石頭在 x=5，
+        // 所以要朝 East 才能指到石頭 —— 見 `Position::offset` 與
+        // `power_emitted_toward` 對中繼器／比較器的方向比對。）
+        let mut comparator = named("minecraft:comparator", BlockKind::Comparator);
+        comparator.lit = true;
+        comparator.power = 7;
+        comparator.facing = Some(Facing::East);
+        w.set(6, 1, 5, dust());
+        w.set(4, 1, 5, comparator);
+
+        let (kind, strength) = block_signal_at(&w, Position::new(5, 1, 5));
+        assert_eq!(kind, BlockPower::Strong, "the comparator strongly powers the stone");
+        assert_eq!(strength, 7, "and it must pass on 7, not 15");
+    }
+
+    #[test]
+    fn block_power_at_still_agrees_with_block_signal_at() {
+        let mut w = World::new(10, 5, 10);
+        w.set(5, 1, 5, stone());
+        let mut lever = named("minecraft:lever", BlockKind::Lever);
+        lever.lit = true;
+        w.set(4, 1, 5, lever);
+
+        let pos = Position::new(5, 1, 5);
+        assert_eq!(block_power_at(&w, pos), block_signal_at(&w, pos).0);
+    }
+
+    #[test]
+    fn an_unpowered_block_reports_no_signal() {
+        let mut w = World::new(10, 5, 10);
+        w.set(5, 1, 5, stone());
+        assert_eq!(
+            block_signal_at(&w, Position::new(5, 1, 5)),
+            (BlockPower::None, 0)
+        );
     }
 }

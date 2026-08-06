@@ -241,11 +241,20 @@ pub fn power_emitted_by(state: &BlockState) -> PowerOutput {
             strength: state.power,
         },
 
-        // 中繼器與比較器：只對正前方輸出，強充能。
-        BlockKind::Repeater | BlockKind::Comparator if state.lit => PowerOutput {
+        // 中繼器：只對正前方輸出，強充能，固定 15。
+        BlockKind::Repeater if state.lit => PowerOutput {
             drives_dust: true,
             block_power: BlockPower::Strong,
             strength: 15,
+        },
+
+        // 比較器：只對正前方輸出，強充能，但強度是類比的（0..15），
+        // 存在 `state.power`。這是比較器存在的意義 —— 硬編成 15
+        // 等於把它變成一個開關。
+        BlockKind::Comparator if state.lit => PowerOutput {
+            drives_dust: true,
+            block_power: BlockPower::Strong,
+            strength: state.power,
         },
 
         // 火把：強充能正上方，弱充能其他相鄰（但**不含**它所附著的方塊）。
