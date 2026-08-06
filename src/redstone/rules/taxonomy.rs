@@ -78,8 +78,13 @@ impl BlockFlags {
 /// `BlockKind::Other` 的方塊是不是一般的完整建材方塊。
 ///
 /// 只有在方塊未被兩份導電性清單涵蓋時才會問到這裡。
+///
+/// `CONDUCTIVE_EXCEPTIONS` 也算在內：那份清單裡的方塊在紅石意義上就是
+/// 「完整且導電」的（靈魂沙、標靶、黏液塊…），紅石粉放得上去。若不納入，
+/// 它們會拿到「導電但什麼都放不上去」的矛盾旗標。
 fn is_ordinary_full_block(name: &str) -> bool {
     java_1_20::CONDUCTIVE_FULL_BLOCKS.contains(&name)
+        || java_1_20::CONDUCTIVE_EXCEPTIONS.contains(&name)
         || java_1_20::FULL_BLOCK_SUFFIXES
             .iter()
             .any(|suffix| name.ends_with(suffix))
@@ -113,11 +118,29 @@ pub fn flags_of(state: &BlockState) -> BlockFlags {
             BlockKind::Other => is_ordinary_full_block(name),
             _ => false,
         };
+
+        // 側面是否為完整面 —— 這與頂面支撐是**獨立的問題**。
+        // 半磚的側面是 16×8，牆上火把附不上去；只有完整立方體才有完整側面。
+        let side_is_full = match state.kind {
+            BlockKind::Slab => state.half == Some(SlabHalf::Double),
+            BlockKind::Solid
+            | BlockKind::Glass
+            | BlockKind::Lamp
+            | BlockKind::Observer
+            | BlockKind::Target
+            | BlockKind::Piston
+            | BlockKind::RedstoneBlock => true,
+            BlockKind::Other => is_ordinary_full_block(name),
+            _ => false,
+        };
+
         if top_is_full {
             bits |= BlockFlags::SUPPORT_FULL
                 | BlockFlags::SUPPORT_RIGID
-                | BlockFlags::SUPPORT_CENTER
-                | BlockFlags::SIDE_FULL;
+                | BlockFlags::SUPPORT_CENTER;
+        }
+        if side_is_full {
+            bits |= BlockFlags::SIDE_FULL;
         }
     }
 
@@ -435,6 +458,49 @@ mod tests {
             let mut dust = named(BlockKind::RedstoneWire, "minecraft:redstone_wire");
             dust.power = level;
             assert_eq!(power_emitted_by(&dust).strength, level);
+        }
+    }
+
+    #[test]
+    fn wall_torches_cannot_attach_to_slab_sides() {
+        // 半磚的側面是 16×8，不是完整面
+        assert!(
+            !flags_of(&slab(SlabHalf::Top)).can_attach_wall_torch(),
+            "a top slab has no full side face"
+        );
+        assert!(
+            !flags_of(&slab(SlabHalf::Bottom)).can_attach_wall_torch(),
+            "a bottom slab has no full side face"
+        );
+        assert!(
+            flags_of(&slab(SlabHalf::Double)).can_attach_wall_torch(),
+            "a double slab is a full cube"
+        );
+    }
+
+    #[test]
+    fn wall_torches_attach_to_full_cubes() {
+        assert!(flags_of(&named(BlockKind::Solid, "minecraft:stone")).can_attach_wall_torch());
+        assert!(flags_of(&named(BlockKind::Glass, "minecraft:glass")).can_attach_wall_torch());
+    }
+
+    #[test]
+    fn top_support_and_side_support_are_independent() {
+        // 上半磚頂面放得了東西，側面卻附不了火把 —— 兩個軸各自獨立
+        let f = flags_of(&slab(SlabHalf::Top));
+        assert!(f.can_carry_dust(), "a top slab holds dust");
+        assert!(!f.can_attach_wall_torch(), "but has no full side");
+    }
+
+    #[test]
+    fn conducting_exception_blocks_have_coherent_flags() {
+        // 導電卻什麼都放不上去是矛盾的旗標組合
+        for name in ["minecraft:soul_sand", "minecraft:target"] {
+            let b = named(BlockKind::Other, name);
+            let f = flags_of(&b);
+            assert!(f.is_conductive(), "{name} conducts");
+            assert!(f.can_carry_dust(), "{name} must also hold dust");
+            assert!(f.can_carry_repeater(), "{name} must also hold a repeater");
         }
     }
 
