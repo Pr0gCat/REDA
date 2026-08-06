@@ -55,6 +55,26 @@ impl Facing {
     }
 }
 
+/// 拉桿／按鈕貼附在哪一種面。單獨的 `facing` 沒有意義 —— 附著方向是
+/// `face` × `facing` 一起決定的：`face` 選出哪一族鄰居（上/下/側面），
+/// `facing` 只在 `Wall` 時才進一步指出側面的哪個方向。
+///
+/// Minecraft 的**預設值是 `Wall`**，不是 `Floor` —— 這正是本模組存在的
+/// 原因：舊程式碼從不寫這個屬性，貼上結構後 Minecraft 套用這個預設，
+/// 而我們排線時從未替拉桿蓋一面牆，於是拉桿在方塊更新時掉成掉落物。
+/// 見 `minecraft.wiki/w/Lever`（Java 1.20 blockstate 表）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Face {
+    /// 立在地板上：附著在**下方**方塊的頂面（需要 `SUPPORT_FULL`）。
+    Floor,
+    /// 附在牆上：附著在 `facing.opposite()` 方向那格方塊的側面
+    /// （需要側面是完整面，同「牆上火把附得上去」那個條件）。這是
+    /// Minecraft 的預設值。
+    Wall,
+    /// 吊在天花板上：附著在**上方**方塊的底面。
+    Ceiling,
+}
+
 /// 半磚位於方塊格的哪一半。這決定它的頂面能不能承載東西。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SlabHalf {
@@ -74,6 +94,8 @@ pub enum SlabHalf {
 pub struct BlockState {
     pub kind: BlockKind,
     pub facing: Option<Facing>,
+    /// 拉桿／按鈕貼附的面。只有 `Lever` 與 `Button` 用得到。
+    pub face: Option<Face>,
     /// 紅石粉的訊號強度 0..=15；其他方塊為 0
     pub power: u8,
     /// 中繼器的延遲 1..=4；其他方塊為 0
@@ -96,6 +118,7 @@ impl BlockState {
         BlockState {
             kind: BlockKind::Air,
             facing: None,
+            face: None,
             power: 0,
             delay: 0,
             lit: false,

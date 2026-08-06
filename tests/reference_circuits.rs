@@ -11,13 +11,19 @@
 
 use std::collections::HashMap;
 
-use reda::circuits::and4::{build_and4_netlist, INPUT_NAMES as AND4_INPUT_NAMES};
-use reda::circuits::full_adder::{build_full_adder_netlist, INPUT_NAMES as ADDER_INPUT_NAMES};
+use reda::circuits::and4::build_and4_netlist;
+use reda::circuits::and4::INPUT_NAMES as AND4_INPUT_NAMES;
+use reda::circuits::full_adder::build_full_adder_netlist;
+use reda::circuits::full_adder::INPUT_NAMES as ADDER_INPUT_NAMES;
 use reda::circuits::seven_segment::{
-    build_single_segment_netlist, INPUT_NAMES as DECODER_INPUT_NAMES, TRUTH_TABLE,
+    build_seven_segment_netlist, build_single_segment_netlist,
+    INPUT_NAMES as DECODER_INPUT_NAMES, TRUTH_TABLE,
 };
 use reda::compile::compile;
+use reda::redstone::rules::taxonomy::flags_of;
 use reda::redstone::simulator::Simulator;
+use reda::redstone::world::block::{BlockKind, Face, Facing};
+use reda::redstone::world::storage::World;
 
 const MAX_TICKS: u64 = 2000;
 
@@ -156,4 +162,127 @@ fn the_compiled_segment_a_matches_its_truth_table() {
         mismatches.len(),
         mismatches.join("\n")
     );
+}
+
+// ---------------------------------------------------------------------
+// Lever attachment: every lever compile() places must carry an explicit
+// `face`, and the neighbour it attaches to given that face must actually be
+// a valid support -- not air. This is the regression test for the bug where
+// `lever()` never set `face` at all: Minecraft's own default is `wall`, our
+// layout never builds a wall next to a lever, and every lever popped off as
+// a dropped item on the first block update after paste. See `lever()` in
+// `src/compile/mod.rs` and the blockstate table on `minecraft.wiki/w/Lever`.
+// ---------------------------------------------------------------------
+
+/// Where the neighbour a lever with this `face` × `facing` must attach to
+/// lives, in world coordinates.
+fn lever_support_position(pos: (i32, i32, i32), face: Face, facing: Facing) -> (i32, i32, i32) {
+    let (x, y, z) = pos;
+    match face {
+        // Floor: the lever stands on top of the block below it.
+        Face::Floor => (x, y - 1, z),
+        // Ceiling: the lever hangs off the bottom of the block above it.
+        Face::Ceiling => (x, y + 1, z),
+        // Wall: `facing` points away from the wall, so the support sits in
+        // the opposite direction (minecraft.wiki/w/Lever: "Opposite to the
+        // direction the player is facing if placed on the side of a block").
+        Face::Wall => match facing.opposite() {
+            Facing::North => (x, y, z - 1),
+            Facing::South => (x, y, z + 1),
+            Facing::East => (x + 1, y, z),
+            Facing::West => (x - 1, y, z),
+            Facing::Up => (x, y + 1, z),
+            Facing::Down => (x, y - 1, z),
+        },
+    }
+}
+
+/// Whether a lever with this `face` can actually attach to `support`.
+///
+/// `SUPPORT_FULL` is documented on `BlockFlags` as "頂面是完整實心方形面：
+/// 紅石粉、拉桿、按鈕放得上去" -- top face is a full solid square, which is
+/// exactly what a floor (and, for the full cubes we ever place, a ceiling)
+/// lever needs. `SIDE_FULL` (`can_attach_wall_torch`) is the same "full side
+/// face" requirement a wall torch has, which a wall-mounted lever shares.
+fn face_is_supported(support: &reda::redstone::world::block::BlockState, face: Face) -> bool {
+    let flags = flags_of(support);
+    match face {
+        Face::Floor | Face::Ceiling => flags.can_carry_dust(),
+        Face::Wall => flags.can_attach_wall_torch(),
+    }
+}
+
+/// Scans `world` for every placed lever and asserts it has an explicit
+/// `face`/`facing` and a real, valid support block.
+fn assert_every_lever_is_properly_attached(circuit_name: &str, world: &World) {
+    let (size_x, size_y, size_z) = world.size();
+    let mut lever_count = 0usize;
+
+    for x in 0..size_x {
+        for y in 0..size_y {
+            for z in 0..size_z {
+                let state = world.get(x, y, z);
+                if state.kind != BlockKind::Lever {
+                    continue;
+                }
+                lever_count += 1;
+
+                let face = state.face.unwrap_or_else(|| {
+                    panic!("{circuit_name}: lever at ({x},{y},{z}) has no explicit face")
+                });
+                let facing = state.facing.unwrap_or_else(|| {
+                    panic!("{circuit_name}: lever at ({x},{y},{z}) has no explicit facing")
+                });
+
+                let (sx, sy, sz) = lever_support_position((x, y, z), face, facing);
+                let support = world.get(sx, sy, sz);
+
+                assert_ne!(
+                    support.kind,
+                    BlockKind::Air,
+                    "{circuit_name}: lever at ({x},{y},{z}) with face={face:?} facing={facing:?} \
+                     attaches to air at ({sx},{sy},{sz}) -- it would pop off as a dropped item \
+                     the moment Minecraft re-checks its support"
+                );
+                assert!(
+                    face_is_supported(support, face),
+                    "{circuit_name}: lever at ({x},{y},{z}) with face={face:?} attaches to \
+                     {support:?} at ({sx},{sy},{sz}), which is not a valid support for that face"
+                );
+            }
+        }
+    }
+
+    assert!(
+        lever_count > 0,
+        "{circuit_name}: found no levers at all -- this test would be vacuously true"
+    );
+}
+
+#[test]
+fn every_lever_in_and4_is_properly_attached() {
+    let (netlist, _output_signal) = build_and4_netlist();
+    let compiled = compile(&netlist).expect("and4 is acyclic and fully driven");
+    assert_every_lever_is_properly_attached("and4", &compiled.world);
+}
+
+#[test]
+fn every_lever_in_full_adder_is_properly_attached() {
+    let (netlist, _output_signal) = build_full_adder_netlist();
+    let compiled = compile(&netlist).expect("full_adder is acyclic and fully driven");
+    assert_every_lever_is_properly_attached("full_adder", &compiled.world);
+}
+
+#[test]
+fn every_lever_in_segment_a_is_properly_attached() {
+    let (netlist, _output_signal) = build_single_segment_netlist(0);
+    let compiled = compile(&netlist).expect("segment_a is acyclic and fully driven");
+    assert_every_lever_is_properly_attached("segment_a", &compiled.world);
+}
+
+#[test]
+fn every_lever_in_seven_segment_is_properly_attached() {
+    let (netlist, _segment_signal) = build_seven_segment_netlist();
+    let compiled = compile(&netlist).expect("seven_segment is acyclic and fully driven");
+    assert_every_lever_is_properly_attached("seven_segment", &compiled.world);
 }

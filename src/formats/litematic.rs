@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::formats::bitpack::{bits_per_entry, pack, required_longs, unpack};
 use crate::formats::nbt::{read_gzip_nbt, write_gzip_nbt, FormatError};
-use crate::redstone::world::block::{BlockKind, BlockState, Facing, SlabHalf};
+use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing, SlabHalf};
 use crate::redstone::world::palette::Palette;
 use crate::redstone::world::storage::World;
 
@@ -112,10 +112,11 @@ fn structured_property_keys(kind: BlockKind) -> &'static [&'static str] {
         BlockKind::Comparator => &["facing", "powered"],
         BlockKind::WallTorch => &["facing", "lit"],
         BlockKind::Torch | BlockKind::Lamp => &["lit"],
-        BlockKind::Lever => &["facing", "powered"],
+        BlockKind::Lever => &["face", "facing", "powered"],
         BlockKind::Piston => &["facing"],
         BlockKind::Slab => &["type"],
-        BlockKind::Button | BlockKind::PressurePlate => &["powered"],
+        BlockKind::Button => &["face", "powered"],
+        BlockKind::PressurePlate => &["powered"],
         BlockKind::WeightedPressurePlate => &["power"],
         BlockKind::Observer => &["facing", "powered"],
         BlockKind::Target | BlockKind::DaylightDetector => &["power"],
@@ -172,6 +173,13 @@ pub fn parse_block_name(name: &str, properties: &HashMap<String, String>) -> Blo
         _ => None,
     });
 
+    let face = reads("face").and_then(|f| match f.as_str() {
+        "floor" => Some(Face::Floor),
+        "wall" => Some(Face::Wall),
+        "ceiling" => Some(Face::Ceiling),
+        _ => None,
+    });
+
     let half = reads("type").and_then(|t| match t.as_str() {
         "top" => Some(SlabHalf::Top),
         "bottom" => Some(SlabHalf::Bottom),
@@ -206,6 +214,7 @@ pub fn parse_block_name(name: &str, properties: &HashMap<String, String>) -> Blo
     BlockState {
         kind,
         facing,
+        face,
         power,
         delay,
         lit,
@@ -313,6 +322,17 @@ pub fn block_state_to_entry(state: &BlockState) -> PaletteEntry {
                 Facing::Down => "down",
             };
             properties.insert("facing".to_string(), s.to_string());
+        }
+    }
+
+    if structured.contains(&"face") {
+        if let Some(f) = state.face {
+            let s = match f {
+                Face::Floor => "floor",
+                Face::Wall => "wall",
+                Face::Ceiling => "ceiling",
+            };
+            properties.insert("face".to_string(), s.to_string());
         }
     }
 
@@ -431,7 +451,7 @@ pub fn save(path: &Path, world: &World, name: &str) -> Result<(), FormatError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::redstone::world::block::{BlockKind, Facing, SlabHalf};
+    use crate::redstone::world::block::{BlockKind, Face, Facing, SlabHalf};
 
     fn props(pairs: &[(&str, &str)]) -> HashMap<String, String> {
         pairs
@@ -637,6 +657,48 @@ mod tests {
     }
 
     #[test]
+    fn lever_face_is_read_into_the_structured_field_not_extra_properties() {
+        // `face` must take the typed path so callers (e.g. compile()) can
+        // query `state.face` instead of poking at a string bag.
+        let lever = parse_block_name(
+            "minecraft:lever",
+            &props(&[("face", "ceiling"), ("facing", "west"), ("powered", "false")]),
+        );
+        assert_eq!(lever.face, Some(Face::Ceiling));
+        assert!(
+            !lever.extra_properties.contains_key("face"),
+            "face must be a structured field, not stashed in extra_properties"
+        );
+    }
+
+    #[test]
+    fn button_face_survives_the_round_trip() {
+        let button = parse_block_name(
+            "minecraft:oak_button",
+            &props(&[("face", "wall"), ("facing", "north"), ("powered", "true")]),
+        );
+        assert_eq!(button.face, Some(Face::Wall));
+        let entry = block_state_to_entry(&button);
+        assert_eq!(
+            entry.properties.get("face").map(String::as_str),
+            Some("wall"),
+            "a wall button must not become a floor button"
+        );
+    }
+
+    #[test]
+    fn face_is_not_emitted_for_blocks_that_have_no_such_property() {
+        let mut stone = parse_block_name("minecraft:stone", &props(&[]));
+        stone.face = Some(Face::Floor);
+
+        let entry = block_state_to_entry(&stone);
+        assert!(
+            !entry.properties.contains_key("face"),
+            "a plain solid block must not carry a face property"
+        );
+    }
+
+    #[test]
     fn plain_blocks_gain_no_properties_they_did_not_have() {
         let stone = parse_block_name("minecraft:stone", &props(&[]));
         assert!(block_state_to_entry(&stone).properties.is_empty());
@@ -650,6 +712,8 @@ mod tests {
             ("minecraft:oak_stairs", vec![("facing", "east"), ("half", "top"), ("shape", "straight"), ("waterlogged", "false")]),
             ("minecraft:redstone_wire", vec![("power", "9"), ("north", "side"), ("east", "up")]),
             ("minecraft:hopper", vec![("facing", "down"), ("enabled", "true")]),
+            ("minecraft:lever", vec![("face", "wall"), ("facing", "south"), ("powered", "true")]),
+            ("minecraft:stone_button", vec![("face", "ceiling"), ("facing", "east"), ("powered", "false")]),
         ];
 
         for (name, pairs) in cases {

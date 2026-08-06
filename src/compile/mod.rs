@@ -27,7 +27,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use crate::redstone::simulator::position::{Position, HORIZONTAL};
-use crate::redstone::world::block::{BlockKind, BlockState, Facing};
+use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use crate::redstone::world::storage::World;
 
 // ---------------------------------------------------------------------
@@ -146,11 +146,20 @@ fn wall_torch(facing: Facing) -> BlockState {
     state
 }
 
+/// `place_primary_input` always stands the lever on top of a floor block
+/// (`ensure_floor` runs right after this), never against a wall, so `face`
+/// must be `Floor` -- Minecraft's own default is `Wall`, which is exactly
+/// the mismatch that made every previous lever pop off as a dropped item on
+/// paste (see `minecraft.wiki/w/Lever`'s blockstate table). `facing` is
+/// purely cosmetic for a floor lever (it only orients the little handle),
+/// so it is fixed to `North` for determinism rather than left unset.
 fn lever(on: bool) -> BlockState {
     let mut state = BlockState::air();
     state.kind = BlockKind::Lever;
     state.name = "minecraft:lever".to_string();
     state.lit = on;
+    state.face = Some(Face::Floor);
+    state.facing = Some(Facing::North);
     state
 }
 

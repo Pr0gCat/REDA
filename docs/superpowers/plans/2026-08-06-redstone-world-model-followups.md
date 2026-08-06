@@ -22,12 +22,12 @@ A1（世界模型與格式 I/O）已合併。最終 whole-branch review 判定 *
 
 以下屬性目前只以字串形式存在 `extra_properties` 裡，round-trip 無損，但程式無法查詢：
 
-| 屬性 | 誰需要 |
-|---|---|
-| 比較器 `mode`（compare / subtract） | 忠實引擎 |
-| 中繼器 `locked` | 忠實引擎 |
-| 活塞 `extended` | 方塊層級引擎 |
-| 拉桿／按鈕 `face`（floor / wall / ceiling） | 三者皆需 —— `state.facing` 單獨沒有意義，附著方向是 `face` × `facing` |
+| 屬性 | 誰需要 | 狀態 |
+|---|---|---|
+| 比較器 `mode`（compare / subtract） | 忠實引擎 | 待做 |
+| 中繼器 `locked` | 忠實引擎 | 待做 |
+| 活塞 `extended` | 方塊層級引擎 | 待做 |
+| 拉桿／按鈕 `face`（floor / wall / ceiling） | 三者皆需 —— `state.facing` 單獨沒有意義，附著方向是 `face` × `facing` | **已做**：`BlockState::face`（`src/redstone/world/block.rs`），litematic 讀寫（`src/formats/litematic.rs`），`compile()` 對每個拉桿明確設成 `Face::Floor`（`src/compile/mod.rs` 的 `lever()`）——它站在 `ensure_floor` 鋪的地板上，不是靠牆。回歸測試見 `tests/reference_circuits.rs` 的 `every_lever_in_*_is_properly_attached`。 |
 
 ### 3. 逐面（per-face）查詢 API
 
