@@ -9,18 +9,22 @@
 //! 任一輸入充能那個方塊，火把就熄滅。NOR 是通用閘，任何布林函數都能只用
 //! NOR 組出來，所以這是唯一需要的 cell。
 //!
-//! # 佈局與繞線：故意做到最簡單
+//! # Placement and routing
 //!
-//! 這個階段的目標是「能動」，不是「小」。佈局是一閘一列，沿著 Z 軸排開，
-//! 間距寬鬆到不用擔心意外相鄰。繞線是直線紅石粉沿著專屬通道走，每 15
-//! 格插一個中繼器補訊號，末端一定接一個中繼器把訊號強充能進下一個閘的
-//! 支撐塊 —— 紅石粉本身水平方向不會充能方塊（只會弱充能正下方），所以
-//! 每一段線都必須用主動元件收尾。
+//! Gates are levelised and every gate of one level shares one row, so Z grows
+//! with the netlist's depth rather than its gate count. Between two rows sits
+//! a routing channel: east-west tracks on one Y layer, north-south columns on
+//! another, so that nets can cross. Tracks are shared by left-edge assignment,
+//! which makes a channel as deep as the netlist's local density instead of as
+//! deep as its edge count. See the "Placement and routing" section further
+//! down for the full picture.
 //!
-//! 每個訊號（不管是外部輸入還是某個閘的輸出）都有專屬的繞線通道，通道
-//! 之間、通道跟閘本體之間都留了遠超過 3 格的間隔，避免意外的訊號路徑。
+//! Every run of dust gets a repeater at least every 15 blocks, and a route
+//! always ends in a repeater facing the next gate's support block -- redstone
+//! dust does not charge a block sideways (only weakly, straight down), so
+//! every wire has to be terminated by an active component.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
 use crate::redstone::simulator::position::{Position, HORIZONTAL};
 use crate::redstone::world::block::{BlockKind, BlockState, Facing};
@@ -233,31 +237,90 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
 }
 
 // ---------------------------------------------------------------------
-// 佈局與繞線
+// Placement and routing
 // ---------------------------------------------------------------------
+//
+// The floorplan is the classic row/channel shape of a standard-cell
+// place-and-route, turned north so that it matches the way a NOR cell emits:
+//
+//     row 0            the primary inputs' levers            (largest Z)
+//     channel 0        routing
+//     row 1            every gate whose level is 0
+//     channel 1        routing
+//     row 2            every gate whose level is 1
+//     ...                                                    (smallest Z)
+//
+// Signal flow is northwards (-Z), because `place_nor_gate` puts the output
+// torch on the cell's north face. Every gate of one level shares one row, so Z
+// grows with the *depth* of the netlist, not with its gate count.
+//
+// Inside a channel the two Manhattan directions live on two different Y
+// layers, and that is what lets nets cross each other at all:
+//
+//   Y = TRACK_Y      east-west "tracks". One track carries several nets when
+//                    their X spans are disjoint (left-edge assignment), so a
+//                    channel is as deep as the netlist's local *density*, not
+//                    as deep as its edge count.
+//   Y = TRACK_Y - 1  the tracks' stone floor. It doubles as the shield that
+//                    stops a track from reaching down into a column.
+//   Y = GATE_Y       north-south "columns", one per pin. A column passes
+//                    underneath any number of tracks without touching them.
+//
+// A net that has to reach a level further away than the next one takes a
+// feed-through: a column that runs straight through the intervening rows in a
+// reserved X slot and rejoins a track in the later channel. A long net
+// therefore costs one column per level it crosses, instead of one dedicated
+// lane for its whole length.
 
-/// 兩列閘之間的間距，寬鬆到繞線通道不會碰到任何一列的本體。
-const ROW_SPACING: i32 = 24;
-
-/// 訊號通道離閘本體中軸的基礎距離。
-const AVENUE_OFFSET: i32 = 12;
-
-/// 相鄰兩條訊號通道之間的間距 —— 保證留下遠超過 3 格的緩衝。
-const LANE_SPACING: i32 = 6;
-
-/// 通道（線段二：跨列的長距離那一段）所在的高度，跟閘本體、插座所在的
-/// `GATE_Y` 刻意分開一層。
-///
-/// 每條邊的通道用不同的 X（或 Z）互相錯開，彼此之間不會撞在一起；但
-/// 一條「跨很多列」的通道，跟另一條邊在它自己那一列附近的短插頭
-/// （線段一、三，就在 `GATE_Y` 那層）投影到平面上完全有可能交叉——通道
-/// 要穿過中間所有列，插頭卻是從閘本體橫向拉出去的，兩者的座標範圍本來
-/// 就會重疊。把通道整段墊高到 `LANE_Y`，插頭留在 `GATE_Y`，兩者處在不同
-/// 高度，投影上的交叉就不會變成真的相鄰——這是先前一版線路會震盪的原因：
-/// 一條邊的通道跟另一條邊的插頭在同一層的同一格重疊，等於把兩個不相干
-/// 的訊號短接在一起。
+/// Y of the gate bodies, their input sockets, the output pins, and every
+/// north-south routing column.
 const GATE_Y: i32 = 1;
-const LANE_Y: i32 = 3;
+
+/// Y of the east-west routing tracks. `TRACK_Y - 1` is their stone floor.
+const TRACK_Y: i32 = 3;
+
+/// Floor, gates, merge dust / track floor, tracks, and one spare layer of air
+/// above the tracks so nothing is ever written outside the world.
+const WORLD_HEIGHT: i32 = 5;
+
+/// X distance between two neighbouring gates of the same row.
+///
+/// A gate cell reaches out to `cx ± GATE_HALF_WIDTH`, so 14 leaves a five-wide
+/// gap between two cells -- room for exactly one feed-through column that is
+/// still at least `COLUMN_CLEARANCE` clear of everything on either side.
+const SLOT_PITCH: i32 = 14;
+
+/// Half the X width of a gate cell: the west and east socket approach columns
+/// sit at `cx ± GATE_HALF_WIDTH`.
+const GATE_HALF_WIDTH: i32 = 4;
+
+/// Z distance between two neighbouring tracks of the same channel.
+///
+/// Four would be just enough for `move_between_layers`' four-block ramp, but
+/// not *safely*: the last step of a descending ramp leaves a **strongly
+/// powered** support block one layer under the track plane, and a strongly
+/// powered block drives every redstone dust next to it. At spacing 4 that
+/// block would sit directly beneath the next track and inject this net's
+/// signal into it. Five puts the ramp's landing on a Z row that can never hold
+/// a track.
+const TRACK_SPACING: i32 = 5;
+
+/// How far a ramp travels horizontally while changing layer:
+/// `move_between_layers` spends two blocks per Y level.
+const RAMP_LENGTH: i32 = 2 * (TRACK_Y - GATE_Y);
+
+/// Minimum X gap between two nets that share one track.
+const TRACK_SHARE_GAP: i32 = 4;
+
+/// Minimum X gap between two routing columns. Redstone dust connects to its
+/// four horizontal neighbours, so one empty block between two columns is
+/// already enough -- but only exactly enough, which is why every other
+/// clearance in this module is derived from it rather than written out.
+const COLUMN_CLEARANCE: i32 = 2;
+
+/// West edge of the floorplan. Everything is laid out eastwards from here, so
+/// no coordinate can go negative on the X axis.
+const ORIGIN_X: i32 = 8;
 
 /// `lay_dust_run` 的 `start` 永遠是一格已經是滿強度 15 的紅石粉（拉桿／
 /// 火把旁邊的那格，或是剛被中繼器重新充能過的轉角），不是主動元件本身。
@@ -283,30 +346,6 @@ pub struct CompiledCircuit {
     pub input_positions: BTreeMap<String, (i32, i32, i32)>,
     /// 每個輸出訊號的讀取座標
     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
-}
-
-/// 水平方向沿著哪一軸移動：東西是 X 軸，南北是 Z 軸。
-fn axis_of(direction: Facing) -> Axis {
-    match direction {
-        Facing::West | Facing::East => Axis::X,
-        Facing::South | Facing::North => Axis::Z,
-        Facing::Up | Facing::Down => unreachable!("輸入/輸出方向只會是水平的"),
-    }
-}
-
-/// 沿著該軸移動時，這個方向對應 +1 還是 -1。
-fn sign_of(direction: Facing) -> i32 {
-    match direction {
-        Facing::East | Facing::South => 1,
-        Facing::West | Facing::North => -1,
-        Facing::Up | Facing::Down => unreachable!("輸入/輸出方向只會是水平的"),
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Axis {
-    X,
-    Z,
 }
 
 /// 把一格地板鋪在 `pos` 正下方，讓紅石粉／拉桿／中繼器能立在上面。
@@ -406,9 +445,15 @@ fn seal_horizontal_neighbours(world: &mut World, pos: Position) {
 /// 所以疊在支撐塊**下面**一樣有效，能用同一招往下搬。
 ///
 /// 每爬一層會沿 `direction` 前進兩格（中繼器一格、支撐塊一格），呼叫端
-/// 得自己預留這段水平距離。每落地一次都會把新紅石粉的水平鄰居補實心
-/// （見 `seal_horizontal_neighbours`），避免它在半空中對角碰到別條線。
-fn move_between_layers(world: &mut World, entry: Position, direction: Facing, target_y: i32) -> Position {
+/// 得自己預留這段水平距離 —— 也就是 `RAMP_LENGTH`。每落地一次都會把新
+/// 紅石粉的水平鄰居補實心（見 `seal_horizontal_neighbours`），避免它在
+/// 半空中對角碰到別條線。
+fn move_between_layers(
+    world: &mut World,
+    entry: Position,
+    direction: Facing,
+    target_y: i32,
+) -> Position {
     let y_step = (target_y - entry.y).signum();
     let mut current = entry;
     while current.y != target_y {
@@ -429,124 +474,465 @@ fn move_between_layers(world: &mut World, entry: Position, direction: Facing, ta
     current
 }
 
-/// 插座朝南時，「回到插座」那一步跟「跨列」共用同一個軸（Z），沒辦法
-/// 直接落地到 `socket.z`——見 `route_to_input` 的說明。這是那一步額外的
-/// 緩衝距離：跨列的下降點先停在 `socket.z` 之外這麼多格，把 X 切回
-/// `socket.x` 之後，再單獨沿 Z 走完最後這一小段，方向才會是真正朝插座
-/// 前進、而不是跟橫向切換的那一步疊在一起。只要小於 `ROW_SPACING` 的一半
-/// 就不會撞進下一列。
-const SOCKET_APPROACH_BUFFER: i32 = 4;
-
-/// 把一個訊號從它的來源接到某個閘的某個輸入插座，中間用專屬通道繞線，
-/// 末端一定是一個面朝支撐塊的中繼器 —— 這是唯一能強充能支撐塊的方法。
+/// Lay one east-west track: dust from `source_x` out to `min_x` and to
+/// `max_x`, with a repeater inserted before the signal can run out.
 ///
-/// 路線是三段直線：先沿著跟目的地方向同一軸移動到專屬通道，再沿另一軸
-/// 走到目的地那一列，最後沿原本的軸走回插座。`lane_index` 保證每條邊
-/// 都有自己專屬的通道，不會跟其他邊共用同一條線。
-///
-/// 跨列的那一段（線段二）刻意墊高到 `LANE_Y`，跟閘本體、插座所在的
-/// `GATE_Y` 分開一層再落地——見 `LANE_Y` 的說明，這是避免不同邊的通道跟
-/// 別條邊的插頭意外相鄰的關鍵。
-///
-/// 插座朝西／東（軸 X）時，「切進通道」跟「切出通道回插座」都沿 X——
-/// 剛好跟插座本來的進入方向一樣，這兩段可以直接當作頭尾兩段，不必再多走
-/// 一段：`compile()` 裡每一列閘的本體都放在同一個 X，列跟列只靠 Z 拉開，
-/// 所以「跨列」永遠沿 Z，跟這裡的頭尾（沿 X）是不同軸，天然不會疊在一起。
-///
-/// 插座朝南（軸 Z）時就不是這樣了：插座的進入方向也是 Z，跟跨列共用
-/// 同一個軸。如果照西／東的公式直接切齊 `socket.z` 落地，X 還停在專屬
-/// 通道的 `lane_x` 上，不在 `socket.x`——`waypoint_a` 跟 `waypoint_b` 的
-/// X、Z 會完全相等（`compile()` 裡所有閘的本體共用同一個 X，只有 Z 隨列
-/// 而變），變成起點等於終點，`direction_from` 判斷不出方向而 panic。這是
-/// 這個電路第一次真正逼出這條路徑：更早的測試電路每個閘最多兩個輸入，
-/// 只用得到西／東方向，從沒排過三輸入閘、也就沒用過南方向插座。
-/// 修法是幫南方向插座多插一段：跨列先在專屬通道（沿 X 偏移的
-/// `lane_x`）上，停在插座之外 `SOCKET_APPROACH_BUFFER` 格的緩衝點，
-/// 而不是插座本身；把 X 切回 `socket.x` 之後（新的一段轉角），才單獨
-/// 沿 Z 走完最後這一小段真正進插座——方向純粹是 Z，跟中繼器該面朝的
-/// 方向（朝支撐塊）一致。
-fn route_to_input(
+/// `taps` are the X positions where a ramp joins or leaves the track. A
+/// repeater on a tap silently cuts the route -- a repeater only reads what is
+/// directly behind it and only drives what is directly in front, so a wire
+/// that turns on top of one is not connected at all. When the 15-block budget
+/// would force a repeater onto a tap, it goes on the last non-tap cell before
+/// it instead; the run after it is then shorter than the budget, never longer.
+fn lay_track(
     world: &mut World,
-    source_pin: Position,
-    socket: Position,
-    input_direction: Facing,
-    lane_index: i32,
+    z: i32,
+    source_x: i32,
+    min_x: i32,
+    max_x: i32,
+    taps: &BTreeSet<i32>,
 ) {
-    let axis = axis_of(input_direction);
-    let sign = sign_of(input_direction);
-    let lane_offset = AVENUE_OFFSET + lane_index * LANE_SPACING;
-
-    // `tail_start` 是最後一段（`lay_segment_to_socket`）的起點。軸 X 的
-    // 情形頭尾都沿 X，`waypoint_b` 本身就是插座前的起點；軸 Z 的情形需要
-    // 一個額外的緩衝點（見上面的說明），`waypoint_b` 只是跨列結束、還沒
-    // 切回 `socket.x` 的中繼站。
-    let (waypoint_a, waypoint_b, tail_start) = match axis {
-        Axis::X => {
-            let lane_x = socket.x + sign * lane_offset;
-            let waypoint_a = Position::new(lane_x, source_pin.y, source_pin.z);
-            let waypoint_b = Position::new(lane_x, source_pin.y, socket.z);
-            (waypoint_a, waypoint_b, waypoint_b)
+    for (end, step) in [(min_x, -1i32), (max_x, 1i32)] {
+        let length = (end - source_x) * step;
+        if length <= 0 {
+            continue;
         }
-        Axis::Z => {
-            let lane_x = socket.x + lane_offset;
-            let approach_z = socket.z + sign * SOCKET_APPROACH_BUFFER;
-            let waypoint_a = Position::new(lane_x, source_pin.y, source_pin.z);
-            let waypoint_b = Position::new(lane_x, source_pin.y, approach_z);
-            let tail_start = Position::new(socket.x, source_pin.y, approach_z);
-            (waypoint_a, waypoint_b, tail_start)
+        let direction = if step > 0 { Facing::East } else { Facing::West };
+        let cells: Vec<i32> = (1..=length).map(|k| source_x + k * step).collect();
+
+        // Pick the repeater cells before writing anything: where one repeater
+        // ends up decides how much budget the cells after it have.
+        let mut is_repeater = vec![false; cells.len()];
+        let mut last_refresh: i64 = -1; // the source cell itself, at full strength
+        let mut i = 0usize;
+        while i < cells.len() {
+            if (i as i64) - last_refresh <= MAX_DUST_RUN as i64 {
+                i += 1;
+                continue;
+            }
+            let mut j = i;
+            while (j as i64) > last_refresh + 1 && taps.contains(&cells[j]) {
+                j -= 1;
+            }
+            debug_assert!(
+                !taps.contains(&cells[j]),
+                "taps must never be dense enough to leave no room for a repeater"
+            );
+            is_repeater[j] = true;
+            last_refresh = j as i64;
+            i = j + 1;
         }
-    };
 
-    lay_segment_to_corner(world, source_pin, waypoint_a);
-
-    let crossing_direction = direction_from(waypoint_a, waypoint_b);
-    let steps_per_layer = 2; // move_between_layers 每爬一層前進兩格
-    let layers = LANE_Y - GATE_Y;
-    let horizontal_margin = steps_per_layer * layers;
-
-    // 從 waypoint_a 爬到 LANE_Y，再從 waypoint_b 往回退 horizontal_margin
-    // 格算出下降的起點,兩段爬升／下降各自消耗 horizontal_margin 格水平
-    // 距離,中間剩下的距離才是真正在 LANE_Y 那層鋪線的部分。
-    let lane_entry = move_between_layers(world, waypoint_a, crossing_direction, LANE_Y);
-
-    let mut descent_target = waypoint_b;
-    for _ in 0..horizontal_margin {
-        descent_target = descent_target.offset(crossing_direction.opposite());
+        for (k, &x) in cells.iter().enumerate() {
+            let pos = Position::new(x, TRACK_Y, z);
+            ensure_floor(world, pos);
+            if is_repeater[k] {
+                world.set(pos.x, pos.y, pos.z, repeater(direction));
+            } else {
+                world.set(pos.x, pos.y, pos.z, dust());
+            }
+        }
     }
-    let descent_entry = Position::new(descent_target.x, LANE_Y, descent_target.z);
-
-    lay_segment_to_corner(world, lane_entry, descent_entry);
-
-    let landed = move_between_layers(world, descent_entry, crossing_direction, GATE_Y);
-    debug_assert_eq!(landed, waypoint_b, "下降後必須精確落在 waypoint_b 上");
-
-    if tail_start != waypoint_b {
-        lay_segment_to_corner(world, waypoint_b, tail_start);
-    }
-    lay_segment_to_socket(world, tail_start, socket);
 }
 
 /// 把一個外部輸入的拉桿與它的起始紅石粉畫進世界，回傳這個訊號的來源
 /// （拉桿本身的座標，以及它驅動的第一格紅石粉）。
 ///
-/// 拉桿是主動元件，直接驅動緊鄰的紅石粉（`drives_dust` 不分方向、不分
-/// 強弱充能）——不需要像閘的輸入插座那樣經過支撐塊。這條紅石粉跟閘的
-/// 輸出插座、輸入插座刻意放在同一個 y 層，讓 `route_to_input` 全程只需
-/// 處理水平方向。
+/// A lever is an active component, so it drives the dust next to it directly
+/// (`power_emitted_by` reports `drives_dust` for a lever in every direction) --
+/// no support block in between, unlike a gate's input socket.
 ///
-/// 拉桿的家永遠在所有閘的列之北（見 `compile` 裡 `base_z` 的算法），
-/// 所以每個閘都在拉桿的南邊。訊號的起點刻意放在拉桿**南側**：往南正是
-/// 繞線接下來一定要走的方向，這樣走線不會反過來往北撞回拉桿本身，把它
-/// 蓋成紅石粉。
+/// The levers live in row 0, south of every gate row, and signal flow is
+/// northwards, so the pin goes on the lever's **north** side: that is the way
+/// the route has to leave anyway, and it keeps the route from turning back
+/// into the lever and overwriting it with dust.
 fn place_primary_input(world: &mut World, home: Position) -> (Position, Position) {
     world.set(home.x, home.y, home.z, lever(false));
     ensure_floor(world, home);
 
-    let pin = home.offset(Facing::South);
+    let pin = home.offset(Facing::North);
     ensure_floor(world, pin);
     world.set(pin.x, pin.y, pin.z, dust());
 
     (home, pin)
+}
+
+/// Where a socket's approach column has to run.
+///
+/// The final repeater of a route must face the gate's support block, and a
+/// repeater only reads from directly behind it, so each socket can only be
+/// entered from one side: the west socket from the west, the east socket from
+/// the east, and the south socket from the south. The first two therefore turn
+/// a corner on the gate's own row, `GATE_HALF_WIDTH` out from the centre; the
+/// third is reached by running straight north.
+fn approach_column(centre_x: i32, input_index: usize) -> i32 {
+    match input_index {
+        0 => centre_x - GATE_HALF_WIDTH,
+        1 => centre_x + GATE_HALF_WIDTH,
+        _ => centre_x,
+    }
+}
+
+/// Where a net's signal comes from.
+#[derive(Debug, Clone, Copy)]
+enum Source {
+    Lever(usize),
+    Gate(usize),
+}
+
+/// How a net leaves one channel.
+#[derive(Debug, Clone, Copy)]
+enum Exit {
+    /// Down into one input socket of a gate in the row north of this channel.
+    Socket { x: i32, gate: usize, input_index: usize },
+    /// Straight on northwards, to rejoin a track in a later channel.
+    Feedthrough { x: i32, next_slot: usize },
+}
+
+impl Exit {
+    fn x(self) -> i32 {
+        match self {
+            Exit::Socket { x, .. } | Exit::Feedthrough { x, .. } => x,
+        }
+    }
+}
+
+/// One signal, and every channel it has to appear in.
+///
+/// `channels`, `tracks` and `sinks` are parallel: entry `i` describes the
+/// net's presence in channel `channels[i]`. `hops[i]` is the feed-through
+/// column that carries it from `channels[i]` to `channels[i + 1]`.
+struct Net {
+    source: Source,
+    source_column: i32,
+    channels: Vec<usize>,
+    tracks: Vec<usize>,
+    sinks: Vec<Vec<(usize, usize)>>,
+    hops: Vec<i32>,
+}
+
+impl Net {
+    fn entry_column(&self, slot: usize) -> i32 {
+        if slot == 0 {
+            self.source_column
+        } else {
+            self.hops[slot - 1]
+        }
+    }
+
+    fn exits(&self, slot: usize, centre_x: &[i32]) -> Vec<Exit> {
+        let mut exits: Vec<Exit> = self.sinks[slot]
+            .iter()
+            .map(|&(gate, input_index)| Exit::Socket {
+                x: approach_column(centre_x[gate], input_index),
+                gate,
+                input_index,
+            })
+            .collect();
+        if slot + 1 < self.channels.len() {
+            exits.push(Exit::Feedthrough { x: self.hops[slot], next_slot: slot + 1 });
+        }
+        exits
+    }
+
+    /// The X range this net's track has to span inside channel `slot`.
+    fn span(&self, slot: usize, centre_x: &[i32]) -> (i32, i32) {
+        let mut lo = self.entry_column(slot);
+        let mut hi = lo;
+        for exit in self.exits(slot, centre_x) {
+            lo = lo.min(exit.x());
+            hi = hi.max(exit.x());
+        }
+        (lo, hi)
+    }
+}
+
+/// The netlist after levelisation, row ordering and X placement.
+struct Floorplan {
+    /// Row of each gate. Row 0 holds the levers, so a gate of level `l` is in
+    /// row `l + 1`.
+    row_of: Vec<usize>,
+    /// Gate indices per row, ordered west to east. `rows[0]` is always empty.
+    rows: Vec<Vec<usize>>,
+    /// Centre X of each gate.
+    centre_x: Vec<i32>,
+    /// X of each primary input's lever.
+    lever_x: Vec<i32>,
+}
+
+/// Levelise the DAG, order each row by barycentre, and give every gate an X.
+fn build_floorplan(
+    netlist: &Netlist,
+    order: &[usize],
+    producer_of: &HashMap<&str, usize>,
+) -> Floorplan {
+    let gate_count = netlist.gates.len();
+
+    // ASAP levels: a gate sits one row deeper than its deepest predecessor.
+    // `order` is topological, so one pass is enough.
+    let mut level = vec![0usize; gate_count];
+    for &g in order {
+        let mut deepest = 0usize;
+        for input in &netlist.gates[g].inputs {
+            if let Some(&p) = producer_of.get(input.as_str()) {
+                deepest = deepest.max(level[p] + 1);
+            }
+        }
+        level[g] = deepest;
+    }
+    let level_count = level.iter().copied().max().map_or(0, |m| m + 1);
+    let row_count = level_count + 1;
+
+    let mut rows: Vec<Vec<usize>> = vec![Vec::new(); row_count];
+    for &g in order {
+        rows[level[g] + 1].push(g);
+    }
+
+    let mut consumers: Vec<Vec<usize>> = vec![Vec::new(); gate_count];
+    for (g, gate) in netlist.gates.iter().enumerate() {
+        for input in &gate.inputs {
+            if let Some(&p) = producer_of.get(input.as_str()) {
+                consumers[p].push(g);
+            }
+        }
+    }
+
+    let input_slot: HashMap<&str, usize> = netlist
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (name.as_str(), i))
+        .collect();
+
+    let row_len: Vec<usize> = rows.iter().map(Vec::len).collect();
+    let widest = row_len
+        .iter()
+        .copied()
+        .max()
+        .unwrap_or(0)
+        .max(netlist.inputs.len())
+        .max(1);
+
+    let mut slot = vec![0usize; gate_count];
+    for row in &rows {
+        for (i, &g) in row.iter().enumerate() {
+            slot[g] = i;
+        }
+    }
+
+    // Barycentre ordering. Sweeping down puts each gate near the average
+    // position of what feeds it; sweeping back up puts it near the average
+    // position of what it feeds. Both reduce crossings, and fewer crossings
+    // mean narrower net spans -- which is exactly what lets the left-edge
+    // track assignment below pack more nets onto one track.
+    let spread = |position: usize, len: usize| -> f64 {
+        (position as f64 + 0.5) * (widest as f64 / len.max(1) as f64)
+    };
+    let lever_spread = |name: &str| -> Option<f64> {
+        input_slot
+            .get(name)
+            .map(|&i| spread(i, netlist.inputs.len()))
+    };
+
+    for _ in 0..3 {
+        for r in 1..row_count {
+            let mut keyed: Vec<(f64, usize, usize)> = rows[r]
+                .iter()
+                .enumerate()
+                .map(|(i, &g)| {
+                    let mut sum = 0.0;
+                    let mut count = 0.0;
+                    for input in &netlist.gates[g].inputs {
+                        if let Some(&p) = producer_of.get(input.as_str()) {
+                            sum += spread(slot[p], row_len[level[p] + 1]);
+                            count += 1.0;
+                        } else if let Some(s) = lever_spread(input) {
+                            sum += s;
+                            count += 1.0;
+                        }
+                    }
+                    let key = if count > 0.0 { sum / count } else { spread(i, row_len[r]) };
+                    (key, i, g)
+                })
+                .collect();
+            keyed.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            rows[r] = keyed.iter().map(|entry| entry.2).collect();
+            for (i, &g) in rows[r].iter().enumerate() {
+                slot[g] = i;
+            }
+        }
+        for r in (1..row_count).rev() {
+            let mut keyed: Vec<(f64, usize, usize)> = rows[r]
+                .iter()
+                .enumerate()
+                .map(|(i, &g)| {
+                    let mut sum = 0.0;
+                    let mut count = 0.0;
+                    for &c in &consumers[g] {
+                        sum += spread(slot[c], row_len[level[c] + 1]);
+                        count += 1.0;
+                    }
+                    let key = if count > 0.0 { sum / count } else { spread(i, row_len[r]) };
+                    (key, i, g)
+                })
+                .collect();
+            keyed.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+            rows[r] = keyed.iter().map(|entry| entry.2).collect();
+            for (i, &g) in rows[r].iter().enumerate() {
+                slot[g] = i;
+            }
+        }
+    }
+
+    // X placement. Rows alternate a `COLUMN_CLEARANCE` shift so that a row's
+    // output columns (at its own `cx`) can never land on the next row's socket
+    // approach columns (at `cx' - 4`, `cx'` and `cx' + 4`): with the shift,
+    // every pair of columns meeting in one channel is at least
+    // `COLUMN_CLEARANCE` apart, which is what keeps two unrelated signals from
+    // running side by side.
+    let mut centre_x = vec![0i32; gate_count];
+    for (r, row) in rows.iter().enumerate() {
+        let shift = if r % 2 == 0 { 0 } else { COLUMN_CLEARANCE };
+        let left = ((widest - row.len()) / 2) as i32 * SLOT_PITCH;
+        for (i, &g) in row.iter().enumerate() {
+            centre_x[g] = ORIGIN_X + left + i as i32 * SLOT_PITCH + GATE_HALF_WIDTH + shift;
+        }
+    }
+    let lever_left = ((widest - netlist.inputs.len()) / 2) as i32 * SLOT_PITCH;
+    let lever_x: Vec<i32> = (0..netlist.inputs.len())
+        .map(|i| ORIGIN_X + lever_left + i as i32 * SLOT_PITCH + GATE_HALF_WIDTH)
+        .collect();
+
+    let row_of: Vec<usize> = level.iter().map(|&l| l + 1).collect();
+
+    Floorplan { row_of, rows, centre_x, lever_x }
+}
+
+/// Collect the nets: one per driven signal that actually has a sink.
+fn build_nets(
+    netlist: &Netlist,
+    order: &[usize],
+    plan: &Floorplan,
+    producer_of: &HashMap<&str, usize>,
+) -> Vec<Net> {
+    let input_slot: HashMap<&str, usize> = netlist
+        .inputs
+        .iter()
+        .enumerate()
+        .map(|(i, name)| (name.as_str(), i))
+        .collect();
+
+    // Signal name -> index into `nets`, built in a fixed order so that two
+    // compiles of the same netlist produce the same world.
+    let mut index_of: HashMap<String, usize> = HashMap::new();
+    let mut nets: Vec<Net> = Vec::new();
+    let mut sinks_of: Vec<Vec<(usize, usize)>> = Vec::new();
+
+    for &g in order {
+        for (input_index, input) in netlist.gates[g].inputs.iter().enumerate() {
+            let net = match index_of.get(input.as_str()) {
+                Some(&i) => i,
+                None => {
+                    let (source, column) = if let Some(&i) = input_slot.get(input.as_str()) {
+                        (Source::Lever(i), plan.lever_x[i])
+                    } else {
+                        let driver = *producer_of.get(input.as_str()).expect(
+                            "every input was checked to be driven before placement started",
+                        );
+                        (Source::Gate(driver), plan.centre_x[driver])
+                    };
+                    let i = nets.len();
+                    nets.push(Net {
+                        source,
+                        source_column: column,
+                        channels: Vec::new(),
+                        tracks: Vec::new(),
+                        sinks: Vec::new(),
+                        hops: Vec::new(),
+                    });
+                    sinks_of.push(Vec::new());
+                    index_of.insert(input.clone(), i);
+                    i
+                }
+            };
+            sinks_of[net].push((g, input_index));
+        }
+    }
+
+    // Turn each net's sink list into the per-channel structure. Channel `c`
+    // lies between row `c` and row `c + 1`, so a sink in row `t` is fed from
+    // channel `t - 1`, and the net's own source row is always a channel too:
+    // when the nearest sink is further away, that first channel is where the
+    // feed-through starts.
+    for (i, net) in nets.iter_mut().enumerate() {
+        let source_row = match net.source {
+            Source::Lever(_) => 0,
+            Source::Gate(g) => plan.row_of[g],
+        };
+        let mut by_channel: BTreeMap<usize, Vec<(usize, usize)>> = BTreeMap::new();
+        by_channel.entry(source_row).or_default();
+        for &(gate, input_index) in &sinks_of[i] {
+            by_channel
+                .entry(plan.row_of[gate] - 1)
+                .or_default()
+                .push((gate, input_index));
+        }
+        for (channel, sinks) in by_channel {
+            net.channels.push(channel);
+            net.sinks.push(sinks);
+        }
+        net.tracks = vec![0; net.channels.len()];
+    }
+
+    nets.retain(|net| net.sinks.iter().any(|s| !s.is_empty()));
+    nets
+}
+
+/// Reserve one X column for a feed-through, clear of everything it would run
+/// past on its way north.
+///
+/// A feed-through is a plain dust run at `GATE_Y` that passes straight through
+/// whole gate rows, so it has to miss both the rows' bodies and every other
+/// routing column in every channel it crosses. Candidates are searched
+/// outwards from `target` so that a feed-through stays near the rest of its
+/// net -- a column parked far away would stretch that net's track and push the
+/// channel's track count up.
+fn reserve_feedthrough(
+    target: i32,
+    channels: std::ops::RangeInclusive<usize>,
+    rows: std::ops::RangeInclusive<usize>,
+    used_columns: &[BTreeSet<i32>],
+    row_blocked: &[Vec<(i32, i32)>],
+    west_limit: i32,
+) -> i32 {
+    let channels: Vec<usize> = channels.collect();
+    let rows: Vec<usize> = rows.collect();
+    let fits = |x: i32| -> bool {
+        if rows.iter().any(|&r| {
+            row_blocked[r]
+                .iter()
+                .any(|&(lo, hi)| x >= lo && x <= hi)
+        }) {
+            return false;
+        }
+        !channels.iter().any(|&c| {
+            used_columns[c]
+                .iter()
+                .any(|&used| (x - used).abs() < COLUMN_CLEARANCE)
+        })
+    };
+
+    let centre = target - target.rem_euclid(2);
+    for step in 0.. {
+        let east = centre + 2 * step;
+        if fits(east) {
+            return east;
+        }
+        let west = centre - 2 * step;
+        if west >= west_limit && fits(west) {
+            return west;
+        }
+    }
+    unreachable!("the search walks east without bound, so it always terminates")
 }
 
 /// 把一個網表編譯成一個紅石世界。
@@ -566,104 +952,289 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
 
     let order = netlist.topological_order().ok_or(CompileError::CyclicNetlist)?;
 
-    let gate_count = netlist.gates.len();
-    let primary_input_count = netlist.inputs.len() as i32;
-    let max_edges: i32 = netlist.gates.iter().map(|g| g.inputs.len() as i32).sum();
+    let mut producer_of: HashMap<&str, usize> = HashMap::new();
+    for (index, gate) in netlist.gates.iter().enumerate() {
+        producer_of.insert(gate.output.as_str(), index);
+    }
 
-    // 世界原點刻意留出足夠的正向緩衝，讓所有通道座標（包含往負方向延伸
-    // 的西側／北側通道）換算成世界座標後都還是非負值。
-    let base_z = (primary_input_count + 1) * ROW_SPACING;
-    let base_x = AVENUE_OFFSET + (max_edges + 1) * LANE_SPACING;
+    let plan = build_floorplan(netlist, &order, &producer_of);
+    let row_count = plan.rows.len();
+    let channel_count = row_count.saturating_sub(1);
+    let mut nets = build_nets(netlist, &order, &plan, &producer_of);
 
-    let size_x = base_x * 2 + AVENUE_OFFSET + (max_edges + 1) * LANE_SPACING + 20;
-    let size_z = base_z + (gate_count as i32 + 1) * ROW_SPACING + 20;
-    let size_y = LANE_Y + 3;
+    // ---------------------------------------------------------------
+    // Column reservation
+    // ---------------------------------------------------------------
+    //
+    // Two kinds of column meet in a channel. The forced ones come straight
+    // from the cell geometry -- a gate's output pin leaves at its own centre X,
+    // a socket is entered from `approach_column` -- and the alternating row
+    // shift already keeps those apart. Feed-through columns are the free
+    // choice, so they are placed last, against everything else.
+    let mut used_columns: Vec<BTreeSet<i32>> = vec![BTreeSet::new(); channel_count.max(1)];
+    let mut row_blocked: Vec<Vec<(i32, i32)>> = vec![Vec::new(); row_count];
 
-    let mut world = World::new(size_x.max(10), size_y, size_z.max(10));
+    for &x in &plan.lever_x {
+        row_blocked[0].push((x - COLUMN_CLEARANCE + 1, x + COLUMN_CLEARANCE - 1));
+    }
+    for (g, &cx) in plan.centre_x.iter().enumerate() {
+        row_blocked[plan.row_of[g]].push((
+            cx - GATE_HALF_WIDTH - COLUMN_CLEARANCE + 1,
+            cx + GATE_HALF_WIDTH + COLUMN_CLEARANCE - 1,
+        ));
+    }
 
-    const GATE_X: i32 = 0; // 加上 base_x 之後才是世界座標
+    for net in &nets {
+        used_columns[net.channels[0]].insert(net.source_column);
+        for (slot, &channel) in net.channels.iter().enumerate() {
+            for &(gate, input_index) in &net.sinks[slot] {
+                used_columns[channel].insert(approach_column(plan.centre_x[gate], input_index));
+            }
+        }
+    }
 
-    // 先把每個閘的本體畫出來，記住它的原點跟 cell，方便之後查詢插座座標。
-    let mut gate_origin: Vec<Position> = vec![Position::new(0, 0, 0); gate_count];
-    let mut gate_cell: Vec<NorCell> = Vec::with_capacity(gate_count);
+    for net in &mut nets {
+        for slot in 0..net.channels.len().saturating_sub(1) {
+            let from = net.channels[slot];
+            let to = net.channels[slot + 1];
+            let target = net.entry_column(slot);
+            let column = reserve_feedthrough(
+                target,
+                from..=to,
+                (from + 1)..=to,
+                &used_columns,
+                &row_blocked,
+                ORIGIN_X - GATE_HALF_WIDTH,
+            );
+            for columns in used_columns[from..=to].iter_mut() {
+                columns.insert(column);
+            }
+            net.hops.push(column);
+        }
+    }
 
-    // 先分配空間再填入，因為畫圖需要照拓樸順序，但索引要照原本的閘索引存。
-    for _ in 0..gate_count {
+    // ---------------------------------------------------------------
+    // Left-edge track assignment
+    // ---------------------------------------------------------------
+    //
+    // This is the change that kills the old router's O(edges) width. Sorting
+    // the nets of one channel by their leftmost pin and dropping each on the
+    // first track whose last net already ended lets one track carry many nets,
+    // so a channel needs as many tracks as the netlist's maximum horizontal
+    // overlap -- not one per edge.
+    let mut track_count = vec![0usize; channel_count];
+    for (channel, count) in track_count.iter_mut().enumerate() {
+        let mut members: Vec<(i32, i32, usize, usize)> = Vec::new();
+        for (n, net) in nets.iter().enumerate() {
+            for (slot, &c) in net.channels.iter().enumerate() {
+                if c == channel {
+                    let (lo, hi) = net.span(slot, &plan.centre_x);
+                    members.push((lo, hi, n, slot));
+                }
+            }
+        }
+        members.sort_by_key(|&(lo, _, n, slot)| (lo, n, slot));
+
+        let mut track_end: Vec<i32> = Vec::new();
+        for (lo, hi, n, slot) in members {
+            let track = match track_end
+                .iter()
+                .position(|&end| lo - end >= TRACK_SHARE_GAP)
+            {
+                Some(t) => t,
+                None => {
+                    track_end.push(i32::MIN / 2);
+                    track_end.len() - 1
+                }
+            };
+            track_end[track] = hi;
+            nets[n].tracks[slot] = track;
+        }
+        *count = track_end.len();
+    }
+
+    // ---------------------------------------------------------------
+    // Z layout
+    // ---------------------------------------------------------------
+    //
+    // Laid out from row 0 northwards, so Z decreases; everything is shifted
+    // back into the positive range afterwards.
+    let mut row_z = vec![0i32; row_count];
+    let mut track_z: Vec<Vec<i32>> = vec![Vec::new(); channel_count];
+    for channel in 0..channel_count {
+        // Three blocks clear of the row's own south socket leaves the first
+        // ramp somewhere to start.
+        let channel_south = row_z[channel] - 3;
+        track_z[channel] = (0..track_count[channel])
+            .map(|k| channel_south - TRACK_SPACING * (k as i32 + 1))
+            .collect();
+        let depth = TRACK_SPACING * track_count[channel].max(1) as i32;
+        // The last descending ramp lands `RAMP_LENGTH` north of the last
+        // track, and the column then needs room to reach the next row's south
+        // socket approach.
+        row_z[channel + 1] = channel_south - depth - RAMP_LENGTH - 4;
+    }
+
+    let z_offset = 3 - row_z[row_count - 1] + 2;
+    for z in &mut row_z {
+        *z += z_offset;
+    }
+    for channel in &mut track_z {
+        for z in channel {
+            *z += z_offset;
+        }
+    }
+
+    let size_x = plan
+        .centre_x
+        .iter()
+        .chain(plan.lever_x.iter())
+        .copied()
+        .max()
+        .unwrap_or(ORIGIN_X)
+        .max(
+            nets.iter()
+                .flat_map(|net| net.hops.iter())
+                .copied()
+                .max()
+                .unwrap_or(ORIGIN_X),
+        )
+        + GATE_HALF_WIDTH
+        + 4;
+    let size_z = row_z[0] + 4;
+
+    let mut world = World::new(size_x.max(8), WORLD_HEIGHT, size_z.max(8));
+
+    // ---------------------------------------------------------------
+    // Emission
+    // ---------------------------------------------------------------
+
+    let mut gate_cell: Vec<NorCell> = Vec::with_capacity(netlist.gates.len());
+    for _ in 0..netlist.gates.len() {
         gate_cell.push(NorCell { size: (0, 0, 0), input_offsets: Vec::new(), output_offset: (0, 0, 0) });
     }
-
-    for (row, &gate_index) in order.iter().enumerate() {
-        let row = row as i32;
-        let origin = (base_x + GATE_X, GATE_Y, base_z + row * ROW_SPACING);
-        let cell = place_nor_gate(&mut world, origin, netlist.gates[gate_index].inputs.len());
-        gate_origin[gate_index] = Position::new(origin.0, origin.1, origin.2);
-        gate_cell[gate_index] = cell;
+    for (g, gate) in netlist.gates.iter().enumerate() {
+        let origin = (plan.centre_x[g], GATE_Y, row_z[plan.row_of[g]]);
+        gate_cell[g] = place_nor_gate(&mut world, origin, gate.inputs.len());
     }
 
-    // 每個外部輸入的拉桿家：獨立的一列，在所有閘的列之前（負方向），彼此
-    // 間隔跟閘的列間距一樣寬鬆。
-    let mut primary_source: HashMap<&str, Position> = HashMap::new();
     let mut input_positions: BTreeMap<String, (i32, i32, i32)> = BTreeMap::new();
-    for (index, name) in netlist.inputs.iter().enumerate() {
-        let home = Position::new(
-            base_x + GATE_X,
-            GATE_Y,
-            base_z - (index as i32 + 1) * ROW_SPACING,
-        );
+    let mut lever_pin: Vec<Position> = Vec::with_capacity(netlist.inputs.len());
+    for (i, name) in netlist.inputs.iter().enumerate() {
+        let home = Position::new(plan.lever_x[i], GATE_Y, row_z[0]);
         let (lever_pos, pin) = place_primary_input(&mut world, home);
-        primary_source.insert(name.as_str(), pin);
         input_positions.insert(name.clone(), (lever_pos.x, lever_pos.y, lever_pos.z));
+        lever_pin.push(pin);
     }
 
-    // 每個閘輸出的訊號來源：輸出火把再往外一格的紅石粉。
-    let mut gate_source: HashMap<&str, Position> = HashMap::new();
-    for (gate_index, gate) in netlist.gates.iter().enumerate() {
-        let origin = gate_origin[gate_index];
-        let cell = &gate_cell[gate_index];
-        let torch_pos = Position::new(
-            origin.x + cell.output_offset.0,
-            origin.y + cell.output_offset.1,
-            origin.z + cell.output_offset.2,
-        );
-        let pin = torch_pos.offset(OUTPUT_DIRECTION);
+    let torch_of = |g: usize, cell: &NorCell| -> Position {
+        Position::new(
+            plan.centre_x[g] + cell.output_offset.0,
+            GATE_Y + cell.output_offset.1,
+            row_z[plan.row_of[g]] + cell.output_offset.2,
+        )
+    };
+
+    let mut gate_pin: Vec<Position> = Vec::with_capacity(netlist.gates.len());
+    for (g, cell) in gate_cell.iter().enumerate() {
+        let pin = torch_of(g, cell).offset(OUTPUT_DIRECTION);
         ensure_floor(&mut world, pin);
         world.set(pin.x, pin.y, pin.z, dust());
-        gate_source.insert(gate.output.as_str(), pin);
+        gate_pin.push(pin);
     }
 
-    // 依拓樸順序逐一把每個閘的輸入接上它的驅動訊號，這樣繞線通道的
-    // lane_index 也會照固定順序分配，結果可重現。
-    let mut lane_index = 0i32;
-    for &gate_index in &order {
-        let gate = &netlist.gates[gate_index];
-        let origin = gate_origin[gate_index];
-        for (input_index, input_name) in gate.inputs.iter().enumerate() {
-            let source_pin = primary_source
-                .get(input_name.as_str())
-                .or_else(|| gate_source.get(input_name.as_str()))
-                .copied()
-                .expect("驅動來源已經在編譯開頭驗證過，這裡一定找得到");
+    // Ramps first. `move_between_layers` seals the blocks around each landing,
+    // and a seal only fills air -- so anything that has to run *through* a
+    // sealed cell (the tracks, and the columns) has to be laid afterwards to
+    // overwrite it.
+    for net in &nets {
+        for slot in 0..net.channels.len() {
+            let channel = net.channels[slot];
+            let z = track_z[channel][net.tracks[slot]];
+            let entry = Position::new(net.entry_column(slot), GATE_Y, z + RAMP_LENGTH);
+            move_between_layers(&mut world, entry, Facing::North, TRACK_Y);
+            for exit in net.exits(slot, &plan.centre_x) {
+                let top = Position::new(exit.x(), TRACK_Y, z);
+                move_between_layers(&mut world, top, Facing::North, GATE_Y);
+            }
+        }
+    }
 
-            let direction = INPUT_DIRECTIONS[input_index];
-            let (dx, dy, dz) = gate_cell[gate_index].input_offsets[input_index];
-            let socket = Position::new(origin.x + dx, origin.y + dy, origin.z + dz);
+    // Columns at `GATE_Y`: from a source pin up to its ramp, and from a ramp's
+    // landing on to whatever it feeds.
+    for net in &nets {
+        for slot in 0..net.channels.len() {
+            let channel = net.channels[slot];
+            let z = track_z[channel][net.tracks[slot]];
+            let entry = Position::new(net.entry_column(slot), GATE_Y, z + RAMP_LENGTH);
+            if slot == 0 {
+                let pin = match net.source {
+                    Source::Lever(i) => lever_pin[i],
+                    Source::Gate(g) => gate_pin[g],
+                };
+                lay_dust_run(&mut world, pin, Facing::North, entry.offset(Facing::North));
+            }
+            for exit in net.exits(slot, &plan.centre_x) {
+                let landing = Position::new(exit.x(), GATE_Y, z - RAMP_LENGTH);
+                match exit {
+                    Exit::Socket { gate, input_index, .. } => {
+                        let (dx, dy, dz) = gate_cell[gate].input_offsets[input_index];
+                        let socket = Position::new(
+                            plan.centre_x[gate] + dx,
+                            GATE_Y + dy,
+                            row_z[plan.row_of[gate]] + dz,
+                        );
+                        if socket.x == landing.x {
+                            lay_segment_to_socket(&mut world, landing, socket);
+                        } else {
+                            let corner =
+                                Position::new(landing.x, GATE_Y, row_z[plan.row_of[gate]]);
+                            lay_segment_to_corner(&mut world, landing, corner);
+                            lay_segment_to_socket(&mut world, corner, socket);
+                        }
+                    }
+                    Exit::Feedthrough { x, next_slot } => {
+                        let next_channel = net.channels[next_slot];
+                        let next_z = track_z[next_channel][net.tracks[next_slot]];
+                        let next_entry = Position::new(x, GATE_Y, next_z + RAMP_LENGTH);
+                        lay_dust_run(
+                            &mut world,
+                            landing,
+                            Facing::North,
+                            next_entry.offset(Facing::North),
+                        );
+                    }
+                }
+            }
+        }
+    }
 
-            route_to_input(&mut world, source_pin, socket, direction, lane_index);
-            lane_index += 1;
+    // Tracks last, so they overwrite the ramps' seal blocks where they have to
+    // pass through them.
+    for net in &nets {
+        for slot in 0..net.channels.len() {
+            let channel = net.channels[slot];
+            let z = track_z[channel][net.tracks[slot]];
+            let source_x = net.entry_column(slot);
+            let (lo, hi) = net.span(slot, &plan.centre_x);
+            let mut taps: BTreeSet<i32> = BTreeSet::new();
+            taps.insert(source_x);
+            for exit in net.exits(slot, &plan.centre_x) {
+                taps.insert(exit.x());
+            }
+            lay_track(&mut world, z, source_x, lo, hi, &taps);
         }
     }
 
     let mut output_positions: BTreeMap<String, (i32, i32, i32)> = BTreeMap::new();
     for output_name in &netlist.outputs {
-        let gate_index = netlist.gates.iter().position(|g| &g.output == output_name).unwrap();
-        let origin = gate_origin[gate_index];
-        let cell = &gate_cell[gate_index];
-        let torch_pos = Position::new(
-            origin.x + cell.output_offset.0,
-            origin.y + cell.output_offset.1,
-            origin.z + cell.output_offset.2,
-        );
-        output_positions.insert(output_name.clone(), (torch_pos.x, torch_pos.y, torch_pos.z));
+        let g = netlist
+            .gates
+            .iter()
+            .position(|gate| &gate.output == output_name)
+            .expect("every output was checked to be driven by a gate above");
+        let torch = torch_of(g, &gate_cell[g]);
+        output_positions.insert(output_name.clone(), (torch.x, torch.y, torch.z));
     }
 
     Ok(CompiledCircuit { world, input_positions, output_positions })

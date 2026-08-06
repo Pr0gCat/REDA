@@ -3,8 +3,12 @@
 //! 這是這個專案的目標電路。三個前人的自動排線工具都死在它身上：
 //! PERSHING 的 router 論文裡這一項結果欄位寫的是「still running」；
 //! MinecraftHDL 產出過一個 83x442 blocks 的版本，超過 Minecraft 的區塊
-//! 載入半徑，實際上跑不起來。這顆電路大約 60 個邏輯閘，至今沒有自動化
-//! 工具真正跑完它。
+//! 載入半徑，實際上跑不起來。
+//!
+//! `the_compiled_decoder_matches_its_truth_table` is the acceptance test for
+//! that target: 84 NOR gates and 156 edges, placed and routed into a footprint
+//! that fits inside a ticking area, and then checked against all 112 truth
+//! table entries through the real redstone simulator.
 //!
 //! 網表是**產生**出來的，不是手寫的 —— 手寫 60 個閘正是抄寫錯誤的來源。
 //! 用 sum-of-products：4 個輸入先各自反相一次（共用），16 個 minterm 裡
@@ -266,23 +270,16 @@ fn read_output(simulator: &Simulator, position: (i32, i32, i32)) -> bool {
     simulator.world().get(position.0, position.1, position.2).lit
 }
 
+/// Java Edition's maximum simulation distance is 32 chunks, so at most about
+/// 1040 blocks across ever tick at once. A circuit wider than that has parts
+/// sitting in unloaded chunks where redstone simply does not run, which is
+/// what sank MinecraftHDL's 83x442 version of this same decoder. 512 is a
+/// deliberately conservative fraction of the ticking area: it leaves room for
+/// the player, for the circuit to sit off-centre, and for a smaller
+/// simulation-distance setting than the maximum.
+const MAX_HORIZONTAL_EXTENT: i32 = 512;
+
 #[test]
-#[ignore = "compiles and routes fine (see the_compiled_decoder_saves_to_a_litematic), but \
-    simulating it is impractically slow: a timed probe showed Simulator::new() alone (one \
-    full-world recompute over the 2882x6x2180 = ~37.7M-cell world) takes 1.67s, and the very \
-    first run_until_stable() -- before any of the 16 lever combinations are even tried -- did \
-    not finish after 580+ wall-clock seconds (1172+ CPU-seconds) and was killed. \
-    recompute_dust_strengths (src/redstone/simulator/propagate.rs) rescans every cell in the \
-    world on every game tick; that is fine for the walking skeleton's tiny AND/NOT-gate worlds \
-    but does not scale to this circuit's footprint. The footprint itself is the other half of \
-    the problem: compile()'s router gives every netlist edge (156 of them here, from 84 gates) \
-    its own dedicated straight-line lane, so the bounding box grows linearly with edge count -- \
-    2882 blocks wide, wider even than MinecraftHDL's already-too-large 83x442 circuit. Fixing either \
-    side (incremental/dirty-region propagation in the simulator, or congestion-aware/shared-\
-    channel routing in the compiler) is a real algorithm, not a contained patch -- see \
-    .superpowers/sdd/seven-segment-report.md for the full diagnosis. Run explicitly with \
-    `cargo test -- --ignored --test seven_segment` if you want to let it run for however many \
-    hours it actually needs."]
 fn the_compiled_decoder_matches_its_truth_table() {
     // 這是這個專案的目標電路。三個前人團隊都死在它身上：PERSHING 的 router
     // 論文裡這一項結果欄位是「still running」；MinecraftHDL 產出過一個
@@ -312,6 +309,15 @@ fn the_compiled_decoder_matches_its_truth_table() {
     eprintln!("seven-segment decoder: {gate_count} gates");
     eprintln!("bounding box: {size_x} x {size_y} x {size_z}, {non_air_blocks} non-air blocks");
     eprintln!("compile() took {compile_elapsed:?}");
+
+    // The circuit has to fit inside a ticking area to be a circuit at all, so
+    // this is a correctness bound rather than a nice-to-have. Y is exempt:
+    // Minecraft's simulation distance is horizontal, and building upwards is
+    // usually the right call in redstone.
+    assert!(
+        size_x <= MAX_HORIZONTAL_EXTENT && size_z <= MAX_HORIZONTAL_EXTENT,
+        "the decoder must fit in a loadable footprint, got {size_x} x {size_y} x {size_z}"
+    );
 
     let mut simulator = Simulator::new(compiled.world);
     simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");

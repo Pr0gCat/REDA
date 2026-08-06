@@ -150,6 +150,32 @@ fn a_compiled_circuit_saves_to_a_loadable_litematic() {
 }
 
 #[test]
+fn compiling_the_same_netlist_twice_gives_the_same_world() {
+    // Placement, track assignment and feed-through reservation are all greedy
+    // searches over hash-map contents, which is exactly the shape of code that
+    // silently starts depending on iteration order. If it ever does, a routing
+    // bug becomes reproducible only every other run.
+    let first = compile(&and_netlist()).expect("this netlist is acyclic and fully driven");
+    let second = compile(&and_netlist()).expect("this netlist is acyclic and fully driven");
+
+    assert_eq!(first.world.size(), second.world.size(), "world size must be stable");
+    assert_eq!(first.input_positions, second.input_positions);
+    assert_eq!(first.output_positions, second.output_positions);
+
+    let (size_x, size_y, size_z) = first.world.size();
+    for x in 0..size_x {
+        for y in 0..size_y {
+            for z in 0..size_z {
+                let a = first.world.get(x, y, z);
+                let b = second.world.get(x, y, z);
+                assert_eq!(a.kind, b.kind, "block kind differs at ({x},{y},{z})");
+                assert_eq!(a.facing, b.facing, "facing differs at ({x},{y},{z})");
+            }
+        }
+    }
+}
+
+#[test]
 fn a_cyclic_netlist_is_rejected() {
     // g1's input is g2's output and g2's input is g1's output -- a two-gate
     // loop with no external input driving either of them.
