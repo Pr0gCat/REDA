@@ -20,13 +20,24 @@ pub fn bits_per_entry(palette_len: usize) -> u32 {
     needed.max(2)
 }
 
+/// 解出 `count` 個項目需要幾個 long。
+///
+/// 呼叫端用它驗證輸入長度，因為 `unpack` 對不足的輸入只會回傳 0，
+/// 不會報錯。
+pub fn required_longs(count: usize, bits: u32) -> usize {
+    (((count as u64) * (bits as u64) + 63) / 64) as usize
+}
+
 /// 從 long array 解出 `count` 個項目。
 ///
 /// `longs` 以有號 `i64` 儲存（NBT 的 LongArray 是有號的），但位元操作
 /// 一律當成無號處理。
+///
+/// 若 `longs` 短於 `required_longs(count, bits)`，不足的項目一律為 0 ——
+/// 不會回傳部分拼湊的值。呼叫端應自行驗證長度並回報損壞的檔案。
 pub fn unpack(longs: &[i64], bits: u32, count: usize) -> Vec<u32> {
     assert!(bits >= 1 && bits <= 32, "bits must be in 1..=32");
-    let mask: u64 = if bits == 64 { u64::MAX } else { (1u64 << bits) - 1 };
+    let mask: u64 = (1u64 << bits) - 1;
     let mut out = Vec::with_capacity(count);
 
     for i in 0..count {
@@ -35,25 +46,23 @@ pub fn unpack(longs: &[i64], bits: u32, count: usize) -> Vec<u32> {
         let start_bit = (bit_offset % 64) as u32;
         let end_bit = start_bit + bits;
 
-        if start_long >= longs.len() {
+        // 輸入不足時一律回傳 0，兩種截斷情形行為一致。
+        // 呼叫端應先用 `required_longs` 驗證長度。
+        let needs_second_long = end_bit > 64;
+        if start_long >= longs.len() || (needs_second_long && start_long + 1 >= longs.len()) {
             out.push(0);
             continue;
         }
 
-        let value = if end_bit <= 64 {
+        let value = if needs_second_long {
+            // 跨越兩個 long —— 這正是舊式慣例
+            let low_bits = 64 - start_bit;
+            let low = (longs[start_long] as u64) >> start_bit;
+            let high = (longs[start_long + 1] as u64) << low_bits;
+            (low | high) & mask
+        } else {
             // 完全落在一個 long 裡
             ((longs[start_long] as u64) >> start_bit) & mask
-        } else {
-            // 跨越兩個 long —— 這正是舊式慣例
-            let end_long = start_long + 1;
-            if end_long >= longs.len() {
-                ((longs[start_long] as u64) >> start_bit) & mask
-            } else {
-                let low_bits = 64 - start_bit;
-                let low = (longs[start_long] as u64) >> start_bit;
-                let high = (longs[end_long] as u64) << low_bits;
-                (low | high) & mask
-            }
         };
 
         out.push(value as u32);
@@ -74,6 +83,10 @@ pub fn pack(values: &[u32], bits: u32) -> Vec<i64> {
     let mask: u64 = (1u64 << bits) - 1;
 
     for (i, &v) in values.iter().enumerate() {
+        debug_assert!(
+            (v as u64) <= mask,
+            "value {v} does not fit in {bits} bits"
+        );
         let value = (v as u64) & mask;
         let bit_offset = (i as u64) * (bits as u64);
         let start_long = (bit_offset / 64) as usize;
@@ -136,5 +149,35 @@ mod tests {
         let packed = pack(&values, 2);
         let unpacked = unpack(&packed, 2, 3);
         assert_eq!(unpacked.len(), 3);
+    }
+
+    #[test]
+    fn truncated_input_yields_zeros_not_partial_values() {
+        // 3 bits/entry：索引 21 起點在 bit 63，需要兩個 long。
+        // 只給一個 long 時，它必須回傳 0，而不是拼湊出的部分值。
+        let values: Vec<u32> = (0..25).map(|i| (i % 7) + 1).collect();
+        let full = pack(&values, 3);
+        assert!(full.len() >= 2, "test needs at least two longs");
+
+        let truncated = &full[..1];
+        let unpacked = unpack(truncated, 3, values.len());
+
+        assert_eq!(unpacked[21], 0, "straddling entry must be 0 when truncated");
+        assert_eq!(unpacked[24], 0, "entry beyond the data must be 0");
+    }
+
+    #[test]
+    fn required_longs_matches_what_pack_produces() {
+        for bits in 2..=16u32 {
+            for count in [0usize, 1, 7, 32, 100] {
+                let values: Vec<u32> = (0..count).map(|i| (i as u32) % 4).collect();
+                let packed = pack(&values, bits);
+                assert_eq!(
+                    packed.len(),
+                    required_longs(count, bits),
+                    "mismatch at bits={bits} count={count}"
+                );
+            }
+        }
     }
 }
