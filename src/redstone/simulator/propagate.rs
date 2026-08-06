@@ -16,28 +16,39 @@ use crate::redstone::world::storage::World;
 /// 紅石訊號的最大強度。
 pub const MAX_SIGNAL_STRENGTH: u8 = 15;
 
-/// 重算全世界紅石粉的訊號強度，回傳有多少格改變了。
+/// 重算全世界紅石粉的訊號強度，回傳強度有改變的位置。
 ///
-/// 回傳 0 表示已經是穩定狀態。
-pub fn recompute_dust_strengths(world: &mut World) -> usize {
-    let (size_x, size_y, size_z) = world.size();
+/// 回傳空的 `Vec` 表示已經是穩定狀態。呼叫端用這份清單排程鄰居更新 ——
+/// 回傳「改變了幾格」會逼呼叫端自己再掃一次世界。
+pub fn recompute_dust_strengths(world: &mut World) -> Vec<Position> {
+    let (size_x, _size_y, size_z) = world.size();
+    let cell_count = world.cells().len();
 
-    // 收集所有紅石粉的位置，以及每格的目標強度
+    // palette 通常只有幾十個項目，先算出哪些索引是紅石粉，
+    // 掃描就退化成每格一次整數比較
+    let dust_palette_indices: Vec<bool> = world
+        .palette()
+        .entries()
+        .iter()
+        .map(|state| state.kind == BlockKind::RedstoneWire)
+        .collect();
+
+    // 收集所有紅石粉的位置，以及每格的目標強度（用 World::index 當鍵，
+    // 一個扁平 Vec 就夠，不必付 HashMap 的雜湊成本）
     let mut dust_positions = Vec::new();
     let mut queue: VecDeque<(Position, u8)> = VecDeque::new();
-    let mut target: std::collections::HashMap<Position, u8> = std::collections::HashMap::new();
+    let mut target: Vec<u8> = vec![0u8; cell_count];
 
-    for y in 0..size_y {
-        for z in 0..size_z {
-            for x in 0..size_x {
-                let pos = Position::new(x, y, z);
-                let state = world.get(x, y, z);
-                if state.kind == BlockKind::RedstoneWire {
-                    dust_positions.push(pos);
-                    target.insert(pos, 0);
-                }
-            }
+    let layer = (size_x as usize) * (size_z as usize);
+    for (flat, &palette_idx) in world.cells().iter().enumerate() {
+        if !dust_palette_indices[palette_idx as usize] {
+            continue;
         }
+        let y = (flat / layer) as i32;
+        let rem = flat % layer;
+        let z = (rem / size_x as usize) as i32;
+        let x = (rem % size_x as usize) as i32;
+        dust_positions.push(Position::new(x, y, z));
     }
 
     // 每格紅石粉的初始強度：來自相鄰的非紅石粉訊號源
@@ -75,7 +86,10 @@ pub fn recompute_dust_strengths(world: &mut World) -> usize {
         }
 
         if best > 0 {
-            target.insert(pos, best);
+            let flat = world
+                .index(pos.x, pos.y, pos.z)
+                .expect("dust position must be in-bounds");
+            target[flat] = best;
             queue.push_back((pos, best));
         }
     }
@@ -88,25 +102,31 @@ pub fn recompute_dust_strengths(world: &mut World) -> usize {
         let next_strength = strength - 1;
         for facing in HORIZONTAL {
             for neighbour in dust_connections(world, pos, facing).iter() {
-                let current = target.get(&neighbour).copied().unwrap_or(0);
+                let flat = world
+                    .index(neighbour.x, neighbour.y, neighbour.z)
+                    .expect("dust_connections only returns in-bounds positions");
+                let current = target[flat];
                 if next_strength > current {
-                    target.insert(neighbour, next_strength);
+                    target[flat] = next_strength;
                     queue.push_back((neighbour, next_strength));
                 }
             }
         }
     }
 
-    // 寫回，統計改變的格數
-    let mut changed = 0;
+    // 寫回，收集改變的位置
+    let mut changed = Vec::new();
     for &pos in &dust_positions {
-        let want = target.get(&pos).copied().unwrap_or(0);
+        let flat = world
+            .index(pos.x, pos.y, pos.z)
+            .expect("dust position must be in-bounds");
+        let want = target[flat];
         let state = world.get(pos.x, pos.y, pos.z);
         if state.power != want {
             let mut updated = state.clone();
             updated.power = want;
             world.set(pos.x, pos.y, pos.z, updated);
-            changed += 1;
+            changed.push(pos);
         }
     }
 
@@ -305,10 +325,29 @@ mod tests {
         w.set(0, 1, 0, redstone_block());
 
         let changed = recompute_dust_strengths(&mut w);
-        assert_eq!(changed, 5, "all five dust cells went from 0 to non-zero");
+        assert_eq!(changed.len(), 5, "all five dust cells went from 0 to non-zero");
 
         let changed_again = recompute_dust_strengths(&mut w);
-        assert_eq!(changed_again, 0, "a second pass changes nothing");
+        assert_eq!(changed_again.len(), 0, "a second pass changes nothing");
+    }
+
+    #[test]
+    fn recompute_is_cheap_on_a_world_with_no_dust() {
+        // 空世界的成本就是「找不到東西」的成本 —— tick 迴圈每個 game tick
+        // 都會呼叫一次，所以這條路徑必須便宜
+        let mut w = World::new(64, 32, 64);
+        let start = std::time::Instant::now();
+        for _ in 0..10 {
+            let changed = recompute_dust_strengths(&mut w);
+            assert!(changed.is_empty());
+        }
+        let per_call = start.elapsed() / 10;
+
+        // debug build 會慢很多，這個上限只是要抓住數量級的退步
+        assert!(
+            per_call < std::time::Duration::from_millis(50),
+            "recompute on an empty 64x32x64 world took {per_call:?} per call"
+        );
     }
 
     #[test]
