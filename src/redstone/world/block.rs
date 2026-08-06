@@ -63,6 +63,11 @@ pub struct BlockState {
     pub half: Option<SlabHalf>,
     /// 原始 Minecraft 方塊 ID
     pub name: String,
+    /// 讀檔時沒有被讀進上面那些結構化欄位的 blockstate property。
+    ///
+    /// 原樣保存、原樣寫回，所以 round-trip 不會遺失任何屬性 —— 我們不需要
+    /// 為每一種方塊建模它的每一個屬性。用 `BTreeMap` 是為了寫出的順序確定。
+    pub extra_properties: std::collections::BTreeMap<String, String>,
 }
 
 impl BlockState {
@@ -76,6 +81,7 @@ impl BlockState {
             lit: false,
             half: None,
             name: "minecraft:air".to_string(),
+            extra_properties: std::collections::BTreeMap::new(),
         }
     }
 }

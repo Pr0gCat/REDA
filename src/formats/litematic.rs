@@ -91,6 +91,24 @@ pub struct PaletteEntry {
     pub properties: HashMap<String, String>,
 }
 
+/// 這個方塊種類的哪些 blockstate property 會被讀進 `BlockState` 的結構化欄位。
+///
+/// 沒列在這裡的屬性一律原樣保存在 `extra_properties` 並原樣寫回，所以新增
+/// 一種方塊不需要修改讀寫邏輯，也不會靜默遺失資料。
+fn structured_property_keys(kind: BlockKind) -> &'static [&'static str] {
+    match kind {
+        BlockKind::RedstoneWire => &["power"],
+        BlockKind::Repeater => &["facing", "delay", "powered"],
+        BlockKind::Comparator => &["facing", "powered"],
+        BlockKind::WallTorch => &["facing", "lit"],
+        BlockKind::Torch | BlockKind::Lamp => &["lit"],
+        BlockKind::Lever => &["facing", "powered"],
+        BlockKind::Piston => &["facing"],
+        BlockKind::Slab => &["type"],
+        _ => &[],
+    }
+}
+
 /// 把 Minecraft 方塊 ID 與其 blockstate properties 轉成我們的 `BlockState`。
 ///
 /// 未知的方塊一律歸類為 `BlockKind::Other`，行為靠 `name` 查表決定
@@ -115,7 +133,16 @@ pub fn parse_block_name(name: &str, properties: &HashMap<String, String>) -> Blo
         _ => BlockKind::Other,
     };
 
-    let facing = properties.get("facing").and_then(|f| match f.as_str() {
+    let structured = structured_property_keys(kind);
+    let reads = |key: &str| -> Option<&String> {
+        if structured.contains(&key) {
+            properties.get(key)
+        } else {
+            None
+        }
+    };
+
+    let facing = reads("facing").and_then(|f| match f.as_str() {
         "north" => Some(Facing::North),
         "south" => Some(Facing::South),
         "east" => Some(Facing::East),
@@ -125,24 +152,18 @@ pub fn parse_block_name(name: &str, properties: &HashMap<String, String>) -> Blo
         _ => None,
     });
 
-    let half = if kind == BlockKind::Slab {
-        properties.get("type").and_then(|t| match t.as_str() {
-            "top" => Some(SlabHalf::Top),
-            "bottom" => Some(SlabHalf::Bottom),
-            "double" => Some(SlabHalf::Double),
-            _ => None,
-        })
-    } else {
-        None
-    };
+    let half = reads("type").and_then(|t| match t.as_str() {
+        "top" => Some(SlabHalf::Top),
+        "bottom" => Some(SlabHalf::Bottom),
+        "double" => Some(SlabHalf::Double),
+        _ => None,
+    });
 
-    let power = properties
-        .get("power")
+    let power = reads("power")
         .and_then(|p| p.parse::<u8>().ok())
         .unwrap_or(0);
 
-    let delay = properties
-        .get("delay")
+    let delay = reads("delay")
         .and_then(|d| d.parse::<u8>().ok())
         .unwrap_or(0);
 
@@ -150,11 +171,17 @@ pub fn parse_block_name(name: &str, properties: &HashMap<String, String>) -> Blo
     // —— 它們只有 `powered`。但 1.21 的銅燈兩個屬性都有而且意義不同
     // （`lit` 是鎖存的輸出狀態，`powered` 是輸入訊號），加入 1.21 支援時
     // 這個退回必須拆開處理。
-    let lit = properties
-        .get("lit")
-        .or_else(|| properties.get("powered"))
+    let lit = reads("lit")
+        .or_else(|| reads("powered"))
         .map(|v| v == "true")
         .unwrap_or(false);
+
+    // 其餘屬性原樣保存，寫回時無損
+    let extra_properties = properties
+        .iter()
+        .filter(|(k, _)| !structured.contains(&k.as_str()))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
 
     BlockState {
         kind,
@@ -164,6 +191,7 @@ pub fn parse_block_name(name: &str, properties: &HashMap<String, String>) -> Blo
         lit,
         half,
         name: name.to_string(),
+        extra_properties,
     }
 }
 
@@ -241,50 +269,42 @@ pub fn load(path: &Path) -> Result<World, FormatError> {
     Ok(World::from_parts(size_x, size_y, size_z, palette, cells))
 }
 
-/// 這個方塊種類在 Minecraft 裡是否真的有 `facing` 屬性。
-///
-/// 寫出方塊沒有的屬性會讓 Minecraft 拒絕載入整個檔案，所以輸出前一律過濾。
-fn kind_has_facing(kind: BlockKind) -> bool {
-    matches!(
-        kind,
-        BlockKind::Repeater
-            | BlockKind::Comparator
-            | BlockKind::WallTorch
-            | BlockKind::Piston
-            | BlockKind::Lever
-    )
-}
-
-/// 這個方塊種類在 Minecraft 裡是否真的有 `type`（上/下/雙層）屬性。
-fn kind_has_slab_half(kind: BlockKind) -> bool {
-    matches!(kind, BlockKind::Slab)
-}
-
 /// 把我們的 `BlockState` 轉回 litematic 的 palette 項目。
 ///
 /// 只寫出該方塊真正擁有的 property —— 多寫會讓 Minecraft 拒絕載入。
 pub fn block_state_to_entry(state: &BlockState) -> PaletteEntry {
-    let mut properties = HashMap::new();
+    // 先放回沒建模的屬性，再讓結構化欄位覆寫 —— 兩者的 key 依定義不重疊。
+    let mut properties: HashMap<String, String> = state
+        .extra_properties
+        .iter()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
 
-    if let Some(f) = state.facing.filter(|_| kind_has_facing(state.kind)) {
-        let s = match f {
-            Facing::North => "north",
-            Facing::South => "south",
-            Facing::East => "east",
-            Facing::West => "west",
-            Facing::Up => "up",
-            Facing::Down => "down",
-        };
-        properties.insert("facing".to_string(), s.to_string());
+    let structured = structured_property_keys(state.kind);
+
+    if structured.contains(&"facing") {
+        if let Some(f) = state.facing {
+            let s = match f {
+                Facing::North => "north",
+                Facing::South => "south",
+                Facing::East => "east",
+                Facing::West => "west",
+                Facing::Up => "up",
+                Facing::Down => "down",
+            };
+            properties.insert("facing".to_string(), s.to_string());
+        }
     }
 
-    if let Some(h) = state.half.filter(|_| kind_has_slab_half(state.kind)) {
-        let s = match h {
-            SlabHalf::Top => "top",
-            SlabHalf::Bottom => "bottom",
-            SlabHalf::Double => "double",
-        };
-        properties.insert("type".to_string(), s.to_string());
+    if structured.contains(&"type") {
+        if let Some(h) = state.half {
+            let s = match h {
+                SlabHalf::Top => "top",
+                SlabHalf::Bottom => "bottom",
+                SlabHalf::Double => "double",
+            };
+            properties.insert("type".to_string(), s.to_string());
+        }
     }
 
     match state.kind {
@@ -531,5 +551,91 @@ mod tests {
             Some("east"),
             "a repeater must keep its facing"
         );
+    }
+
+    #[test]
+    fn observer_facing_survives_the_round_trip() {
+        // observer 是 BlockKind::Other，facing 必須靠 extra_properties 保住
+        let b = parse_block_name("minecraft:observer", &props(&[("facing", "north")]));
+        let entry = block_state_to_entry(&b);
+        assert_eq!(
+            entry.properties.get("facing").map(String::as_str),
+            Some("north"),
+            "an observer's facing must not be lost"
+        );
+    }
+
+    #[test]
+    fn comparator_mode_survives_the_round_trip() {
+        // mode 決定比較器是比較還是減法 —— 弄丟它等於把元件換成另一個
+        let b = parse_block_name(
+            "minecraft:comparator",
+            &props(&[("mode", "subtract"), ("powered", "true"), ("facing", "north")]),
+        );
+        let entry = block_state_to_entry(&b);
+        assert_eq!(
+            entry.properties.get("mode").map(String::as_str),
+            Some("subtract"),
+            "a subtract comparator must not become a compare comparator"
+        );
+        assert_eq!(entry.properties.get("facing").map(String::as_str), Some("north"));
+        assert_eq!(entry.properties.get("powered").map(String::as_str), Some("true"));
+    }
+
+    #[test]
+    fn lever_face_and_repeater_locked_survive() {
+        let lever = parse_block_name(
+            "minecraft:lever",
+            &props(&[("face", "floor"), ("facing", "north"), ("powered", "false")]),
+        );
+        let entry = block_state_to_entry(&lever);
+        assert_eq!(
+            entry.properties.get("face").map(String::as_str),
+            Some("floor"),
+            "a floor lever must not become a wall lever"
+        );
+
+        let rep = parse_block_name(
+            "minecraft:repeater",
+            &props(&[("locked", "true"), ("delay", "1"), ("powered", "false"), ("facing", "east")]),
+        );
+        let rep_entry = block_state_to_entry(&rep);
+        assert_eq!(
+            rep_entry.properties.get("locked").map(String::as_str),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn plain_blocks_gain_no_properties_they_did_not_have() {
+        let stone = parse_block_name("minecraft:stone", &props(&[]));
+        assert!(block_state_to_entry(&stone).properties.is_empty());
+    }
+
+    #[test]
+    fn every_input_property_comes_back_out() {
+        // 通用不變式:讀進來的 key 集合必須等於寫出去的 key 集合
+        let cases: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("minecraft:observer", vec![("facing", "up"), ("powered", "false")]),
+            ("minecraft:oak_stairs", vec![("facing", "east"), ("half", "top"), ("shape", "straight"), ("waterlogged", "false")]),
+            ("minecraft:redstone_wire", vec![("power", "9"), ("north", "side"), ("east", "up")]),
+            ("minecraft:hopper", vec![("facing", "down"), ("enabled", "true")]),
+        ];
+
+        for (name, pairs) in cases {
+            let input = props(&pairs);
+            let state = parse_block_name(name, &input);
+            let output = block_state_to_entry(&state).properties;
+
+            let mut in_keys: Vec<&str> = input.keys().map(String::as_str).collect();
+            let mut out_keys: Vec<&str> = output.keys().map(String::as_str).collect();
+            in_keys.sort_unstable();
+            out_keys.sort_unstable();
+            assert_eq!(in_keys, out_keys, "key set changed for {name}");
+
+            for (k, v) in &input {
+                assert_eq!(output.get(k), Some(v), "value changed for {name}.{k}");
+            }
+        }
     }
 }
