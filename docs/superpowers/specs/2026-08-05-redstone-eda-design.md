@@ -190,13 +190,17 @@ VHDL
 
 所有驗證機制的基礎。等價性驗證、DRC、延遲量測、benchmark 對比全部依賴它。
 
-### 4.1 雙引擎
+### 4.1 三個引擎
 
-| | 快速引擎 | 忠實引擎 |
-|---|---|---|
-| 模型 | 理想化。net 層級距離場，紅石粉瞬間穩定 | 完全複製 Java 1.20：scheduled tick、TickPriority、neighbor update 順序、QC、紅石粉遞迴 power 重算 |
-| 用途 | 編譯迴圈內的等價性驗證（每次編譯數千次呼叫） | 最終 sign-off、locational 偵測 |
-| 速度 | 快數個數量級 | 慢，只跑數次 |
+原本設計成雙引擎，但 `fast` 在**原理上**發現不了繞線耦合 —— 它以網表連線為前提，看不到不在網表裡的連線。耦合偵測因此需要自己的一層：
+
+| | `fast` | `coupling` | `exact` |
+|---|---|---|---|
+| 模型 | net 層級距離場，紅石粉瞬間穩定 | **方塊層級**充能傳播，但 update order 簡化 | 完全複製 Java 1.20：scheduled tick、TickPriority、neighbor update 順序、QC、紅石粉遞迴 power 重算 |
+| 用途 | 編譯迴圈內的大量呼叫 | 逐 net 注入-觀測（§4.6 L5） | sign-off、locational 偵測 |
+| 抓得到瞬態／glitch | ✗（結構上不可能） | 部分 | ✓ |
+| 抓得到意外耦合 | **✗（結構上不可能）** | ✓ | ✓ |
+| 速度 | 快數個數量級 | 中等 | 慢，只跑數次 |
 
 **兩者行為不一致 = 電路依賴了 Minecraft 的詭異行為。** 不需要另寫 QC 偵測器或 locational 偵測器，分歧本身就是警報。偵測到即退回重繞。
 
@@ -802,6 +806,8 @@ memory generator **是 generator 不是 macro** —— 它是吃 depth/width 參
 
 **用差距定位未知的技巧。** 工具負責讀入、模擬、標出關鍵路徑、與我們的輸出逐段對比，指出「你在這三處各慢了 2 tick」。人負責看懂那三處在幹嘛並抽象成 rule。
 
+**差距必須分解成「能力」與「演算法」兩項**（見 §15.2）—— 對方用了我們關著的技巧，那不是演算法輸，是能力沒開。混在一起報會把我們推往錯的優化方向。
+
 ### 10.3 北極星指標
 
 **REDA 距離人類手刻還差幾 tick。** 每加一條 rule 重跑整個 benchmark，差距縮小多少一目瞭然。
@@ -1098,3 +1104,117 @@ RedstoneBuilder 是最值得記住的反例：它**真的會編譯、CI 全綠�
 **EDA 詞彙正確，EDA 行為不正確。** 這正是本文件 §10.7 堅持 `check-rule` 要跑全 benchmark、以及 §4.6 要求逐 net 注入-觀測的理由 —— 綠色的測試套件本身不保證任何事，只有**跑真電路、量真數字**才算數。
 
 我們自己的 benchmark 必須產出可公開查核的數字（gate 數、blocks 尺寸、tick 延遲、以及 §8.0 的 Feasibility），而不是通過/失敗的布林值。
+
+---
+
+## 15. 能力集合（capability flags）
+
+紅石有一批「可用但有代價」的技巧 —— 更緊湊或更快，但更脆弱。要不要用是**取捨**，不是對錯，所以做成可切換的能力集合：
+
+```
+capabilities = {
+    qc:          false,   # quasi-connectivity（活塞／發射器／投擲器）
+    piston:      false,   # 活塞（隱含需要 QC 意識）
+    observer:    false,
+    zero_tick:   false,   # 0-tick 技巧
+    locational:  false,   # 位置相依結構（幾乎不該開）
+    copper_bulb: false,   # 1.21 才有
+}
+```
+
+**全域預設 + per-instance 覆寫**。
+
+### 15.1 對各模組的意義
+
+| 模組 | 影響 |
+|---|---|
+| `cells/generators` | 每個技巧至少要有保守版；激進版是選配 |
+| `cells/library` | 每個 cell 標註自己需要哪些 capability |
+| `layout/route` | **QC 開啟時 keep-out 要放大** —— 是「上方那格的鄰居」而非「正上方一格」（§4.5） |
+| `verify` | 兩種模式都要能驗；`locational: true` 時 §4.6 L6 的窮舉才放行 |
+| **`redstone/simulator`** | **不受 toggle 影響，永遠模擬 QC** |
+
+最後一列是關鍵：toggle 管的是「我們主動用不用」，不是「模擬器要不要知道」。**就算全部關著，模擬器仍必須模擬 QC** —— 否則繞線意外造成的 QC 耦合就抓不到了。
+
+### 15.2 順帶解決的三件事
+
+**目標版本自然表達。** 1.20 就是 `copper_bulb: false`，不需要另一套版本判斷邏輯（§4.4 的 `rules` 版本化因此更輕）。
+
+**benchmark 變公平。** 比較時固定 capability set，避免「我們關著 QC、人家開著，然後說我們慢」這種無效比較。
+
+**gap analysis 可以分解 —— 這點最有價值。** §10.2 的差距數字若不分解會誤導：
+
+```
+adder8:  人類 4 tick  /  我們 9 tick
+         ├─ 能力差距 2 tick（對方用了 QC 與 0-tick，我們關著）
+         └─ 演算法差距 3 tick   ← 只有這個才是我們該追的
+```
+
+沒有這個分解，我們會把「沒開能力」誤判成「演算法不行」，然後往錯的方向優化。`reda gap` 必須報這兩個數字，不是一個。
+
+---
+
+## 16. 專案結構
+
+單一 crate，內部以 module 劃分。**現在拆成多個 crate 的成本是實在的**（版本同步、循環依賴迴避、編譯設定重複），而好處要等到有第二個使用者才兌現。`redstone/` 零外部依賴，是最可能第一個獨立出去的。
+
+```
+reda/
+├── redstone/    紅石本身：方塊規則、世界模型、模擬器
+├── formats/     檔案讀寫：NBT、litematic、Yosys netlist
+├── circuit/     電路的四種表示形式，從抽象到具體
+├── cells/       紅石元件庫，以及會長出結構的生成器
+├── layout/      決定東西擺哪、線怎麼走
+├── optimize/    邏輯優化：技巧的累積與套用
+├── verify/      驗證：產出的東西到底對不對
+└── cli/         指令列工具
+```
+
+展開：
+
+```
+redstone/                紅石的一切，零外部依賴
+├── world/               方塊狀態、3D 空間儲存
+├── rules/               方塊分類表（§2.2）、充能規則、版本差異
+├── simulator/
+│   ├── fast/            理想化：整條線一次算完，快但看不到瞬態
+│   ├── coupling/        方塊層級：抓意外的線與線干擾
+│   └── exact/           忠實：逐 tick、含 QC，唯一能當裁判的
+└── signals/             世界座標 ↔ 邏輯訊號名，給測試用
+
+circuit/
+├── word/                位寬和算術還看得出來（8-bit 加法器還是一個加法器）
+├── gate/                拆成純布林閘了
+├── physical/            每個閘有了 3D 座標
+└── blocks/              變成一格一格的方塊
+
+cells/
+├── library/             每個紅石元件的體積、延遲、需要什麼支撐
+├── liberty/             翻譯成 abc 看得懂的格式
+└── generators/          給參數長出結構（RAM 給我深度寬度，我生一塊給你）
+
+layout/
+├── place/               閘擺哪裡
+├── route/               線怎麼走、中繼器插哪
+├── legality/            這樣擺合不合法
+└── timing/              關鍵路徑多長、能跑多快
+
+optimize/
+├── egraph/              e-graph 引擎整合
+├── rules/               rewrite rules，一條一檔（§10.6）
+├── cost/                成本函數（§6）
+└── extract/             抽取，外接 e-boost（§6.4）
+
+verify/
+├── equivalence/         改寫前後邏輯有沒有變
+├── coupling/            繞線有沒有讓不該連的線連在一起
+└── locational/          換個座標貼還會不會動
+```
+
+### 16.1 命名原則
+
+1. **不用縮寫** —— `pnr`、`fmt`、`opt`、`drc` 一律展開或改用白話
+2. **不跟 Rust 生態撞名** —— 不要 `lib/`（撞 `lib.rs`）、不要 `core/`（撞 `core` crate）
+3. **讀了就知道在幹嘛** —— 若一個名字需要註解才懂，那就是名字沒取好
+
+（前一版用的 `core/ fmt/ ir/ lib/ pnr/ opt/` 違反全部三條，已撤換。）
