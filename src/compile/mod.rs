@@ -429,6 +429,14 @@ fn move_between_layers(world: &mut World, entry: Position, direction: Facing, ta
     current
 }
 
+/// 插座朝南時，「回到插座」那一步跟「跨列」共用同一個軸（Z），沒辦法
+/// 直接落地到 `socket.z`——見 `route_to_input` 的說明。這是那一步額外的
+/// 緩衝距離：跨列的下降點先停在 `socket.z` 之外這麼多格，把 X 切回
+/// `socket.x` 之後，再單獨沿 Z 走完最後這一小段，方向才會是真正朝插座
+/// 前進、而不是跟橫向切換的那一步疊在一起。只要小於 `ROW_SPACING` 的一半
+/// 就不會撞進下一列。
+const SOCKET_APPROACH_BUFFER: i32 = 4;
+
 /// 把一個訊號從它的來源接到某個閘的某個輸入插座，中間用專屬通道繞線，
 /// 末端一定是一個面朝支撐塊的中繼器 —— 這是唯一能強充能支撐塊的方法。
 ///
@@ -439,6 +447,24 @@ fn move_between_layers(world: &mut World, entry: Position, direction: Facing, ta
 /// 跨列的那一段（線段二）刻意墊高到 `LANE_Y`，跟閘本體、插座所在的
 /// `GATE_Y` 分開一層再落地——見 `LANE_Y` 的說明，這是避免不同邊的通道跟
 /// 別條邊的插頭意外相鄰的關鍵。
+///
+/// 插座朝西／東（軸 X）時，「切進通道」跟「切出通道回插座」都沿 X——
+/// 剛好跟插座本來的進入方向一樣，這兩段可以直接當作頭尾兩段，不必再多走
+/// 一段：`compile()` 裡每一列閘的本體都放在同一個 X，列跟列只靠 Z 拉開，
+/// 所以「跨列」永遠沿 Z，跟這裡的頭尾（沿 X）是不同軸，天然不會疊在一起。
+///
+/// 插座朝南（軸 Z）時就不是這樣了：插座的進入方向也是 Z，跟跨列共用
+/// 同一個軸。如果照西／東的公式直接切齊 `socket.z` 落地，X 還停在專屬
+/// 通道的 `lane_x` 上，不在 `socket.x`——`waypoint_a` 跟 `waypoint_b` 的
+/// X、Z 會完全相等（`compile()` 裡所有閘的本體共用同一個 X，只有 Z 隨列
+/// 而變），變成起點等於終點，`direction_from` 判斷不出方向而 panic。這是
+/// 這個電路第一次真正逼出這條路徑：更早的測試電路每個閘最多兩個輸入，
+/// 只用得到西／東方向，從沒排過三輸入閘、也就沒用過南方向插座。
+/// 修法是幫南方向插座多插一段：跨列先在專屬通道（沿 X 偏移的
+/// `lane_x`）上，停在插座之外 `SOCKET_APPROACH_BUFFER` 格的緩衝點，
+/// 而不是插座本身；把 X 切回 `socket.x` 之後（新的一段轉角），才單獨
+/// 沿 Z 走完最後這一小段真正進插座——方向純粹是 Z，跟中繼器該面朝的
+/// 方向（朝支撐塊）一致。
 fn route_to_input(
     world: &mut World,
     source_pin: Position,
@@ -448,22 +474,26 @@ fn route_to_input(
 ) {
     let axis = axis_of(input_direction);
     let sign = sign_of(input_direction);
-    let lane_offset = sign * (AVENUE_OFFSET + lane_index * LANE_SPACING);
+    let lane_offset = AVENUE_OFFSET + lane_index * LANE_SPACING;
 
-    let (waypoint_a, waypoint_b) = match axis {
+    // `tail_start` 是最後一段（`lay_segment_to_socket`）的起點。軸 X 的
+    // 情形頭尾都沿 X，`waypoint_b` 本身就是插座前的起點；軸 Z 的情形需要
+    // 一個額外的緩衝點（見上面的說明），`waypoint_b` 只是跨列結束、還沒
+    // 切回 `socket.x` 的中繼站。
+    let (waypoint_a, waypoint_b, tail_start) = match axis {
         Axis::X => {
-            let lane_x = socket.x + lane_offset;
-            (
-                Position::new(lane_x, source_pin.y, source_pin.z),
-                Position::new(lane_x, source_pin.y, socket.z),
-            )
+            let lane_x = socket.x + sign * lane_offset;
+            let waypoint_a = Position::new(lane_x, source_pin.y, source_pin.z);
+            let waypoint_b = Position::new(lane_x, source_pin.y, socket.z);
+            (waypoint_a, waypoint_b, waypoint_b)
         }
         Axis::Z => {
-            let lane_z = socket.z + lane_offset;
-            (
-                Position::new(source_pin.x, source_pin.y, lane_z),
-                Position::new(socket.x, source_pin.y, lane_z),
-            )
+            let lane_x = socket.x + lane_offset;
+            let approach_z = socket.z + sign * SOCKET_APPROACH_BUFFER;
+            let waypoint_a = Position::new(lane_x, source_pin.y, source_pin.z);
+            let waypoint_b = Position::new(lane_x, source_pin.y, approach_z);
+            let tail_start = Position::new(socket.x, source_pin.y, approach_z);
+            (waypoint_a, waypoint_b, tail_start)
         }
     };
 
@@ -490,7 +520,10 @@ fn route_to_input(
     let landed = move_between_layers(world, descent_entry, crossing_direction, GATE_Y);
     debug_assert_eq!(landed, waypoint_b, "下降後必須精確落在 waypoint_b 上");
 
-    lay_segment_to_socket(world, waypoint_b, socket);
+    if tail_start != waypoint_b {
+        lay_segment_to_corner(world, waypoint_b, tail_start);
+    }
+    lay_segment_to_socket(world, tail_start, socket);
 }
 
 /// 把一個外部輸入的拉桿與它的起始紅石粉畫進世界，回傳這個訊號的來源
