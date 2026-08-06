@@ -20,6 +20,11 @@ pub enum BlockKind {
     RedstoneBlock,
     Lamp,
     Piston,
+    Button,
+    PressurePlate,
+    Observer,
+    Target,
+    DaylightDetector,
     /// 其他方塊，行為由 `BlockState::name` 查表決定
     Other,
 }

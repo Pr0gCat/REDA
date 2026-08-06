@@ -105,6 +105,9 @@ fn structured_property_keys(kind: BlockKind) -> &'static [&'static str] {
         BlockKind::Lever => &["facing", "powered"],
         BlockKind::Piston => &["facing"],
         BlockKind::Slab => &["type"],
+        BlockKind::Button | BlockKind::PressurePlate => &["powered"],
+        BlockKind::Observer => &["facing", "powered"],
+        BlockKind::Target | BlockKind::DaylightDetector => &["power"],
         _ => &[],
     }
 }
@@ -130,6 +133,11 @@ pub fn parse_block_name(name: &str, properties: &HashMap<String, String>) -> Blo
         n if n.ends_with("_slab") => BlockKind::Slab,
         "minecraft:stone" | "minecraft:smooth_stone" | "minecraft:cobblestone"
         | "minecraft:dirt" | "minecraft:oak_planks" => BlockKind::Solid,
+        "minecraft:observer" => BlockKind::Observer,
+        "minecraft:target" => BlockKind::Target,
+        "minecraft:daylight_detector" => BlockKind::DaylightDetector,
+        n if n.ends_with("_button") => BlockKind::Button,
+        n if n.ends_with("_pressure_plate") => BlockKind::PressurePlate,
         _ => BlockKind::Other,
     };
 
@@ -323,6 +331,12 @@ pub fn block_state_to_entry(state: &BlockState) -> PaletteEntry {
         }
         BlockKind::Lever => {
             properties.insert("powered".to_string(), state.lit.to_string());
+        }
+        BlockKind::Button | BlockKind::PressurePlate | BlockKind::Observer => {
+            properties.insert("powered".to_string(), state.lit.to_string());
+        }
+        BlockKind::Target | BlockKind::DaylightDetector => {
+            properties.insert("power".to_string(), state.power.to_string());
         }
         _ => {}
     }
@@ -637,5 +651,21 @@ mod tests {
                 assert_eq!(output.get(k), Some(v), "value changed for {name}.{k}");
             }
         }
+    }
+
+    #[test]
+    fn input_component_names_are_recognised() {
+        assert_eq!(
+            parse_block_name("minecraft:stone_button", &props(&[])).kind,
+            BlockKind::Button
+        );
+        assert_eq!(
+            parse_block_name("minecraft:oak_pressure_plate", &props(&[])).kind,
+            BlockKind::PressurePlate
+        );
+        assert_eq!(
+            parse_block_name("minecraft:observer", &props(&[])).kind,
+            BlockKind::Observer
+        );
     }
 }

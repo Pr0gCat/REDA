@@ -108,6 +108,8 @@ pub fn flags_of(state: &BlockState) -> BlockFlags {
             BlockKind::Slab => matches!(state.half, Some(SlabHalf::Top) | Some(SlabHalf::Double)),
             BlockKind::Solid | BlockKind::Glass | BlockKind::Lamp => true,
             BlockKind::Piston | BlockKind::RedstoneBlock => true,
+            BlockKind::Observer | BlockKind::Target => true,
+            BlockKind::Button | BlockKind::PressurePlate | BlockKind::DaylightDetector => false,
             BlockKind::Other => is_ordinary_full_block(name),
             _ => false,
         };
@@ -129,6 +131,8 @@ pub fn flags_of(state: &BlockState) -> BlockFlags {
             // 單層半磚永不導電；雙層半磚等同完整方塊
             BlockKind::Slab => state.half == Some(SlabHalf::Double),
             BlockKind::Solid | BlockKind::Lamp => true,
+            BlockKind::Button | BlockKind::PressurePlate | BlockKind::DaylightDetector => false,
+            BlockKind::Observer | BlockKind::Target => false,
             BlockKind::Other => is_ordinary_full_block(name),
             _ => false,
         }
@@ -140,69 +144,122 @@ pub fn flags_of(state: &BlockState) -> BlockFlags {
     BlockFlags(bits)
 }
 
-/// 充能的強度類別。
+/// 一個方塊對相鄰方塊送出的充能種類。
 ///
-/// 這**不是**訊號強度 0..15，而是「這個充能能驅動什麼」的分類：
-///
-/// - **強充能**：可驅動相鄰紅石粉（含上下方），也可啟動機械。
-///   來源：紅石電源元件、已充能的中繼器、已充能的比較器。
-/// - **弱充能**：**不能**驅動相鄰紅石粉，但可啟動相鄰機械、
-///   可驅動朝外的中繼器與比較器。
-///   來源：**只有紅石粉**。
-///
-/// 這個區分是紅石繞線的結構性約束 —— 只被紅石粉充能的方塊無法續傳訊號，
-/// 所以每一段線都必須以火把、中繼器或比較器收尾。
+/// 這與「會不會驅動相鄰紅石粉」是**兩個獨立的問題** —— 見 `PowerOutput`。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PowerLevel {
+pub enum BlockPower {
     None,
+    /// 弱充能：被充能的方塊**不能**再驅動相鄰紅石粉，但能啟動相鄰機械、
+    /// 也能驅動背對它的中繼器與比較器。只有紅石粉會產生弱充能。
     Weak,
+    /// 強充能：被充能的方塊**可以**驅動相鄰紅石粉。
+    /// 由電源元件、已充能的中繼器與比較器產生。
     Strong,
 }
 
-/// 這種充能能不能驅動相鄰的紅石粉。
-#[inline]
-pub fn can_power_adjacent_dust(level: PowerLevel) -> bool {
-    matches!(level, PowerLevel::Strong)
+impl BlockPower {
+    /// 被這種充能充到的方塊，能不能再驅動相鄰的紅石粉。
+    ///
+    /// 這是紅石繞線的結構性約束：只被紅石粉充能的方塊無法續傳訊號，
+    /// 所以每一段線都必須以火把、中繼器或比較器收尾。
+    #[inline]
+    pub fn can_repower_dust(self) -> bool {
+        matches!(self, BlockPower::Strong)
+    }
 }
 
-/// 這個方塊對外送出哪一種充能。
-pub fn power_emitted_by(state: &BlockState) -> PowerLevel {
+/// 一個元件對外送出的訊號。
+///
+/// 兩個軸是獨立的，不能合併成單一的強／弱：
+///
+/// | 元件     | 驅動相鄰紅石粉 | 充能相鄰方塊 |
+/// |----------|----------------|--------------|
+/// | 紅石塊   | ✔              | **無**       |
+/// | 紅石粉   | ✔（相連）      | 弱           |
+/// | 拉桿     | ✔              | 強           |
+/// | 中繼器   | ✔（正前方）    | 強（正前方） |
+///
+/// **方向性不在這個型別裡。** 火把強充能正上方、弱充能其他相鄰；中繼器
+/// 只作用於正前方。這裡回傳的是該元件最強的輸出，實際套用到哪些座標
+/// 由模擬器決定。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PowerOutput {
+    /// 直接讓相鄰的紅石粉亮起（不經由中間的方塊）
+    pub drives_dust: bool,
+    /// 對相鄰方塊送出的充能種類
+    pub block_power: BlockPower,
+    /// 訊號強度 0..=15
+    pub strength: u8,
+}
+
+impl PowerOutput {
+    /// 什麼都不送出。
+    pub const INERT: PowerOutput = PowerOutput {
+        drives_dust: false,
+        block_power: BlockPower::None,
+        strength: 0,
+    };
+}
+
+/// 這個方塊對外送出什麼訊號。
+pub fn power_emitted_by(state: &BlockState) -> PowerOutput {
     match state.kind {
-        // 紅石粉只送出弱充能，而且只給腳下與它指向的方塊
-        BlockKind::RedstoneWire => {
-            if state.power > 0 {
-                PowerLevel::Weak
-            } else {
-                PowerLevel::None
+        // 紅石粉：與相鄰的粉相連，並**弱**充能腳下與它指向的方塊。
+        // 弱充能的方塊無法再驅動紅石粉 —— 這就是每段線都要以主動元件收尾的原因。
+        BlockKind::RedstoneWire if state.power > 0 => PowerOutput {
+            drives_dust: true,
+            block_power: BlockPower::Weak,
+            strength: state.power,
+        },
+
+        // 中繼器與比較器：只對正前方輸出，強充能。
+        BlockKind::Repeater | BlockKind::Comparator if state.lit => PowerOutput {
+            drives_dust: true,
+            block_power: BlockPower::Strong,
+            strength: 15,
+        },
+
+        // 火把：強充能正上方，弱充能其他相鄰（但**不含**它所附著的方塊）。
+        // 方向性由模擬器處理，這裡給最強的那種。
+        BlockKind::Torch | BlockKind::WallTorch if state.lit => PowerOutput {
+            drives_dust: true,
+            block_power: BlockPower::Strong,
+            strength: 15,
+        },
+
+        // 拉桿、按鈕、壓力板：強充能所附著／下方的方塊。
+        BlockKind::Lever | BlockKind::Button | BlockKind::PressurePlate if state.lit => {
+            PowerOutput {
+                drives_dust: true,
+                block_power: BlockPower::Strong,
+                strength: 15,
             }
         }
-        // 中繼器與比較器：亮著時對正前方送強充能
-        BlockKind::Repeater | BlockKind::Comparator => {
-            if state.lit {
-                PowerLevel::Strong
-            } else {
-                PowerLevel::None
-            }
-        }
-        // 火把：強充能正上方，弱充能其他相鄰（排除所附著的方塊）。
-        // 這裡回傳的是「最強的那一種」，方向性由呼叫端處理。
-        BlockKind::Torch | BlockKind::WallTorch => {
-            if state.lit {
-                PowerLevel::Strong
-            } else {
-                PowerLevel::None
-            }
-        }
-        BlockKind::Lever => {
-            if state.lit {
-                PowerLevel::Strong
-            } else {
-                PowerLevel::None
-            }
-        }
-        // 紅石塊：不充能任何方塊，只驅動相鄰紅石粉與朝外的中繼器/比較器
-        BlockKind::RedstoneBlock => PowerLevel::None,
-        _ => PowerLevel::None,
+
+        // 觀察者：只從背面送出，強充能。
+        BlockKind::Observer if state.lit => PowerOutput {
+            drives_dust: true,
+            block_power: BlockPower::Strong,
+            strength: 15,
+        },
+
+        // 紅石塊：**驅動相鄰紅石粉，但不充能任何方塊**。
+        // 這正是舊的三值 PowerLevel 表達不了、因而回傳 None 的情形。
+        BlockKind::RedstoneBlock => PowerOutput {
+            drives_dust: true,
+            block_power: BlockPower::None,
+            strength: 15,
+        },
+
+        // 標靶與日光感測器：驅動相鄰紅石粉，不充能方塊，強度是類比的。
+        BlockKind::Target | BlockKind::DaylightDetector => PowerOutput {
+            drives_dust: state.power > 0,
+            block_power: BlockPower::None,
+            strength: state.power,
+        },
+
+        _ => PowerOutput::INERT,
     }
 }
 
@@ -322,34 +379,78 @@ mod tests {
     }
 
     #[test]
-    fn weak_power_cannot_drive_adjacent_dust() {
-        assert!(!can_power_adjacent_dust(PowerLevel::Weak));
-        assert!(can_power_adjacent_dust(PowerLevel::Strong));
-        assert!(!can_power_adjacent_dust(PowerLevel::None));
+    fn weak_power_cannot_repower_dust() {
+        assert!(!BlockPower::Weak.can_repower_dust());
+        assert!(BlockPower::Strong.can_repower_dust());
+        assert!(!BlockPower::None.can_repower_dust());
     }
 
     #[test]
-    fn dust_only_emits_weak_power() {
+    fn dust_only_weakly_powers_blocks() {
         let mut dust = named(BlockKind::RedstoneWire, "minecraft:redstone_wire");
         dust.power = 15;
-        assert_eq!(power_emitted_by(&dust), PowerLevel::Weak);
+        let out = power_emitted_by(&dust);
+        assert_eq!(out.block_power, BlockPower::Weak);
+        assert!(out.drives_dust);
+        assert_eq!(out.strength, 15);
     }
 
     #[test]
-    fn powered_repeater_emits_strong_power() {
+    fn powered_repeater_strongly_powers_blocks() {
         let mut rep = named(BlockKind::Repeater, "minecraft:repeater");
         rep.lit = true;
-        assert_eq!(power_emitted_by(&rep), PowerLevel::Strong);
+        let out = power_emitted_by(&rep);
+        assert_eq!(out.block_power, BlockPower::Strong);
+        assert_eq!(out.strength, 15);
 
         let mut off = named(BlockKind::Repeater, "minecraft:repeater");
         off.lit = false;
-        assert_eq!(power_emitted_by(&off), PowerLevel::None);
+        assert_eq!(power_emitted_by(&off), PowerOutput::INERT);
     }
 
     #[test]
     fn unpowered_dust_emits_nothing() {
         let mut dust = named(BlockKind::RedstoneWire, "minecraft:redstone_wire");
         dust.power = 0;
-        assert_eq!(power_emitted_by(&dust), PowerLevel::None);
+        assert_eq!(power_emitted_by(&dust), PowerOutput::INERT);
+    }
+
+    #[test]
+    fn redstone_block_drives_dust_but_powers_no_block() {
+        // 這是舊的三值 PowerLevel 表達不了、因而被寫成「不發電」的情形
+        let rb = named(BlockKind::RedstoneBlock, "minecraft:redstone_block");
+        let out = power_emitted_by(&rb);
+        assert!(out.drives_dust, "a redstone block drives adjacent dust");
+        assert_eq!(
+            out.block_power,
+            BlockPower::None,
+            "a redstone block powers no block"
+        );
+        assert_eq!(out.strength, 15);
+    }
+
+    #[test]
+    fn dust_carries_its_own_signal_strength() {
+        for level in [1u8, 7, 14, 15] {
+            let mut dust = named(BlockKind::RedstoneWire, "minecraft:redstone_wire");
+            dust.power = level;
+            assert_eq!(power_emitted_by(&dust).strength, level);
+        }
+    }
+
+    #[test]
+    fn input_components_are_not_inert() {
+        // 少了這些，模擬器載入真實電路時會看不到任何輸入源
+        for (kind, name) in [
+            (BlockKind::Button, "minecraft:stone_button"),
+            (BlockKind::PressurePlate, "minecraft:stone_pressure_plate"),
+            (BlockKind::Observer, "minecraft:observer"),
+        ] {
+            let mut b = named(kind, name);
+            b.lit = true;
+            let out = power_emitted_by(&b);
+            assert!(out.drives_dust, "{name} must drive dust when active");
+            assert_eq!(out.strength, 15, "{name} strength");
+        }
     }
 }
