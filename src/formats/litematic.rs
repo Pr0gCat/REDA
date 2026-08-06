@@ -106,6 +106,7 @@ fn structured_property_keys(kind: BlockKind) -> &'static [&'static str] {
         BlockKind::Piston => &["facing"],
         BlockKind::Slab => &["type"],
         BlockKind::Button | BlockKind::PressurePlate => &["powered"],
+        BlockKind::WeightedPressurePlate => &["power"],
         BlockKind::Observer => &["facing", "powered"],
         BlockKind::Target | BlockKind::DaylightDetector => &["power"],
         _ => &[],
@@ -137,6 +138,7 @@ pub fn parse_block_name(name: &str, properties: &HashMap<String, String>) -> Blo
         "minecraft:target" => BlockKind::Target,
         "minecraft:daylight_detector" => BlockKind::DaylightDetector,
         n if n.ends_with("_button") => BlockKind::Button,
+        n if n.ends_with("_weighted_pressure_plate") => BlockKind::WeightedPressurePlate,
         n if n.ends_with("_pressure_plate") => BlockKind::PressurePlate,
         _ => BlockKind::Other,
     };
@@ -334,6 +336,9 @@ pub fn block_state_to_entry(state: &BlockState) -> PaletteEntry {
         }
         BlockKind::Button | BlockKind::PressurePlate | BlockKind::Observer => {
             properties.insert("powered".to_string(), state.lit.to_string());
+        }
+        BlockKind::WeightedPressurePlate => {
+            properties.insert("power".to_string(), state.power.to_string());
         }
         BlockKind::Target | BlockKind::DaylightDetector => {
             properties.insert("power".to_string(), state.power.to_string());
@@ -569,7 +574,8 @@ mod tests {
 
     #[test]
     fn observer_facing_survives_the_round_trip() {
-        // observer 是 BlockKind::Other，facing 必須靠 extra_properties 保住
+        // observer 是自己的 BlockKind::Observer，facing 是結構化欄位，
+        // 走的是結構化路徑而不是 extra_properties
         let b = parse_block_name("minecraft:observer", &props(&[("facing", "north")]));
         let entry = block_state_to_entry(&b);
         assert_eq!(
@@ -667,5 +673,34 @@ mod tests {
             parse_block_name("minecraft:observer", &props(&[])).kind,
             BlockKind::Observer
         );
+    }
+
+    #[test]
+    fn weighted_pressure_plates_keep_their_analog_power() {
+        let plate = parse_block_name(
+            "minecraft:light_weighted_pressure_plate",
+            &props(&[("power", "7")]),
+        );
+        assert_eq!(plate.kind, BlockKind::WeightedPressurePlate);
+        assert_eq!(plate.power, 7, "analog power must reach the structured field");
+
+        let entry = block_state_to_entry(&plate);
+        assert_eq!(entry.properties.get("power").map(String::as_str), Some("7"));
+        assert!(
+            !entry.properties.contains_key("powered"),
+            "a weighted plate has no `powered` property; emitting one makes Minecraft reject the file"
+        );
+    }
+
+    #[test]
+    fn ordinary_pressure_plates_still_use_powered() {
+        let plate = parse_block_name(
+            "minecraft:stone_pressure_plate",
+            &props(&[("powered", "true")]),
+        );
+        assert_eq!(plate.kind, BlockKind::PressurePlate);
+        let entry = block_state_to_entry(&plate);
+        assert_eq!(entry.properties.get("powered").map(String::as_str), Some("true"));
+        assert!(!entry.properties.contains_key("power"));
     }
 }

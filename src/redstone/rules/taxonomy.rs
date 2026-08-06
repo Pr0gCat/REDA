@@ -75,16 +75,15 @@ impl BlockFlags {
     }
 }
 
-/// `BlockKind::Other` 的方塊是不是一般的完整建材方塊。
+/// 這個名稱的方塊是不是完整立方體 —— 也就是頂面與側面都是完整面。
 ///
-/// 只有在方塊未被兩份導電性清單涵蓋時才會問到這裡。
-///
-/// `CONDUCTIVE_EXCEPTIONS` 也算在內：那份清單裡的方塊在紅石意義上就是
-/// 「完整且導電」的（靈魂沙、標靶、黏液塊…），紅石粉放得上去。若不納入，
-/// 它們會拿到「導電但什麼都放不上去」的矛盾旗標。
-fn is_ordinary_full_block(name: &str) -> bool {
+/// **這只回答形狀，不回答導電性。** 兩者獨立：玻璃是完整立方體但不導電，
+/// 靈魂沙不是完整立方體卻導電。把兩者混在一份清單裡正是先前
+/// `packed_ice` 拿到零旗標的原因。
+fn has_full_cube_shape(name: &str) -> bool {
     java_1_20::CONDUCTIVE_FULL_BLOCKS.contains(&name)
         || java_1_20::CONDUCTIVE_EXCEPTIONS.contains(&name)
+        || java_1_20::FULL_SHAPE_NON_CONDUCTIVE.contains(&name)
         || java_1_20::FULL_BLOCK_SUFFIXES
             .iter()
             .any(|suffix| name.ends_with(suffix))
@@ -114,8 +113,11 @@ pub fn flags_of(state: &BlockState) -> BlockFlags {
             BlockKind::Solid | BlockKind::Glass | BlockKind::Lamp => true,
             BlockKind::Piston | BlockKind::RedstoneBlock => true,
             BlockKind::Observer | BlockKind::Target => true,
-            BlockKind::Button | BlockKind::PressurePlate | BlockKind::DaylightDetector => false,
-            BlockKind::Other => is_ordinary_full_block(name),
+            BlockKind::Button
+            | BlockKind::PressurePlate
+            | BlockKind::WeightedPressurePlate
+            | BlockKind::DaylightDetector => false,
+            BlockKind::Other => has_full_cube_shape(name),
             _ => false,
         };
 
@@ -130,7 +132,7 @@ pub fn flags_of(state: &BlockState) -> BlockFlags {
             | BlockKind::Target
             | BlockKind::Piston
             | BlockKind::RedstoneBlock => true,
-            BlockKind::Other => is_ordinary_full_block(name),
+            BlockKind::Other => has_full_cube_shape(name),
             _ => false,
         };
 
@@ -154,9 +156,12 @@ pub fn flags_of(state: &BlockState) -> BlockFlags {
             // 單層半磚永不導電；雙層半磚等同完整方塊
             BlockKind::Slab => state.half == Some(SlabHalf::Double),
             BlockKind::Solid | BlockKind::Lamp => true,
-            BlockKind::Button | BlockKind::PressurePlate | BlockKind::DaylightDetector => false,
+            BlockKind::Button
+            | BlockKind::PressurePlate
+            | BlockKind::WeightedPressurePlate
+            | BlockKind::DaylightDetector => false,
             BlockKind::Observer | BlockKind::Target => false,
-            BlockKind::Other => is_ordinary_full_block(name),
+            BlockKind::Other => has_full_cube_shape(name),
             _ => false,
         }
     };
@@ -275,12 +280,14 @@ pub fn power_emitted_by(state: &BlockState) -> PowerOutput {
             strength: 15,
         },
 
-        // 標靶與日光感測器：驅動相鄰紅石粉，不充能方塊，強度是類比的。
-        BlockKind::Target | BlockKind::DaylightDetector => PowerOutput {
-            drives_dust: state.power > 0,
-            block_power: BlockPower::None,
-            strength: state.power,
-        },
+        // 標靶、日光感測器與重量壓力板：驅動相鄰紅石粉，不充能方塊，強度是類比的。
+        BlockKind::Target | BlockKind::DaylightDetector | BlockKind::WeightedPressurePlate => {
+            PowerOutput {
+                drives_dust: state.power > 0,
+                block_power: BlockPower::None,
+                strength: state.power,
+            }
+        }
 
         _ => PowerOutput::INERT,
     }
@@ -495,8 +502,11 @@ mod tests {
     #[test]
     fn conducting_exception_blocks_have_coherent_flags() {
         // 導電卻什麼都放不上去是矛盾的旗標組合
-        for name in ["minecraft:soul_sand", "minecraft:target"] {
-            let b = named(BlockKind::Other, name);
+        for (kind, name) in [
+            (BlockKind::Other, "minecraft:soul_sand"),
+            (BlockKind::Target, "minecraft:target"),
+        ] {
+            let b = named(kind, name);
             let f = flags_of(&b);
             assert!(f.is_conductive(), "{name} conducts");
             assert!(f.can_carry_dust(), "{name} must also hold dust");
@@ -518,5 +528,45 @@ mod tests {
             assert!(out.drives_dust, "{name} must drive dust when active");
             assert_eq!(out.strength, 15, "{name} strength");
         }
+    }
+
+    #[test]
+    fn full_cubes_support_things_even_when_they_do_not_conduct() {
+        // 支撐與導電是獨立的兩個問題 —— 冰的家族全都是完整立方體
+        for name in [
+            "minecraft:packed_ice",
+            "minecraft:blue_ice",
+            "minecraft:glowstone",
+            "minecraft:tnt",
+        ] {
+            let b = named(BlockKind::Other, name);
+            let f = flags_of(&b);
+            assert!(f.can_carry_dust(), "{name} is a full cube and holds dust");
+            assert!(f.can_attach_wall_torch(), "{name} has full sides");
+            assert!(!f.is_conductive(), "{name} does not conduct");
+        }
+    }
+
+    #[test]
+    fn blocks_that_support_nothing_still_support_nothing() {
+        for name in ["minecraft:farmland", "minecraft:dirt_path", "minecraft:composter"] {
+            let b = named(BlockKind::Other, name);
+            let f = flags_of(&b);
+            assert!(!f.can_carry_dust(), "{name} must not hold dust");
+            assert!(!f.is_conductive(), "{name} must not conduct");
+        }
+    }
+
+    #[test]
+    fn weighted_plates_emit_their_analog_strength() {
+        let mut plate = named(
+            BlockKind::WeightedPressurePlate,
+            "minecraft:light_weighted_pressure_plate",
+        );
+        plate.power = 9;
+        let out = power_emitted_by(&plate);
+        assert!(out.drives_dust);
+        assert_eq!(out.strength, 9);
+        assert_eq!(out.block_power, BlockPower::None);
     }
 }

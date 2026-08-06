@@ -57,6 +57,27 @@ pub const CENTER_ONLY: &[&str] = &[
 /// 紅石粉的硬編碼特例：漏斗頂面是 hollow square，但遊戲特別允許放紅石粉。
 pub const DUST_EXCEPTIONS: &[&str] = &["minecraft:hopper"];
 
+/// 完整立方體但不導電的方塊。
+///
+/// 它們可以承載紅石粉與元件、有完整側面，但無法傳遞紅石訊號。
+/// 這份清單與 `NON_CONDUCTIVE` 的差別在於後者也包含農地、樹葉、堆肥桶
+/// 這類「什麼都放不上去」的方塊 —— 支撐與導電是兩個獨立的問題，
+/// 不能用同一份清單回答。
+pub const FULL_SHAPE_NON_CONDUCTIVE: &[&str] = &[
+    "minecraft:glass",
+    "minecraft:tinted_glass",
+    "minecraft:glowstone",
+    "minecraft:sea_lantern",
+    "minecraft:ice",
+    "minecraft:packed_ice",
+    "minecraft:blue_ice",
+    "minecraft:tnt",
+    "minecraft:redstone_block",
+    "minecraft:observer",
+    "minecraft:piston",
+    "minecraft:sticky_piston",
+];
+
 /// 完整且導電的一般建材方塊。
 ///
 /// `BlockKind::Other` 的方塊必須符合這裡的名單或後綴規則，才會被視為

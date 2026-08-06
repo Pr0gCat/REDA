@@ -22,6 +22,7 @@ pub enum BlockKind {
     Piston,
     Button,
     PressurePlate,
+    WeightedPressurePlate,
     Observer,
     Target,
     DaylightDetector,
