@@ -22,6 +22,11 @@ use crate::redstone::rules::java_1_20;
 use crate::redstone::world::block::{BlockKind, BlockState, SlabHalf};
 
 /// 方塊行為的位元旗標。
+///
+/// **三個支撐旗標不是階層關係。** 不要假設 `SUPPORT_FULL` 蘊含
+/// `SUPPORT_CENTER` —— 漏斗就是反例：它的頂面是 hollow square，紅石粉
+/// 靠遊戲的硬編碼特例放得上去（FULL），但立式火把需要中央的實心面，
+/// 放不上去（無 CENTER）。三者各自獨立查詢。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BlockFlags(pub u16);
 
@@ -70,6 +75,16 @@ impl BlockFlags {
     }
 }
 
+/// `BlockKind::Other` 的方塊是不是一般的完整建材方塊。
+///
+/// 只有在方塊未被兩份導電性清單涵蓋時才會問到這裡。
+fn is_ordinary_full_block(name: &str) -> bool {
+    java_1_20::CONDUCTIVE_FULL_BLOCKS.contains(&name)
+        || java_1_20::FULL_BLOCK_SUFFIXES
+            .iter()
+            .any(|suffix| name.ends_with(suffix))
+}
+
 /// 查出一個方塊的行為旗標。
 pub fn flags_of(state: &BlockState) -> BlockFlags {
     let name = state.name.as_str();
@@ -93,7 +108,7 @@ pub fn flags_of(state: &BlockState) -> BlockFlags {
             BlockKind::Slab => matches!(state.half, Some(SlabHalf::Top) | Some(SlabHalf::Double)),
             BlockKind::Solid | BlockKind::Glass | BlockKind::Lamp => true,
             BlockKind::Piston | BlockKind::RedstoneBlock => true,
-            BlockKind::Other => true,
+            BlockKind::Other => is_ordinary_full_block(name),
             _ => false,
         };
         if top_is_full {
@@ -113,7 +128,8 @@ pub fn flags_of(state: &BlockState) -> BlockFlags {
         match state.kind {
             // 單層半磚永不導電；雙層半磚等同完整方塊
             BlockKind::Slab => state.half == Some(SlabHalf::Double),
-            BlockKind::Solid | BlockKind::Lamp | BlockKind::Other => true,
+            BlockKind::Solid | BlockKind::Lamp => true,
+            BlockKind::Other => is_ordinary_full_block(name),
             _ => false,
         }
     };
@@ -198,5 +214,44 @@ mod tests {
         assert!(!f.can_carry_repeater());
         assert!(!f.can_carry_torch());
         assert!(!f.is_conductive());
+    }
+
+    #[test]
+    fn fence_does_not_conduct() {
+        let fence = named(BlockKind::Other, "minecraft:oak_fence");
+        assert!(
+            !flags_of(&fence).is_conductive(),
+            "a fence is not a full block and must not conduct"
+        );
+    }
+
+    #[test]
+    fn unknown_blocks_get_no_capabilities() {
+        let unknown = named(BlockKind::Other, "minecraft:some_block_we_never_heard_of");
+        let f = flags_of(&unknown);
+        assert!(!f.can_carry_dust(), "unknown blocks must fail safe");
+        assert!(!f.can_carry_repeater());
+        assert!(!f.can_carry_torch());
+        assert!(!f.is_conductive());
+    }
+
+    #[test]
+    fn ordinary_building_blocks_still_work_via_suffix() {
+        let wool = named(BlockKind::Other, "minecraft:lime_wool");
+        let f = flags_of(&wool);
+        assert!(f.can_carry_dust(), "wool is an ordinary full block");
+        assert!(f.is_conductive(), "wool conducts like stone");
+    }
+
+    #[test]
+    fn suffix_rule_does_not_override_the_non_conductive_list() {
+        // `_block` 後綴不能讓紅石塊與蜂蜜塊變成導體
+        for name in ["minecraft:redstone_block", "minecraft:honey_block"] {
+            let b = named(BlockKind::Other, name);
+            assert!(
+                !flags_of(&b).is_conductive(),
+                "{name} must stay non-conductive despite the _block suffix"
+            );
+        }
     }
 }

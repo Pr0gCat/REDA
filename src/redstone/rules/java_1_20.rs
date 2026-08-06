@@ -24,7 +24,6 @@ pub const NON_CONDUCTIVE: &[&str] = &[
     "minecraft:piston",
     "minecraft:sticky_piston",
     "minecraft:hopper",
-    "minecraft:oak_leaves",
     "minecraft:farmland",
     "minecraft:dirt_path",
     "minecraft:honey_block",
@@ -57,6 +56,53 @@ pub const CENTER_ONLY: &[&str] = &[
 
 /// 紅石粉的硬編碼特例：漏斗頂面是 hollow square，但遊戲特別允許放紅石粉。
 pub const DUST_EXCEPTIONS: &[&str] = &["minecraft:hopper"];
+
+/// 完整且導電的一般建材方塊。
+///
+/// `BlockKind::Other` 的方塊必須符合這裡的名單或後綴規則，才會被視為
+/// 完整方塊（可承載一切）且導電。不符合的一律沒有任何能力 —— 未知方塊
+/// **fail safe**，寧可誤判成不能用，也不要誤判成可用。
+///
+/// 註：把方塊正確分類成 `BlockKind::Solid` 是 `parse_block_name` 的責任。
+/// 這份清單只是 `Other` 的安全網，不追求完整。
+pub const CONDUCTIVE_FULL_BLOCKS: &[&str] = &[
+    "minecraft:stone",
+    "minecraft:smooth_stone",
+    "minecraft:cobblestone",
+    "minecraft:stone_bricks",
+    "minecraft:deepslate",
+    "minecraft:andesite",
+    "minecraft:diorite",
+    "minecraft:granite",
+    "minecraft:dirt",
+    "minecraft:grass_block",
+    "minecraft:sand",
+    "minecraft:gravel",
+    "minecraft:obsidian",
+    "minecraft:bedrock",
+    "minecraft:netherrack",
+    "minecraft:end_stone",
+    "minecraft:quartz_block",
+    "minecraft:purpur_block",
+    "minecraft:hay_block",
+    "minecraft:bone_block",
+];
+
+/// 常見的完整建材方塊後綴。多數染色變體只有前綴不同，逐一列出不切實際。
+///
+/// **這些後綴只在方塊未出現於 `NON_CONDUCTIVE` 與 `CONDUCTIVE_EXCEPTIONS`
+/// 時才適用** —— 那兩份清單先查，所以 `redstone_block`、`honey_block`、
+/// `slime_block` 不會被 `_block` 這條後綴誤判。
+pub const FULL_BLOCK_SUFFIXES: &[&str] = &[
+    "_wool",
+    "_concrete",
+    "_planks",
+    "_terracotta",
+    "_bricks",
+    "_log",
+    "_wood",
+    "_block",
+];
 
 /// 完全不能承載任何東西的方塊。
 pub const SUPPORTS_NOTHING: &[&str] = &[
