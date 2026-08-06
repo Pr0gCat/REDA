@@ -67,6 +67,26 @@ clock_period ≥ max( 關鍵路徑 tick 數, burnout 下限 )
 
 **弱充能不能續傳**。只被紅石粉充能的方塊是**弱充能**，它**不能再去充能相鄰的紅石粉**。所以「一條線」不是自由的幾何物件 —— 每一段都必須以火把／中繼器／比較器這類主動元件收尾才能續傳。這是 cell library 與 router 的結構性約束，§2 表格裡「15 格內的線完全免費」是在這個前提下才成立的簡化。
 
+**The ticking area is bounded, so circuit footprint has a hard ceiling — not just a cost.**
+Redstone only ticks in loaded chunks. Java Edition caps simulation distance at
+32 chunks, which puts the ticking region at roughly 1040 blocks across at the
+most permissive vanilla setting, and far less on a typical server. A circuit
+wider than that does not run slowly — parts of it simply stop, and the failure
+is silent and position-dependent.
+
+This makes area a *feasibility* constraint, not merely a term in the cost
+function. Any placer or router that lets footprint grow linearly in gate count
+or edge count is unusable at real scale regardless of how good its delay
+numbers look. It is also the constraint that retroactively explains
+MinecraftHDL's 83×442 output: that result was reported as working, but a
+442-block span already exceeds the ticking radius of a default-configured
+server.
+
+Concretely, for the placer (§7) and router (§8): width must scale with routing
+*density* — the maximum number of nets that must cross a given cut — not with
+the total net count. Channel routing gets this right by construction; a
+dedicated lane per net does not.
+
 ### 2.2 方塊分類：DRC 的地基
 
 **Minecraft 沒有單一的 `isSolid` 屬性。** 紅石行為由三個**彼此獨立**的屬性決定，DRC 必須分成三個欄位建模：
