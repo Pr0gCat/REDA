@@ -90,16 +90,14 @@ impl World {
         size_x: i32,
         size_y: i32,
         size_z: i32,
-        palette: Palette,
+        mut palette: Palette,
         cells: Vec<u32>,
     ) -> Self {
         let expected = (size_x as usize) * (size_y as usize) * (size_z as usize);
         assert_eq!(cells.len(), expected, "cell count must match world size");
-        let air_index = palette
-            .entries()
-            .iter()
-            .position(|b| b.name == "minecraft:air")
-            .unwrap_or(0) as u32;
+        // 空氣必須在 palette 裡，否則越界讀取會拿到錯誤的方塊。
+        // `intern` 是冪等的：已存在就回傳既有索引。
+        let air_index = palette.intern(BlockState::air());
         World {
             size_x,
             size_y,
@@ -149,5 +147,24 @@ mod tests {
         let w = World::new(2, 2, 2);
         assert_eq!(w.index(2, 0, 0), None);
         assert_eq!(w.index(-1, 0, 0), None);
+    }
+
+    #[test]
+    fn from_parts_guarantees_air_for_out_of_bounds_reads() {
+        // litematic 檔案的 palette 不保證含空氣
+        let mut palette = Palette::new();
+        let mut stone = BlockState::air();
+        stone.kind = BlockKind::Solid;
+        stone.name = "minecraft:stone".to_string();
+        let stone_idx = palette.intern(stone);
+
+        let w = World::from_parts(2, 1, 1, palette, vec![stone_idx, stone_idx]);
+
+        assert_eq!(w.get(0, 0, 0).kind, BlockKind::Solid, "in-bounds is stone");
+        assert_eq!(
+            w.get(99, 0, 0).kind,
+            BlockKind::Air,
+            "out-of-bounds must be air even when the palette had none"
+        );
     }
 }
