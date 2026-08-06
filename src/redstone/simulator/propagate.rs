@@ -7,7 +7,7 @@
 
 use std::collections::VecDeque;
 
-use crate::redstone::rules::taxonomy::{flags_of, power_emitted_by, BlockPower};
+use crate::redstone::rules::taxonomy::{flags_of, power_emitted_toward, BlockPower};
 use crate::redstone::simulator::connectivity::dust_connects;
 use crate::redstone::simulator::position::{Position, ALL_SIX, HORIZONTAL};
 use crate::redstone::world::block::BlockKind;
@@ -58,7 +58,8 @@ pub fn recompute_dust_strengths(world: &mut World) -> usize {
             if neighbour_state.kind == BlockKind::RedstoneWire {
                 continue;
             }
-            let output = power_emitted_by(neighbour_state);
+            // 鄰居是往「朝向我們」的方向送出，也就是 facing 的反方向
+            let output = power_emitted_toward(neighbour_state, facing.opposite());
             if output.drives_dust {
                 best = best.max(output.strength);
             }
@@ -126,7 +127,8 @@ pub fn block_power_at(world: &World, pos: Position) -> BlockPower {
     for facing in ALL_SIX {
         let neighbour = pos.offset(facing);
         let neighbour_state = world.get(neighbour.x, neighbour.y, neighbour.z);
-        let output = power_emitted_by(neighbour_state);
+        // 鄰居是往「朝向我們」的方向送出，也就是 facing 的反方向
+        let output = power_emitted_toward(neighbour_state, facing.opposite());
 
         match output.block_power {
             BlockPower::Strong => return BlockPower::Strong,
@@ -237,6 +239,35 @@ mod tests {
             block_power_at(&w, Position::new(1, 0, 0)),
             BlockPower::Weak,
             "a block under dust is only weakly powered"
+        );
+    }
+
+    #[test]
+    fn a_torch_does_not_light_dust_through_its_own_support_block() {
+        // 探測發現的殺手案例：火把立在石頭上，火把不該充能它的支撐塊，
+        // 所以只能透過支撐塊才碰得到訊號的粉應該保持暗。
+        //
+        // 探測用的粉刻意放在跟火把支撐塊同一層、但不直接貼著火把本身
+        // 的位置 —— 如果粉直接貼著火把，火把會直接充能它（這是合法的
+        // 另一條訊號路徑，見 taxonomy 的方向性測試），會跟這裡要抓的
+        // 「火把餵自己支撐塊」這個 bug 混在一起，測不出來。
+        let mut w = World::new(10, 5, 10);
+        w.set(5, 1, 5, stone()); // 火把的支撐塊
+        let mut torch = named("minecraft:redstone_torch", BlockKind::Torch);
+        torch.lit = true;
+        w.set(5, 2, 5, torch); // 立在支撐塊上，跟支撐塊同一縱列
+
+        // 探測粉：跟支撐塊同一層水平相鄰，自己的支撐塊是另一塊石頭。
+        // 它完全不碰到火把本身。
+        w.set(6, 0, 5, stone());
+        w.set(6, 1, 5, dust());
+
+        recompute_dust_strengths(&mut w);
+
+        assert_eq!(
+            w.get(6, 1, 5).power,
+            0,
+            "a torch must not power its support block, so dust reachable only through that block stays dark"
         );
     }
 

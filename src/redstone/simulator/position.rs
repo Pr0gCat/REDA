@@ -56,14 +56,7 @@ impl Position {
 
 /// 相反方向。
 pub fn opposite(facing: Facing) -> Facing {
-    match facing {
-        Facing::North => Facing::South,
-        Facing::South => Facing::North,
-        Facing::East => Facing::West,
-        Facing::West => Facing::East,
-        Facing::Up => Facing::Down,
-        Facing::Down => Facing::Up,
-    }
+    facing.opposite()
 }
 
 #[cfg(test)]
