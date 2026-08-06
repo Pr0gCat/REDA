@@ -67,6 +67,28 @@ pub fn is_burned_out(changes: &[u64], now: u64) -> bool {
     recent_changes > BURNOUT_CHANGE_LIMIT
 }
 
+/// Whether a redstone lamp should be lit right now.
+///
+/// A lamp does not invert like a torch, and it has no facing like a repeater
+/// or comparator -- it simply lights whenever the block it occupies is
+/// powered at all, weak or strong, from any of its six neighbours. This is
+/// the same `block_power_at` a torch consults about its own support block,
+/// just without the negation.
+pub fn lamp_should_be_lit(world: &World, pos: Position) -> bool {
+    block_power_at(world, pos) != BlockPower::None
+}
+
+/// Delay between a lamp's power changing and its `lit` state following, in
+/// game ticks.
+///
+/// Real Minecraft lights a lamp immediately but delays turning it off by one
+/// redstone tick to avoid a lamp flickering on the same tick a repeater
+/// pulses through it. This simulator applies the same delay symmetrically in
+/// both directions instead -- once a circuit has settled via
+/// `run_until_stable`, that difference is invisible to a caller checking a
+/// truth table; only the transient timing during the settle would differ.
+pub const LAMP_DELAY_GAME_TICKS: u64 = 2;
+
 /// 這個 kind 是不是「二極體」（中繼器或比較器）—— 兩者共用鎖存規則。
 fn is_diode(kind: BlockKind) -> bool {
     matches!(kind, BlockKind::Repeater | BlockKind::Comparator)
@@ -609,6 +631,64 @@ mod tests {
             0,
             "dust directly at the side position is not a strongly-powered block \
              and must not feed the comparator"
+        );
+    }
+
+    fn lamp() -> BlockState {
+        named("minecraft:redstone_lamp", BlockKind::Lamp)
+    }
+
+    #[test]
+    fn an_unpowered_lamp_should_stay_dark() {
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, lamp());
+        assert!(!lamp_should_be_lit(&world, Position::new(2, 0, 2)));
+    }
+
+    #[test]
+    fn a_lamp_strongly_powered_from_above_a_torch_should_light() {
+        // The intended placement: a lamp sitting directly on top of a lit
+        // wall torch. `power_emitted_toward`'s `WallTorch` arm treats `Up` as
+        // the one direction that is never withheld (the direction a torch
+        // withholds is always horizontal -- the block it is attached to).
+        let mut world = World::new(5, 5, 5);
+        world.set(1, 1, 1, stone()); // the torch's support block
+        let mut torch = wall_torch(Facing::East); // attached to the block west of it
+        torch.lit = true;
+        world.set(2, 1, 1, torch);
+        world.set(2, 2, 1, lamp());
+
+        assert!(
+            lamp_should_be_lit(&world, Position::new(2, 2, 1)),
+            "a lamp directly above a lit wall torch must be strongly powered"
+        );
+    }
+
+    #[test]
+    fn a_lamp_above_an_unlit_torch_should_stay_dark() {
+        let mut world = World::new(5, 5, 5);
+        world.set(1, 1, 1, stone());
+        let torch = wall_torch(Facing::East); // lit = false
+        world.set(2, 1, 1, torch);
+        world.set(2, 2, 1, lamp());
+
+        assert!(!lamp_should_be_lit(&world, Position::new(2, 2, 1)));
+    }
+
+    #[test]
+    fn a_weakly_powered_lamp_should_still_light() {
+        // A lamp does not distinguish weak from strong power -- only a lack
+        // of any power keeps it dark.
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, stone());
+        let mut dust = named("minecraft:redstone_wire", BlockKind::RedstoneWire);
+        dust.power = 15;
+        world.set(2, 1, 2, dust); // sits on top of the stone -- weak power only
+        world.set(2, 0, 2, lamp());
+
+        assert!(
+            lamp_should_be_lit(&world, Position::new(2, 0, 2)),
+            "weak power from dust resting on the lamp must still light it"
         );
     }
 

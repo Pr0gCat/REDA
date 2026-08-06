@@ -106,6 +106,17 @@ fn comparator_positions(world: &World) -> Vec<Position> {
         .collect()
 }
 
+/// Every redstone lamp's position in the world.
+fn lamp_positions(world: &World) -> Vec<Position> {
+    world
+        .positions_of(BlockKind::Lamp)
+        .map(|flat| {
+            let (x, y, z) = world.decode(flat);
+            Position::new(x, y, z)
+        })
+        .collect()
+}
+
 impl Simulator {
     /// 從一個世界建立模擬器，並讓它先穩定下來。
     ///
@@ -210,6 +221,7 @@ impl Simulator {
         self.schedule_mismatched_torches();
         self.schedule_mismatched_repeaters();
         self.schedule_mismatched_comparators();
+        self.schedule_mismatched_lamps();
     }
 
     /// 找出目前狀態與「應該是什麼狀態」不一致的火把，把它們排入佇列。
@@ -258,8 +270,47 @@ impl Simulator {
             BlockKind::Torch | BlockKind::WallTorch => self.apply_torch_tick(position, now),
             BlockKind::Repeater => self.apply_repeater_tick(position),
             BlockKind::Comparator => self.apply_comparator_tick(position),
+            BlockKind::Lamp => self.apply_lamp_tick(position),
             _ => false,
         }
+    }
+
+    /// Find every lamp whose `lit` state disagrees with what its current
+    /// power says it should be, and schedule it.
+    ///
+    /// Same shape as `schedule_mismatched_torches`: this catches both ripple
+    /// effects from other components settling this tick, and external edits
+    /// made through `world_mut()`. A lamp has no latching and no burnout, so
+    /// unlike repeaters there is nothing else to check before scheduling.
+    fn schedule_mismatched_lamps(&mut self) {
+        for position in lamp_positions(&self.world) {
+            let currently_lit = self.world.get(position.x, position.y, position.z).lit;
+            if currently_lit != component::lamp_should_be_lit(&self.world, position) {
+                self.queue.schedule(
+                    position,
+                    component::LAMP_DELAY_GAME_TICKS,
+                    TickPriority::Normal,
+                );
+            }
+        }
+    }
+
+    /// Apply one due lamp tick: flip `lit` to match its current power.
+    fn apply_lamp_tick(&mut self, position: Position) -> bool {
+        let state = self.world.get(position.x, position.y, position.z).clone();
+        if state.kind != BlockKind::Lamp {
+            return false;
+        }
+
+        let desired = component::lamp_should_be_lit(&self.world, position);
+        if desired == state.lit {
+            return false;
+        }
+
+        let mut updated = state;
+        updated.lit = desired;
+        self.world.set(position.x, position.y, position.z, updated);
+        true
     }
 
     /// 找出輸出跟輸入不一致、既沒被鎖住也還沒排程的中繼器，依規則排入佇列。
@@ -434,6 +485,10 @@ mod tests {
         state
     }
 
+    fn lamp() -> BlockState {
+        named("minecraft:redstone_lamp", BlockKind::Lamp)
+    }
+
     fn repeater(facing: Facing, delay: u8, lit: bool) -> BlockState {
         let mut state = named("minecraft:repeater", BlockKind::Repeater);
         state.facing = Some(facing);
@@ -499,6 +554,49 @@ mod tests {
             simulator.world().get(1, 1, 0).power,
             15,
             "new() 必須先讓世界穩定，火把的訊號在建構當下就該傳到相鄰的粉"
+        );
+    }
+
+    #[test]
+    fn a_lamp_above_a_torch_mirrors_the_torch_end_to_end() {
+        // This is `compile()`'s output stage in miniature: lever -> support
+        // block -> torch (inverter) -> lamp sitting directly on top of the
+        // torch. The lamp must track the torch, which itself inverts the
+        // lever -- so the lamp ends up lit exactly when the lever is off.
+        let mut world = World::new(5, 5, 5);
+        world.set(0, 0, 0, stone()); // the torch's support block
+        world.set(1, 0, 0, lever()); // starts off (lit = false)
+        let mut lit_torch = torch();
+        lit_torch.lit = true; // self-consistent: support is unpowered while the lever is off
+        world.set(0, 1, 0, lit_torch);
+        world.set(0, 2, 0, lamp()); // starts dark; the first settle corrects it
+
+        let mut simulator = Simulator::new(world);
+        simulator
+            .run_until_stable(50)
+            .expect("a lever -> torch -> lamp chain must settle");
+        assert!(
+            simulator.world().get(0, 1, 0).lit,
+            "sanity check: torch should still be lit with the lever off"
+        );
+        assert!(
+            simulator.world().get(0, 2, 0).lit,
+            "lever off -> support unpowered -> torch lit -> lamp above it lit"
+        );
+
+        let mut on_lever = lever();
+        on_lever.lit = true;
+        simulator.world_mut().set(1, 0, 0, on_lever);
+        simulator
+            .run_until_stable(50)
+            .expect("the chain must settle again after the lever flips");
+        assert!(
+            !simulator.world().get(0, 1, 0).lit,
+            "sanity check: torch should now be off with the lever on"
+        );
+        assert!(
+            !simulator.world().get(0, 2, 0).lit,
+            "lever on -> support powered -> torch off -> lamp above it dark"
         );
     }
 

@@ -146,6 +146,21 @@ fn wall_torch(facing: Facing) -> BlockState {
     state
 }
 
+/// A redstone lamp: the block a person actually reads an output from.
+///
+/// `lit` starts `false` -- it is not self-consistent with the world around it
+/// yet at construction time, unlike the other active components here, so the
+/// simulator's first settle pass is what gives it a correct initial value
+/// (see `Simulator::new`, which recomputes dust strengths and then schedules
+/// any mismatched component before the caller ever reads anything).
+fn lamp() -> BlockState {
+    let mut state = BlockState::air();
+    state.kind = BlockKind::Lamp;
+    state.name = "minecraft:redstone_lamp".to_string();
+    state.lit = false;
+    state
+}
+
 /// `place_primary_input` always stands the lever on top of a floor block
 /// (`ensure_floor` runs right after this), never against a wall, so `face`
 /// must be `Floor` -- Minecraft's own default is `Wall`, which is exactly
@@ -353,7 +368,10 @@ pub struct CompiledCircuit {
     pub world: World,
     /// 每個輸入訊號的拉桿座標
     pub input_positions: BTreeMap<String, (i32, i32, i32)>,
-    /// 每個輸出訊號的讀取座標
+    /// Each output signal's reading point -- the coordinate of the redstone
+    /// lamp that lights up when the signal is high, not the internal NOR
+    /// gate's output torch. This is what a person standing in front of the
+    /// pasted circuit actually looks at.
     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
 }
 
@@ -1235,6 +1253,39 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         }
     }
 
+    // Every netlist output gets a lamp so a person can read it by eye instead
+    // of having to know which buried wall torch to stare at.
+    //
+    // The obvious placement -- directly above the output torch, the one
+    // direction a wall torch's power is never withheld (`power_emitted_toward`:
+    // `direction == Facing::Up => full`, and `full.block_power` there is
+    // `Strong`) -- turns out to be wrong. Verified in the simulator: it makes
+    // `compile()`'s own reference circuits oscillate and never settle. The
+    // reason is indirect power: `recompute_dust_strengths` treats *any*
+    // strongly-powered solid block as a conduit that recharges every redstone
+    // wire adjacent to it, not just wires that are meant to be on that net
+    // (this is also how a NOR cell's own merge dust weakly powers its centre
+    // block -- the same mechanism, just at `Strong` instead of `Weak`
+    // strength). A lamp sitting right above the torch is orthogonally
+    // adjacent to that gate's own merge dust one row south of it at the same
+    // Y, so a strongly-lit lamp would immediately re-inject the gate's own
+    // output back into its input pool -- output high -> merge dust charged ->
+    // centre block powered -> torch (and lamp) should go off -> merge dust
+    // uncharged -> torch back on -> repeat forever.
+    //
+    // The safe fix is to only ever weakly power the lamp, since
+    // `recompute_dust_strengths` only treats *strongly* powered blocks as
+    // conduits (`if kind == BlockPower::Strong`) -- a weakly powered lamp can
+    // never leak back into a neighbouring wire, whatever it happens to be
+    // adjacent to. Redstone dust only ever weakly powers the block directly
+    // *beneath* it (`power_emitted_toward`'s `RedstoneWire` arm), so the lamp
+    // goes under the gate's own output pin dust (`gate_pin`), replacing the
+    // plain floor block `ensure_floor` already put there to hold that dust up
+    // -- a lamp satisfies the same "full top face" support requirement a
+    // stone floor does, so nothing else about that dust changes. That
+    // location is otherwise never touched by any other net (each gate owns
+    // its output column exclusively), so the lamp is guaranteed to be powered
+    // by nothing but its own gate's output.
     let mut output_positions: BTreeMap<String, (i32, i32, i32)> = BTreeMap::new();
     for output_name in &netlist.outputs {
         let g = netlist
@@ -1242,8 +1293,9 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
             .iter()
             .position(|gate| &gate.output == output_name)
             .expect("every output was checked to be driven by a gate above");
-        let torch = torch_of(g, &gate_cell[g]);
-        output_positions.insert(output_name.clone(), (torch.x, torch.y, torch.z));
+        let lamp_pos = gate_pin[g].down();
+        world.set(lamp_pos.x, lamp_pos.y, lamp_pos.z, lamp());
+        output_positions.insert(output_name.clone(), (lamp_pos.x, lamp_pos.y, lamp_pos.z));
     }
 
     Ok(CompiledCircuit { world, input_positions, output_positions })
