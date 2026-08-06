@@ -23,30 +23,76 @@ fn is_conductive(world: &World, pos: Position) -> bool {
     flags_of(world.get(pos.x, pos.y, pos.z)).is_conductive()
 }
 
-/// 從 `from` 的紅石粉往 `direction` 看，連到哪一格紅石粉。
+/// 一個方向上的連接目標，最多兩個。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Connections {
+    items: [Option<Position>; 2],
+}
+
+impl Connections {
+    pub fn none() -> Self {
+        Connections { items: [None, None] }
+    }
+
+    pub fn one(pos: Position) -> Self {
+        Connections { items: [Some(pos), None] }
+    }
+
+    fn push(&mut self, pos: Position) {
+        if self.items[0].is_none() {
+            self.items[0] = Some(pos);
+        } else if self.items[1].is_none() {
+            self.items[1] = Some(pos);
+        }
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.items[0].is_none()
+    }
+
+    /// 走訪所有連接目標。
+    pub fn iter(self) -> impl Iterator<Item = Position> {
+        self.items.into_iter().flatten()
+    }
+}
+
+/// 從 `from` 的紅石粉往 `direction` 看，連到哪些紅石粉。
 ///
-/// 回傳 `None` 表示該方向沒有連接。
-pub fn dust_connects(world: &World, from: Position, direction: Facing) -> Option<Position> {
+/// 回傳最多兩個位置。一個方向可以同時有兩個合法目標嗎？在原版裡不會 ——
+/// 往上要求水平鄰居**是**導體，往下要求它**不是**，兩條互斥。但回傳集合
+/// 而非單一值，是為了讓這個不變式由型別而非巧合來保證：先前的 `Option`
+/// 版本在兩條規則同時成立時只回傳其中一個，造成兩條相鄰的線之間出現
+/// **單向**的邊 —— 而物理上沒有這種東西。
+pub fn dust_connections(world: &World, from: Position, direction: Facing) -> Connections {
+    let mut found = Connections::none();
     let neighbour = from.offset(direction);
 
     // 同層
     if is_dust(world, neighbour) {
-        return Some(neighbour);
+        found.push(neighbour);
     }
 
-    // 往上：本格正上方若是導體就擋住
-    let above_neighbour = neighbour.up();
-    if is_dust(world, above_neighbour) && !is_conductive(world, from.up()) {
-        return Some(above_neighbour);
+    let neighbour_conducts = is_conductive(world, neighbour);
+
+    // 往上：水平鄰居**必須是導體**（訊號沿著它爬），且本格正上方不能是導體（會擋住）
+    if neighbour_conducts && is_dust(world, neighbour.up()) && !is_conductive(world, from.up()) {
+        found.push(neighbour.up());
     }
 
-    // 往下：水平鄰居那格若是導體就擋住
-    let below_neighbour = neighbour.down();
-    if is_dust(world, below_neighbour) && !is_conductive(world, neighbour) {
-        return Some(below_neighbour);
+    // 往下：水平鄰居**必須不是導體**（否則擋住），下方才連得到
+    if !neighbour_conducts && is_dust(world, neighbour.down()) {
+        found.push(neighbour.down());
     }
 
-    None
+    found
+}
+
+/// 單一目標版本，保留給只需要「有沒有連接」的呼叫端。
+///
+/// **新的程式碼應該用 `dust_connections`** —— 這個版本在一個方向有多個
+/// 目標時只回傳第一個。
+pub fn dust_connects(world: &World, from: Position, direction: Facing) -> Option<Position> {
+    dust_connections(world, from, direction).iter().next()
 }
 
 #[cfg(test)]
@@ -185,6 +231,83 @@ mod tests {
             dust_connects(&w, from, Facing::East),
             None,
             "a conductive neighbour must cut the downward connection"
+        );
+    }
+
+    #[test]
+    fn signal_does_not_climb_a_non_conductive_block() {
+        // 玻璃承載得了紅石粉，但不導電 —— 訊號爬不上去
+        let mut w = World::new(5, 5, 5);
+        place_dust_on_stone(&mut w, 1, 0, 2);
+        w.set(2, 1, 2, glass());
+        w.set(2, 2, 2, dust());
+
+        let from = Position::new(1, 1, 2);
+        assert!(
+            dust_connections(&w, from, Facing::East)
+                .iter()
+                .all(|p| p != Position::new(2, 2, 2)),
+            "dust must not climb glass -- vanilla looks down instead"
+        );
+    }
+
+    #[test]
+    fn dust_does_not_connect_across_thin_air() {
+        // 鄰居那格是空氣，斜上方有粉 —— 遊戲裡擺不出來，但載入的檔案可能有
+        let mut w = World::new(5, 5, 5);
+        place_dust_on_stone(&mut w, 1, 0, 2);
+        w.set(2, 2, 2, dust()); // 浮空，(2,1,2) 是空氣
+
+        let from = Position::new(1, 1, 2);
+        assert!(
+            dust_connections(&w, from, Facing::East)
+                .iter()
+                .all(|p| p != Position::new(2, 2, 2)),
+            "air is not a conductor, so nothing climbs it"
+        );
+    }
+
+    #[test]
+    fn the_up_and_down_rules_are_mutually_exclusive() {
+        // 先前的 Option 版本在兩條規則同時成立時只回傳一個，造成單向的邊。
+        // 加上「往上要求鄰居導電」之後兩條互斥，一個方向最多一個目標。
+        let mut w = World::new(6, 6, 6);
+        place_dust_on_stone(&mut w, 1, 1, 2); // 石頭 y=1、粉 y=2
+        w.set(2, 2, 2, glass());
+        w.set(2, 3, 2, dust()); // 玻璃上方
+        w.set(2, 0, 2, stone());
+        w.set(2, 1, 2, dust()); // 玻璃下方
+
+        let from = Position::new(1, 2, 2);
+        let found = dust_connections(&w, from, Facing::East);
+        let targets: Vec<Position> = found.iter().collect();
+
+        assert_eq!(
+            targets.len(),
+            1,
+            "with a non-conductive neighbour only the down-rule may fire, got {targets:?}"
+        );
+        assert_eq!(targets[0], Position::new(2, 1, 2), "it must be the lower wire");
+    }
+
+    #[test]
+    fn adjacency_is_symmetric() {
+        // 兩條相鄰的線之間不能有單向的邊
+        let mut w = World::new(8, 8, 8);
+        place_dust_on_stone(&mut w, 2, 1, 3);
+        w.set(3, 2, 3, stone());
+        w.set(3, 3, 3, dust());
+
+        let lower = Position::new(2, 2, 3);
+        let upper = Position::new(3, 3, 3);
+
+        let forward: Vec<Position> = dust_connections(&w, lower, Facing::East).iter().collect();
+        let backward: Vec<Position> = dust_connections(&w, upper, Facing::West).iter().collect();
+
+        assert_eq!(
+            forward.contains(&upper),
+            backward.contains(&lower),
+            "connection must be mutual: forward={forward:?} backward={backward:?}"
         );
     }
 }

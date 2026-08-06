@@ -8,7 +8,7 @@
 use std::collections::VecDeque;
 
 use crate::redstone::rules::taxonomy::{flags_of, power_emitted_toward, BlockPower};
-use crate::redstone::simulator::connectivity::dust_connects;
+use crate::redstone::simulator::connectivity::dust_connections;
 use crate::redstone::simulator::position::{Position, ALL_SIX, HORIZONTAL};
 use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::storage::World;
@@ -86,7 +86,7 @@ pub fn recompute_dust_strengths(world: &mut World) -> usize {
         }
         let next_strength = strength - 1;
         for facing in HORIZONTAL {
-            if let Some(neighbour) = dust_connects(world, pos, facing) {
+            for neighbour in dust_connections(world, pos, facing).iter() {
                 let current = target.get(&neighbour).copied().unwrap_or(0);
                 if next_strength > current {
                     target.insert(neighbour, next_strength);
