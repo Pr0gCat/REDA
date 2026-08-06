@@ -50,7 +50,7 @@ pub enum SlabHalf {
 ///
 /// `name` 保留原始的 Minecraft 方塊 ID（例如 `minecraft:smooth_stone`），
 /// 因為方塊分類（§2.2）必須查表，不能從 `kind` 推導。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct BlockState {
     pub kind: BlockKind,
     pub facing: Option<Facing>,
