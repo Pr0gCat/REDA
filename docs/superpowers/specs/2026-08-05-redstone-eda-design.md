@@ -314,10 +314,23 @@ QC 進場的時機是活塞記憶體與社群結構。屆時的原則是：結�
 | L1 | 一條 rule 是否等價 | 窮舉 pattern 涉及的那幾個閘 | **完備** | `O(2^k)`，k ≤ 5 |
 | L2 | saturation 是否保持語意 | **不需驗** —— e-graph 只儲存等價類，每條 rule 等價則任何抽取結果必等價 | **完備** | 免費 |
 | L3 | 參數化生成器 | 小 N（1–8）窮舉，**外加每次編譯對當次的具體 N 驗證** | 對驗過的 N 完備 | 每次編譯一次 |
-| L4 | lowering（gate → phys） | 窮舉實體結構的輸入；時序元件另窮舉輸入序列 | 組合完備／時序有限 | 便宜 |
+| L4 | lowering（gate → phys） | 窮舉實體結構的輸入，**且必須做雙向 transition 掃描**（見下） | 組合完備／時序有限 | 便宜 |
 | L5 | 繞線是否引入耦合 | **逐 net 注入-觀測**（見下） | 對耦合類 bug **完備** | `O(nets)` 次模擬 |
 | L6 | locational 免疫 | **窮舉座標偏移**，覆蓋所有可達的 datum point 排列（§4.1） | **完備** | 中等 |
 | L7 | 最終 sign-off | 忠實引擎跑 testbench | 取樣 | 少數幾次 |
+
+#### L4：從 reset 掃真值表是不夠的
+
+一個實體結構可能**每一列真值表從 reset 開始都對，但串進大電路就壞** —— 因為它「能上電、不能放電」：某些 layout 的紅石網路從初始狀態被驅動時會正確亮起，但輸入撤除後放不掉。
+
+這是 Redstone-Compiler 踩過並解決的坑（§14.6）。對策是 **雙向 transition 掃描**：真值表跑一遍升序、再跑一遍降序，讓每個 row 都經歷「從別的狀態轉移過來」而非「從 reset 開始」。
+
+```
+for mask in (0..2^n).chain((0..2^n).rev()):
+    施加 mask，跑到穩定，比對輸出
+```
+
+成本只有兩倍，但它涵蓋的是**狀態相依**的錯誤 —— 那類錯誤在單向掃描下 100% 漏掉。
 
 #### L5：逐 net 注入-觀測
 
@@ -425,6 +438,14 @@ LLVM 最惡名昭彰的 phase ordering 問題（pass 順序影響結果，最佳
 「用哪個實體結構實作這坨邏輯」是一條 `gate → phys` 的 lowering rule。作法是讓 e-graph 節點可以是實體結構實例，成本為實測 tick。
 
 於是**邏輯優化與技術映射不再是兩個階段，而是同一次抽取裡互相競爭的選項**。
+
+#### structural legality 必須是抽取的約束，不能是後處理
+
+紅石有一類「兩個閘不能直接相接」的規則，最典型的是 **OR→OR**：紅石的 OR 就是兩條紅石粉合流，兩個 OR 直接相接會併成同一個 net，**閘的邊界直接消失**。中間必須插一個主動元件（火把或中繼器）把它們隔開。
+
+這類規則不能等抽取完再修 —— 修補會改變延遲與體積，讓抽取當時的成本比較失效。**它們必須是抽取的合法性約束**，讓不合法的組合根本不進入候選。
+
+（Redstone-Compiler 是用 placer 硬拒絕 + 前置 buffer insertion pass 處理的，那是後處理，也正是他們的 full adder 需要「手工 buffered 版本」才編得出來的原因之一。）
 
 ### 5.4 相對 LLVM 的簡化
 
@@ -654,7 +675,16 @@ PERSHING 提出的四項評估指標中，**Feasibility**（router 是否跑得�
 
 （extraction 那邊不必先動 GPU：SmoothE 的 GPU 方案需要 A100 級的卡，而 e-boost 純 CPU 平行已經比 ILP 快 558×。）
 
-### 8.2 中繼器插入
+### 8.2 中繼器插入：搜尋狀態的一部分，不是前後處理
+
+**訊號強度必須是繞線搜尋狀態的一部分**，`(位置, 訊號強度)` 一起當 visited key。強度耗盡時就在該處插中繼器並重設為 15，繼續搜尋。
+
+這個設計來自 Redstone-Compiler（已驗證可行，見 §14.6），而它比「事後貪婪補中繼器」好在兩點：
+
+- **前人失敗的模式正是事後補。** PERSHING 在 routing 之後才貪婪插 repeater，論文自承有「pathological cases 導致訊號無法 buffer，必須整條重繞」。把強度納入搜尋狀態就不會產生無法 buffer 的路徑 —— 不合法的路徑根本不會被展開。
+- **強度預算與延遲自然耦合**：每插一個中繼器就是 +1 tick，所以搜尋在最小化路徑長度的同時就在最小化延遲，不需要另一套機制。
+
+以下是中繼器本身的性質：
 
 繞線同時要決定中繼器位置。訊號從 driver 出發有 15 的強度預算，用完必須插中繼器（+1 tick）。插入位置在 1~15 之間有自由度，可用於避開擁塞。
 
@@ -777,6 +807,15 @@ benchmark 套件應早期建立。可用的素材已經查清楚：
 **參考量級**：ORE 的 Engineer 級門檻是 CPU「至少 10 ticks/cycle」；MPU 1–7 的跨代 clock 序列為 15→10→6→7→7→5→5 ticks。
 
 > **關於「與人類最佳解的差距」這個指標**：社群沒有公開的 size+latency 統一標準（ISA benchmark sheet 有 cycles/ticks/bytes 但**沒有 blocks 欄位**），CHUNGUS 2 甚至連可用的 world download 都找不到。所以 gap analysis 的對照組只能建立在**有明確尺寸/延遲標註的小型電路**上。若我們同時量測 size 與 latency 並公開，那本身就是社群目前不存在的東西。
+
+#### 反向萃取（world → logic）：benchmark 的第二個來源
+
+從 `.litematic` **反解析出邏輯網表**（等同 EDA 的 LVS）是一項獨立能力，它同時解決兩個問題：
+
+- **對照組的來源**：拿真人蓋的優秀電路反解析成 netlist，就得到「同一份邏輯」的兩種實作 —— 人類的與我們的。不必依賴社群是否公布尺寸數據。
+- **驗證的另一個方向**：我們自己輸出的世界反解析回 netlist，應該等於輸入的 netlist。這是獨立於 §4.6 各層的交叉檢查。
+
+> **⚠️ 但它有系統性盲點**：反解析器與 placer 若對某個紅石細節有**共同的誤解**（例如都忽略某個時序或強度規則），這個檢查抓不到 —— 它驗證的是「兩個都用同一套假設的模組彼此一致」。所以它是補充，不能取代 §4.6 的 L5（逐 net 注入-觀測，那是真的跑模擬器）。
 
 ### 10.4 rule 的兩種形式
 
@@ -911,6 +950,7 @@ benchmark 套件在階段 A 末期即開始建立 —— 階段 A 用來驗證�
 13. **本文件的紅石機制描述已經過查核並修正過一輪**，但仍有部分只能以 wiki 與舊版反編譯原始碼交叉驗證，未取得 1.20 逐字原始碼（§4.5）。**最終仲裁者是黃金軌跡的實測結果**，不是本文件。
 14. **`fanout` 無法進入 bottom-up 成本函數**（表達力問題，§6.3），只能在 extraction 層處理。
 15. **e-graph 在 gate level 的 scalability 有明確前例警告**（§5.2.1）。我們的 gate dialect 是風險最高的一層。
+16. **latch 回授會讓模擬不收斂，這是必踩的坑。** 前人（Redstone-Compiler）的「解法」是讓火把燒毀永不恢復 —— 那是讓模擬器偏離遊戲語意來換收斂。**我們不能這樣做**：忠實引擎必須如實建模 burnout 與其恢復，讓振盪呈現為振盪，由驗證層報錯並退回重繞。這意味著模擬器必須有明確的**發散偵測與上限**（事件數、cycle 數），且發散是一種可報告的結果，不是要被消除的現象。
 
 ---
 
@@ -972,8 +1012,48 @@ benchmark 套件在階段 A 末期即開始建立 —— 階段 A 用來驗證�
 3. **`ceil(len/15)` 階梯型線延遲。** CMOS 的線延遲連續可線性近似；階梯是非凸非線性，ILP 要 big-M 編碼（可做，沒人做過），SmoothE 的可微鬆弛在這裡不適用。
 4. **扇出延遲免費 + 3D 佈局。** 所有 CMOS 工作都把 fanout 當延遲代價；e-graph EDA 文獻也全是 2D standard cell 或 FPGA。
 
-### 14.5 動工前必須做的一件事
+### 14.5 Redstone-Compiler 評估結論
 
-**先評估 [Redstone-Compiler](https://github.com/Redstone-Compiler/redstone-compiler)。** Rust、MIT、2026-07 仍活躍，已經有 113 KB 的紅石模擬器、自由 3D placement、hierarchical placer、NBT 輸出。
+**結論：取用觀念 + 少量程式碼。不貢獻、不 fork、不當依賴。**
 
-要回答的是：它的模擬器忠實度如何、placement 做到什麼程度、是否值得貢獻而非重寫、或至少哪些部分可以直接用。這個評估排在實作計畫之前。
+#### 模擬器不能用，理由是架構性的
+
+| 我們需要 | 它的現況 |
+|---|---|
+| 精確的 game tick / redstone tick | **只有自創的 "cycle"**，作者明文寫「不是 game ticks 或 redstone ticks」 |
+| tick priority | 純 FIFO，零優先級 |
+| 正確的 neighbor update order | 硬編碼且與 MC 不同，**而且每 cycle 去重**（MC 不去重，0-tick 電路正靠重複更新） |
+| 逐 tick 傳播才能觀察 glitch | **全域 Bellman-Ford 鬆弛到不動點，原子的** —— glitch 在此模型中不存在 |
+| QC 建模（雙引擎分歧偵測的核心） | 零 |
+| 比較器、觀察者、活塞 | 沒有 / 沒有 / `todo!()` |
+
+它既不能當快速引擎（給不出有意義的延遲數字），也不能當忠實引擎（不忠實）。
+
+#### 它精準標出了我們必踩的一個坑
+
+他們遇到 D flip-flop 的 latch 回授導致模擬不收斂，**解法是讓火把燒毀變成永久的**（`burned_out_torches` 只有 insert 沒有 remove，還有測試明文釘住「不該恢復」）。Minecraft 的火把燒毀是會恢復的。
+
+**這個坑我們一定會踩到，而且不能用同樣方式逃。** 正確做法是如實建模 tick 與 burnout recovery，讓振盪呈現為振盪，再由驗證層報錯 —— 不是讓模擬器說謊。這條寫進 §13。
+
+#### 四個值得採用的觀念（已寫入本文件）
+
+1. **訊號強度作為繞線搜尋狀態，中繼器在路徑合法性中即時插入** → §8.2
+2. **雙向 transition 驗證**（從 reset 掃真值表不夠） → §4.6 L4
+3. **structural legality 必須是抽取約束**（OR→OR） → §5.3
+4. **反向萃取 world → logic 當獨立能力** → §10.3，它同時是 benchmark 的來源
+
+#### 可取用的程式碼（MIT，需標注 attribution）
+
+- `src/nbt/mod.rs` —— NBT ↔ block palette 對應（先確認方塊涵蓋範圍夠不夠，目前只有 8 種）
+- `src/world/position.rs` + `World3D::update_redstone_states` —— 紅石粉連線判定規則，當**參考**讀
+- `tools/nbt-viewer/` —— TypeScript，完全獨立，可直接拿來檢視我們的輸出
+
+**絕對不取**：`simulator.rs`、`router.rs`、`placer.rs`、`local_placer/`、`verilog/`。
+
+#### 它的實際能力（用來校準這個領域的現實）
+
+**實際編譯過的最大設計是 2-bit counter**，而且該測試是 `#[ignore]` 的。`test/alu.v` 是無人讀取的死檔案且語法不合法；`test/alu.nbt` 是手工蓋的世界，不是編譯產物。CI 不跑任何 Rust 測試，clean clone 下 `cargo test` 因 `include_str!` 指向被 gitignore 的目錄而編不過。
+
+一個人維護、bus factor 1、有過 13 個月空窗、零外部貢獻、fork 數 0。
+
+**唯一的正面佐證**：它的 IR 分層（Logical 帶 width/Add/Mux/Register\<N\> ↔ Routable 純 scalar gate）與我們的 word/gate 分層對得上 —— 這是四層設計在紅石 target 上站得住腳的一個獨立證據。
