@@ -8,6 +8,17 @@
 
 **Tech Stack:** Rust 2021、`fastnbt`（NBT 序列化）、`flate2`（gzip）、`thiserror`（錯誤型別）
 
+## 執行環境（每個任務都適用）
+
+Rust 工具鏈**不在預設 PATH 上**。所有 `cargo` 指令必須在 bash 裡先設 PATH：
+
+```bash
+export PATH="/c/Users/LTY/.cargo/bin:$PATH"
+cargo test
+```
+
+PowerShell 找不到 cargo，一律用 bash。工具鏈版本：cargo 1.97.1 / rustc 1.97.1。
+
 ## Global Constraints
 
 - 目標版本：**Minecraft Java Edition 1.20**。1.21 的元件（銅燈）不在此計畫範圍。
@@ -17,7 +28,7 @@
 - litematic 的索引順序是 **YZX**：`index = y * (sizeX * sizeZ) + z * sizeX + x`
 - 方塊行為由**三個彼此獨立**的屬性決定：頂面支撐型別、導電性、不透明度（不透明度與紅石無關，不建模）。**絕不用單一 `is_solid` 判斷任何事。**
 - 模組命名：不用縮寫、不與 Rust 生態撞名（禁用 `lib/`、`core/`）、讀了就知道在幹嘛。
-- 所有規則查詢必須是查表或位元運算，**不寫條件分支鏈** —— 為日後的 SIMD/GPU 與規則版本化保留空間。
+- 規則查詢的結果以**位元旗標**表示，判定邏輯**集中在單一函式**並由資料表驅動。呼叫端一律呼叫該函式，**不得自行以方塊種類做 if-else 判斷** —— 為日後的 SIMD/GPU 與規則版本化保留空間。（判定函式內部使用 `match` 與條件式是正常且必要的，此約束針對的是「判定邏輯散布到各處」。）
 
 ---
 
