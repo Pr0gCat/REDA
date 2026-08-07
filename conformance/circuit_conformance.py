@@ -32,8 +32,14 @@ Usage:
     cargo run --release --bin mc_dump -- seven_segment > /tmp/decoder.txt
     python circuit_conformance.py --dump /tmp/decoder.txt \
         --properties ../minecraft-server/server/server.properties \
-        --out results/decoder_head.json --label head \
-        --settle-build 12 --settle-vector 6.5
+        --out results/decoder_head.json --label head
+
+No settle flags needed above, on either circuit: this harness polls each
+circuit until it is actually quiescent (see poll_until_quiescent) rather than
+sleeping a fixed guess, so a bigger circuit just takes however long it
+actually takes, not however long someone remembered to ask for. --settle-build
+and --settle-vector still exist, but as floors (skip pointless early polls
+during dead time), not the stopping condition.
 
 The server must already be running (docs/minecraft-server.md) with RCON
 enabled. `mc_dump` (src/bin/mc_dump.rs) is a separate step, run once per
@@ -146,11 +152,25 @@ Three defenses now stand between forceload and the first `setblock`:
       right non-air block" instead of "air". If this fails, the world
       never got into the state we told it to -- that is `RegionNotReady`,
       exit code 2, an environment/harness problem, not a circuit one.
-   b. **Has it settled, or is it still changing?** Two reads of every
-      signal, `--oscillation-probe` seconds apart. If anything differs
-      between them, the circuit is oscillating, not merely wrong -- a
-      distinct failure shape from "wrong but stable", and the message says
-      so explicitly.
+   b. **Has it settled, or is it still changing?** Poll every signal --
+      every output lamp and every gate's output torch -- repeatedly, and
+      call it settled only once several consecutive polls in a row agree on
+      all of them (see `poll_until_quiescent` and `REQUIRED_STABLE_POLLS` --
+      not just two: a freshly-placed circuit glitches almost continuously
+      for the first several seconds, with quiet notches between glitches
+      almost as long as one poll interval, so two reads alone can land in
+      the same notch by chance and look settled when they are not). If it
+      never holds still that long before a generous,
+      dump-derived ceiling (see `compute_settle_ceiling`) runs out, the
+      circuit is oscillating, not merely wrong -- a distinct failure shape
+      from "wrong but stable", and the message says so explicitly. This
+      used to be a fixed sleep (`--settle-vector`, formerly a flat 6.0s)
+      followed by a single pair of reads -- which is what let the
+      seven-segment decoder's real 124-tick (6.2s) settle time read as a
+      circuit bug (specific vectors, specific segments, a named "first bad
+      gate") when it was really the harness giving up 0.2s early. Polling
+      to an actual fixed point removes the guess entirely; see this
+      function's own docstring and `poll_until_quiescent`'s for the detail.
    c. **Settled to the right values?** With placement confirmed and no
       motion detected, any remaining disagreement with the simulator is
       the compiled circuit's logic being wrong. That is `CircuitMismatch`,
@@ -174,6 +194,7 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
+from harness import GAME_TICK_S
 from rcon import RconClient
 
 # Where the circuit is placed. Deliberately far from both world spawn and
@@ -658,11 +679,198 @@ def read_state(
     return lamp_vals, gate_vals
 
 
+def gate_logic_depth(gates: list[tuple[str, list[str]]]) -> int:
+    """Longest dependency chain among the netlist's gates, one level per NOR
+    gate -- the same "logic-depth lower bound" concept src/timing/mod.rs
+    computes for the compiler itself (see that module's docstring),
+    reimplemented here from the dump's own GATE lines because this script
+    has no access to the Rust Netlist type, only its text dump. Primary
+    inputs (levers) contribute depth 0; each gate's depth is one more than
+    its deepest dependency. `gates` is already topologically ordered (mc_dump
+    preserves that), so a single forward pass is enough. Used only to size
+    compute_settle_ceiling's margin below -- not itself a timing prediction."""
+    depth: dict[str, int] = {}
+    for name, ins in gates:
+        depth[name] = 1 + max((depth.get(i, 0) for i in ins), default=0)
+    return max(depth.values(), default=0)
+
+
+# Real vanilla constants this project has already independently measured
+# against a live 1.20.1 server and encoded in the simulator (see
+# src/redstone/simulator/component.rs and conformance/results/1.20.1.json's
+# repeater_delay_is_two_to_eight_game_ticks / lamp entries) -- reused here
+# rather than re-guessed, so compute_settle_ceiling below is grounded in
+# measured redstone behaviour, not picked to make today's decoder pass.
+TORCH_DELAY_GAME_TICKS = 2
+LAMP_TURN_OFF_DELAY_GAME_TICKS = 4
+# Doubles the raw physical estimate below to cover two things that are NOT
+# circuit physics: RCON round-trip/poll-interval slop, and "average repeaters
+# per gate" being, by construction, an underestimate for whichever gate sits
+# above the average.
+SETTLE_CEILING_SAFETY_FACTOR = 2.0
+# A dump with few or no repeaters (a trivial circuit) still deserves a
+# non-instant ceiling: a floor of real seconds for RCON latency and tick
+# jitter, not zero.
+MIN_SETTLE_CEILING_SECONDS = 2.0
+
+
+def compute_settle_ceiling(dump: Dump) -> float:
+    """A generous, dump-derived upper bound on how long this specific
+    circuit could plausibly take to reach a fixed point -- used as
+    poll_until_quiescent's ceiling: the point past which "still changing"
+    stops meaning "slow" and starts meaning "oscillating" (CircuitMismatch).
+
+    Deliberately not a fixed constant (that is the bug this module exists to
+    fix -- a flat 6.0s --settle-vector was shorter than the seven-segment
+    decoder's own real 124-tick/6.2s settle time) and deliberately not a
+    number a human tunes per circuit on the command line either (that just
+    moves the same problem one layer up, onto whoever picks
+    --settle-build/--settle-vector next). Instead it is computed from the
+    dump's own structure:
+
+    - `depth`, the longest gate dependency chain (gate_logic_depth) -- the
+      number of NOR inversions any one signal could have to cross serially.
+    - `avg_repeaters_per_gate` and `avg_repeater_delay_ticks`, both read
+      directly from this dump's own repeater population (every repeater
+      mc_dump emits carries its own `delay`; see Block.delay) rather than
+      assumed. This uses the *average*, not the sum of every repeater in the
+      whole circuit: most repeaters sit on parallel branches, not the one
+      critical path, so summing all of them overstates a single path's cost
+      by roughly an order of magnitude. Measured directly on the decoder:
+      785 repeaters totalling 1570 game ticks of delay, against a real
+      measured critical-path settle of 124 game ticks -- using the raw sum
+      would make a genuinely oscillating decoder take a minute and a half to
+      be declared failed, for no benefit.
+
+    ceiling_ticks = depth * avg_repeaters_per_gate * avg_repeater_delay_ticks
+                    + depth * TORCH_DELAY_GAME_TICKS
+                    + LAMP_TURN_OFF_DELAY_GAME_TICKS
+    then doubled (SETTLE_CEILING_SAFETY_FACTOR) and floored at
+    MIN_SETTLE_CEILING_SECONDS.
+
+    Measured against the two circuits this project currently has: and4 (7
+    gates, 29 repeaters, depth 4) comes out to a few seconds; the
+    seven-segment decoder (84 gates, 785 repeaters, depth 9) comes out to
+    ~19s -- about 3x its own measured real settle time (124 ticks = 6.2s).
+    That is the shape a ceiling should have: comfortable margin over any real
+    circuit's actual settle time, without being so large that a genuinely
+    broken one takes minutes to be reported."""
+    depth = gate_logic_depth(dump.gates)
+    repeaters = [b for b in dump.blocks if b.kind == "Repeater"]
+    if repeaters:
+        avg_repeaters_per_gate = len(repeaters) / max(1, len(dump.gates))
+        avg_repeater_delay_ticks = sum(b.delay for b in repeaters) / len(repeaters) * 2  # redstone ticks -> game ticks
+    else:
+        avg_repeaters_per_gate = 0.0
+        avg_repeater_delay_ticks = 0.0
+    ceiling_ticks = (
+        depth * avg_repeaters_per_gate * avg_repeater_delay_ticks
+        + depth * TORCH_DELAY_GAME_TICKS
+        + LAMP_TURN_OFF_DELAY_GAME_TICKS
+    )
+    ceiling_seconds = ceiling_ticks * GAME_TICK_S * SETTLE_CEILING_SAFETY_FACTOR
+    return max(ceiling_seconds, MIN_SETTLE_CEILING_SECONDS)
+
+
+# How many consecutive polls must agree, all the way down, before the
+# circuit is declared settled. NOT 2: measured directly on the decoder, a
+# freshly-placed build produces real digital glitches (a net taking a wrong
+# value before its final one, exactly what src/timing/mod.rs calls "glitch
+# count") on almost every single poll for its first ~5.5 real seconds, with
+# quiet notches *between* those glitches as long as ~0.36s -- comparable to
+# a single default poll_interval (0.25s). Two reads landing in the same
+# notch by chance therefore looks identical to "settled" but is not: a live
+# run on a genuinely fresh world hit exactly this, declaring the build
+# quiescent (with a wrong value, correctly caught by the check that follows
+# quiescence -- but for the wrong reason) after only ~1s, while an
+# instrumented replay of the identical circuit kept glitching for another
+# 4.5s before reaching its real, and correct, fixed point. Requiring several
+# consecutive agreeing polls -- i.e. a continuous quiet stretch several
+# times longer than the longest observed mid-transient notch -- makes that
+# kind of aliasing vanishingly unlikely without meaningfully slowing down a
+# circuit that has genuinely finished (the cost is (REQUIRED_STABLE_POLLS-1)
+# * poll_interval tacked onto the tail of every settle, not multiplied into
+# it). Expressed as a poll count rather than a fixed duration so it stays
+# proportionate however poll_interval is tuned.
+REQUIRED_STABLE_POLLS = 5
+
+
+def poll_until_quiescent(
+    client: RconClient,
+    dump: Dump,
+    origin: tuple[int, int, int],
+    min_wait: float,
+    ceiling: float,
+    poll_interval: float,
+    context: str,
+) -> tuple[dict[str, int | None], dict[str, int | None]]:
+    """Wait until every output lamp and every gate's output torch reads
+    identically across REQUIRED_STABLE_POLLS consecutive polls, instead of
+    sleeping a fixed guess and hoping. This is the actual fix for the bug
+    described at the top of this module: a hand-tuned sleep's correctness
+    depends on nobody ever building a circuit slower than the number that
+    was tuned against, and when that happens the failure it produces
+    (specific vectors, specific segments, a named "first bad gate") is
+    indistinguishable from a real compiled-circuit fault.
+
+    `min_wait` is honoured as a floor before the very first poll: a circuit
+    cannot possibly have finished reacting to a lever flip before even one
+    redstone tick has passed, so polling from t=0 would just spend RCON round
+    trips confirming dead time. Those round trips are individually cheap --
+    measured directly against this project's live server, a full 91-position
+    read (7 output lamps + 84 gate torches, the seven-segment decoder's
+    complete signal set) costs ~11ms -- but there is no reason to spend even
+    that on time nothing could have changed yet, so the floor stays.
+
+    `ceiling` bounds the *total* elapsed time (including `min_wait`). Past
+    it, the required stable-poll streak has still never been reached -- this
+    project treats that as an oscillating circuit, a real fault, and raises
+    CircuitMismatch (never a timeout/environment error; see RegionNotReady
+    vs CircuitMismatch in the module docstring). Exit code and category are
+    unaffected by why the mismatch was found -- mid-sweep or here.
+
+    Reads every gate's output torch on every poll, not just the output
+    lamps: the same ~11ms measurement above showed no meaningful cost
+    difference between reading 7 positions and 91, so there is no real
+    trade-off to make here. Watching only the outputs would risk calling the
+    circuit settled while an interior gate is still one hop from finishing
+    propagation -- exactly the kind of gap a lamp-only probe cannot see but
+    a later vector's mismatch would eventually expose anyway, just later and
+    less legibly."""
+    start = time.monotonic()
+    if min_wait > 0:
+        time.sleep(min_wait)
+    prev = read_state(client, dump, origin)
+    stable_streak = 1  # the read we just took counts as the first of the streak
+    while True:
+        if stable_streak >= REQUIRED_STABLE_POLLS:
+            return prev
+        elapsed = time.monotonic() - start
+        if elapsed >= ceiling:
+            raise CircuitMismatch(
+                f"{context}: the circuit never stopped changing within {ceiling:.1f}s "
+                f"(after an initial {min_wait:.1f}s floor), polling every {poll_interval:.2f}s and "
+                f"requiring {REQUIRED_STABLE_POLLS} consecutive agreeing reads -- it never held still "
+                "that long, which means the circuit is oscillating rather than merely slow to settle. "
+                "This is a real circuit fault, not an environment or timing problem: a redstone "
+                "circuit that never reaches a fixed point cannot be made to pass by waiting longer."
+            )
+        time.sleep(poll_interval)
+        cur = read_state(client, dump, origin)
+        if cur == prev:
+            stable_streak += 1
+        else:
+            stable_streak = 1
+        prev = cur
+
+
 def assert_quiescent(
     client: RconClient,
     dump: Dump,
     origin: tuple[int, int, int],
-    oscillation_probe_seconds: float = 1.0,
+    min_wait: float,
+    ceiling: float,
+    poll_interval: float,
 ) -> None:
     """After the initial build settles (every lever placed off), confirm
     the circuit is trustworthy before a single input vector is swept, by
@@ -704,36 +912,24 @@ def assert_quiescent(
             "circuit failure: " + "; ".join(missing)
         )
 
-    # 2. Settled, or still moving? Two reads spaced apart; any signal that
-    # differs between them means the circuit has not reached a fixed point
-    # at all -- a different failure shape from "settled but wrong".
-    lamps1, gates1 = read_state(client, dump, origin)
-    time.sleep(oscillation_probe_seconds)
-    lamps2, gates2 = read_state(client, dump, origin)
-    changed: list[str] = []
-    for output_name in lamps1:
-        if lamps1[output_name] != lamps2[output_name]:
-            changed.append(
-                f"output {dump.output_display_name(output_name)}: {lamps1[output_name]!r} -> {lamps2[output_name]!r}"
-            )
-    for gate_name in gates1:
-        if gates1[gate_name] != gates2[gate_name]:
-            changed.append(f"gate {gate_name}: {gates1[gate_name]!r} -> {gates2[gate_name]!r}")
-    if changed:
-        raise CircuitMismatch(
-            f"the circuit is still changing {oscillation_probe_seconds:.1f}s after the initial "
-            "settle wait -- these signals disagreed between two reads taken that far apart, which "
-            "looks like oscillation rather than a simple wrong-value mismatch: " + "; ".join(changed)
-        )
+    # 2. Settled, or still moving? Poll until REQUIRED_STABLE_POLLS
+    # consecutive reads agree on every signal (see poll_until_quiescent);
+    # past `ceiling`, that function itself raises CircuitMismatch for us --
+    # a circuit that never reaches a fixed point is oscillating, a
+    # different failure shape from "settled but wrong".
+    lamps, gates = poll_until_quiescent(
+        client, dump, origin, min_wait, ceiling, poll_interval,
+        context="the initial all-zero build",
+    )
 
     # 3. Settled -- but to the values the simulator predicts?
     mismatches: list[str] = []
-    for output_name, actual in lamps2.items():
+    for output_name, actual in lamps.items():
         if actual != expected[output_name]:
             mismatches.append(
                 f"output {dump.output_display_name(output_name)}: expected {expected[output_name]}, read {actual!r}"
             )
-    for gate_name, actual in gates2.items():
+    for gate_name, actual in gates.items():
         if actual != expected[gate_name]:
             mismatches.append(f"gate {gate_name}: expected {expected[gate_name]}, read {actual!r}")
     if mismatches:
@@ -829,11 +1025,19 @@ def run(args: argparse.Namespace) -> int:
         report["placement_commands"] = len(commands)
         report["placement_seconds"] = placement_seconds
 
-        print(f"Settling {args.settle_build:.1f}s after initial build...")
-        time.sleep(args.settle_build)
+        ceiling = args.settle_ceiling if args.settle_ceiling is not None else compute_settle_ceiling(dump)
+        print(
+            f"Settle ceiling for this circuit: {ceiling:.1f}s "
+            f"(floors: {args.settle_build:.1f}s build / {args.settle_vector:.1f}s vector, "
+            f"polling every {args.poll_interval:.2f}s)"
+        )
+        report["settle_ceiling_seconds"] = ceiling
 
-        print("Checking placement landed and the build settled to the expected all-zero state...")
-        assert_quiescent(client, dump, origin, oscillation_probe_seconds=args.oscillation_probe)
+        print("Checking placement landed and polling until the build settles to the expected all-zero state...")
+        assert_quiescent(
+            client, dump, origin,
+            min_wait=args.settle_build, ceiling=ceiling, poll_interval=args.poll_interval,
+        )
 
         current = {name: False for name in input_names}
 
@@ -849,18 +1053,12 @@ def run(args: argparse.Namespace) -> int:
                 client.command(f"setblock {x} {y} {z} {lever_state_string(b, bool(primary[name]))} replace")
             current = {name: bool(primary[name]) for name in input_names}
 
-            time.sleep(args.settle_vector)
-
-            actual_outputs = {}
-            for output_name in output_names:
-                output_pos = dump.outputs[output_name]
-                pos = (ox + output_pos[0], oy + output_pos[1], oz + output_pos[2])
-                actual_outputs[output_name] = read_lamp(client, pos)
-
-            gate_readings = {}
-            for gate_name, gate_pos in dump.gate_outputs.items():
-                pos = (ox + gate_pos[0], oy + gate_pos[1], oz + gate_pos[2])
-                gate_readings[gate_name] = read_torch(client, pos)
+            vec_str = "".join(str(b) for b in vector)
+            lamps, gate_readings = poll_until_quiescent(
+                client, dump, origin, args.settle_vector, ceiling, args.poll_interval,
+                context=f"vector {vec_str}",
+            )
+            actual_outputs = {name: lamps[name] for name in output_names}
 
             first_disagreement = None
             for gate_name, _ins in dump.gates:
@@ -877,7 +1075,6 @@ def run(args: argparse.Namespace) -> int:
             match = all(per_output_match.values())
             mismatched_outputs = [dump.output_display_name(n) for n in output_names if not per_output_match[n]]
 
-            vec_str = "".join(str(b) for b in vector)
             expected_by_label = {dump.output_display_name(n): expected_outputs[n] for n in output_names}
             actual_by_label = {dump.output_display_name(n): actual_outputs[n] for n in output_names}
             if len(output_names) == 1:
@@ -931,8 +1128,31 @@ def main() -> int:
     ap.add_argument("--out", required=True, help="path to write the JSON report")
     ap.add_argument("--label", required=True, help="short label for this run, e.g. 'head' or 'a1d50a4'")
     ap.add_argument("--origin", default="{},{},{}".format(*DEFAULT_ORIGIN), help="x,y,z world origin to place the circuit at")
-    ap.add_argument("--settle-build", type=float, default=8.0, help="seconds to wait after the initial static build")
-    ap.add_argument("--settle-vector", type=float, default=6.0, help="seconds to wait after setting levers for one vector")
+    ap.add_argument(
+        "--settle-build", type=float, default=0.5,
+        help="minimum seconds to wait after the initial static build before the first quiescence "
+        "poll (a floor to skip pointless early polls during dead time -- NOT the actual settle time; "
+        "see poll_until_quiescent). The real stopping condition is REQUIRED_STABLE_POLLS consecutive "
+        "polls of every gate and output agreeing.",
+    )
+    ap.add_argument(
+        "--settle-vector", type=float, default=0.25,
+        help="minimum seconds to wait after setting levers for one vector before the first "
+        "quiescence poll (a floor, not the actual settle time -- see --settle-build)",
+    )
+    ap.add_argument(
+        "--poll-interval", type=float, default=0.25,
+        help="seconds between quiescence polls once the floor has elapsed",
+    )
+    ap.add_argument(
+        "--settle-ceiling", type=float, default=None,
+        help="override the auto-computed settle ceiling (seconds) past which a circuit that is "
+        "still changing is declared oscillating (CircuitMismatch) instead of merely slow. Default: "
+        "derived from this dump's own gate depth and repeater population -- see "
+        "compute_settle_ceiling. Only override this to deliberately force a shorter ceiling (to "
+        "exercise the oscillation failure path quickly) or a longer one (for a circuit far larger "
+        "than any this project currently has).",
+    )
     ap.add_argument("--vectors", default=None, help="comma-separated input vectors to test, one bit per input in sorted-input-name order, e.g. 0000,1111 (default: all 2^n)")
     ap.add_argument("--no-clear", action="store_true", help="skip the pre-build air clear (region already known clean)")
     ap.add_argument("--keep", action="store_true", help="leave the circuit standing and the region forceloaded after the run")
@@ -941,11 +1161,6 @@ def main() -> int:
         help="seconds to wait for forceload to report the region actually loaded before giving up "
         "with RegionNotReady (exit 2). Lower this (e.g. to a fraction of a second) against a "
         "never-visited region to deliberately exercise that failure path.",
-    )
-    ap.add_argument(
-        "--oscillation-probe", type=float, default=1.0,
-        help="seconds between the two reads assert_quiescent takes to detect a circuit that is "
-        "still changing rather than settled",
     )
     args = ap.parse_args()
     try:
