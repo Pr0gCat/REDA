@@ -1,0 +1,753 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>reda viewer</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #1e1f22;
+    --panel: #2a2b2e;
+    --border: #44464a;
+    --text: #e6e6e6;
+    --muted: #9a9a9a;
+    --accent: #4da3ff;
+    --on: #52d17c;
+    --off: #555;
+    --error: #ff6b6b;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    font-size: 14px;
+  }
+  header {
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: baseline;
+    gap: 12px;
+  }
+  header h1 { font-size: 16px; margin: 0; }
+  header p { margin: 0; color: var(--muted); font-size: 12px; }
+  main {
+    display: grid;
+    grid-template-columns: 300px 1fr;
+    gap: 12px;
+    padding: 12px;
+    align-items: start;
+  }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    margin-bottom: 12px;
+  }
+  .panel h2 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    margin: 0 0 8px 0;
+  }
+  label { display: block; margin-bottom: 4px; color: var(--muted); font-size: 12px; }
+  select, input[type=range] { width: 100%; }
+  select {
+    background: #17181a;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 4px 6px;
+  }
+  .row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  .row label { margin: 0; flex: 0 0 auto; width: 70px; }
+  .row .value { width: 46px; text-align: right; color: var(--muted); font-variant-numeric: tabular-nums; }
+  button {
+    background: #333539;
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 6px 10px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  button:hover { background: #3d3f44; }
+  button:active { background: #2a2b2e; }
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+  .tick-count { color: var(--muted); font-size: 12px; }
+  .status { font-size: 12px; margin-top: 6px; min-height: 16px; }
+  .status.error { color: var(--error); }
+  .lever-list, .output-list { display: flex; flex-direction: column; gap: 6px; }
+  .lever {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .lever button {
+    min-width: 64px;
+  }
+  .lever button[data-on="true"] { background: var(--on); color: #06210f; border-color: var(--on); }
+  .lever button[data-on="false"] { background: var(--off); color: #ddd; }
+  .pin-name { font-family: ui-monospace, Consolas, monospace; }
+  .pin-coord { color: var(--muted); font-size: 11px; }
+  .output {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .output-badge {
+    min-width: 40px;
+    text-align: center;
+    border-radius: 3px;
+    padding: 2px 8px;
+    font-weight: 600;
+    font-size: 12px;
+  }
+  .output-badge[data-on="true"] { background: var(--on); color: #06210f; }
+  .output-badge[data-on="false"] { background: var(--off); color: #ccc; }
+  .canvas-wrap {
+    position: relative;
+    overflow: auto;
+    max-height: 76vh;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #101113;
+  }
+  canvas { display: block; image-rendering: pixelated; }
+  #hover-readout {
+    font-family: ui-monospace, Consolas, monospace;
+    font-size: 12px;
+    color: var(--muted);
+    padding: 6px 4px 0 4px;
+    min-height: 18px;
+  }
+  .legend-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 10px;
+    font-size: 11px;
+    color: var(--muted);
+  }
+  .legend-swatch {
+    display: inline-block;
+    width: 10px;
+    height: 10px;
+    border-radius: 2px;
+    border: 1px solid #000;
+    vertical-align: middle;
+    margin-right: 4px;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1>reda viewer</h1>
+  <p>Runs the actual simulator, compiled to WebAssembly. What you see here is the simulator's own state.</p>
+</header>
+<main>
+  <div class="left">
+    <div class="panel">
+      <h2>Circuit</h2>
+      <label for="circuit-select">Circuit</label>
+      <select id="circuit-select"></select>
+    </div>
+
+    <div class="panel">
+      <h2>Slice</h2>
+      <div class="row">
+        <label for="axis-select">Axis</label>
+        <select id="axis-select">
+          <option value="X">X</option>
+          <option value="Y" selected>Y</option>
+          <option value="Z">Z</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="index-slider">Index</label>
+        <input type="range" id="index-slider" min="0" max="0" value="0" />
+        <span class="value" id="index-value">0</span>
+      </div>
+      <div class="row">
+        <label for="zoom-slider">Zoom</label>
+        <input type="range" id="zoom-slider" min="1" max="40" value="6" />
+        <span class="value" id="zoom-value">6px</span>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>Simulation</h2>
+      <div class="btn-row">
+        <button id="step-btn">Step</button>
+        <button id="run-btn">Run to stable</button>
+        <button id="reset-btn">Reset</button>
+      </div>
+      <div class="tick-count">Ticks: <span id="tick-count">0</span></div>
+      <div class="status" id="status"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Inputs</h2>
+      <div class="lever-list" id="lever-list"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Outputs</h2>
+      <div class="output-list" id="output-list"></div>
+    </div>
+
+    <div class="panel">
+      <h2>Legend</h2>
+      <div class="legend-list" id="legend-list"></div>
+    </div>
+  </div>
+
+  <div class="right">
+    <div class="panel" style="margin-bottom:6px;">
+      <h2 id="canvas-caption">Slice</h2>
+      <div class="canvas-wrap" id="canvas-wrap">
+        <canvas id="grid-canvas" width="10" height="10"></canvas>
+      </div>
+      <div id="hover-readout">&nbsp;</div>
+    </div>
+  </div>
+</main>
+
+<script type="module">
+import init, { list_circuits, Session, Axis } from './pkg/reda_viewer.js';
+
+await init();
+
+// ---------------------------------------------------------------------
+// DOM handles
+// ---------------------------------------------------------------------
+const circuitSelect = document.getElementById('circuit-select');
+const axisSelect = document.getElementById('axis-select');
+const indexSlider = document.getElementById('index-slider');
+const indexValue = document.getElementById('index-value');
+const zoomSlider = document.getElementById('zoom-slider');
+const zoomValue = document.getElementById('zoom-value');
+const stepBtn = document.getElementById('step-btn');
+const runBtn = document.getElementById('run-btn');
+const resetBtn = document.getElementById('reset-btn');
+const tickCountEl = document.getElementById('tick-count');
+const statusEl = document.getElementById('status');
+const leverList = document.getElementById('lever-list');
+const outputList = document.getElementById('output-list');
+const legendList = document.getElementById('legend-list');
+const canvasWrap = document.getElementById('canvas-wrap');
+const canvas = document.getElementById('grid-canvas');
+const ctx = canvas.getContext('2d');
+const hoverReadout = document.getElementById('hover-readout');
+const canvasCaption = document.getElementById('canvas-caption');
+
+// Offscreen 1px-per-cell canvas the visible canvas is scaled up from.
+const offscreen = document.createElement('canvas');
+const offCtx = offscreen.getContext('2d');
+
+// ---------------------------------------------------------------------
+// State
+// ---------------------------------------------------------------------
+const AXIS_MAP = { X: Axis.X, Y: Axis.Y, Z: Axis.Z };
+
+let session = null;
+let size = [0, 0, 0]; // [x, y, z]
+let pinout = { inputs: [], outputs: [] };
+let legendMap = new Map(); // id -> { name, rgba: [r,g,b,a] }
+let leverState = new Map(); // name -> bool
+let currentBytes = null; // Uint8Array for the currently displayed slice
+let currentOuterLen = 0;
+let currentInnerLen = 0;
+let outputSliceCache = new Map(); // y -> Uint8Array, cleared each refreshOutputs()
+
+// ---------------------------------------------------------------------
+// Colour helpers
+// ---------------------------------------------------------------------
+
+/** Parse "#rrggbb" or "#rrggbbaa" into [r, g, b, a] (0-255 each). */
+function parseColour(hex) {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.substring(0, 2), 16);
+  const g = parseInt(h.substring(2, 4), 16);
+  const b = parseInt(h.substring(4, 6), 16);
+  const a = h.length >= 8 ? parseInt(h.substring(6, 8), 16) : 255;
+  return [r, g, b, a];
+}
+
+/** Redstone dust: scale brightness by strength (0-15) so a live wire reads
+ * dark red when unpowered and full bright red at strength 15. */
+function tintDust(rgba, strength) {
+  const factor = 0.18 + 0.82 * (strength / 15);
+  return [
+    Math.round(rgba[0] * factor),
+    Math.round(rgba[1] * factor),
+    Math.round(rgba[2] * factor),
+    rgba[3],
+  ];
+}
+
+const REDSTONE_WIRE_ID = 4; // BlockKind::RedstoneWire, see viewer/src/lib.rs ALL_BLOCK_KINDS
+
+function colourForCell(kindId, strength) {
+  const entry = legendMap.get(kindId);
+  if (!entry) return [255, 0, 255, 255]; // unknown id -- should never happen if legend() is complete
+  if (kindId === REDSTONE_WIRE_ID) return tintDust(entry.rgba, strength);
+  return entry.rgba;
+}
+
+// ---------------------------------------------------------------------
+// rAF throttle -- coalesce rapid slider drags into one paint per frame
+// ---------------------------------------------------------------------
+function rafThrottle(fn) {
+  let scheduled = false;
+  return (...args) => {
+    if (scheduled) return;
+    scheduled = true;
+    requestAnimationFrame(() => {
+      scheduled = false;
+      fn(...args);
+    });
+  };
+}
+
+// ---------------------------------------------------------------------
+// Axis / slice geometry
+// ---------------------------------------------------------------------
+
+/** Per the slice() contract: which world size component the axis's index
+ * ranges over, and the (outer, inner) lengths of the remaining two axes. */
+function axisGeometry(axisName) {
+  const [sx, sy, sz] = size;
+  switch (axisName) {
+    case 'X': return { indexMax: sx - 1, outerLen: sy, innerLen: sz };
+    case 'Y': return { indexMax: sy - 1, outerLen: sx, innerLen: sz };
+    case 'Z': return { indexMax: sz - 1, outerLen: sx, innerLen: sy };
+  }
+}
+
+/** Map (axis, index, outer, inner) back to world (x, y, z), matching the
+ * loops documented on Session::slice. */
+function worldCoord(axisName, index, outer, inner) {
+  switch (axisName) {
+    case 'X': return [index, outer, inner];
+    case 'Y': return [outer, index, inner];
+    case 'Z': return [outer, inner, index];
+  }
+}
+
+// ---------------------------------------------------------------------
+// Circuit lifecycle
+// ---------------------------------------------------------------------
+
+function setStatus(message, isError) {
+  statusEl.textContent = message || '';
+  statusEl.classList.toggle('error', !!isError);
+}
+
+function loadCircuit(name) {
+  try {
+    session = new Session(name);
+  } catch (e) {
+    setStatus(`Failed to build ${name}: ${e}`, true);
+    return;
+  }
+  size = Array.from(session.size());
+
+  const rawPinout = session.pinout();
+  pinout = { inputs: rawPinout.inputs || [], outputs: rawPinout.outputs || [] };
+
+  const rawLegend = session.legend();
+  legendMap = new Map();
+  for (const entry of rawLegend) {
+    legendMap.set(entry.id, { name: entry.name, rgba: parseColour(entry.colour) });
+  }
+
+  leverState = new Map(pinout.inputs.map((p) => [p.name, false]));
+  outputSliceCache.clear();
+
+  buildLeverUI();
+  buildOutputUI();
+  buildLegendUI();
+
+  setStatus('');
+  updateTickCount();
+  syncAxisRange(true);
+  refreshOutputs();
+}
+
+function updateTickCount() {
+  tickCountEl.textContent = session.tick_count();
+}
+
+// ---------------------------------------------------------------------
+// Inputs (levers)
+// ---------------------------------------------------------------------
+
+function buildLeverUI() {
+  leverList.innerHTML = '';
+  if (pinout.inputs.length === 0) {
+    leverList.innerHTML = '<span style="color:var(--muted)">No inputs.</span>';
+    return;
+  }
+  for (const pin of pinout.inputs) {
+    const row = document.createElement('div');
+    row.className = 'lever';
+
+    const label = document.createElement('span');
+    label.innerHTML = `<span class="pin-name">${pin.name}</span> `
+      + `<span class="pin-coord">(${pin.x}, ${pin.y}, ${pin.z})</span>`;
+
+    const btn = document.createElement('button');
+    const on = leverState.get(pin.name);
+    btn.dataset.on = String(on);
+    btn.textContent = on ? 'ON' : 'OFF';
+    btn.addEventListener('click', () => toggleLever(pin.name, btn));
+
+    row.appendChild(label);
+    row.appendChild(btn);
+    leverList.appendChild(row);
+  }
+}
+
+function toggleLever(name, btn) {
+  const next = !leverState.get(name);
+  leverState.set(name, next);
+  try {
+    session.set_lever(name, next);
+  } catch (e) {
+    setStatus(`set_lever(${name}) failed: ${e}`, true);
+    return;
+  }
+  btn.dataset.on = String(next);
+  btn.textContent = next ? 'ON' : 'OFF';
+
+  // Settle immediately so the effect is visible without an extra click --
+  // matches the plan's "flip all four levers on, watch the lamp light".
+  try {
+    const ticks = session.run_until_stable();
+    setStatus(`Settled after ${ticks} tick(s).`, false);
+  } catch (e) {
+    setStatus(`run_until_stable failed: ${e}`, true);
+  }
+  updateTickCount();
+  outputSliceCache.clear();
+  refreshSlice();
+  refreshOutputs();
+}
+
+// ---------------------------------------------------------------------
+// Outputs
+// ---------------------------------------------------------------------
+
+function buildOutputUI() {
+  outputList.innerHTML = '';
+  if (pinout.outputs.length === 0) {
+    outputList.innerHTML = '<span style="color:var(--muted)">No outputs.</span>';
+    return;
+  }
+  for (const pin of pinout.outputs) {
+    const row = document.createElement('div');
+    row.className = 'output';
+    row.dataset.pinName = pin.name;
+
+    const label = document.createElement('span');
+    label.innerHTML = `<span class="pin-name">${pin.name}</span> `
+      + `<span class="pin-coord">(${pin.x}, ${pin.y}, ${pin.z})</span>`;
+
+    const badge = document.createElement('span');
+    badge.className = 'output-badge';
+    badge.dataset.on = 'false';
+    badge.textContent = 'OFF';
+
+    row.appendChild(label);
+    row.appendChild(badge);
+    outputList.appendChild(row);
+  }
+}
+
+/** Read one cell's [kind, strength] without regard to which axis/index the
+ * canvas is currently showing -- always via a Y slice, per the documented
+ * offset formula `2 * (x * size_z + z)`. Cached per-y for one refresh pass
+ * since several outputs (e.g. seven_segment's seven segments) can share a
+ * y-layer. */
+function readCell(x, y, z) {
+  let bytes = outputSliceCache.get(y);
+  if (!bytes) {
+    bytes = session.slice(Axis.Y, y);
+    outputSliceCache.set(y, bytes);
+  }
+  const offset = 2 * (x * size[2] + z);
+  return { kind: bytes[offset], strength: bytes[offset + 1] };
+}
+
+function refreshOutputs() {
+  outputSliceCache.clear();
+  for (const pin of pinout.outputs) {
+    const { strength } = readCell(pin.x, pin.y, pin.z);
+    const on = strength > 0;
+    const row = outputList.querySelector(`[data-pin-name="${CSS.escape(pin.name)}"]`);
+    if (!row) continue;
+    const badge = row.querySelector('.output-badge');
+    badge.dataset.on = String(on);
+    badge.textContent = on ? 'ON' : 'OFF';
+  }
+}
+
+// ---------------------------------------------------------------------
+// Legend panel
+// ---------------------------------------------------------------------
+
+function buildLegendUI() {
+  legendList.innerHTML = '';
+  for (const [id, entry] of legendMap) {
+    if (entry.name === 'Air') continue;
+    const span = document.createElement('span');
+    const [r, g, b] = entry.rgba;
+    span.innerHTML = `<span class="legend-swatch" style="background:rgb(${r},${g},${b})"></span>${entry.name}`;
+    legendList.appendChild(span);
+  }
+}
+
+// ---------------------------------------------------------------------
+// Slice fetch + axis/index UI sync
+// ---------------------------------------------------------------------
+
+function syncAxisRange(resetIndex) {
+  const geom = axisGeometry(axisSelect.value);
+  indexSlider.min = '0';
+  indexSlider.max = String(Math.max(geom.indexMax, 0));
+  if (resetIndex) {
+    indexSlider.value = String(Math.floor(geom.indexMax / 2));
+  } else if (Number(indexSlider.value) > geom.indexMax) {
+    indexSlider.value = String(geom.indexMax);
+  }
+  indexValue.textContent = indexSlider.value;
+  refreshSlice();
+}
+
+function refreshSlice() {
+  const axisName = axisSelect.value;
+  const index = Number(indexSlider.value);
+  const geom = axisGeometry(axisName);
+
+  let bytes;
+  try {
+    bytes = session.slice(AXIS_MAP[axisName], index);
+  } catch (e) {
+    setStatus(`slice(${axisName}, ${index}) failed: ${e}`, true);
+    return;
+  }
+  currentBytes = bytes;
+  currentOuterLen = geom.outerLen;
+  currentInnerLen = geom.innerLen;
+  canvasCaption.textContent =
+    `Slice ${axisName}=${index} of ${size[0]}x${size[1]}x${size[2]} (${geom.innerLen}x${geom.outerLen} cells)`;
+
+  drawBase();
+  drawOverlay();
+}
+
+// ---------------------------------------------------------------------
+// Canvas rendering
+// ---------------------------------------------------------------------
+
+function drawBase() {
+  if (!currentBytes) return;
+  const w = currentInnerLen;
+  const h = currentOuterLen;
+  offscreen.width = w;
+  offscreen.height = h;
+  const imageData = offCtx.createImageData(w, h);
+  const data = imageData.data;
+
+  for (let outer = 0; outer < h; outer++) {
+    for (let inner = 0; inner < w; inner++) {
+      const cellIdx = outer * w + inner;
+      const byteIdx = cellIdx * 2;
+      const kind = currentBytes[byteIdx];
+      const strength = currentBytes[byteIdx + 1];
+      const [r, g, b, a] = colourForCell(kind, strength);
+      const p = cellIdx * 4;
+      data[p] = r;
+      data[p + 1] = g;
+      data[p + 2] = b;
+      data[p + 3] = a;
+    }
+  }
+  offCtx.putImageData(imageData, 0, 0);
+
+  const cellSize = Number(zoomSlider.value);
+  canvas.width = w * cellSize;
+  canvas.height = h * cellSize;
+  ctx.imageSmoothingEnabled = false;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(offscreen, 0, 0, w, h, 0, 0, canvas.width, canvas.height);
+}
+
+/** Grid lines and per-cell numbers, drawn only over the currently scrolled
+ * viewport so cost stays proportional to what's on screen, not to the
+ * circuit's total size (seven_segment's Y slice is 232x298 = 69k cells). */
+function drawOverlay() {
+  if (!currentBytes) return;
+  const cellSize = Number(zoomSlider.value);
+  if (cellSize < 6) return; // too small for grid lines or numbers to help
+
+  const scrollLeft = canvasWrap.scrollLeft;
+  const scrollTop = canvasWrap.scrollTop;
+  const viewW = canvasWrap.clientWidth;
+  const viewH = canvasWrap.clientHeight;
+
+  const innerStart = Math.max(0, Math.floor(scrollLeft / cellSize) - 1);
+  const innerEnd = Math.min(currentInnerLen, Math.ceil((scrollLeft + viewW) / cellSize) + 1);
+  const outerStart = Math.max(0, Math.floor(scrollTop / cellSize) - 1);
+  const outerEnd = Math.min(currentOuterLen, Math.ceil((scrollTop + viewH) / cellSize) + 1);
+
+  ctx.strokeStyle = 'rgba(255,255,255,0.08)';
+  ctx.lineWidth = 1;
+  for (let inner = innerStart; inner <= innerEnd; inner++) {
+    const x = inner * cellSize + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(x, outerStart * cellSize);
+    ctx.lineTo(x, outerEnd * cellSize);
+    ctx.stroke();
+  }
+  for (let outer = outerStart; outer <= outerEnd; outer++) {
+    const y = outer * cellSize + 0.5;
+    ctx.beginPath();
+    ctx.moveTo(innerStart * cellSize, y);
+    ctx.lineTo(innerEnd * cellSize, y);
+    ctx.stroke();
+  }
+
+  if (cellSize < 14) return; // too small to read a number
+
+  ctx.font = `${Math.floor(cellSize * 0.5)}px ui-monospace, monospace`;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  for (let outer = outerStart; outer < outerEnd; outer++) {
+    for (let inner = innerStart; inner < innerEnd; inner++) {
+      const byteIdx = (outer * currentInnerLen + inner) * 2;
+      const kind = currentBytes[byteIdx];
+      if (legendMap.get(kind)?.name === 'Air') continue;
+      const strength = currentBytes[byteIdx + 1];
+      const [r, g, b] = colourForCell(kind, strength);
+      const luminance = 0.299 * r + 0.587 * g + 0.114 * b;
+      ctx.fillStyle = luminance > 140 ? '#000' : '#fff';
+      ctx.fillText(
+        String(strength),
+        inner * cellSize + cellSize / 2,
+        outer * cellSize + cellSize / 2,
+      );
+    }
+  }
+}
+
+// ---------------------------------------------------------------------
+// Hover readout
+// ---------------------------------------------------------------------
+
+canvas.addEventListener('mousemove', (e) => {
+  if (!currentBytes) return;
+  const cellSize = Number(zoomSlider.value);
+  const rect = canvas.getBoundingClientRect();
+  const px = e.clientX - rect.left;
+  const py = e.clientY - rect.top;
+  const inner = Math.floor(px / cellSize);
+  const outer = Math.floor(py / cellSize);
+  if (inner < 0 || inner >= currentInnerLen || outer < 0 || outer >= currentOuterLen) {
+    hoverReadout.textContent = ' ';
+    return;
+  }
+  const byteIdx = (outer * currentInnerLen + inner) * 2;
+  const kind = currentBytes[byteIdx];
+  const strength = currentBytes[byteIdx + 1];
+  const [wx, wy, wz] = worldCoord(axisSelect.value, Number(indexSlider.value), outer, inner);
+  const name = legendMap.get(kind)?.name || `unknown(${kind})`;
+  hoverReadout.textContent = `(${wx}, ${wy}, ${wz}) -- ${name}, strength ${strength}`;
+});
+
+canvas.addEventListener('mouseleave', () => {
+  hoverReadout.textContent = ' ';
+});
+
+// ---------------------------------------------------------------------
+// Wire up controls
+// ---------------------------------------------------------------------
+
+for (const name of list_circuits()) {
+  const opt = document.createElement('option');
+  opt.value = name;
+  opt.textContent = name;
+  circuitSelect.appendChild(opt);
+}
+
+circuitSelect.addEventListener('change', () => loadCircuit(circuitSelect.value));
+
+axisSelect.addEventListener('change', () => syncAxisRange(true));
+
+const throttledIndexInput = rafThrottle(() => {
+  indexValue.textContent = indexSlider.value;
+  refreshSlice();
+});
+indexSlider.addEventListener('input', throttledIndexInput);
+
+const throttledZoomInput = rafThrottle(() => {
+  zoomValue.textContent = `${zoomSlider.value}px`;
+  drawBase();
+  drawOverlay();
+});
+zoomSlider.addEventListener('input', throttledZoomInput);
+
+const throttledScroll = rafThrottle(() => drawOverlay());
+canvasWrap.addEventListener('scroll', throttledScroll);
+
+stepBtn.addEventListener('click', () => {
+  const changed = session.step();
+  setStatus(changed ? 'Stepped one tick.' : 'Stepped one tick (nothing changed).', false);
+  updateTickCount();
+  outputSliceCache.clear();
+  refreshSlice();
+  refreshOutputs();
+});
+
+runBtn.addEventListener('click', () => {
+  try {
+    const ticks = session.run_until_stable();
+    setStatus(`Settled after ${ticks} tick(s).`, false);
+  } catch (e) {
+    setStatus(`run_until_stable failed: ${e}`, true);
+  }
+  updateTickCount();
+  outputSliceCache.clear();
+  refreshSlice();
+  refreshOutputs();
+});
+
+resetBtn.addEventListener('click', () => {
+  try {
+    session.reset();
+  } catch (e) {
+    setStatus(`reset failed: ${e}`, true);
+    return;
+  }
+  leverState = new Map(pinout.inputs.map((p) => [p.name, false]));
+  buildLeverUI();
+  setStatus('Reset.', false);
+  updateTickCount();
+  outputSliceCache.clear();
+  refreshSlice();
+  refreshOutputs();
+});
+
+// ---------------------------------------------------------------------
+// Initial load
+// ---------------------------------------------------------------------
+loadCircuit(circuitSelect.value);
+</script>
+</body>
+</html>
