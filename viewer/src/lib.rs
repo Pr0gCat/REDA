@@ -249,7 +249,7 @@ fn signal_strength(state: &BlockState) -> u8 {
 
 /// How many bytes [`Session::geometry`] spends on each non-air cell. See that
 /// method's doc comment for the field layout.
-const GEOMETRY_BYTES_PER_CELL: usize = 9;
+const GEOMETRY_BYTES_PER_CELL: usize = 10;
 
 /// `geometry()`'s byte for a cell's `facing`. `Facing` has no explicit
 /// discriminants and (unlike `BlockKind`) is not exhaustively listed anywhere
@@ -557,9 +557,9 @@ impl Session {
 
     /// Static per-circuit geometry for a 3D view: one entry per non-air cell,
     /// visited in [`non_air_coords`]'s order, packed as
-    /// [`GEOMETRY_BYTES_PER_CELL`] (9) bytes each:
+    /// [`GEOMETRY_BYTES_PER_CELL`] (10) bytes each:
     ///
-    /// `[x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, kind, facing, face]`
+    /// `[x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, kind, facing, face, delay]`
     ///
     /// `x`/`y`/`z` are little-endian `u16` world coordinates -- `u16`, not
     /// `u8`, because `seven_segment`'s Z axis reaches 298, past a single
@@ -575,18 +575,26 @@ impl Session {
     /// this is a real field with a real "absent" value, not something a 3D
     /// view can silently default and still look plausible.
     ///
+    /// `delay` carries `BlockState::delay` verbatim: 1..=4 for a repeater,
+    /// 0 for every other block kind. Unlike `facing`/`face`, this needs no
+    /// 255 sentinel -- `delay`'s own "not applicable" value (0) already never
+    /// collides with a real repeater delay (which starts at 1), so the raw
+    /// byte is unambiguous as-is. See the module-level plan doc's "Repeater
+    /// delay" section: a view renders this as the gap between a repeater's
+    /// two nubs, the same way Minecraft itself shows it.
+    ///
     /// A caller builds this **once per circuit**: the set of non-air cells
-    /// and their coordinates/kinds/facing/face is fixed the moment
+    /// and their coordinates/kinds/facing/face/delay is fixed the moment
     /// `compile()` lays the world out, and never changes as the simulation
     /// runs (only *strengths* change -- see [`Session::strengths`]).
     ///
     /// Entry `i` here and byte `i` of `strengths()` describe the very same
     /// cell -- this pairing, and [`non_air_coords`]'s order, is exactly what
-    /// `tests/geometry_ordering.rs` pins down (facing and face included). If
-    /// the two ever drifted out of order relative to each other, a 3D view
-    /// would still render a plausible-looking circuit, just with every
-    /// colour (and orientation) attached to the wrong block, and nothing on
-    /// screen would say so.
+    /// `tests/geometry_ordering.rs` pins down (facing, face and delay
+    /// included). If the two ever drifted out of order relative to each
+    /// other, a 3D view would still render a plausible-looking circuit, just
+    /// with every colour (and orientation) attached to the wrong block, and
+    /// nothing on screen would say so.
     pub fn geometry(&self) -> Vec<u8> {
         let world = self.simulator.world();
         let mut bytes = Vec::new();
@@ -599,6 +607,7 @@ impl Session {
             cell[6] = block_kind_id(state.kind);
             cell[7] = facing_id(state.facing);
             cell[8] = face_id(state.face);
+            cell[9] = state.delay;
             bytes.extend_from_slice(&cell);
         }
         bytes
@@ -617,5 +626,80 @@ impl Session {
     pub fn strengths(&self) -> Vec<u8> {
         let world = self.simulator.world();
         non_air_coords(world).map(|(x, y, z)| signal_strength(world.get(x, y, z))).collect()
+    }
+}
+
+// ---------------------------------------------------------------------
+// Repeater delay: proof that geometry() carries it, independent of compile()
+// ---------------------------------------------------------------------
+
+/// `compile()` hardcodes `delay = 1` on every repeater it places, so no
+/// circuit in [`CIRCUITS`] ever exercises anything but delay 1 -- the plan
+/// document is explicit that this is not a reason to skip carrying `delay`
+/// through `geometry()`. This module is the proof: it builds a `World` by
+/// hand (never touching `compile()`), places four otherwise-identical
+/// repeaters differing only in `delay` (1, 2, 3 and 4), and checks that
+/// `geometry()` reports each one's real, distinct value rather than some
+/// constant that would "look plausible" the way `facing`/`face` could if
+/// silently defaulted (see [`Session::geometry`]'s doc comment).
+///
+/// This test is deliberately a unit test inside this module (not a
+/// `tests/*.rs` integration test) because it constructs a [`Session`]
+/// directly via its private fields, sidestepping [`Session::build`]'s
+/// `find_builder`/`compile()` path entirely -- there is no other way to get
+/// a repeater with `delay != 1` into a `Session` today, precisely because
+/// `compile()` never emits one.
+#[cfg(test)]
+mod repeater_delay_geometry_tests {
+    use super::*;
+    use reda::redstone::world::storage::World;
+
+    /// Build a session wrapping a hand-crafted `World` containing one
+    /// repeater per delay value 1..=4, laid out along X so each has its own
+    /// non-air cell, all sharing the same facing (the facing is irrelevant
+    /// to this test; keeping it fixed isolates `delay` as the only thing
+    /// that varies between the four cells).
+    fn session_with_one_repeater_per_delay() -> Session {
+        let mut world = World::new(8, 1, 1);
+        for (i, delay) in (1u8..=4).enumerate() {
+            let mut state = BlockState::air();
+            state.kind = BlockKind::Repeater;
+            state.facing = Some(Facing::North);
+            state.delay = delay;
+            state.name = "minecraft:repeater".to_string();
+            world.set(i as i32 * 2, 0, 0, state);
+        }
+        let simulator = Simulator::new(world);
+        Session {
+            circuit_name: "repeater_delay_test_fixture".to_string(),
+            simulator,
+            input_positions: BTreeMap::new(),
+            output_positions: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn geometry_reports_each_repeaters_real_delay_distinctly() {
+        let session = session_with_one_repeater_per_delay();
+        let bytes = session.geometry();
+
+        assert_eq!(bytes.len() % GEOMETRY_BYTES_PER_CELL, 0);
+        let cells: Vec<&[u8]> = bytes.chunks_exact(GEOMETRY_BYTES_PER_CELL).collect();
+        assert_eq!(cells.len(), 4, "all four repeaters must be non-air and appear once each");
+
+        // Ascending-X order (see non_air_coords) puts delay 1 first, matching
+        // the order they were placed above.
+        let delays: Vec<u8> = cells.iter().map(|cell| cell[9]).collect();
+        assert_eq!(
+            delays,
+            vec![1, 2, 3, 4],
+            "geometry() must report each repeater's own delay, not a shared/defaulted value"
+        );
+
+        // Every kind byte must still read as Repeater -- delay is an
+        // additional field, not a replacement for kind.
+        for cell in &cells {
+            assert_eq!(cell[6], BlockKind::Repeater as u8);
+        }
     }
 }

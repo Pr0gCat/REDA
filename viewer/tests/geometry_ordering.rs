@@ -32,7 +32,7 @@ const MAX_TICKS: u64 = 2000;
 /// Must match `viewer/src/lib.rs`'s private `GEOMETRY_BYTES_PER_CELL` --
 /// re-declared here rather than exported, so this test decodes the *public*
 /// byte contract `geometry()` documents, not an internal constant.
-const GEOMETRY_BYTES_PER_CELL: usize = 9;
+const GEOMETRY_BYTES_PER_CELL: usize = 10;
 
 /// The `[kind_id, strength]` pair `geometry()`/`strengths()` should report
 /// for `state`, taken straight from `slice()`'s (and `geometry()`'s) own
@@ -82,6 +82,17 @@ fn expected_face_id(state: &BlockState) -> u8 {
         Some(Face::Ceiling) => 2,
         None => 255,
     }
+}
+
+/// The byte `geometry()` should report for `state.delay`: `BlockState::delay`
+/// verbatim (1..=4 for a repeater, 0 for everything else). Unlike
+/// `facing`/`face`, `delay` needs no sentinel -- 0 is already `delay`'s own
+/// "not applicable" value and never collides with a real repeater's delay --
+/// so this is deliberately just a passthrough, reimplemented independently of
+/// `viewer/src/lib.rs`'s `geometry()` for the same reason as
+/// [`expected_facing_id`].
+fn expected_delay(state: &BlockState) -> u8 {
+    state.delay
 }
 
 #[test]
@@ -167,6 +178,7 @@ fn geometry_and_strengths_agree_with_world_get_in_order() {
         let kind_id = cell[6];
         let facing_id = cell[7];
         let face_id = cell[8];
+        let delay = cell[9];
 
         // Strict ascending-YZX order, matching World's own internal layout
         // (see World's module doc comment and `World::decode`).
@@ -189,6 +201,7 @@ fn geometry_and_strengths_agree_with_world_get_in_order() {
         let (expected_kind, expected_strength) = expected(state);
         let expected_facing = expected_facing_id(state);
         let expected_face = expected_face_id(state);
+        let expected_delay_byte = expected_delay(state);
         if kind_id != expected_kind || strength != expected_strength {
             mismatches.push(format!(
                 "entry {i} at ({x}, {y}, {z}): geometry/strengths say kind {kind_id}, strength \
@@ -207,6 +220,12 @@ fn geometry_and_strengths_agree_with_world_get_in_order() {
                 "entry {i} at ({x}, {y}, {z}): geometry says face byte {face_id}; \
                  World::get's actual face ({:?}) maps to {expected_face}",
                 state.face
+            ));
+        }
+        if delay != expected_delay_byte {
+            mismatches.push(format!(
+                "entry {i} at ({x}, {y}, {z}): geometry says delay byte {delay}; \
+                 World::get's actual delay is {expected_delay_byte}"
             ));
         }
         if kind_id == BlockKind::Repeater as u8 {

@@ -784,7 +784,7 @@ function buildLegendUI() {
 // continuous run, which for redstone is the working/dead distinction.
 // ---------------------------------------------------------------------
 
-const GEOMETRY_BYTES_PER_CELL = 9; // must match viewer/src/lib.rs's Session::geometry()
+const GEOMETRY_BYTES_PER_CELL = 10; // must match viewer/src/lib.rs's Session::geometry()
 
 // `facing`/`face` sentinel and variant ids, matching viewer/src/lib.rs's
 // `facing_id`/`face_id` exactly -- see that function's doc comment for why
@@ -806,12 +806,19 @@ const KIND_WALL_TORCH = 8;
 const KIND_LEVER = 9;
 
 /** Which shape family a non-air cell belongs to, from its kind and (for
- * levers only) its attachment face. One `InstancedMesh` per family name. */
-function familyForCell(kind, faceId) {
+ * levers only) its attachment face, and (for repeaters only) its delay. One
+ * `InstancedMesh` per family name -- a repeater's delay (1-4) picks one of
+ * four pre-built templates (`repeater1`..`repeater4`, see SHAPE_TEMPLATES),
+ * so repeaters of different delays never share an instance batch and each
+ * gets its own nub-gap geometry. `delay` should always be 1..=4 for a real
+ * repeater (`BlockState::delay`'s documented range); an out-of-range value
+ * defensively falls back to `repeater1` rather than crashing on a missing
+ * template. */
+function familyForCell(kind, faceId, delay) {
   switch (kind) {
     case KIND_REDSTONE_WIRE: return 'dust';
     case KIND_SLAB: return 'slab';
-    case KIND_REPEATER: return 'repeater';
+    case KIND_REPEATER: return `repeater${delay >= 1 && delay <= 4 ? delay : 1}`;
     case KIND_COMPARATOR: return 'comparator';
     case KIND_TORCH: return 'torch';
     case KIND_WALL_TORCH: return 'wallTorch';
@@ -825,11 +832,12 @@ function familyForCell(kind, faceId) {
 
 /** Families whose instances rotate around Y per-cell from `facing` --
  * everything with a horizontal-only `facing` in this compiler's output
- * (repeaters, comparators, wall torches, wall/floor/ceiling levers).
- * Standing torches, dust, slabs and plain cubes have no meaningful
+ * (repeaters of every delay, comparators, wall torches, wall/floor/ceiling
+ * levers). Standing torches, dust, slabs and plain cubes have no meaningful
  * horizontal orientation and are left at the identity rotation. */
 const FAMILIES_ROTATED_BY_FACING = new Set([
-  'repeater', 'comparator', 'wallTorch', 'leverFloor', 'leverCeiling', 'leverWall',
+  'repeater1', 'repeater2', 'repeater3', 'repeater4',
+  'comparator', 'wallTorch', 'leverFloor', 'leverCeiling', 'leverWall',
 ]);
 
 /** Y-axis rotation (radians) that turns a template authored facing South
@@ -944,19 +952,45 @@ function mergeBoxen(boxes) {
 
 const DUST_HEIGHT = 1 / 16; // a flat film on the cell floor, not a block tall
 
+// Repeater nub layout -- see the "Repeater delay" section of
+// docs/superpowers/plans/2026-08-07-3d-view.md: Minecraft shows a repeater's
+// delay by the gap between its two torch nubs, delay 1 close together and
+// delay 4 at opposite ends. Built South-facing like every other template
+// here (input toward -z/North, output toward +z/South; `facingAngleY`
+// rotates the whole instance to the cell's real facing).
+//
+// The input nub is fixed at the back edge for every delay -- only the output
+// nub moves, from right next to the input nub (delay 1) out to the front
+// edge (delay 4, the position the old delay-less template always used). Four
+// evenly spaced stops, 0.125 apart, keep the nub (0.25 wide, so +-0.125 from
+// its own centre) exactly edge-to-edge with the input nub at delay 1 --
+// visibly close, not overlapping -- and spread out from there.
+const REPEATER_INPUT_NUB_Z = -0.3125;
+const REPEATER_OUTPUT_NUB_Z_BY_DELAY = { 1: -0.0625, 2: 0.0625, 3: 0.1875, 4: 0.3125 };
+
+/** One repeater shape template for a given delay (1-4): a low slab plus two
+ * nubs -- the nub *count* (two) is what separates this from a comparator at
+ * a glance, their placement along the facing axis shows direction, and the
+ * gap between them (this function's whole point) shows delay. */
+function repeaterTemplate(delay) {
+  return mergeBoxen([
+    box([1, 0.125, 1], [0, -0.4375, 0]),
+    box([0.25, 0.3125, 0.25], [0, -0.21875, REPEATER_INPUT_NUB_Z]), // input end, fixed
+    box([0.25, 0.3125, 0.25], [0, -0.21875, REPEATER_OUTPUT_NUB_Z_BY_DELAY[delay]]), // output end, moves with delay
+  ]);
+}
+
 const SHAPE_TEMPLATES = {
   cube: mergeBoxen([box([1, 1, 1], [0, 0, 0])]),
   dust: mergeBoxen([box([1, DUST_HEIGHT, 1], [0, -0.5 + DUST_HEIGHT / 2, 0])]),
   slab: mergeBoxen([box([1, 0.5, 1], [0, -0.25, 0])]),
-  // Low slab base plus two nubs straddling it along the facing axis (built
-  // South-facing: input nub toward -z/North, output nub toward +z/South) --
-  // the nub *count* (two) is what separates this from a comparator at a
-  // glance, and their placement along the facing axis is the direction.
-  repeater: mergeBoxen([
-    box([1, 0.125, 1], [0, -0.4375, 0]),
-    box([0.25, 0.3125, 0.25], [0, -0.21875, -0.3125]), // input end
-    box([0.25, 0.3125, 0.25], [0, -0.21875, 0.3125]),  // output end
-  ]),
+  // One template per possible delay -- since instanced geometry is shared
+  // within a mesh, a repeater's delay has to pick which mesh it belongs to
+  // (see `familyForCell`), not a per-instance parameter.
+  repeater1: repeaterTemplate(1),
+  repeater2: repeaterTemplate(2),
+  repeater3: repeaterTemplate(3),
+  repeater4: repeaterTemplate(4),
   // Same slab, but three nubs: two on the facing (front/output) side and one
   // on the back (input) side -- three nubs at a glance is unmistakably not
   // a repeater, and the asymmetric two-front/one-back layout still shows
@@ -1086,7 +1120,15 @@ let meshEntryByObject = new Map(); // THREE.InstancedMesh -> its instancedMeshes
 let cellCount3d = 0;
 let cellCoords3d = null; // Float32Array, 3 per cell: world x, y, z (cell corner, not centre)
 let cellKind3d = null;   // Uint8Array, 1 per cell, same index as cellCoords3d
+let cellDelay3d = null;  // Uint8Array, 1 per cell, same index as cellCoords3d (0 unless a repeater)
 let latestStrengths3d = null; // Uint8Array from the last update3DStrengths(), reused by hover
+// World coordinate ("x,y,z") -> delay, repeater cells only. Rebuilt alongside
+// the rest of the static geometry in build3DGeometry(); the 2D view's hover
+// readout uses this to report delay too, since `slice()`'s 2-byte-per-cell
+// format (unlike geometry()) never carried this field and there is no need
+// to change it just for a hover readout when geometry()'s own per-circuit
+// snapshot already has the answer.
+let delayByCoord = new Map();
 let clipRange = { xMin: 0, xMax: 0, yMin: 0, yMax: 0, zMin: 0, zMax: 0 };
 let currentView = '2d';
 const raycaster3d = new THREE.Raycaster();
@@ -1163,14 +1205,17 @@ function frameCamera() {
 }
 
 /** Decode `Session::geometry()`'s packed bytes, per its documented layout:
- * 9 bytes/cell, `[x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, kind, facing, face]`
- * with little-endian u16 coordinates. */
+ * 10 bytes/cell, `[x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, kind, facing, face,
+ * delay]` with little-endian u16 coordinates. `delay` is `BlockState::delay`
+ * verbatim -- 1..=4 for a repeater, 0 (never a real repeater delay) for
+ * everything else -- so unlike facing/face it needs no sentinel decoding. */
 function decodeGeometry(bytes) {
   const count = Math.floor(bytes.length / GEOMETRY_BYTES_PER_CELL);
   const coords = new Float32Array(count * 3);
   const kinds = new Uint8Array(count);
   const facings = new Uint8Array(count);
   const faces = new Uint8Array(count);
+  const delays = new Uint8Array(count);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   for (let i = 0; i < count; i++) {
     const base = i * GEOMETRY_BYTES_PER_CELL;
@@ -1180,8 +1225,9 @@ function decodeGeometry(bytes) {
     kinds[i] = bytes[base + 6];
     facings[i] = bytes[base + 7];
     faces[i] = bytes[base + 8];
+    delays[i] = bytes[base + 9];
   }
-  return { count, coords, kinds, facings, faces };
+  return { count, coords, kinds, facings, faces, delays };
 }
 
 /** Rebuild the 3D scene's static geometry from scratch. Called once per
@@ -1202,10 +1248,19 @@ function build3DGeometry() {
   meshEntryByObject = new Map();
 
   const bytes = session.geometry();
-  const { count, coords, kinds, facings, faces } = decodeGeometry(bytes);
+  const { count, coords, kinds, facings, faces, delays } = decodeGeometry(bytes);
   cellCount3d = count;
   cellCoords3d = coords;
   cellKind3d = kinds;
+  cellDelay3d = delays;
+
+  delayByCoord = new Map();
+  for (let i = 0; i < count; i++) {
+    if (kinds[i] === KIND_REPEATER) {
+      const x = coords[i * 3], y = coords[i * 3 + 1], z = coords[i * 3 + 2];
+      delayByCoord.set(`${x},${y},${z}`, delays[i]);
+    }
+  }
 
   // Bucket every cell's global index (its position in geometry()/strengths())
   // by shape family, and precompute each bucketed instance's fixed Y
@@ -1213,7 +1268,7 @@ function build3DGeometry() {
   // this circuit, unlike colour.
   const buckets = new Map(); // family -> { indices: number[], rotationY: number[] }
   for (let i = 0; i < count; i++) {
-    const family = familyForCell(kinds[i], faces[i]);
+    const family = familyForCell(kinds[i], faces[i], delays[i]);
     let bucket = buckets.get(family);
     if (!bucket) {
       bucket = { indices: [], rotationY: [] };
@@ -1372,7 +1427,8 @@ function onThreeHover(e) {
   const kind = cellKind3d[gi];
   const strength = (latestStrengths3d || session.strengths())[gi];
   const name = legendMap.get(kind)?.name || `unknown(${kind})`;
-  threeHoverReadout.textContent = `(${x}, ${y}, ${z}) -- ${name}, strength ${strength}`;
+  const delaySuffix = kind === KIND_REPEATER ? `, delay ${cellDelay3d[gi]}` : '';
+  threeHoverReadout.textContent = `(${x}, ${y}, ${z}) -- ${name}, strength ${strength}${delaySuffix}`;
 }
 
 /** Switch which of the 2D/3D panels are visible. Both views read the same
@@ -1561,7 +1617,12 @@ canvas.addEventListener('mousemove', (e) => {
   const strength = currentBytes[byteIdx + 1];
   const [wx, wy, wz] = worldCoord(currentAxisName, Number(indexSlider.value), outer, inner);
   const name = legendMap.get(kind)?.name || `unknown(${kind})`;
-  hoverReadout.textContent = `(${wx}, ${wy}, ${wz}) -- ${name}, strength ${strength}`;
+  // slice()'s own bytes never carried delay (only geometry() does) -- look it
+  // up from the static per-circuit geometry snapshot built alongside the 3D
+  // view instead of changing slice()'s wire format just for a hover readout.
+  const delay = kind === KIND_REPEATER ? delayByCoord.get(`${wx},${wy},${wz}`) : undefined;
+  const delaySuffix = delay !== undefined ? `, delay ${delay}` : '';
+  hoverReadout.textContent = `(${wx}, ${wy}, ${wz}) -- ${name}, strength ${strength}${delaySuffix}`;
 });
 
 canvas.addEventListener('mouseleave', () => {
