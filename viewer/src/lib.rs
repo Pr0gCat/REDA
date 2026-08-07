@@ -31,6 +31,7 @@ use reda::circuits::{and4, full_adder, seven_segment};
 use reda::compile::{compile, Netlist};
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::{BlockKind, BlockState};
+use reda::redstone::world::storage::World;
 
 use serde::Serialize;
 use wasm_bindgen::prelude::*;
@@ -240,6 +241,40 @@ fn signal_strength(state: &BlockState) -> u8 {
     } else {
         0
     }
+}
+
+// ---------------------------------------------------------------------
+// 3D geometry and per-tick strengths
+// ---------------------------------------------------------------------
+
+/// How many bytes [`Session::geometry`] spends on each non-air cell. See that
+/// method's doc comment for the field layout.
+const GEOMETRY_BYTES_PER_CELL: usize = 7;
+
+/// Every non-air cell's coordinate, in the fixed order [`Session::geometry`]
+/// and [`Session::strengths`] both walk: ascending flat index over `World`'s
+/// own internal layout -- `y` outermost, then `z`, then `x` innermost (see
+/// the `YZX` layout `World`'s own module doc comment describes and
+/// `World::decode` implements). Walking coordinates directly (rather than,
+/// say, `World::positions_of` per kind) is what keeps this a single global
+/// order across every block kind at once, instead of one grouped by kind.
+///
+/// This is the one place that order is spelled out in code; both
+/// `Session::geometry` and `Session::strengths` call this so they can never
+/// disagree with each other about it.
+fn non_air_coords(world: &World) -> impl Iterator<Item = (i32, i32, i32)> + '_ {
+    let (size_x, size_y, size_z) = world.size();
+    (0..size_y).flat_map(move |y| {
+        (0..size_z).flat_map(move |z| {
+            (0..size_x).filter_map(move |x| {
+                if world.get(x, y, z).kind == BlockKind::Air {
+                    None
+                } else {
+                    Some((x, y, z))
+                }
+            })
+        })
+    })
 }
 
 // ---------------------------------------------------------------------
@@ -484,5 +519,57 @@ impl Session {
             }
         }
         Ok(bytes)
+    }
+
+    /// Static per-circuit geometry for a 3D view: one entry per non-air cell,
+    /// visited in [`non_air_coords`]'s order, packed as
+    /// [`GEOMETRY_BYTES_PER_CELL`] (7) bytes each:
+    ///
+    /// `[x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, kind]`
+    ///
+    /// `x`/`y`/`z` are little-endian `u16` world coordinates -- `u16`, not
+    /// `u8`, because `seven_segment`'s Z axis reaches 298, past a single
+    /// byte's range -- and `kind` is the same "block kind id" `slice()` and
+    /// `legend()` already use (`block_kind_id`, i.e. `BlockKind as u8`).
+    ///
+    /// A caller builds this **once per circuit**: the set of non-air cells
+    /// and their coordinates/kinds is fixed the moment `compile()` lays the
+    /// world out, and never changes as the simulation runs (only *strengths*
+    /// change -- see [`Session::strengths`]).
+    ///
+    /// Entry `i` here and byte `i` of `strengths()` describe the very same
+    /// cell -- this pairing, and [`non_air_coords`]'s order, is exactly what
+    /// `tests/geometry_ordering.rs` pins down. If the two ever drifted out of
+    /// order relative to each other, a 3D view would still render a
+    /// plausible-looking circuit, just with every colour attached to the
+    /// wrong block, and nothing on screen would say so.
+    pub fn geometry(&self) -> Vec<u8> {
+        let world = self.simulator.world();
+        let mut bytes = Vec::new();
+        for (x, y, z) in non_air_coords(world) {
+            let kind = world.get(x, y, z).kind;
+            let mut cell = [0u8; GEOMETRY_BYTES_PER_CELL];
+            cell[0..2].copy_from_slice(&(x as u16).to_le_bytes());
+            cell[2..4].copy_from_slice(&(y as u16).to_le_bytes());
+            cell[4..6].copy_from_slice(&(z as u16).to_le_bytes());
+            cell[6] = block_kind_id(kind);
+            bytes.extend_from_slice(&cell);
+        }
+        bytes
+    }
+
+    /// One byte per non-air cell, in **exactly** `geometry()`'s order (see
+    /// [`non_air_coords`]): byte `i` here is
+    /// [`signal_strength`] of the cell `geometry()`'s entry `i` describes.
+    ///
+    /// Call this **every tick**. Unlike `geometry()`, this is the only thing
+    /// that changes as the simulation runs -- a step or a lever flip never
+    /// adds or removes a block, only changes what's lit or how strong the
+    /// dust is -- so a caller can keep `geometry()`'s buffer (and whatever
+    /// per-instance transform it built from it) fixed for the session's
+    /// whole lifetime and just re-upload this one array.
+    pub fn strengths(&self) -> Vec<u8> {
+        let world = self.simulator.world();
+        non_air_coords(world).map(|(x, y, z)| signal_strength(world.get(x, y, z))).collect()
     }
 }

@@ -152,12 +152,41 @@
     vertical-align: middle;
     margin-right: 4px;
   }
+  .view-toggle { display: flex; gap: 6px; }
+  .view-toggle button[data-active="true"] { background: var(--accent); color: #06213a; border-color: var(--accent); }
+  .hidden { display: none !important; }
+  .clip-row { display: grid; grid-template-columns: 20px 1fr 1fr; align-items: center; gap: 6px; margin-bottom: 6px; }
+  .clip-row label { margin: 0; }
+  .clip-row .value { color: var(--muted); font-size: 11px; text-align: center; }
+  #three-wrap {
+    position: relative;
+    height: 76vh;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: #101113;
+    overflow: hidden;
+  }
+  #three-container { width: 100%; height: 100%; }
+  #three-container canvas { display: block; }
+  #three-hint {
+    position: absolute;
+    top: 6px;
+    left: 8px;
+    font-size: 11px;
+    color: var(--muted);
+    pointer-events: none;
+  }
 </style>
 </head>
 <body>
 <header>
   <h1>reda viewer</h1>
   <p>Runs the actual simulator, compiled to WebAssembly. What you see here is the simulator's own state.</p>
+  <span style="flex:1"></span>
+  <div class="view-toggle" id="view-toggle">
+    <button id="view-2d-btn" data-active="true">2D Slice</button>
+    <button id="view-3d-btn" data-active="false">3D View</button>
+  </div>
 </header>
 <main>
   <div class="left">
@@ -167,7 +196,7 @@
       <select id="circuit-select"></select>
     </div>
 
-    <div class="panel">
+    <div class="panel" data-view="2d">
       <h2>Slice</h2>
       <div class="row">
         <label for="axis-select">Axis</label>
@@ -186,6 +215,43 @@
         <label for="zoom-slider">Zoom</label>
         <input type="range" id="zoom-slider" min="1" max="40" value="6" />
         <span class="value" id="zoom-value">6px</span>
+      </div>
+    </div>
+
+    <div class="panel hidden" data-view="3d">
+      <h2>3D Clip Box</h2>
+      <div class="clip-row">
+        <label>X</label>
+        <input type="range" id="clip-x-min" min="0" max="0" value="0" />
+        <input type="range" id="clip-x-max" min="0" max="0" value="0" />
+      </div>
+      <div class="clip-row">
+        <span></span>
+        <span class="value" id="clip-x-min-value">0</span>
+        <span class="value" id="clip-x-max-value">0</span>
+      </div>
+      <div class="clip-row">
+        <label>Y</label>
+        <input type="range" id="clip-y-min" min="0" max="0" value="0" />
+        <input type="range" id="clip-y-max" min="0" max="0" value="0" />
+      </div>
+      <div class="clip-row">
+        <span></span>
+        <span class="value" id="clip-y-min-value">0</span>
+        <span class="value" id="clip-y-max-value">0</span>
+      </div>
+      <div class="clip-row">
+        <label>Z</label>
+        <input type="range" id="clip-z-min" min="0" max="0" value="0" />
+        <input type="range" id="clip-z-max" min="0" max="0" value="0" />
+      </div>
+      <div class="clip-row">
+        <span></span>
+        <span class="value" id="clip-z-min-value">0</span>
+        <span class="value" id="clip-z-max-value">0</span>
+      </div>
+      <div class="btn-row">
+        <button id="clip-reset-btn">Reset clip</button>
       </div>
     </div>
 
@@ -229,18 +295,36 @@
   </div>
 
   <div class="right">
-    <div class="panel" style="margin-bottom:6px;">
+    <div class="panel" data-view="2d" style="margin-bottom:6px;">
       <h2 id="canvas-caption">Slice</h2>
       <div class="canvas-wrap" id="canvas-wrap">
         <canvas id="grid-canvas" width="10" height="10"></canvas>
       </div>
       <div id="hover-readout">&nbsp;</div>
     </div>
+
+    <div class="panel hidden" data-view="3d" style="margin-bottom:6px;">
+      <h2>3D View -- drag to orbit, wheel to zoom, right-drag/shift-drag to pan</h2>
+      <div id="three-wrap">
+        <div id="three-container"></div>
+        <div id="three-hint">Loading...</div>
+      </div>
+      <div id="three-hover-readout">&nbsp;</div>
+    </div>
   </div>
 </main>
 
+<script type="importmap">
+{
+  "imports": {
+    "three": "./vendor/three.module.min.js"
+  }
+}
+</script>
 <script type="module">
 import init, { list_circuits, Session, Axis } from './pkg/reda_viewer.js';
+import * as THREE from 'three';
+import { OrbitControls } from './vendor/examples/jsm/controls/OrbitControls.js';
 
 await init();
 
@@ -268,6 +352,25 @@ const canvas = document.getElementById('grid-canvas');
 const ctx = canvas.getContext('2d');
 const hoverReadout = document.getElementById('hover-readout');
 const canvasCaption = document.getElementById('canvas-caption');
+
+// 3D view DOM handles
+const view2dBtn = document.getElementById('view-2d-btn');
+const view3dBtn = document.getElementById('view-3d-btn');
+const threeWrap = document.getElementById('three-wrap');
+const threeContainer = document.getElementById('three-container');
+const threeHint = document.getElementById('three-hint');
+const threeHoverReadout = document.getElementById('three-hover-readout');
+const clipInputs = {
+  xMin: document.getElementById('clip-x-min'), xMax: document.getElementById('clip-x-max'),
+  yMin: document.getElementById('clip-y-min'), yMax: document.getElementById('clip-y-max'),
+  zMin: document.getElementById('clip-z-min'), zMax: document.getElementById('clip-z-max'),
+};
+const clipValues = {
+  xMin: document.getElementById('clip-x-min-value'), xMax: document.getElementById('clip-x-max-value'),
+  yMin: document.getElementById('clip-y-min-value'), yMax: document.getElementById('clip-y-max-value'),
+  zMin: document.getElementById('clip-z-min-value'), zMax: document.getElementById('clip-z-max-value'),
+};
+const clipResetBtn = document.getElementById('clip-reset-btn');
 
 // Offscreen 1px-per-cell canvas the visible canvas is scaled up from.
 const offscreen = document.createElement('canvas');
@@ -464,6 +567,7 @@ function loadCircuit(name) {
   resetSettleDisplay();
   syncAxisRange(true);
   refreshOutputs();
+  build3DGeometry();
 }
 
 function updateTickCount() {
@@ -566,6 +670,7 @@ function toggleLever(name, btn) {
   outputSliceCache.clear();
   refreshSlice();
   refreshOutputs();
+  update3DStrengths();
 }
 
 // ---------------------------------------------------------------------
@@ -640,6 +745,302 @@ function buildLegendUI() {
     legendList.appendChild(span);
   }
 }
+
+// ---------------------------------------------------------------------
+// 3D view
+//
+// Static geometry -- one InstancedMesh box per non-air cell -- built once
+// per circuit from `Session::geometry()`; per-tick recolouring from
+// `Session::strengths()`. See the doc comments on those two wasm methods in
+// viewer/src/lib.rs for the exact byte layout and the ordering guarantee
+// this code leans on: entry i of one describes the same cell as byte i of
+// the other.
+//
+// World (x, y, z) maps straight onto three.js (x, y, z) with no flip:
+// three.js is right-handed with Y already pointing up, matching Minecraft's
+// own convention and the 2D slice view's "Y increases upward" rule for the
+// X and Z slices -- so the two views cannot disagree about which way is up.
+// ---------------------------------------------------------------------
+
+const CELL_BOX_SIZE = 0.9; // < 1 leaves a thin gap between adjacent blocks, like a voxel grid
+const GEOMETRY_BYTES_PER_CELL = 7; // must match viewer/src/lib.rs's Session::geometry()
+
+let renderer3d = null;
+let scene3d = null;
+let camera3d = null;
+let controls3d = null;
+let instancedMesh = null;
+let cellCount3d = 0;
+let cellCoords3d = null; // Float32Array, 3 per cell: world x, y, z (cell corner, not centre)
+let cellKind3d = null;   // Uint8Array, 1 per cell, same index as cellCoords3d
+let latestStrengths3d = null; // Uint8Array from the last update3DStrengths(), reused by hover
+let clipRange = { xMin: 0, xMax: 0, yMin: 0, yMax: 0, zMin: 0, zMax: 0 };
+let currentView = '2d';
+const raycaster3d = new THREE.Raycaster();
+const mouse3d = new THREE.Vector2();
+const scratchMatrix = new THREE.Matrix4();
+const scratchColor = new THREE.Color();
+
+/** Build the renderer/scene/camera/controls/lights once, lazily, the first
+ * time a circuit is loaded (independent of whether the 3D tab has ever been
+ * shown -- so switching to it later is instant, not a first-load stall). */
+function ensureThreeInitialized() {
+  if (renderer3d) return;
+  renderer3d = new THREE.WebGLRenderer({ antialias: true });
+  renderer3d.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  threeContainer.appendChild(renderer3d.domElement);
+
+  scene3d = new THREE.Scene();
+  scene3d.background = new THREE.Color(0x101113);
+
+  camera3d = new THREE.PerspectiveCamera(60, 1, 0.1, 10000);
+
+  controls3d = new OrbitControls(camera3d, renderer3d.domElement);
+  controls3d.enableDamping = true;
+  controls3d.dampingFactor = 0.08;
+
+  // No lights: instances use MeshBasicMaterial (unlit), deliberately, so a
+  // rendered colour is exactly legend()'s colour with no lighting model or
+  // renderer light-intensity convention in between -- the same guarantee
+  // the plan states ("the two views disagreeing about what a colour means
+  // would be worse than having only one"). Depth is still readable from the
+  // per-cell gap (see CELL_BOX_SIZE) and perspective/occlusion alone.
+
+  renderer3d.domElement.addEventListener('mousemove', onThreeHover);
+  renderer3d.domElement.addEventListener('mouseleave', () => {
+    threeHoverReadout.textContent = ' ';
+  });
+  window.addEventListener('resize', resizeThree);
+
+  function animate() {
+    requestAnimationFrame(animate);
+    if (currentView !== '3d') return; // no point rendering a hidden canvas
+    controls3d.update();
+    renderer3d.render(scene3d, camera3d);
+  }
+  animate();
+}
+
+function resizeThree() {
+  if (!renderer3d || currentView !== '3d') return;
+  const w = threeContainer.clientWidth || 1;
+  const h = threeContainer.clientHeight || 1;
+  renderer3d.setSize(w, h);
+  camera3d.aspect = w / h;
+  camera3d.updateProjectionMatrix();
+}
+
+/** Frame the whole circuit on load: look at the world's centre from a
+ * diagonal, far enough back that every cell fits in view. */
+function frameCamera() {
+  const [sx, sy, sz] = size;
+  const center = new THREE.Vector3(sx / 2, sy / 2, sz / 2);
+  const radius = Math.max(1, Math.sqrt(sx * sx + sy * sy + sz * sz) / 2);
+  camera3d.position.copy(center).add(new THREE.Vector3(radius, radius * 0.8, radius));
+  camera3d.near = Math.max(0.05, radius / 500);
+  camera3d.far = radius * 20;
+  camera3d.updateProjectionMatrix();
+  controls3d.target.copy(center);
+  controls3d.update();
+}
+
+/** Decode `Session::geometry()`'s packed bytes, per its documented layout:
+ * 7 bytes/cell, `[x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, kind]` with
+ * little-endian u16 coordinates. */
+function decodeGeometry(bytes) {
+  const count = Math.floor(bytes.length / GEOMETRY_BYTES_PER_CELL);
+  const coords = new Float32Array(count * 3);
+  const kinds = new Uint8Array(count);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  for (let i = 0; i < count; i++) {
+    const base = i * GEOMETRY_BYTES_PER_CELL;
+    coords[i * 3] = view.getUint16(base, true);
+    coords[i * 3 + 1] = view.getUint16(base + 2, true);
+    coords[i * 3 + 2] = view.getUint16(base + 4, true);
+    kinds[i] = bytes[base + 6];
+  }
+  return { count, coords, kinds };
+}
+
+/** Rebuild the 3D scene's static geometry from scratch. Called once per
+ * circuit (on load or reset) -- never on a lever flip or a step. That split
+ * is exactly what `Session::geometry()` vs `Session::strengths()` documents:
+ * the set of non-air cells never changes as the simulation runs, only what
+ * they light up as. */
+function build3DGeometry() {
+  ensureThreeInitialized();
+
+  if (instancedMesh) {
+    scene3d.remove(instancedMesh);
+    instancedMesh.geometry.dispose();
+    instancedMesh.material.dispose();
+    instancedMesh = null;
+  }
+
+  const bytes = session.geometry();
+  const { count, coords, kinds } = decodeGeometry(bytes);
+  cellCount3d = count;
+  cellCoords3d = coords;
+  cellKind3d = kinds;
+
+  const capacity = Math.max(count, 1);
+  const geometry = new THREE.BoxGeometry(CELL_BOX_SIZE, CELL_BOX_SIZE, CELL_BOX_SIZE);
+  // three.js's instancing-colour shader chunk multiplies `instanceColor`
+  // into `vColor`, but only initialises `vColor` at all when the geometry
+  // itself also carries a per-vertex `color` attribute (`USE_COLOR`) --
+  // without one, `vColor` is left uninitialised and every instance renders
+  // solid black regardless of what `setColorAt` wrote. This all-white dummy
+  // attribute exists purely to turn that on; the actual per-cell colour
+  // comes entirely from `instanceColor` in `update3DStrengths`.
+  const vertexCount = geometry.attributes.position.count;
+  geometry.setAttribute(
+    'color',
+    new THREE.Float32BufferAttribute(new Float32Array(vertexCount * 3).fill(1), 3),
+  );
+  // Unlit on purpose -- see ensureThreeInitialized's comment on why there
+  // are no lights in the scene.
+  const material = new THREE.MeshBasicMaterial({ vertexColors: true });
+  instancedMesh = new THREE.InstancedMesh(geometry, material, capacity);
+  instancedMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
+  instancedMesh.count = count;
+  scene3d.add(instancedMesh);
+
+  setupClipRanges(); // also lays out every instance's matrix via applyClip()
+  update3DStrengths();
+  frameCamera();
+  threeHint.classList.add('hidden');
+}
+
+/** Recolour every instance from `Session::strengths()`, in lockstep with
+ * `build3DGeometry`'s `cellCoords3d`/`cellKind3d` (index i means the same
+ * cell in all three arrays, per `Session::geometry()`'s ordering guarantee).
+ * Touches colour only, never position or instance count -- safe, and cheap
+ * enough, to call after every step / lever flip / run-to-stable / reset. */
+function update3DStrengths() {
+  if (!instancedMesh || cellCount3d === 0) return;
+  const strengths = session.strengths();
+  latestStrengths3d = strengths;
+  for (let i = 0; i < cellCount3d; i++) {
+    const [r, g, b] = colourForCell(cellKind3d[i], strengths[i]);
+    // legend()'s colours are sRGB hex, same as the 2D canvas draws them
+    // straight into `ImageData` -- say so explicitly here too (three.js's
+    // working colour space is linear by default), so a rendered instance
+    // colour matches the 2D view's pixel for pixel, not just approximately.
+    scratchColor.setRGB(r / 255, g / 255, b / 255, THREE.SRGBColorSpace);
+    instancedMesh.setColorAt(i, scratchColor);
+  }
+  if (instancedMesh.instanceColor) instancedMesh.instanceColor.needsUpdate = true;
+}
+
+/** Reset every clip slider to the current circuit's full world extent --
+ * called on load/reset since world size can differ between circuits. */
+function setupClipRanges() {
+  const [sx, sy, sz] = size;
+  const setup = (minEl, maxEl, minValEl, maxValEl, axisMax) => {
+    minEl.min = '0'; minEl.max = String(axisMax); minEl.value = '0';
+    maxEl.min = '0'; maxEl.max = String(axisMax); maxEl.value = String(axisMax);
+    minValEl.textContent = '0';
+    maxValEl.textContent = String(axisMax);
+  };
+  setup(clipInputs.xMin, clipInputs.xMax, clipValues.xMin, clipValues.xMax, Math.max(sx - 1, 0));
+  setup(clipInputs.yMin, clipInputs.yMax, clipValues.yMin, clipValues.yMax, Math.max(sy - 1, 0));
+  setup(clipInputs.zMin, clipInputs.zMax, clipValues.zMin, clipValues.zMax, Math.max(sz - 1, 0));
+  readClipInputs();
+  applyClip();
+}
+
+/** Read the six clip sliders into `clipRange`, clamping each axis's min to
+ * never exceed its max (dragging min past max would otherwise invert the
+ * range), and refresh the on-screen value labels. */
+function readClipInputs() {
+  const read = (minEl, maxEl, minValEl, maxValEl) => {
+    let lo = Number(minEl.value);
+    const hi = Number(maxEl.value);
+    if (lo > hi) { lo = hi; minEl.value = String(lo); }
+    minValEl.textContent = String(lo);
+    maxValEl.textContent = String(hi);
+    return [lo, hi];
+  };
+  const [xMin, xMax] = read(clipInputs.xMin, clipInputs.xMax, clipValues.xMin, clipValues.xMax);
+  const [yMin, yMax] = read(clipInputs.yMin, clipInputs.yMax, clipValues.yMin, clipValues.yMax);
+  const [zMin, zMax] = read(clipInputs.zMin, clipInputs.zMax, clipValues.zMin, clipValues.zMax);
+  clipRange = { xMin, xMax, yMin, yMax, zMin, zMax };
+}
+
+/** Hide every instance outside the clip box by collapsing its matrix to zero
+ * scale -- cheaper than rebuilding the instance count, and a zero-scale box
+ * has no volume for the raycaster to hit either, so hover skips it too.
+ *
+ * Setting the clip box's Y min and max to the same value reproduces exactly
+ * what the 2D slice view shows at that Y index: both read the very same
+ * world coordinates, coloured by the very same `colourForCell`, with no
+ * extra transform in between. */
+function applyClip() {
+  if (!instancedMesh) return;
+  const { xMin, xMax, yMin, yMax, zMin, zMax } = clipRange;
+  for (let i = 0; i < cellCount3d; i++) {
+    const x = cellCoords3d[i * 3], y = cellCoords3d[i * 3 + 1], z = cellCoords3d[i * 3 + 2];
+    const visible = x >= xMin && x <= xMax && y >= yMin && y <= yMax && z >= zMin && z <= zMax;
+    if (visible) {
+      scratchMatrix.makeTranslation(x + 0.5, y + 0.5, z + 0.5);
+    } else {
+      scratchMatrix.makeScale(0, 0, 0);
+    }
+    instancedMesh.setMatrixAt(i, scratchMatrix);
+  }
+  instancedMesh.instanceMatrix.needsUpdate = true;
+}
+
+const throttledClipInput = rafThrottle(() => {
+  readClipInputs();
+  applyClip();
+});
+for (const el of Object.values(clipInputs)) {
+  el.addEventListener('input', throttledClipInput);
+}
+clipResetBtn.addEventListener('click', () => setupClipRanges());
+
+/** Hover readout for the 3D view: raycast from the mouse through the
+ * instanced mesh and report the same (coordinate, kind, strength) triple the
+ * 2D view's hover readout reports, for whichever block instance is under the
+ * cursor (clipped-out instances have zero volume, so they're never hit). */
+function onThreeHover(e) {
+  if (!instancedMesh || cellCount3d === 0) return;
+  const rect = renderer3d.domElement.getBoundingClientRect();
+  mouse3d.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+  mouse3d.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
+  raycaster3d.setFromCamera(mouse3d, camera3d);
+  const hits = raycaster3d.intersectObject(instancedMesh);
+  if (hits.length === 0) {
+    threeHoverReadout.textContent = ' ';
+    return;
+  }
+  const i = hits[0].instanceId;
+  const x = cellCoords3d[i * 3], y = cellCoords3d[i * 3 + 1], z = cellCoords3d[i * 3 + 2];
+  const kind = cellKind3d[i];
+  const strength = (latestStrengths3d || session.strengths())[i];
+  const name = legendMap.get(kind)?.name || `unknown(${kind})`;
+  threeHoverReadout.textContent = `(${x}, ${y}, ${z}) -- ${name}, strength ${strength}`;
+}
+
+/** Switch which of the 2D/3D panels are visible. Both views read the same
+ * `Session`; nothing here touches the simulator, so toggling never resets
+ * it. */
+function setView(view) {
+  currentView = view;
+  const is3d = view === '3d';
+  view2dBtn.dataset.active = String(!is3d);
+  view3dBtn.dataset.active = String(is3d);
+  for (const el of document.querySelectorAll('[data-view="2d"]')) el.classList.toggle('hidden', is3d);
+  for (const el of document.querySelectorAll('[data-view="3d"]')) el.classList.toggle('hidden', !is3d);
+  if (is3d) {
+    ensureThreeInitialized();
+    resizeThree();
+  }
+}
+
+view2dBtn.addEventListener('click', () => setView('2d'));
+view3dBtn.addEventListener('click', () => setView('3d'));
 
 // ---------------------------------------------------------------------
 // Slice fetch + axis/index UI sync
@@ -853,6 +1254,7 @@ stepBtn.addEventListener('click', () => {
   outputSliceCache.clear();
   refreshSlice();
   refreshOutputs();
+  update3DStrengths();
 });
 
 runBtn.addEventListener('click', () => {
@@ -867,6 +1269,7 @@ runBtn.addEventListener('click', () => {
   outputSliceCache.clear();
   refreshSlice();
   refreshOutputs();
+  update3DStrengths();
 });
 
 resetBtn.addEventListener('click', () => {
@@ -884,6 +1287,10 @@ resetBtn.addEventListener('click', () => {
   outputSliceCache.clear();
   refreshSlice();
   refreshOutputs();
+  // reset() rebuilds the world from scratch, so the set of non-air cells
+  // and their coordinates could in principle differ -- rebuild the 3D
+  // geometry too, not just its colours, to stay safe against that.
+  build3DGeometry();
 });
 
 // ---------------------------------------------------------------------
