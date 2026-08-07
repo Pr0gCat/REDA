@@ -83,6 +83,43 @@ socket here does by construction. The empirical checks below (matching
 every one of 16 vectors, including several immediately-adjacent pairs that
 only flip one bit) are what stands in for that proof; see the run report's
 "vectors" list.
+
+# Robustness against a racing world
+
+A run against a genuinely fresh region (never forceloaded before in this
+world) once reported two mismatched vectors (`0011`, `0111`, both first
+disagreeing at gate `g3`); every run since -- including one after a full
+server restart -- passed 16/16 with no code changes. That shape (wrong
+exactly once, on brand-new terrain, self-healing once the chunks existed on
+disk) pointed at a race between this harness and world generation/loading
+rather than a real circuit bug, and one link in that chain is confirmed,
+not assumed: `/forceload add` is not synchronous. Measured directly against
+a live server, `execute if loaded <pos>` still answers "Test failed"
+immediately after a `forceload add` covering that position returns, and
+only starts answering "Test passed" about one game tick (~50-100ms) later.
+This harness used to issue `/fill`/`/setblock` commands right after
+forceload's command returned, trusting that return to mean the region was
+already loaded and ticking -- which the measurement above shows is false.
+(The original two-vector mismatch itself could not be reproduced on demand
+across repeated fresh-world attempts while diagnosing this -- it is a
+narrow race, not a deterministic one -- but the false assumption it
+implicates was reproduced directly and is real regardless.)
+
+Three defenses now stand between forceload and the first `setblock`:
+
+1. `wait_for_region_loaded` polls `execute if loaded` for every chunk the
+   build will occupy until each genuinely reports loaded, instead of
+   trusting forceload's return.
+2. `verify_region_is_air` samples the cleared region with `execute if
+   block ... minecraft:air` and retries until it actually reads back clean,
+   instead of a fixed sleep after `clear_region`.
+3. `assert_quiescent` checks the lamp and every gate's output torch against
+   the all-zero quiescent state right after the initial build settles, and
+   raises `RegionNotReady` (a distinct exit code, 2, from a real mismatch's
+   exit code, 1) if the circuit is not already in the state the simulator
+   predicts -- so a corrupted build is reported as "the build did not
+   settle as expected" instead of being silently swept across all 16
+   vectors and reported as circuit-level mismatches.
 """
 
 from __future__ import annotations
@@ -282,6 +319,100 @@ def forceload_release(client: RconClient, origin: tuple[int, int, int], size: tu
     client.command(f"forceload remove {ox - margin} {oz - margin} {ox + sx + margin} {oz + sz + margin}")
 
 
+class RegionNotReady(RuntimeError):
+    """Raised when the world does not confirm the state this harness is
+    about to depend on -- a loaded region, a genuinely blank canvas, or a
+    settled circuit -- within a generous timeout. A test that proceeds
+    anyway is exactly the false-failure risk this class exists to remove:
+    see the module docstring's "Robustness against a racing world" section."""
+
+
+def _xz_chunk_grid(origin: tuple[int, int, int], size: tuple[int, int, int], step: int = 16) -> list[tuple[int, int]]:
+    """One (x, z) sample point per ~step x step cell of the build's
+    footprint, so a chunk-granular check (is this loaded? is this air?)
+    touches every chunk the build will actually occupy, not just the
+    region's outer corners -- a slow-to-load chunk in the middle of a wide
+    circuit would be invisible to a corners-only check."""
+    ox, _, oz = origin
+    sx, _, sz = size
+    xs = sorted(set(range(ox, ox + sx, step)) | {ox + sx - 1})
+    zs = sorted(set(range(oz, oz + sz, step)) | {oz + sz - 1})
+    return [(x, z) for x in xs for z in zs]
+
+
+def wait_for_region_loaded(
+    client: RconClient,
+    origin: tuple[int, int, int],
+    size: tuple[int, int, int],
+    timeout: float = 15.0,
+    poll_interval: float = 0.1,
+) -> None:
+    """`/forceload add` is not synchronous: confirmed directly against a
+    live server, `execute if loaded <pos>` still answers "Test failed"
+    immediately after a `forceload add` covering that position returns, and
+    only starts answering "Test passed" about one game tick (~50-100ms)
+    later. Everything downstream of forceload() in this harness used to
+    assume the region was already loaded and ticking the instant the
+    command came back -- that assumption is false, and is the leading
+    suspect for the one observed false failure (see the module docstring's
+    "Robustness against a racing world" section). This polls every chunk
+    the build will occupy until each one genuinely reports loaded, rather
+    than trusting forceload's return to mean anything."""
+    ox, oy, _ = origin
+    points = [(x, oy, z) for x, z in _xz_chunk_grid(origin, size)]
+    deadline = time.monotonic() + timeout
+    while True:
+        pending = [
+            p for p in points
+            if not client.command(f"execute if loaded {p[0]} {p[1]} {p[2]}").strip().startswith("Test passed")
+        ]
+        if not pending:
+            return
+        if time.monotonic() >= deadline:
+            raise RegionNotReady(
+                f"region did not report loaded within {timeout:.1f}s of forceload "
+                f"({len(pending)}/{len(points)} sample chunks still unloaded, e.g. {pending[0]}) -- "
+                "forceload is not synchronous; see wait_for_region_loaded's docstring."
+            )
+        time.sleep(poll_interval)
+
+
+def verify_region_is_air(
+    client: RconClient,
+    origin: tuple[int, int, int],
+    size: tuple[int, int, int],
+    timeout: float = 20.0,
+    poll_interval: float = 0.2,
+) -> None:
+    """After clear_region() issues its `/fill ... air` commands, confirm the
+    region really reads back as air before trusting it as a blank canvas --
+    a sampled `execute if block` check that retries rather than proceeding.
+    Guards against exactly the same class of problem as
+    wait_for_region_loaded: a command that returned is not proof its effect
+    is visible to the very next command sent a moment later."""
+    ox, oy, oz = origin
+    _, sy, _ = size
+    ys = sorted({oy, oy + sy - 1})
+    points = [(x, y, z) for x, z in _xz_chunk_grid(origin, size) for y in ys]
+    deadline = time.monotonic() + timeout
+    while True:
+        not_air = [
+            p for p in points
+            if not client.command(f"execute if block {p[0]} {p[1]} {p[2]} minecraft:air").strip().startswith(
+                "Test passed"
+            )
+        ]
+        if not not_air:
+            return
+        if time.monotonic() >= deadline:
+            raise RegionNotReady(
+                f"region did not verify as air within {timeout:.1f}s of clearing "
+                f"({len(not_air)}/{len(points)} sample points not air, e.g. {not_air[0]}) -- "
+                "refusing to build on ground we have not confirmed is blank."
+            )
+        time.sleep(poll_interval)
+
+
 def read_lamp(client: RconClient, pos: tuple[int, int, int]) -> int | None:
     x, y, z = pos
     if client.command(f"execute if block {x} {y} {z} minecraft:redstone_lamp[lit=true]").strip().startswith(
@@ -306,6 +437,43 @@ def read_torch(client: RconClient, pos: tuple[int, int, int]) -> int | None:
     ).strip().startswith("Test passed"):
         return 0
     return None
+
+
+def assert_quiescent(
+    client: RconClient,
+    dump: Dump,
+    origin: tuple[int, int, int],
+    output_signal: str,
+    output_pos: tuple[int, int, int],
+) -> None:
+    """After the initial build settles (every lever placed off), check the
+    lamp and every gate's output torch against the pure-boolean evaluation
+    for all-zero inputs, and fail loudly if any disagree, instead of
+    silently sweeping all 16 vectors over a circuit that never finished
+    settling. This does not depend on identifying the exact reason the
+    build might be wrong -- a race with world generation, a dropped RCON
+    command, an unlucky chunk reload -- it just refuses to trust a circuit
+    it has not itself confirmed is in the state the simulator predicts."""
+    ox, oy, oz = origin
+    expected = evaluate_expected(dump.gates, {name: 0 for name in sorted(dump.inputs)})
+
+    mismatches: list[str] = []
+    lamp_pos = (ox + output_pos[0], oy + output_pos[1], oz + output_pos[2])
+    actual_lamp = read_lamp(client, lamp_pos)
+    if actual_lamp != expected[output_signal]:
+        mismatches.append(f"output {output_signal}: expected {expected[output_signal]}, read {actual_lamp!r}")
+
+    for gate_name, gate_pos in dump.gate_outputs.items():
+        pos = (ox + gate_pos[0], oy + gate_pos[1], oz + gate_pos[2])
+        actual = read_torch(client, pos)
+        if actual != expected[gate_name]:
+            mismatches.append(f"gate {gate_name}: expected {expected[gate_name]}, read {actual!r}")
+
+    if mismatches:
+        raise RegionNotReady(
+            "the build did not settle as expected -- circuit disagrees with the all-zero "
+            "quiescent state before a single vector was even swept: " + "; ".join(mismatches)
+        )
 
 
 def read_properties(path: Path) -> dict:
@@ -358,10 +526,11 @@ def run(args: argparse.Namespace) -> int:
     try:
         print("Forceloading region...")
         forceload(client, origin, dump.size)
+        wait_for_region_loaded(client, origin, dump.size)
         if not args.no_clear:
             print("Clearing region...")
             clear_region(client, origin, dump.size)
-            time.sleep(2.0)
+            verify_region_is_air(client, origin, dump.size)
 
         lever_blocks = [b for b in dump.blocks if b.kind == "Lever"]
         static_blocks = [b for b in dump.blocks if b.kind != "Lever"]
@@ -390,6 +559,9 @@ def run(args: argparse.Namespace) -> int:
 
         print(f"Settling {args.settle_build:.1f}s after initial build...")
         time.sleep(args.settle_build)
+
+        print("Checking the build settled to the expected all-zero quiescent state...")
+        assert_quiescent(client, dump, origin, output_signal, output_pos)
 
         current = {name: False for name in input_names}
 
@@ -472,7 +644,16 @@ def main() -> int:
     ap.add_argument("--no-clear", action="store_true", help="skip the pre-build air clear (region already known clean)")
     ap.add_argument("--keep", action="store_true", help="leave the circuit standing and the region forceloaded after the run")
     args = ap.parse_args()
-    return run(args)
+    try:
+        return run(args)
+    except RegionNotReady as exc:
+        # Deliberately distinct from a mismatched-vector failure (exit 1):
+        # this means the world was never in a state worth testing, not that
+        # the circuit disagreed with the truth table. run()'s own
+        # try/finally has already cleared the region and released the
+        # forceload before this is reached.
+        print(f"\nERROR: {exc}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":
