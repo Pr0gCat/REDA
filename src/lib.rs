@@ -3,4 +3,5 @@
 pub mod circuits;
 pub mod compile;
 pub mod formats;
+pub mod macro_cells;
 pub mod redstone;

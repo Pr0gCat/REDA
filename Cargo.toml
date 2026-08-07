@@ -10,5 +10,6 @@ fastnbt = "2.6"
 flate2 = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 thiserror = "2.0"
+toml = "0.8"
 
 [dev-dependencies]
