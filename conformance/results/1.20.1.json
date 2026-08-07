@@ -1,0 +1,543 @@
+{
+  "label": "1.20.1",
+  "probes": [
+    {
+      "name": "dust_same_layer_connects",
+      "category": "dust-connectivity",
+      "assumption": "Same-layer dust connects to an adjacent same-layer dust block; a one-block gap does not carry the signal across.",
+      "source": "src/redstone/simulator/connectivity.rs: dust_connections, same-layer branch",
+      "checks": [
+        {
+          "question": "adjacent same-layer dust carries the signal (dust 3 blocks out reads power=13)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "a one-block gap in the same layer stops the signal (dust past the gap reads power=0)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "dust_climbs_when_open",
+      "category": "dust-connectivity",
+      "assumption": "Dust climbs a step up when the horizontal neighbour is conductive and nothing conductive sits directly above the source dust.",
+      "source": "src/redstone/simulator/connectivity.rs: dust_connections, climb branch",
+      "checks": [
+        {
+          "question": "source dust powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dust climbs a conductive step when nothing blocks above the source (power=14)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "dust_climb_blocked_by_conductive_above_source",
+      "category": "dust-connectivity",
+      "assumption": "A conductive block directly above the source dust cuts the climb connection, even though the step itself is unchanged.",
+      "source": "src/redstone/simulator/connectivity.rs: dust_connections, `!is_conductive(world, from.up())` guard",
+      "checks": [
+        {
+          "question": "a conductive block above the source dust cuts the upward connection (power=0)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "dust_climb_blocked_by_nonconductive_step",
+      "category": "dust-connectivity",
+      "assumption": "Dust does not climb a non-conductive step (glass): the horizontal neighbour must itself be conductive for the climb rule to fire.",
+      "source": "src/redstone/simulator/connectivity.rs: dust_connections, `neighbour_conducts` guard on the climb branch",
+      "checks": [
+        {
+          "question": "source dust powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dust does not climb a non-conductive (glass) step (power=0)",
+          "expected": true,
+          "actual": false,
+          "matches": false,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "dust_descends_when_open",
+      "category": "dust-connectivity",
+      "assumption": "Dust descends a step down when the horizontal neighbour is NOT conductive (the opposite polarity from the climb rule).",
+      "source": "src/redstone/simulator/connectivity.rs: dust_connections, descend branch",
+      "checks": [
+        {
+          "question": "source dust powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dust descends a step when the neighbour cell is open (power=14)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "dust_descend_blocked_by_conductive_neighbour",
+      "category": "dust-connectivity",
+      "assumption": "A conductive block in the horizontal neighbour cell blocks the descend connection.",
+      "source": "src/redstone/simulator/connectivity.rs: dust_connections, `!neighbour_conducts` guard on the descend branch",
+      "checks": [
+        {
+          "question": "source dust powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "a conductive neighbour cell blocks the descend connection (power=0)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "dust_strength_starts_at_15",
+      "category": "dust-strength",
+      "assumption": "Dust directly adjacent to a power source (here: a redstone block) reads power=15.",
+      "source": "src/redstone/rules/taxonomy.rs: power_emitted_by, RedstoneBlock arm (strength: 15)",
+      "checks": [
+        {
+          "question": "dust adjacent to a redstone block has power=15",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "dust_strength_decays_by_one_per_block",
+      "category": "dust-strength",
+      "assumption": "Dust strength decreases by exactly 1 per block of distance from the source.",
+      "source": "Standard vanilla dust behaviour; the simulator's BFS propagation walk assumes it directly (src/redstone/simulator/propagate.rs, recompute_dust_strengths: `next_strength = strength - 1`)",
+      "checks": [
+        {
+          "question": "dust 1 block(s) from the source has power=15",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dust 5 block(s) from the source has power=11",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dust 10 block(s) from the source has power=6",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dust 15 block(s) from the source has power=1",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "dust_dies_at_zero",
+      "category": "dust-strength",
+      "assumption": "The 16th dust block from a source has power=0, while the 15th still has power=1.",
+      "source": "src/redstone/rules/taxonomy.rs: power_emitted_by only emits dust when `state.power > 0`; src/redstone/simulator/propagate.rs's BFS stops at strength<=1",
+      "checks": [
+        {
+          "question": "dust 15 blocks from the source has power=1",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dust 16 blocks from the source has power=0 (dead)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "torch_drives_adjacent_dust",
+      "category": "torch",
+      "assumption": "A lit torch drives directly-touching dust to full strength (15). (Only the side direction could be probed: dust needs a full support block directly beneath it, and a standing torch does not provide one, so dust cannot physically rest in the one cell directly above a torch -- confirmed live, the block silently fails to place there at all. The stronger Up-direction claim, and the claim that a torch withholds power from its own support, both need a second block to read through, which was found to never propagate via `/setblock`; see harness.py.)",
+      "source": "src/redstone/rules/taxonomy.rs: power_emitted_toward, Torch arm",
+      "checks": [
+        {
+          "question": "dust beside a lit torch reads power=15",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "repeater_facing_names_the_input_side",
+      "category": "repeater",
+      "assumption": "`facing` names the direction from the repeater's output side to its input side (input = facing, output = facing.opposite()). Mirrored pair: with a source fixed to the west and a dust reader fixed to the east, only facing=west (input=west, matching the source) should light the reader; facing=east should not.",
+      "source": "src/redstone/simulator/component.rs: repeater_input_position (`pos.offset(facing)`), cites Minecraft Wiki: \"facing: the direction from the output side to the input side of a repeater\"",
+      "checks": [
+        {
+          "question": "facing=east (input on the far side from the source) stays dark",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "facing=west (input on the source side) lights the output",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "repeater_delay_is_two_to_eight_game_ticks",
+      "category": "repeater",
+      "assumption": "delay=1..4 (redstone ticks) means 2, 4, 6, 8 game ticks (100/200/300/400ms) before the output responds to a genuine input change.",
+      "source": "src/redstone/simulator/component.rs: repeater_delay_game_ticks (`redstone_ticks * 2`)",
+      "checks": [],
+      "measurements": [
+        {
+          "question": "delay=1: measured time from input transition to output reaching full strength",
+          "note": "expected ~2 game ticks (100ms)",
+          "value_ticks": 1.9
+        },
+        {
+          "question": "delay=2: measured time from input transition to output reaching full strength",
+          "note": "expected ~4 game ticks (200ms)",
+          "value_ticks": 4.1
+        },
+        {
+          "question": "delay=3: measured time from input transition to output reaching full strength",
+          "note": "expected ~6 game ticks (300ms)",
+          "value_ticks": 5.9
+        },
+        {
+          "question": "delay=4: measured time from input transition to output reaching full strength",
+          "note": "expected ~8 game ticks (400ms)",
+          "value_ticks": 8.1
+        }
+      ]
+    },
+    {
+      "name": "repeater_locking",
+      "category": "repeater",
+      "assumption": "A powered diode facing into a repeater's side locks it: its output does not respond to its own input changing while locked.",
+      "source": "src/redstone/simulator/component.rs: repeater_is_locked",
+      "checks": [
+        {
+          "question": "side repeater S is lit (feeding into M's side)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "main repeater M reports locked=true",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "M's output stays dark while locked",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "unlocked control: S stays dark (never fed)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "unlocked control: M's output lights normally",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "comparator_facing_names_the_input_side",
+      "category": "comparator",
+      "assumption": "`facing` has the same meaning as a repeater's: the direction from the output side to the (rear) input side. Same mirrored-pair shape as the repeater facing probe.",
+      "source": "src/redstone/simulator/component.rs: comparator_rear_position (`pos.offset(facing)`), cites the same Wiki convention as the repeater",
+      "checks": [
+        {
+          "question": "facing=east (input on the far side from the source) stays dark",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "facing=west (input on the source side) lights the output",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "comparator_compare_mode_passes_rear_signal",
+      "category": "comparator",
+      "assumption": "In compare mode, with the side unpowered, the comparator passes its rear signal through unchanged (here: rear=9 via a 7-long dust chain).",
+      "source": "src/redstone/simulator/component.rs: comparator_output, compare-mode branch",
+      "checks": [
+        {
+          "question": "rear dust (touching the comparator) reads power=9",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "comparator output dust reads power=9 (passthrough)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "comparator_subtract_mode_with_unpowered_side",
+      "category": "comparator",
+      "assumption": "In subtract mode with the side unpowered (0), output = rear - 0 = rear -- the same passthrough value as compare mode. (Subtracting an actual non-zero side value could not be independently verified: the side reads whether a *neighbouring block* is itself powered, which is inherently a second hop through a plain block -- the one shape confirmed to never propagate via `/setblock`; see harness.py.)",
+      "source": "src/redstone/simulator/component.rs: comparator_output, `rear.saturating_sub(side)` in the subtract-mode branch",
+      "checks": [
+        {
+          "question": "output dust reads power=9 (9 - 0 side = 9)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "lamp_lights_from_weak_power",
+      "category": "lamp",
+      "assumption": "A lamp does not distinguish weak from strong power -- dust resting on top of a lamp (which only ever weakly powers the block beneath it) still lights it.",
+      "source": "src/redstone/simulator/component.rs: lamp_should_be_lit (`block_power_at(world, pos) != BlockPower::None`, no weak/strong distinction)",
+      "checks": [
+        {
+          "question": "dust on the lamp is powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "lamp lights from dust resting on top of it (weak power)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "lamp_on_off_delay",
+      "category": "lamp",
+      "assumption": "Our simulator applies the same delay (2 game ticks) symmetrically both turning on and turning off, as a documented simplification. Real Minecraft lights a lamp immediately and only delays turning it off by one redstone tick (2 game ticks), to avoid flicker.",
+      "source": "src/redstone/simulator/component.rs: LAMP_DELAY_GAME_TICKS and its doc comment, which states this asymmetry explicitly and why the simulator does not replicate it",
+      "checks": [],
+      "measurements": [
+        {
+          "question": "delay from power applied to lamp lit (\"on\" delay)",
+          "note": "our code assumes ~2 ticks; vanilla is documented as ~0 (instant)",
+          "value_ticks": 0.0
+        },
+        {
+          "question": "delay from power removed to lamp dark (\"off\" delay)",
+          "note": "our code and vanilla both expect ~2 ticks",
+          "value_ticks": 3.7
+        }
+      ]
+    },
+    {
+      "name": "conducts_stone",
+      "category": "conductivity",
+      "assumption": "minecraft:stone is a full, conductive block -- the baseline substrate block the compiler actually places.",
+      "source": "src/redstone/rules/java_1_20.rs: CONDUCTIVE_FULL_BLOCKS includes minecraft:stone; src/compile/mod.rs places minecraft:stone as its solid substrate",
+      "checks": [
+        {
+          "question": "source dust powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dust climbs over minecraft:stone (conductive expected)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "conducts_glass",
+      "category": "conductivity",
+      "assumption": "minecraft:glass is a full block (holds dust, holds a repeater) but does not conduct.",
+      "source": "src/redstone/rules/java_1_20.rs: NON_CONDUCTIVE includes minecraft:glass",
+      "checks": [
+        {
+          "question": "source dust powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dust climbs over minecraft:glass (non-conductive expected)",
+          "expected": false,
+          "actual": true,
+          "matches": false,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "conducts_soul_sand",
+      "category": "conductivity",
+      "assumption": "minecraft:soul_sand conducts despite not being a full cube -- an explicit exception, not a consequence of its shape.",
+      "source": "src/redstone/rules/java_1_20.rs: CONDUCTIVE_EXCEPTIONS includes minecraft:soul_sand",
+      "checks": [
+        {
+          "question": "source dust powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dust climbs over minecraft:soul_sand (conductive expected)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "conducts_honey_block",
+      "category": "conductivity",
+      "assumption": "minecraft:honey_block is a full cube (matches the generic `_block` suffix rule for shape) but is explicitly listed as non-conductive.",
+      "source": "src/redstone/rules/java_1_20.rs: NON_CONDUCTIVE includes minecraft:honey_block; FULL_BLOCK_SUFFIXES's `_block` suffix would otherwise misjudge its conductivity if checked before the NON_CONDUCTIVE list",
+      "checks": [
+        {
+          "question": "source dust powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dust climbs over minecraft:honey_block (non-conductive expected)",
+          "expected": false,
+          "actual": false,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    },
+    {
+      "name": "conducts_target",
+      "category": "conductivity",
+      "assumption": "minecraft:target conducts -- an explicit exception alongside emitting its own analog signal.",
+      "source": "src/redstone/rules/java_1_20.rs: CONDUCTIVE_EXCEPTIONS includes minecraft:target",
+      "checks": [
+        {
+          "question": "source dust powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dust climbs over minecraft:target (conductive expected)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": []
+    }
+  ]
+}

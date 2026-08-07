@@ -157,3 +157,59 @@ was not exercised end-to-end**, because the server never reaches the point
 of opening the RCON socket while `eula=false`. Once you flip that line, the
 harness's first RCON connection attempt against `127.0.0.1:25575` with the
 password in `server.properties` is the next real test.
+
+## The 26.2 sibling server
+
+`minecraft-server-26.2/` is a second, independent server set up the same
+way, for comparing 1.20.1's redstone behaviour against Minecraft's current
+release (26.2, Mojang's latest year-based version). Entirely gitignored,
+same as `minecraft-server/`, for the same reasons.
+
+**Minecraft 26.2 `server.jar`**, resolved the same way as 1.20.1's:
+
+1. `https://launchermeta.mojang.com/mc/game/version_manifest_v2.json` ->
+   `"latest": {"release": "26.2", ...}` -> the `26.2` entry points at
+   `https://piston-meta.mojang.com/v1/packages/4b74f58f68a2baae3547d5a20274079f29cafc06/26.2.json`
+2. That version JSON's `downloads.server` gives:
+   - URL: `https://piston-data.mojang.com/v1/objects/823e2250d24b3ddac457a60c92a6a941943fcd6a/server.jar`
+   - SHA-1: `823e2250d24b3ddac457a60c92a6a941943fcd6a`
+3. Downloaded and verified with `sha1sum` -- matched. Placed at
+   `minecraft-server-26.2/server/server.jar`.
+
+**JDK: a second, newer JDK was required.** The same version JSON's
+`javaVersion` field reads `{"component": "java-runtime-epsilon",
+"majorVersion": 25}` -- 26.2 requires Java 25, and the Temurin 21 bundled
+for 1.20.1 is not new enough to run it (confirmed: 1.20.1's `javaVersion`
+requirement is 17, comfortably covered by 21; 26.2's is not). Resolved
+**Eclipse Temurin 25** (Windows x64, `.zip`, the current LTS) via the same
+Adoptium API pattern used for JDK 21:
+
+- URL: `https://github.com/adoptium/temurin25-binaries/releases/download/jdk-25.0.4%2B7/OpenJDK25U-jdk_x64_windows_hotspot_25.0.4_7.zip`
+- SHA-256 (per Adoptium's API, matched against the download): `7caab7db43bf4b94a2e6252c699e70d90084f9aa7c943cd3414761fd540937ae`
+- Extracted to `minecraft-server-26.2/jdk25/`.
+
+Directory layout mirrors the 1.20.1 server exactly (`jdk25/`, `server/`,
+`run-server.sh` / `run-server.ps1`), and `server.properties` was copied from
+the tuned 1.20.1 config with the same reasoning behind every setting (see
+above) -- 26.2 added a few new keys on first run (`management-server-*`,
+`enable-code-of-conduct`, `accepts-transfers`, ...) which were left at their
+generated defaults since none of them matter to a redstone conformance
+harness.
+
+**`minecraft-server-26.2/server/eula.txt` also reads `eula=false`.** Same
+rule as the 1.20.1 server: this repo will not flip it, even though the
+identical Mojang EULA has already been accepted once for the sibling
+server -- that acceptance covered running *that* server, not a second,
+independently-downloaded one. Flip it yourself before starting
+`minecraft-server-26.2/run-server.sh`.
+
+## Conformance probe suite
+
+`conformance/` (tracked, not gitignored -- it is ordinary project code, not
+server state) holds a small RCON-driven probe suite, independent of
+anything in `src/`, that asks a live server direct yes/no questions about
+the redstone rules the compiler and simulator depend on, and compares the
+answer against what the code assumes. See the module docstrings in
+`conformance/harness.py` and `conformance/probes.py` for the methodology
+(and its hard-won limitations), and `conformance/run.py --help` /
+`conformance/compare.py --help` for usage.

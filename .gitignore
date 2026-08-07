@@ -31,3 +31,5 @@ Thumbs.db
 desktop.ini
 .DS_Store
 .superpowers/
+# Minecraft 26.2 conformance server (mirrors /minecraft-server/, see docs/minecraft-server.md)
+/minecraft-server-26.2/
