@@ -31,6 +31,10 @@ use reda::circuits::seven_segment::{build_seven_segment_netlist, INPUT_NAMES, SE
 use reda::compile::{compile, Netlist};
 use reda::formats::litematic;
 use reda::redstone::simulator::Simulator;
+use reda::timing::{
+    game_ticks_to_redstone_ticks, game_ticks_to_seconds, observations_to_result, summarize_worst_case,
+    watch_all_nets, TransitionResult,
+};
 
 /// 期望的真值表，展開成全部 16 個輸入組合（10-15 全熄滅），方便測試逐項比對。
 fn expected_segments(value: u8) -> [bool; 7] {
@@ -105,8 +109,51 @@ fn set_lever(simulator: &mut Simulator, position: (i32, i32, i32), on: bool) {
     simulator.run_until_stable(MAX_TICKS).expect("circuit must settle after changing an input");
 }
 
+/// Same as `set_lever`, but also records the transition's timing -- the
+/// simulator must already have an observer attached (see `watch_all_nets`).
+fn set_lever_and_record(
+    simulator: &mut Simulator,
+    position: (i32, i32, i32),
+    on: bool,
+    transitions: &mut Vec<TransitionResult>,
+) {
+    simulator.reset_observer();
+    let start_tick = simulator.current_tick();
+    set_lever(simulator, position, on);
+    let settle_game_ticks = simulator.current_tick() - start_tick;
+    transitions.push(observations_to_result(simulator.observations(), start_tick, settle_game_ticks));
+}
+
 fn read_output(simulator: &Simulator, position: (i32, i32, i32)) -> bool {
     simulator.world().get(position.0, position.1, position.2).lit
+}
+
+/// Print the worst case across an instrumented sweep: settle time (game
+/// ticks / redstone ticks / seconds), the logic-depth lower bound, the ratio
+/// between them, the critical path, and how many input vectors glitched
+/// which outputs. This is dynamic timing analysis (`reda::timing`) applied
+/// to the same sweep the correctness check above already ran.
+fn report_timing(label: &str, netlist: &Netlist, outputs: &[String], transitions: &[TransitionResult]) {
+    let summary = summarize_worst_case(netlist, outputs, transitions);
+    eprintln!(
+        "{label} timing: worst-case settle = {} game ticks ({:.1} redstone ticks, {:.3}s)",
+        summary.worst_settle_game_ticks,
+        game_ticks_to_redstone_ticks(summary.worst_settle_game_ticks),
+        game_ticks_to_seconds(summary.worst_settle_game_ticks),
+    );
+    eprintln!(
+        "{label} timing: logic-depth bound = {} gates -> {} game ticks; ratio (measured/bound) = {:.2}x",
+        summary.logic_depth, summary.logic_depth_bound_game_ticks, summary.ratio,
+    );
+    eprintln!(
+        "{label} timing: critical path to worst output `{}`: {}",
+        summary.critical_output,
+        summary.critical_path.join(" -> ")
+    );
+    eprintln!(
+        "{label} timing: glitches by output (number of input vectors that glitched it): {:?}",
+        summary.glitch_counts
+    );
 }
 
 /// Java Edition's maximum simulation distance is 32 chunks, so at most about
@@ -158,8 +205,11 @@ fn the_compiled_decoder_matches_its_truth_table() {
         "the decoder must fit in a loadable footprint, got {size_x} x {size_y} x {size_z}"
     );
 
+    let watched = watch_all_nets(&compiled);
+
     let mut simulator = Simulator::new(compiled.world);
     simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator.attach_observer(watched);
 
     let lever_positions: HashMap<&str, (i32, i32, i32)> = INPUT_NAMES
         .iter()
@@ -172,10 +222,11 @@ fn the_compiled_decoder_matches_its_truth_table() {
 
     let simulate_start = Instant::now();
     let mut mismatches = Vec::new();
+    let mut transitions: Vec<TransitionResult> = Vec::new();
     for value in 0u8..16 {
         let bits = [(value >> 3) & 1, (value >> 2) & 1, (value >> 1) & 1, value & 1];
         for (&name, &bit) in INPUT_NAMES.iter().zip(bits.iter()) {
-            set_lever(&mut simulator, lever_positions[name], bit == 1);
+            set_lever_and_record(&mut simulator, lever_positions[name], bit == 1, &mut transitions);
         }
 
         let expected = expected_segments(value);
@@ -198,6 +249,9 @@ fn the_compiled_decoder_matches_its_truth_table() {
         mismatches.len(),
         mismatches.join("\n")
     );
+
+    let outputs: Vec<String> = SEGMENT_NAMES.iter().map(|&name| segment_signal[name].clone()).collect();
+    report_timing("seven_segment", &netlist, &outputs, &transitions);
 }
 
 #[test]

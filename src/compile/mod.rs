@@ -373,6 +373,17 @@ pub struct CompiledCircuit {
     /// gate's output torch. This is what a person standing in front of the
     /// pasted circuit actually looks at.
     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
+    /// Every gate's actual output position -- the wall torch that is this
+    /// gate's real output -- keyed by the gate's output signal name.
+    ///
+    /// Unlike `output_positions`, which only covers the netlist's *declared*
+    /// outputs and points one game tick further down the line at the
+    /// readable lamp, this covers every gate including purely internal ones
+    /// with no lamp at all. This is what dynamic timing analysis
+    /// (`crate::timing`) watches to measure every net, not just the ones a
+    /// person reads -- the lamp's own extra delay (`LAMP_DELAY_GAME_TICKS`)
+    /// is a display convenience, not part of the logic.
+    pub gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
 }
 
 /// 把一格地板鋪在 `pos` 正下方，讓紅石粉／拉桿／中繼器能立在上面。
@@ -1163,8 +1174,11 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     };
 
     let mut gate_pin: Vec<Position> = Vec::with_capacity(netlist.gates.len());
+    let mut gate_output_positions: BTreeMap<String, (i32, i32, i32)> = BTreeMap::new();
     for (g, cell) in gate_cell.iter().enumerate() {
-        let pin = torch_of(g, cell).offset(OUTPUT_DIRECTION);
+        let torch = torch_of(g, cell);
+        gate_output_positions.insert(netlist.gates[g].output.clone(), (torch.x, torch.y, torch.z));
+        let pin = torch.offset(OUTPUT_DIRECTION);
         ensure_floor(&mut world, pin);
         world.set(pin.x, pin.y, pin.z, dust());
         gate_pin.push(pin);
@@ -1298,5 +1312,5 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         output_positions.insert(output_name.clone(), (lamp_pos.x, lamp_pos.y, lamp_pos.z));
     }
 
-    Ok(CompiledCircuit { world, input_positions, output_positions })
+    Ok(CompiledCircuit { world, input_positions, output_positions, gate_output_positions })
 }

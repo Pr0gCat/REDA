@@ -7,6 +7,7 @@
 
 pub mod component;
 pub mod connectivity;
+pub mod observer;
 pub mod position;
 pub mod propagate;
 pub mod schedule;
@@ -16,6 +17,7 @@ use std::collections::HashMap;
 use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::storage::World;
 
+use observer::{Observation, Observer};
 use position::Position;
 use schedule::{TickPriority, TickQueue};
 
@@ -29,6 +31,11 @@ pub struct Simulator {
     torch_changes: std::collections::HashMap<position::Position, Vec<u64>>,
     /// 這次模擬總共處理了幾筆排程，用來偵測發散
     work_done: u64,
+    /// Optional dynamic-timing-analysis observer. `None` unless
+    /// `attach_observer` was called -- and when it is `None`, `step` and
+    /// `run_until_stable` take exactly the path they always have (see
+    /// `advance_one_tick`, the only place this is consulted).
+    observer: Option<Observer>,
 }
 
 /// 模擬過程的錯誤。
@@ -133,6 +140,7 @@ impl Simulator {
             queue: TickQueue::new(),
             torch_changes: HashMap::new(),
             work_done: 0,
+            observer: None,
         };
 
         if let Some((position, name)) = find_unsupported_component(&simulator.world) {
@@ -156,6 +164,37 @@ impl Simulator {
 
     pub fn current_tick(&self) -> u64 {
         self.queue.current_tick()
+    }
+
+    /// Attach a dynamic-timing-analysis observer watching exactly these
+    /// positions, each carrying a human-readable label (typically a netlist
+    /// signal name). Replaces any previously attached observer.
+    ///
+    /// The observer is baselined against the world's current state
+    /// immediately, so nothing already true when it is attached shows up as
+    /// an observation -- only changes from this point on do.
+    pub fn attach_observer(&mut self, watched: impl IntoIterator<Item = (Position, String)>) {
+        let mut observer = Observer::new(watched);
+        observer.reset(&self.world);
+        self.observer = Some(observer);
+    }
+
+    /// Re-baseline the attached observer (if any) against the world's
+    /// current state and clear its log.
+    ///
+    /// Call this right before the input change you want to measure, so the
+    /// observations that follow hold only the changes caused by that
+    /// change. A no-op if no observer is attached.
+    pub fn reset_observer(&mut self) {
+        if let Some(observer) = self.observer.as_mut() {
+            observer.reset(&self.world);
+        }
+    }
+
+    /// The attached observer's log since its last reset, or an empty slice
+    /// if no observer is attached.
+    pub fn observations(&self) -> &[Observation] {
+        self.observer.as_ref().map(Observer::log).unwrap_or(&[])
     }
 
     /// 推進一個 game tick。回傳這一刻有多少格的狀態改變了。
@@ -261,6 +300,11 @@ impl Simulator {
         }
 
         changed += propagate::recompute_dust_strengths(&mut self.world).len();
+
+        if let Some(observer) = self.observer.as_mut() {
+            observer.sample(&self.world, now);
+        }
+
         changed
     }
 

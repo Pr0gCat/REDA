@@ -19,11 +19,15 @@ use reda::circuits::seven_segment::{
     build_seven_segment_netlist, build_single_segment_netlist,
     INPUT_NAMES as DECODER_INPUT_NAMES, TRUTH_TABLE,
 };
-use reda::compile::compile;
+use reda::compile::{compile, Netlist};
 use reda::redstone::rules::taxonomy::flags_of;
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::{BlockKind, Face, Facing};
 use reda::redstone::world::storage::World;
+use reda::timing::{
+    game_ticks_to_redstone_ticks, game_ticks_to_seconds, observations_to_result, summarize_worst_case,
+    watch_all_nets, TransitionResult,
+};
 
 const MAX_TICKS: u64 = 2000;
 
@@ -34,8 +38,51 @@ fn set_lever(simulator: &mut Simulator, position: (i32, i32, i32), on: bool) {
     simulator.run_until_stable(MAX_TICKS).expect("circuit must settle after changing an input");
 }
 
+/// Same as `set_lever`, but also records the transition's timing -- the
+/// simulator must already have an observer attached (see `watch_all_nets`).
+fn set_lever_and_record(
+    simulator: &mut Simulator,
+    position: (i32, i32, i32),
+    on: bool,
+    transitions: &mut Vec<TransitionResult>,
+) {
+    simulator.reset_observer();
+    let start_tick = simulator.current_tick();
+    set_lever(simulator, position, on);
+    let settle_game_ticks = simulator.current_tick() - start_tick;
+    transitions.push(observations_to_result(simulator.observations(), start_tick, settle_game_ticks));
+}
+
 fn read_output(simulator: &Simulator, position: (i32, i32, i32)) -> bool {
     simulator.world().get(position.0, position.1, position.2).lit
+}
+
+/// Print the worst case across an instrumented sweep: settle time (game
+/// ticks / redstone ticks / seconds), the logic-depth lower bound, the ratio
+/// between them, the critical path, and how many input vectors glitched
+/// which outputs. This is dynamic timing analysis (`reda::timing`) applied
+/// to the same sweep the correctness check above already ran.
+fn report_timing(label: &str, netlist: &Netlist, outputs: &[String], transitions: &[TransitionResult]) {
+    let summary = summarize_worst_case(netlist, outputs, transitions);
+    eprintln!(
+        "{label} timing: worst-case settle = {} game ticks ({:.1} redstone ticks, {:.3}s)",
+        summary.worst_settle_game_ticks,
+        game_ticks_to_redstone_ticks(summary.worst_settle_game_ticks),
+        game_ticks_to_seconds(summary.worst_settle_game_ticks),
+    );
+    eprintln!(
+        "{label} timing: logic-depth bound = {} gates -> {} game ticks; ratio (measured/bound) = {:.2}x",
+        summary.logic_depth, summary.logic_depth_bound_game_ticks, summary.ratio,
+    );
+    eprintln!(
+        "{label} timing: critical path to worst output `{}`: {}",
+        summary.critical_output,
+        summary.critical_path.join(" -> ")
+    );
+    eprintln!(
+        "{label} timing: glitches by output (number of input vectors that glitched it): {:?}",
+        summary.glitch_counts
+    );
 }
 
 #[test]
@@ -43,16 +90,19 @@ fn the_compiled_and4_matches_its_truth_table() {
     let (netlist, output_signal) = build_and4_netlist();
     let compiled = compile(&netlist).expect("and4 is acyclic and fully driven");
 
-    let mut simulator = Simulator::new(compiled.world);
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
-
     let lever_positions: HashMap<&str, (i32, i32, i32)> = AND4_INPUT_NAMES
         .iter()
         .map(|&name| (name, *compiled.input_positions.get(name).unwrap()))
         .collect();
     let output_position = *compiled.output_positions.get(&output_signal).unwrap();
+    let watched = watch_all_nets(&compiled);
+
+    let mut simulator = Simulator::new(compiled.world);
+    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator.attach_observer(watched);
 
     let mut mismatches = Vec::new();
+    let mut transitions: Vec<TransitionResult> = Vec::new();
     for combination in 0u8..16 {
         let bits = [
             (combination >> 3) & 1,
@@ -61,7 +111,7 @@ fn the_compiled_and4_matches_its_truth_table() {
             combination & 1,
         ];
         for (&name, &bit) in AND4_INPUT_NAMES.iter().zip(bits.iter()) {
-            set_lever(&mut simulator, lever_positions[name], bit == 1);
+            set_lever_and_record(&mut simulator, lever_positions[name], bit == 1, &mut transitions);
         }
 
         // Independently-written expected table: AND of all four bits.
@@ -78,6 +128,8 @@ fn the_compiled_and4_matches_its_truth_table() {
         mismatches.len(),
         mismatches.join("\n")
     );
+
+    report_timing("and4", &netlist, &[output_signal], &transitions);
 }
 
 #[test]
@@ -85,21 +137,24 @@ fn the_compiled_full_adder_matches_its_truth_table() {
     let (netlist, output_signal) = build_full_adder_netlist();
     let compiled = compile(&netlist).expect("full_adder is acyclic and fully driven");
 
-    let mut simulator = Simulator::new(compiled.world);
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
-
     let lever_positions: HashMap<&str, (i32, i32, i32)> = ADDER_INPUT_NAMES
         .iter()
         .map(|&name| (name, *compiled.input_positions.get(name).unwrap()))
         .collect();
     let sum_position = *compiled.output_positions.get(&output_signal["sum"]).unwrap();
     let cout_position = *compiled.output_positions.get(&output_signal["cout"]).unwrap();
+    let watched = watch_all_nets(&compiled);
+
+    let mut simulator = Simulator::new(compiled.world);
+    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator.attach_observer(watched);
 
     let mut mismatches = Vec::new();
+    let mut transitions: Vec<TransitionResult> = Vec::new();
     for combination in 0u8..8 {
         let bits = [(combination >> 2) & 1, (combination >> 1) & 1, combination & 1];
         for (&name, &bit) in ADDER_INPUT_NAMES.iter().zip(bits.iter()) {
-            set_lever(&mut simulator, lever_positions[name], bit == 1);
+            set_lever_and_record(&mut simulator, lever_positions[name], bit == 1, &mut transitions);
         }
 
         // Independently-written expected table: a 1-bit binary adder.
@@ -123,6 +178,8 @@ fn the_compiled_full_adder_matches_its_truth_table() {
         mismatches.len(),
         mismatches.join("\n")
     );
+
+    report_timing("full_adder", &netlist, &[output_signal["sum"].clone(), output_signal["cout"].clone()], &transitions);
 }
 
 #[test]
@@ -131,20 +188,23 @@ fn the_compiled_segment_a_matches_its_truth_table() {
     let (netlist, output_signal) = build_single_segment_netlist(0);
     let compiled = compile(&netlist).expect("segment_a is acyclic and fully driven");
 
-    let mut simulator = Simulator::new(compiled.world);
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
-
     let lever_positions: HashMap<&str, (i32, i32, i32)> = DECODER_INPUT_NAMES
         .iter()
         .map(|&name| (name, *compiled.input_positions.get(name).unwrap()))
         .collect();
     let output_position = *compiled.output_positions.get(&output_signal).unwrap();
+    let watched = watch_all_nets(&compiled);
+
+    let mut simulator = Simulator::new(compiled.world);
+    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator.attach_observer(watched);
 
     let mut mismatches = Vec::new();
+    let mut transitions: Vec<TransitionResult> = Vec::new();
     for value in 0u8..16 {
         let bits = [(value >> 3) & 1, (value >> 2) & 1, (value >> 1) & 1, value & 1];
         for (&name, &bit) in DECODER_INPUT_NAMES.iter().zip(bits.iter()) {
-            set_lever(&mut simulator, lever_positions[name], bit == 1);
+            set_lever_and_record(&mut simulator, lever_positions[name], bit == 1, &mut transitions);
         }
 
         // Independently-sourced expected value: the project's own truth
@@ -162,6 +222,8 @@ fn the_compiled_segment_a_matches_its_truth_table() {
         mismatches.len(),
         mismatches.join("\n")
     );
+
+    report_timing("segment_a", &netlist, &[output_signal], &transitions);
 }
 
 // ---------------------------------------------------------------------
