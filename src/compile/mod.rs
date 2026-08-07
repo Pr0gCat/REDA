@@ -482,7 +482,8 @@ pub struct CompiledCircuit {
     /// readable lamp, this covers every gate including purely internal ones
     /// with no lamp at all. This is what dynamic timing analysis
     /// (`crate::timing`) watches to measure every net, not just the ones a
-    /// person reads -- the lamp's own extra delay (`LAMP_DELAY_GAME_TICKS`)
+    /// person reads -- the lamp's own extra delay
+    /// (`LAMP_TURN_ON_DELAY_GAME_TICKS` / `LAMP_TURN_OFF_DELAY_GAME_TICKS`)
     /// is a display convenience, not part of the logic.
     pub gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
 }

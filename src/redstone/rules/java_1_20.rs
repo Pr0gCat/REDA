@@ -5,6 +5,8 @@
 //! **重要**：導電性與「是不是完整方塊」無關，必須查表。
 //! 完整方塊但不導電的例子：玻璃、發光石、TNT、冰、紅石塊、觀察者、活塞。
 //! 不是完整方塊但導電的例子：靈魂沙。
+//! 渲染模型看起來是完整方塊、實際上連紅石粉都放不上去的例子：蜂蜜塊
+//! （見 `SUPPORTS_NOTHING` 的說明）。
 
 /// 明確不導電的方塊 ID。
 ///
@@ -26,7 +28,6 @@ pub const NON_CONDUCTIVE: &[&str] = &[
     "minecraft:hopper",
     "minecraft:farmland",
     "minecraft:dirt_path",
-    "minecraft:honey_block",
     "minecraft:composter",
     "minecraft:decorated_pot",
     "minecraft:enchanting_table",
@@ -111,9 +112,11 @@ pub const CONDUCTIVE_FULL_BLOCKS: &[&str] = &[
 
 /// 常見的完整建材方塊後綴。多數染色變體只有前綴不同，逐一列出不切實際。
 ///
-/// **這些後綴只在方塊未出現於 `NON_CONDUCTIVE` 與 `CONDUCTIVE_EXCEPTIONS`
-/// 時才適用** —— 那兩份清單先查，所以 `redstone_block`、`honey_block`、
-/// `slime_block` 不會被 `_block` 這條後綴誤判。
+/// **這些後綴只在方塊未出現於 `NON_CONDUCTIVE`、`CONDUCTIVE_EXCEPTIONS`
+/// 與 `SUPPORTS_NOTHING` 時才適用** —— 那幾份清單先查，所以
+/// `redstone_block`、`slime_block` 不會被 `_block` 這條後綴誤判成一般完整
+/// 方塊，`honey_block` 更是連「完整方塊」的資格都在 `SUPPORTS_NOTHING`
+/// 那一關就被擋下，根本不會走到這條後綴規則。
 pub const FULL_BLOCK_SUFFIXES: &[&str] = &[
     "_wool",
     "_concrete",
@@ -126,6 +129,15 @@ pub const FULL_BLOCK_SUFFIXES: &[&str] = &[
 ];
 
 /// 完全不能承載任何東西的方塊。
+///
+/// `minecraft:honey_block` 是這裡最違反直覺的一筆：它的渲染模型是完整
+/// 16x16x16 立方體（跟玻璃一樣），視覺上像個完整方塊，但遊戲把它排除在
+/// 「頂面完整實心方形面」之外 —— 紅石粉、拉桿、按鈕都放不上去。這與它
+/// 不導電是**兩件獨立的事**：不導電只表示訊號傳不過去，這裡講的是連
+/// 「站得上去」都不行。誤把它丟進 `NON_CONDUCTIVE`（如同一份完整方塊只是
+/// 不導電的清單）曾經讓 `_block` 後綴規則把它判成完整立方體，因而誤判紅石粉
+/// 爬得上去 —— 見 `conformance/results/1.20.1.json` 的 `conducts_honey_block`
+/// 探針。
 pub const SUPPORTS_NOTHING: &[&str] = &[
     "minecraft:air",
     "minecraft:cave_air",
@@ -137,4 +149,5 @@ pub const SUPPORTS_NOTHING: &[&str] = &[
     "minecraft:oak_leaves",
     "minecraft:chest",
     "minecraft:flower_pot",
+    "minecraft:honey_block",
 ];

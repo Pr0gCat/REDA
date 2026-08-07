@@ -326,15 +326,22 @@ impl Simulator {
     /// effects from other components settling this tick, and external edits
     /// made through `world_mut()`. A lamp has no latching and no burnout, so
     /// unlike repeaters there is nothing else to check before scheduling.
+    ///
+    /// The delay is not symmetric: turning on is immediate
+    /// (`LAMP_TURN_ON_DELAY_GAME_TICKS` = 0) but turning off is delayed by one
+    /// redstone tick (`LAMP_TURN_OFF_DELAY_GAME_TICKS` = 4), matching real
+    /// Minecraft -- see both constants' doc comments in `component.rs`.
     fn schedule_mismatched_lamps(&mut self) {
         for position in lamp_positions(&self.world) {
             let currently_lit = self.world.get(position.x, position.y, position.z).lit;
-            if currently_lit != component::lamp_should_be_lit(&self.world, position) {
-                self.queue.schedule(
-                    position,
-                    component::LAMP_DELAY_GAME_TICKS,
-                    TickPriority::Normal,
-                );
+            let desired_lit = component::lamp_should_be_lit(&self.world, position);
+            if currently_lit != desired_lit {
+                let delay = if desired_lit {
+                    component::LAMP_TURN_ON_DELAY_GAME_TICKS
+                } else {
+                    component::LAMP_TURN_OFF_DELAY_GAME_TICKS
+                };
+                self.queue.schedule(position, delay, TickPriority::Normal);
             }
         }
     }

@@ -36,7 +36,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use crate::compile::routing_stats;
 use crate::compile::{CompiledCircuit, Netlist};
-use crate::redstone::simulator::component::{LAMP_DELAY_GAME_TICKS, TORCH_DELAY_GAME_TICKS};
+use crate::redstone::simulator::component::{
+    LAMP_TURN_OFF_DELAY_GAME_TICKS, LAMP_TURN_ON_DELAY_GAME_TICKS, TORCH_DELAY_GAME_TICKS,
+};
 use crate::redstone::simulator::observer::Observation;
 use crate::redstone::simulator::position::Position;
 use crate::redstone::simulator::{SimulationError, Simulator};
@@ -289,9 +291,15 @@ pub fn critical_path_repeaters(netlist: &Netlist, compiled: &CompiledCircuit, cr
 /// Each gate on the path costs one `TORCH_DELAY_GAME_TICKS`; each repeater
 /// its real, physically routed edges contain costs the same (every repeater
 /// this compiler places is set to the minimum one-redstone-tick delay, see
-/// `compile::repeater`); the terminating `LAMP_DELAY_GAME_TICKS` accounts for
-/// the output lamp's own display delay, which every declared output pays
-/// once, after its driving gate has already settled.
+/// `compile::repeater`); the terminating lamp delay accounts for the output
+/// lamp's own display delay, which every declared output pays once, after its
+/// driving gate has already settled. That delay is not symmetric -- a lamp
+/// lights immediately but goes dark one redstone tick later (see
+/// `LAMP_TURN_ON_DELAY_GAME_TICKS` / `LAMP_TURN_OFF_DELAY_GAME_TICKS`'s doc
+/// comments) -- so `lamp_turns_on` must say which direction the critical
+/// path's own transition actually was; the caller (`summarize_worst_case`)
+/// reads that off the worst transition's own recorded final value, not off
+/// the netlist.
 ///
 /// Before dust-staircase ramps (`compile`'s repeater ramps added a uniform,
 /// fixed repeater tax to every hop), the deepest gate chain and the
@@ -302,8 +310,13 @@ pub fn critical_path_repeaters(netlist: &Netlist, compiled: &CompiledCircuit, cr
 /// or gate-entry corners) can now be slower than a longer chain that routes
 /// cleanly -- this model must be fed the path that was *actually* slowest,
 /// not the deepest one.
-pub fn critical_path_settle_model_game_ticks(critical_path_gate_count: usize, critical_path_repeaters: usize) -> u64 {
-    TORCH_DELAY_GAME_TICKS * (critical_path_gate_count as u64 + critical_path_repeaters as u64) + LAMP_DELAY_GAME_TICKS
+pub fn critical_path_settle_model_game_ticks(
+    critical_path_gate_count: usize,
+    critical_path_repeaters: usize,
+    lamp_turns_on: bool,
+) -> u64 {
+    let lamp_delay = if lamp_turns_on { LAMP_TURN_ON_DELAY_GAME_TICKS } else { LAMP_TURN_OFF_DELAY_GAME_TICKS };
+    TORCH_DELAY_GAME_TICKS * (critical_path_gate_count as u64 + critical_path_repeaters as u64) + lamp_delay
 }
 
 // ---------------------------------------------------------------------
@@ -411,8 +424,24 @@ pub fn summarize_worst_case(
 
     let critical_path_gate_count = path.len().saturating_sub(1);
     let critical_path_repeater_count = critical_path_repeaters(netlist, compiled, &path);
+    // The critical output's own net (the driving gate's output torch, not the
+    // physical lamp -- see `watch_all_nets`) carries the lamp's own final
+    // value: the lamp sits directly under that torch's output pin with
+    // nothing inverting in between (`compile::mod`'s output-wiring doc
+    // comment), so torch.lit == lamp.lit. Its last recorded change is
+    // therefore exactly whether this transition turned the lamp on or off.
+    // No recorded change means the output never moved during the worst
+    // transition (an edge case that should not arise for any transition that
+    // is actually the slowest); default to the cheaper, immediate direction
+    // since there is nothing to time in that case.
+    let lamp_turns_on = worst
+        .nets
+        .get(&critical_output)
+        .and_then(|timing| timing.changes().last())
+        .map(|&(_, value)| value)
+        .unwrap_or(true);
     let critical_path_model_game_ticks =
-        critical_path_settle_model_game_ticks(critical_path_gate_count, critical_path_repeater_count);
+        critical_path_settle_model_game_ticks(critical_path_gate_count, critical_path_repeater_count, lamp_turns_on);
 
     TimingSummary {
         worst_settle_game_ticks: worst_ticks,
@@ -531,20 +560,21 @@ mod tests {
     // every tick below is derived by hand, not read off a run:
     //
     //   Chain A: lever -(0gt)-> support_a0 -(0gt)-> torch_a@2 -> repeater_a1@4
-    //            -> repeater_a2@6 -> repeater_a3@8 -> repeater_a4@10 -> lamp_a@12
+    //            -> repeater_a2@6 -> repeater_a3@8 -> repeater_a4@10 -> lamp_a@14
     //   Chain B: lever -(0gt)-> support_b1 -(0gt)-> torch_b1@2 -> support_b2@2
     //            -> torch_b2@4 -> support_b3@4 -> torch_b3@6
-    //            -> repeater_b1@8 -> lamp_b@10
+    //            -> repeater_b1@8 -> lamp_b@12
     //
     // (dust/solid-block conduction is instant -- only torches, repeaters and
     // lamps are ever scheduled, at TORCH_DELAY_GAME_TICKS / repeater delay /
-    // LAMP_DELAY_GAME_TICKS respectively.)
+    // LAMP_TURN_OFF_DELAY_GAME_TICKS respectively -- both lamps here are
+    // turning off, since both chains have an odd inversion count.)
     //
-    // Chain A's own numbers (1 gate, 4 repeaters) predict 2*1 + 2*4 + 2 = 12.
-    // Chain B's own numbers (3 gates, 1 repeater) predict 2*3 + 2*1 + 2 = 10.
+    // Chain A's own numbers (1 gate, 4 repeaters) predict 2*1 + 2*4 + 4 = 14.
+    // Chain B's own numbers (3 gates, 1 repeater) predict 2*3 + 2*1 + 4 = 12.
     // Chain B is the "deepest chain" (more gates) -- the netlist-depth
     // analogue of the old model would have used chain B's numbers. But the
-    // circuit's actual worst-case settle time is chain A's 12 ticks: the
+    // circuit's actual worst-case settle time is chain A's 14 ticks: the
     // slowest path is the shallow, repeater-heavy one, not the deep one.
     #[test]
     fn critical_path_settle_model_uses_the_slowest_path_not_the_deepest_one() {
@@ -636,15 +666,20 @@ mod tests {
         assert!(!simulator.world().get(lamp_a.x, lamp_a.y, lamp_a.z).lit, "lamp_a must end up dark (lever on)");
         assert!(!simulator.world().get(lamp_b.x, lamp_b.y, lamp_b.z).lit, "lamp_b must end up dark (lever on)");
         assert_eq!(
-            settle, 12,
+            settle, 14,
             "see the hand-derived timeline above -- chain A (1 gate, 4 repeaters) is the true \
              critical path, not chain B (3 gates, 1 repeater)"
         );
 
+        // Both lamps are turning off (lit -> dark) in this transition, so the
+        // model must be fed `lamp_turns_on = false` to use
+        // `LAMP_TURN_OFF_DELAY_GAME_TICKS` -- the same delay the hand-derived
+        // timeline above already accounts for.
+        //
         // The netlist-depth analogue -- the deepest chain's own numbers --
         // gets this circuit wrong. This is exactly the bug: static depth
         // assumed the deepest chain is always the slowest.
-        let deepest_chain_prediction = critical_path_settle_model_game_ticks(3, 1);
+        let deepest_chain_prediction = critical_path_settle_model_game_ticks(3, 1, false);
         assert_ne!(
             deepest_chain_prediction, settle,
             "the deepest chain's own numbers must NOT predict this circuit's settle time"
@@ -652,7 +687,7 @@ mod tests {
 
         // Fed the *actual* critical path's numbers instead -- chain A's 1
         // gate and 4 repeaters -- the model matches exactly.
-        let actual_critical_path_prediction = critical_path_settle_model_game_ticks(1, 4);
+        let actual_critical_path_prediction = critical_path_settle_model_game_ticks(1, 4, false);
         assert_eq!(actual_critical_path_prediction, settle);
     }
 }

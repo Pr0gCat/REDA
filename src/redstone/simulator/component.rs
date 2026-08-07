@@ -78,16 +78,24 @@ pub fn lamp_should_be_lit(world: &World, pos: Position) -> bool {
     block_power_at(world, pos) != BlockPower::None
 }
 
-/// Delay between a lamp's power changing and its `lit` state following, in
-/// game ticks.
+/// Delay from a lamp's power arriving to it lighting, in game ticks.
 ///
-/// Real Minecraft lights a lamp immediately but delays turning it off by one
-/// redstone tick to avoid a lamp flickering on the same tick a repeater
-/// pulses through it. This simulator applies the same delay symmetrically in
-/// both directions instead -- once a circuit has settled via
-/// `run_until_stable`, that difference is invisible to a caller checking a
-/// truth table; only the transient timing during the settle would differ.
-pub const LAMP_DELAY_GAME_TICKS: u64 = 2;
+/// Confirmed against a real 1.20.1 server (`conformance/results/1.20.1.json`,
+/// probe `lamp_on_off_delay`): a lamp lights immediately, on the same tick its
+/// power arrives.
+pub const LAMP_TURN_ON_DELAY_GAME_TICKS: u64 = 0;
+
+/// Delay from a lamp's power leaving to it going dark, in game ticks.
+///
+/// Confirmed against a real 1.20.1 server (same probe as above): turning off
+/// takes one redstone tick (2 game ticks) longer than turning on -- ~4 game
+/// ticks measured end to end. This asymmetry exists in vanilla to avoid a
+/// lamp flickering on the same tick a repeater pulses through it. An earlier
+/// version of this constant applied the same delay symmetrically in both
+/// directions, which was a deliberate simplification but did not match the
+/// game; `LAMP_TURN_ON_DELAY_GAME_TICKS` and this constant now match the
+/// measured asymmetry directly.
+pub const LAMP_TURN_OFF_DELAY_GAME_TICKS: u64 = 4;
 
 /// 這個 kind 是不是「二極體」（中繼器或比較器）—— 兩者共用鎖存規則。
 fn is_diode(kind: BlockKind) -> bool {

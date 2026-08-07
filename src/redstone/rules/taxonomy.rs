@@ -638,6 +638,23 @@ mod tests {
     }
 
     #[test]
+    fn honey_block_looks_full_but_supports_nothing() {
+        // Confirmed against the game (not just reasoned about): dust, levers
+        // and buttons all fail to attach to a honey block, even though its
+        // render model is a plain 16x16x16 cube like glass's. The `_block`
+        // suffix rule would otherwise have misjudged it as an ordinary full
+        // cube -- see `SUPPORTS_NOTHING`'s doc comment in `java_1_20.rs` and
+        // the `conducts_honey_block` conformance probe.
+        let honey = named(BlockKind::Other, "minecraft:honey_block");
+        let f = flags_of(&honey);
+        assert!(!f.can_carry_dust(), "honey block must not hold dust");
+        assert!(!f.can_carry_repeater(), "honey block must not hold a repeater");
+        assert!(!f.can_carry_torch(), "honey block must not hold a standing torch");
+        assert!(!f.can_attach_wall_torch(), "honey block has no full side face either");
+        assert!(!f.is_conductive(), "honey block does not conduct");
+    }
+
+    #[test]
     fn a_torch_does_not_power_the_block_it_stands_on() {
         // 這是火把能當反相器的全部原因 —— 少了它，火把塔會自己餵自己
         let mut torch = named(BlockKind::Torch, "minecraft:redstone_torch");
