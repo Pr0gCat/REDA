@@ -115,11 +115,34 @@ Three defenses now stand between forceload and the first `setblock`:
    instead of a fixed sleep after `clear_region`.
 3. `assert_quiescent` checks the lamp and every gate's output torch against
    the all-zero quiescent state right after the initial build settles, and
-   raises `RegionNotReady` (a distinct exit code, 2, from a real mismatch's
-   exit code, 1) if the circuit is not already in the state the simulator
-   predicts -- so a corrupted build is reported as "the build did not
-   settle as expected" instead of being silently swept across all 16
-   vectors and reported as circuit-level mismatches.
+   raises before a single input vector is even swept if anything is wrong.
+   It asks three separate questions, in order, because they have different
+   causes and different fixes:
+
+   a. **Did placement land?** Is the block we asked to be at each position
+      (lamp, every gate's output torch) actually there, by block identity
+      alone -- ignoring lit/powered/facing entirely? This is answerable
+      without knowing anything about redstone: it is the same kind of
+      check `verify_region_is_air` already makes, just pointed at "the
+      right non-air block" instead of "air". If this fails, the world
+      never got into the state we told it to -- that is `RegionNotReady`,
+      exit code 2, an environment/harness problem, not a circuit one.
+   b. **Has it settled, or is it still changing?** Two reads of every
+      signal, `--oscillation-probe` seconds apart. If anything differs
+      between them, the circuit is oscillating, not merely wrong -- a
+      distinct failure shape from "wrong but stable", and the message says
+      so explicitly.
+   c. **Settled to the right values?** With placement confirmed and no
+      motion detected, any remaining disagreement with the simulator is
+      the compiled circuit's logic being wrong. That is `CircuitMismatch`,
+      exit code 1 -- the same category a mismatch found during the vector
+      sweep gets -- and the message names every disagreeing gate.
+
+   Only (a) is a `RegionNotReady`. (b) and (c) are both `CircuitMismatch`:
+   the world did what we asked; the circuit computed the wrong thing. That
+   distinction is the whole point -- see "What to fix" in this harness's
+   change history: a dead circuit must never be reported as "go look at
+   the server".
 """
 
 from __future__ import annotations
@@ -320,11 +343,26 @@ def forceload_release(client: RconClient, origin: tuple[int, int, int], size: tu
 
 
 class RegionNotReady(RuntimeError):
-    """Raised when the world does not confirm the state this harness is
-    about to depend on -- a loaded region, a genuinely blank canvas, or a
-    settled circuit -- within a generous timeout. A test that proceeds
-    anyway is exactly the false-failure risk this class exists to remove:
-    see the module docstring's "Robustness against a racing world" section."""
+    """Raised when the world does not confirm the *environment* state this
+    harness depends on -- a loaded region, a genuinely blank canvas, or
+    (see assert_quiescent) the blocks we placed actually being physically
+    present at the positions we placed them -- within a generous timeout.
+    Deliberately narrow: this class is about the world failing to do what
+    we told it, never about a circuit computing the wrong answer. A test
+    that proceeds on an unconfirmed world is exactly the false-failure risk
+    this class exists to remove: see the module docstring's "Robustness
+    against a racing world" section. Its counterpart for a circuit that IS
+    physically present but logically wrong is CircuitMismatch, below."""
+
+
+class CircuitMismatch(RuntimeError):
+    """Raised when the world did exactly what we asked -- every block we
+    placed is confirmed present at its position by identity, and the
+    signals we're reading are no longer changing -- but the circuit
+    disagrees with the pure-boolean simulator anyway, or never stopped
+    changing at all (oscillation). Exit code 1, the same category a
+    mismatch discovered mid-sweep gets: unlike RegionNotReady, this means
+    look at the compiled circuit, not at the server."""
 
 
 def _xz_chunk_grid(origin: tuple[int, int, int], size: tuple[int, int, int], step: int = 16) -> list[tuple[int, int]]:
@@ -426,6 +464,33 @@ def read_lamp(client: RconClient, pos: tuple[int, int, int]) -> int | None:
     return None
 
 
+def block_id_present(client: RconClient, pos: tuple[int, int, int], block_id: str) -> bool:
+    """Pure block-identity check: is `block_id` sitting at `pos`, regardless
+    of any blockstate property (lit, powered, facing, delay, ...)? Vanilla's
+    `execute if block` with no bracketed state treats every property as a
+    wildcard, so this answers "did placement land here" without needing to
+    know anything about how the block's redstone state ought to look --
+    that is a separate question, answered by read_lamp/read_torch below."""
+    x, y, z = pos
+    return client.command(f"execute if block {x} {y} {z} {block_id}").strip().startswith("Test passed")
+
+
+def verify_positions_placed(
+    client: RconClient, checks: list[tuple[tuple[int, int, int], str]]
+) -> list[str]:
+    """Given [(position, expected_block_id), ...], return a description of
+    every position that does not actually hold the expected block. This is
+    the same kind of check verify_region_is_air already makes (a bare
+    block-id match over RCON), just pointed at "the right non-air block"
+    instead of "air" -- it confirms placement landed, nothing more, and in
+    particular says nothing about whether the circuit's logic is right."""
+    missing = []
+    for pos, block_id in checks:
+        if not block_id_present(client, pos, block_id):
+            missing.append(f"{pos}: expected block id {block_id!r}, not present")
+    return missing
+
+
 def read_torch(client: RconClient, pos: tuple[int, int, int]) -> int | None:
     x, y, z = pos
     if client.command(
@@ -439,40 +504,94 @@ def read_torch(client: RconClient, pos: tuple[int, int, int]) -> int | None:
     return None
 
 
+def read_state(
+    client: RconClient,
+    dump: Dump,
+    origin: tuple[int, int, int],
+    output_pos: tuple[int, int, int],
+) -> tuple[int | None, dict[str, int | None]]:
+    """Read the lamp and every gate's output torch once, as a snapshot."""
+    ox, oy, oz = origin
+    lamp_val = read_lamp(client, (ox + output_pos[0], oy + output_pos[1], oz + output_pos[2]))
+    gate_vals = {}
+    for gate_name, gate_pos in dump.gate_outputs.items():
+        pos = (ox + gate_pos[0], oy + gate_pos[1], oz + gate_pos[2])
+        gate_vals[gate_name] = read_torch(client, pos)
+    return lamp_val, gate_vals
+
+
 def assert_quiescent(
     client: RconClient,
     dump: Dump,
     origin: tuple[int, int, int],
     output_signal: str,
     output_pos: tuple[int, int, int],
+    oscillation_probe_seconds: float = 1.0,
 ) -> None:
-    """After the initial build settles (every lever placed off), check the
-    lamp and every gate's output torch against the pure-boolean evaluation
-    for all-zero inputs, and fail loudly if any disagree, instead of
-    silently sweeping all 16 vectors over a circuit that never finished
-    settling. This does not depend on identifying the exact reason the
-    build might be wrong -- a race with world generation, a dropped RCON
-    command, an unlucky chunk reload -- it just refuses to trust a circuit
-    it has not itself confirmed is in the state the simulator predicts."""
+    """After the initial build settles (every lever placed off), confirm
+    the circuit is trustworthy before a single input vector is swept, by
+    asking three separate questions in order -- see the module docstring's
+    "Three defenses" section point 3 for the reasoning:
+
+    1. Did placement land? (RegionNotReady if not -- environment problem.)
+    2. Has it actually stopped changing, or is it oscillating?
+    3. Having stopped changing, did it stop at the *right* values?
+
+    (2) and (3) both raise CircuitMismatch: by that point the world is
+    confirmed to hold exactly the blocks we asked for, so any remaining
+    disagreement is the compiled circuit's logic, not the harness's."""
     ox, oy, oz = origin
     expected = evaluate_expected(dump.gates, {name: 0 for name in sorted(dump.inputs)})
 
-    mismatches: list[str] = []
+    # 1. Placement landed? Pure block-identity check, independent of any
+    # redstone state -- see block_id_present's docstring. Deliberately
+    # checked before we interpret lit/powered at all, so a missing or
+    # wrong block here can never be misread as a circuit-logic failure.
     lamp_pos = (ox + output_pos[0], oy + output_pos[1], oz + output_pos[2])
-    actual_lamp = read_lamp(client, lamp_pos)
-    if actual_lamp != expected[output_signal]:
-        mismatches.append(f"output {output_signal}: expected {expected[output_signal]}, read {actual_lamp!r}")
-
-    for gate_name, gate_pos in dump.gate_outputs.items():
+    checks: list[tuple[tuple[int, int, int], str]] = [(lamp_pos, "minecraft:redstone_lamp")]
+    for gate_pos in dump.gate_outputs.values():
         pos = (ox + gate_pos[0], oy + gate_pos[1], oz + gate_pos[2])
-        actual = read_torch(client, pos)
+        checks.append((pos, "minecraft:redstone_wall_torch"))
+    missing = verify_positions_placed(client, checks)
+    if missing:
+        raise RegionNotReady(
+            "placement did not land as instructed -- these positions do not hold the "
+            "block we placed there, checked by block identity alone and independent of "
+            "any redstone state, so this is an environment/harness problem, not a "
+            "circuit failure: " + "; ".join(missing)
+        )
+
+    # 2. Settled, or still moving? Two reads spaced apart; any signal that
+    # differs between them means the circuit has not reached a fixed point
+    # at all -- a different failure shape from "settled but wrong".
+    lamp1, gates1 = read_state(client, dump, origin, output_pos)
+    time.sleep(oscillation_probe_seconds)
+    lamp2, gates2 = read_state(client, dump, origin, output_pos)
+    changed: list[str] = []
+    if lamp1 != lamp2:
+        changed.append(f"output {output_signal}: {lamp1!r} -> {lamp2!r}")
+    for gate_name in gates1:
+        if gates1[gate_name] != gates2[gate_name]:
+            changed.append(f"gate {gate_name}: {gates1[gate_name]!r} -> {gates2[gate_name]!r}")
+    if changed:
+        raise CircuitMismatch(
+            f"the circuit is still changing {oscillation_probe_seconds:.1f}s after the initial "
+            "settle wait -- these signals disagreed between two reads taken that far apart, which "
+            "looks like oscillation rather than a simple wrong-value mismatch: " + "; ".join(changed)
+        )
+
+    # 3. Settled -- but to the values the simulator predicts?
+    mismatches: list[str] = []
+    if lamp2 != expected[output_signal]:
+        mismatches.append(f"output {output_signal}: expected {expected[output_signal]}, read {lamp2!r}")
+    for gate_name, actual in gates2.items():
         if actual != expected[gate_name]:
             mismatches.append(f"gate {gate_name}: expected {expected[gate_name]}, read {actual!r}")
-
     if mismatches:
-        raise RegionNotReady(
-            "the build did not settle as expected -- circuit disagrees with the all-zero "
-            "quiescent state before a single vector was even swept: " + "; ".join(mismatches)
+        raise CircuitMismatch(
+            "the compiled circuit disagrees with the simulator at rest -- placement is confirmed "
+            "and every signal is stable, but the build settled to the wrong values before a single "
+            "input vector was even swept: " + "; ".join(mismatches)
         )
 
 
@@ -526,7 +645,7 @@ def run(args: argparse.Namespace) -> int:
     try:
         print("Forceloading region...")
         forceload(client, origin, dump.size)
-        wait_for_region_loaded(client, origin, dump.size)
+        wait_for_region_loaded(client, origin, dump.size, timeout=args.load_timeout)
         if not args.no_clear:
             print("Clearing region...")
             clear_region(client, origin, dump.size)
@@ -560,8 +679,11 @@ def run(args: argparse.Namespace) -> int:
         print(f"Settling {args.settle_build:.1f}s after initial build...")
         time.sleep(args.settle_build)
 
-        print("Checking the build settled to the expected all-zero quiescent state...")
-        assert_quiescent(client, dump, origin, output_signal, output_pos)
+        print("Checking placement landed and the build settled to the expected all-zero state...")
+        assert_quiescent(
+            client, dump, origin, output_signal, output_pos,
+            oscillation_probe_seconds=args.oscillation_probe,
+        )
 
         current = {name: False for name in input_names}
 
@@ -643,17 +765,36 @@ def main() -> int:
     ap.add_argument("--vectors", default=None, help="comma-separated 4-bit vectors to test, e.g. 0000,1111 (default: all 16)")
     ap.add_argument("--no-clear", action="store_true", help="skip the pre-build air clear (region already known clean)")
     ap.add_argument("--keep", action="store_true", help="leave the circuit standing and the region forceloaded after the run")
+    ap.add_argument(
+        "--load-timeout", type=float, default=15.0,
+        help="seconds to wait for forceload to report the region actually loaded before giving up "
+        "with RegionNotReady (exit 2). Lower this (e.g. to a fraction of a second) against a "
+        "never-visited region to deliberately exercise that failure path.",
+    )
+    ap.add_argument(
+        "--oscillation-probe", type=float, default=1.0,
+        help="seconds between the two reads assert_quiescent takes to detect a circuit that is "
+        "still changing rather than settled",
+    )
     args = ap.parse_args()
     try:
         return run(args)
     except RegionNotReady as exc:
-        # Deliberately distinct from a mismatched-vector failure (exit 1):
-        # this means the world was never in a state worth testing, not that
+        # Deliberately distinct from a circuit-level failure (exit 1): this
+        # means the world was never confirmed to be in the state we asked
+        # for -- forceload, a blank canvas, or placement itself -- not that
         # the circuit disagreed with the truth table. run()'s own
         # try/finally has already cleared the region and released the
         # forceload before this is reached.
         print(f"\nERROR: {exc}", file=sys.stderr)
         return 2
+    except CircuitMismatch as exc:
+        # The world did what we asked; the compiled circuit computed the
+        # wrong thing (or never stopped changing). Same exit code as a
+        # mismatch found during the vector sweep, because it is the same
+        # category of failure -- just caught one step earlier.
+        print(f"\nERROR: {exc}", file=sys.stderr)
+        return 1
 
 
 if __name__ == "__main__":
