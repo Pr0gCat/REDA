@@ -1,0 +1,159 @@
+# Minecraft server for redstone conformance testing
+
+This sets up the ground-truth server described in
+`docs/superpowers/specs/2026-08-07-minecraft-conformance.md`: a real vanilla
+1.20.1 server, driven over RCON, that the (separate, not-yet-written) test
+harness will use to place compiled circuits and check them against a real
+game rather than our own simulator.
+
+Everything in this section lives under `minecraft-server/` at the repo root,
+which is entirely gitignored. Nothing here touches `src/`, `tests/`, or
+`viewer/`.
+
+## What was downloaded
+
+**Eclipse Temurin JDK 21** (Windows x64, `.zip`), because Minecraft 1.20.1
+requires Java 17+ and the machine only had Java 8/11 installed. Resolved via
+the Adoptium API (`GET
+https://api.adoptium.net/v3/assets/latest/21/hotspot?architecture=x64&image_type=jdk&os=windows&vendor=eclipse`),
+which returned build `jdk-21.0.12+8`:
+
+- URL: `https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.12%2B8/OpenJDK21U-jdk_x64_windows_hotspot_21.0.12_8.zip`
+- SHA-256 (per Adoptium's API, matched against the download): `9ba963ee2371874a74185d18bc7bb2ab9407df7683300855ed7606e0662321d0`
+- Extracted to `minecraft-server/jdk21/` (portable, not installed system-wide, not on PATH).
+
+**Minecraft 1.20.1 `server.jar`**, resolved through Mojang's manifest chain
+rather than a hardcoded URL:
+
+1. `https://launchermeta.mojang.com/mc/game/version_manifest_v2.json` → the
+   `1.20.1` entry points at
+   `https://piston-meta.mojang.com/v1/packages/c2f76c955503c7143424b51e21eea87bbe5c6547/1.20.1.json`
+2. That version JSON's `downloads.server` gives:
+   - URL: `https://piston-data.mojang.com/v1/objects/84194a2f286ef7c14ed7ce0090dba59902951553/server.jar`
+   - SHA-1: `84194a2f286ef7c14ed7ce0090dba59902951553`
+3. Downloaded and verified with `sha1sum` — matched. Placed at
+   `minecraft-server/server/server.jar`.
+
+## Directory layout
+
+```
+minecraft-server/           (gitignored in full)
+  jdk21/                     Temurin 21, extracted, self-contained
+  server/                    the runnable server (jar, world, logs, config)
+  run-server.sh              starts the server with the bundled JDK (bash)
+  run-server.ps1             same, for PowerShell
+```
+
+## The one line you need to change
+
+`minecraft-server/server/eula.txt` currently reads:
+
+```
+eula=false
+```
+
+This repo will not flip that to `true` — accepting Mojang's EULA is your
+decision, not the agent's. The server refuses to start until you change that
+line to `eula=true` yourself. See https://aka.ms/MinecraftEULA before you do.
+
+## Starting and stopping
+
+```bash
+./minecraft-server/run-server.sh       # git-bash / WSL
+```
+```powershell
+.\minecraft-server\run-server.ps1      # PowerShell
+```
+
+Both scripts resolve the bundled JDK by path, so they work regardless of
+what `java` is on the machine's PATH. They run the server in the foreground
+(`nogui`, no interactive console window).
+
+To stop: `Ctrl+C` in the terminal (the vanilla server has a shutdown hook
+that saves and exits cleanly), or send `stop` over RCON.
+
+## RCON
+
+- Enabled: `enable-rcon=true`
+- Port: `25575` (`rcon.port` in `server.properties`)
+- Password: `rcon.password` in `minecraft-server/server/server.properties`
+  (generated once, stored in plaintext — that file is gitignored, and this is
+  the standard place Minecraft itself reads the password from, so the
+  harness can just parse that one file rather than needing a second secret
+  store).
+- The server binds to `127.0.0.1` only (`server-ip=127.0.0.1`), so RCON and
+  the game port are not reachable from outside the machine.
+
+A harness authenticates with the standard [Source RCON
+protocol](https://developer.valvesoftware.com/wiki/Source_RCON_Protocol):
+open a TCP socket to `127.0.0.1:25575`, send a `SERVERDATA_AUTH` packet with
+the password from `server.properties`, then issue `SERVERDATA_EXECCOMMAND`
+packets (`/forceload add ...`, `/setblock ...`, `/data get block ...`, etc.)
+and read the responses.
+
+## `server.properties` choices and why
+
+The full file is at `minecraft-server/server/server.properties`. The choices
+that matter for a redstone conformance harness:
+
+- `enable-rcon=true`, `rcon.port=25575`, `rcon.password=<generated>` — the
+  harness's only way in; no player needs to log in.
+- `level-type=flat`, `generate-structures=false`, `generator-settings={}` —
+  a superflat world with no villages, strongholds, or terrain features nearby
+  to confuse `/fill`/`/setblock` or slow down chunk generation.
+- `spawn-monsters=false`, `spawn-animals=false`, `spawn-npcs=false`,
+  `difficulty=peaceful` — no entities ticking near the circuit, no hostile
+  mobs that could path onto redstone components or despawn/attack, no hunger
+  or environmental damage to worry about if a human ever joins to look.
+- `allow-nether=false` — the harness only ever needs the overworld; skips
+  generating/loading a second dimension entirely.
+- `spawn-protection=0` — otherwise vanilla protects a 16-block radius around
+  spawn from `/setblock`/`/fill`, which would silently no-op placements near
+  the origin.
+- `view-distance=10`, `simulation-distance=10` — large enough that a circuit
+  a human is observing keeps ticking, but note `/forceload` (per the spec)
+  is what actually guarantees the circuit's chunks tick regardless of any
+  player's distance from it — that's the whole point of forceloading rather
+  than relying on view/simulation distance.
+- `max-chained-neighbor-updates=1000000` — left at the (already generous)
+  vanilla default so a circuit with many redstone updates in one tick doesn't
+  get its update chain truncated.
+- `online-mode=false`, `enforce-secure-profile=false` — no Mojang auth
+  handshake needed for a local-only harness; avoids chat-signing errors that
+  `enforce-secure-profile=true` would otherwise cause with `online-mode=false`.
+- `server-ip=127.0.0.1` — binds the game port to localhost only; this server
+  is not meant to be reachable from the network.
+- `pvp=false`, `hardcore=false`, `gamemode=creative`, `force-gamemode=true` —
+  in case a human joins to eyeball a circuit, they can fly and place/break
+  blocks freely without dying or fighting anything.
+- `enable-command-block=true` — convenience for manual debugging; RCON
+  commands already run at full permission regardless of this setting.
+- `enable-query=false`, `enable-status=false` — no reason to expose a second
+  query protocol or answer server-list pings for a harness-only server.
+- `level-seed=reda-conformance` — fixed, so the (irrelevant, since it's flat)
+  seed is at least reproducible rather than random per generation.
+
+## Verification performed
+
+Confirmed, with the bundled JDK and without ever touching `eula.txt`:
+
+1. `minecraft-server/jdk21/bin/java.exe -version` reports Temurin 21.0.12 —
+   the bundled JDK runs standalone.
+2. Running the server once (`java -jar server.jar nogui`) generated
+   `eula.txt` (`eula=false`) and a default `server.properties`, then exited
+   — this is how `eula.txt` was created, per the constraint that this repo
+   would generate it rather than hand-write `eula=true`.
+3. `server.properties` was then replaced with the tuned version above, and
+   the server was run a second time. It loaded and re-saved
+   `server.properties` with all the custom values intact (confirming the
+   file parses and every key was accepted — a typo'd key would have been
+   silently dropped or reset to default here), logged "You need to agree to
+   the EULA in order to run the server", and exited. **No `world/` directory
+   was created** — confirming the EULA gate happens before any world
+   generation, RCON listener, or game-port binding.
+
+That is as far as verification could go without accepting the EULA: **RCON
+was not exercised end-to-end**, because the server never reaches the point
+of opening the RCON socket while `eula=false`. Once you flip that line, the
+harness's first RCON connection attempt against `127.0.0.1:25575` with the
+password in `server.properties` is the next real test.

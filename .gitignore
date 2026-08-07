@@ -16,6 +16,11 @@
 /output/*.litematic
 /output/*.schem
 
+# Minecraft conformance server: bundled JDK, server jar/world/logs, RCON
+# password. Everything under here is downloaded or generated locally, never
+# committed. See docs/minecraft-server.md.
+/minecraft-server/
+
 # IDE
 .idea/
 .vscode/
