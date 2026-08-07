@@ -3,6 +3,10 @@
 **/*.rs.bk
 *.pdb
 
+# wasm build output (viewer/): `wasm-pack build` regenerates this from source
+/viewer/target/
+/viewer/pkg/
+
 # 外部工具產出的中間檔
 *.json.netlist
 /build/
