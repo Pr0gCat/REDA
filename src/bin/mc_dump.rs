@@ -43,7 +43,11 @@ use reda::compile::{compile, Netlist};
 use reda::redstone::world::block::{BlockKind, Face, Facing};
 use reda::redstone::world::storage::World;
 
-fn available_circuits() -> Vec<(&'static str, fn() -> Netlist)> {
+/// A named reference circuit's builder, paired with the name used to select
+/// it on the command line -- see `available_circuits` below.
+type NamedCircuitBuilder = (&'static str, fn() -> Netlist);
+
+fn available_circuits() -> Vec<NamedCircuitBuilder> {
     vec![("and4", || and4::build_and4_netlist().0)]
 }
 

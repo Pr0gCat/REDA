@@ -783,16 +783,19 @@ function buildLegendUI() {
 // own rotation from the cell's `facing` byte (`FAMILIES_ROTATED_BY_FACING`).
 // Every template is authored in cell-local, cell-*centred* coordinates
 // (-0.5..0.5 on each axis = one full cell, matching `Session::geometry()`'s
-// cell corner once translated to the cell's centre) and assuming a canonical
-// output-facing of South (+z) -- `facingAngleY` supplies the rotation that
-// turns "South" into whatever direction is real, using the same direction
-// convention as `reda`'s own `Position::offset` (North=-z, South=+z,
-// East=+x, West=-x -- see src/redstone/simulator/position.rs). For a
-// repeater or comparator, "whatever direction is real" is the stored
-// `facing` byte's *opposite* -- Minecraft's `facing` records the direction
-// from output to input (see `FAMILIES_ROTATED_BY_OPPOSITE_FACING`); a wall
-// torch or lever's `facing` already is the direction the block points, so
-// those rotate by `facing` directly.
+// cell corner once translated to the cell's centre) and matches the real
+// block model's own `facing=south` variant verbatim (no rotation applied) --
+// `facingAngleY` then supplies the rotation that turns "South" into whatever
+// direction is real, using the same direction convention as `reda`'s own
+// `Position::offset` (North=-z, South=+z, East=+x, West=-x -- see
+// src/redstone/simulator/position.rs). This applies uniformly: a repeater or
+// comparator's `facing` byte and a wall torch or lever's `facing` byte are
+// both rotated by `facing` directly, with no per-family inversion. (An
+// earlier version of this file rotated repeaters/comparators by `facing`'s
+// opposite to compensate for a template whose two nubs were placed for the
+// wrong ends -- see `tools/mc_block_info.py` and
+// docs/minecraft-block-authority.md for how to check a block's real model
+// instead of guessing.)
 // A full cube (`CUBE_SIZE = 1`, no gap) keeps two adjacent solid blocks
 // flush -- shrinking it would read as a row of loose beads instead of a
 // continuous run, which for redstone is the working/dead distinction.
@@ -848,37 +851,28 @@ function familyForCell(kind, faceId, delay) {
  * everything with a horizontal-only `facing` in this compiler's output
  * (repeaters of every delay, comparators, wall torches, wall/floor/ceiling
  * levers). Standing torches, dust, slabs and plain cubes have no meaningful
- * horizontal orientation and are left at the identity rotation. */
+ * horizontal orientation and are left at the identity rotation.
+ *
+ * Every family here rotates by `facing` *directly*, with no per-family
+ * inversion: each template already matches its block's real `facing=south`
+ * model variant verbatim (checked against the client jar's blockstate/model
+ * JSON -- see `tools/mc_block_info.py` and docs/minecraft-block-authority.md),
+ * so applying `facingAngleY(facing)` reproduces the same rotation Minecraft's
+ * own blockstate table applies (`facing=south` -> no rotation, `north` ->
+ * 180, `west` -> 90, `east` -> 270, for both repeater and comparator). A
+ * repeater/comparator's `facing` records "the direction from the output side
+ * to the input side" (Minecraft Wiki; matches `state.facing` in
+ * src/redstone/simulator/component.rs), so its *canonical* (facing=south)
+ * template must put the fixed nub -- the output -- on the north end and the
+ * nub that moves with delay -- the input -- sliding toward the south end,
+ * per the real repeater_Ntick.json models. Getting the direct-vs-opposite
+ * rotation wrong here previously produced a repeater rendered mirrored
+ * end-to-end -- output and input nubs swapped -- despite each individual
+ * nub's z-offset already being numerically correct. */
 const FAMILIES_ROTATED_BY_FACING = new Set([
   'repeater1', 'repeater2', 'repeater3', 'repeater4',
   'comparator', 'wallTorch', 'leverFloor', 'leverCeiling', 'leverWall',
 ]);
-
-/** Families whose stored `facing` byte points from *output* to *input* --
- * repeaters and comparators, per the Minecraft Wiki's blockstate tables for
- * both ("the direction from the output side to the input side"). Every
- * template in this file is authored output-toward-canonical-South (see the
- * "Repeater nub layout" comment below), so these two families must rotate by
- * `facing`'s *opposite* to land their output nub on the real output side.
- * Wall torches and levers are not in this set -- their `facing` already
- * means "the direction the block points", unaffected by this file's own
- * repeater/comparator convention fix. */
-const FAMILIES_ROTATED_BY_OPPOSITE_FACING = new Set([
-  'repeater1', 'repeater2', 'repeater3', 'repeater4', 'comparator',
-]);
-
-/** The horizontal opposite of a `facing` byte (`FACING_NORTH`/`SOUTH`/`EAST`/
- * `WEST`), or the value unchanged for `FACING_NONE`/anything else -- used by
- * `FAMILIES_ROTATED_BY_OPPOSITE_FACING` above. */
-function oppositeFacing(facingId) {
-  switch (facingId) {
-    case FACING_NORTH: return FACING_SOUTH;
-    case FACING_SOUTH: return FACING_NORTH;
-    case FACING_EAST: return FACING_WEST;
-    case FACING_WEST: return FACING_EAST;
-    default: return facingId;
-  }
-}
 
 /** Y-axis rotation (radians) that turns a template authored facing South
  * (+z) into one facing `facingId`'s real direction, using the same
@@ -992,23 +986,26 @@ function mergeBoxen(boxes) {
 
 const DUST_HEIGHT = 1 / 16; // a flat film on the cell floor, not a block tall
 
-// Repeater nub layout -- see the "Repeater delay" section of
-// docs/superpowers/plans/2026-08-07-3d-view.md: Minecraft shows a repeater's
-// delay by the gap between its two torch nubs, delay 1 close together and
-// delay 4 at opposite ends. Built South-*output* like every other template
-// here (input toward -z/North, output toward +z/South) -- but the cell's
-// stored `facing` byte records the opposite (output-to-input) direction per
-// the Minecraft Wiki, so the instance is rotated by `facing`'s *opposite*,
-// not `facing` itself (see `FAMILIES_ROTATED_BY_OPPOSITE_FACING` above).
-//
-// The input nub is fixed at the back edge for every delay -- only the output
-// nub moves, from right next to the input nub (delay 1) out to the front
-// edge (delay 4, the position the old delay-less template always used). Four
-// evenly spaced stops, 0.125 apart, keep the nub (0.25 wide, so +-0.125 from
-// its own centre) exactly edge-to-edge with the input nub at delay 1 --
-// visibly close, not overlapping -- and spread out from there.
-const REPEATER_INPUT_NUB_Z = -0.3125;
-const REPEATER_OUTPUT_NUB_Z_BY_DELAY = { 1: -0.0625, 2: 0.0625, 3: 0.1875, 4: 0.3125 };
+// Repeater nub layout -- offsets read verbatim off the client jar's
+// assets/minecraft/models/block/repeater_1tick.json .. repeater_4tick.json
+// (see docs/minecraft-block-authority.md; re-check with
+// `tools/mc_block_info.py minecraft:repeater`). Each model has a torch fixed
+// at [7,2,2]->[9,7,4] (block-centred: x=0, z=-0.3125) in every tick variant,
+// and a second torch that slides from [7,2,6]->[9,7,8] (z=-0.0625) at 1 tick
+// out to [7,2,12]->[9,7,14] (z=0.3125) at 4 ticks, 0.125 apart per tick.
+// blockstates/repeater.json applies these models unrotated for
+// `facing=south`, and per the Minecraft Wiki (matching `state.facing` in
+// src/redstone/simulator/component.rs) a repeater's `facing` points from its
+// output side to its input side -- so for `facing=south` the input is to the
+// south (+z) and the output to the north (-z). That makes the torch fixed at
+// z=-0.3125 the OUTPUT nub and the one that slides toward +z with more delay
+// the INPUT nub, sliding further from the output as delay grows. (An earlier
+// version of this file had these two swapped, and compensated by rotating
+// the whole template by `facing`'s opposite -- the two mistakes partly
+// cancelled out to still place each nub at these same z-offsets, but flipped
+// the model end-to-end once a real, non-south `facing` was rotated in.)
+const REPEATER_OUTPUT_NUB_Z = -0.3125; // fixed, every delay
+const REPEATER_INPUT_NUB_Z_BY_DELAY = { 1: -0.0625, 2: 0.0625, 3: 0.1875, 4: 0.3125 };
 
 /** One repeater shape template for a given delay (1-4): a low slab plus two
  * nubs -- the nub *count* (two) is what separates this from a comparator at
@@ -1017,8 +1014,8 @@ const REPEATER_OUTPUT_NUB_Z_BY_DELAY = { 1: -0.0625, 2: 0.0625, 3: 0.1875, 4: 0.
 function repeaterTemplate(delay) {
   return mergeBoxen([
     box([1, 0.125, 1], [0, -0.4375, 0]),
-    box([0.25, 0.3125, 0.25], [0, -0.21875, REPEATER_INPUT_NUB_Z]), // input end, fixed
-    box([0.25, 0.3125, 0.25], [0, -0.21875, REPEATER_OUTPUT_NUB_Z_BY_DELAY[delay]]), // output end, moves with delay
+    box([0.25, 0.3125, 0.25], [0, -0.21875, REPEATER_OUTPUT_NUB_Z]), // output end, fixed
+    box([0.25, 0.3125, 0.25], [0, -0.21875, REPEATER_INPUT_NUB_Z_BY_DELAY[delay]]), // input end, moves with delay
   ]);
 }
 
@@ -1033,15 +1030,35 @@ const SHAPE_TEMPLATES = {
   repeater2: repeaterTemplate(2),
   repeater3: repeaterTemplate(3),
   repeater4: repeaterTemplate(4),
-  // Same slab, but three nubs: two on the facing (front/output) side and one
-  // on the back (input) side -- three nubs at a glance is unmistakably not
-  // a repeater, and the asymmetric two-front/one-back layout still shows
-  // which way it faces.
+  // Three nubs, offsets read verbatim off the client jar's
+  // assets/minecraft/models/block/comparator.json (re-check with
+  // `tools/mc_block_info.py minecraft:comparator`): a single mode-indicator
+  // torch at [7,2,2]->[9,4,4] (block-centred x=0, z=-0.3125, short -- only
+  // 2 units tall) and a symmetric pair of side torches at [4,2,11]->[6,7,13]
+  // and [10,2,11]->[12,7,13] (x=-0.1875/+0.1875, z=0.25, taller). Same
+  // blockstates/comparator.json rotation table as the repeater
+  // (`facing=south` unrotated, `north`->180, `west`->90, `east`->270) and
+  // the Minecraft Wiki gives a comparator's `facing` the same "output side
+  // to input side" meaning as a repeater's (matching `state.facing` in
+  // src/redstone/simulator/component.rs) -- so for `facing=south` the single
+  // front torch (z=-0.3125, north) is the OUTPUT side and the rear pair
+  // (z=0.25, south) is the INPUT side. Three nubs at a glance is
+  // unmistakably not a repeater; the asymmetric single-front/pair-back
+  // layout still shows which way it faces.
+  //
+  // The jar has four comparator models (compare/subtract x powered/unlit),
+  // differing only in the front torch's height and texture and the rear
+  // torches' texture -- but `Session::geometry()` does not carry a
+  // comparator's `mode` or `powered` bit at all (see the byte layout doc on
+  // `Session::geometry()` in viewer/src/lib.rs), and `compile()` never
+  // places a comparator in the first place, so this template always draws
+  // the plain `compare`-mode nub shape; there is nothing to select a
+  // different variant with yet.
   comparator: mergeBoxen([
     box([1, 0.125, 1], [0, -0.4375, 0]),
-    box([0.2, 0.3125, 0.2], [-0.25, -0.21875, 0.3125]),
-    box([0.2, 0.3125, 0.2], [0.25, -0.21875, 0.3125]),
-    box([0.2, 0.3125, 0.2], [0, -0.21875, -0.3125]),
+    box([0.2, 0.125, 0.2], [0, -0.3125, -0.3125]), // mode indicator, output side, fixed
+    box([0.2, 0.3125, 0.2], [-0.1875, -0.21875, 0.25]), // input side, left
+    box([0.2, 0.3125, 0.2], [0.1875, -0.21875, 0.25]), // input side, right
   ]),
   // Thin post with a slightly wider head, standing from the cell floor --
   // always vertical, so it needs no facing.
@@ -1318,11 +1335,7 @@ function build3DGeometry() {
     }
     bucket.indices.push(i);
     bucket.rotationY.push(
-      FAMILIES_ROTATED_BY_FACING.has(family)
-        ? facingAngleY(
-            FAMILIES_ROTATED_BY_OPPOSITE_FACING.has(family) ? oppositeFacing(facings[i]) : facings[i],
-          )
-        : 0,
+      FAMILIES_ROTATED_BY_FACING.has(family) ? facingAngleY(facings[i]) : 0,
     );
   }
 
