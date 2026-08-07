@@ -860,9 +860,33 @@ function facingAngleY(facingId) {
 // ---------------------------------------------------------------------
 
 /** One `BoxGeometry`, optionally rotated about its own centre and then
- * moved to `center` -- the building block every shape template is made of. */
+ * moved to `center` -- the building block every shape template is made of.
+ *
+ * Also stamps three custom per-vertex attributes the block-edge shader
+ * (see `sharedMaterial3d.onBeforeCompile` below) needs, captured *before*
+ * this box's own rotate/translate so they stay in the box's own local
+ * frame no matter where the box ends up in the cell or how the whole
+ * instance is later rotated by `facing`:
+ *   localPos      -- the vertex's own box-local position. `BoxGeometry` is
+ *                     built centred on the origin, so this is already
+ *                     exactly +-halfExtent on each axis at the box's own
+ *                     boundary.
+ *   boxNormal     -- that box's face normal, also pre-transform.
+ *   boxHalfExtent -- that box's own half-size, repeated per vertex.
+ * A composite shape (a repeater's slab-plus-nubs) is several `box()` calls
+ * merged by `mergeBoxen`, so each box's edges are its own -- exactly the
+ * twelve edges of that box, not the merged shape's outer hull. */
 function box(size, center, rotation) {
   const geometry = new THREE.BoxGeometry(size[0], size[1], size[2]).toNonIndexed();
+  const localPos = geometry.attributes.position.array.slice();
+  const boxNormal = geometry.attributes.normal.array.slice();
+  const vertexCount = geometry.attributes.position.count;
+  const boxHalfExtent = new Float32Array(vertexCount * 3);
+  for (let i = 0; i < vertexCount; i++) {
+    boxHalfExtent[i * 3] = size[0] / 2;
+    boxHalfExtent[i * 3 + 1] = size[1] / 2;
+    boxHalfExtent[i * 3 + 2] = size[2] / 2;
+  }
   if (rotation) {
     const [rx, ry, rz] = rotation;
     if (rx) geometry.rotateX(rx);
@@ -870,30 +894,43 @@ function box(size, center, rotation) {
     if (rz) geometry.rotateZ(rz);
   }
   geometry.translate(center[0], center[1], center[2]);
+  geometry.setAttribute('localPos', new THREE.BufferAttribute(localPos, 3));
+  geometry.setAttribute('boxNormal', new THREE.BufferAttribute(boxNormal, 3));
+  geometry.setAttribute('boxHalfExtent', new THREE.BufferAttribute(boxHalfExtent, 3));
   return geometry;
 }
 
-/** Concatenate several (non-indexed) box geometries' position/normal
- * attributes into one `BufferGeometry`, then add the all-white dummy `color`
- * attribute `update3DStrengths` needs (see the comment this replaces, below,
- * on why `vertexColors` needs one at all). No index buffer -- box geometries
- * are small, and a shared index would need per-box offsetting for no real
- * saving here. */
+/** Concatenate several (non-indexed) box geometries' attributes into one
+ * `BufferGeometry` -- position/normal for rendering, localPos/boxNormal/
+ * boxHalfExtent (see `box()`) for the block-edge shader -- then add the
+ * all-white dummy `color` attribute `update3DStrengths` needs (see the
+ * comment this replaces, below, on why `vertexColors` needs one at all). No
+ * index buffer -- box geometries are small, and a shared index would need
+ * per-box offsetting for no real saving here. */
 function mergeBoxen(boxes) {
   let vertexCount = 0;
   for (const b of boxes) vertexCount += b.attributes.position.count;
   const positions = new Float32Array(vertexCount * 3);
   const normals = new Float32Array(vertexCount * 3);
+  const localPositions = new Float32Array(vertexCount * 3);
+  const boxNormals = new Float32Array(vertexCount * 3);
+  const boxHalfExtents = new Float32Array(vertexCount * 3);
   let offset = 0;
   for (const b of boxes) {
     positions.set(b.attributes.position.array, offset * 3);
     normals.set(b.attributes.normal.array, offset * 3);
+    localPositions.set(b.attributes.localPos.array, offset * 3);
+    boxNormals.set(b.attributes.boxNormal.array, offset * 3);
+    boxHalfExtents.set(b.attributes.boxHalfExtent.array, offset * 3);
     offset += b.attributes.position.count;
     b.dispose();
   }
   const merged = new THREE.BufferGeometry();
   merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
   merged.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  merged.setAttribute('localPos', new THREE.BufferAttribute(localPositions, 3));
+  merged.setAttribute('boxNormal', new THREE.BufferAttribute(boxNormals, 3));
+  merged.setAttribute('boxHalfExtent', new THREE.BufferAttribute(boxHalfExtents, 3));
   // three.js's instancing-colour shader chunk multiplies `instanceColor`
   // into `vColor`, but only initialises `vColor` at all when the geometry
   // itself also carries a per-vertex `color` attribute (`USE_COLOR`) --
@@ -955,6 +992,86 @@ const SHAPE_TEMPLATES = {
 // itself. Unlit on purpose -- see ensureThreeInitialized's comment below on
 // why there are no lights in the scene.
 const sharedMaterial3d = new THREE.MeshBasicMaterial({ vertexColors: true });
+
+// ---------------------------------------------------------------------
+// Block edges -- see the "Block edges" section of
+// docs/superpowers/plans/2026-08-07-3d-view.md. Flush blocks (the previous
+// change) fixed seams between adjacent solids but made a run of them read
+// as one grey mass; this draws each box's own twelve edges so individual
+// cells stay countable, without any of:
+//   - a per-block draw call: this rides along on the existing shared
+//     `sharedMaterial3d` via `onBeforeCompile`, so there is still exactly
+//     one draw call per shape family (InstancedMesh) regardless of how
+//     many cells -- 19,050 for seven_segment -- it has.
+//   - extra geometry: no outline mesh, no extra triangles. Only three
+//     small per-vertex attributes (`localPos`/`boxNormal`/`boxHalfExtent`,
+//     stamped by `box()` above) ride along with the existing ones.
+//   - diagonals: the fragment shader derives distance-to-nearest-edge from
+//     `vLocalPos`, a value that is continuous across a face's two
+//     triangles (both share the same planar attribute values), so the
+//     triangulation seam never lights up -- only the box's real edges do.
+//
+// Per fragment: `boxNormal` says which one of the three local axes is
+// perpendicular to the current face (that axis sits at a constant
+// coordinate across the whole face, so it is masked out); of the other
+// two, the smaller distance to that box's own `boxHalfExtent` is the
+// distance to the nearest edge of *this face*. Both the line's thickness
+// and the point at which it fades away are computed from
+// dFdx/dFdy(vLocalPos) -- the actual world-space size of one screen pixel
+// at that fragment -- rather than a fixed world-space width, so lines stay
+// a constant thickness in *pixels* as the view zooms, and fade out (rather
+// than collapsing into aliased noise or a solid dark field) once a cell's
+// on-screen size drops below EDGE_FADE_LOW_PX pixels.
+// ---------------------------------------------------------------------
+const EDGE_COLOR = [0.04, 0.04, 0.04];  // near-black; reads against every legend colour
+const EDGE_LINE_PX = 2.0;               // edge half-width, in screen pixels, when crisp
+const EDGE_MAX_ALPHA = 0.85;            // edges tint the block's colour, never fully replace it
+const EDGE_FADE_LOW_PX = 5.0;           // cell screen size (px) at/below which edges are gone
+const EDGE_FADE_HIGH_PX = 9.0;          // cell screen size (px) at/above which edges are fully crisp
+
+sharedMaterial3d.onBeforeCompile = (shader) => {
+  const varyingDecl = `
+varying vec3 vLocalPos;
+varying vec3 vBoxNormal;
+varying vec3 vBoxHalfExtent;
+`;
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', `attribute vec3 localPos;
+attribute vec3 boxNormal;
+attribute vec3 boxHalfExtent;
+${varyingDecl}
+#include <common>`)
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+vLocalPos = localPos;
+vBoxNormal = boxNormal;
+vBoxHalfExtent = boxHalfExtent;`);
+
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', `${varyingDecl}
+#include <common>`)
+    .replace('#include <color_fragment>', `#include <color_fragment>
+{
+  // Which local axis is perpendicular to this face (mask == 0) vs. runs
+  // along it (mask == 1) -- box normals are axis-aligned, so abs(vBoxNormal)
+  // is exactly (1,0,0)/(0,1,0)/(0,0,1) and this mask is exact, not approximate.
+  vec3 mask = vec3(1.0) - abs(vBoxNormal);
+  vec3 edgeDist = vBoxHalfExtent - abs(vLocalPos);
+  vec3 dAxis = edgeDist + (vec3(1.0) - mask) * 1.0e4;
+  float dEdge = min(dAxis.x, min(dAxis.y, dAxis.z));
+
+  vec3 dpdx = dFdx(vLocalPos);
+  vec3 dpdy = dFdy(vLocalPos);
+  float worldPerPixel = max(length(dpdx), length(dpdy));
+  float lineHalfWidth = max(worldPerPixel * ${EDGE_LINE_PX.toFixed(3)}, 1e-6);
+  float edgeSignal = 1.0 - smoothstep(0.0, lineHalfWidth, dEdge);
+
+  float cellPixels = 1.0 / max(worldPerPixel, 1e-6);
+  float fade = smoothstep(${EDGE_FADE_LOW_PX.toFixed(3)}, ${EDGE_FADE_HIGH_PX.toFixed(3)}, cellPixels);
+
+  float edgeAlpha = edgeSignal * fade * ${EDGE_MAX_ALPHA.toFixed(3)};
+  diffuseColor.rgb = mix(diffuseColor.rgb, vec3(${EDGE_COLOR.map((c) => c.toFixed(3)).join(', ')}), edgeAlpha);
+}`);
+};
 
 let renderer3d = null;
 let scene3d = null;
