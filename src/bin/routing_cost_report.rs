@@ -80,6 +80,7 @@ fn part_name(part: RoutePart) -> &'static str {
         RoutePart::Ramp => "ramp",
         RoutePart::Track => "track",
         RoutePart::GateEntry => "gate-entry",
+        RoutePart::Bypass => "bypass",
     }
 }
 
@@ -161,6 +162,12 @@ fn run_and_report(label: &str, netlist: &Netlist, input_names: &[&str], outputs:
         *hop_histogram.entry(edge.hops).or_default() += 1;
     }
     println!("Hop-count histogram (edges by channels crossed): {hop_histogram:?}");
+
+    let bypassed = all_edges.iter().filter(|e| e.part(RoutePart::Bypass).length > 0).count();
+    println!(
+        "Bypass vs track: {bypassed}/{} edges routed directly at GATE_Y (no ramp, no track)",
+        all_edges.len()
+    );
 
     let lever_positions: Vec<(i32, i32, i32)> =
         input_names.iter().map(|&n| *compiled.input_positions.get(n).unwrap()).collect();

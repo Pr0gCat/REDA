@@ -34,9 +34,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use super::{
-    approach_column, assign_tracks, build_floorplan, build_nets, direction_from, layout_z, place_nor_gate,
-    reserve_columns, CompileError, CompiledCircuit, Exit, Floorplan, Net, Netlist, NorCell, Source, GATE_Y,
-    OUTPUT_DIRECTION, RAMP_LENGTH, TRACK_Y,
+    approach_column, assign_tracks, bent_path_cells, build_floorplan, build_nets, compute_bypass, direction_from,
+    layout_z, place_nor_gate, reserve_columns, CompileError, CompiledCircuit, Exit, Floorplan, Net, Netlist, NorCell,
+    Source, GATE_Y, OUTPUT_DIRECTION, RAMP_LENGTH, TRACK_Y,
 };
 use crate::redstone::simulator::position::Position;
 use crate::redstone::world::block::{BlockKind, Facing};
@@ -70,10 +70,17 @@ pub enum RoutePart {
     /// their approach column does not line up with their socket), and the
     /// mandatory terminating repeater every socket needs.
     GateEntry,
+    /// A whole edge routed directly at `GATE_Y`, with no ramp and no track at
+    /// all -- `compute_bypass`'s "close enough" case. Covers everything from
+    /// the source pin to the consuming socket: the optional sideways corner
+    /// onto the sink's approach column, and the final approach into the
+    /// socket. Mutually exclusive with `Column`/`Ramp`/`Track`/`GateEntry`
+    /// for the same edge -- a bypassed edge has none of those parts at all.
+    Bypass,
 }
 
-pub const ALL_PARTS: [RoutePart; 4] =
-    [RoutePart::Column, RoutePart::Ramp, RoutePart::Track, RoutePart::GateEntry];
+pub const ALL_PARTS: [RoutePart; 5] =
+    [RoutePart::Column, RoutePart::Ramp, RoutePart::Track, RoutePart::GateEntry, RoutePart::Bypass];
 
 /// One part's contribution: how many blocks (dust + repeaters), and how many
 /// of those blocks are repeaters.
@@ -134,13 +141,14 @@ pub struct RoutingReport {
 // Reusable geometry: recomputes exactly what `compile` computes
 // ---------------------------------------------------------------------
 
-/// `(floorplan, nets, row Z, per-channel track Z, per-channel track count)`.
-type Geometry = (Floorplan, Vec<Net>, Vec<i32>, Vec<Vec<i32>>, Vec<usize>);
+/// `(floorplan, nets, row Z, per-channel track Z, per-channel track count,
+/// per-net bypass flag)`.
+type Geometry = (Floorplan, Vec<Net>, Vec<i32>, Vec<Vec<i32>>, Vec<usize>, Vec<bool>);
 
-/// Recompute the floorplan, nets (with columns and tracks already assigned)
-/// and Z layout for `netlist` -- the same pure, world-free stages `compile`
-/// runs, called here verbatim so this module's geometry cannot drift from
-/// what actually got built.
+/// Recompute the floorplan, nets (with columns and tracks already assigned),
+/// Z layout and bypass decisions for `netlist` -- the same pure, world-free
+/// stages `compile` runs, called here verbatim so this module's geometry
+/// cannot drift from what actually got built.
 fn recompute_geometry(netlist: &Netlist) -> Result<Geometry, CompileError> {
     for gate in &netlist.gates {
         for input in &gate.inputs {
@@ -167,10 +175,11 @@ fn recompute_geometry(netlist: &Netlist) -> Result<Geometry, CompileError> {
     let mut nets = build_nets(netlist, &order, &plan, &producer_of);
 
     reserve_columns(&plan, &mut nets, row_count, channel_count);
-    let track_count = assign_tracks(&plan, &mut nets, channel_count);
+    let bypass = compute_bypass(&nets, &plan);
+    let track_count = assign_tracks(&plan, &mut nets, channel_count, &bypass);
     let (row_z, track_z) = layout_z(row_count, channel_count, &track_count);
 
-    Ok((plan, nets, row_z, track_z, track_count))
+    Ok((plan, nets, row_z, track_z, track_count, bypass))
 }
 
 /// One gate cell's socket geometry per distinct input count (1..=3) --
@@ -230,6 +239,29 @@ fn scan_to_socket(world: &World, start: Position, socket: Position) -> PartTotal
     let mut totals = scan_dust_run(world, start, direction, socket);
     totals += classify(world, socket);
     totals
+}
+
+/// Mirrors `lay_bent_path`'s own cell list (`bent_path_cells`) exactly, so
+/// this reads back precisely the cells that call wrote -- one classification
+/// per cell, with no assumption about which of them (if any) turned out to
+/// need a repeater.
+fn scan_bent_path(world: &World, start: Position, waypoints: &[Position]) -> PartTotals {
+    bent_path_cells(start, waypoints).into_iter().fold(PartTotals::default(), |acc, pos| acc + classify(world, pos))
+}
+
+/// Mirrors the bypass branch of `emit`'s Columns pass exactly: from `pin`,
+/// an optional sideways bend onto the sink's approach column (`exit_x`), an
+/// optional second bend at the destination row, then the socket.
+fn scan_bypass(world: &World, pin: Position, exit_x: i32, socket: Position, row_z_gate: i32) -> PartTotals {
+    let mut waypoints: Vec<Position> = Vec::new();
+    if pin.x != exit_x {
+        waypoints.push(Position::new(exit_x, pin.y, pin.z));
+    }
+    if socket.x != exit_x {
+        waypoints.push(Position::new(exit_x, pin.y, row_z_gate));
+    }
+    waypoints.push(socket);
+    scan_bent_path(world, pin, &waypoints)
 }
 
 /// Mirrors `move_between_layers`'s loop exactly: one landing-dust cell per Y
@@ -323,17 +355,36 @@ fn source_pin(netlist: &Netlist, compiled: &CompiledCircuit, source: Source) -> 
 /// route. `compiled` must be the result of calling `compile(netlist)` --
 /// this only reads its `World`, it never rebuilds one.
 pub fn analyze(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<RoutingReport, CompileError> {
-    let (plan, nets, row_z, track_z, track_count) = recompute_geometry(netlist)?;
+    let (plan, nets, row_z, track_z, track_count, bypass) = recompute_geometry(netlist)?;
     let cell_of_count = cell_geometry_by_input_count(netlist);
     let world = &compiled.world;
 
     let mut edges = Vec::new();
-    for net in &nets {
+    for (n, net) in nets.iter().enumerate() {
         let source_label = match net.source {
             Source::Lever(i) => netlist.inputs[i].clone(),
             Source::Gate(g) => netlist.gates[g].output.clone(),
         };
         let pin = source_pin(netlist, compiled, net.source);
+
+        if bypass[n] {
+            // `compute_bypass` only admits nets with exactly one channel and
+            // exactly one sink, so this net has exactly one edge, routed
+            // entirely by the bypass branch of `emit`'s Columns pass.
+            let (gate, input_index) = net.sinks[0][0];
+            let exit_x = approach_column(plan.centre_x[gate], input_index);
+            let row_z_gate = row_z[plan.row_of[gate]];
+            let cell = &cell_of_count[&netlist.gates[gate].inputs.len()];
+            let (dx, dy, dz) = cell.input_offsets[input_index];
+            let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
+
+            let mut parts: BTreeMap<RoutePart, PartTotals> = BTreeMap::new();
+            parts.insert(RoutePart::Bypass, scan_bypass(world, pin, exit_x, socket, row_z_gate));
+
+            let sink_label = format!("{}.in[{}]", netlist.gates[gate].output, input_index);
+            edges.push(EdgeRoute { source: source_label, sink: sink_label, hops: 1, parts });
+            continue;
+        }
 
         for (slot, sinks) in net.sinks.iter().enumerate() {
             for &(gate, input_index) in sinks {
@@ -427,13 +478,24 @@ pub fn distinct_totals_by_part(
     netlist: &Netlist,
     compiled: &CompiledCircuit,
 ) -> Result<BTreeMap<RoutePart, PartTotals>, CompileError> {
-    let (plan, nets, row_z, track_z, _track_count) = recompute_geometry(netlist)?;
+    let (plan, nets, row_z, track_z, _track_count, bypass) = recompute_geometry(netlist)?;
     let cell_of_count = cell_geometry_by_input_count(netlist);
     let world = &compiled.world;
 
     let mut total: BTreeMap<RoutePart, PartTotals> = BTreeMap::new();
-    for net in &nets {
+    for (n, net) in nets.iter().enumerate() {
         let pin = source_pin(netlist, compiled, net.source);
+
+        if bypass[n] {
+            let (gate, input_index) = net.sinks[0][0];
+            let exit_x = approach_column(plan.centre_x[gate], input_index);
+            let row_z_gate = row_z[plan.row_of[gate]];
+            let cell = &cell_of_count[&netlist.gates[gate].inputs.len()];
+            let (dx, dy, dz) = cell.input_offsets[input_index];
+            let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
+            *total.entry(RoutePart::Bypass).or_default() += scan_bypass(world, pin, exit_x, socket, row_z_gate);
+            continue;
+        }
 
         for (slot, &channel) in net.channels.iter().enumerate() {
             let z = track_z[channel][net.tracks[slot]];
@@ -563,14 +625,37 @@ mod tests {
         let compiled = compile(&and4).expect("and4 must compile");
         let report = analyze(&and4, &compiled).expect("and4 must analyze");
         for edge in &report.edges {
+            if edge.part(RoutePart::Bypass).length > 0 {
+                // A bypassed edge never ramps at all -- it connects directly
+                // at `GATE_Y` (see `compute_bypass`) -- so it is exempt from
+                // the "every edge climbs" assumption this test otherwise
+                // checks.
+                assert_eq!(edge.part(RoutePart::Ramp), PartTotals::default());
+                continue;
+            }
             let ramp = edge.part(RoutePart::Ramp);
-            // Every edge crosses at least one channel, so it has at least
-            // one ramp up and one ramp down: 2 * hops ramp instances, each
-            // exactly `RAMP_LENGTH` long with zero repeaters -- a dust
-            // staircase, unlike the old repeater ramp, never places one.
+            // Every non-bypassed edge crosses at least one channel, so it has
+            // at least one ramp up and one ramp down: 2 * hops ramp
+            // instances, each exactly `RAMP_LENGTH` long with zero
+            // repeaters -- a dust staircase, unlike the old repeater ramp,
+            // never places one.
             let expected_instances = 2 * edge.hops as i64;
             assert_eq!(ramp.length, expected_instances * RAMP_LENGTH as i64);
             assert_eq!(ramp.repeaters, 0, "a dust staircase ramp must never place a repeater");
         }
+    }
+
+    /// The one behavioural check this whole feature exists for: on `and4`,
+    /// at least one edge actually takes the direct `GATE_Y` bypass instead of
+    /// climbing to a track and back down. If this ever goes back to zero, the
+    /// bypass has silently stopped firing on the reference circuit the
+    /// routing-cost spec measured it against.
+    #[test]
+    fn and4_actually_uses_the_bypass_on_at_least_one_edge() {
+        let (and4, _) = build_and4_netlist();
+        let compiled = compile(&and4).expect("and4 must compile");
+        let report = analyze(&and4, &compiled).expect("and4 must analyze");
+        let bypassed = report.edges.iter().filter(|e| e.part(RoutePart::Bypass).length > 0).count();
+        assert!(bypassed > 0, "expected at least one bypassed edge on and4, got 0 of {}", report.edges.len());
     }
 }

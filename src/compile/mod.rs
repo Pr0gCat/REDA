@@ -309,6 +309,16 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
 // reserved X slot and rejoins a track in the later channel. A long net
 // therefore costs one column per level it crosses, instead of one dedicated
 // lane for its whole length.
+//
+// A net with exactly one sink whose source column and sink approach column
+// are close enough (`compute_bypass`) skips this whole climb-cross-descend
+// dance and instead connects straight across at `GATE_Y`, never touching
+// `TRACK_Y` at all. "Close enough" is not tuned -- `BYPASS_MAX_DISTANCE`
+// derives it from the same clearance invariant that keeps every other column
+// apart, so a bypass route is provably clear of every other net's column
+// before it is ever laid. See that constant's doc comment for the proof, and
+// `lay_bent_path` for how the route itself is built without paying for a
+// mandatory strength refresh it does not need.
 
 /// Y of the gate bodies, their input sockets, the output pins, and every
 /// north-south routing column.
@@ -380,6 +390,25 @@ const TRACK_SHARE_GAP: i32 = 4;
 /// already enough -- but only exactly enough, which is why every other
 /// clearance in this module is derived from it rather than written out.
 const COLUMN_CLEARANCE: i32 = 2;
+
+/// The largest X gap between a net's source column and its one sink's
+/// approach column that a direct `GATE_Y` route -- no ramp, no track -- can
+/// bridge without ever risking another net's column.
+///
+/// Every column this router places -- a net's source column, a gate's socket
+/// approach column, or a feed-through hop -- sits at least
+/// `COLUMN_CLEARANCE` away from every other one in the same channel (see
+/// `reserve_columns`'s own doc comment, and the shifted row placement in
+/// `build_floorplan` that makes it true even before a single feed-through is
+/// chosen). A third column strictly between two points `d` apart would
+/// itself have to be at least `COLUMN_CLEARANCE` away from *both* of them,
+/// which needs `d >= 2 * COLUMN_CLEARANCE`. So whenever `d < 2 *
+/// COLUMN_CLEARANCE`, no such column can exist anywhere in the world, at any
+/// Z -- not merely unlikely to -- and a direct horizontal jog between the two
+/// is provably clear of every other net's dust. That is what makes this a
+/// derived threshold rather than a tuned one; see `compute_bypass`, the only
+/// caller.
+const BYPASS_MAX_DISTANCE: i32 = 2 * COLUMN_CLEARANCE - 1;
 
 /// West edge of the floorplan. Everything is laid out eastwards from here, so
 /// no coordinate can go negative on the X axis.
@@ -627,6 +656,116 @@ fn lay_segment_to_socket(world: &mut World, start: Position, socket: Position, i
     route.claim(socket.down());
     world.set(socket.x, socket.y, socket.z, repeater(direction));
     route.claim(socket);
+}
+
+/// Break a multi-segment axis-aligned path from `start` through every point
+/// of `waypoints` in order into its individual cells, in write order. Each
+/// consecutive pair -- `start`/`waypoints[0]`, then each pair after it --
+/// must share exactly one axis, same as every other segment helper here.
+/// Pure position arithmetic (mirrors `straight_run_length`'s role for a
+/// single segment), so `routing_stats` can replay the exact same cell list
+/// `lay_bent_path` below writes without touching a `World`.
+fn bent_path_cells(start: Position, waypoints: &[Position]) -> Vec<Position> {
+    let mut cells = Vec::new();
+    let mut prev = start;
+    for &waypoint in waypoints {
+        let direction = direction_from(prev, waypoint);
+        let mut pos = prev.offset(direction);
+        while pos != waypoint {
+            cells.push(pos);
+            pos = pos.offset(direction);
+        }
+        cells.push(waypoint);
+        prev = waypoint;
+    }
+    cells
+}
+
+/// Lay a multi-segment axis-aligned dust path from `start` (exclusive,
+/// already lit at `incoming_strength`) through every point of `waypoints` in
+/// order, ending in a mandatory repeater facing into `waypoints`'s last
+/// element -- same convention as `lay_segment_to_socket`, which this
+/// generalises for a path used by `compute_bypass`'s direct routes: unlike
+/// every fixed two-or-three-segment route elsewhere in this module, a bypass
+/// may bend zero, one or two times depending on where its one sink sits
+/// relative to its source column.
+///
+/// Every waypoint except the last stays plain dust, because the path
+/// changes axis there: a repeater only reads what is directly behind it, so
+/// one sitting where the path turns would not be connected to the segment
+/// after the turn at all. Unlike `lay_segment_to_corner`, this does *not*
+/// force a mandatory refresh at those turns -- a corner costs exactly the
+/// same one hop of strength a straight cell does
+/// (`recompute_dust_strengths`'s BFS does not distinguish them), so forcing
+/// one would spend a repeater a short bypass never needs, which is exactly
+/// what made an earlier version of this route regress settle time instead of
+/// improving it. Instead the whole path shares one strength budget end to
+/// end, exactly as if it had no bends at all, with turns simply excluded
+/// from ever hosting the occasional repeater that budget calls for --
+/// mirrors `plan_track_run`'s handling of taps it must route around.
+///
+/// This path always ends in its own mandatory repeater, so nothing after it
+/// needs preserved strength -- `reserve` is 0, same as
+/// `lay_segment_to_socket`.
+fn lay_bent_path(world: &mut World, start: Position, waypoints: &[Position], incoming_strength: u8, route: &mut Route) {
+    debug_assert!(!waypoints.is_empty(), "a bent path must have somewhere to end");
+    debug_assert!(incoming_strength > 0, "a run cannot start from an already-dead signal");
+
+    let cells = bent_path_cells(start, waypoints);
+    let len = cells.len();
+    let bend_indices: BTreeSet<usize> = waypoints[..waypoints.len() - 1]
+        .iter()
+        .map(|&waypoint| {
+            cells
+                .iter()
+                .position(|&cell| cell == waypoint)
+                .expect("every waypoint before the last is pushed onto `cells` by `bent_path_cells`")
+        })
+        .collect();
+
+    // Same decision `plan_track_run` makes, generalised from X-coordinate
+    // taps to index-based ones: a repeater must never land on a bend, so
+    // when the budget would force one there, it goes on the last non-bend
+    // cell before it instead.
+    let threshold = MAX_DUST_RUN as i64;
+    let mut is_repeater = vec![false; len];
+    let mut last_refresh: i64 = incoming_strength as i64 - (MAX_SIGNAL_STRENGTH as i64 + 1);
+    let mut i = 0usize;
+    while i < len {
+        if (i as i64) - last_refresh <= threshold {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while (j as i64) > last_refresh + 1 && bend_indices.contains(&j) {
+            j -= 1;
+        }
+        debug_assert!(
+            !bend_indices.contains(&j),
+            "bends must never be dense enough to leave no room for a repeater"
+        );
+        is_repeater[j] = true;
+        last_refresh = j as i64;
+        i = j + 1;
+    }
+    // The final cell is a mandatory repeater regardless of the budget --
+    // `waypoints`'s last element is never a bend, so this can never collide
+    // with `bend_indices`.
+    is_repeater[len - 1] = true;
+
+    let mut prev = start;
+    for (index, &pos) in cells.iter().enumerate() {
+        let direction = direction_from(prev, pos);
+        ensure_floor(world, pos);
+        route.claim(pos.down());
+        if is_repeater[index] {
+            world.set(pos.x, pos.y, pos.z, repeater(direction));
+        } else {
+            world.set(pos.x, pos.y, pos.z, dust());
+        }
+        route.claim(pos);
+        prev = pos;
+    }
 }
 
 /// The two horizontal directions perpendicular to `direction` -- the only
@@ -1315,6 +1454,37 @@ fn build_nets(
     nets
 }
 
+/// Which nets can skip the ramp/track machinery entirely and connect
+/// straight across at `GATE_Y` -- see `BYPASS_MAX_DISTANCE` for why a small
+/// X gap makes that provably safe.
+///
+/// Deliberately restricted to nets with exactly one channel (no
+/// feed-through: a bypass never has to survive crossing into a second
+/// channel, so it never has to reason about a hop column it does not fully
+/// control) and exactly one sink (fan-out would need more than one jog
+/// leaving the same trunk cell; two independently-planned corners could
+/// disagree about a shared cell's repeater placement, which is exactly the
+/// kind of bug this module's whole `Footprint`/`verify_connectivity` apparatus
+/// exists to catch, not something worth risking for a case this router does
+/// not need to handle yet). Every other net keeps routing exactly as before.
+///
+/// Pure function of the floorplan and each net's channel/sink structure --
+/// like `reserve_columns` and `assign_tracks`, no world access, so it can run
+/// before either of them and its answer feeds straight into `assign_tracks`
+/// (a bypassed net needs no track at all).
+fn compute_bypass(nets: &[Net], plan: &Floorplan) -> Vec<bool> {
+    nets.iter()
+        .map(|net| {
+            if net.channels.len() != 1 || net.sinks[0].len() != 1 {
+                return false;
+            }
+            let (gate, input_index) = net.sinks[0][0];
+            let exit_x = approach_column(plan.centre_x[gate], input_index);
+            (exit_x - net.source_column).abs() <= BYPASS_MAX_DISTANCE
+        })
+        .collect()
+}
+
 /// Reserve one X column for a feed-through, clear of everything it would run
 /// past on its way north.
 ///
@@ -1418,13 +1588,21 @@ fn reserve_columns(plan: &Floorplan, nets: &mut [Net], row_count: usize, channel
 /// Left-edge track assignment: fill in every net's per-slot `tracks` index,
 /// and return how many tracks each channel ended up needing.
 ///
+/// A net for which `bypass[n]` holds contributes no member at all -- it
+/// connects directly at `GATE_Y` (see `compute_bypass`) and never touches a
+/// track, so it must not inflate the channel's track count or claim a track
+/// index nobody will ever lay.
+///
 /// Extracted verbatim from `compile`'s "Left-edge track assignment" section;
 /// see the comment there for why one track can carry many nets.
-fn assign_tracks(plan: &Floorplan, nets: &mut [Net], channel_count: usize) -> Vec<usize> {
+fn assign_tracks(plan: &Floorplan, nets: &mut [Net], channel_count: usize, bypass: &[bool]) -> Vec<usize> {
     let mut track_count = vec![0usize; channel_count];
     for (channel, count) in track_count.iter_mut().enumerate() {
         let mut members: Vec<(i32, i32, usize, usize)> = Vec::new();
         for (n, net) in nets.iter().enumerate() {
+            if bypass[n] {
+                continue;
+            }
             for (slot, &c) in net.channels.iter().enumerate() {
                 if c == channel {
                     let (lo, hi) = net.span(slot, &plan.centre_x);
@@ -1516,13 +1694,26 @@ fn plan_strengths(
     track_z: &[Vec<i32>],
     lever_pin: &[Position],
     gate_pin: &[Position],
+    bypass: &[bool],
 ) -> StrengthPlan {
     let mut entry_strength: Vec<Vec<u8>> = Vec::with_capacity(nets.len());
     let mut exit_strength: Vec<Vec<BTreeMap<i32, u8>>> = Vec::with_capacity(nets.len());
 
-    for net in nets {
+    for (n, net) in nets.iter().enumerate() {
         let mut net_entry = vec![0u8; net.channels.len()];
         let mut net_exit: Vec<BTreeMap<i32, u8>> = vec![BTreeMap::new(); net.channels.len()];
+
+        // A bypassed net never ramps or touches a track (`emit`'s Columns
+        // pass routes it directly instead), and its one channel may not even
+        // have a `track_z` entry to read (a channel every one of whose nets
+        // bypasses gets zero tracks -- see `assign_tracks`). Leaving these at
+        // their zero default is safe precisely because nothing downstream
+        // ever reads a bypassed net's entry/exit strength.
+        if bypass[n] {
+            entry_strength.push(net_entry);
+            exit_strength.push(net_exit);
+            continue;
+        }
 
         for slot in 0..net.channels.len() {
             let channel = net.channels[slot];
@@ -1574,6 +1765,20 @@ struct EmitResult {
     gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
 }
 
+/// Everything the placement/routing stages before `emit` computed about
+/// where things go, bundled into one value purely so `emit` takes one
+/// parameter instead of five (`clippy::too_many_arguments`) -- every field
+/// here already travels together from `compile` down to both `emit` calls.
+struct RoutingGeometry<'a> {
+    plan: &'a Floorplan,
+    row_z: &'a [i32],
+    nets: &'a [Net],
+    track_z: &'a [Vec<i32>],
+    /// Per-net: whether `compute_bypass` found this net's one sink close
+    /// enough to connect directly at `GATE_Y` instead of via ramp and track.
+    bypass: &'a [bool],
+}
+
 /// Write the whole circuit into `world`: every gate, every primary input,
 /// every net's ramps/columns/tracks, and every output lamp.
 ///
@@ -1584,15 +1789,8 @@ struct EmitResult {
 /// now-complete picture. Both calls run the exact same code, so the two
 /// worlds can never disagree about where anything is -- only about whether
 /// the orphaned keep-out cells around a ramp landing got sealed.
-fn emit(
-    world: &mut World,
-    netlist: &Netlist,
-    plan: &Floorplan,
-    row_z: &[i32],
-    nets: &[Net],
-    track_z: &[Vec<i32>],
-    footprint: &mut Footprint,
-) -> EmitResult {
+fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footprint: &mut Footprint) -> EmitResult {
+    let RoutingGeometry { plan, row_z, nets, track_z, bypass } = *geometry;
     let mut gate_cell: Vec<NorCell> = Vec::with_capacity(netlist.gates.len());
     for _ in 0..netlist.gates.len() {
         gate_cell.push(NorCell { size: (0, 0, 0), input_offsets: Vec::new(), output_offset: (0, 0, 0) });
@@ -1634,7 +1832,7 @@ fn emit(
     // exits will carry, before any of them are actually built. See
     // `plan_strengths` for why this has to happen up front rather than
     // inline in the passes below.
-    let (entry_strength, exit_strength) = plan_strengths(nets, plan, track_z, &lever_pin, &gate_pin);
+    let (entry_strength, exit_strength) = plan_strengths(nets, plan, track_z, &lever_pin, &gate_pin, bypass);
 
     // Every net's own pin -- the first cell of its route -- belongs to that
     // net too, exactly like everything the passes below claim as they write
@@ -1652,6 +1850,13 @@ fn emit(
     // sealed cell (the tracks, and the columns) has to be laid afterwards to
     // overwrite it.
     for (n, net) in nets.iter().enumerate() {
+        if bypass[n] {
+            // No ramp at all: `compute_bypass` only admits nets whose one
+            // sink is close enough to connect directly at `GATE_Y` (see
+            // `BYPASS_MAX_DISTANCE`). Handled entirely in the Columns pass
+            // below.
+            continue;
+        }
         let mut route = Route { net: n, footprint: &mut *footprint };
         for slot in 0..net.channels.len() {
             let channel = net.channels[slot];
@@ -1669,6 +1874,48 @@ fn emit(
     // landing on to whatever it feeds.
     for (n, net) in nets.iter().enumerate() {
         let mut route = Route { net: n, footprint: &mut *footprint };
+
+        if bypass[n] {
+            // A direct connection: no ramp, no track. `compute_bypass`
+            // guarantees this net has exactly one channel and exactly one
+            // sink, and that the sink's approach column is within
+            // `BYPASS_MAX_DISTANCE` of this net's own source column -- close
+            // enough that no other net's column can possibly sit between
+            // them (see that constant's derivation), so a plain path from the
+            // source pin straight to the socket is provably safe.
+            //
+            // The path bends at most twice: once to get from the pin's own
+            // column onto the sink's approach column (skipped if they are
+            // already the same column), and once more at the destination
+            // row -- the same final jog every socket gets, whether its input
+            // is west/east (approach column does not line up with the
+            // socket) or south (it does, and this second bend never
+            // happens). `lay_bent_path` handles all of that with one shared
+            // strength budget end to end, rather than a mandatory refresh at
+            // every bend -- see its own doc comment for why that used to
+            // regress settle time instead of improving it.
+            let (gate, input_index) = net.sinks[0][0];
+            let pin = match net.source {
+                Source::Lever(i) => lever_pin[i],
+                Source::Gate(g) => gate_pin[g],
+            };
+            let exit_x = approach_column(plan.centre_x[gate], input_index);
+            let row_z_gate = row_z[plan.row_of[gate]];
+            let (dx, dy, dz) = gate_cell[gate].input_offsets[input_index];
+            let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
+
+            let mut waypoints: Vec<Position> = Vec::new();
+            if pin.x != exit_x {
+                waypoints.push(Position::new(exit_x, GATE_Y, pin.z));
+            }
+            if socket.x != exit_x {
+                waypoints.push(Position::new(exit_x, GATE_Y, row_z_gate));
+            }
+            waypoints.push(socket);
+            lay_bent_path(world, pin, &waypoints, MAX_SIGNAL_STRENGTH, &mut route);
+            continue;
+        }
+
         for slot in 0..net.channels.len() {
             let channel = net.channels[slot];
             let z = track_z[channel][net.tracks[slot]];
@@ -1732,6 +1979,10 @@ fn emit(
     // Tracks last, so they overwrite the ramps' seal blocks where they have to
     // pass through them.
     for (n, net) in nets.iter().enumerate() {
+        if bypass[n] {
+            // Never touches a track -- see the Ramps pass above.
+            continue;
+        }
         let mut route = Route { net: n, footprint: &mut *footprint };
         for slot in 0..net.channels.len() {
             let channel = net.channels[slot];
@@ -1887,7 +2138,8 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     let mut nets = build_nets(netlist, &order, &plan, &producer_of);
 
     reserve_columns(&plan, &mut nets, row_count, channel_count);
-    let track_count = assign_tracks(&plan, &mut nets, channel_count);
+    let bypass = compute_bypass(&nets, &plan);
+    let track_count = assign_tracks(&plan, &mut nets, channel_count, &bypass);
     let (row_z, track_z) = layout_z(row_count, channel_count, &track_count);
 
     let size_x = plan
@@ -1922,15 +2174,17 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     // See `Footprint` and `seal_cross_talk` for why that split is what makes
     // the spacing constraint free where nothing is near.
 
+    let geometry = RoutingGeometry { plan: &plan, row_z: &row_z, nets: &nets, track_z: &track_z, bypass: &bypass };
+
     let mut scratch = World::new(size_x.max(8), WORLD_HEIGHT, size_z.max(8));
     let mut footprint = Footprint::record();
-    emit(&mut scratch, netlist, &plan, &row_z, &nets, &track_z, &mut footprint);
+    emit(&mut scratch, netlist, &geometry, &mut footprint);
     drop(scratch);
 
     let mut footprint = Footprint::enforce(footprint.reservation);
     let mut world = World::new(size_x.max(8), WORLD_HEIGHT, size_z.max(8));
     let EmitResult { input_positions, output_positions, gate_output_positions } =
-        emit(&mut world, netlist, &plan, &row_z, &nets, &track_z, &mut footprint);
+        emit(&mut world, netlist, &geometry, &mut footprint);
 
     // The connectivity invariant: whatever the two passes above actually
     // wrote, it must partition into exactly the nets the netlist asked for.
