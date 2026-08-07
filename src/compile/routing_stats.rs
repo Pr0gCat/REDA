@@ -7,7 +7,7 @@
 //!
 //! This module never writes to a `World`. It recomputes the exact geometry
 //! `compile` computes -- by calling `build_floorplan`, `build_nets`,
-//! `reserve_columns`, `assign_tracks` and `layout_z` verbatim, the same
+//! `assign_shafts`, `assign_tracks` and `layout_row_z` verbatim, the same
 //! functions `compile` itself calls -- and then reads the *already compiled*
 //! `World` along the coordinates that geometry implies, counting actual dust
 //! vs. repeater blocks. Two consequences of that split follow directly:
@@ -20,6 +20,37 @@
 //!   emission function's *loop bounds* (so it visits exactly the cells that
 //!   function wrote) but classifies each cell by reading it back, rather than
 //!   re-implementing the decision of *which* cells become repeaters.
+//!
+//! # Part categories, after 3D placement
+//!
+//! Levels now stack along Y (see `compile`'s module doc comment), so the
+//! four parts keep their names but two of them widen slightly:
+//!
+//! - **Column**: only the driving pin's own run up to its first climb --
+//!   there is no longer a flat "feed-through column" at all, because a net
+//!   that skips levels climbs straight through them instead (see below).
+//! - **Ramp**: every vertical climb or descent. A single band's fixed
+//!   `RAMP_LENGTH` hop never has a repeater (too short to ever need one --
+//!   `MAX_DUST_RUN` is 14). A skip-level edge's shaft (`climb_levels`) can
+//!   span many bands, though, and a climb cannot refresh itself the way a
+//!   flat run can (a repeater does not participate in `dust_connections`'
+//!   diagonal rule at all) -- so a long enough climb detours sideways onto a
+//!   repeater instead (see `climb_levels`'s doc comment), and this category
+//!   counts those. Reading the count back like this, rather than assuming
+//!   zero, is exactly the point: getting a climb's strength budget wrong is
+//!   the kind of mistake that produces a dead wire on some inputs and not
+//!   others, not a compile error, so this module treats "how many repeaters
+//!   did a climb actually need" as a real question with a real answer, not
+//!   an architectural constant.
+//! - **Track**: every east-west dust run at a channel's own track plane,
+//!   *plus* a skip-level shaft's landing correction (`land_shaft`'s
+//!   perpendicular run onto the destination channel's own track Z, when the
+//!   two channels did not already happen to share a track index) -- folded
+//!   in here rather than given a fifth category, since it is structurally
+//!   the same kind of thing: a flat run ending in a mandatory repeater,
+//!   preparing a tap for the next leg.
+//! - **GateEntry**: unchanged -- the final approach into a consuming gate's
+//!   input socket.
 //!
 //! See `docs/superpowers/specs/2026-08-07-routing-cost-breakdown.md` for the
 //! measurement this exists to support, and why the two representations below
@@ -34,11 +65,13 @@
 use std::collections::{BTreeMap, HashMap};
 
 use super::{
-    approach_column, assign_tracks, build_floorplan, build_nets, direction_from, layout_z, place_nor_gate,
-    reserve_columns, CompileError, CompiledCircuit, Exit, Floorplan, Net, Netlist, NorCell, Source, GATE_Y,
-    OUTPUT_DIRECTION, RAMP_LENGTH, TRACK_Y,
+    approach_column, assign_shafts, assign_tracks, build_floorplan, build_nets, direction_from, gate_y,
+    layout_row_z, place_nor_gate, plan_climb, shaft_diagonal_z, shaft_rail_offset, side_directions,
+    socket_approach_corners, track_y, CompileError, CompiledCircuit, Exit, Floorplan, Net, Netlist, NorCell, Source,
+    DESCEND_LENGTH, GATE_HALF_WIDTH, GATE_Y_OFFSET, ORIGIN_X, RAMP_LENGTH,
 };
 use crate::redstone::simulator::position::Position;
+use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
 use crate::redstone::world::block::{BlockKind, Facing};
 use crate::redstone::world::storage::World;
 
@@ -49,19 +82,18 @@ use crate::redstone::world::storage::World;
 /// One structural part of a routed edge's physical path.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RoutePart {
-    /// North-south dust run at `GATE_Y`: a driver's pin to its first ramp,
-    /// or (for a feed-through hop) one ramp's landing straight on to the
-    /// next ramp's entry -- passing underneath any number of tracks it does
-    /// not stop at.
+    /// North-south dust run at a band's own `gate_y`: a driver's pin to its
+    /// first climb.
     Column,
-    /// A fixed dust-staircase climb or descent between `GATE_Y` and
-    /// `TRACK_Y`: `RAMP_LENGTH` blocks, zero repeaters, by construction of
-    /// that one constant, regardless of net, slot or circuit -- not
-    /// something the router's placement or track-assignment choices can
-    /// affect.
+    /// A dust-staircase climb or descent: `RAMP_LENGTH` blocks within one
+    /// band for an ordinary next-row hop (never a repeater -- too short to
+    /// need one), or a whole multiple of `BAND_HEIGHT` for a skip-level
+    /// shaft, which can need one or more (see `scan_climb`'s doc comment).
     Ramp,
-    /// East-west dust run at `TRACK_Y`: the portion of an assigned track
-    /// between a net's entry point and one specific exit. A track can carry
+    /// East-west dust run at a channel's own track plane: the portion of an
+    /// assigned track between a net's entry point and one specific exit,
+    /// plus a skip-level shaft's landing correction onto its destination
+    /// channel's own track Z, when one was needed. A track can carry
     /// several nets (left-edge assignment), so this is only the calling
     /// net's own share of it, not the whole physical track.
     Track,
@@ -105,9 +137,9 @@ pub struct EdgeRoute {
     /// The consuming gate's output name and which of its inputs this is,
     /// formatted as `"<gate output>.in[<index>]"`.
     pub sink: String,
-    /// How many channels (routing rows) this edge's signal had to cross --
-    /// 1 for a next-row consumer, more if a feed-through was needed to skip
-    /// over intervening rows entirely.
+    /// How many channels (routing bands) this edge's signal had to cross --
+    /// 1 for a next-level consumer, more if a skip-level shaft was needed to
+    /// pass over intervening bands entirely.
     pub hops: usize,
     pub parts: BTreeMap<RoutePart, PartTotals>,
 }
@@ -134,10 +166,11 @@ pub struct RoutingReport {
 // Reusable geometry: recomputes exactly what `compile` computes
 // ---------------------------------------------------------------------
 
-/// `(floorplan, nets, row Z, per-channel track Z, per-channel track count)`.
-type Geometry = (Floorplan, Vec<Net>, Vec<i32>, Vec<Vec<i32>>, Vec<usize>);
+/// `(floorplan, nets, row Z (shared by every band), per-channel track Z,
+/// per-channel track count)`.
+type Geometry = (Floorplan, Vec<Net>, i32, Vec<Vec<i32>>, Vec<usize>);
 
-/// Recompute the floorplan, nets (with columns and tracks already assigned)
+/// Recompute the floorplan, nets (with shafts and tracks already assigned)
 /// and Z layout for `netlist` -- the same pure, world-free stages `compile`
 /// runs, called here verbatim so this module's geometry cannot drift from
 /// what actually got built.
@@ -166,9 +199,12 @@ fn recompute_geometry(netlist: &Netlist) -> Result<Geometry, CompileError> {
     let channel_count = row_count.saturating_sub(1);
     let mut nets = build_nets(netlist, &order, &plan, &producer_of);
 
-    reserve_columns(&plan, &mut nets, row_count, channel_count);
-    let track_count = assign_tracks(&plan, &mut nets, channel_count);
-    let (row_z, track_z) = layout_z(row_count, channel_count, &track_count);
+    let content_max_x =
+        plan.centre_x.iter().chain(plan.lever_x.iter()).copied().max().unwrap_or(ORIGIN_X) + GATE_HALF_WIDTH;
+    assign_shafts(&mut nets, content_max_x);
+    let rail_offset = shaft_rail_offset(&nets);
+    let track_count = assign_tracks(&plan, &mut nets, channel_count, rail_offset);
+    let (row_z, track_z) = layout_row_z(channel_count, &track_count);
 
     Ok((plan, nets, row_z, track_z, track_count))
 }
@@ -178,11 +214,11 @@ fn recompute_geometry(netlist: &Netlist) -> Result<Geometry, CompileError> {
 /// gate actually sits, only on how many inputs it has.
 fn cell_geometry_by_input_count(netlist: &Netlist) -> HashMap<usize, NorCell> {
     let mut cells = HashMap::new();
-    let mut scratch = World::new(20, 5, 20);
+    let mut scratch = World::new(20, 8, 20);
     for gate in &netlist.gates {
         cells
             .entry(gate.inputs.len())
-            .or_insert_with(|| place_nor_gate(&mut scratch, (8, GATE_Y, 8), gate.inputs.len()));
+            .or_insert_with(|| place_nor_gate(&mut scratch, (8, GATE_Y_OFFSET, 8), gate.inputs.len()));
     }
     cells
 }
@@ -235,7 +271,7 @@ fn scan_to_socket(world: &World, start: Position, socket: Position) -> PartTotal
 /// Mirrors `move_between_layers`'s loop exactly: one landing-dust cell per Y
 /// level crossed between `entry` and `target_y`. The riser each step also
 /// places is solid stone, not wire, so it is never counted here (`classify`
-/// only recognises `Repeater`/`RedstoneWire`) -- a dust staircase has no
+/// only recognises `Repeater`/`RedstoneWire`) -- a single-band ramp has no
 /// repeaters at all, only the dust cells this counts.
 fn scan_ramp(world: &World, entry: Position, direction: Facing, target_y: i32) -> PartTotals {
     let mut current = entry;
@@ -256,6 +292,84 @@ fn scan_ramp(world: &World, entry: Position, direction: Facing, target_y: i32) -
         }
     }
     totals
+}
+
+/// Mirrors `climb_levels`'s loop exactly, `needs_detour` (from `plan_climb`,
+/// replayed on the same `incoming_strength` the caller passed -- always
+/// `MAX_SIGNAL_STRENGTH` for a skip-level shaft's climb, since `move_
+/// through_shaft` always lands it on a mandatory-repeater correction first)
+/// telling it precisely which levels detoured onto a repeater and which
+/// climbed straight through -- without this, a detour partway up (see
+/// `plan_climb`'s doc comment) shifts every cell after it sideways, and a
+/// scan that assumed a straight line would silently visit the wrong cells
+/// for the rest of the climb. The solid risers are still never counted
+/// (`classify` only recognises `Repeater`/`RedstoneWire`).
+///
+/// Returns the totals *and* the actual landing position, since a detour
+/// also changes where the climb ends up -- callers need that real position,
+/// not the naive `entry` position offset by `levels`, to know where the
+/// climb actually left off.
+fn scan_climb(world: &World, entry: Position, direction: Facing, levels: i32, incoming_strength: u8) -> (PartTotals, Position) {
+    let needs_detour = plan_climb(levels, incoming_strength);
+    let detour_direction = side_directions(direction)[0];
+    let mut current = entry;
+    let mut totals = PartTotals::default();
+    for &detour in &needs_detour {
+        if detour {
+            let repeater_pos = current.offset(detour_direction);
+            totals += classify(world, repeater_pos);
+            let fresh = repeater_pos.offset(detour_direction);
+            totals += classify(world, fresh);
+            current = fresh;
+        }
+        let riser = current.offset(direction);
+        let landing = riser.up();
+        totals += classify(world, landing);
+        current = landing;
+    }
+    (totals, current)
+}
+
+/// One skip-level shaft hop's worth of `Track`/`Ramp` cells -- mirrors
+/// `move_through_shaft`'s structure exactly (rail jog east, sweep to
+/// `shaft_diagonal_z`, the climb, sweep back onto `target_z`, rail jog back
+/// west onto the real tap), rather than the plain single fixed-X sweep an
+/// earlier version of this module (and of `move_through_shaft` itself) used
+/// -- see that function's doc comment for why the rail jogs exist at all.
+/// Callers never need the landing position back: every caller here
+/// recomputes the next slot's own tap straight from `Net::entry_column`,
+/// same as `move_through_shaft`'s own real callers do.
+struct ShaftScan {
+    track: PartTotals,
+    ramp: PartTotals,
+}
+
+fn scan_shaft(
+    world: &World,
+    origin: Position,
+    row_z: i32,
+    climb: i32,
+    target_z: i32,
+    rail_offset: i32,
+) -> ShaftScan {
+    let diagonal_z = shaft_diagonal_z(row_z);
+    let mut track = PartTotals::default();
+
+    let rail_entry = Position::new(origin.x + rail_offset, origin.y, origin.z);
+    track += scan_to_corner(world, origin, rail_entry);
+
+    let pre_corner = Position::new(rail_entry.x, rail_entry.y, diagonal_z);
+    track += scan_to_corner(world, rail_entry, pre_corner);
+
+    let (ramp, landing) = scan_climb(world, pre_corner, Facing::East, climb, MAX_SIGNAL_STRENGTH);
+
+    let post_corner = Position::new(landing.x, landing.y, target_z);
+    track += scan_to_corner(world, landing, post_corner);
+
+    let destination = Position::new(post_corner.x - rail_offset, post_corner.y, post_corner.z);
+    track += scan_to_corner(world, post_corner, destination);
+
+    ShaftScan { track, ramp }
 }
 
 /// The portion of an east-west track between `source_x` (exclusive -- it is
@@ -310,7 +424,7 @@ fn source_pin(netlist: &Netlist, compiled: &CompiledCircuit, source: Source) -> 
         }
         Source::Gate(g) => {
             let (x, y, z) = compiled.gate_output_positions[&netlist.gates[g].output];
-            Position::new(x, y, z).offset(OUTPUT_DIRECTION)
+            Position::new(x, y, z).offset(super::OUTPUT_DIRECTION)
         }
     }
 }
@@ -324,6 +438,7 @@ fn source_pin(netlist: &Netlist, compiled: &CompiledCircuit, source: Source) -> 
 /// this only reads its `World`, it never rebuilds one.
 pub fn analyze(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<RoutingReport, CompileError> {
     let (plan, nets, row_z, track_z, track_count) = recompute_geometry(netlist)?;
+    let rail_offset = shaft_rail_offset(&nets);
     let cell_of_count = cell_geometry_by_input_count(netlist);
     let world = &compiled.world;
 
@@ -339,67 +454,67 @@ pub fn analyze(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<RoutingR
             for &(gate, input_index) in sinks {
                 let mut parts: BTreeMap<RoutePart, PartTotals> = BTreeMap::new();
 
-                // Column-in: once per net, always present, regardless of
-                // which slot this particular edge ends at.
+                // Column-in and the first climb: once per net, always
+                // present, regardless of which slot this particular edge
+                // ends at.
                 let channel0 = net.channels[0];
-                let entry0 = Position::new(
-                    net.entry_column(0),
-                    GATE_Y,
-                    track_z[channel0][net.tracks[0]] + RAMP_LENGTH,
-                );
+                let z0 = track_z[channel0][net.tracks[0]];
+                let entry0 = Position::new(net.entry_column(0), gate_y(channel0), z0 + RAMP_LENGTH);
                 *parts.entry(RoutePart::Column).or_default() +=
                     scan_dust_run(world, pin, Facing::North, entry0.offset(Facing::North));
+                *parts.entry(RoutePart::Ramp).or_default() +=
+                    scan_ramp(world, entry0, Facing::North, track_y(channel0));
 
                 for i in 0..=slot {
                     let channel = net.channels[i];
                     let z = track_z[channel][net.tracks[i]];
-                    let entry = Position::new(net.entry_column(i), GATE_Y, z + RAMP_LENGTH);
-
-                    // Ramp up into this slot's track: once per slot, shared
-                    // by every exit (sinks and/or a feed-through) in it.
-                    *parts.entry(RoutePart::Ramp).or_default() += scan_ramp(world, entry, Facing::North, TRACK_Y);
+                    let source_x = net.entry_column(i);
 
                     if i < slot {
                         // Intermediate hop: this net feeds a gate further
-                        // away than the next row, so it feeds through here.
-                        let hop_x = net.hops[i];
+                        // away than the next row, so it climbs straight
+                        // past this channel's own level via a shaft --
+                        // always via `shaft_diagonal_z`, and always with a
+                        // mandatory-repeater correction on both ends (see
+                        // `shaft_diagonal_z`'s doc comment for why neither
+                        // is ever skipped), so the climb itself always
+                        // starts at `MAX_SIGNAL_STRENGTH`.
+                        let hop_x = net.hop_exit[i];
                         *parts.entry(RoutePart::Track).or_default() +=
-                            scan_track_to(world, net.entry_column(i), hop_x, TRACK_Y, z);
+                            scan_track_to(world, source_x, hop_x, track_y(channel), z);
 
-                        let top = Position::new(hop_x, TRACK_Y, z);
-                        *parts.entry(RoutePart::Ramp).or_default() += scan_ramp(world, top, Facing::North, GATE_Y);
-
-                        let landing = Position::new(hop_x, GATE_Y, z - RAMP_LENGTH);
+                        let origin = Position::new(hop_x, track_y(channel), z);
                         let next_channel = net.channels[i + 1];
-                        let next_z = track_z[next_channel][net.tracks[i + 1]];
-                        let next_entry = Position::new(hop_x, GATE_Y, next_z + RAMP_LENGTH);
-                        *parts.entry(RoutePart::Column).or_default() +=
-                            scan_dust_run(world, landing, Facing::North, next_entry.offset(Facing::North));
+                        let climb = track_y(next_channel) - track_y(channel);
+                        let target_z = track_z[next_channel][net.tracks[i + 1]];
+                        let shaft = scan_shaft(world, origin, row_z, climb, target_z, rail_offset);
+                        *parts.entry(RoutePart::Track).or_default() += shaft.track;
+                        *parts.entry(RoutePart::Ramp).or_default() += shaft.ramp;
                     } else {
                         // Final slot: the real socket this edge ends at.
                         let exit_x = approach_column(plan.centre_x[gate], input_index);
                         *parts.entry(RoutePart::Track).or_default() +=
-                            scan_track_to(world, net.entry_column(i), exit_x, TRACK_Y, z);
+                            scan_track_to(world, source_x, exit_x, track_y(channel), z);
 
-                        let top = Position::new(exit_x, TRACK_Y, z);
-                        *parts.entry(RoutePart::Ramp).or_default() += scan_ramp(world, top, Facing::North, GATE_Y);
+                        *parts.entry(RoutePart::Ramp).or_default() += scan_ramp(
+                            world,
+                            Position::new(exit_x, track_y(channel), z),
+                            Facing::South,
+                            gate_y(channel + 1),
+                        );
 
-                        let landing = Position::new(exit_x, GATE_Y, z - RAMP_LENGTH);
+                        let landing = Position::new(exit_x, gate_y(channel + 1), z + DESCEND_LENGTH);
                         let cell = &cell_of_count[&netlist.gates[gate].inputs.len()];
                         let (dx, dy, dz) = cell.input_offsets[input_index];
-                        let socket = Position::new(
-                            plan.centre_x[gate] + dx,
-                            GATE_Y + dy,
-                            row_z[plan.row_of[gate]] + dz,
-                        );
+                        let socket =
+                            Position::new(plan.centre_x[gate] + dx, gate_y(channel + 1) + dy, row_z + dz);
                         let mut entry_total = PartTotals::default();
-                        if socket.x == landing.x {
-                            entry_total += scan_to_socket(world, landing, socket);
-                        } else {
-                            let corner = Position::new(landing.x, GATE_Y, row_z[plan.row_of[gate]]);
-                            entry_total += scan_to_corner(world, landing, corner);
-                            entry_total += scan_to_socket(world, corner, socket);
+                        let mut current = landing;
+                        for corner in socket_approach_corners(landing, socket, row_z) {
+                            entry_total += scan_to_corner(world, current, corner);
+                            current = corner;
                         }
+                        entry_total += scan_to_socket(world, current, socket);
                         *parts.entry(RoutePart::GateEntry).or_default() += entry_total;
                     }
                 }
@@ -428,6 +543,7 @@ pub fn distinct_totals_by_part(
     compiled: &CompiledCircuit,
 ) -> Result<BTreeMap<RoutePart, PartTotals>, CompileError> {
     let (plan, nets, row_z, track_z, _track_count) = recompute_geometry(netlist)?;
+    let rail_offset = shaft_rail_offset(&nets);
     let cell_of_count = cell_geometry_by_input_count(netlist);
     let world = &compiled.world;
 
@@ -437,46 +553,49 @@ pub fn distinct_totals_by_part(
 
         for (slot, &channel) in net.channels.iter().enumerate() {
             let z = track_z[channel][net.tracks[slot]];
-            let entry = Position::new(net.entry_column(slot), GATE_Y, z + RAMP_LENGTH);
+            let source_x = net.entry_column(slot);
+            let entry = Position::new(source_x, gate_y(channel), z + RAMP_LENGTH);
 
             if slot == 0 {
                 *total.entry(RoutePart::Column).or_default() +=
                     scan_dust_run(world, pin, Facing::North, entry.offset(Facing::North));
+                *total.entry(RoutePart::Ramp).or_default() += scan_ramp(world, entry, Facing::North, track_y(channel));
             }
-            *total.entry(RoutePart::Ramp).or_default() += scan_ramp(world, entry, Facing::North, TRACK_Y);
 
             let (lo, hi) = net.span(slot, &plan.centre_x);
-            *total.entry(RoutePart::Track).or_default() +=
-                scan_full_track(world, net.entry_column(slot), lo, hi, TRACK_Y, z);
+            *total.entry(RoutePart::Track).or_default() += scan_full_track(world, source_x, lo, hi, track_y(channel), z);
 
             for exit in net.exits(slot, &plan.centre_x) {
-                let top = Position::new(exit.x(), TRACK_Y, z);
-                *total.entry(RoutePart::Ramp).or_default() += scan_ramp(world, top, Facing::North, GATE_Y);
-                let landing = Position::new(exit.x(), GATE_Y, z - RAMP_LENGTH);
-
                 match exit {
                     Exit::Socket { gate, input_index, .. } => {
+                        *total.entry(RoutePart::Ramp).or_default() += scan_ramp(
+                            world,
+                            Position::new(exit.x(), track_y(channel), z),
+                            Facing::South,
+                            gate_y(channel + 1),
+                        );
+                        let landing = Position::new(exit.x(), gate_y(channel + 1), z + DESCEND_LENGTH);
                         let cell = &cell_of_count[&netlist.gates[gate].inputs.len()];
                         let (dx, dy, dz) = cell.input_offsets[input_index];
-                        let socket = Position::new(
-                            plan.centre_x[gate] + dx,
-                            GATE_Y + dy,
-                            row_z[plan.row_of[gate]] + dz,
-                        );
-                        let entry_total = if socket.x == landing.x {
-                            scan_to_socket(world, landing, socket)
-                        } else {
-                            let corner = Position::new(landing.x, GATE_Y, row_z[plan.row_of[gate]]);
-                            scan_to_corner(world, landing, corner) + scan_to_socket(world, corner, socket)
-                        };
+                        let socket =
+                            Position::new(plan.centre_x[gate] + dx, gate_y(channel + 1) + dy, row_z + dz);
+                        let mut entry_total = PartTotals::default();
+                        let mut current = landing;
+                        for corner in socket_approach_corners(landing, socket, row_z) {
+                            entry_total += scan_to_corner(world, current, corner);
+                            current = corner;
+                        }
+                        entry_total += scan_to_socket(world, current, socket);
                         *total.entry(RoutePart::GateEntry).or_default() += entry_total;
                     }
                     Exit::Feedthrough { x, next_slot } => {
+                        let origin = Position::new(x, track_y(channel), z);
                         let next_channel = net.channels[next_slot];
-                        let next_z = track_z[next_channel][net.tracks[next_slot]];
-                        let next_entry = Position::new(x, GATE_Y, next_z + RAMP_LENGTH);
-                        *total.entry(RoutePart::Column).or_default() +=
-                            scan_dust_run(world, landing, Facing::North, next_entry.offset(Facing::North));
+                        let climb = track_y(next_channel) - track_y(channel);
+                        let target_z = track_z[next_channel][net.tracks[next_slot]];
+                        let shaft = scan_shaft(world, origin, row_z, climb, target_z, rail_offset);
+                        *total.entry(RoutePart::Track).or_default() += shaft.track;
+                        *total.entry(RoutePart::Ramp).or_default() += shaft.ramp;
                     }
                 }
             }
@@ -490,6 +609,180 @@ pub fn distinct_totals_by_part(
 pub fn distinct_totals(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<PartTotals, CompileError> {
     let by_part = distinct_totals_by_part(netlist, compiled)?;
     Ok(ALL_PARTS.iter().fold(PartTotals::default(), |acc, p| acc + by_part.get(p).copied().unwrap_or_default()))
+}
+
+#[cfg(test)]
+mod dbg_collision {
+    use super::*;
+    use crate::circuits::seven_segment::{build_single_segment_netlist, INPUT_NAMES};
+    use crate::compile::compile;
+    use crate::redstone::simulator::Simulator;
+
+    #[test]
+    fn live_trace_segment_a_at_0000() {
+        let (netlist, output_signal) = build_single_segment_netlist(0);
+        let compiled = compile(&netlist).unwrap();
+        let mut sim = Simulator::new(compiled.world.clone());
+        sim.run_until_stable(2000).unwrap();
+
+        for &name in INPUT_NAMES.iter() {
+            let (x, y, z) = compiled.input_positions[name];
+            let mut state = sim.world().get(x, y, z).clone();
+            state.lit = false;
+            sim.world_mut().set(x, y, z, state);
+            sim.run_until_stable(2000).unwrap();
+        }
+
+        let read = |sim: &Simulator, (x, y, z): (i32, i32, i32)| sim.world().get(x, y, z).lit;
+        let read_power = |sim: &Simulator, (x, y, z): (i32, i32, i32)| sim.world().get(x, y, z).power;
+
+        for g in ["g8", "g9", "g10"] {
+            let pos = compiled.gate_output_positions[g];
+            println!("{g} output torch lit={} pos={:?}", read(&sim, pos), pos);
+        }
+        let out_pos = compiled.output_positions[&output_signal];
+        println!("output lamp lit={}", read(&sim, out_pos));
+
+        // Channel4 track0 line: y=23, z=28 (from earlier geometry dump).
+        for x in [10, 50, 88, 150, 182, 185, 186] {
+            println!("track4/0 x={x} y=23 z=28 power={:?}", read_power(&sim, (x, 23, 28)));
+        }
+
+        println!("--- net22 destination jog region, y=23 z=28, x=180..210 ---");
+        for x in 180..=210 {
+            let b = sim.world().get(x, 23, 28);
+            println!("x={x} kind={:?} lit={} power={} facing={:?}", b.kind, b.lit, b.power, b.facing);
+        }
+        println!("--- net22 post_corner climb landing region, y=23, z=40..50, x=200..210 ---");
+        for x in 200..=210 {
+            for z in 40..=50 {
+                let b = sim.world().get(x, 23, z);
+                if b.kind != crate::redstone::world::block::BlockKind::Air {
+                    println!("x={x} z={z} kind={:?} lit={} power={} facing={:?}", b.kind, b.lit, b.power, b.facing);
+                }
+            }
+        }
+    }
+
+
+    #[test]
+    fn find_pre_post_correction_collisions() {
+        let (netlist, _label) = build_single_segment_netlist(0);
+        let (plan, nets, row_z, track_z, _track_count) = recompute_geometry(&netlist).unwrap();
+        let diagonal_z = shaft_diagonal_z(row_z);
+        let rail_offset = shaft_rail_offset(&nets);
+        println!("rail_offset={rail_offset}");
+
+        // For every net's shaft hop, print the pre-correction sweep (fixed X,
+        // fixed Y = track_y(origin channel), Z from origin track Z to
+        // diagonal_z) and post-correction sweep (fixed X, fixed Y =
+        // track_y(dest channel), Z from diagonal_z to dest track Z).
+        struct Sweep {
+            net: usize,
+            slot: usize,
+            kind: &'static str,
+            x: i32,
+            y: i32,
+            z_lo: i32,
+            z_hi: i32,
+        }
+        let mut sweeps = Vec::new();
+        for (n, net) in nets.iter().enumerate() {
+            for slot in 0..net.channels.len() {
+                if slot + 1 >= net.channels.len() {
+                    continue;
+                }
+                let channel = net.channels[slot];
+                let next_channel = net.channels[slot + 1];
+                let z = track_z[channel][net.tracks[slot]];
+                let x = net.hop_exit[slot] + rail_offset;
+                let (lo, hi) = if z < diagonal_z { (z, diagonal_z) } else { (diagonal_z, z) };
+                sweeps.push(Sweep {
+                    net: n,
+                    slot,
+                    kind: "pre",
+                    x,
+                    y: track_y(channel),
+                    z_lo: lo,
+                    z_hi: hi,
+                });
+                let target_z = track_z[next_channel][net.tracks[slot + 1]];
+                let landing_x = net.hop_entry[slot] + rail_offset;
+                let (lo2, hi2) = if target_z < diagonal_z { (target_z, diagonal_z) } else { (diagonal_z, target_z) };
+                sweeps.push(Sweep {
+                    net: n,
+                    slot,
+                    kind: "post",
+                    x: landing_x,
+                    y: track_y(next_channel),
+                    z_lo: lo2,
+                    z_hi: hi2,
+                });
+            }
+        }
+
+        // For every channel, every track index's actual physical span (union
+        // over every net/slot using that track index in that channel).
+        let channel_count = track_z.len();
+        let mut track_span: Vec<Vec<Option<(i32, i32)>>> =
+            track_z.iter().map(|zs| vec![None; zs.len()]).collect();
+        for net in &nets {
+            for slot in 0..net.channels.len() {
+                let channel = net.channels[slot];
+                let track = net.tracks[slot];
+                let (lo, hi) = net.span(slot, &plan.centre_x);
+                let entry = &mut track_span[channel][track];
+                *entry = Some(match entry {
+                    Some((elo, ehi)) => ((*elo).min(lo), (*ehi).max(hi)),
+                    None => (lo, hi),
+                });
+            }
+        }
+
+        for (n, net) in nets.iter().enumerate() {
+            println!(
+                "net {n}: source={:?} channels={:?} tracks={:?} hop_exit={:?} hop_entry={:?} sinks={:?}",
+                match net.source {
+                    Source::Lever(i) => format!("lever {} ({})", i, netlist.inputs[i]),
+                    Source::Gate(g) => format!("gate {} ({})", g, netlist.gates[g].output),
+                },
+                net.channels,
+                net.tracks,
+                net.hop_exit,
+                net.hop_entry,
+                net.sinks
+                    .iter()
+                    .flatten()
+                    .map(|&(g, i)| format!("{}.in[{}]", netlist.gates[g].output, i))
+                    .collect::<Vec<_>>()
+            );
+        }
+
+        println!("row_z={row_z} diagonal_z={diagonal_z}");
+        for c in 0..channel_count {
+            for (k, z) in track_z[c].iter().enumerate() {
+                println!("channel {c} track {k}: z={z} span={:?} y={}", track_span[c][k], track_y(c));
+            }
+        }
+
+        for s in &sweeps {
+            // Does this sweep's fixed Y correspond to a channel, and does its
+            // Z range cross any *other* track index's Z within that channel?
+            let channel = (0..channel_count).find(|&c| track_y(c) == s.y);
+            let Some(channel) = channel else { continue };
+            for (k, &tz) in track_z[channel].iter().enumerate() {
+                if tz > s.z_lo && tz < s.z_hi {
+                    if let Some((lo, hi)) = track_span[channel][k] {
+                        let hits = s.x >= lo && s.x <= hi;
+                        println!(
+                            "net {} slot {} {} sweep x={} y={} z=[{},{}] CROSSES channel {} track {} (z={}) span=[{},{}] -> HITS_SPAN={}",
+                            s.net, s.slot, s.kind, s.x, s.y, s.z_lo, s.z_hi, channel, k, tz, lo, hi, hits
+                        );
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -558,19 +851,68 @@ mod tests {
     }
 
     #[test]
-    fn ramp_length_and_repeater_count_are_fixed_by_gate_y_and_track_y() {
+    fn single_band_ramps_never_place_a_repeater() {
+        // A single-band ramp (`RAMP_LENGTH` = 2) is always far too short to
+        // ever need a repeater (`MAX_DUST_RUN` is 14). A skip-level shaft
+        // *can* need one -- see `climb_levels`'s doc comment -- so this only
+        // checks edges with `hops == 1`, which never touch a shaft at all
+        // (see `Net::exits`: a shaft only exists between two channels this
+        // net has to cross, and a `hops == 1` edge never crosses one).
         let (and4, _) = build_and4_netlist();
         let compiled = compile(&and4).expect("and4 must compile");
         let report = analyze(&and4, &compiled).expect("and4 must analyze");
-        for edge in &report.edges {
+        for edge in report.edges.iter().filter(|e| e.hops == 1) {
             let ramp = edge.part(RoutePart::Ramp);
-            // Every edge crosses at least one channel, so it has at least
-            // one ramp up and one ramp down: 2 * hops ramp instances, each
-            // exactly `RAMP_LENGTH` long with zero repeaters -- a dust
-            // staircase, unlike the old repeater ramp, never places one.
-            let expected_instances = 2 * edge.hops as i64;
-            assert_eq!(ramp.length, expected_instances * RAMP_LENGTH as i64);
-            assert_eq!(ramp.repeaters, 0, "a dust staircase ramp must never place a repeater");
+            assert_eq!(
+                ramp.repeaters, 0,
+                "{} -> {}: a single-band ramp must never place a repeater",
+                edge.source, edge.sink
+            );
         }
+    }
+
+    #[test]
+    fn a_deep_skip_level_shaft_can_need_a_repeater() {
+        // None of the four reference circuits' own skip-level edges climb
+        // far enough to need this any more: `move_through_shaft` now always
+        // lands the climb on a mandatory-repeater correction first (see
+        // `shaft_diagonal_z`'s doc comment), so a climb starts fresh
+        // (`MAX_SIGNAL_STRENGTH`) every time, and none of the reference
+        // circuits' own skips are deep enough to run that out before
+        // reaching the top. A synthetic deep chain still can: six levels of
+        // `NOT` between the primary input and a seventh gate that also
+        // reads that same primary input directly skips from row 0 to row 6
+        // (`BAND_HEIGHT` * 6 = 30 levels, well past `MAX_DUST_RUN`'s 14).
+        // This is the one load-bearing check that `scan_climb` actually
+        // replays `plan_climb`'s decision instead of assuming a straight
+        // run -- without it, `distinct_totals_matches_the_world_for_every_
+        // reference_circuit` would still catch a wrong *count* on whatever
+        // circuit first needed this, but only this test pins down that the
+        // count is allowed to be nonzero for the right, specific reason.
+        use crate::compile::Gate;
+
+        let mut gates = Vec::new();
+        let mut prev = "a".to_string();
+        for i in 1..=6 {
+            let out = format!("g{i}");
+            gates.push(Gate { name: out.clone(), inputs: vec![prev.clone()], output: out.clone() });
+            prev = out;
+        }
+        gates.push(Gate { name: "g7".to_string(), inputs: vec!["a".to_string(), prev], output: "g7".to_string() });
+        let netlist =
+            Netlist { inputs: vec!["a".to_string()], outputs: vec!["g7".to_string()], gates };
+
+        let compiled = compile(&netlist).expect("this deep chain must compile");
+        let report = analyze(&netlist, &compiled).expect("this deep chain must analyze");
+        let skip_edge = report
+            .edges
+            .iter()
+            .find(|e| e.source == "a" && e.sink == "g7.in[0]")
+            .expect("a -> g7.in[0] must be a routed edge");
+        assert!(skip_edge.hops > 1, "a -> g7 should skip several levels, got hops={}", skip_edge.hops);
+        assert!(
+            skip_edge.part(RoutePart::Ramp).repeaters > 0,
+            "a climb this deep should have needed at least one shaft repeater"
+        );
     }
 }

@@ -9,15 +9,22 @@
 //! 任一輸入充能那個方塊，火把就熄滅。NOR 是通用閘，任何布林函數都能只用
 //! NOR 組出來，所以這是唯一需要的 cell。
 //!
-//! # Placement and routing
+//! # Placement and routing: levels stack along Y, not Z
 //!
-//! Gates are levelised and every gate of one level shares one row, so Z grows
-//! with the netlist's depth rather than its gate count. Between two rows sits
-//! a routing channel: east-west tracks on one Y layer, north-south columns on
-//! another, so that nets can cross. Tracks are shared by left-edge assignment,
-//! which makes a channel as deep as the netlist's local density instead of as
-//! deep as its edge count. See the "Placement and routing" section further
-//! down for the full picture.
+//! Gates are levelised, and every logic level gets its own horizontal band
+//! stacked along Y -- level 0's band sits at the bottom, level 1's directly
+//! above it, and so on. Within one band, gates of that level share a row
+//! (spread along X), and a routing channel above that row carries their
+//! outputs to the next band's row: east-west tracks on one Y layer, then a
+//! short climb to the next band's gate plane. Because every band reuses the
+//! *same* X/Z footprint (only Y differs), the whole circuit's Z extent is
+//! bounded by one band's own local routing depth, not by the number of
+//! levels -- levels no longer compete for a footprint that has to fit inside
+//! Minecraft's horizontal chunk-loading radius. See "Placement and routing"
+//! further down for the full picture, including how an edge that skips
+//! several levels (a signal produced at level 0 and consumed at level 8)
+//! climbs straight through the intervening bands via a dedicated shaft
+//! instead of visiting each one.
 //!
 //! Every run of dust gets a repeater at least every 15 blocks, and a route
 //! always ends in a repeater facing the next gate's support block -- redstone
@@ -267,48 +274,137 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
 // Placement and routing
 // ---------------------------------------------------------------------
 //
-// The floorplan is the classic row/channel shape of a standard-cell
-// place-and-route, turned north so that it matches the way a NOR cell emits:
+// Level *i* gets its own horizontal band, stacked along Y:
 //
-//     row 0            the primary inputs' levers            (largest Z)
-//     channel 0        routing
-//     row 1            every gate whose level is 0
-//     channel 1        routing
-//     row 2            every gate whose level is 1
-//     ...                                                    (smallest Z)
+//     band 0   row 0 (the primary inputs' levers) + channel 0
+//     band 1   row 1 (every gate whose level is 0) + channel 1
+//     band 2   row 2 (every gate whose level is 1) + channel 2
+//     ...
 //
-// Signal flow is northwards (-Z), because `place_nor_gate` puts the output
-// torch on the cell's north face. Every gate of one level shares one row, so Z
-// grows with the *depth* of the netlist, not with its gate count.
+// A band is five Y layers tall, in this order from its own bottom:
 //
-// Inside a channel the two Manhattan directions live on two different Y
-// layers, and that is what lets nets cross each other at all:
+//   offset 0   floor: sparse support blocks for whatever sits at offset 1.
+//   offset 1   GATE_Y_OFFSET: gate bodies, lever homes, primary-input pins,
+//              and every north-south routing column.
+//   offset 2   the isolation floor / merge-dust plane: doubles as a NOR
+//              cell's own bus wire support *and* as the solid floor a
+//              track needs directly beneath it. Same role `Y=2` played in
+//              the pre-3D design, just now repeated once per band.
+//   offset 3   TRACK_Y_OFFSET: east-west routing tracks.
+//   offset 4   a genuinely empty layer, never written to by anything. Not
+//              here for the diagonal climb rule (which only ever bridges
+//              wire that is exactly one level apart through a specific
+//              neighbour, and this band's own track and the next band's
+//              floor are never that neighbour to each other) but for a
+//              completely different mechanism -- see `DESCEND_LENGTH`'s
+//              doc comment, which is where this layer's existence is
+//              actually derived from, not this diagram.
 //
-//   Y = TRACK_Y      east-west "tracks". One track carries several nets when
-//                    their X spans are disjoint (left-edge assignment), so a
-//                    channel is as deep as the netlist's local *density*, not
-//                    as deep as its edge count.
-//   Y = TRACK_Y - 1  the tracks' stone floor. It doubles as the shield that
-//                    stops a track from reaching down into a column.
-//   Y = GATE_Y       north-south "columns", one per pin. A column passes
-//                    underneath any number of tracks without touching them.
+// The *next* band's own floor picks up at offset 5 (= its own offset 0).
+// Signal flow only ever moves *up* through the whole stack, so the hop from
+// one band's track into the next band's gate plane is itself another
+// ascend, `DESCEND_LENGTH` levels instead of `RAMP_LENGTH` -- see
+// `DESCEND_LENGTH`'s own comment for why the two are not the same number.
 //
-// A net that has to reach a level further away than the next one takes a
-// feed-through: a column that runs straight through the intervening rows in a
-// reserved X slot and rejoins a track in the later channel. A long net
-// therefore costs one column per level it crosses, instead of one dedicated
-// lane for its whole length.
+// Every band reuses the *same* Z template (a row's gates sit at a single
+// constant `ROW_Z`, and each channel's tracks sit at `ROW_Z` minus some
+// multiple of `TRACK_SPACING`, sized for the *widest single channel*, not
+// summed across every level the way the old Z-stacked design had to). Only
+// Y tells two bands apart. Consecutive levels are therefore vertically
+// adjacent: the hop from a gate to its next-level consumer is two small
+// climbs (`RAMP_LENGTH` up to this band's own track, `DESCEND_LENGTH` on to
+// the next band's gate plane) plus a short horizontal run within one band's
+// own local channel, not a traverse across the whole circuit's Z extent.
+//
+// Edges that skip levels. A netlist edge does not always connect consecutive
+// levels -- a signal produced at level 0 may be consumed at level 8. Such an
+// edge does not visit every intervening band's gate row at all: after
+// reaching its own band's track, it keeps climbing straight past every
+// intervening band's Y range (using a route that never enters their X/Z
+// footprint -- see `climb_levels` and the "Skip-level shafts" section below)
+// until it reaches the destination band's track. See `assign_shafts`.
 
-/// Y of the gate bodies, their input sockets, the output pins, and every
-/// north-south routing column.
-const GATE_Y: i32 = 1;
+/// Offset within a band where gate bodies, lever homes, primary-input pins,
+/// and every north-south routing column sit.
+const GATE_Y_OFFSET: i32 = 1;
 
-/// Y of the east-west routing tracks. `TRACK_Y - 1` is their stone floor.
-const TRACK_Y: i32 = 3;
+/// How far a **single-band** ramp travels horizontally while changing layer,
+/// *and* how much signal strength it spends doing so -- the two are the same
+/// number here, not a coincidence pasted together (see the pre-3D design's
+/// identical constant, whose derivation via `dust_connections`' diagonal rule
+/// still applies unchanged: one block of horizontal travel, one point of
+/// strength, per Y level, always in lockstep).
+///
+/// This is the *only* ramp height that is architecturally fixed by the cell
+/// library. A skip-level edge's climb (`climb_levels`) is instead a multiple
+/// of a whole `BAND_HEIGHT`, and its own strength cost is accounted for
+/// separately -- see `track_reserve`.
+const RAMP_LENGTH: i32 = 2;
 
-/// Floor, gates, merge dust / track floor, tracks, and one spare layer of air
-/// above the tracks so nothing is ever written outside the world.
-const WORLD_HEIGHT: i32 = 5;
+/// Offset within a band where east-west routing tracks sit. One layer below
+/// this (`TRACK_Y_OFFSET - 1`) is a track's own stone floor, which is the
+/// *same* layer a gate cell's merge dust sits on -- see the isolation
+/// argument above.
+const TRACK_Y_OFFSET: i32 = GATE_Y_OFFSET + RAMP_LENGTH;
+
+/// How far a channel's own track sits below the *next* band's gate plane --
+/// deliberately `RAMP_LENGTH + 1`, not `RAMP_LENGTH` again, even though
+/// signal flow only ever moves up through the whole stack and this hop is
+/// architecturally just another ascend (`move_between_layers` does not care
+/// which of the two it is asked to build).
+///
+/// The `+ 1` exists for a completely different reason than the climb rules:
+/// `redstone::simulator::propagate::recompute_dust_strengths` treats *any*
+/// strongly-powered solid block as a conduit that recharges every redstone
+/// wire directly adjacent to it -- not just via the diagonal climb rule, but
+/// via plain orthogonal adjacency (the same mechanism `compile`'s own output
+/// -lamp placement comment works around, one level down instead of one level
+/// sideways). Every repeater in the next band's own approach columns sits on
+/// a support floor at that band's own floor offset (0). If that floor sat
+/// directly on top of *this* band's track (offset `RAMP_LENGTH` = 2, one
+/// level below), a repeater anywhere in the next band -- and every band's
+/// approach columns reuse the *same* wide X range this band's track already
+/// spans, so this is not a rare coincidence to guard against, it is the
+/// common case -- would strongly power that floor block and leak straight
+/// down into whatever net's track cell happens to sit under it. `+ 1` buys
+/// back the one genuinely empty Y layer (`RAMP_LENGTH + 1`, never written to
+/// by anything) that keeps the next band's floor two levels above this
+/// band's track instead of one, out of reach of plain adjacency the same
+/// way the pre-3D design's single shared `WORLD_HEIGHT` kept its own track
+/// plane two levels clear of its own gate plane's merge dust.
+///
+/// Getting this wrong does not fail loudly: the circuit still compiles and
+/// still places every repeater exactly where the strength budget says to,
+/// it just also strongly re-powers unrelated dust, which reads as answers
+/// stuck high regardless of input -- not a settle failure, not a panic.
+const DESCEND_LENGTH: i32 = RAMP_LENGTH + 1;
+
+/// Height of one logic level's whole band: floor, gate plane, isolation
+/// floor / merge dust, track plane, and the one genuinely empty layer
+/// `DESCEND_LENGTH` buys back (see its own doc comment). This is exactly
+/// the number `docs/superpowers/specs/2026-08-07-3d-placement.md`'s "band
+/// height" asks for, and this derivation -- `RAMP_LENGTH` up to this band's
+/// own track, `DESCEND_LENGTH` on to the next band's gate plane -- is how it
+/// was arrived at, not guessed.
+///
+/// Multiplying this by the level count is what decides whether a circuit
+/// fits under Minecraft's 384-block ceiling; see `compile`'s size
+/// computation and this module's tests for what that comes out to on the
+/// four reference circuits.
+const BAND_HEIGHT: i32 = RAMP_LENGTH + DESCEND_LENGTH;
+
+/// Absolute Y of row `row`'s gate plane (and lever home, and every
+/// north-south column in its own band).
+fn gate_y(row: usize) -> i32 {
+    row as i32 * BAND_HEIGHT + GATE_Y_OFFSET
+}
+
+/// Absolute Y of channel `row`'s east-west track plane -- the channel that
+/// carries row `row`'s outputs onward (to row `row + 1`, or further, via a
+/// skip-level shaft).
+fn track_y(row: usize) -> i32 {
+    row as i32 * BAND_HEIGHT + TRACK_Y_OFFSET
+}
 
 /// X distance between two neighbouring gates of the same row.
 ///
@@ -321,45 +417,25 @@ const SLOT_PITCH: i32 = 14;
 /// sit at `cx ± GATE_HALF_WIDTH`.
 const GATE_HALF_WIDTH: i32 = 4;
 
+/// X offset of the south socket's own approach column, out past the west and
+/// east ones (`± GATE_HALF_WIDTH`) with `COLUMN_CLEARANCE` to spare on both
+/// sides -- see `approach_column`'s doc comment for why south needs a column
+/// of its own at all.
+const SOUTH_APPROACH_OFFSET: i32 = GATE_HALF_WIDTH + 2 * COLUMN_CLEARANCE;
+
+/// How far south of a row's own Z the south approach's dogleg turns back
+/// west, before heading north into the socket -- see `socket_approach_
+/// corners`. Only needs to clear the south socket itself (`ROW_Z + 2`, fixed
+/// by `place_nor_gate`'s cell geometry) by `lay_segment_to_corner`'s own
+/// minimum spacing of 2.
+const SOUTH_TURN_MARGIN: i32 = 4;
+
 /// Z distance between two neighbouring tracks of the same channel.
 ///
-/// This was originally chosen because the old repeater ramp's last
-/// descending step left a **strongly powered** support block one layer under
-/// the track plane -- a strongly powered block drives every redstone dust
-/// next to it in all six directions, so at spacing 4 that block would sit
-/// directly beneath the next track and inject this net's signal into it.
-/// Five put the ramp's landing on a Z row that could never hold a track.
-///
-/// The dust staircase that replaced that ramp (`move_between_layers`) has no
-/// such block: every solid cell it places is a stair's support, only ever
-/// *weakly* powered by the dust sitting on it (`dust_only_weakly_powers_the_
-/// block_beneath_it`), and weak power cannot re-drive a neighbour. So the
-/// original justification for 5 no longer applies -- but retuning it is a
-/// track-spacing change, a size win, not the delay win this module exists to
-/// produce right now (see `docs/superpowers/plans/2026-08-07-dust-staircase-
-/// ramps.md`, "Out of scope"). Left at 5 deliberately.
+/// Every band reuses this same spacing at its own Y, so this bounds Z by the
+/// *widest single channel*'s own track count, not by anything that grows
+/// with the number of levels -- see `layout_row_z`.
 const TRACK_SPACING: i32 = 5;
-
-/// How far a ramp travels horizontally while changing layer, *and* how much
-/// signal strength it spends doing so -- the two are the same number here,
-/// not a coincidence pasted together.
-///
-/// The old ramp was built from repeaters and spent two blocks of horizontal
-/// travel per Y level (a repeater, then the support block it drove). A dust
-/// staircase instead climbs or descends via `redstone::simulator::
-/// connectivity::dust_connections`' diagonal rule, which connects one dust
-/// cell straight to the next diagonal one -- exactly one block of horizontal
-/// travel per Y level, not two. So the footprint halves to `TRACK_Y - GATE_Y`.
-///
-/// That diagonal connection is still a single hop of `dust_connections`, and
-/// `recompute_dust_strengths`'s BFS spends exactly one strength per hop it
-/// walks, same-level or diagonal, without distinguishing them (see its
-/// `HORIZONTAL` loop, which is the only place hops are counted). So a ramp
-/// that changes `RAMP_LENGTH` levels also spends exactly `RAMP_LENGTH`
-/// signal strength -- one block of horizontal footprint, one point of
-/// strength, per level, always in lockstep. `MAX_DUST_RUN`'s comment below
-/// derives what that costs the surrounding dust runs.
-const RAMP_LENGTH: i32 = TRACK_Y - GATE_Y;
 
 /// Minimum X gap between two nets that share one track.
 const TRACK_SHARE_GAP: i32 = 4;
@@ -373,6 +449,35 @@ const COLUMN_CLEARANCE: i32 = 2;
 /// West edge of the floorplan. Everything is laid out eastwards from here, so
 /// no coordinate can go negative on the X axis.
 const ORIGIN_X: i32 = 8;
+
+/// How far east of every band's own content a skip-level shaft's lanes start
+/// (see `assign_shafts`). Chosen generously past `COLUMN_CLEARANCE` purely
+/// for readability at the boundary; the shafts themselves need no clearance
+/// search at all, since content never extends this far east in any band.
+const SHAFT_MARGIN: i32 = 6;
+
+/// X gap between two concurrent skip-level shafts' lanes.
+///
+/// Two shafts climb at the same rate (one X per Y level, see
+/// `assign_shafts`), so a constant gap at their starting Y is a constant
+/// gap at every Y both are active -- they can never converge in the sense
+/// of ending up at the *same* cell. But `COLUMN_CLEARANCE` (2) is not
+/// enough to keep them from interfering with *each other's* diagonal climb
+/// rule, which is a stricter requirement than plain adjacency: a climbing
+/// shaft's own ascend needs the cell directly above its *current* landing
+/// to stay open (`climb_levels`'s doc comment), and a second shaft exactly
+/// 2 lanes over has its own riser (a solid block, laid one Y level later)
+/// land in exactly that cell -- gap 1 fails the same way via plain
+/// horizontal adjacency, and gap 2 fails this way instead, so 3 is the
+/// smallest gap that avoids both. This is exactly the kind of interaction
+/// `assign_shafts`' "no clearance search needed" reasoning does not cover,
+/// since it only reasoned about a shaft's X never falling inside a band's
+/// *content*, not about two shafts' diagonal footprints reaching each
+/// other. Doubled here for headroom rather than shipped at the bare
+/// minimum (3), since every sub-case of this interaction (a landing's own
+/// future riser, the symmetric direction) was not exhaustively re-verified
+/// once one concrete instance of it was found and fixed.
+const SHAFT_LANE_PITCH: i32 = 4;
 
 /// `lay_dust_run`'s `start` (or a track's `source_x`) is not always a fresh
 /// signal source anymore -- it can also be a ramp's landing, which arrives
@@ -391,18 +496,16 @@ const ORIGIN_X: i32 = 8;
 /// exactly this boundary). So at most 14 dust cells may follow a fresh
 /// source before a repeater is mandatory.
 ///
-/// A run that empties into a ramp cannot spend the full 14, though: the ramp
-/// itself is `RAMP_LENGTH` more hops (see that constant's comment) that has
-/// to survive on whatever strength is left when the flat run hands off to
-/// it, and a ramp cannot absorb a repeater partway up -- a repeater cannot
-/// change Y. So such a run's last cell must still be carrying at least
-/// `RAMP_LENGTH + 1` (enough to survive `RAMP_LENGTH` more hops and land on
-/// a live 1, not a dead 0), which means it may only spend
-/// `MAX_DUST_RUN - RAMP_LENGTH` cells per refresh cycle, not the full budget
-/// -- `plan_straight_run` and `plan_track_run` take that shortfall as their
-/// `reserve` parameter. Every dust run in this router either starts or ends
-/// at a ramp (frequently both), so this reservation, not the bare constant,
-/// is what most calls actually use.
+/// A run that empties into a single-band ramp cannot spend the full 14,
+/// though: the ramp itself is `RAMP_LENGTH` more hops that has to survive on
+/// whatever strength is left when the flat run hands off to it, and a ramp
+/// cannot absorb a repeater partway up -- a repeater cannot change Y. So such
+/// a run's last cell must still be carrying at least `RAMP_LENGTH + 1`,
+/// which means it may only spend `MAX_DUST_RUN - RAMP_LENGTH` cells per
+/// refresh cycle, not the full budget. A run that empties into a
+/// **skip-level** shaft instead reserves that shaft's own climb height --
+/// see `track_reserve`, which generalises this same reasoning to a climb
+/// that spans many bands instead of one.
 const MAX_DUST_RUN: i32 = 14;
 
 /// 編譯過程的錯誤。
@@ -480,9 +583,10 @@ fn straight_run_length(start: Position, direction: Facing, stop_before: Position
 /// another run's own last cell). `reserve` is how much strength must remain
 /// unspent in the last cell for whatever immediately follows to survive --
 /// see `MAX_DUST_RUN`'s comment for the derivation of `RAMP_LENGTH` as that
-/// reserve for a run that empties into a ramp, and 0 for one that empties
-/// into a mandatory terminating repeater instead (which cannot die no matter
-/// what strength reaches it, as long as it is nonzero).
+/// reserve for a run that empties into a single-band ramp, `track_reserve`
+/// for a run that empties into a skip-level shaft instead, and 0 for one
+/// that empties into a mandatory terminating repeater (which cannot die no
+/// matter what strength reaches it, as long as it is nonzero).
 fn plan_straight_run(len: i32, incoming_strength: u8, reserve: i32) -> (Vec<bool>, u8) {
     debug_assert!(incoming_strength > 0, "a run cannot start from an already-dead signal");
     let threshold = (MAX_DUST_RUN - reserve) as i64;
@@ -582,17 +686,18 @@ fn side_directions(direction: Facing) -> [Facing; 2] {
 /// Seal `pos`'s two neighbours perpendicular to `direction` with stone,
 /// wherever they are still air.
 ///
-/// This is `move_between_layers`'s cross-talk guard, and it is deliberately
-/// narrower than the repeater ramp's old `seal_horizontal_neighbours` (which
-/// sealed all four horizontal neighbours). That was safe there because the
-/// old ramp never relied on `dust_connections`' climb/descend rule at all --
-/// a repeater and a support block drove the landing dust directly, so every
-/// neighbour was free to fill in. A dust staircase *is* built from that
-/// diagonal rule (see `move_between_layers`), and the rule requires one
-/// specific neighbour -- the one along the direction of travel -- to stay
-/// exactly as the climb/descend step leaves it; sealing it would sever the
-/// very connection the staircase exists to make. Only the two side
+/// This is a single-band ramp's cross-talk guard (`move_between_layers`),
+/// deliberately narrower than sealing all four horizontal neighbours: a dust
+/// staircase is built from `dust_connections`' diagonal rule, and that rule
+/// requires one specific neighbour -- the one along the direction of travel
+/// -- to stay exactly as the climb/descend step leaves it; sealing it would
+/// sever the very connection the staircase exists to make. Only the two side
 /// neighbours are ever free of that constraint.
+///
+/// A skip-level shaft (`climb_levels`) does not call this at all -- it never
+/// runs anywhere near another band's content in the first place (see
+/// "Skip-level shafts" below), so there is nothing nearby for it to guard
+/// against.
 fn seal_cross_talk(world: &mut World, pos: Position, direction: Facing) {
     for side in side_directions(direction) {
         let neighbour = pos.offset(side);
@@ -605,6 +710,12 @@ fn seal_cross_talk(world: &mut World, pos: Position, direction: Facing) {
 /// Move a signal from `entry` (already lit, at whatever strength the caller
 /// arranged for) along `direction` to height `target_y`, one dust staircase
 /// step per Y level, and return the position of the final landing dust.
+///
+/// This is the **single-band** ramp: it only ever moves `RAMP_LENGTH` levels
+/// (a band's own gate plane to its own track plane, or back), which is
+/// always safely inside the strength budget by construction, so it needs no
+/// `reserve` parameter of its own -- unlike `climb_levels`, the shaft used
+/// for edges that skip whole bands.
 ///
 /// Climbing and descending are *not* mirror images of each other: they are
 /// governed by two different, deliberately asymmetric halves of
@@ -624,16 +735,10 @@ fn seal_cross_talk(world: &mut World, pos: Position, direction: Facing) {
 ///   landing (at the current cell's own height) is never written, so it
 ///   stays open.
 ///
-/// Either direction spends exactly one signal strength per level walked
-/// (`RAMP_LENGTH`'s comment derives why) and places no repeater -- the
-/// caller is responsible for having reserved that strength in whatever run
-/// feeds this ramp (`MAX_DUST_RUN`'s comment).
-fn move_between_layers(
-    world: &mut World,
-    entry: Position,
-    direction: Facing,
-    target_y: i32,
-) -> Position {
+/// Either direction spends exactly one signal strength per level walked and
+/// places no repeater -- the caller is responsible for having reserved that
+/// strength in whatever run feeds this ramp (`MAX_DUST_RUN`'s comment).
+fn move_between_layers(world: &mut World, entry: Position, direction: Facing, target_y: i32) -> Position {
     let mut current = entry;
     if target_y >= current.y {
         while current.y != target_y {
@@ -655,6 +760,83 @@ fn move_between_layers(
         }
     }
     current
+}
+
+/// A skip-level shaft's climb: ascend `levels` Y-levels from `entry` in
+/// `direction` (always `Facing::East`, in practice -- see `assign_shafts`),
+/// exactly like `move_between_layers`'s ascend half, but generalised to a
+/// span that may cross many bands -- and so, unlike a single-band ramp,
+/// generally too tall to survive on one fresh 15 (a netlist edge's two
+/// levels can be arbitrarily far apart; nothing bounds how many bands a
+/// shaft climbs).
+///
+/// A climb cannot refresh its own strength the way a flat run can, though:
+/// `plan_straight_run` can swap a repeater in for any dust cell of a flat
+/// run because a repeater simply *replaces* what would have been that run's
+/// next dust cell, but the diagonal climb rule
+/// (`redstone::simulator::connectivity::dust_connections`) only ever
+/// connects **dust** to dust -- a repeater does not participate in it at
+/// all. So refreshing mid-climb costs a small **detour** instead: step
+/// sideways, in one of the two directions perpendicular to travel, onto a
+/// repeater and then a fresh dust cell, then resume climbing from there.
+/// This is safe for the same reason a shaft needs no cross-talk sealing at
+/// all (contrast `move_between_layers`): a shaft's X is always east of
+/// every band's own content (`assign_shafts`), so a sideways detour can
+/// never step into anything real, and two concurrent shafts can never
+/// converge (`assign_shafts`'s doc comment) -- so a detour's exact Z does
+/// not matter, only that the climb keeps going afterwards. Landing on the
+/// destination channel's actual track Z is `land_shaft`'s job, once the
+/// climb is done, however much Z drifted from however many detours this
+/// took.
+///
+/// The detour direction is fixed (one of `side_directions(direction)`, not
+/// `direction` itself and not its opposite) so that it can never retrace a
+/// cell the climb has already been through, which is what keeps a detour
+/// from ever needing to reason about what an earlier step already placed.
+///
+/// Decide, for a climb of `levels` Y-steps starting at `incoming_strength`,
+/// which of them need a detour-and-refresh first. Pure, exactly like
+/// `plan_straight_run` -- so `routing_stats` can replay this identical
+/// decision while reading back an already-built world, without duplicating
+/// (and risking drifting from) the strength arithmetic that produced it.
+fn plan_climb(levels: i32, incoming_strength: u8) -> Vec<bool> {
+    debug_assert!(incoming_strength > 0, "a climb cannot start from an already-dead signal");
+    let mut needs_detour = vec![false; levels.max(0) as usize];
+    let mut since_refresh = (MAX_SIGNAL_STRENGTH - incoming_strength) as i32;
+    for slot in needs_detour.iter_mut() {
+        if since_refresh >= MAX_DUST_RUN {
+            *slot = true;
+            since_refresh = 0;
+        }
+        since_refresh += 1;
+    }
+    needs_detour
+}
+
+fn climb_levels(world: &mut World, entry: Position, direction: Facing, levels: i32, incoming_strength: u8) -> (Position, u8) {
+    let needs_detour = plan_climb(levels, incoming_strength);
+    let detour_direction = side_directions(direction)[0];
+    let mut current = entry;
+    let mut strength = incoming_strength;
+    for &detour in &needs_detour {
+        if detour {
+            let repeater_pos = current.offset(detour_direction);
+            ensure_floor(world, repeater_pos);
+            world.set(repeater_pos.x, repeater_pos.y, repeater_pos.z, repeater(detour_direction));
+            let fresh = repeater_pos.offset(detour_direction);
+            ensure_floor(world, fresh);
+            world.set(fresh.x, fresh.y, fresh.z, dust());
+            current = fresh;
+            strength = MAX_SIGNAL_STRENGTH;
+        }
+        let riser = current.offset(direction);
+        world.set(riser.x, riser.y, riser.z, stone());
+        let landing = riser.up();
+        world.set(landing.x, landing.y, landing.z, dust());
+        current = landing;
+        strength -= 1;
+    }
+    (current, strength)
 }
 
 /// Same decision as `plan_straight_run`, but for one direction of a track: a
@@ -714,18 +896,23 @@ fn plan_track_run(
 /// `incoming_strength` arriving at `source_x` -- without touching a `World`.
 ///
 /// This exists for the "Strength planning" pass in `compile`: a descending
-/// ramp needs to know what the track hands it before it can tell the column
-/// after it what it is starting from, but the track itself is not actually
-/// written until the later Tracks pass (world-building order needs Ramps,
-/// then Columns, then Tracks -- see the comment where `compile` calls them).
-/// `lay_track` runs this identical pure decision again when it actually
-/// writes the track, so the two can never silently disagree.
+/// ramp (or a skip-level shaft) needs to know what the track hands it before
+/// it can tell whatever comes after it what it is starting from, but the
+/// track itself is not actually written until the later Tracks pass
+/// (world-building order needs Ramps, then Columns, then Tracks -- see the
+/// comment where `compile` calls them). `lay_track` runs this identical pure
+/// decision again when it actually writes the track, so the two can never
+/// silently disagree.
+///
+/// `reserve` is `track_reserve`'s result for this (net, slot) -- see its own
+/// doc comment for what it actually returns and why.
 fn track_exit_strengths(
     source_x: i32,
     min_x: i32,
     max_x: i32,
     taps: &BTreeSet<i32>,
     incoming_strength: u8,
+    reserve: i32,
 ) -> BTreeMap<i32, u8> {
     let mut exit_strength = BTreeMap::new();
     for (end, step) in [(min_x, -1i32), (max_x, 1i32)] {
@@ -734,7 +921,7 @@ fn track_exit_strengths(
             continue;
         }
         let cells: Vec<i32> = (1..=length).map(|k| source_x + k * step).collect();
-        let (_is_repeater, strengths) = plan_track_run(&cells, incoming_strength, RAMP_LENGTH, taps);
+        let (_is_repeater, strengths) = plan_track_run(&cells, incoming_strength, reserve, taps);
         for (k, &x) in cells.iter().enumerate() {
             if taps.contains(&x) {
                 exit_strength.insert(x, strengths[k]);
@@ -749,20 +936,23 @@ fn track_exit_strengths(
 /// `plan_track_run`). Returns the strength delivered at each of `taps`,
 /// exactly as `track_exit_strengths` already predicted during planning.
 ///
-/// `taps` are the X positions where a ramp joins or leaves the track; every
-/// one of them reserves `RAMP_LENGTH` strength for the ramp it feeds (see
-/// `MAX_DUST_RUN`'s comment) -- applied to the whole track rather than just
-/// at each tap, which is simpler and only ever costs an occasional early
-/// repeater on a run that was already close to the 14-cell limit, never a
-/// correctness problem.
+/// `taps` are the X positions where a ramp or a skip-level shaft joins or
+/// leaves the track; every one of them reserves `reserve` strength for
+/// whatever it feeds (see `MAX_DUST_RUN`'s comment and `track_reserve`) --
+/// applied to the whole track rather than just at each tap, which is
+/// simpler and only ever costs an occasional early repeater on a run that
+/// was already close to the 14-cell limit, never a correctness problem.
+#[allow(clippy::too_many_arguments)]
 fn lay_track(
     world: &mut World,
+    y: i32,
     z: i32,
     source_x: i32,
     min_x: i32,
     max_x: i32,
     taps: &BTreeSet<i32>,
     incoming_strength: u8,
+    reserve: i32,
 ) -> BTreeMap<i32, u8> {
     let mut exit_strength = BTreeMap::new();
     for (end, step) in [(min_x, -1i32), (max_x, 1i32)] {
@@ -772,10 +962,10 @@ fn lay_track(
         }
         let direction = if step > 0 { Facing::East } else { Facing::West };
         let cells: Vec<i32> = (1..=length).map(|k| source_x + k * step).collect();
-        let (is_repeater, strengths) = plan_track_run(&cells, incoming_strength, RAMP_LENGTH, taps);
+        let (is_repeater, strengths) = plan_track_run(&cells, incoming_strength, reserve, taps);
 
         for (k, &x) in cells.iter().enumerate() {
-            let pos = Position::new(x, TRACK_Y, z);
+            let pos = Position::new(x, y, z);
             ensure_floor(world, pos);
             if is_repeater[k] {
                 world.set(pos.x, pos.y, pos.z, repeater(direction));
@@ -797,10 +987,10 @@ fn lay_track(
 /// (`power_emitted_by` reports `drives_dust` for a lever in every direction) --
 /// no support block in between, unlike a gate's input socket.
 ///
-/// The levers live in row 0, south of every gate row, and signal flow is
-/// northwards, so the pin goes on the lever's **north** side: that is the way
-/// the route has to leave anyway, and it keeps the route from turning back
-/// into the lever and overwriting it with dust.
+/// The levers live in row 0's band, south of every gate row, and signal flow
+/// is northwards, so the pin goes on the lever's **north** side: that is the
+/// way the route has to leave anyway, and it keeps the route from turning
+/// back into the lever and overwriting it with dust.
 fn place_primary_input(world: &mut World, home: Position) -> (Position, Position) {
     world.set(home.x, home.y, home.z, lever(false));
     ensure_floor(world, home);
@@ -816,15 +1006,60 @@ fn place_primary_input(world: &mut World, home: Position) -> (Position, Position
 ///
 /// The final repeater of a route must face the gate's support block, and a
 /// repeater only reads from directly behind it, so each socket can only be
-/// entered from one side: the west socket from the west, the east socket from
-/// the east, and the south socket from the south. The first two therefore turn
-/// a corner on the gate's own row, `GATE_HALF_WIDTH` out from the centre; the
-/// third is reached by running straight north.
+/// entered from one side: the west socket from the west, the east socket
+/// from the east, and the south socket from the south.
+///
+/// The first two turn a single corner on the gate's own row, `GATE_HALF_
+/// WIDTH` out from the centre, and their sockets sit at the row's own Z, so
+/// a ramp landing (always north of the row -- every route arrives from a
+/// channel, and every channel this module ever places is north of the row
+/// it feeds) reaches them by simply continuing north into that corner and
+/// then east/west into the socket (`socket_route`'s single-corner case).
+///
+/// The south socket is different in a way that has no equivalent for west
+/// or east: it sits two blocks *south* of the row, needing a wire that
+/// arrives travelling north into it -- but every ramp landing is itself
+/// north of the row. A straight run south from the landing would have to
+/// pass straight through the gate's own body (the centre block and the
+/// output torch both sit between the landing and the socket). So the south
+/// approach gets a column of its own, offset in X exactly like west and
+/// east are, purely so it has room to dogleg *around* the gate on its way
+/// to a point south of it, before turning back north into the socket --
+/// see `socket_route`'s two-corner case.
 fn approach_column(centre_x: i32, input_index: usize) -> i32 {
     match input_index {
         0 => centre_x - GATE_HALF_WIDTH,
         1 => centre_x + GATE_HALF_WIDTH,
-        _ => centre_x,
+        _ => centre_x + SOUTH_APPROACH_OFFSET,
+    }
+}
+
+/// Waypoints a socket's approach route must corner through between a ramp's
+/// `landing` (always north of the row -- see `approach_column`'s doc
+/// comment) and the `socket` itself, in order, not including either
+/// endpoint.
+///
+/// - **Zero** if they already share both X and Z (never actually happens
+///   for any of the three real input directions today, but costs nothing to
+///   handle rather than assume away).
+/// - **One**, at the row's own `row_z`, for west or east: their sockets sit
+///   at the row's own Z, so the landing only has to turn once, from
+///   travelling north to travelling east/west.
+/// - **Two**, for south: its socket sits *south* of the row, which a wire
+///   arriving from the north cannot reach without first getting past the
+///   gate's own body. The first waypoint continues north-to-south past the
+///   row entirely (at the landing's own X, clear of the gate); the second
+///   turns back toward the socket's X, still south of the row -- so the
+///   final leg (`lay_segment_to_socket`/`scan_to_socket`, laid by the
+///   caller) approaches heading north, exactly as the socket requires.
+fn socket_approach_corners(landing: Position, socket: Position, row_z: i32) -> Vec<Position> {
+    if landing.x == socket.x && landing.z == socket.z {
+        Vec::new()
+    } else if socket.z == row_z {
+        vec![Position::new(landing.x, landing.y, row_z)]
+    } else {
+        let turn_z = row_z + SOUTH_TURN_MARGIN;
+        vec![Position::new(landing.x, landing.y, turn_z), Position::new(socket.x, landing.y, turn_z)]
     }
 }
 
@@ -840,7 +1075,7 @@ enum Source {
 enum Exit {
     /// Down into one input socket of a gate in the row north of this channel.
     Socket { x: i32, gate: usize, input_index: usize },
-    /// Straight on northwards, to rejoin a track in a later channel.
+    /// Up a skip-level shaft, to rejoin a track in a later channel.
     Feedthrough { x: i32, next_slot: usize },
 }
 
@@ -855,15 +1090,23 @@ impl Exit {
 /// One signal, and every channel it has to appear in.
 ///
 /// `channels`, `tracks` and `sinks` are parallel: entry `i` describes the
-/// net's presence in channel `channels[i]`. `hops[i]` is the feed-through
-/// column that carries it from `channels[i]` to `channels[i + 1]`.
+/// net's presence in channel `channels[i]`. For a net that spans more than
+/// one channel, `hop_exit[i]` / `hop_entry[i]` are the skip-level shaft that
+/// carries it from `channels[i]` to `channels[i + 1]` -- see `assign_shafts`.
 struct Net {
     source: Source,
     source_column: i32,
     channels: Vec<usize>,
     tracks: Vec<usize>,
     sinks: Vec<Vec<(usize, usize)>>,
-    hops: Vec<i32>,
+    /// The X where this net's signal leaves `channels[i]`'s track to start
+    /// climbing toward `channels[i + 1]` -- a tap on `channels[i]`'s track.
+    hop_exit: Vec<i32>,
+    /// The X where the climb from `channels[i]` lands, on `channels[i + 1]`'s
+    /// track -- `entry_column(i + 1)` reads this. Not necessarily equal to
+    /// `hop_exit[i]`: the shaft only ever moves in one direction (east), so
+    /// climbing to a taller band moves this east of where the climb started.
+    hop_entry: Vec<i32>,
 }
 
 impl Net {
@@ -871,7 +1114,7 @@ impl Net {
         if slot == 0 {
             self.source_column
         } else {
-            self.hops[slot - 1]
+            self.hop_entry[slot - 1]
         }
     }
 
@@ -885,20 +1128,64 @@ impl Net {
             })
             .collect();
         if slot + 1 < self.channels.len() {
-            exits.push(Exit::Feedthrough { x: self.hops[slot], next_slot: slot + 1 });
+            exits.push(Exit::Feedthrough { x: self.hop_exit[slot], next_slot: slot + 1 });
         }
         exits
     }
 
     /// The X range this net's track has to span inside channel `slot`.
     fn span(&self, slot: usize, centre_x: &[i32]) -> (i32, i32) {
-        let mut lo = self.entry_column(slot);
-        let mut hi = lo;
+        self.span_padded(slot, centre_x, 0)
+    }
+
+    /// Same as `span`, but any X that comes from a skip-level shaft tap --
+    /// this slot's own incoming `entry_column` if it was reached via a
+    /// shaft (`slot > 0`), or this slot's own outgoing `Feedthrough` exit if
+    /// it has one -- is treated as `pad` further east than it really sits.
+    ///
+    /// `assign_tracks` is the only caller that ever passes a nonzero `pad`
+    /// (`shaft_rail_offset`'s own value): a shaft tap's real electrical
+    /// position never moves, but `move_through_shaft` physically extends
+    /// past it, all the way out to that same offset, before it is safe to
+    /// change Z at all (see that function's doc comment for why). If left-
+    /// edge track assignment planned packing around only the real,
+    /// un-padded tap position, a second net's own track could legally start
+    /// as close as `TRACK_SHARE_GAP` past it -- well inside the reach
+    /// `move_through_shaft` actually needs -- and the two would end up
+    /// physically wired together despite belonging to different nets.
+    /// Padding here reserves that reach up front, in the one place that
+    /// decides which nets may ever share a physical track, so the shaft's
+    /// own rail extension can never collide with a neighbour it never knew
+    /// about. Every other caller (strength planning, the actual track draw)
+    /// keeps using the unpadded `span`, since none of them place a single
+    /// block out past the real tap themselves.
+    fn span_padded(&self, slot: usize, centre_x: &[i32], pad: i32) -> (i32, i32) {
+        let entry = self.entry_column(slot);
+        let padded_entry = if slot > 0 { entry + pad } else { entry };
+        let mut lo = padded_entry;
+        let mut hi = padded_entry;
         for exit in self.exits(slot, centre_x) {
-            lo = lo.min(exit.x());
-            hi = hi.max(exit.x());
+            let x = match exit {
+                Exit::Feedthrough { x, .. } => x + pad,
+                Exit::Socket { x, .. } => x,
+            };
+            lo = lo.min(x);
+            hi = hi.max(x);
         }
         (lo, hi)
+    }
+
+    /// How much strength a track serving this (net, slot) pair must reserve
+    /// for whatever it feeds. A socket exit needs `DESCEND_LENGTH` to
+    /// survive its own fixed climb onward into the next band's gate plane;
+    /// a skip-level shaft (`climb_levels`) needs no particular amount at
+    /// all -- it can self-refresh mid-climb no matter how little it started
+    /// with, as long as it started with more than 0 -- so using
+    /// `DESCEND_LENGTH` here for every slot regardless of which kind of
+    /// exit it has is simply the larger of the two genuine requirements,
+    /// not a bound the shaft actually depends on.
+    fn track_reserve(&self, _slot: usize) -> i32 {
+        DESCEND_LENGTH
     }
 }
 
@@ -1103,7 +1390,8 @@ fn build_nets(
                         channels: Vec::new(),
                         tracks: Vec::new(),
                         sinks: Vec::new(),
-                        hops: Vec::new(),
+                        hop_exit: Vec::new(),
+                        hop_entry: Vec::new(),
                     });
                     sinks_of.push(Vec::new());
                     index_of.insert(input.clone(), i);
@@ -1118,7 +1406,7 @@ fn build_nets(
     // lies between row `c` and row `c + 1`, so a sink in row `t` is fed from
     // channel `t - 1`, and the net's own source row is always a channel too:
     // when the nearest sink is further away, that first channel is where the
-    // feed-through starts.
+    // skip-level shaft starts.
     for (i, net) in nets.iter_mut().enumerate() {
         let source_row = match net.source {
             Source::Lever(_) => 0,
@@ -1143,104 +1431,74 @@ fn build_nets(
     nets
 }
 
-/// Reserve one X column for a feed-through, clear of everything it would run
-/// past on its way north.
+/// Assign every net's skip-level shafts: `hop_exit` / `hop_entry` for every
+/// consecutive pair of channels it has to cross without a direct socket in
+/// between.
 ///
-/// A feed-through is a plain dust run at `GATE_Y` that passes straight through
-/// whole gate rows, so it has to miss both the rows' bodies and every other
-/// routing column in every channel it crosses. Candidates are searched
-/// outwards from `target` so that a feed-through stays near the rest of its
-/// net -- a column parked far away would stretch that net's track and push the
-/// channel's track count up.
-fn reserve_feedthrough(
-    target: i32,
-    channels: std::ops::RangeInclusive<usize>,
-    rows: std::ops::RangeInclusive<usize>,
-    used_columns: &[BTreeSet<i32>],
-    row_blocked: &[Vec<(i32, i32)>],
-    west_limit: i32,
-) -> i32 {
-    let channels: Vec<usize> = channels.collect();
-    let rows: Vec<usize> = rows.collect();
-    let fits = |x: i32| -> bool {
-        if rows.iter().any(|&r| {
-            row_blocked[r]
-                .iter()
-                .any(|&(lo, hi)| x >= lo && x <= hi)
-        }) {
-            return false;
-        }
-        !channels.iter().any(|&c| {
-            used_columns[c]
-                .iter()
-                .any(|&used| (x - used).abs() < COLUMN_CLEARANCE)
-        })
-    };
-
-    let centre = target - target.rem_euclid(2);
-    for step in 0.. {
-        let east = centre + 2 * step;
-        if fits(east) {
-            return east;
-        }
-        let west = centre - 2 * step;
-        if west >= west_limit && fits(west) {
-            return west;
+/// A shaft's lane is identified by one number, `offset`, chosen once per
+/// shaft from a strictly increasing global counter so that no two shafts
+/// ever share one: at any absolute Y, a shaft climbing east sits at
+/// `offset + y` (`assign_shafts` computes this at just the two Y values that
+/// matter, `track_y` of each end, since the shaft only ever needs to *reach*
+/// those two points, never anywhere in between). Two shafts' X therefore
+/// differ by their constant `offset` difference at every Y both are active,
+/// so spacing every `offset` at least `SHAFT_LANE_PITCH` apart is enough to
+/// guarantee they can never collide, however their active Y ranges overlap.
+///
+/// `offset` is chosen so that even the earliest possible shaft (starting at
+/// row 0's channel) starts east of every band's own content -- and since
+/// `track_y` only grows for a later-starting shaft, every other shaft starts
+/// even further east. No clearance search is needed against a band's own
+/// gates, columns or tracks, unlike the pre-3D design's feed-through
+/// columns -- a shaft's *tap* is simply never inside the range those ever
+/// use.
+///
+/// That guarantee does not extend to a shaft's own Z-sweep once it leaves
+/// its tap, though: two *different* nets' taps in the same channel, on two
+/// different tracks, are only ever `SHAFT_LANE_PITCH` apart at minimum, but
+/// whichever of the two has the larger tap value gives its own track a span
+/// reaching all the way out to it -- and that span's west edge is ordinary
+/// band content, which routinely sits well west of *every* tap. So the
+/// larger-tapped track's own dust almost always physically covers the
+/// smaller tap's X position too, just on a different Z. A sweep that
+/// changes Z while sitting at the smaller tap's X necessarily crosses the
+/// larger track's own Z along the way, at an X inside that track's laid
+/// span -- an unintended electrical bridge between two unrelated nets. See
+/// `shaft_rail_offset` and `move_through_shaft`'s doc comment for how this
+/// is actually avoided.
+fn assign_shafts(nets: &mut [Net], content_max_x: i32) {
+    let base_offset = content_max_x + SHAFT_MARGIN - TRACK_Y_OFFSET;
+    let mut lane = 0i32;
+    for net in nets.iter_mut() {
+        let hop_count = net.channels.len().saturating_sub(1);
+        for slot in 0..hop_count {
+            let offset = base_offset + lane * SHAFT_LANE_PITCH;
+            lane += 1;
+            net.hop_exit.push(offset + track_y(net.channels[slot]));
+            net.hop_entry.push(offset + track_y(net.channels[slot + 1]));
         }
     }
-    unreachable!("the search walks east without bound, so it always terminates")
 }
 
-/// Column reservation: fill in every net's `hops` (the feed-through columns
-/// that connect consecutive channels it has to appear in). Pure function of
-/// the floorplan and each net's channel/sink structure -- no world access,
-/// so it is exactly as reusable by routing analysis as it is by `compile`.
+/// How far east of its own tap a skip-level shaft's Z-sweep must travel
+/// before it is safe from every other track's own laid span in the same
+/// channel -- see `assign_shafts`'s doc comment for the collision this
+/// avoids, and `move_through_shaft` for where this is actually spent.
 ///
-/// Extracted verbatim from `compile`'s "Column reservation" section; see the
-/// comment there (still in place) for why the forced columns come first and
-/// feed-throughs are placed last, against everything else.
-fn reserve_columns(plan: &Floorplan, nets: &mut [Net], row_count: usize, channel_count: usize) {
-    let mut used_columns: Vec<BTreeSet<i32>> = vec![BTreeSet::new(); channel_count.max(1)];
-    let mut row_blocked: Vec<Vec<(i32, i32)>> = vec![Vec::new(); row_count];
-
-    for &x in &plan.lever_x {
-        row_blocked[0].push((x - COLUMN_CLEARANCE + 1, x + COLUMN_CLEARANCE - 1));
-    }
-    for (g, &cx) in plan.centre_x.iter().enumerate() {
-        row_blocked[plan.row_of[g]].push((
-            cx - GATE_HALF_WIDTH - COLUMN_CLEARANCE + 1,
-            cx + GATE_HALF_WIDTH + COLUMN_CLEARANCE - 1,
-        ));
-    }
-
-    for net in nets.iter() {
-        used_columns[net.channels[0]].insert(net.source_column);
-        for (slot, &channel) in net.channels.iter().enumerate() {
-            for &(gate, input_index) in &net.sinks[slot] {
-                used_columns[channel].insert(approach_column(plan.centre_x[gate], input_index));
-            }
-        }
-    }
-
-    for net in nets.iter_mut() {
-        for slot in 0..net.channels.len().saturating_sub(1) {
-            let from = net.channels[slot];
-            let to = net.channels[slot + 1];
-            let target = net.entry_column(slot);
-            let column = reserve_feedthrough(
-                target,
-                from..=to,
-                (from + 1)..=to,
-                &used_columns,
-                &row_blocked,
-                ORIGIN_X - GATE_HALF_WIDTH,
-            );
-            for columns in used_columns[from..=to].iter_mut() {
-                columns.insert(column);
-            }
-            net.hops.push(column);
-        }
-    }
+/// One `SHAFT_LANE_PITCH` per shaft hop anywhere in the whole netlist is
+/// always enough: two taps that share a channel are themselves at most
+/// `(total hop count - 1) * SHAFT_LANE_PITCH` apart (`assign_shafts`'
+/// strictly-increasing global `lane` counter), so a rail one whole
+/// `total hop count * SHAFT_LANE_PITCH` past the *smaller* of the two is
+/// guaranteed to clear the *larger* one's tap -- and therefore every track
+/// it could possibly have extended out to reach it -- by at least one
+/// `SHAFT_LANE_PITCH`, regardless of which of the two this value is
+/// computed from (the `+ track_y(channel)` term every tap and every rail
+/// alike carries is identical on both sides of that comparison, so it
+/// cancels out and never affects the ordering).
+fn shaft_rail_offset(nets: &[Net]) -> i32 {
+    let total_hops: i32 = nets.iter().map(|net| net.channels.len().saturating_sub(1) as i32).sum();
+    total_hops * SHAFT_LANE_PITCH
 }
 
 /// Left-edge track assignment: fill in every net's per-slot `tracks` index,
@@ -1248,14 +1506,20 @@ fn reserve_columns(plan: &Floorplan, nets: &mut [Net], row_count: usize, channel
 ///
 /// Extracted verbatim from `compile`'s "Left-edge track assignment" section;
 /// see the comment there for why one track can carry many nets.
-fn assign_tracks(plan: &Floorplan, nets: &mut [Net], channel_count: usize) -> Vec<usize> {
+///
+/// `rail_offset` is `shaft_rail_offset`'s value, used to pad any member's
+/// shaft-tap X (`Net::span_padded`) before packing -- reserving the reach
+/// `move_through_shaft` will need for its own rail jog, so a later, closer
+/// member can never be packed onto the same track within that reach. Every
+/// other user of a net's span keeps using the real, unpadded position.
+fn assign_tracks(plan: &Floorplan, nets: &mut [Net], channel_count: usize, rail_offset: i32) -> Vec<usize> {
     let mut track_count = vec![0usize; channel_count];
     for (channel, count) in track_count.iter_mut().enumerate() {
         let mut members: Vec<(i32, i32, usize, usize)> = Vec::new();
         for (n, net) in nets.iter().enumerate() {
             for (slot, &c) in net.channels.iter().enumerate() {
                 if c == channel {
-                    let (lo, hi) = net.span(slot, &plan.centre_x);
+                    let (lo, hi) = net.span_padded(slot, &plan.centre_x, rail_offset);
                     members.push((lo, hi, n, slot));
                 }
             }
@@ -1279,37 +1543,27 @@ fn assign_tracks(plan: &Floorplan, nets: &mut [Net], channel_count: usize) -> Ve
     track_count
 }
 
-/// Z layout: each row's Z and every channel's track Zs, laid out northwards
-/// from row 0 and then shifted back into the non-negative range.
+/// Z layout: one row Z shared by every band, and every channel's track Zs
+/// beneath it.
 ///
-/// Extracted verbatim from `compile`'s "Z layout" section; see the comment
-/// there for the per-channel depth derivation.
-fn layout_z(row_count: usize, channel_count: usize, track_count: &[usize]) -> (Vec<i32>, Vec<Vec<i32>>) {
-    let mut row_z = vec![0i32; row_count];
-    let mut track_z: Vec<Vec<i32>> = vec![Vec::new(); channel_count];
-    for channel in 0..channel_count {
-        // Three blocks clear of the row's own south socket leaves the first
-        // ramp somewhere to start.
-        let channel_south = row_z[channel] - 3;
-        track_z[channel] = (0..track_count[channel])
-            .map(|k| channel_south - TRACK_SPACING * (k as i32 + 1))
-            .collect();
-        let depth = TRACK_SPACING * track_count[channel].max(1) as i32;
-        // The last descending ramp lands `RAMP_LENGTH` north of the last
-        // track, and the column then needs room to reach the next row's south
-        // socket approach.
-        row_z[channel + 1] = channel_south - depth - RAMP_LENGTH - 4;
-    }
-
-    let z_offset = 3 - row_z[row_count - 1] + 2;
-    for z in &mut row_z {
-        *z += z_offset;
-    }
-    for channel in &mut track_z {
-        for z in channel {
-            *z += z_offset;
-        }
-    }
+/// Every band reuses the exact same Z template -- only Y tells two bands
+/// apart -- so `row_z` only has to be big enough for the *widest single
+/// channel*'s own track count, not for the sum across every channel the way
+/// the pre-3D design's per-row Z had to be. This is the heart of the size
+/// win: Z no longer grows with the netlist's depth at all.
+fn layout_row_z(channel_count: usize, track_count: &[usize]) -> (i32, Vec<Vec<i32>>) {
+    let max_tracks = track_count.iter().copied().max().unwrap_or(0).max(1) as i32;
+    // Three blocks clear of the row's own south socket leaves the first
+    // ramp somewhere to start (same margin the pre-3D design used), plus
+    // `DESCEND_LENGTH` more of buffer -- every track's own exit descends
+    // (really ascends, in Y, but still travels north in Z -- see
+    // `DESCEND_LENGTH`'s doc comment) that many cells further north of it,
+    // and the deepest channel's last track is the one with the least room
+    // to spare before that would run Z negative.
+    let row_z = 3 + TRACK_SPACING * max_tracks + DESCEND_LENGTH;
+    let track_z: Vec<Vec<i32>> = (0..channel_count)
+        .map(|c| (0..track_count[c]).map(|k| row_z - 3 - TRACK_SPACING * (k as i32 + 1)).collect())
+        .collect();
     (row_z, track_z)
 }
 
@@ -1319,25 +1573,26 @@ type StrengthPlan = (Vec<Vec<u8>>, Vec<Vec<BTreeMap<i32, u8>>>);
 
 /// Work out, for every net and every slot it appears in, the signal strength
 /// arriving at that slot's ramp entry (`entry_strength[net][slot]`) and the
-/// strength the track hands each of that slot's exits before their
-/// descending ramp (`exit_strength[net][slot]`, keyed by exit X).
+/// strength the track hands each of that slot's exits (`exit_strength[net]
+/// [slot]`, keyed by exit X) before whatever continues from there -- a
+/// descending ramp, or a skip-level shaft.
 ///
 /// This has to run before any of the Ramps/Columns/Tracks passes write a
-/// single block. The Columns pass needs to know, for a feed-through, what
-/// strength survived the previous slot's track and descending ramp before it
-/// can lay the column that continues from there -- but that number depends
-/// on the *next* slot's track layout, which is not written until the later
-/// Tracks pass (world-building order has to stay Ramps, then Columns, then
-/// Tracks -- see the comment above the Ramps loop in `compile` for why).
+/// single block, for the same reason it always has: the Columns pass needs
+/// to know what strength survived the previous slot's shaft before it can
+/// lay whatever continues from there, but that number depends on the *next*
+/// slot's track layout, which is not written until the later Tracks pass.
 /// Computing every slot's numbers up front, net by net in slot order (each
 /// slot's result depends only on the previous slot's, within the same net),
-/// sidesteps that ordering conflict entirely: pure arithmetic, no `World`,
-/// so it does not care what order the real blocks go down in.
+/// sidesteps that ordering conflict entirely.
 ///
-/// `plan_straight_run` and `track_exit_strengths` are the exact same
-/// decisions `lay_dust_run` and `lay_track` make when they actually write
-/// blocks later, so the numbers this produces are guaranteed to match what
-/// ends up in the world, not just a plausible estimate of it.
+/// A slot reached via a skip-level shaft (`slot > 0`) always arrives at
+/// `MAX_SIGNAL_STRENGTH` if the shaft needed a Z-correction corner (which
+/// ends in a mandatory repeater, same guarantee a socket's own corner gives
+/// -- see `land_shaft`), or at whatever strength survived the climb
+/// otherwise (no correction needed, so no repeater forced it fresh either).
+/// Both branches are computed here exactly as `land_shaft` computes them
+/// later, so the two can never silently disagree.
 fn plan_strengths(
     nets: &[Net],
     plan: &Floorplan,
@@ -1355,7 +1610,7 @@ fn plan_strengths(
         for slot in 0..net.channels.len() {
             let channel = net.channels[slot];
             let z = track_z[channel][net.tracks[slot]];
-            let entry = Position::new(net.entry_column(slot), GATE_Y, z + RAMP_LENGTH);
+            let entry = Position::new(net.entry_column(slot), gate_y(channel), z + RAMP_LENGTH);
 
             let arriving = if slot == 0 {
                 let pin = match net.source {
@@ -1365,18 +1620,22 @@ fn plan_strengths(
                 let len = straight_run_length(pin, Facing::North, entry.offset(Facing::North));
                 plan_straight_run(len, MAX_SIGNAL_STRENGTH, RAMP_LENGTH).1
             } else {
-                let prev_channel = net.channels[slot - 1];
-                let prev_z = track_z[prev_channel][net.tracks[slot - 1]];
-                let feed_x = net.hops[slot - 1];
-                let track_strength = net_exit[slot - 1][&feed_x];
-                let landing_strength = track_strength - RAMP_LENGTH as u8;
-                let landing = Position::new(feed_x, GATE_Y, prev_z - RAMP_LENGTH);
-                let len = straight_run_length(landing, Facing::North, entry.offset(Facing::North));
-                plan_straight_run(len, landing_strength, RAMP_LENGTH).1
+                // A slot reached via a skip-level shaft always arrives
+                // fresh: `move_through_shaft` unconditionally ends in a
+                // mandatory-repeater correction onto the destination
+                // channel's own track Z, exactly like a socket's own
+                // corner -- see `shaft_diagonal_z`'s doc comment for why
+                // that correction is never skipped, even when the origin
+                // and destination Z already happen to match.
+                MAX_SIGNAL_STRENGTH
             };
             net_entry[slot] = arriving;
 
-            let track_incoming = arriving - RAMP_LENGTH as u8;
+            // Slot 0 arrives at `gate_y`, RAMP_LENGTH below the track, and
+            // has to climb to reach it; a slot reached via a skip-level
+            // shaft is already sitting on the track (`land_shaft` landed it
+            // there directly), so there is no climb left to subtract.
+            let track_incoming = if slot == 0 { arriving - RAMP_LENGTH as u8 } else { arriving };
             let source_x = net.entry_column(slot);
             let (lo, hi) = net.span(slot, &plan.centre_x);
             let mut taps: BTreeSet<i32> = BTreeSet::new();
@@ -1384,7 +1643,7 @@ fn plan_strengths(
             for exit in net.exits(slot, &plan.centre_x) {
                 taps.insert(exit.x());
             }
-            net_exit[slot] = track_exit_strengths(source_x, lo, hi, &taps, track_incoming);
+            net_exit[slot] = track_exit_strengths(source_x, lo, hi, &taps, track_incoming, net.track_reserve(slot));
         }
 
         entry_strength.push(net_entry);
@@ -1392,6 +1651,95 @@ fn plan_strengths(
     }
 
     (entry_strength, exit_strength)
+}
+
+/// The Z a skip-level shaft's diagonal climb happens at -- deliberately
+/// none of any real channel's own track Z (all of which are strictly less
+/// than `row_z`, by construction of `layout_row_z`), so that nothing the
+/// climb touches can ever coincide with a track that legitimately needs to
+/// extend out to meet it.
+///
+/// This is not a defensive margin against a rare coincidence; it is
+/// structural. A diagonal climb's own landing at `(x, y)` necessarily has
+/// its supporting cell one step behind it at `(x - 1, y - 1)` (`climb_
+/// levels`' doc comment). The destination channel's own track, tapping the
+/// shaft at that same `(x, y)`, necessarily extends further west from
+/// there to reach whatever it actually feeds -- so it necessarily has dust
+/// at `(x - 1, y)` too, which necessarily needs a floor at `(x - 1, y - 1)`.
+/// That is the exact cell the climb's own diagonal step already placed
+/// dust on. Landing the diagonal directly on the destination track's own Z
+/// makes this collision inevitable, not occasional -- whichever pass runs
+/// second overwrites the other's cell, and for the reference circuits
+/// measured here, it happens whenever a shaft's origin and destination
+/// channels happen to pick the same track index (common, since index 0 is
+/// the most heavily used track everywhere). Landing the diagonal somewhere
+/// no real track ever reaches removes the possibility entirely, rather
+/// than relying on it not coming up.
+fn shaft_diagonal_z(row_z: i32) -> i32 {
+    row_z + 10
+}
+
+/// Move a skip-level shaft's signal from a tap on its origin channel's
+/// track onto a tap on its destination channel's track: a rail jog east
+/// (mandatory repeater, so what follows always starts fresh -- see below
+/// for why this leg exists at all), a perpendicular run out to `shaft_
+/// diagonal_z` (mandatory repeater again), the climb itself, a
+/// perpendicular run back onto the destination channel's own track Z
+/// (mandatory repeater, so whatever continues from here can always assume
+/// a fresh signal -- the same guarantee a socket's own corner gives), and a
+/// final rail jog back west onto the real destination tap. See `shaft_
+/// diagonal_z`'s doc comment for why the two Z corrections happen
+/// unconditionally, never skipped even when the origin and destination Z
+/// already happen to match.
+///
+/// The two rail jogs are what `shaft_rail_offset` exists for: without them,
+/// each perpendicular Z run would sit at a *fixed* X equal to the raw tap
+/// (`origin.x`, or the climb's landing X) the entire way from that tap's own
+/// track Z out to `shaft_diagonal_z` -- crossing every *other* track Z that
+/// channel has along the way, at that same X. `assign_shafts`'s doc comment
+/// works through why that X is routinely inside some other, larger-tapped
+/// track's own laid span in the same channel: an unintended electrical
+/// bridge between two unrelated nets, sitting quietly until one net's
+/// signal happens to disagree with the other's. Doing the Z sweep only
+/// after jogging out to `origin.x + rail_offset` moves it somewhere no real
+/// track's span ever reaches (`shaft_rail_offset`'s own doc comment), and
+/// jogging back onto the real tap afterwards keeps the returned position
+/// exactly where the rest of this module already expects it
+/// (`net.hop_entry[slot]`'s X and Y, at the destination's own Z) -- nothing
+/// downstream of this function has to know the rail detour ever happened.
+/// Both jogs travel at a fixed Z equal to their own end's real tap, so they
+/// only ever extend that same net's own track further out, never crossing
+/// another track's Z at all; `assign_tracks`' padded packing
+/// (`Net::span_padded`) is what keeps another *net* from ever being placed
+/// within that reach on the same track index.
+///
+/// Returns the position that becomes the tap on the destination channel's
+/// track (`net.hop_entry[slot]`'s X and Y, at the destination's own Z).
+fn move_through_shaft(
+    world: &mut World,
+    origin: Position,
+    row_z: i32,
+    climb: i32,
+    target_z: i32,
+    rail_offset: i32,
+    incoming_strength: u8,
+) -> Position {
+    let diagonal_z = shaft_diagonal_z(row_z);
+
+    let rail_entry = Position::new(origin.x + rail_offset, origin.y, origin.z);
+    lay_segment_to_corner(world, origin, rail_entry, incoming_strength);
+
+    let pre_corner = Position::new(rail_entry.x, rail_entry.y, diagonal_z);
+    lay_segment_to_corner(world, rail_entry, pre_corner, MAX_SIGNAL_STRENGTH);
+
+    let (landing, ending) = climb_levels(world, pre_corner, Facing::East, climb, MAX_SIGNAL_STRENGTH);
+
+    let post_corner = Position::new(landing.x, landing.y, target_z);
+    lay_segment_to_corner(world, landing, post_corner, ending);
+
+    let destination_tap = Position::new(post_corner.x - rail_offset, post_corner.y, post_corner.z);
+    lay_segment_to_corner(world, post_corner, destination_tap, MAX_SIGNAL_STRENGTH);
+    destination_tap
 }
 
 /// 把一個網表編譯成一個紅石世界。
@@ -1421,29 +1769,35 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     let channel_count = row_count.saturating_sub(1);
     let mut nets = build_nets(netlist, &order, &plan, &producer_of);
 
-    reserve_columns(&plan, &mut nets, row_count, channel_count);
-    let track_count = assign_tracks(&plan, &mut nets, channel_count);
-    let (row_z, track_z) = layout_z(row_count, channel_count, &track_count);
-
-    let size_x = plan
+    let content_max_x = plan
         .centre_x
         .iter()
         .chain(plan.lever_x.iter())
         .copied()
         .max()
         .unwrap_or(ORIGIN_X)
-        .max(
-            nets.iter()
-                .flat_map(|net| net.hops.iter())
-                .copied()
-                .max()
-                .unwrap_or(ORIGIN_X),
-        )
-        + GATE_HALF_WIDTH
-        + 4;
-    let size_z = row_z[0] + 4;
+        + GATE_HALF_WIDTH;
+    assign_shafts(&mut nets, content_max_x);
+    let rail_offset = shaft_rail_offset(&nets);
+    let track_count = assign_tracks(&plan, &mut nets, channel_count, rail_offset);
+    let (row_z, track_z) = layout_row_z(channel_count, &track_count);
 
-    let mut world = World::new(size_x.max(8), WORLD_HEIGHT, size_z.max(8));
+    let shaft_max_x = nets
+        .iter()
+        .flat_map(|net| net.hop_exit.iter().chain(net.hop_entry.iter()))
+        .copied()
+        .max()
+        .unwrap_or(content_max_x)
+        + rail_offset;
+
+    let size_x = content_max_x.max(shaft_max_x) + 4;
+    let size_y = row_count as i32 * BAND_HEIGHT;
+    // `+ 4` past `shaft_diagonal_z` even when no net actually has a
+    // skip-level shaft: cheap, and keeps this formula from needing to know
+    // whether one exists.
+    let size_z = shaft_diagonal_z(row_z) + 4;
+
+    let mut world = World::new(size_x.max(8), size_y.max(8), size_z.max(8));
 
     // ---------------------------------------------------------------
     // Emission
@@ -1454,14 +1808,14 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         gate_cell.push(NorCell { size: (0, 0, 0), input_offsets: Vec::new(), output_offset: (0, 0, 0) });
     }
     for (g, gate) in netlist.gates.iter().enumerate() {
-        let origin = (plan.centre_x[g], GATE_Y, row_z[plan.row_of[g]]);
+        let origin = (plan.centre_x[g], gate_y(plan.row_of[g]), row_z);
         gate_cell[g] = place_nor_gate(&mut world, origin, gate.inputs.len());
     }
 
     let mut input_positions: BTreeMap<String, (i32, i32, i32)> = BTreeMap::new();
     let mut lever_pin: Vec<Position> = Vec::with_capacity(netlist.inputs.len());
     for (i, name) in netlist.inputs.iter().enumerate() {
-        let home = Position::new(plan.lever_x[i], GATE_Y, row_z[0]);
+        let home = Position::new(plan.lever_x[i], gate_y(0), row_z);
         let (lever_pos, pin) = place_primary_input(&mut world, home);
         input_positions.insert(name.clone(), (lever_pos.x, lever_pos.y, lever_pos.z));
         lever_pin.push(pin);
@@ -1470,8 +1824,8 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     let torch_of = |g: usize, cell: &NorCell| -> Position {
         Position::new(
             plan.centre_x[g] + cell.output_offset.0,
-            GATE_Y + cell.output_offset.1,
-            row_z[plan.row_of[g]] + cell.output_offset.2,
+            gate_y(plan.row_of[g]) + cell.output_offset.1,
+            row_z + cell.output_offset.2,
         )
     };
 
@@ -1492,30 +1846,60 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     // inline in the passes below.
     let (entry_strength, exit_strength) = plan_strengths(&nets, &plan, &track_z, &lever_pin, &gate_pin);
 
-    // Ramps first. `move_between_layers` seals the blocks around each landing,
-    // and a seal only fills air -- so anything that has to run *through* a
-    // sealed cell (the tracks, and the columns) has to be laid afterwards to
-    // overwrite it.
-    for net in &nets {
-        for slot in 0..net.channels.len() {
-            let channel = net.channels[slot];
-            let z = track_z[channel][net.tracks[slot]];
-            let entry = Position::new(net.entry_column(slot), GATE_Y, z + RAMP_LENGTH);
-            move_between_layers(&mut world, entry, Facing::North, TRACK_Y);
-            for exit in net.exits(slot, &plan.centre_x) {
-                let top = Position::new(exit.x(), TRACK_Y, z);
-                move_between_layers(&mut world, top, Facing::North, GATE_Y);
-            }
-        }
-    }
-
-    // Columns at `GATE_Y`: from a source pin up to its ramp, and from a ramp's
-    // landing on to whatever it feeds.
+    // Ramps first (including skip-level shafts). `move_between_layers` seals
+    // the blocks around each single-band landing, and a seal only fills air
+    // -- so anything that has to run *through* a sealed cell (the tracks,
+    // and the columns) has to be laid afterwards to overwrite it.
     for (n, net) in nets.iter().enumerate() {
         for slot in 0..net.channels.len() {
             let channel = net.channels[slot];
             let z = track_z[channel][net.tracks[slot]];
-            let entry = Position::new(net.entry_column(slot), GATE_Y, z + RAMP_LENGTH);
+            if slot == 0 {
+                let entry = Position::new(net.entry_column(0), gate_y(channel), z + RAMP_LENGTH);
+                move_between_layers(&mut world, entry, Facing::North, track_y(channel));
+            }
+            for exit in net.exits(slot, &plan.centre_x) {
+                match exit {
+                    Exit::Socket { .. } => {
+                        // South, not north: `ROW_Z` is shared by every band
+                        // (unlike the pre-3D design's per-row Z), so the
+                        // corner/socket approach that continues from this
+                        // climb's landing still has to travel further south
+                        // to reach it. Climbing north here would have this
+                        // land *further* from the row, forcing that
+                        // approach run to backtrack south through the same
+                        // Z the climb just used -- see `socket_approach_
+                        // corners`'s landing parameter and `DESCEND_LENGTH`'s
+                        // doc comment for why that backtrack is not merely
+                        // wasteful but actively wrong: the approach run's
+                        // own `ensure_floor` calls would overwrite this
+                        // climb's own intermediate dust with solid stone.
+                        let top = Position::new(exit.x(), track_y(channel), z);
+                        move_between_layers(&mut world, top, Facing::South, gate_y(channel + 1));
+                    }
+                    Exit::Feedthrough { x, next_slot } => {
+                        let next_channel = net.channels[next_slot];
+                        let climb = track_y(next_channel) - track_y(channel);
+                        let incoming = exit_strength[n][slot][&x];
+                        let origin = Position::new(x, track_y(channel), z);
+                        let target_z = track_z[next_channel][net.tracks[next_slot]];
+                        move_through_shaft(&mut world, origin, row_z, climb, target_z, rail_offset, incoming);
+                    }
+                }
+            }
+        }
+    }
+
+    // Columns at each band's own `gate_y`: from a source pin up to its ramp,
+    // and from a ramp's landing on to whatever socket it feeds. A
+    // skip-level shaft needs no column of its own here -- the Ramps pass
+    // above already carried it all the way to its destination channel's
+    // track.
+    for (n, net) in nets.iter().enumerate() {
+        for slot in 0..net.channels.len() {
+            let channel = net.channels[slot];
+            let z = track_z[channel][net.tracks[slot]];
+            let entry = Position::new(net.entry_column(slot), gate_y(channel), z + RAMP_LENGTH);
             if slot == 0 {
                 let pin = match net.source {
                     Source::Lever(i) => lever_pin[i],
@@ -1531,41 +1915,21 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
                 );
             }
             for exit in net.exits(slot, &plan.centre_x) {
-                let landing = Position::new(exit.x(), GATE_Y, z - RAMP_LENGTH);
-                let landing_strength = exit_strength[n][slot][&exit.x()] - RAMP_LENGTH as u8;
-                match exit {
-                    Exit::Socket { gate, input_index, .. } => {
-                        let (dx, dy, dz) = gate_cell[gate].input_offsets[input_index];
-                        let socket = Position::new(
-                            plan.centre_x[gate] + dx,
-                            GATE_Y + dy,
-                            row_z[plan.row_of[gate]] + dz,
-                        );
-                        if socket.x == landing.x {
-                            lay_segment_to_socket(&mut world, landing, socket, landing_strength);
-                        } else {
-                            let corner =
-                                Position::new(landing.x, GATE_Y, row_z[plan.row_of[gate]]);
-                            lay_segment_to_corner(&mut world, landing, corner, landing_strength);
-                            // `corner` always follows `lay_segment_to_corner`'s own
-                            // mandatory repeater, so it is always fresh.
-                            lay_segment_to_socket(&mut world, corner, socket, MAX_SIGNAL_STRENGTH);
-                        }
-                    }
-                    Exit::Feedthrough { x, next_slot } => {
-                        let next_channel = net.channels[next_slot];
-                        let next_z = track_z[next_channel][net.tracks[next_slot]];
-                        let next_entry = Position::new(x, GATE_Y, next_z + RAMP_LENGTH);
-                        lay_dust_run(
-                            &mut world,
-                            landing,
-                            Facing::North,
-                            next_entry.offset(Facing::North),
-                            landing_strength,
-                            RAMP_LENGTH,
-                        );
-                    }
+                let Exit::Socket { gate, input_index, .. } = exit else { continue };
+                let landing = Position::new(exit.x(), gate_y(channel + 1), z + DESCEND_LENGTH);
+                let landing_strength = exit_strength[n][slot][&exit.x()] - DESCEND_LENGTH as u8;
+                let (dx, dy, dz) = gate_cell[gate].input_offsets[input_index];
+                let socket = Position::new(plan.centre_x[gate] + dx, gate_y(channel + 1) + dy, row_z + dz);
+                let mut current = landing;
+                let mut strength = landing_strength;
+                for corner in socket_approach_corners(landing, socket, row_z) {
+                    lay_segment_to_corner(&mut world, current, corner, strength);
+                    // `corner` always follows `lay_segment_to_corner`'s own
+                    // mandatory repeater, so it is always fresh.
+                    current = corner;
+                    strength = MAX_SIGNAL_STRENGTH;
                 }
+                lay_segment_to_socket(&mut world, current, socket, strength);
             }
         }
     }
@@ -1583,8 +1947,9 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
             for exit in net.exits(slot, &plan.centre_x) {
                 taps.insert(exit.x());
             }
-            let track_incoming = entry_strength[n][slot] - RAMP_LENGTH as u8;
-            lay_track(&mut world, z, source_x, lo, hi, &taps, track_incoming);
+            let track_incoming =
+                if slot == 0 { entry_strength[n][slot] - RAMP_LENGTH as u8 } else { entry_strength[n][slot] };
+            lay_track(&mut world, track_y(channel), z, source_x, lo, hi, &taps, track_incoming, net.track_reserve(slot));
         }
     }
 
