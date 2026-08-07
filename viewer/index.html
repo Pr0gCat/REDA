@@ -749,8 +749,9 @@ function buildLegendUI() {
 // ---------------------------------------------------------------------
 // 3D view
 //
-// Static geometry -- one InstancedMesh box per non-air cell -- built once
-// per circuit from `Session::geometry()`; per-tick recolouring from
+// Static geometry -- one InstancedMesh per *shape family* (not one box per
+// cell -- see "Block shapes and orientation" below) -- built once per
+// circuit from `Session::geometry()`; per-tick recolouring from
 // `Session::strengths()`. See the doc comments on those two wasm methods in
 // viewer/src/lib.rs for the exact byte layout and the ordering guarantee
 // this code leans on: entry i of one describes the same cell as byte i of
@@ -760,16 +761,211 @@ function buildLegendUI() {
 // three.js is right-handed with Y already pointing up, matching Minecraft's
 // own convention and the 2D slice view's "Y increases upward" rule for the
 // X and Z slices -- so the two views cannot disagree about which way is up.
+//
+// Block shapes and orientation
+// -----------------------------
+// A full cube is wrong for dust (drawn a full block tall, a wire run reads
+// as a solid wall) and wrong for anything with a `facing` (a repeater,
+// comparator and torch become indistinguishable, and direction -- load
+// bearing for a one-way repeater -- disappears). Every non-air cell is
+// assigned a *shape family* from its block kind (see `familyForCell`); each
+// family gets its own `InstancedMesh` sharing one template `BufferGeometry`
+// built once at module load (`SHAPE_TEMPLATES`), and each instance gets its
+// own rotation from the cell's `facing` byte (`FAMILIES_ROTATED_BY_FACING`).
+// Every template is authored in cell-local, cell-*centred* coordinates
+// (-0.5..0.5 on each axis = one full cell, matching `Session::geometry()`'s
+// cell corner once translated to the cell's centre) and assuming a canonical
+// `facing` of South (+z) -- `facingAngleY` supplies the rotation that turns
+// "South" into whatever the cell's real facing is, using the same
+// direction convention as `reda`'s own `Position::offset` (North=-z,
+// South=+z, East=+x, West=-x -- see src/redstone/simulator/position.rs).
+// A full cube (`CUBE_SIZE = 1`, no gap) keeps two adjacent solid blocks
+// flush -- shrinking it would read as a row of loose beads instead of a
+// continuous run, which for redstone is the working/dead distinction.
 // ---------------------------------------------------------------------
 
-const CELL_BOX_SIZE = 0.9; // < 1 leaves a thin gap between adjacent blocks, like a voxel grid
-const GEOMETRY_BYTES_PER_CELL = 7; // must match viewer/src/lib.rs's Session::geometry()
+const GEOMETRY_BYTES_PER_CELL = 9; // must match viewer/src/lib.rs's Session::geometry()
+
+// `facing`/`face` sentinel and variant ids, matching viewer/src/lib.rs's
+// `facing_id`/`face_id` exactly -- see that function's doc comment for why
+// 255 (not e.g. 0) means "no facing"/"no face".
+const FACING_NONE = 255;
+const FACING_NORTH = 0, FACING_SOUTH = 1, FACING_EAST = 2, FACING_WEST = 3;
+const FACE_NONE = 255;
+const FACE_FLOOR = 0, FACE_WALL = 1, FACE_CEILING = 2;
+
+// Block kind ids, matching viewer/src/lib.rs's ALL_BLOCK_KINDS declaration
+// order (== `BlockKind as u8`). Only the kinds this file treats specially
+// need a name here; everything else falls through to the 'cube' family.
+const KIND_SLAB = 3;
+const KIND_REDSTONE_WIRE = 4; // also REDSTONE_WIRE_ID above, for dust tinting
+const KIND_REPEATER = 5;
+const KIND_COMPARATOR = 6;
+const KIND_TORCH = 7;
+const KIND_WALL_TORCH = 8;
+const KIND_LEVER = 9;
+
+/** Which shape family a non-air cell belongs to, from its kind and (for
+ * levers only) its attachment face. One `InstancedMesh` per family name. */
+function familyForCell(kind, faceId) {
+  switch (kind) {
+    case KIND_REDSTONE_WIRE: return 'dust';
+    case KIND_SLAB: return 'slab';
+    case KIND_REPEATER: return 'repeater';
+    case KIND_COMPARATOR: return 'comparator';
+    case KIND_TORCH: return 'torch';
+    case KIND_WALL_TORCH: return 'wallTorch';
+    case KIND_LEVER:
+      if (faceId === FACE_WALL) return 'leverWall';
+      if (faceId === FACE_CEILING) return 'leverCeiling';
+      return 'leverFloor'; // Face::Floor, or (defensively) an unset face
+    default: return 'cube';
+  }
+}
+
+/** Families whose instances rotate around Y per-cell from `facing` --
+ * everything with a horizontal-only `facing` in this compiler's output
+ * (repeaters, comparators, wall torches, wall/floor/ceiling levers).
+ * Standing torches, dust, slabs and plain cubes have no meaningful
+ * horizontal orientation and are left at the identity rotation. */
+const FAMILIES_ROTATED_BY_FACING = new Set([
+  'repeater', 'comparator', 'wallTorch', 'leverFloor', 'leverCeiling', 'leverWall',
+]);
+
+/** Y-axis rotation (radians) that turns a template authored facing South
+ * (+z) into one facing `facingId`'s real direction, using the same
+ * North=-z/South=+z/East=+x/West=-x convention as `Position::offset`
+ * (src/redstone/simulator/position.rs). Up/Down/None have no horizontal
+ * meaning here and fall back to the untouched (South) orientation -- every
+ * family in `FAMILIES_ROTATED_BY_FACING` only ever gets a horizontal
+ * `facing` from this compiler. */
+function facingAngleY(facingId) {
+  switch (facingId) {
+    case FACING_SOUTH: return 0;
+    case FACING_EAST: return Math.PI / 2;
+    case FACING_NORTH: return Math.PI;
+    case FACING_WEST: return -Math.PI / 2;
+    default: return 0;
+  }
+}
+
+// ---------------------------------------------------------------------
+// Shape templates -- one `BufferGeometry` per family, built once at module
+// load (independent of any circuit). Every template lives in cell-centred
+// local coordinates: (0,0,0) is the cell's centre, and +-0.5 on each axis is
+// the cell's boundary. `three.module.min.js` ships no BufferGeometryUtils,
+// so composite shapes (a repeater's slab-plus-nubs, etc) are merged by hand
+// via `mergeBoxen` rather than pulling in another vendored module for one
+// function.
+// ---------------------------------------------------------------------
+
+/** One `BoxGeometry`, optionally rotated about its own centre and then
+ * moved to `center` -- the building block every shape template is made of. */
+function box(size, center, rotation) {
+  const geometry = new THREE.BoxGeometry(size[0], size[1], size[2]).toNonIndexed();
+  if (rotation) {
+    const [rx, ry, rz] = rotation;
+    if (rx) geometry.rotateX(rx);
+    if (ry) geometry.rotateY(ry);
+    if (rz) geometry.rotateZ(rz);
+  }
+  geometry.translate(center[0], center[1], center[2]);
+  return geometry;
+}
+
+/** Concatenate several (non-indexed) box geometries' position/normal
+ * attributes into one `BufferGeometry`, then add the all-white dummy `color`
+ * attribute `update3DStrengths` needs (see the comment this replaces, below,
+ * on why `vertexColors` needs one at all). No index buffer -- box geometries
+ * are small, and a shared index would need per-box offsetting for no real
+ * saving here. */
+function mergeBoxen(boxes) {
+  let vertexCount = 0;
+  for (const b of boxes) vertexCount += b.attributes.position.count;
+  const positions = new Float32Array(vertexCount * 3);
+  const normals = new Float32Array(vertexCount * 3);
+  let offset = 0;
+  for (const b of boxes) {
+    positions.set(b.attributes.position.array, offset * 3);
+    normals.set(b.attributes.normal.array, offset * 3);
+    offset += b.attributes.position.count;
+    b.dispose();
+  }
+  const merged = new THREE.BufferGeometry();
+  merged.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+  merged.setAttribute('normal', new THREE.BufferAttribute(normals, 3));
+  // three.js's instancing-colour shader chunk multiplies `instanceColor`
+  // into `vColor`, but only initialises `vColor` at all when the geometry
+  // itself also carries a per-vertex `color` attribute (`USE_COLOR`) --
+  // without one, `vColor` is left uninitialised and every instance renders
+  // solid black regardless of what `setColorAt` wrote. This all-white dummy
+  // attribute exists purely to turn that on; the actual per-cell colour
+  // comes entirely from `instanceColor` in `update3DStrengths`.
+  merged.setAttribute('color', new THREE.Float32BufferAttribute(new Float32Array(vertexCount * 3).fill(1), 3));
+  return merged;
+}
+
+const DUST_HEIGHT = 1 / 16; // a flat film on the cell floor, not a block tall
+
+const SHAPE_TEMPLATES = {
+  cube: mergeBoxen([box([1, 1, 1], [0, 0, 0])]),
+  dust: mergeBoxen([box([1, DUST_HEIGHT, 1], [0, -0.5 + DUST_HEIGHT / 2, 0])]),
+  slab: mergeBoxen([box([1, 0.5, 1], [0, -0.25, 0])]),
+  // Low slab base plus two nubs straddling it along the facing axis (built
+  // South-facing: input nub toward -z/North, output nub toward +z/South) --
+  // the nub *count* (two) is what separates this from a comparator at a
+  // glance, and their placement along the facing axis is the direction.
+  repeater: mergeBoxen([
+    box([1, 0.125, 1], [0, -0.4375, 0]),
+    box([0.25, 0.3125, 0.25], [0, -0.21875, -0.3125]), // input end
+    box([0.25, 0.3125, 0.25], [0, -0.21875, 0.3125]),  // output end
+  ]),
+  // Same slab, but three nubs: two on the facing (front/output) side and one
+  // on the back (input) side -- three nubs at a glance is unmistakably not
+  // a repeater, and the asymmetric two-front/one-back layout still shows
+  // which way it faces.
+  comparator: mergeBoxen([
+    box([1, 0.125, 1], [0, -0.4375, 0]),
+    box([0.2, 0.3125, 0.2], [-0.25, -0.21875, 0.3125]),
+    box([0.2, 0.3125, 0.2], [0.25, -0.21875, 0.3125]),
+    box([0.2, 0.3125, 0.2], [0, -0.21875, -0.3125]),
+  ]),
+  // Thin post with a slightly wider head, standing from the cell floor --
+  // always vertical, so it needs no facing.
+  torch: mergeBoxen([
+    box([0.125, 0.5, 0.125], [0, -0.25, 0]),
+    box([0.1875, 0.1875, 0.1875], [0, 0.09375, 0]),
+  ]),
+  // Same post-and-head, but offset toward the wall it is mounted on
+  // (South-canonical: the wall is at -z) and tilted outward -- `rotateX` on
+  // the post alone approximates a torch pivoting away from its support.
+  wallTorch: mergeBoxen([
+    box([0.125, 0.4375, 0.125], [0, -0.28125, -0.375], [0.3, 0, 0]),
+    box([0.1875, 0.1875, 0.1875], [0, 0.03, -0.28]),
+  ]),
+  leverFloor: mergeBoxen([box([0.375, 0.25, 0.25], [0, -0.375, 0])]),
+  leverCeiling: mergeBoxen([box([0.375, 0.25, 0.25], [0, 0.375, 0])]),
+  // South-canonical: the wall is at -z, same convention as wallTorch.
+  leverWall: mergeBoxen([box([0.25, 0.375, 0.25], [0, 0, -0.375])]),
+};
+
+// A single MeshBasicMaterial, shared by every family's InstancedMesh --
+// vertexColors means all per-cell colour comes from each mesh's own
+// `instanceColor`, so nothing family-specific belongs on the material
+// itself. Unlit on purpose -- see ensureThreeInitialized's comment below on
+// why there are no lights in the scene.
+const sharedMaterial3d = new THREE.MeshBasicMaterial({ vertexColors: true });
 
 let renderer3d = null;
 let scene3d = null;
 let camera3d = null;
 let controls3d = null;
-let instancedMesh = null;
+// One entry per shape family present in the current circuit:
+// { mesh: THREE.InstancedMesh,
+//   globalIndex: Int32Array -- instance i's index into cellCoords3d/cellKind3d/strengths(),
+//   rotationY: Float32Array -- instance i's fixed Y rotation (radians), from facing }
+let instancedMeshes = [];
+let meshEntryByObject = new Map(); // THREE.InstancedMesh -> its instancedMeshes entry, for hover
 let cellCount3d = 0;
 let cellCoords3d = null; // Float32Array, 3 per cell: world x, y, z (cell corner, not centre)
 let cellKind3d = null;   // Uint8Array, 1 per cell, same index as cellCoords3d
@@ -780,6 +976,10 @@ const raycaster3d = new THREE.Raycaster();
 const mouse3d = new THREE.Vector2();
 const scratchMatrix = new THREE.Matrix4();
 const scratchColor = new THREE.Color();
+const scratchPosition = new THREE.Vector3();
+const scratchQuaternion = new THREE.Quaternion();
+const scratchScale = new THREE.Vector3(1, 1, 1);
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
 
 /** Build the renderer/scene/camera/controls/lights once, lazily, the first
  * time a circuit is loaded (independent of whether the 3D tab has ever been
@@ -803,8 +1003,9 @@ function ensureThreeInitialized() {
   // rendered colour is exactly legend()'s colour with no lighting model or
   // renderer light-intensity convention in between -- the same guarantee
   // the plan states ("the two views disagreeing about what a colour means
-  // would be worse than having only one"). Depth is still readable from the
-  // per-cell gap (see CELL_BOX_SIZE) and perspective/occlusion alone.
+  // would be worse than having only one"). Depth is still readable from
+  // perspective and occlusion alone -- shapes are flush against their
+  // neighbours on purpose (see SHAPE_TEMPLATES's doc comment).
 
   renderer3d.domElement.addEventListener('mousemove', onThreeHover);
   renderer3d.domElement.addEventListener('mouseleave', () => {
@@ -845,12 +1046,14 @@ function frameCamera() {
 }
 
 /** Decode `Session::geometry()`'s packed bytes, per its documented layout:
- * 7 bytes/cell, `[x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, kind]` with
- * little-endian u16 coordinates. */
+ * 9 bytes/cell, `[x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, kind, facing, face]`
+ * with little-endian u16 coordinates. */
 function decodeGeometry(bytes) {
   const count = Math.floor(bytes.length / GEOMETRY_BYTES_PER_CELL);
   const coords = new Float32Array(count * 3);
   const kinds = new Uint8Array(count);
+  const facings = new Uint8Array(count);
+  const faces = new Uint8Array(count);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   for (let i = 0; i < count; i++) {
     const base = i * GEOMETRY_BYTES_PER_CELL;
@@ -858,52 +1061,67 @@ function decodeGeometry(bytes) {
     coords[i * 3 + 1] = view.getUint16(base + 2, true);
     coords[i * 3 + 2] = view.getUint16(base + 4, true);
     kinds[i] = bytes[base + 6];
+    facings[i] = bytes[base + 7];
+    faces[i] = bytes[base + 8];
   }
-  return { count, coords, kinds };
+  return { count, coords, kinds, facings, faces };
 }
 
 /** Rebuild the 3D scene's static geometry from scratch. Called once per
  * circuit (on load or reset) -- never on a lever flip or a step. That split
  * is exactly what `Session::geometry()` vs `Session::strengths()` documents:
  * the set of non-air cells never changes as the simulation runs, only what
- * they light up as. */
+ * they light up as.
+ *
+ * Groups cells into one `InstancedMesh` per shape family (`familyForCell`)
+ * instead of one mesh for everything -- `seven_segment`'s 19,050 cells stay
+ * split across at most a handful of meshes (cube/dust/repeater/etc), each
+ * still cheap to raycast and render, rather than one mesh per block. */
 function build3DGeometry() {
   ensureThreeInitialized();
 
-  if (instancedMesh) {
-    scene3d.remove(instancedMesh);
-    instancedMesh.geometry.dispose();
-    instancedMesh.material.dispose();
-    instancedMesh = null;
-  }
+  for (const { mesh } of instancedMeshes) scene3d.remove(mesh);
+  instancedMeshes = [];
+  meshEntryByObject = new Map();
 
   const bytes = session.geometry();
-  const { count, coords, kinds } = decodeGeometry(bytes);
+  const { count, coords, kinds, facings, faces } = decodeGeometry(bytes);
   cellCount3d = count;
   cellCoords3d = coords;
   cellKind3d = kinds;
 
-  const capacity = Math.max(count, 1);
-  const geometry = new THREE.BoxGeometry(CELL_BOX_SIZE, CELL_BOX_SIZE, CELL_BOX_SIZE);
-  // three.js's instancing-colour shader chunk multiplies `instanceColor`
-  // into `vColor`, but only initialises `vColor` at all when the geometry
-  // itself also carries a per-vertex `color` attribute (`USE_COLOR`) --
-  // without one, `vColor` is left uninitialised and every instance renders
-  // solid black regardless of what `setColorAt` wrote. This all-white dummy
-  // attribute exists purely to turn that on; the actual per-cell colour
-  // comes entirely from `instanceColor` in `update3DStrengths`.
-  const vertexCount = geometry.attributes.position.count;
-  geometry.setAttribute(
-    'color',
-    new THREE.Float32BufferAttribute(new Float32Array(vertexCount * 3).fill(1), 3),
-  );
-  // Unlit on purpose -- see ensureThreeInitialized's comment on why there
-  // are no lights in the scene.
-  const material = new THREE.MeshBasicMaterial({ vertexColors: true });
-  instancedMesh = new THREE.InstancedMesh(geometry, material, capacity);
-  instancedMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
-  instancedMesh.count = count;
-  scene3d.add(instancedMesh);
+  // Bucket every cell's global index (its position in geometry()/strengths())
+  // by shape family, and precompute each bucketed instance's fixed Y
+  // rotation from its facing right away -- it never changes for the life of
+  // this circuit, unlike colour.
+  const buckets = new Map(); // family -> { indices: number[], rotationY: number[] }
+  for (let i = 0; i < count; i++) {
+    const family = familyForCell(kinds[i], faces[i]);
+    let bucket = buckets.get(family);
+    if (!bucket) {
+      bucket = { indices: [], rotationY: [] };
+      buckets.set(family, bucket);
+    }
+    bucket.indices.push(i);
+    bucket.rotationY.push(
+      FAMILIES_ROTATED_BY_FACING.has(family) ? facingAngleY(facings[i]) : 0,
+    );
+  }
+
+  for (const [family, bucket] of buckets) {
+    const capacity = bucket.indices.length;
+    const mesh = new THREE.InstancedMesh(SHAPE_TEMPLATES[family], sharedMaterial3d, capacity);
+    mesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(capacity * 3), 3);
+    mesh.count = capacity;
+    scene3d.add(mesh);
+    const entry = {
+      mesh,
+      globalIndex: Int32Array.from(bucket.indices),
+      rotationY: Float32Array.from(bucket.rotationY),
+    };
+    instancedMeshes.push(entry);
+    meshEntryByObject.set(mesh, entry);
+  }
 
   setupClipRanges(); // also lays out every instance's matrix via applyClip()
   update3DStrengths();
@@ -912,24 +1130,28 @@ function build3DGeometry() {
 }
 
 /** Recolour every instance from `Session::strengths()`, in lockstep with
- * `build3DGeometry`'s `cellCoords3d`/`cellKind3d` (index i means the same
- * cell in all three arrays, per `Session::geometry()`'s ordering guarantee).
- * Touches colour only, never position or instance count -- safe, and cheap
- * enough, to call after every step / lever flip / run-to-stable / reset. */
+ * `build3DGeometry`'s `cellCoords3d`/`cellKind3d` (a mesh's `globalIndex[i]`
+ * gives the same cell's index into all three, per `Session::geometry()`'s
+ * ordering guarantee). Touches colour only, never position/rotation or
+ * instance count -- safe, and cheap enough, to call after every step / lever
+ * flip / run-to-stable / reset. */
 function update3DStrengths() {
-  if (!instancedMesh || cellCount3d === 0) return;
+  if (cellCount3d === 0) return;
   const strengths = session.strengths();
   latestStrengths3d = strengths;
-  for (let i = 0; i < cellCount3d; i++) {
-    const [r, g, b] = colourForCell(cellKind3d[i], strengths[i]);
-    // legend()'s colours are sRGB hex, same as the 2D canvas draws them
-    // straight into `ImageData` -- say so explicitly here too (three.js's
-    // working colour space is linear by default), so a rendered instance
-    // colour matches the 2D view's pixel for pixel, not just approximately.
-    scratchColor.setRGB(r / 255, g / 255, b / 255, THREE.SRGBColorSpace);
-    instancedMesh.setColorAt(i, scratchColor);
+  for (const { mesh, globalIndex } of instancedMeshes) {
+    for (let i = 0; i < globalIndex.length; i++) {
+      const gi = globalIndex[i];
+      const [r, g, b] = colourForCell(cellKind3d[gi], strengths[gi]);
+      // legend()'s colours are sRGB hex, same as the 2D canvas draws them
+      // straight into `ImageData` -- say so explicitly here too (three.js's
+      // working colour space is linear by default), so a rendered instance
+      // colour matches the 2D view's pixel for pixel, not just approximately.
+      scratchColor.setRGB(r / 255, g / 255, b / 255, THREE.SRGBColorSpace);
+      mesh.setColorAt(i, scratchColor);
+    }
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
   }
-  if (instancedMesh.instanceColor) instancedMesh.instanceColor.needsUpdate = true;
 }
 
 /** Reset every clip slider to the current circuit's full world extent --
@@ -970,25 +1192,32 @@ function readClipInputs() {
 /** Hide every instance outside the clip box by collapsing its matrix to zero
  * scale -- cheaper than rebuilding the instance count, and a zero-scale box
  * has no volume for the raycaster to hit either, so hover skips it too.
+ * Visible instances get their fixed per-cell rotation (from `facing`,
+ * precomputed once in `build3DGeometry`) composed with a translation to the
+ * cell's centre -- `Matrix4.compose` applies rotation before translation,
+ * exactly right for a template authored about a local origin.
  *
  * Setting the clip box's Y min and max to the same value reproduces exactly
  * what the 2D slice view shows at that Y index: both read the very same
  * world coordinates, coloured by the very same `colourForCell`, with no
- * extra transform in between. */
+ * extra transform in between (rotation does not change *which* cells are
+ * shown, only how each one is drawn). */
 function applyClip() {
-  if (!instancedMesh) return;
   const { xMin, xMax, yMin, yMax, zMin, zMax } = clipRange;
-  for (let i = 0; i < cellCount3d; i++) {
-    const x = cellCoords3d[i * 3], y = cellCoords3d[i * 3 + 1], z = cellCoords3d[i * 3 + 2];
-    const visible = x >= xMin && x <= xMax && y >= yMin && y <= yMax && z >= zMin && z <= zMax;
-    if (visible) {
-      scratchMatrix.makeTranslation(x + 0.5, y + 0.5, z + 0.5);
-    } else {
-      scratchMatrix.makeScale(0, 0, 0);
+  for (const { mesh, globalIndex, rotationY } of instancedMeshes) {
+    for (let i = 0; i < globalIndex.length; i++) {
+      const gi = globalIndex[i];
+      const x = cellCoords3d[gi * 3], y = cellCoords3d[gi * 3 + 1], z = cellCoords3d[gi * 3 + 2];
+      const visible = x >= xMin && x <= xMax && y >= yMin && y <= yMax && z >= zMin && z <= zMax;
+      scratchPosition.set(x + 0.5, y + 0.5, z + 0.5);
+      scratchQuaternion.setFromAxisAngle(Y_AXIS, rotationY[i]);
+      const s = visible ? 1 : 0;
+      scratchScale.set(s, s, s);
+      scratchMatrix.compose(scratchPosition, scratchQuaternion, scratchScale);
+      mesh.setMatrixAt(i, scratchMatrix);
     }
-    instancedMesh.setMatrixAt(i, scratchMatrix);
+    mesh.instanceMatrix.needsUpdate = true;
   }
-  instancedMesh.instanceMatrix.needsUpdate = true;
 }
 
 const throttledClipInput = rafThrottle(() => {
@@ -1000,25 +1229,31 @@ for (const el of Object.values(clipInputs)) {
 }
 clipResetBtn.addEventListener('click', () => setupClipRanges());
 
-/** Hover readout for the 3D view: raycast from the mouse through the
- * instanced mesh and report the same (coordinate, kind, strength) triple the
- * 2D view's hover readout reports, for whichever block instance is under the
- * cursor (clipped-out instances have zero volume, so they're never hit). */
+/** Hover readout for the 3D view: raycast from the mouse through every
+ * shape family's instanced mesh at once and report the same
+ * (coordinate, kind, strength) triple the 2D view's hover readout reports,
+ * for whichever block instance is under the cursor (clipped-out instances
+ * have zero volume, so they're never hit). `intersectObjects` returns hits
+ * sorted nearest-first across all meshes given, so the closest hit across
+ * every family is exactly `hits[0]` -- no need to raycast each mesh
+ * separately and merge results by hand. */
 function onThreeHover(e) {
-  if (!instancedMesh || cellCount3d === 0) return;
+  if (cellCount3d === 0 || instancedMeshes.length === 0) return;
   const rect = renderer3d.domElement.getBoundingClientRect();
   mouse3d.x = ((e.clientX - rect.left) / rect.width) * 2 - 1;
   mouse3d.y = -((e.clientY - rect.top) / rect.height) * 2 + 1;
   raycaster3d.setFromCamera(mouse3d, camera3d);
-  const hits = raycaster3d.intersectObject(instancedMesh);
+  const hits = raycaster3d.intersectObjects(instancedMeshes.map((entry) => entry.mesh));
   if (hits.length === 0) {
     threeHoverReadout.textContent = ' ';
     return;
   }
-  const i = hits[0].instanceId;
-  const x = cellCoords3d[i * 3], y = cellCoords3d[i * 3 + 1], z = cellCoords3d[i * 3 + 2];
-  const kind = cellKind3d[i];
-  const strength = (latestStrengths3d || session.strengths())[i];
+  const hit = hits[0];
+  const entry = meshEntryByObject.get(hit.object);
+  const gi = entry.globalIndex[hit.instanceId];
+  const x = cellCoords3d[gi * 3], y = cellCoords3d[gi * 3 + 1], z = cellCoords3d[gi * 3 + 2];
+  const kind = cellKind3d[gi];
+  const strength = (latestStrengths3d || session.strengths())[gi];
   const name = legendMap.get(kind)?.name || `unknown(${kind})`;
   threeHoverReadout.textContent = `(${x}, ${y}, ${z}) -- ${name}, strength ${strength}`;
 }

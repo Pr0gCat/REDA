@@ -30,7 +30,7 @@ use std::collections::BTreeMap;
 use reda::circuits::{and4, full_adder, seven_segment};
 use reda::compile::{compile, Netlist};
 use reda::redstone::simulator::Simulator;
-use reda::redstone::world::block::{BlockKind, BlockState};
+use reda::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use reda::redstone::world::storage::World;
 
 use serde::Serialize;
@@ -249,7 +249,41 @@ fn signal_strength(state: &BlockState) -> u8 {
 
 /// How many bytes [`Session::geometry`] spends on each non-air cell. See that
 /// method's doc comment for the field layout.
-const GEOMETRY_BYTES_PER_CELL: usize = 7;
+const GEOMETRY_BYTES_PER_CELL: usize = 9;
+
+/// `geometry()`'s byte for a cell's `facing`. `Facing` has no explicit
+/// discriminants and (unlike `BlockKind`) is not exhaustively listed anywhere
+/// else in this crate, so this mapping is spelled out by hand rather than
+/// cast -- North/South/East/West/Up/Down as 0..6, and 255 as the sentinel for
+/// "no facing" (`Option::None`), a value no real `Facing` variant can ever
+/// produce. A repeater, comparator or wall torch without a `facing` byte at
+/// all would be indistinguishable from one that defaulted to some direction
+/// by accident -- 255 makes "no facing" a visible, checkable value instead of
+/// a silent default. See `tests/geometry_ordering.rs` for the check.
+fn facing_id(facing: Option<Facing>) -> u8 {
+    match facing {
+        Some(Facing::North) => 0,
+        Some(Facing::South) => 1,
+        Some(Facing::East) => 2,
+        Some(Facing::West) => 3,
+        Some(Facing::Up) => 4,
+        Some(Facing::Down) => 5,
+        None => 255,
+    }
+}
+
+/// `geometry()`'s byte for a cell's `face` (`Lever`/`Button`'s attachment
+/// surface -- see `Face`'s doc comment). Same sentinel convention as
+/// [`facing_id`]: 255 means `Option::None`, a value no real `Face` variant can
+/// produce.
+fn face_id(face: Option<Face>) -> u8 {
+    match face {
+        Some(Face::Floor) => 0,
+        Some(Face::Wall) => 1,
+        Some(Face::Ceiling) => 2,
+        None => 255,
+    }
+}
 
 /// Every non-air cell's coordinate, in the fixed order [`Session::geometry`]
 /// and [`Session::strengths`] both walk: ascending flat index over `World`'s
@@ -523,36 +557,48 @@ impl Session {
 
     /// Static per-circuit geometry for a 3D view: one entry per non-air cell,
     /// visited in [`non_air_coords`]'s order, packed as
-    /// [`GEOMETRY_BYTES_PER_CELL`] (7) bytes each:
+    /// [`GEOMETRY_BYTES_PER_CELL`] (9) bytes each:
     ///
-    /// `[x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, kind]`
+    /// `[x_lo, x_hi, y_lo, y_hi, z_lo, z_hi, kind, facing, face]`
     ///
     /// `x`/`y`/`z` are little-endian `u16` world coordinates -- `u16`, not
     /// `u8`, because `seven_segment`'s Z axis reaches 298, past a single
     /// byte's range -- and `kind` is the same "block kind id" `slice()` and
     /// `legend()` already use (`block_kind_id`, i.e. `BlockKind as u8`).
     ///
+    /// `facing` ([`facing_id`]) and `face` ([`face_id`]) carry `BlockState`'s
+    /// own `Option<Facing>`/`Option<Face>` verbatim, each as 0..6 (or 0..3 for
+    /// `face`) for the real variants and **255 for `None`** -- a repeater,
+    /// comparator or wall torch's direction (and a lever's attachment
+    /// surface) is load-bearing for reading the circuit correctly (see the
+    /// module-level plan doc's "Block shapes and orientation" section), so
+    /// this is a real field with a real "absent" value, not something a 3D
+    /// view can silently default and still look plausible.
+    ///
     /// A caller builds this **once per circuit**: the set of non-air cells
-    /// and their coordinates/kinds is fixed the moment `compile()` lays the
-    /// world out, and never changes as the simulation runs (only *strengths*
-    /// change -- see [`Session::strengths`]).
+    /// and their coordinates/kinds/facing/face is fixed the moment
+    /// `compile()` lays the world out, and never changes as the simulation
+    /// runs (only *strengths* change -- see [`Session::strengths`]).
     ///
     /// Entry `i` here and byte `i` of `strengths()` describe the very same
     /// cell -- this pairing, and [`non_air_coords`]'s order, is exactly what
-    /// `tests/geometry_ordering.rs` pins down. If the two ever drifted out of
-    /// order relative to each other, a 3D view would still render a
-    /// plausible-looking circuit, just with every colour attached to the
-    /// wrong block, and nothing on screen would say so.
+    /// `tests/geometry_ordering.rs` pins down (facing and face included). If
+    /// the two ever drifted out of order relative to each other, a 3D view
+    /// would still render a plausible-looking circuit, just with every
+    /// colour (and orientation) attached to the wrong block, and nothing on
+    /// screen would say so.
     pub fn geometry(&self) -> Vec<u8> {
         let world = self.simulator.world();
         let mut bytes = Vec::new();
         for (x, y, z) in non_air_coords(world) {
-            let kind = world.get(x, y, z).kind;
+            let state = world.get(x, y, z);
             let mut cell = [0u8; GEOMETRY_BYTES_PER_CELL];
             cell[0..2].copy_from_slice(&(x as u16).to_le_bytes());
             cell[2..4].copy_from_slice(&(y as u16).to_le_bytes());
             cell[4..6].copy_from_slice(&(z as u16).to_le_bytes());
-            cell[6] = block_kind_id(kind);
+            cell[6] = block_kind_id(state.kind);
+            cell[7] = facing_id(state.facing);
+            cell[8] = face_id(state.face);
             bytes.extend_from_slice(&cell);
         }
         bytes

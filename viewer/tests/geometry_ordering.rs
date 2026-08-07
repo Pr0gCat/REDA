@@ -24,7 +24,7 @@
 use reda::circuits::and4::{build_and4_netlist, INPUT_NAMES};
 use reda::compile::compile;
 use reda::redstone::simulator::Simulator;
-use reda::redstone::world::block::{BlockKind, BlockState};
+use reda::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use reda_viewer::Session;
 
 const MAX_TICKS: u64 = 2000;
@@ -32,7 +32,7 @@ const MAX_TICKS: u64 = 2000;
 /// Must match `viewer/src/lib.rs`'s private `GEOMETRY_BYTES_PER_CELL` --
 /// re-declared here rather than exported, so this test decodes the *public*
 /// byte contract `geometry()` documents, not an internal constant.
-const GEOMETRY_BYTES_PER_CELL: usize = 7;
+const GEOMETRY_BYTES_PER_CELL: usize = 9;
 
 /// The `[kind_id, strength]` pair `geometry()`/`strengths()` should report
 /// for `state`, taken straight from `slice()`'s (and `geometry()`'s) own
@@ -51,6 +51,37 @@ fn expected(state: &BlockState) -> (u8, u8) {
         0
     };
     (kind_id, strength)
+}
+
+/// The byte `geometry()` should report for `state.facing`, reimplemented
+/// independently of `viewer/src/lib.rs`'s private `facing_id` -- North
+/// through Down as 0..6, 255 for `None`. This is the check the plan calls out
+/// by name: "a facing that silently defaulted would point every repeater the
+/// same way and look entirely plausible", so this helper must compute its
+/// expectation from `BlockState::facing` directly, never from whatever
+/// `geometry()` itself happened to emit.
+fn expected_facing_id(state: &BlockState) -> u8 {
+    match state.facing {
+        Some(Facing::North) => 0,
+        Some(Facing::South) => 1,
+        Some(Facing::East) => 2,
+        Some(Facing::West) => 3,
+        Some(Facing::Up) => 4,
+        Some(Facing::Down) => 5,
+        None => 255,
+    }
+}
+
+/// The byte `geometry()` should report for `state.face` (the lever/button
+/// attachment surface), reimplemented independently of `viewer/src/lib.rs`'s
+/// private `face_id` for the same reason as [`expected_facing_id`].
+fn expected_face_id(state: &BlockState) -> u8 {
+    match state.face {
+        Some(Face::Floor) => 0,
+        Some(Face::Wall) => 1,
+        Some(Face::Ceiling) => 2,
+        None => 255,
+    }
 }
 
 #[test]
@@ -120,12 +151,22 @@ fn geometry_and_strengths_agree_with_world_get_in_order() {
 
     let mut mismatches = Vec::new();
     let mut last_flat: i64 = -1;
+    // Distinct facing bytes seen among repeaters -- and4's router turns
+    // corners, so its repeaters genuinely point in more than one direction.
+    // A `geometry()` bug that always emitted the same facing (e.g. a
+    // forgotten field, defaulting to 0/North) would pass every per-entry
+    // check below only if it happened to match reality everywhere; this set
+    // is the direct check the plan asks for: catch a facing that "look[s]
+    // entirely plausible" by construction, not by coincidence.
+    let mut repeater_facings_seen = std::collections::BTreeSet::new();
     let entries = geometry.chunks_exact(GEOMETRY_BYTES_PER_CELL).zip(strengths.iter());
     for (i, (cell, &strength)) in entries.enumerate() {
         let x = u16::from_le_bytes([cell[0], cell[1]]) as i32;
         let y = u16::from_le_bytes([cell[2], cell[3]]) as i32;
         let z = u16::from_le_bytes([cell[4], cell[5]]) as i32;
         let kind_id = cell[6];
+        let facing_id = cell[7];
+        let face_id = cell[8];
 
         // Strict ascending-YZX order, matching World's own internal layout
         // (see World's module doc comment and `World::decode`).
@@ -146,13 +187,40 @@ fn geometry_and_strengths_agree_with_world_get_in_order() {
             "geometry() entry {i} at ({x}, {y}, {z}) must not be air"
         );
         let (expected_kind, expected_strength) = expected(state);
+        let expected_facing = expected_facing_id(state);
+        let expected_face = expected_face_id(state);
         if kind_id != expected_kind || strength != expected_strength {
             mismatches.push(format!(
                 "entry {i} at ({x}, {y}, {z}): geometry/strengths say kind {kind_id}, strength \
                  {strength}; World::get says kind {expected_kind}, strength {expected_strength}"
             ));
         }
+        if facing_id != expected_facing {
+            mismatches.push(format!(
+                "entry {i} at ({x}, {y}, {z}): geometry says facing byte {facing_id}; \
+                 World::get's actual facing ({:?}) maps to {expected_facing}",
+                state.facing
+            ));
+        }
+        if face_id != expected_face {
+            mismatches.push(format!(
+                "entry {i} at ({x}, {y}, {z}): geometry says face byte {face_id}; \
+                 World::get's actual face ({:?}) maps to {expected_face}",
+                state.face
+            ));
+        }
+        if kind_id == BlockKind::Repeater as u8 {
+            repeater_facings_seen.insert(facing_id);
+        }
     }
+
+    assert!(
+        repeater_facings_seen.len() > 1,
+        "and4's repeaters must point in more than one direction (router turns corners) -- only \
+         saw facing byte(s) {repeater_facings_seen:?}. A single value here is exactly what a \
+         defaulted `facing` field would produce, and would look plausible on screen while being \
+         wrong for most repeaters."
+    );
 
     assert!(
         mismatches.is_empty(),
