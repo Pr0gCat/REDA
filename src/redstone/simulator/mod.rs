@@ -747,7 +747,7 @@ mod tests {
     fn a_repeater_delays_its_output_by_its_setting() {
         // delay=2 的中繼器：輸入變化後 4 game tick 輸出才變
         let mut world = World::new(5, 5, 5);
-        world.set(2, 0, 2, repeater(Facing::East, 2, false));
+        world.set(2, 0, 2, repeater(Facing::West, 2, false));
 
         let mut simulator = Simulator::new(world);
         assert!(!simulator.world().get(2, 0, 2).lit);
@@ -775,7 +775,7 @@ mod tests {
     fn a_repeater_does_not_pass_signal_backwards() {
         // 訊號從前方進不去 -- 這是二極體的定義
         let mut world = World::new(5, 5, 5);
-        world.set(2, 0, 2, repeater(Facing::East, 1, false));
+        world.set(2, 0, 2, repeater(Facing::West, 1, false));
 
         // 前方（輸出端）放一個一直充能的紅石塊 -- 如果中繼器誤把它當輸入，
         // 就會被觸發開啟
@@ -796,12 +796,13 @@ mod tests {
     fn a_locked_repeater_holds_its_output() {
         // 鎖住之後輸入怎麼變輸出都不動
         let mut world = World::new(5, 5, 5);
-        world.set(2, 0, 2, repeater(Facing::East, 1, true));
+        world.set(2, 0, 2, repeater(Facing::West, 1, true));
 
-        // 北側放一個已充能、面朝南（正對這個中繼器）的中繼器 -- 鎖住它。
-        // 它自己的輸入也持續供電，這樣它自己不會被排程關閉，鎖存才會
-        // 全程有效，不會半途因為鎖它的那個中繼器關掉而解除。
-        world.set(2, 0, 1, repeater(Facing::South, 1, true));
+        // 北側放一個已充能、輸出朝南（正對這個中繼器）的中繼器 -- 鎖住它。
+        // facing=North -> output south。它自己的輸入也持續供電，這樣它
+        // 自己不會被排程關閉，鎖存才會全程有效，不會半途因為鎖它的那個
+        // 中繼器關掉而解除。
+        world.set(2, 0, 1, repeater(Facing::North, 1, true));
         let mut lock_input = lever();
         lock_input.lit = true;
         world.set(2, 0, 0, lock_input);
@@ -828,7 +829,7 @@ mod tests {
     fn a_repeater_swallows_a_pulse_shorter_than_its_delay() {
         // 這應該是「排程中不重排」自然的結果，不是特例邏輯
         let mut world = World::new(5, 5, 5);
-        world.set(2, 0, 2, repeater(Facing::East, 4, true)); // delay = 8 game tick
+        world.set(2, 0, 2, repeater(Facing::West, 4, true)); // delay = 8 game tick
 
         let mut on_lever = lever();
         on_lever.lit = true;
@@ -860,7 +861,7 @@ mod tests {
     fn a_comparator_output_settles_after_one_redstone_tick() {
         // 拉桿 -> 比較器：延遲跟中繼器、火把一樣是 2 個 game tick
         let mut world = World::new(5, 5, 5);
-        world.set(2, 0, 2, comparator(Facing::East, 0, false));
+        world.set(2, 0, 2, comparator(Facing::West, 0, false));
         world.set(1, 0, 2, lever()); // 比較器西邊 -- 就是它的後方，拉桿一開始是關的
 
         let mut simulator = Simulator::new(world);
@@ -890,7 +891,7 @@ mod tests {
     fn a_comparator_carries_an_analog_level_not_just_on_off() {
         // rear 給 9，輸出必須是 9，不是 15 -- 硬編成開關就是把比較器做成中繼器
         let mut world = World::new(5, 5, 5);
-        world.set(2, 0, 2, comparator(Facing::East, 0, false));
+        world.set(2, 0, 2, comparator(Facing::West, 0, false));
 
         // 用 target 當靜態的類比訊號源：它不會被排程改變，純粹是測試用的
         // 訊號源，跟其他測試用拉桿當固定 15 的訊號源是同一個道理。
@@ -925,7 +926,7 @@ mod tests {
         world.set(0, 1, 0, on_lever);
         world.set(1, 0, 0, stone());
         world.set(1, 1, 0, dust()); // 中繼器正後方，跟中繼器同一層
-        world.set(2, 1, 0, repeater(Facing::East, 1, false));
+        world.set(2, 1, 0, repeater(Facing::West, 1, false));
         world.set(3, 0, 0, stone());
         world.set(3, 1, 0, dust()); // 中繼器的輸出端
 
@@ -952,7 +953,7 @@ mod tests {
         world.set(1, 1, 0, dust()); // 貼著拉桿，滿強度 15
         world.set(2, 0, 0, stone());
         world.set(2, 1, 0, dust()); // 再走一格，衰減成 14，緊貼比較器後方
-        world.set(3, 1, 0, comparator(Facing::East, 0, false));
+        world.set(3, 1, 0, comparator(Facing::West, 0, false));
 
         let mut simulator = Simulator::new(world);
 
@@ -980,7 +981,7 @@ mod tests {
             world.set(x, 0, 0, stone());
             world.set(x, 1, 0, dust());
         }
-        world.set(12, 1, 0, repeater(Facing::East, 1, false));
+        world.set(12, 1, 0, repeater(Facing::West, 1, false));
 
         let mut simulator = Simulator::new(world);
 
@@ -996,6 +997,110 @@ mod tests {
         assert!(
             simulator.world().get(12, 1, 0).lit,
             "a repeater only cares whether its input has any signal, not how strong"
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Convention pin: these two tests exist so a future change cannot
+    // silently invert `facing` back to the wrong direction the way the
+    // original implementation did. Every other test in this file already
+    // exercises the *current* convention, but every one of them also passed
+    // when the convention was inverted (input/output simply swapped ends
+    // together with the setup) -- see the commit that fixed this bug. What
+    // pins the convention here is deriving the exact compass directions from
+    // an independent source instead of from the code under test: both the
+    // wiki's wording and a real server's actual behaviour.
+    //
+    // Verified against a real vanilla 1.20.1 server over RCON (not just
+    // read off the wiki), with the mirrored pair of `/setblock` experiments
+    // this test also encodes:
+    //   /setblock <p> minecraft:repeater[facing=north]
+    //   /setblock <p+north> minecraft:redstone_block
+    //   /setblock <p+south> minecraft:redstone_lamp
+    //   -> repeater powered=true, lamp lit=true
+    // and the mirror (redstone block to the south, lamp to the north of the
+    // same repeater) -> repeater powered=false, lamp unlit. Repeaters and
+    // lamps are not block entities, so `/data get block` cannot read their
+    // state -- use `/execute if block <pos> minecraft:redstone_lamp[lit=true]`
+    // ("Test passed"/"Test failed") instead.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn a_north_facing_repeater_matches_the_wiki_convention() {
+        // minecraft.wiki/w/Redstone_Repeater, blockstate table, `facing`:
+        // "The direction from the output side to the input side of a
+        // repeater. The opposite from the direction the player faces while
+        // placing the repeater."
+        //
+        // So `facing = North` means the input is to the north and the
+        // output is to the south -- the opposite of treating `facing` as
+        // "the direction the repeater points its output". Confirmed live
+        // (see the block comment above this test) on a real 1.20.1 server:
+        // facing=north + redstone block to the north + lamp to the south
+        // lights the lamp; swapping the block and lamp to the opposite
+        // sides does not.
+        let mut world = World::new(5, 5, 5);
+        let repeater_pos = Position::new(2, 0, 2);
+        world.set(repeater_pos.x, repeater_pos.y, repeater_pos.z, repeater(Facing::North, 1, false));
+
+        let mut on_lever = lever();
+        on_lever.lit = true;
+        world.set(2, 0, 1, on_lever); // north of the repeater -- must be its input
+
+        world.set(2, 0, 3, lamp()); // south of the repeater -- must be its output
+
+        let mut simulator = Simulator::new(world);
+        simulator
+            .run_until_stable(50)
+            .expect("a lever feeding a repeater's input must settle");
+
+        assert!(
+            simulator.world().get(repeater_pos.x, repeater_pos.y, repeater_pos.z).lit,
+            "facing=North must read its input from the north, where the lit lever sits"
+        );
+        assert!(
+            simulator.world().get(2, 0, 3).lit,
+            "facing=North must drive its output south, powering the lamp there \
+             (this is the exact case that was inverted: a repeater's output pointed \
+             at its own input side and never reached the far side)"
+        );
+    }
+
+    #[test]
+    fn a_north_facing_comparator_matches_the_wiki_convention() {
+        // minecraft.wiki/w/Redstone_Comparator, blockstate table, `facing`:
+        // "The direction from the output side to the input side of the
+        // comparator, or the opposite from the direction the player faces
+        // while placing the comparator." -- stated as identical to a
+        // repeater's, and independently confirmed on the same real 1.20.1
+        // server rather than assumed from the wiki text alone: the same
+        // mirrored `/setblock` pair described above this test's sibling,
+        // with `minecraft:comparator[facing=north]` in place of the
+        // repeater, gave comparator powered=true/lamp lit=true with the
+        // redstone block to the north, and powered=false/unlit with it to
+        // the south.
+        let mut world = World::new(5, 5, 5);
+        let comparator_pos = Position::new(2, 0, 2);
+        world.set(comparator_pos.x, comparator_pos.y, comparator_pos.z, comparator(Facing::North, 0, false));
+
+        let mut on_lever = lever();
+        on_lever.lit = true;
+        world.set(2, 0, 1, on_lever); // north of the comparator -- must be its rear input
+
+        world.set(2, 0, 3, lamp()); // south of the comparator -- must be its output
+
+        let mut simulator = Simulator::new(world);
+        simulator
+            .run_until_stable(50)
+            .expect("a lever feeding a comparator's rear input must settle");
+
+        assert!(
+            simulator.world().get(comparator_pos.x, comparator_pos.y, comparator_pos.z).power > 0,
+            "facing=North must read its main signal from the north, where the lit lever sits"
+        );
+        assert!(
+            simulator.world().get(2, 0, 3).lit,
+            "facing=North must drive its output south, powering the lamp there"
         );
     }
 
@@ -1043,7 +1148,7 @@ mod tests {
     fn lit_and_power_stay_consistent() {
         // power == 0 必須 lit == false，反之亦然
         let mut world = World::new(5, 5, 5);
-        world.set(2, 0, 2, comparator(Facing::East, 0, false));
+        world.set(2, 0, 2, comparator(Facing::West, 0, false));
         world.set(1, 0, 2, lever());
 
         let mut simulator = Simulator::new(world);

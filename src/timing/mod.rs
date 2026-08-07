@@ -591,7 +591,8 @@ mod tests {
         let mut previous = torch_a;
         for _ in 0..4 {
             let next = previous.offset(Facing::East);
-            world.set(next.x, next.y, next.z, repeater(Facing::East));
+            // facing=West -> input west, output east: continues the chain
+            world.set(next.x, next.y, next.z, repeater(Facing::West));
             previous = next;
         }
         let lamp_a = previous.offset(Facing::East);
@@ -614,7 +615,8 @@ mod tests {
         world.set(torch_b3.x, torch_b3.y, torch_b3.z, wall_torch(Facing::South));
 
         let repeater_b1 = torch_b3.offset(Facing::South);
-        world.set(repeater_b1.x, repeater_b1.y, repeater_b1.z, repeater(Facing::South));
+        // facing=North -> input north, output south: continues the chain
+        world.set(repeater_b1.x, repeater_b1.y, repeater_b1.z, repeater(Facing::North));
         let lamp_b = repeater_b1.offset(Facing::South);
         world.set(lamp_b.x, lamp_b.y, lamp_b.z, lamp());
 

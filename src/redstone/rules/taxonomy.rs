@@ -318,9 +318,11 @@ pub fn power_emitted_toward(state: &BlockState, direction: Facing) -> PowerOutpu
     }
 
     match state.kind {
-        // 中繼器與比較器：只有正前方
+        // 中繼器與比較器：只有正前方（輸出端）。Minecraft Wiki 對兩者
+        // `facing` 的定義都是「從輸出指向輸入的方向」，所以輸出方向是
+        // `facing` 的反方向，不是 `facing` 本身。
         BlockKind::Repeater | BlockKind::Comparator => {
-            if state.facing == Some(direction) {
+            if state.facing == Some(direction.opposite()) {
                 full
             } else {
                 PowerOutput::INERT
@@ -677,9 +679,11 @@ mod tests {
 
     #[test]
     fn a_repeater_only_outputs_forward() {
+        // Wiki: `facing` is "the direction from the output side to the input
+        // side", so a repeater facing West outputs East, its opposite.
         let mut rep = named(BlockKind::Repeater, "minecraft:repeater");
         rep.lit = true;
-        rep.facing = Some(Facing::East);
+        rep.facing = Some(Facing::West);
 
         assert_ne!(power_emitted_toward(&rep, Facing::East), PowerOutput::INERT);
         for other in [Facing::North, Facing::South, Facing::West, Facing::Up, Facing::Down] {

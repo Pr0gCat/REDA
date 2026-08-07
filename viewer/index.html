@@ -784,10 +784,15 @@ function buildLegendUI() {
 // Every template is authored in cell-local, cell-*centred* coordinates
 // (-0.5..0.5 on each axis = one full cell, matching `Session::geometry()`'s
 // cell corner once translated to the cell's centre) and assuming a canonical
-// `facing` of South (+z) -- `facingAngleY` supplies the rotation that turns
-// "South" into whatever the cell's real facing is, using the same
-// direction convention as `reda`'s own `Position::offset` (North=-z,
-// South=+z, East=+x, West=-x -- see src/redstone/simulator/position.rs).
+// output-facing of South (+z) -- `facingAngleY` supplies the rotation that
+// turns "South" into whatever direction is real, using the same direction
+// convention as `reda`'s own `Position::offset` (North=-z, South=+z,
+// East=+x, West=-x -- see src/redstone/simulator/position.rs). For a
+// repeater or comparator, "whatever direction is real" is the stored
+// `facing` byte's *opposite* -- Minecraft's `facing` records the direction
+// from output to input (see `FAMILIES_ROTATED_BY_OPPOSITE_FACING`); a wall
+// torch or lever's `facing` already is the direction the block points, so
+// those rotate by `facing` directly.
 // A full cube (`CUBE_SIZE = 1`, no gap) keeps two adjacent solid blocks
 // flush -- shrinking it would read as a row of loose beads instead of a
 // continuous run, which for redstone is the working/dead distinction.
@@ -848,6 +853,32 @@ const FAMILIES_ROTATED_BY_FACING = new Set([
   'repeater1', 'repeater2', 'repeater3', 'repeater4',
   'comparator', 'wallTorch', 'leverFloor', 'leverCeiling', 'leverWall',
 ]);
+
+/** Families whose stored `facing` byte points from *output* to *input* --
+ * repeaters and comparators, per the Minecraft Wiki's blockstate tables for
+ * both ("the direction from the output side to the input side"). Every
+ * template in this file is authored output-toward-canonical-South (see the
+ * "Repeater nub layout" comment below), so these two families must rotate by
+ * `facing`'s *opposite* to land their output nub on the real output side.
+ * Wall torches and levers are not in this set -- their `facing` already
+ * means "the direction the block points", unaffected by this file's own
+ * repeater/comparator convention fix. */
+const FAMILIES_ROTATED_BY_OPPOSITE_FACING = new Set([
+  'repeater1', 'repeater2', 'repeater3', 'repeater4', 'comparator',
+]);
+
+/** The horizontal opposite of a `facing` byte (`FACING_NORTH`/`SOUTH`/`EAST`/
+ * `WEST`), or the value unchanged for `FACING_NONE`/anything else -- used by
+ * `FAMILIES_ROTATED_BY_OPPOSITE_FACING` above. */
+function oppositeFacing(facingId) {
+  switch (facingId) {
+    case FACING_NORTH: return FACING_SOUTH;
+    case FACING_SOUTH: return FACING_NORTH;
+    case FACING_EAST: return FACING_WEST;
+    case FACING_WEST: return FACING_EAST;
+    default: return facingId;
+  }
+}
 
 /** Y-axis rotation (radians) that turns a template authored facing South
  * (+z) into one facing `facingId`'s real direction, using the same
@@ -964,9 +995,11 @@ const DUST_HEIGHT = 1 / 16; // a flat film on the cell floor, not a block tall
 // Repeater nub layout -- see the "Repeater delay" section of
 // docs/superpowers/plans/2026-08-07-3d-view.md: Minecraft shows a repeater's
 // delay by the gap between its two torch nubs, delay 1 close together and
-// delay 4 at opposite ends. Built South-facing like every other template
-// here (input toward -z/North, output toward +z/South; `facingAngleY`
-// rotates the whole instance to the cell's real facing).
+// delay 4 at opposite ends. Built South-*output* like every other template
+// here (input toward -z/North, output toward +z/South) -- but the cell's
+// stored `facing` byte records the opposite (output-to-input) direction per
+// the Minecraft Wiki, so the instance is rotated by `facing`'s *opposite*,
+// not `facing` itself (see `FAMILIES_ROTATED_BY_OPPOSITE_FACING` above).
 //
 // The input nub is fixed at the back edge for every delay -- only the output
 // nub moves, from right next to the input nub (delay 1) out to the front
@@ -1285,7 +1318,11 @@ function build3DGeometry() {
     }
     bucket.indices.push(i);
     bucket.rotationY.push(
-      FAMILIES_ROTATED_BY_FACING.has(family) ? facingAngleY(facings[i]) : 0,
+      FAMILIES_ROTATED_BY_FACING.has(family)
+        ? facingAngleY(
+            FAMILIES_ROTATED_BY_OPPOSITE_FACING.has(family) ? oppositeFacing(facings[i]) : facings[i],
+          )
+        : 0,
     );
   }
 

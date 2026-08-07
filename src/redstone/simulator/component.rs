@@ -107,12 +107,15 @@ fn horizontal_side_directions(facing: Facing) -> [Facing; 2] {
     }
 }
 
-/// 中繼器的輸入位置（正後方）。
+/// 中繼器的輸入位置。
 ///
-/// 中繼器只從它朝向的反方向讀取輸入 —— 這是二極體的定義，正前方與側面
-/// 都不算輸入。缺少 `facing` 的資料回傳 `None`，不猜方向。
+/// Minecraft Wiki 對中繼器 `facing` 的定義："The direction from the output
+/// side to the input side of a repeater." —— `facing` 記錄的就是從輸出指向
+/// 輸入的方向，所以輸入正好在 `facing` 那一格，輸出在反方向。中繼器只從
+/// 這一格讀取輸入 —— 這是二極體的定義，正前方（輸出）與側面都不算輸入。
+/// 缺少 `facing` 的資料回傳 `None`，不猜方向。
 pub fn repeater_input_position(state: &BlockState, pos: Position) -> Option<Position> {
-    state.facing.map(|facing| pos.offset(facing.opposite()))
+    state.facing.map(|facing| pos.offset(facing))
 }
 
 /// 中繼器兩側的位置，用來判斷鎖存。
@@ -141,7 +144,12 @@ pub fn repeater_is_locked(world: &World, pos: Position) -> bool {
     for side_facing in horizontal_side_directions(facing) {
         let side_pos = pos.offset(side_facing);
         let side_state = world.get(side_pos.x, side_pos.y, side_pos.z);
-        let faces_into_us = side_state.facing == Some(side_facing.opposite());
+        // The side neighbour's output points into us exactly when its own
+        // input side (its `facing`) points back the way it came from --
+        // i.e. its `facing` equals the direction we just walked to reach it.
+        // (output = `facing.opposite()`, and that must equal `side_facing.opposite()`,
+        // which reduces to `facing == side_facing`.)
+        let faces_into_us = side_state.facing == Some(side_facing);
         if is_diode(side_state.kind) && side_state.lit && faces_into_us {
             return true;
         }
@@ -175,7 +183,9 @@ pub fn repeater_priority(world: &World, pos: Position, turning_off: bool) -> Tic
         return TickPriority::High;
     };
 
-    let front = pos.offset(facing);
+    // `facing` points from output to input (Minecraft Wiki), so this
+    // repeater's own output lands on the cell in the *opposite* direction.
+    let front = pos.offset(facing.opposite());
     let front_state = world.get(front.x, front.y, front.z);
     let faces_back_or_side_of_diode = is_diode(front_state.kind)
         && front_state
@@ -200,12 +210,15 @@ pub fn repeater_delay_game_ticks(state: &BlockState) -> u64 {
     redstone_ticks as u64 * 2
 }
 
-/// 比較器的後方輸入位置（`facing` 的反方向）。
+/// 比較器的後方輸入位置。
 ///
-/// 跟中繼器一樣是二極體的定義：主訊號只從正後方讀，正前方、側面都不算。
-/// 缺少 `facing` 的資料回傳 `None`，不猜方向。
+/// Minecraft Wiki 對比較器 `facing` 的定義跟中繼器一樣："The direction from
+/// the output side to the input side of the comparator." —— `facing` 就是
+/// 從輸出指向輸入的方向，所以主訊號輸入正好在 `facing` 那一格，輸出在反
+/// 方向。跟中繼器一樣是二極體的定義：主訊號只從這一格讀，正前方（輸出）、
+/// 側面都不算。缺少 `facing` 的資料回傳 `None`，不猜方向。
 pub fn comparator_rear_position(state: &BlockState, pos: Position) -> Option<Position> {
-    state.facing.map(|facing| pos.offset(facing.opposite()))
+    state.facing.map(|facing| pos.offset(facing))
 }
 
 /// 比較器兩側的輸入位置，用來讀比較訊號。
@@ -293,7 +306,9 @@ pub fn comparator_priority(world: &World, pos: Position) -> TickPriority {
         return TickPriority::Normal;
     };
 
-    let front = pos.offset(facing);
+    // `facing` points from output to input (Minecraft Wiki), so this
+    // comparator's own output lands on the cell in the *opposite* direction.
+    let front = pos.offset(facing.opposite());
     let front_state = world.get(front.x, front.y, front.z);
     let faces_back_or_side_of_diode = is_diode(front_state.kind)
         && front_state
@@ -419,12 +434,13 @@ mod tests {
 
     #[test]
     fn a_repeater_takes_its_input_from_directly_behind() {
-        // 朝東的中繼器，輸入在它西邊
+        // Wiki: "The direction from the output side to the input side of a
+        // repeater." -- a west-facing repeater's input is to its west.
         let pos = Position::new(5, 5, 5);
         assert_eq!(
-            repeater_input_position(&repeater(Facing::East, 1, false), pos),
+            repeater_input_position(&repeater(Facing::West, 1, false), pos),
             Some(Position::new(4, 5, 5)),
-            "an east-facing repeater must read its input from the block to its west"
+            "a west-facing repeater must read its input from the block to its west"
         );
     }
 
@@ -452,9 +468,10 @@ mod tests {
     fn a_powered_repeater_facing_a_diode_gets_the_highest_priority() {
         let mut world = World::new(5, 5, 5);
         let pos = Position::new(2, 0, 2);
-        world.set(pos.x, pos.y, pos.z, repeater(Facing::East, 1, true));
+        // facing=West -> input west, output east (into (3,0,2))
+        world.set(pos.x, pos.y, pos.z, repeater(Facing::West, 1, true));
         // 前方是另一個朝同方向的中繼器 -- 正對著它的背面（正常的中繼器鏈）
-        world.set(3, 0, 2, repeater(Facing::East, 1, false));
+        world.set(3, 0, 2, repeater(Facing::West, 1, false));
 
         assert_eq!(
             repeater_priority(&world, pos, false),
@@ -472,7 +489,8 @@ mod tests {
     fn a_repeater_turning_off_gets_higher_priority_than_one_turning_on() {
         let mut world = World::new(5, 5, 5);
         let pos = Position::new(2, 0, 2);
-        world.set(pos.x, pos.y, pos.z, repeater(Facing::East, 1, true));
+        // facing=West -> output east, into (3,0,2)
+        world.set(pos.x, pos.y, pos.z, repeater(Facing::West, 1, true));
         // 前方只是石頭，不是二極體，所以不會落入 Highest 那一支
         world.set(3, 0, 2, stone());
 
@@ -488,9 +506,10 @@ mod tests {
     fn a_powered_repeater_at_the_side_locks_this_one() {
         let mut world = World::new(5, 5, 5);
         let pos = Position::new(2, 0, 2);
-        world.set(pos.x, pos.y, pos.z, repeater(Facing::East, 1, false));
-        // 北側 (z-1) 放一個已充能、朝南（正對著它）的中繼器
-        world.set(2, 0, 1, repeater(Facing::South, 1, true));
+        world.set(pos.x, pos.y, pos.z, repeater(Facing::West, 1, false));
+        // 北側 (z-1) 放一個已充能、輸出朝南（正對著它）的中繼器
+        // facing=North -> output south
+        world.set(2, 0, 1, repeater(Facing::North, 1, true));
 
         assert!(
             repeater_is_locked(&world, pos),
@@ -502,8 +521,8 @@ mod tests {
     fn an_unpowered_repeater_at_the_side_does_not_lock() {
         let mut world = World::new(5, 5, 5);
         let pos = Position::new(2, 0, 2);
-        world.set(pos.x, pos.y, pos.z, repeater(Facing::East, 1, false));
-        world.set(2, 0, 1, repeater(Facing::South, 1, false));
+        world.set(pos.x, pos.y, pos.z, repeater(Facing::West, 1, false));
+        world.set(2, 0, 1, repeater(Facing::North, 1, false));
 
         assert!(
             !repeater_is_locked(&world, pos),
@@ -513,12 +532,14 @@ mod tests {
 
     #[test]
     fn a_comparator_reads_its_main_signal_from_behind() {
-        // 朝東的比較器，後方（主訊號）在它西邊
+        // Wiki: comparator `facing` has the same meaning as a repeater's --
+        // "the direction from the output side to the input side" -- so a
+        // west-facing comparator's rear input is to its west.
         let pos = Position::new(5, 5, 5);
         assert_eq!(
-            comparator_rear_position(&comparator(Facing::East, None, 0, false), pos),
+            comparator_rear_position(&comparator(Facing::West, None, 0, false), pos),
             Some(Position::new(4, 5, 5)),
-            "an east-facing comparator must read its main signal from the block to its west"
+            "a west-facing comparator must read its main signal from the block to its west"
         );
     }
 
@@ -548,11 +569,12 @@ mod tests {
     fn compare_mode_passes_the_rear_signal_when_no_side_is_stronger() {
         let mut world = World::new(5, 5, 5);
         let pos = Position::new(2, 0, 2);
-        world.set(pos.x, pos.y, pos.z, comparator(Facing::East, None, 0, false));
+        // facing=West -> rear input west, at (1,0,2)
+        world.set(pos.x, pos.y, pos.z, comparator(Facing::West, None, 0, false));
 
-        // 後方是另一個朝同方向的比較器，直接送出類比值 9（不是固定的 15，
-        // 才能抓到「硬編成開關」的錯誤實作）
-        world.set(1, 0, 2, comparator(Facing::East, None, 9, true));
+        // 後方是另一個朝同方向、輸出朝東（進到我們後方）的比較器，直接送出
+        // 類比值 9（不是固定的 15，才能抓到「硬編成開關」的錯誤實作）
+        world.set(1, 0, 2, comparator(Facing::West, None, 9, true));
 
         // 兩側都是沒有被充能的石頭
         world.set(2, 0, 1, stone());
@@ -569,12 +591,13 @@ mod tests {
     fn compare_mode_outputs_zero_when_a_side_is_stronger() {
         let mut world = World::new(5, 5, 5);
         let pos = Position::new(2, 0, 2);
-        world.set(pos.x, pos.y, pos.z, comparator(Facing::East, None, 0, false));
-        world.set(1, 0, 2, comparator(Facing::East, None, 9, true));
+        world.set(pos.x, pos.y, pos.z, comparator(Facing::West, None, 0, false));
+        world.set(1, 0, 2, comparator(Facing::West, None, 9, true));
 
         // 北側石頭被另一個比較器強充能到 12，比後方的 9 強
+        // facing=North -> output south, into (2,0,1)
         world.set(2, 0, 1, stone());
-        world.set(2, 0, 0, comparator(Facing::South, None, 12, true));
+        world.set(2, 0, 0, comparator(Facing::North, None, 12, true));
         world.set(2, 0, 3, stone());
 
         assert_eq!(
@@ -589,11 +612,11 @@ mod tests {
         // rear 12, side 5 -> 7
         let mut world = World::new(5, 5, 5);
         let pos = Position::new(2, 0, 2);
-        world.set(pos.x, pos.y, pos.z, comparator(Facing::East, Some("subtract"), 0, false));
-        world.set(1, 0, 2, comparator(Facing::East, None, 12, true));
+        world.set(pos.x, pos.y, pos.z, comparator(Facing::West, Some("subtract"), 0, false));
+        world.set(1, 0, 2, comparator(Facing::West, None, 12, true));
 
         world.set(2, 0, 1, stone());
-        world.set(2, 0, 0, comparator(Facing::South, None, 5, true));
+        world.set(2, 0, 0, comparator(Facing::North, None, 5, true));
         world.set(2, 0, 3, stone());
 
         assert_eq!(comparator_output(&world, pos), 7);
@@ -604,11 +627,11 @@ mod tests {
         // rear 3, side 9 -> 0，不是負數繞回
         let mut world = World::new(5, 5, 5);
         let pos = Position::new(2, 0, 2);
-        world.set(pos.x, pos.y, pos.z, comparator(Facing::East, Some("subtract"), 0, false));
-        world.set(1, 0, 2, comparator(Facing::East, None, 3, true));
+        world.set(pos.x, pos.y, pos.z, comparator(Facing::West, Some("subtract"), 0, false));
+        world.set(1, 0, 2, comparator(Facing::West, None, 3, true));
 
         world.set(2, 0, 1, stone());
-        world.set(2, 0, 0, comparator(Facing::South, None, 9, true));
+        world.set(2, 0, 0, comparator(Facing::North, None, 9, true));
         world.set(2, 0, 3, stone());
 
         assert_eq!(comparator_output(&world, pos), 0);

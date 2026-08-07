@@ -182,11 +182,21 @@ fn lever(on: bool) -> BlockState {
     state
 }
 
-fn repeater(facing: Facing) -> BlockState {
+/// Place a repeater whose signal travels toward `direction` -- i.e. it reads
+/// its input from `direction.opposite()` and drives its output toward
+/// `direction`.
+///
+/// Minecraft's `facing` block state records the opposite: "the direction from
+/// the output side to the input side" (see `minecraft.wiki/w/Redstone_Repeater`'s
+/// blockstate table), so the stored `facing` is `direction.opposite()`, not
+/// `direction` itself. Every call site below only ever cares about the
+/// direction the signal is travelling, so that is what this helper takes --
+/// the Minecraft-facing conversion happens once, here.
+fn repeater(direction: Facing) -> BlockState {
     let mut state = BlockState::air();
     state.kind = BlockKind::Repeater;
     state.name = "minecraft:repeater".to_string();
-    state.facing = Some(facing);
+    state.facing = Some(direction.opposite());
     state.delay = 1;
     state.lit = true;
     state

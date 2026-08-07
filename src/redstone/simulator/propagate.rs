@@ -492,14 +492,16 @@ mod tests {
         w.set(6, 0, 5, stone());
         w.set(6, 1, 5, dust());
 
-        // 比較器在石頭西邊，朝東（指向石頭），輸出強度 7。
-        // （Facing 是全域座標系：East 是 +x，比較器在 x=4、石頭在 x=5，
-        // 所以要朝 East 才能指到石頭 —— 見 `Position::offset` 與
-        // `power_emitted_toward` 對中繼器／比較器的方向比對。）
+        // 比較器在石頭西邊，輸出朝東（指向石頭），輸出強度 7。
+        // （Facing 是全域座標系：East 是 +x，比較器在 x=4、石頭在 x=5。
+        // Wiki 對比較器 `facing` 的定義是「從輸出指向輸入的方向」，所以
+        // 輸出方向是 `facing` 的反方向 —— 要輸出到 East，`facing` 必須是
+        // West。見 `Position::offset` 與 `power_emitted_toward` 對中繼器／
+        // 比較器的方向比對。）
         let mut comparator = named("minecraft:comparator", BlockKind::Comparator);
         comparator.lit = true;
         comparator.power = 7;
-        comparator.facing = Some(Facing::East);
+        comparator.facing = Some(Facing::West);
         w.set(6, 1, 5, dust());
         w.set(4, 1, 5, comparator);
 

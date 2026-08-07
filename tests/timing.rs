@@ -213,15 +213,15 @@ fn build_glitch_circuit() -> GlitchCircuit {
 
     // Path A reads torch_a directly -- a torch drives its horizontal
     // neighbours regardless of weak/strong, so no dust is needed here.
-    let repeater_a = Position::new(5, 1, 2); // east of torch_a, facing East
+    let repeater_a = Position::new(5, 1, 2); // east of torch_a; outputs east (facing West)
 
     // Path B needs to reach the merge block from a different row, so it
     // bridges the gap with two cells of dust (dust adds no delay, only a
     // decaying strength, which does not matter for a boolean signal).
     let dust_b: [Position; 2] = [Position::new(5, 1, 4), Position::new(6, 1, 4)];
-    let repeater_b = Position::new(6, 1, 3); // north of dust_b's last cell, facing North
+    let repeater_b = Position::new(6, 1, 3); // north of dust_b's last cell; outputs north (facing South)
 
-    let merge = Position::new(6, 1, 2); // east of repeater_a, south of repeater_b
+    let merge = Position::new(6, 1, 2); // east of repeater_a, north of repeater_b
     let out = merge.up(); // the output torch stands on the merge block
 
     // Lever off: nothing is powered yet. Initial `lit`/`power` values are
@@ -239,12 +239,14 @@ fn build_glitch_circuit() -> GlitchCircuit {
     world.set(support_b2.x, support_b2.y, support_b2.z, stone());
     world.set(torch_b2.x, torch_b2.y, torch_b2.z, wall_torch(Facing::East));
 
-    world.set(repeater_a.x, repeater_a.y, repeater_a.z, repeater(Facing::East, 1));
+    // facing=West -> input west, output east (into `merge`)
+    world.set(repeater_a.x, repeater_a.y, repeater_a.z, repeater(Facing::West, 1));
 
     for &d in &dust_b {
         world.set(d.x, d.y, d.z, dust());
     }
-    world.set(repeater_b.x, repeater_b.y, repeater_b.z, repeater(Facing::North, 2));
+    // facing=South -> input south, output north (into `merge`)
+    world.set(repeater_b.x, repeater_b.y, repeater_b.z, repeater(Facing::South, 2));
 
     world.set(merge.x, merge.y, merge.z, stone());
     world.set(out.x, out.y, out.z, standing_torch());
