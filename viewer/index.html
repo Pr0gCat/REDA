@@ -81,6 +81,15 @@
   .tick-count { color: var(--muted); font-size: 12px; }
   .status { font-size: 12px; margin-top: 6px; min-height: 16px; }
   .status.error { color: var(--error); }
+  .settle-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
+    margin-bottom: 4px;
+  }
+  .settle-label { color: var(--muted); }
+  .settle-value { font-variant-numeric: tabular-nums; text-align: right; }
   .lever-list, .output-list { display: flex; flex-direction: column; gap: 6px; }
   .lever {
     display: flex;
@@ -192,6 +201,18 @@
     </div>
 
     <div class="panel">
+      <h2>Settle Time</h2>
+      <div class="settle-row">
+        <span class="settle-label">Last</span>
+        <span id="settle-last" class="settle-value">&mdash;</span>
+      </div>
+      <div class="settle-row">
+        <span class="settle-label">Worst since load</span>
+        <span id="settle-worst" class="settle-value">&mdash;</span>
+      </div>
+    </div>
+
+    <div class="panel">
       <h2>Inputs</h2>
       <div class="lever-list" id="lever-list"></div>
     </div>
@@ -237,6 +258,8 @@ const runBtn = document.getElementById('run-btn');
 const resetBtn = document.getElementById('reset-btn');
 const tickCountEl = document.getElementById('tick-count');
 const statusEl = document.getElementById('status');
+const settleLastEl = document.getElementById('settle-last');
+const settleWorstEl = document.getElementById('settle-worst');
 const leverList = document.getElementById('lever-list');
 const outputList = document.getElementById('output-list');
 const legendList = document.getElementById('legend-list');
@@ -261,9 +284,14 @@ let pinout = { inputs: [], outputs: [] };
 let legendMap = new Map(); // id -> { name, rgba: [r,g,b,a] }
 let leverState = new Map(); // name -> bool
 let currentBytes = null; // Uint8Array for the currently displayed slice
+let currentAxisName = 'Y';
+let currentGeom = null; // data-space layout of currentBytes, from axisGeometry()
 let currentOuterLen = 0;
 let currentInnerLen = 0;
+let currentScreenW = 0; // canvas pixel width, in cells (post screen mapping)
+let currentScreenH = 0; // canvas pixel height, in cells (post screen mapping)
 let outputSliceCache = new Map(); // y -> Uint8Array, cleared each refreshOutputs()
+let worstSettleTicks = null; // worst run_until_stable() result since this circuit was (re)loaded
 
 // ---------------------------------------------------------------------
 // Colour helpers
@@ -320,7 +348,11 @@ function rafThrottle(fn) {
 // ---------------------------------------------------------------------
 
 /** Per the slice() contract: which world size component the axis's index
- * ranges over, and the (outer, inner) lengths of the remaining two axes. */
+ * ranges over, and the (outer, inner) lengths of the remaining two axes, as
+ * `Session::slice` itself loops over them (outer is the slower-varying
+ * index, matching its doc comment). This is the *data* layout -- how bytes
+ * are packed in the `Uint8Array` -- not the on-screen layout; see
+ * `toScreen`/`toData` below for that. */
 function axisGeometry(axisName) {
   const [sx, sy, sz] = size;
   switch (axisName) {
@@ -331,12 +363,65 @@ function axisGeometry(axisName) {
 }
 
 /** Map (axis, index, outer, inner) back to world (x, y, z), matching the
- * loops documented on Session::slice. */
+ * loops documented on Session::slice. Independent of how the cell is drawn
+ * on screen. */
 function worldCoord(axisName, index, outer, inner) {
   switch (axisName) {
     case 'X': return [index, outer, inner];
     case 'Y': return [outer, index, inner];
     case 'Z': return [outer, inner, index];
+  }
+}
+
+/** On-screen pixel dimensions for one slice, following the convention every
+ * Minecraft map/schematic tool uses: a top-down view has X horizontal and Z
+ * vertical; a side view has the horizontal ground axis horizontal and Y
+ * (height) vertical. This is a pure relabelling of the same data `slice()`
+ * already returns -- see `toScreen`/`toData`. */
+function screenDims(axisName, geom) {
+  // X slice (side view along X): data's own (outer=y, inner=z) already has
+  // inner=z as the natural screen column, so width/height match the data
+  // shape as-is; only the row direction flips (see toScreen).
+  if (axisName === 'X') return { width: geom.innerLen, height: geom.outerLen };
+  // Y slice (top-down): screen column is world X (data's outer), screen row
+  // is world Z (data's inner) -- a transpose of the data shape.
+  // Z slice (side view along Z): screen column is world X (data's outer),
+  // screen row is world Y (data's inner) -- also a transpose.
+  return { width: geom.outerLen, height: geom.innerLen };
+}
+
+/** Map one data cell (as `Session::slice` indexes it: outer/inner per
+ * `axisGeometry`) to the screen pixel (col, row) it should be drawn at,
+ * implementing the mapping documented on `screenDims`. The two side views
+ * (X, Z) flip their row so world Y increases upward (sky at the top) instead
+ * of the default downward-growing screen Y. */
+function toScreen(axisName, outer, inner, geom) {
+  switch (axisName) {
+    case 'X': return { col: inner, row: geom.outerLen - 1 - outer }; // outer=y (flip), inner=z
+    case 'Y': return { col: outer, row: inner };                     // outer=x, inner=z
+    case 'Z': return { col: outer, row: geom.innerLen - 1 - inner }; // outer=x, inner=y (flip)
+  }
+}
+
+/** Inverse of `toScreen`: given a screen pixel, recover the data cell
+ * (outer, inner) `Session::slice`'s byte layout uses, so a byte can be
+ * looked up for a pixel the mouse is hovering over. */
+function toData(axisName, col, row, geom) {
+  switch (axisName) {
+    case 'X': return { outer: geom.outerLen - 1 - row, inner: col };
+    case 'Y': return { outer: col, inner: row };
+    case 'Z': return { outer: col, inner: geom.innerLen - 1 - row };
+  }
+}
+
+/** Which world axis runs horizontally and which runs vertically on screen,
+ * for the caption -- so a mismapping like the one this replaces is visible
+ * from a screenshot alone, without needing to hover to detect it. */
+function screenAxisLabels(axisName) {
+  switch (axisName) {
+    case 'X': return { horizontal: 'Z', vertical: 'Y' };
+    case 'Y': return { horizontal: 'X', vertical: 'Z' };
+    case 'Z': return { horizontal: 'X', vertical: 'Y' };
   }
 }
 
@@ -376,12 +461,54 @@ function loadCircuit(name) {
 
   setStatus('');
   updateTickCount();
+  resetSettleDisplay();
   syncAxisRange(true);
   refreshOutputs();
 }
 
 function updateTickCount() {
   tickCountEl.textContent = session.tick_count();
+}
+
+// ---------------------------------------------------------------------
+// Settle time
+//
+// `run_until_stable()`'s game-tick count is the whole point of this project
+// -- the first real latency measurement the simulator produces -- so it gets
+// its own panel instead of living only in the transient status line. Shown
+// in all three units a redstone engineer thinks in: game ticks (what the
+// simulator actually counts), redstone ticks (1 redstone tick = 2 game
+// ticks), and wall-clock seconds (1 game tick = 0.05 s at Minecraft's fixed
+// 20 ticks/second).
+// ---------------------------------------------------------------------
+
+const GAME_TICK_SECONDS = 0.05; // 1 / 20, Minecraft's fixed tick rate
+
+function formatSettle(gameTicks) {
+  const redstoneTicks = gameTicks / 2;
+  const seconds = gameTicks * GAME_TICK_SECONDS;
+  return `${gameTicks} game tick${gameTicks === 1 ? '' : 's'} `
+    + `(${redstoneTicks} redstone tick${redstoneTicks === 1 ? '' : 's'}, ${seconds.toFixed(2)} s)`;
+}
+
+/** Record one `run_until_stable()` result: update the "last" reading and,
+ * if this is the worst seen since the circuit was (re)loaded, the "worst"
+ * reading too. */
+function recordSettle(gameTicks) {
+  settleLastEl.textContent = formatSettle(gameTicks);
+  if (worstSettleTicks === null || gameTicks > worstSettleTicks) {
+    worstSettleTicks = gameTicks;
+  }
+  settleWorstEl.textContent = formatSettle(worstSettleTicks);
+}
+
+/** Clear both readings back to "no measurement yet" -- called whenever the
+ * circuit is (re)loaded, since "worst since load" starts over at that
+ * point. */
+function resetSettleDisplay() {
+  worstSettleTicks = null;
+  settleLastEl.textContent = '—';
+  settleWorstEl.textContent = '—';
 }
 
 // ---------------------------------------------------------------------
@@ -431,6 +558,7 @@ function toggleLever(name, btn) {
   try {
     const ticks = session.run_until_stable();
     setStatus(`Settled after ${ticks} tick(s).`, false);
+    recordSettle(ticks);
   } catch (e) {
     setStatus(`run_until_stable failed: ${e}`, true);
   }
@@ -534,6 +662,7 @@ function refreshSlice() {
   const axisName = axisSelect.value;
   const index = Number(indexSlider.value);
   const geom = axisGeometry(axisName);
+  const screen = screenDims(axisName, geom);
 
   let bytes;
   try {
@@ -543,10 +672,17 @@ function refreshSlice() {
     return;
   }
   currentBytes = bytes;
+  currentAxisName = axisName;
+  currentGeom = geom;
   currentOuterLen = geom.outerLen;
   currentInnerLen = geom.innerLen;
+  currentScreenW = screen.width;
+  currentScreenH = screen.height;
+
+  const labels = screenAxisLabels(axisName);
   canvasCaption.textContent =
-    `Slice ${axisName}=${index} of ${size[0]}x${size[1]}x${size[2]} (${geom.innerLen}x${geom.outerLen} cells)`;
+    `Slice ${axisName}=${index} of ${size[0]}x${size[1]}x${size[2]} `
+    + `(${screen.width}x${screen.height} cells, screen: ${labels.horizontal} horizontal, ${labels.vertical} vertical)`;
 
   drawBase();
   drawOverlay();
@@ -558,21 +694,21 @@ function refreshSlice() {
 
 function drawBase() {
   if (!currentBytes) return;
-  const w = currentInnerLen;
-  const h = currentOuterLen;
+  const w = currentScreenW;
+  const h = currentScreenH;
   offscreen.width = w;
   offscreen.height = h;
   const imageData = offCtx.createImageData(w, h);
   const data = imageData.data;
 
-  for (let outer = 0; outer < h; outer++) {
-    for (let inner = 0; inner < w; inner++) {
-      const cellIdx = outer * w + inner;
-      const byteIdx = cellIdx * 2;
+  for (let outer = 0; outer < currentOuterLen; outer++) {
+    for (let inner = 0; inner < currentInnerLen; inner++) {
+      const byteIdx = (outer * currentInnerLen + inner) * 2;
       const kind = currentBytes[byteIdx];
       const strength = currentBytes[byteIdx + 1];
       const [r, g, b, a] = colourForCell(kind, strength);
-      const p = cellIdx * 4;
+      const { col, row } = toScreen(currentAxisName, outer, inner, currentGeom);
+      const p = (row * w + col) * 4;
       data[p] = r;
       data[p + 1] = g;
       data[p + 2] = b;
@@ -591,7 +727,9 @@ function drawBase() {
 
 /** Grid lines and per-cell numbers, drawn only over the currently scrolled
  * viewport so cost stays proportional to what's on screen, not to the
- * circuit's total size (seven_segment's Y slice is 232x298 = 69k cells). */
+ * circuit's total size (seven_segment's Y slice is 232x298 = 69k cells).
+ * Iterates in screen space and looks up the underlying data cell via
+ * `toData` -- the inverse of the mapping `drawBase` used to place it. */
 function drawOverlay() {
   if (!currentBytes) return;
   const cellSize = Number(zoomSlider.value);
@@ -602,25 +740,25 @@ function drawOverlay() {
   const viewW = canvasWrap.clientWidth;
   const viewH = canvasWrap.clientHeight;
 
-  const innerStart = Math.max(0, Math.floor(scrollLeft / cellSize) - 1);
-  const innerEnd = Math.min(currentInnerLen, Math.ceil((scrollLeft + viewW) / cellSize) + 1);
-  const outerStart = Math.max(0, Math.floor(scrollTop / cellSize) - 1);
-  const outerEnd = Math.min(currentOuterLen, Math.ceil((scrollTop + viewH) / cellSize) + 1);
+  const colStart = Math.max(0, Math.floor(scrollLeft / cellSize) - 1);
+  const colEnd = Math.min(currentScreenW, Math.ceil((scrollLeft + viewW) / cellSize) + 1);
+  const rowStart = Math.max(0, Math.floor(scrollTop / cellSize) - 1);
+  const rowEnd = Math.min(currentScreenH, Math.ceil((scrollTop + viewH) / cellSize) + 1);
 
   ctx.strokeStyle = 'rgba(255,255,255,0.08)';
   ctx.lineWidth = 1;
-  for (let inner = innerStart; inner <= innerEnd; inner++) {
-    const x = inner * cellSize + 0.5;
+  for (let col = colStart; col <= colEnd; col++) {
+    const x = col * cellSize + 0.5;
     ctx.beginPath();
-    ctx.moveTo(x, outerStart * cellSize);
-    ctx.lineTo(x, outerEnd * cellSize);
+    ctx.moveTo(x, rowStart * cellSize);
+    ctx.lineTo(x, rowEnd * cellSize);
     ctx.stroke();
   }
-  for (let outer = outerStart; outer <= outerEnd; outer++) {
-    const y = outer * cellSize + 0.5;
+  for (let row = rowStart; row <= rowEnd; row++) {
+    const y = row * cellSize + 0.5;
     ctx.beginPath();
-    ctx.moveTo(innerStart * cellSize, y);
-    ctx.lineTo(innerEnd * cellSize, y);
+    ctx.moveTo(colStart * cellSize, y);
+    ctx.lineTo(colEnd * cellSize, y);
     ctx.stroke();
   }
 
@@ -629,8 +767,9 @@ function drawOverlay() {
   ctx.font = `${Math.floor(cellSize * 0.5)}px ui-monospace, monospace`;
   ctx.textAlign = 'center';
   ctx.textBaseline = 'middle';
-  for (let outer = outerStart; outer < outerEnd; outer++) {
-    for (let inner = innerStart; inner < innerEnd; inner++) {
+  for (let row = rowStart; row < rowEnd; row++) {
+    for (let col = colStart; col < colEnd; col++) {
+      const { outer, inner } = toData(currentAxisName, col, row, currentGeom);
       const byteIdx = (outer * currentInnerLen + inner) * 2;
       const kind = currentBytes[byteIdx];
       if (legendMap.get(kind)?.name === 'Air') continue;
@@ -640,8 +779,8 @@ function drawOverlay() {
       ctx.fillStyle = luminance > 140 ? '#000' : '#fff';
       ctx.fillText(
         String(strength),
-        inner * cellSize + cellSize / 2,
-        outer * cellSize + cellSize / 2,
+        col * cellSize + cellSize / 2,
+        row * cellSize + cellSize / 2,
       );
     }
   }
@@ -657,16 +796,17 @@ canvas.addEventListener('mousemove', (e) => {
   const rect = canvas.getBoundingClientRect();
   const px = e.clientX - rect.left;
   const py = e.clientY - rect.top;
-  const inner = Math.floor(px / cellSize);
-  const outer = Math.floor(py / cellSize);
-  if (inner < 0 || inner >= currentInnerLen || outer < 0 || outer >= currentOuterLen) {
+  const col = Math.floor(px / cellSize);
+  const row = Math.floor(py / cellSize);
+  if (col < 0 || col >= currentScreenW || row < 0 || row >= currentScreenH) {
     hoverReadout.textContent = ' ';
     return;
   }
+  const { outer, inner } = toData(currentAxisName, col, row, currentGeom);
   const byteIdx = (outer * currentInnerLen + inner) * 2;
   const kind = currentBytes[byteIdx];
   const strength = currentBytes[byteIdx + 1];
-  const [wx, wy, wz] = worldCoord(axisSelect.value, Number(indexSlider.value), outer, inner);
+  const [wx, wy, wz] = worldCoord(currentAxisName, Number(indexSlider.value), outer, inner);
   const name = legendMap.get(kind)?.name || `unknown(${kind})`;
   hoverReadout.textContent = `(${wx}, ${wy}, ${wz}) -- ${name}, strength ${strength}`;
 });
@@ -719,6 +859,7 @@ runBtn.addEventListener('click', () => {
   try {
     const ticks = session.run_until_stable();
     setStatus(`Settled after ${ticks} tick(s).`, false);
+    recordSettle(ticks);
   } catch (e) {
     setStatus(`run_until_stable failed: ${e}`, true);
   }
@@ -739,6 +880,7 @@ resetBtn.addEventListener('click', () => {
   buildLeverUI();
   setStatus('Reset.', false);
   updateTickCount();
+  resetSettleDisplay();
   outputSliceCache.clear();
   refreshSlice();
   refreshOutputs();

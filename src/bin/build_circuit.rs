@@ -40,9 +40,7 @@ fn available_circuits() -> Vec<CircuitInfo> {
         CircuitInfo {
             name: "and4",
             build: || and4::build_and4_netlist().0,
-            // and4 has one, unnamed output -- "y" is just a conventional
-            // single-output label, not a name the circuit itself carries.
-            output_labels: || vec![("y", and4::build_and4_netlist().1)],
+            output_labels: || vec![(and4::OUTPUT_NAME, and4::build_and4_netlist().1)],
         },
         CircuitInfo {
             name: "full_adder",
@@ -59,7 +57,9 @@ fn available_circuits() -> Vec<CircuitInfo> {
             name: "segment_a",
             build: || seven_segment::build_single_segment_netlist(0).0,
             // Segment index 0 is "a" in `seven_segment::SEGMENT_NAMES`.
-            output_labels: || vec![("a", seven_segment::build_single_segment_netlist(0).1)],
+            output_labels: || {
+                vec![(seven_segment::SEGMENT_NAMES[0], seven_segment::build_single_segment_netlist(0).1)]
+            },
         },
         CircuitInfo {
             name: "seven_segment",

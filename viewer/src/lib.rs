@@ -58,7 +58,7 @@ type CircuitBuilder = fn() -> (Netlist, Vec<(String, String)>);
 
 fn and4_adapter() -> (Netlist, Vec<(String, String)>) {
     let (netlist, output) = and4::build_and4_netlist();
-    (netlist, vec![(output.clone(), output)])
+    (netlist, vec![(and4::OUTPUT_NAME.to_string(), output)])
 }
 
 fn full_adder_adapter() -> (Netlist, Vec<(String, String)>) {
@@ -74,7 +74,7 @@ fn segment_a_adapter() -> (Netlist, Vec<(String, String)>) {
     // Segment index 0 is "a" in `seven_segment::SEGMENT_NAMES`, matching
     // `tests/reference_circuits.rs`'s `the_compiled_segment_a_matches_its_truth_table`.
     let (netlist, output) = seven_segment::build_single_segment_netlist(0);
-    (netlist, vec![("a".to_string(), output)])
+    (netlist, vec![(seven_segment::SEGMENT_NAMES[0].to_string(), output)])
 }
 
 fn seven_segment_adapter() -> (Netlist, Vec<(String, String)>) {

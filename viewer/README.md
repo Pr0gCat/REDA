@@ -55,7 +55,12 @@ A ready-made launch entry for this is checked in at `.claude/launch.json`
    world along it. **Zoom** controls pixels per cell; at 14px and above, each
    cell's signal strength is drawn as a number, and grid lines appear from 6px
    up. The grid is drawn to a canvas, not one DOM node per cell, so this stays
-   responsive even for `seven_segment`'s 232x298 = ~69k-cell slices.
+   responsive even for `seven_segment`'s 232x298 = ~69k-cell slices. Screen
+   axes follow the same convention as any Minecraft map/schematic tool: a Y
+   slice is a top-down view (X horizontal, Z vertical); an X or Z slice is a
+   side elevation (the other horizontal axis horizontal, Y vertical, sky at
+   the top). The caption above the canvas always names which world axis is
+   currently horizontal and which is vertical.
 3. Toggle **Inputs** on/off -- each toggle calls `set_lever` and then
    immediately `run_until_stable`, so the effect is visible without an extra
    click. **Outputs** shows the live value at each output pin (read via a
