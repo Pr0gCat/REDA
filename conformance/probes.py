@@ -14,12 +14,17 @@ two are compared by run.py, not here -- the point of this file is to keep
 
 Every probe here stays inside the shapes confirmed reliable during
 development (see harness.py): dust-to-dust chains, an active source
-directly touching dust, or a lever/redstone-block/dust source directly
-touching a lamp. Rules that could only be probed by crossing a second hop
-through a plain block -- lever `face` attachment validity, hopper/fence/
-composter placement-support, a torch's inversion observed as a *live*
-transition rather than a static snapshot -- are not in this file; they are
-called out by name in the run report as not testable this way, rather than
+directly touching dust or a lamp, and -- crossing a second hop through a
+plain block -- a dust cell mediating between a fresh or toggled source and
+a component (torch, another dust cell) that is itself attached to or
+touching that same plain block. What still does not work, even with dust
+mediation: a *second, merely adjacent* dust cell reading a plain block's
+power (only an attached component like a torch responds), and a
+comparator's side input from a genuinely strong source (dust itself is
+only ever a weak source, so it cannot stand in for a lever there). Those,
+plus placement-validity questions no RCON command can answer at all --
+lever `face` attachment, hopper/fence/composter placement-support -- are
+left out of this file and called out by name in the run report instead of
 silently producing a number that would not mean what it appears to mean.
 """
 
@@ -64,6 +69,15 @@ class ProbeResult:
     @property
     def all_match(self) -> bool:
         return all(c.matches for c in self.checks)
+
+    @property
+    def all_measurements_null(self) -> bool:
+        """True when this probe had measurements and every one of them
+        timed out (never observed the expected transition at all) -- a
+        strong signal that the underlying mechanism didn't fire, not just
+        that the timing differs. A probe with no measurements is not
+        flagged by this (it has nothing to time out)."""
+        return bool(self.measurements) and all(m.value_ticks is None for m in self.measurements)
 
 
 @dataclass
@@ -315,13 +329,11 @@ def dust_dies_at_zero(slot: Slot) -> ProbeResult:
     "torch_drives_adjacent_dust",
     "torch",
     "A lit torch drives directly-touching dust to full strength (15). "
-    "(Only the side direction could be probed: dust needs a full support "
-    "block directly beneath it, and a standing torch does not provide one, "
-    "so dust cannot physically rest in the one cell directly above a torch "
-    "-- confirmed live, the block silently fails to place there at all. "
-    "The stronger Up-direction claim, and the claim that a torch withholds "
-    "power from its own support, both need a second block to read through, "
-    "which was found to never propagate via `/setblock`; see harness.py.)",
+    "(Only the side direction could be probed this way: dust needs a full "
+    "support block directly beneath it, and a standing torch does not "
+    "provide one, so dust cannot physically rest in the one cell directly "
+    "above a torch -- confirmed live, the block silently fails to place "
+    "there at all.)",
     "src/redstone/rules/taxonomy.rs: power_emitted_toward, Torch arm",
 )
 def torch_drives_dust(slot: Slot) -> ProbeResult:
@@ -332,6 +344,132 @@ def torch_drives_dust(slot: Slot) -> ProbeResult:
     slot.set(1, 0, 0, DUST)  # beside the torch, same layer
     settle(1.5)
     r.add("dust beside a lit torch reads power=15", True, dust_power(slot, 1, 0, 0, 15))
+    return r
+
+
+def _dust_mediated_source(slot: Slot, feed_dx: int, feed_dz: int, target_dx: int, target_dz: int) -> None:
+    """Places a dust cell at (feed_dx,0,feed_dz), touching the target
+    position, then a redstone block one step further out as the actual
+    source -- placed *last*, so the change is a genuine transition. This is
+    the one shape confirmed to relay a signal through a second plain block
+    (see harness.py): the mediating dust cell must directly touch the plain
+    block the rule under test cares about."""
+    slot.floor(feed_dx, feed_dz)
+    slot.set(feed_dx, 0, feed_dz, DUST)
+    settle(1.0)
+    out_dx = feed_dx + (feed_dx - target_dx)
+    out_dz = feed_dz + (feed_dz - target_dz)
+    slot.set(out_dx, 0, out_dz, "minecraft:redstone_block")
+
+
+@probe(
+    "torch_inverts_when_its_support_is_genuinely_powered",
+    "torch",
+    "A torch inverts (goes dark) when the block it is attached to becomes "
+    "powered by something else, and relights when that power is removed. "
+    "This is the entire reason a torch can act as a NOT gate.",
+    "src/redstone/simulator/component.rs: torch_should_be_lit "
+    "(`block_power_at(world, support) == BlockPower::None`)",
+)
+def torch_inverts(slot: Slot) -> ProbeResult:
+    r = ProbeResult()
+    # Support B at (1,0,0); standing torch on top at (1,1,0); dust reads
+    # the torch directly at the torch's own height (side, confirmed
+    # reliable). A second dust cell touches B on a free face at B's own
+    # height and is fed by a redstone block placed last.
+    slot.floor(1, 0)
+    slot.set(1, 0, 0, STONE)  # B, the shared support
+    slot.set(1, 1, 0, "minecraft:redstone_torch[lit=true]")
+    slot.floor(2, 0, dy=0)  # floor directly under the reader dust, at (2,0,0)
+    slot.set(2, 1, 0, DUST)  # same height as the torch -- reads it directly
+    settle(1.0)
+    r.add("baseline: torch's own dust reads power=15 (support unpowered)", True, dust_power(slot, 2, 1, 0, 15))
+    _dust_mediated_source(slot, feed_dx=0, feed_dz=0, target_dx=1, target_dz=0)
+    settle(1.5)
+    r.add("feed dust (touching B) is powered", True, dust_power(slot, 0, 0, 0, 15))
+    r.add("torch inverts off once its support is genuinely powered", True, slot.check(1, 1, 0, "minecraft:redstone_torch[lit=false]"))
+    r.add("the torch's own dust reading drops to 0 once it is off", True, dust_power(slot, 2, 1, 0, 0))
+    return r
+
+
+@probe(
+    "torch_does_not_power_its_own_support",
+    "torch",
+    "A torch does not power the block it is attached to -- if it did, a "
+    "torch tower would feed itself and turn into a latch instead of an "
+    "inverter. Mirrored pair on the same shared block: with only the "
+    "standing torch touching it, a second (wall) torch on another face "
+    "must stay lit; with a genuine external source also touching it "
+    "(mediated through dust, the one shape confirmed to relay through a "
+    "plain block), the same wall torch must invert off -- proving the "
+    "sensor would have caught it if the rule were false. (A plain second "
+    "dust cell will not do as the sensor here: dust-mediation was found to "
+    "reach an *attached component* like a torch, but not a second, merely "
+    "adjacent piece of dust -- see harness.py.)",
+    "src/redstone/rules/taxonomy.rs: power_emitted_toward, Torch arm "
+    "(`Facing::Down => PowerOutput::INERT`)",
+)
+def torch_does_not_power_support(slot: Slot) -> ProbeResult:
+    r = ProbeResult()
+    # Negative control (dz=0): only the standing torch touches B.
+    slot.floor(1, 0)
+    slot.set(1, 0, 0, STONE)  # B
+    slot.set(1, 1, 0, "minecraft:redstone_torch[lit=true]")
+    slot.set(2, 0, 0, "minecraft:redstone_wall_torch[facing=east,lit=true]")  # attached to B (west of the torch)
+    settle(1.5)
+    r.add("negative control: the wall torch on B's other face stays lit (standing torch alone)", True, slot.check(2, 0, 0, "minecraft:redstone_wall_torch[lit=true]"))
+
+    # Positive control (dz=3): identical, plus a dust-mediated external
+    # source also touching B, proving the sensor inverts when B really is powered.
+    slot.floor(1, 3)
+    slot.set(1, 0, 3, STONE)
+    slot.set(1, 1, 3, "minecraft:redstone_torch[lit=true]")
+    slot.set(2, 0, 3, "minecraft:redstone_wall_torch[facing=east,lit=true]")
+    settle(1.0)
+    _dust_mediated_source(slot, feed_dx=0, feed_dz=3, target_dx=1, target_dz=3)
+    settle(1.5)
+    r.add("positive control: the wall torch inverts off once B is genuinely externally powered", True, slot.check(2, 0, 3, "minecraft:redstone_wall_torch[lit=false]"))
+    return r
+
+
+@probe(
+    "wall_torch_facing_names_the_attached_block",
+    "torch",
+    "A wall torch's `facing` records the direction its head points; it is "
+    "attached to the block on the *opposite* side (`facing.opposite()`). "
+    "Mirrored pair: a facing=east torch sandwiched between two stone "
+    "blocks (west and east) inverts when the west one is genuinely "
+    "powered, and stays lit when the east one is.",
+    "src/redstone/simulator/component.rs: torch_support_position, "
+    "WallTorch arm (`pos.offset(facing.opposite())`)",
+)
+def wall_torch_facing(slot: Slot) -> ProbeResult:
+    r = ProbeResult()
+    # Lane A (dz=0): power the west stone -- expected to invert the torch.
+    slot.floor(0, 0)
+    slot.floor(1, 0)
+    slot.floor(2, 0)
+    slot.set(0, 0, 0, STONE)  # west stone
+    slot.set(1, 0, 0, "minecraft:redstone_wall_torch[facing=east,lit=true]")
+    slot.set(2, 0, 0, STONE)  # east stone
+    settle(1.0)
+    _dust_mediated_source(slot, feed_dx=-1, feed_dz=0, target_dx=0, target_dz=0)
+    settle(1.5)
+    r.add("lane A: dust feed (touching the west stone) is powered", True, dust_power(slot, -1, 0, 0, 15))
+    r.add("lane A: torch inverts off when the WEST stone is powered", True, slot.check(1, 0, 0, "minecraft:redstone_wall_torch[lit=false]"))
+
+    # Lane B (dz=3): mirror -- power the east stone instead.
+    slot.floor(0, 3)
+    slot.floor(1, 3)
+    slot.floor(2, 3)
+    slot.set(0, 0, 3, STONE)
+    slot.set(1, 0, 3, "minecraft:redstone_wall_torch[facing=east,lit=true]")
+    slot.set(2, 0, 3, STONE)
+    settle(1.0)
+    _dust_mediated_source(slot, feed_dx=3, feed_dz=3, target_dx=2, target_dz=3)
+    settle(1.5)
+    r.add("lane B: dust feed (touching the east stone) is powered", True, dust_power(slot, 3, 0, 3, 15))
+    r.add("lane B: torch stays lit when the EAST stone is powered (not its attachment)", True, slot.check(1, 0, 3, "minecraft:redstone_wall_torch[lit=true]"))
     return r
 
 

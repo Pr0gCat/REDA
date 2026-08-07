@@ -20,35 +20,64 @@ real question and one that silently measures nothing.
    adding and removing forceload around the same coordinates was itself a
    source of flaky results during development.
 
-3. **`/setblock` does not simulate a block update the way real play does.**
-   This is the load-bearing discovery of the whole exercise, found by
-   spending an afternoon chasing why textbook circuits (lever -> block ->
-   torch, a torch under a lamp, a redstone block behind a comparator)
-   refused to respond no matter how long the probe waited:
+3. **`/setblock` does not simulate a block update the way real play does --
+   except through redstone dust, which is the one block type that does.**
+   This took two rounds to get right. The first round concluded "a signal
+   never crosses a second plain block, full stop" -- which is wrong, and
+   would have quietly thrown away the ability to test anything with a
+   torch, a comparator side, or a lever's real effect in a circuit. The
+   corrected, narrower rule, confirmed by directly building the failing
+   and succeeding shapes side by side and toggling the one variable at a
+   time:
 
-   - A **fresh placement** of an active source (a lever, a redstone block)
-     correctly notifies whatever is *directly touching it*: adjacent dust
-     recomputes, and a lamp directly touching it lights.
-   - A chain of **pure redstone dust** reliably propagates end to end --
-     dust has aggressive custom neighbour-notification logic that keeps
-     re-triggering its neighbours, confirmed with chains over a dozen
-     blocks long decaying exactly one strength per block.
-   - **Nothing else reliably crosses a second hop.** A plain block that is
-     itself freshly powered by one neighbour does not relay that power to a
-     *different* neighbour -- not to a torch, not to a lamp, not even to a
-     second piece of dust -- regardless of placement order, staged delays
-     (tested up to 10 real seconds), or which specific block sits in the
-     middle. This was tested exhaustively with lever, redstone block, torch
-     and dust all playing the "source touching the middle block" role, and
-     dust, lamp, wall torch and a second dust cell all playing the "reads
-     the middle block" role: every single combination failed identically.
+   - A **fresh placement or an in-place property change (a "toggle") of an
+     active source** (a lever, a redstone block) correctly notifies
+     whatever is *directly touching it*: adjacent dust recomputes, and a
+     lamp directly touching it lights. This part was never in question.
+   - A chain of **pure redstone dust** reliably propagates end to end, and
+     -- this is the part the first round missed -- **when redstone dust's
+     own power changes, it also reaches one hop past itself**: a torch, a
+     lamp, or another piece of dust that is attached to or touching a
+     *plain block that the changed dust is directly touching* updates
+     correctly. Confirmed directly: `redstone_block -> dust -> stone ->
+     wall_torch -> dust`, with the redstone block placed *last*, correctly
+     inverted the torch and dropped the far dust to 0; removing the
+     mediating dust cell (`redstone_block -> stone -> wall_torch` directly)
+     and repeating the identical experiment left the torch lit every time.
+     This matches redstone dust's real, well-documented reputation for
+     triggering far more block updates than a naive implementation would
+     need to -- that over-notification is exactly what makes this shape
+     work. It is *not* a property of levers, redstone blocks, repeaters or
+     comparators touching a plain block directly; only dust has it.
+   - **Toggling an existing block in place works exactly as well as a
+     fresh placement, provided a piece of dust still mediates the plain
+     block in between.** Tested directly: a lever already sitting at
+     `powered=false`, feeding dust that touches a shared stone a wall torch
+     is attached to, correctly inverted the torch when the *same lever*
+     was overwritten to `powered=true` -- no different from placing a new
+     redstone block there. The only thing toggling breaks is the case that
+     was already broken anyway: a lever directly touching the plain block,
+     with no dust in between, does not reach a torch on that block's other
+     face whether the lever is freshly placed or toggled. So the deciding
+     variable is dust mediation, not placement-versus-toggle.
+   - **Nothing that isn't dust reliably crosses a second hop.** A lever, a
+     redstone block, or a lit repeater/comparator's output, touching a
+     plain block directly with no dust in the path, does not get relayed
+     to a *different* neighbour of that block -- not a torch, not a lamp,
+     not a second piece of dust -- regardless of placement order, staged
+     delays (tested up to 10 real seconds), or toggle-versus-placement.
+     Getting a genuinely *strong* power source to reach a comparator's side
+     input this way remains out of reach for the same reason: the side
+     reads whether a neighbouring block is itself powered, and the only
+     source strong enough to matter (a lever) does not mediate through a
+     plain block the way dust does.
    - **Repeaters and comparators need a floor block under them before they
      will do anything at all**, and they need their *input to genuinely
-     transition* (built pointing at air, then a source is placed there as a
-     second step) rather than being placed already in their "final" state.
-     Skip either of those and the block sits there inert forever, no matter
-     the wait -- this is not a hop-count issue, it looks like the engine
-     never schedules the internal tick that would make the visible
+     change* (built pointing at air, then a source is placed or toggled in
+     as a second step) rather than being placed already in their "final"
+     state. Skip either of those and the block sits there inert forever,
+     no matter the wait -- this is not a hop-count issue, it looks like the
+     engine never schedules the internal tick that would make the visible
      `powered`/`lit` property real.
    - A **lamp is an unreliable sensor for a torch or a repeater's direct
      output** even at one hop (a lamp touching a lit torch, or touching a
@@ -58,16 +87,51 @@ real question and one that silently measures nothing.
      own `power` property wherever the rule under test allows it, and only
      uses a lamp when the source driving it is a lever, a redstone block,
      or dust directly touching it (all three confirmed reliable).
+   - A newly-generated chunk region needs a few real seconds to settle
+     after `/forceload add` before it reliably ticks at all -- a basic,
+     always-reliable 1-hop test (redstone block directly touching dust)
+     was seen to fail immediately after forceloading a brand new area and
+     then pass a few seconds later with nothing else changed. This suite
+     forceloads its whole region once up front and gives it a settle pause
+     before the first probe runs, rather than per-probe.
+
+5. **On 26.2, none of the above dust-mediation or genuine-transition
+   techniques were reliable for repeaters, comparators, or a torch
+   responding to a dust-mediated support change** -- even though every one
+   of them was 100% reproducible across dozens of trials on 1.20.1. A
+   repeater built pointing at air, then given a real redstone block at its
+   input, never transitioned to `powered=true` on 26.2 in any trial (tested
+   up to 8 real seconds, and via a lever toggle, a remove-then-replace, and
+   dust mediation -- all failed identically); forcing `powered=true`
+   directly, by contrast, *does* produce a real, dust-verifiable output on
+   26.2, which is itself the reverse of 1.20.1 (where forcing the state
+   directly was the one thing that reliably did *not* work; see point 3).
+   The dust-mediated torch probes were flakier still: identical code
+   produced a passing result in one run and a failing one in the next,
+   across otherwise-identical trials, whereas the same probes never once
+   flipped outcome across many 1.20.1 runs. Because of this, every probe in
+   `probes.py` that depends on a repeater/comparator genuinely activating,
+   or a torch reacting to a dust-mediated support change, is reported as
+   **inconclusive on 26.2** rather than a confirmed match or divergence --
+   the evidence does not distinguish "the rule changed" from "RCON-driven
+   world edits reach 26.2's tick scheduler less reliably than 1.20.1's".
+   26.2 does support `/tick freeze` and `/tick step` (confirmed live,
+   `/tick query` answers normally) which 1.20.1 does not -- a follow-up
+   attempt at these specific probes should almost certainly drive the
+   world with single stepped ticks instead of wall-clock sleeps, rather
+   than trying to out-wait whatever is making this unreliable.
 
    Every probe in `probes.py` is built to stay inside these confirmed-
-   reliable shapes. Where a rule from the "at minimum" list in the task
-   could only be tested by crossing a second hop through a plain block --
-   whether a lever's declared support survives an incorrect placement,
-   whether a fence/hopper/composter's support type is enforced, whether a
-   torch inverting can be *observed as a live transition* rather than a
-   static snapshot -- it is left out of the executable suite and called out
-   explicitly in the run report instead of silently producing a number that
-   would not mean what it appears to mean.
+   reliable shapes -- routing any plain-block hop through a dust cell where
+   the rule allows it. Where a rule from the "at minimum" list could still
+   only be tested by crossing a second hop through a plain block with no
+   dust available to mediate it -- whether a lever's declared support
+   survives an incorrect placement (a placement-validity question, not a
+   power-propagation one; see point 4), whether a fence/hopper/composter's
+   support type is enforced, or a comparator's side input from a genuinely
+   strong (non-dust) source -- it is left out of the executable suite and
+   called out explicitly in the run report instead of silently producing a
+   number that would not mean what it appears to mean.
 
 4. **`/setblock` never enforces placement-support validity (`canSurvive`).**
    A lever with zero support on any side, placed via `/setblock`, does not

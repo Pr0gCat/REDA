@@ -1,5 +1,5 @@
 {
-  "label": "1.20.1",
+  "label": "26.2",
   "probes": [
     {
       "name": "dust_same_layer_connects",
@@ -22,7 +22,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "dust_climbs_when_open",
@@ -45,7 +46,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "dust_climb_blocked_by_conductive_above_source",
@@ -61,7 +63,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "dust_climb_blocked_by_nonconductive_step",
@@ -84,7 +87,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "dust_descends_when_open",
@@ -107,7 +111,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "dust_descend_blocked_by_conductive_neighbour",
@@ -130,7 +135,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "dust_strength_starts_at_15",
@@ -146,7 +152,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "dust_strength_decays_by_one_per_block",
@@ -183,7 +190,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "dust_dies_at_zero",
@@ -206,7 +214,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "torch_drives_adjacent_dust",
@@ -222,7 +231,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "torch_inverts_when_its_support_is_genuinely_powered",
@@ -247,19 +257,20 @@
         {
           "question": "torch inverts off once its support is genuinely powered",
           "expected": true,
-          "actual": true,
-          "matches": true,
+          "actual": false,
+          "matches": false,
           "note": ""
         },
         {
           "question": "the torch's own dust reading drops to 0 once it is off",
           "expected": true,
-          "actual": true,
-          "matches": true,
+          "actual": false,
+          "matches": false,
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "torch_does_not_power_its_own_support",
@@ -277,12 +288,13 @@
         {
           "question": "positive control: the wall torch inverts off once B is genuinely externally powered",
           "expected": true,
-          "actual": true,
-          "matches": true,
+          "actual": false,
+          "matches": false,
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "wall_torch_facing_names_the_attached_block",
@@ -300,8 +312,8 @@
         {
           "question": "lane A: torch inverts off when the WEST stone is powered",
           "expected": true,
-          "actual": true,
-          "matches": true,
+          "actual": false,
+          "matches": false,
           "note": ""
         },
         {
@@ -319,7 +331,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "repeater_facing_names_the_input_side",
@@ -337,12 +350,13 @@
         {
           "question": "facing=west (input on the source side) lights the output",
           "expected": true,
-          "actual": true,
-          "matches": true,
+          "actual": false,
+          "matches": false,
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "repeater_delay_is_two_to_eight_game_ticks",
@@ -354,24 +368,25 @@
         {
           "question": "delay=1: measured time from input transition to output reaching full strength",
           "note": "expected ~2 game ticks (100ms)",
-          "value_ticks": 1.9
+          "value_ticks": null
         },
         {
           "question": "delay=2: measured time from input transition to output reaching full strength",
           "note": "expected ~4 game ticks (200ms)",
-          "value_ticks": 4.4
+          "value_ticks": null
         },
         {
           "question": "delay=3: measured time from input transition to output reaching full strength",
           "note": "expected ~6 game ticks (300ms)",
-          "value_ticks": 5.6
+          "value_ticks": null
         },
         {
           "question": "delay=4: measured time from input transition to output reaching full strength",
           "note": "expected ~8 game ticks (400ms)",
-          "value_ticks": 8.1
+          "value_ticks": null
         }
-      ]
+      ],
+      "never_transitioned": true
     },
     {
       "name": "repeater_locking",
@@ -382,15 +397,15 @@
         {
           "question": "side repeater S is lit (feeding into M's side)",
           "expected": true,
-          "actual": true,
-          "matches": true,
+          "actual": false,
+          "matches": false,
           "note": ""
         },
         {
           "question": "main repeater M reports locked=true",
           "expected": true,
-          "actual": true,
-          "matches": true,
+          "actual": false,
+          "matches": false,
           "note": ""
         },
         {
@@ -410,12 +425,13 @@
         {
           "question": "unlocked control: M's output lights normally",
           "expected": true,
-          "actual": true,
-          "matches": true,
+          "actual": false,
+          "matches": false,
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "comparator_facing_names_the_input_side",
@@ -433,12 +449,13 @@
         {
           "question": "facing=west (input on the source side) lights the output",
           "expected": true,
-          "actual": true,
-          "matches": true,
+          "actual": false,
+          "matches": false,
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "comparator_compare_mode_passes_rear_signal",
@@ -456,12 +473,13 @@
         {
           "question": "comparator output dust reads power=9 (passthrough)",
           "expected": true,
-          "actual": true,
-          "matches": true,
+          "actual": false,
+          "matches": false,
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "comparator_subtract_mode_with_unpowered_side",
@@ -472,12 +490,13 @@
         {
           "question": "output dust reads power=9 (9 - 0 side = 9)",
           "expected": true,
-          "actual": true,
-          "matches": true,
+          "actual": false,
+          "matches": false,
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "lamp_lights_from_weak_power",
@@ -500,7 +519,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "lamp_on_off_delay",
@@ -517,9 +537,10 @@
         {
           "question": "delay from power removed to lamp dark (\"off\" delay)",
           "note": "our code and vanilla both expect ~2 ticks",
-          "value_ticks": 4.1
+          "value_ticks": null
         }
-      ]
+      ],
+      "never_transitioned": false
     },
     {
       "name": "conducts_stone",
@@ -542,7 +563,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "conducts_glass",
@@ -565,7 +587,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "conducts_soul_sand",
@@ -588,7 +611,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "conducts_honey_block",
@@ -611,7 +635,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "conducts_target",
@@ -634,7 +659,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     }
   ]
 }

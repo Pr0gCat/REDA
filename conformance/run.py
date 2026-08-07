@@ -65,7 +65,12 @@ def main() -> int:
     print("Connected. Forceloading the probe region...")
     forceload_region(client, len(probes))
     clear_region(client, len(probes))
-    settle(1.0)
+    # A freshly-generated chunk region needs a few real seconds before it
+    # reliably ticks at all -- confirmed directly: a basic, always-reliable
+    # 1-hop test (redstone block touching dust) failed immediately after
+    # forceloading a brand new area and passed a few seconds later with
+    # nothing else changed. See harness.py's module docstring.
+    settle(4.0)
 
     report = {"label": args.label, "probes": []}
 
@@ -77,7 +82,12 @@ def main() -> int:
             settle(0.5)
             try:
                 result = p.run(slot)
-                status = "OK" if result.all_match else "DISAGREES"
+                if result.all_measurements_null:
+                    status = "NEVER TRANSITIONED (all measurements timed out)"
+                elif result.all_match:
+                    status = "OK"
+                else:
+                    status = "DISAGREES"
             except Exception as exc:  # noqa: BLE001
                 print(f"ERROR: {exc}")
                 report["probes"].append(
@@ -111,6 +121,7 @@ def main() -> int:
                         {"question": m.question, "note": m.note, "value_ticks": m.value_ticks}
                         for m in result.measurements
                     ],
+                    "never_transitioned": result.all_measurements_null,
                 }
             )
     finally:
