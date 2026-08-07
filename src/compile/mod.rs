@@ -26,7 +26,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
 
-use crate::redstone::simulator::position::{Position, HORIZONTAL};
+use crate::redstone::simulator::position::Position;
+use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
 use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use crate::redstone::world::storage::World;
 
@@ -322,18 +323,43 @@ const GATE_HALF_WIDTH: i32 = 4;
 
 /// Z distance between two neighbouring tracks of the same channel.
 ///
-/// Four would be just enough for `move_between_layers`' four-block ramp, but
-/// not *safely*: the last step of a descending ramp leaves a **strongly
-/// powered** support block one layer under the track plane, and a strongly
-/// powered block drives every redstone dust next to it. At spacing 4 that
-/// block would sit directly beneath the next track and inject this net's
-/// signal into it. Five puts the ramp's landing on a Z row that can never hold
-/// a track.
+/// This was originally chosen because the old repeater ramp's last
+/// descending step left a **strongly powered** support block one layer under
+/// the track plane -- a strongly powered block drives every redstone dust
+/// next to it in all six directions, so at spacing 4 that block would sit
+/// directly beneath the next track and inject this net's signal into it.
+/// Five put the ramp's landing on a Z row that could never hold a track.
+///
+/// The dust staircase that replaced that ramp (`move_between_layers`) has no
+/// such block: every solid cell it places is a stair's support, only ever
+/// *weakly* powered by the dust sitting on it (`dust_only_weakly_powers_the_
+/// block_beneath_it`), and weak power cannot re-drive a neighbour. So the
+/// original justification for 5 no longer applies -- but retuning it is a
+/// track-spacing change, a size win, not the delay win this module exists to
+/// produce right now (see `docs/superpowers/plans/2026-08-07-dust-staircase-
+/// ramps.md`, "Out of scope"). Left at 5 deliberately.
 const TRACK_SPACING: i32 = 5;
 
-/// How far a ramp travels horizontally while changing layer:
-/// `move_between_layers` spends two blocks per Y level.
-const RAMP_LENGTH: i32 = 2 * (TRACK_Y - GATE_Y);
+/// How far a ramp travels horizontally while changing layer, *and* how much
+/// signal strength it spends doing so -- the two are the same number here,
+/// not a coincidence pasted together.
+///
+/// The old ramp was built from repeaters and spent two blocks of horizontal
+/// travel per Y level (a repeater, then the support block it drove). A dust
+/// staircase instead climbs or descends via `redstone::simulator::
+/// connectivity::dust_connections`' diagonal rule, which connects one dust
+/// cell straight to the next diagonal one -- exactly one block of horizontal
+/// travel per Y level, not two. So the footprint halves to `TRACK_Y - GATE_Y`.
+///
+/// That diagonal connection is still a single hop of `dust_connections`, and
+/// `recompute_dust_strengths`'s BFS spends exactly one strength per hop it
+/// walks, same-level or diagonal, without distinguishing them (see its
+/// `HORIZONTAL` loop, which is the only place hops are counted). So a ramp
+/// that changes `RAMP_LENGTH` levels also spends exactly `RAMP_LENGTH`
+/// signal strength -- one block of horizontal footprint, one point of
+/// strength, per level, always in lockstep. `MAX_DUST_RUN`'s comment below
+/// derives what that costs the surrounding dust runs.
+const RAMP_LENGTH: i32 = TRACK_Y - GATE_Y;
 
 /// Minimum X gap between two nets that share one track.
 const TRACK_SHARE_GAP: i32 = 4;
@@ -348,12 +374,35 @@ const COLUMN_CLEARANCE: i32 = 2;
 /// no coordinate can go negative on the X axis.
 const ORIGIN_X: i32 = 8;
 
-/// `lay_dust_run` 的 `start` 永遠是一格已經是滿強度 15 的紅石粉（拉桿／
-/// 火把旁邊的那格，或是剛被中繼器重新充能過的轉角），不是主動元件本身。
-/// 粉接粉每多一格就再衰減 1，所以從 `start` 算起，下一格已經是 14，
-/// 第 14 格是 1（還活著），第 15 格就是 0（死透，
-/// `signal_strength_falls_off_over_distance_in_a_real_circuit` 驗證過這個
-/// 邊界）。所以最多再鋪 14 格紅石粉，第 15 格一定換成中繼器。
+/// `lay_dust_run`'s `start` (or a track's `source_x`) is not always a fresh
+/// signal source anymore -- it can also be a ramp's landing, which arrives
+/// carrying less than the full 15. `MAX_SIGNAL_STRENGTH - incoming_strength`
+/// is how much of that budget is already spent before this run's first cell;
+/// counting from there (instead of from zero) is what keeps a long run whose
+/// *input* is already weakened from silently running the wire dead before a
+/// repeater would otherwise have been due -- see `plan_straight_run` and
+/// `plan_track_run`, which both start their counters this way.
+///
+/// A cell one hop past an active source (lever, torch-adjacent dust, or a
+/// repeater's output) is at strength 14; each further hop of flat dust costs
+/// exactly 1 more (`recompute_dust_strengths`); the 14th hop is still alive
+/// at strength 1, and the 15th would be 0 -- dead
+/// (`signal_strength_falls_off_over_distance_in_a_real_circuit` verifies
+/// exactly this boundary). So at most 14 dust cells may follow a fresh
+/// source before a repeater is mandatory.
+///
+/// A run that empties into a ramp cannot spend the full 14, though: the ramp
+/// itself is `RAMP_LENGTH` more hops (see that constant's comment) that has
+/// to survive on whatever strength is left when the flat run hands off to
+/// it, and a ramp cannot absorb a repeater partway up -- a repeater cannot
+/// change Y. So such a run's last cell must still be carrying at least
+/// `RAMP_LENGTH + 1` (enough to survive `RAMP_LENGTH` more hops and land on
+/// a live 1, not a dead 0), which means it may only spend
+/// `MAX_DUST_RUN - RAMP_LENGTH` cells per refresh cycle, not the full budget
+/// -- `plan_straight_run` and `plan_track_run` take that shortfall as their
+/// `reserve` parameter. Every dust run in this router either starts or ends
+/// at a ramp (frequently both), so this reservation, not the bare constant,
+/// is what most calls actually use.
 const MAX_DUST_RUN: i32 = 14;
 
 /// 編譯過程的錯誤。
@@ -405,23 +454,80 @@ fn direction_from(start: Position, end: Position) -> Facing {
     }
 }
 
-/// 沿著 `direction` 鋪設紅石粉，從 `start`（不含，已經是主動元件，power
-/// 15）鋪到 `stop_before`（不含），每 `MAX_DUST_RUN` 格插一個中繼器補強度。
-/// `start` 到 `stop_before` 之間如果沒有任何格子，什麼都不做。
-fn lay_dust_run(world: &mut World, start: Position, direction: Facing, stop_before: Position) {
-    let mut counter = 0i32;
+/// Number of cells strictly between `start` and `stop_before` along
+/// `direction` -- the same count `lay_dust_run` would place blocks into, if
+/// it were called with these same three arguments. Pure position arithmetic,
+/// so the "Strength planning" pass in `compile` can use it to size a run
+/// before any block for it exists.
+fn straight_run_length(start: Position, direction: Facing, stop_before: Position) -> i32 {
+    let mut len = 0;
     let mut pos = start.offset(direction);
     while pos != stop_before {
+        len += 1;
+        pos = pos.offset(direction);
+    }
+    len
+}
+
+/// Decide where repeaters must land along a straight run of `len` cells, and
+/// report the strength of the last one -- what continues past it, whether
+/// that is another run or a ramp. Pure (no `World`), so it can be replayed
+/// during strength planning to learn a value before any block for it exists;
+/// `lay_dust_run` below calls it to decide what to write.
+///
+/// `incoming_strength` is the strength of the cell immediately before this
+/// run (the last cell of whatever preceded it: an active component, or
+/// another run's own last cell). `reserve` is how much strength must remain
+/// unspent in the last cell for whatever immediately follows to survive --
+/// see `MAX_DUST_RUN`'s comment for the derivation of `RAMP_LENGTH` as that
+/// reserve for a run that empties into a ramp, and 0 for one that empties
+/// into a mandatory terminating repeater instead (which cannot die no matter
+/// what strength reaches it, as long as it is nonzero).
+fn plan_straight_run(len: i32, incoming_strength: u8, reserve: i32) -> (Vec<bool>, u8) {
+    debug_assert!(incoming_strength > 0, "a run cannot start from an already-dead signal");
+    let threshold = (MAX_DUST_RUN - reserve) as i64;
+    let mut is_repeater = vec![false; len.max(0) as usize];
+    let mut last_refresh: i64 = incoming_strength as i64 - (MAX_SIGNAL_STRENGTH as i64 + 1);
+    let mut strength = incoming_strength;
+    for (i, slot) in is_repeater.iter_mut().enumerate() {
+        if (i as i64) - last_refresh > threshold {
+            *slot = true;
+            last_refresh = i as i64;
+            strength = MAX_SIGNAL_STRENGTH;
+        } else {
+            strength -= 1;
+        }
+    }
+    (is_repeater, strength)
+}
+
+/// Lay dust from `start` (exclusive, already lit at `incoming_strength`)
+/// along `direction` to `stop_before` (exclusive), inserting a repeater
+/// wherever `plan_straight_run` decides the budget is spent. Returns the
+/// strength of the last cell placed (or `incoming_strength` unchanged if
+/// `start` and `stop_before` turn out to be adjacent -- nothing to lay).
+fn lay_dust_run(
+    world: &mut World,
+    start: Position,
+    direction: Facing,
+    stop_before: Position,
+    incoming_strength: u8,
+    reserve: i32,
+) -> u8 {
+    let len = straight_run_length(start, direction, stop_before);
+    let (is_repeater, ending_strength) = plan_straight_run(len, incoming_strength, reserve);
+
+    let mut pos = start.offset(direction);
+    for &place_repeater in &is_repeater {
         ensure_floor(world, pos);
-        if counter >= MAX_DUST_RUN {
+        if place_repeater {
             world.set(pos.x, pos.y, pos.z, repeater(direction));
-            counter = 0;
         } else {
             world.set(pos.x, pos.y, pos.z, dust());
-            counter += 1;
         }
         pos = pos.offset(direction);
     }
+    ending_strength
 }
 
 /// 鋪一段路線，終點是一個**轉角**：下一段線要換一個軸繼續走，所以這一格
@@ -432,11 +538,15 @@ fn lay_dust_run(world: &mut World, start: Position, direction: Facing, stop_befo
 /// 前面累計了幾格 —— 中繼器正前方的粉一定是新鮮的滿強度，這是它存在的
 /// 意義。呼叫端保證 `start` 到 `corner` 至少有 2 格距離，所以「轉角前一
 /// 格」不會撞到 `start` 自己。
-fn lay_segment_to_corner(world: &mut World, start: Position, corner: Position) {
+///
+/// This segment always ends in that mandatory repeater, so it can never die
+/// no matter how weak `incoming_strength` is (as long as it is nonzero) --
+/// `reserve` is 0.
+fn lay_segment_to_corner(world: &mut World, start: Position, corner: Position, incoming_strength: u8) {
     let direction = direction_from(start, corner);
     let refresh_point = corner.offset(direction.opposite());
 
-    lay_dust_run(world, start, direction, refresh_point);
+    lay_dust_run(world, start, direction, refresh_point, incoming_strength, 0);
 
     ensure_floor(world, refresh_point);
     world.set(refresh_point.x, refresh_point.y, refresh_point.z, repeater(direction));
@@ -449,80 +559,202 @@ fn lay_segment_to_corner(world: &mut World, start: Position, corner: Position) {
 /// 面朝這一段前進的方向 —— 而這個方向剛好就是「面朝支撐塊」的方向，因為
 /// 插座本來就在支撐塊的正對外側。這是唯一能強充能支撐塊的方法：紅石粉
 /// 水平方向不會充能方塊。
-fn lay_segment_to_socket(world: &mut World, start: Position, socket: Position) {
+///
+/// Same reasoning as `lay_segment_to_corner`: the mandatory repeater at
+/// `socket` means this segment can never die, so `reserve` is 0.
+fn lay_segment_to_socket(world: &mut World, start: Position, socket: Position, incoming_strength: u8) {
     let direction = direction_from(start, socket);
-    lay_dust_run(world, start, direction, socket);
+    lay_dust_run(world, start, direction, socket, incoming_strength, 0);
     ensure_floor(world, socket);
     world.set(socket.x, socket.y, socket.z, repeater(direction));
 }
 
-/// 把 `pos` 四個水平方向的鄰居，凡是目前還空氣的都填成石頭。
+/// The two horizontal directions perpendicular to `direction` -- the only
+/// two `seal_cross_talk` may ever seal.
+fn side_directions(direction: Facing) -> [Facing; 2] {
+    match direction {
+        Facing::North | Facing::South => [Facing::East, Facing::West],
+        Facing::East | Facing::West => [Facing::North, Facing::South],
+        Facing::Up | Facing::Down => unreachable!("a ramp only ever travels horizontally"),
+    }
+}
+
+/// Seal `pos`'s two neighbours perpendicular to `direction` with stone,
+/// wherever they are still air.
 ///
-/// 這是為了擋住紅石粉「往下爬」的對角規則：`dust_connections` 判斷能不能
-/// 往下爬，只看水平鄰居**不是導體**（例如空氣）且鄰居正下方是紅石粉 ——
-/// 完全不管那格紅石粉是哪個訊號、哪一段線路放的。`move_between_layers`
-/// 疊出來的紅石粉如果水平鄰居剛好是空氣、空氣下面剛好是**另一條完全不
-/// 相干的線**的紅石粉，兩條線就會透過這個對角線悄悄短接在一起 —— 這正是
-/// 這個專案第一次踩到的「意外相鄰」：某一閘的輸入通道爬升／下降時，會
-/// 從高處對角碰到同一閘輸出插頭那一整排紅石粉。把水平鄰居填實心，這條
-/// 對角規則的前提（鄰居不是導體）就不成立，自然斷開。
-fn seal_horizontal_neighbours(world: &mut World, pos: Position) {
-    for direction in HORIZONTAL {
-        let neighbour = pos.offset(direction);
+/// This is `move_between_layers`'s cross-talk guard, and it is deliberately
+/// narrower than the repeater ramp's old `seal_horizontal_neighbours` (which
+/// sealed all four horizontal neighbours). That was safe there because the
+/// old ramp never relied on `dust_connections`' climb/descend rule at all --
+/// a repeater and a support block drove the landing dust directly, so every
+/// neighbour was free to fill in. A dust staircase *is* built from that
+/// diagonal rule (see `move_between_layers`), and the rule requires one
+/// specific neighbour -- the one along the direction of travel -- to stay
+/// exactly as the climb/descend step leaves it; sealing it would sever the
+/// very connection the staircase exists to make. Only the two side
+/// neighbours are ever free of that constraint.
+fn seal_cross_talk(world: &mut World, pos: Position, direction: Facing) {
+    for side in side_directions(direction) {
+        let neighbour = pos.offset(side);
         if world.get(neighbour.x, neighbour.y, neighbour.z).kind == BlockKind::Air {
             world.set(neighbour.x, neighbour.y, neighbour.z, stone());
         }
     }
 }
 
-/// 把訊號從 `entry`（一格滿強度 15 的紅石粉）沿著 `direction` 搬到高度
-/// `target_y`，回傳落地那一格紅石粉的座標。
+/// Move a signal from `entry` (already lit, at whatever strength the caller
+/// arranged for) along `direction` to height `target_y`, one dust staircase
+/// step per Y level, and return the position of the final landing dust.
 ///
-/// 每差一層就重複一次「中繼器 + 支撐塊 + 支撐塊上（或下）一層的紅石粉」
-/// ——這跟 `place_nor_gate` 的輸入插座接法（外部主動元件強充能支撐塊，
-/// 支撐塊再驅動疊在它上面的紅石粉）是同一招；`recompute_dust_strengths`
-/// 判斷「強充能的方塊能不能驅動紅石粉」時，六個方向（含上下）一視同仁，
-/// 所以疊在支撐塊**下面**一樣有效，能用同一招往下搬。
+/// Climbing and descending are *not* mirror images of each other: they are
+/// governed by two different, deliberately asymmetric halves of
+/// `redstone::simulator::connectivity::dust_connections` (see that module's
+/// doc comment for why).
 ///
-/// 每爬一層會沿 `direction` 前進兩格（中繼器一格、支撐塊一格），呼叫端
-/// 得自己預留這段水平距離 —— 也就是 `RAMP_LENGTH`。每落地一次都會把新
-/// 紅石粉的水平鄰居補實心（見 `seal_horizontal_neighbours`），避免它在
-/// 半空中對角碰到別條線。
+/// - **Climb** requires the horizontal neighbour to be a conductor (the
+///   "step" the next dust sits on) and requires the current cell's own space
+///   above to stay open. So ascending places a solid riser one block ahead
+///   at the current height, then lands new dust directly on top of it, one
+///   level higher; `current`'s own space above is simply never written, so
+///   it stays open air as the rule requires.
+/// - **Descend** requires the opposite: the horizontal neighbour must stay
+///   open, and the wire it connects to sits one level *below* that
+///   neighbour. So descending lands new dust one block ahead and one level
+///   down, with its own floor for support; the cell directly above that
+///   landing (at the current cell's own height) is never written, so it
+///   stays open.
+///
+/// Either direction spends exactly one signal strength per level walked
+/// (`RAMP_LENGTH`'s comment derives why) and places no repeater -- the
+/// caller is responsible for having reserved that strength in whatever run
+/// feeds this ramp (`MAX_DUST_RUN`'s comment).
 fn move_between_layers(
     world: &mut World,
     entry: Position,
     direction: Facing,
     target_y: i32,
 ) -> Position {
-    let y_step = (target_y - entry.y).signum();
     let mut current = entry;
-    while current.y != target_y {
-        let repeater_pos = current.offset(direction);
-        ensure_floor(world, repeater_pos);
-        world.set(repeater_pos.x, repeater_pos.y, repeater_pos.z, repeater(direction));
-
-        let support_pos = repeater_pos.offset(direction);
-        world.set(support_pos.x, support_pos.y, support_pos.z, stone());
-
-        let landing = Position::new(support_pos.x, support_pos.y + y_step, support_pos.z);
-        ensure_floor(world, landing);
-        world.set(landing.x, landing.y, landing.z, dust());
-        seal_horizontal_neighbours(world, landing);
-
-        current = landing;
+    if target_y >= current.y {
+        while current.y != target_y {
+            let riser = current.offset(direction);
+            world.set(riser.x, riser.y, riser.z, stone());
+            let landing = riser.up();
+            world.set(landing.x, landing.y, landing.z, dust());
+            seal_cross_talk(world, landing, direction);
+            current = landing;
+        }
+    } else {
+        while current.y != target_y {
+            let stepped = current.offset(direction);
+            let landing = Position::new(stepped.x, stepped.y - 1, stepped.z);
+            ensure_floor(world, landing);
+            world.set(landing.x, landing.y, landing.z, dust());
+            seal_cross_talk(world, landing, direction);
+            current = landing;
+        }
     }
     current
 }
 
-/// Lay one east-west track: dust from `source_x` out to `min_x` and to
-/// `max_x`, with a repeater inserted before the signal can run out.
+/// Same decision as `plan_straight_run`, but for one direction of a track: a
+/// run that must also never land a repeater on one of `taps`' cells -- a
+/// repeater only reads what is directly behind it, so a wire that turns on
+/// top of one is not connected at all. When the budget would force a
+/// repeater onto a tap, it goes on the last non-tap cell before it instead;
+/// the run after it is then shorter than the budget, never longer. Pure,
+/// like `plan_straight_run`, so it can be replayed during strength planning
+/// without a `World`.
+fn plan_track_run(
+    cells: &[i32],
+    incoming_strength: u8,
+    reserve: i32,
+    taps: &BTreeSet<i32>,
+) -> (Vec<bool>, Vec<u8>) {
+    debug_assert!(incoming_strength > 0, "a run cannot start from an already-dead signal");
+    let threshold = (MAX_DUST_RUN - reserve) as i64;
+
+    // Pick the repeater cells before writing anything: where one repeater
+    // ends up decides how much budget the cells after it have.
+    let mut is_repeater = vec![false; cells.len()];
+    let mut last_refresh: i64 = incoming_strength as i64 - (MAX_SIGNAL_STRENGTH as i64 + 1);
+    let mut i = 0usize;
+    while i < cells.len() {
+        if (i as i64) - last_refresh <= threshold {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while (j as i64) > last_refresh + 1 && taps.contains(&cells[j]) {
+            j -= 1;
+        }
+        debug_assert!(
+            !taps.contains(&cells[j]),
+            "taps must never be dense enough to leave no room for a repeater"
+        );
+        is_repeater[j] = true;
+        last_refresh = j as i64;
+        i = j + 1;
+    }
+
+    let mut strengths = vec![0u8; cells.len()];
+    let mut strength = incoming_strength;
+    for (k, &placed_repeater) in is_repeater.iter().enumerate() {
+        if placed_repeater {
+            strength = MAX_SIGNAL_STRENGTH;
+        } else {
+            strength -= 1;
+        }
+        strengths[k] = strength;
+    }
+    (is_repeater, strengths)
+}
+
+/// The strength a track would deliver at each of `taps`, if laid with
+/// `incoming_strength` arriving at `source_x` -- without touching a `World`.
 ///
-/// `taps` are the X positions where a ramp joins or leaves the track. A
-/// repeater on a tap silently cuts the route -- a repeater only reads what is
-/// directly behind it and only drives what is directly in front, so a wire
-/// that turns on top of one is not connected at all. When the 15-block budget
-/// would force a repeater onto a tap, it goes on the last non-tap cell before
-/// it instead; the run after it is then shorter than the budget, never longer.
+/// This exists for the "Strength planning" pass in `compile`: a descending
+/// ramp needs to know what the track hands it before it can tell the column
+/// after it what it is starting from, but the track itself is not actually
+/// written until the later Tracks pass (world-building order needs Ramps,
+/// then Columns, then Tracks -- see the comment where `compile` calls them).
+/// `lay_track` runs this identical pure decision again when it actually
+/// writes the track, so the two can never silently disagree.
+fn track_exit_strengths(
+    source_x: i32,
+    min_x: i32,
+    max_x: i32,
+    taps: &BTreeSet<i32>,
+    incoming_strength: u8,
+) -> BTreeMap<i32, u8> {
+    let mut exit_strength = BTreeMap::new();
+    for (end, step) in [(min_x, -1i32), (max_x, 1i32)] {
+        let length = (end - source_x) * step;
+        if length <= 0 {
+            continue;
+        }
+        let cells: Vec<i32> = (1..=length).map(|k| source_x + k * step).collect();
+        let (_is_repeater, strengths) = plan_track_run(&cells, incoming_strength, RAMP_LENGTH, taps);
+        for (k, &x) in cells.iter().enumerate() {
+            if taps.contains(&x) {
+                exit_strength.insert(x, strengths[k]);
+            }
+        }
+    }
+    exit_strength
+}
+
+/// Lay one east-west track: dust from `source_x` out to `min_x` and to
+/// `max_x`, with a repeater inserted before the signal can run out (see
+/// `plan_track_run`). Returns the strength delivered at each of `taps`,
+/// exactly as `track_exit_strengths` already predicted during planning.
+///
+/// `taps` are the X positions where a ramp joins or leaves the track; every
+/// one of them reserves `RAMP_LENGTH` strength for the ramp it feeds (see
+/// `MAX_DUST_RUN`'s comment) -- applied to the whole track rather than just
+/// at each tap, which is simpler and only ever costs an occasional early
+/// repeater on a run that was already close to the 14-cell limit, never a
+/// correctness problem.
 fn lay_track(
     world: &mut World,
     z: i32,
@@ -530,7 +762,9 @@ fn lay_track(
     min_x: i32,
     max_x: i32,
     taps: &BTreeSet<i32>,
-) {
+    incoming_strength: u8,
+) -> BTreeMap<i32, u8> {
+    let mut exit_strength = BTreeMap::new();
     for (end, step) in [(min_x, -1i32), (max_x, 1i32)] {
         let length = (end - source_x) * step;
         if length <= 0 {
@@ -538,29 +772,7 @@ fn lay_track(
         }
         let direction = if step > 0 { Facing::East } else { Facing::West };
         let cells: Vec<i32> = (1..=length).map(|k| source_x + k * step).collect();
-
-        // Pick the repeater cells before writing anything: where one repeater
-        // ends up decides how much budget the cells after it have.
-        let mut is_repeater = vec![false; cells.len()];
-        let mut last_refresh: i64 = -1; // the source cell itself, at full strength
-        let mut i = 0usize;
-        while i < cells.len() {
-            if (i as i64) - last_refresh <= MAX_DUST_RUN as i64 {
-                i += 1;
-                continue;
-            }
-            let mut j = i;
-            while (j as i64) > last_refresh + 1 && taps.contains(&cells[j]) {
-                j -= 1;
-            }
-            debug_assert!(
-                !taps.contains(&cells[j]),
-                "taps must never be dense enough to leave no room for a repeater"
-            );
-            is_repeater[j] = true;
-            last_refresh = j as i64;
-            i = j + 1;
-        }
+        let (is_repeater, strengths) = plan_track_run(&cells, incoming_strength, RAMP_LENGTH, taps);
 
         for (k, &x) in cells.iter().enumerate() {
             let pos = Position::new(x, TRACK_Y, z);
@@ -570,8 +782,12 @@ fn lay_track(
             } else {
                 world.set(pos.x, pos.y, pos.z, dust());
             }
+            if taps.contains(&x) {
+                exit_strength.insert(x, strengths[k]);
+            }
         }
     }
+    exit_strength
 }
 
 /// 把一個外部輸入的拉桿與它的起始紅石粉畫進世界，回傳這個訊號的來源
@@ -1097,6 +1313,87 @@ fn layout_z(row_count: usize, channel_count: usize, track_count: &[usize]) -> (V
     (row_z, track_z)
 }
 
+/// `(entry_strength[net][slot], exit_strength[net][slot][exit_x])` -- see
+/// `plan_strengths`.
+type StrengthPlan = (Vec<Vec<u8>>, Vec<Vec<BTreeMap<i32, u8>>>);
+
+/// Work out, for every net and every slot it appears in, the signal strength
+/// arriving at that slot's ramp entry (`entry_strength[net][slot]`) and the
+/// strength the track hands each of that slot's exits before their
+/// descending ramp (`exit_strength[net][slot]`, keyed by exit X).
+///
+/// This has to run before any of the Ramps/Columns/Tracks passes write a
+/// single block. The Columns pass needs to know, for a feed-through, what
+/// strength survived the previous slot's track and descending ramp before it
+/// can lay the column that continues from there -- but that number depends
+/// on the *next* slot's track layout, which is not written until the later
+/// Tracks pass (world-building order has to stay Ramps, then Columns, then
+/// Tracks -- see the comment above the Ramps loop in `compile` for why).
+/// Computing every slot's numbers up front, net by net in slot order (each
+/// slot's result depends only on the previous slot's, within the same net),
+/// sidesteps that ordering conflict entirely: pure arithmetic, no `World`,
+/// so it does not care what order the real blocks go down in.
+///
+/// `plan_straight_run` and `track_exit_strengths` are the exact same
+/// decisions `lay_dust_run` and `lay_track` make when they actually write
+/// blocks later, so the numbers this produces are guaranteed to match what
+/// ends up in the world, not just a plausible estimate of it.
+fn plan_strengths(
+    nets: &[Net],
+    plan: &Floorplan,
+    track_z: &[Vec<i32>],
+    lever_pin: &[Position],
+    gate_pin: &[Position],
+) -> StrengthPlan {
+    let mut entry_strength: Vec<Vec<u8>> = Vec::with_capacity(nets.len());
+    let mut exit_strength: Vec<Vec<BTreeMap<i32, u8>>> = Vec::with_capacity(nets.len());
+
+    for net in nets {
+        let mut net_entry = vec![0u8; net.channels.len()];
+        let mut net_exit: Vec<BTreeMap<i32, u8>> = vec![BTreeMap::new(); net.channels.len()];
+
+        for slot in 0..net.channels.len() {
+            let channel = net.channels[slot];
+            let z = track_z[channel][net.tracks[slot]];
+            let entry = Position::new(net.entry_column(slot), GATE_Y, z + RAMP_LENGTH);
+
+            let arriving = if slot == 0 {
+                let pin = match net.source {
+                    Source::Lever(i) => lever_pin[i],
+                    Source::Gate(g) => gate_pin[g],
+                };
+                let len = straight_run_length(pin, Facing::North, entry.offset(Facing::North));
+                plan_straight_run(len, MAX_SIGNAL_STRENGTH, RAMP_LENGTH).1
+            } else {
+                let prev_channel = net.channels[slot - 1];
+                let prev_z = track_z[prev_channel][net.tracks[slot - 1]];
+                let feed_x = net.hops[slot - 1];
+                let track_strength = net_exit[slot - 1][&feed_x];
+                let landing_strength = track_strength - RAMP_LENGTH as u8;
+                let landing = Position::new(feed_x, GATE_Y, prev_z - RAMP_LENGTH);
+                let len = straight_run_length(landing, Facing::North, entry.offset(Facing::North));
+                plan_straight_run(len, landing_strength, RAMP_LENGTH).1
+            };
+            net_entry[slot] = arriving;
+
+            let track_incoming = arriving - RAMP_LENGTH as u8;
+            let source_x = net.entry_column(slot);
+            let (lo, hi) = net.span(slot, &plan.centre_x);
+            let mut taps: BTreeSet<i32> = BTreeSet::new();
+            taps.insert(source_x);
+            for exit in net.exits(slot, &plan.centre_x) {
+                taps.insert(exit.x());
+            }
+            net_exit[slot] = track_exit_strengths(source_x, lo, hi, &taps, track_incoming);
+        }
+
+        entry_strength.push(net_entry);
+        exit_strength.push(net_exit);
+    }
+
+    (entry_strength, exit_strength)
+}
+
 /// 把一個網表編譯成一個紅石世界。
 pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     for gate in &netlist.gates {
@@ -1189,6 +1486,12 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         gate_pin.push(pin);
     }
 
+    // Strength planning: work out what every ramp's entry and every track's
+    // exits will carry, before any of them are actually built. See
+    // `plan_strengths` for why this has to happen up front rather than
+    // inline in the passes below.
+    let (entry_strength, exit_strength) = plan_strengths(&nets, &plan, &track_z, &lever_pin, &gate_pin);
+
     // Ramps first. `move_between_layers` seals the blocks around each landing,
     // and a seal only fills air -- so anything that has to run *through* a
     // sealed cell (the tracks, and the columns) has to be laid afterwards to
@@ -1208,7 +1511,7 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
 
     // Columns at `GATE_Y`: from a source pin up to its ramp, and from a ramp's
     // landing on to whatever it feeds.
-    for net in &nets {
+    for (n, net) in nets.iter().enumerate() {
         for slot in 0..net.channels.len() {
             let channel = net.channels[slot];
             let z = track_z[channel][net.tracks[slot]];
@@ -1218,10 +1521,18 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
                     Source::Lever(i) => lever_pin[i],
                     Source::Gate(g) => gate_pin[g],
                 };
-                lay_dust_run(&mut world, pin, Facing::North, entry.offset(Facing::North));
+                lay_dust_run(
+                    &mut world,
+                    pin,
+                    Facing::North,
+                    entry.offset(Facing::North),
+                    MAX_SIGNAL_STRENGTH,
+                    RAMP_LENGTH,
+                );
             }
             for exit in net.exits(slot, &plan.centre_x) {
                 let landing = Position::new(exit.x(), GATE_Y, z - RAMP_LENGTH);
+                let landing_strength = exit_strength[n][slot][&exit.x()] - RAMP_LENGTH as u8;
                 match exit {
                     Exit::Socket { gate, input_index, .. } => {
                         let (dx, dy, dz) = gate_cell[gate].input_offsets[input_index];
@@ -1231,12 +1542,14 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
                             row_z[plan.row_of[gate]] + dz,
                         );
                         if socket.x == landing.x {
-                            lay_segment_to_socket(&mut world, landing, socket);
+                            lay_segment_to_socket(&mut world, landing, socket, landing_strength);
                         } else {
                             let corner =
                                 Position::new(landing.x, GATE_Y, row_z[plan.row_of[gate]]);
-                            lay_segment_to_corner(&mut world, landing, corner);
-                            lay_segment_to_socket(&mut world, corner, socket);
+                            lay_segment_to_corner(&mut world, landing, corner, landing_strength);
+                            // `corner` always follows `lay_segment_to_corner`'s own
+                            // mandatory repeater, so it is always fresh.
+                            lay_segment_to_socket(&mut world, corner, socket, MAX_SIGNAL_STRENGTH);
                         }
                     }
                     Exit::Feedthrough { x, next_slot } => {
@@ -1248,6 +1561,8 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
                             landing,
                             Facing::North,
                             next_entry.offset(Facing::North),
+                            landing_strength,
+                            RAMP_LENGTH,
                         );
                     }
                 }
@@ -1257,7 +1572,7 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
 
     // Tracks last, so they overwrite the ramps' seal blocks where they have to
     // pass through them.
-    for net in &nets {
+    for (n, net) in nets.iter().enumerate() {
         for slot in 0..net.channels.len() {
             let channel = net.channels[slot];
             let z = track_z[channel][net.tracks[slot]];
@@ -1268,7 +1583,8 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
             for exit in net.exits(slot, &plan.centre_x) {
                 taps.insert(exit.x());
             }
-            lay_track(&mut world, z, source_x, lo, hi, &taps);
+            let track_incoming = entry_strength[n][slot] - RAMP_LENGTH as u8;
+            lay_track(&mut world, z, source_x, lo, hi, &taps, track_incoming);
         }
     }
 

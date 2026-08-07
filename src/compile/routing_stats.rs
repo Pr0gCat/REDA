@@ -54,10 +54,11 @@ pub enum RoutePart {
     /// next ramp's entry -- passing underneath any number of tracks it does
     /// not stop at.
     Column,
-    /// A fixed four-block climb or descent between `GATE_Y` and `TRACK_Y`.
-    /// Always exactly two repeaters and four blocks by construction of those
-    /// two constants, regardless of net, slot or circuit -- not something
-    /// the router's placement or track-assignment choices can affect.
+    /// A fixed dust-staircase climb or descent between `GATE_Y` and
+    /// `TRACK_Y`: `RAMP_LENGTH` blocks, zero repeaters, by construction of
+    /// that one constant, regardless of net, slot or circuit -- not
+    /// something the router's placement or track-assignment choices can
+    /// affect.
     Ramp,
     /// East-west dust run at `TRACK_Y`: the portion of an assigned track
     /// between a net's entry point and one specific exit. A track can carry
@@ -231,20 +232,28 @@ fn scan_to_socket(world: &World, start: Position, socket: Position) -> PartTotal
     totals
 }
 
-/// Mirrors `move_between_layers`'s loop exactly: one repeater and one
-/// landing-dust cell per Y level crossed between `entry` and `target_y`.
-/// Support blocks are stone, not wire, so they are not counted here.
+/// Mirrors `move_between_layers`'s loop exactly: one landing-dust cell per Y
+/// level crossed between `entry` and `target_y`. The riser each step also
+/// places is solid stone, not wire, so it is never counted here (`classify`
+/// only recognises `Repeater`/`RedstoneWire`) -- a dust staircase has no
+/// repeaters at all, only the dust cells this counts.
 fn scan_ramp(world: &World, entry: Position, direction: Facing, target_y: i32) -> PartTotals {
-    let y_step = (target_y - entry.y).signum();
     let mut current = entry;
     let mut totals = PartTotals::default();
-    while current.y != target_y {
-        let repeater_pos = current.offset(direction);
-        totals += classify(world, repeater_pos);
-        let support_pos = repeater_pos.offset(direction);
-        let landing = Position::new(support_pos.x, support_pos.y + y_step, support_pos.z);
-        totals += classify(world, landing);
-        current = landing;
+    if target_y >= current.y {
+        while current.y != target_y {
+            let riser = current.offset(direction);
+            let landing = riser.up();
+            totals += classify(world, landing);
+            current = landing;
+        }
+    } else {
+        while current.y != target_y {
+            let stepped = current.offset(direction);
+            let landing = Position::new(stepped.x, stepped.y - 1, stepped.z);
+            totals += classify(world, landing);
+            current = landing;
+        }
     }
     totals
 }
@@ -557,10 +566,11 @@ mod tests {
             let ramp = edge.part(RoutePart::Ramp);
             // Every edge crosses at least one channel, so it has at least
             // one ramp up and one ramp down: 2 * hops ramp instances, each
-            // exactly `RAMP_LENGTH` long with `RAMP_LENGTH / 2` repeaters.
+            // exactly `RAMP_LENGTH` long with zero repeaters -- a dust
+            // staircase, unlike the old repeater ramp, never places one.
             let expected_instances = 2 * edge.hops as i64;
             assert_eq!(ramp.length, expected_instances * RAMP_LENGTH as i64);
-            assert_eq!(ramp.repeaters, expected_instances as usize * (RAMP_LENGTH as usize / 2));
+            assert_eq!(ramp.repeaters, 0, "a dust staircase ramp must never place a repeater");
         }
     }
 }
