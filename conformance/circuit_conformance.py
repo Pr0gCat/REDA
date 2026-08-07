@@ -1,20 +1,39 @@
 #!/usr/bin/env python
-"""End-to-end conformance harness: place a compiled `and4` circuit into a
-real Minecraft 1.20.1 server, drive its four levers through every input
-vector, read the lamp, and compare against the pure-boolean NOR truth table.
+"""End-to-end conformance harness: place any circuit `mc_dump` can describe
+into a real Minecraft 1.20.1 server, drive its levers through every input
+vector, read every output, and compare against the pure-boolean NOR truth
+table.
 
 This is the "does the whole compiled circuit actually work in the real game"
 test described in docs/superpowers/specs/2026-08-07-minecraft-conformance.md.
 It is a different, larger thing than conformance/probes.py: probes.py asks
 narrow yes/no questions about individual redstone rules in isolation; this
-module builds one real, complete, 611-block circuit and asks whether it
-computes the right answer.
+module builds one real, complete circuit -- from `and4`'s 611 blocks and one
+output up to the seven-segment decoder's 16,894 blocks and seven -- and asks
+whether it computes the right answer.
+
+This script is deliberately circuit-agnostic: it was originally written
+against `and4` alone (one lever set, one lamp), then generalised to read
+however many `INPUT`/`OUTPUT` lines a dump contains rather than assuming
+exactly one output. Nothing here hardcodes a circuit name, an input count, or
+an output count -- see `Dump`/`parse_dump` below, which build every one of
+those from the dump file itself. The failure-category logic (`RegionNotReady`
+vs `CircuitMismatch`, exit 2 vs exit 1) that makes a failing run diagnostic
+rather than just "something didn't match" is untouched by that
+generalisation -- it operates over "every output" and "every gate" exactly
+as it always did over the one output `and4` happens to have.
 
 Usage:
     cargo run --release --bin mc_dump -- and4 > /tmp/and4.txt
-    python and4_conformance.py --dump /tmp/and4.txt \
+    python circuit_conformance.py --dump /tmp/and4.txt \
         --properties ../minecraft-server/server/server.properties \
         --out results/and4_head.json --label head
+
+    cargo run --release --bin mc_dump -- seven_segment > /tmp/decoder.txt
+    python circuit_conformance.py --dump /tmp/decoder.txt \
+        --properties ../minecraft-server/server/server.properties \
+        --out results/decoder_head.json --label head \
+        --settle-build 12 --settle-vector 6.5
 
 The server must already be running (docs/minecraft-server.md) with RCON
 enabled. `mc_dump` (src/bin/mc_dump.rs) is a separate step, run once per
@@ -64,10 +83,10 @@ computer exactly this way: wire everything up inert, then flip the switch.
 
 This ordering is a hypothesis grounded in the documented rules, not a
 retest of them -- it is checked empirically below by confirming a handful
-of vectors (particularly all-off and all-on) settle to the expected lamp
-state before trusting a full 16-vector sweep, and by reading every gate's
-own output torch on every vector so a disagreement can be localised to the
-first gate that is wrong, not just reported as "the lamp was wrong".
+of vectors (particularly all-off and all-on) settle to the expected output
+state(s) before trusting a full sweep, and by reading every gate's own
+output torch on every vector so a disagreement can be localised to the
+first gate that is wrong, not just reported as "an output was wrong".
 
 # Toggling vs. rebuilding
 
@@ -113,8 +132,8 @@ Three defenses now stand between forceload and the first `setblock`:
 2. `verify_region_is_air` samples the cleared region with `execute if
    block ... minecraft:air` and retries until it actually reads back clean,
    instead of a fixed sleep after `clear_region`.
-3. `assert_quiescent` checks the lamp and every gate's output torch against
-   the all-zero quiescent state right after the initial build settles, and
+3. `assert_quiescent` checks every output lamp and every gate's output torch
+   against the all-zero quiescent state right after the initial build settles, and
    raises before a single input vector is even swept if anything is wrong.
    It asks three separate questions, in order, because they have different
    causes and different fixes:
@@ -185,9 +204,23 @@ class Dump:
     size: tuple[int, int, int]
     blocks: list[Block]
     inputs: dict[str, tuple[int, int, int]]
-    outputs: dict[str, tuple[int, int, int]]
+    outputs: dict[str, tuple[int, int, int]]  # keyed by internal signal name, e.g. "g45"
+    output_labels: dict[str, str]  # internal signal name -> human label, e.g. "g45" -> "a"
     gate_outputs: dict[str, tuple[int, int, int]]
     gates: list[tuple[str, list[str]]]  # (output_name, input_names) in topological order
+
+    def output_display_name(self, internal_name: str) -> str:
+        """Human label for an output signal if `mc_dump` supplied one via
+        OUTLABEL (every reference circuit does), else the internal name
+        itself -- so a dump from an older `mc_dump` binary that predates
+        OUTLABEL still works, just less legibly."""
+        return self.output_labels.get(internal_name, internal_name)
+
+    def sorted_output_names(self) -> list[str]:
+        """Internal output names, ordered by their human label ("a" before
+        "g") when labels are available, falling back to the dict's own
+        (BTreeMap, i.e. alphabetical-by-internal-name) order otherwise."""
+        return sorted(self.outputs, key=lambda n: (self.output_display_name(n), n))
 
 
 def parse_dump(path: Path) -> Dump:
@@ -195,6 +228,7 @@ def parse_dump(path: Path) -> Dump:
     blocks: list[Block] = []
     inputs: dict[str, tuple[int, int, int]] = {}
     outputs: dict[str, tuple[int, int, int]] = {}
+    output_labels: dict[str, str] = {}
     gate_outputs: dict[str, tuple[int, int, int]] = {}
     gates: list[tuple[str, list[str]]] = []
 
@@ -223,6 +257,13 @@ def parse_dump(path: Path) -> Dump:
             inputs[parts[1]] = (int(parts[2]), int(parts[3]), int(parts[4]))
         elif tag == "OUTPUT":
             outputs[parts[1]] = (int(parts[2]), int(parts[3]), int(parts[4]))
+        elif tag == "OUTLABEL":
+            # "OUTLABEL label internal_name" -- see mc_dump.rs's module
+            # docstring. Stored inverted (internal -> label) because every
+            # lookup this script does starts from the internal name (the key
+            # `outputs`, `evaluate_expected`'s result dict, and `GATE` lines
+            # all share).
+            output_labels[parts[2]] = parts[1]
         elif tag == "GATEOUT":
             gate_outputs[parts[1]] = (int(parts[2]), int(parts[3]), int(parts[4]))
         elif tag == "GATE":
@@ -234,7 +275,7 @@ def parse_dump(path: Path) -> Dump:
 
     if size is None:
         raise ValueError("dump had no SIZE line")
-    return Dump(size, blocks, inputs, outputs, gate_outputs, gates)
+    return Dump(size, blocks, inputs, outputs, output_labels, gate_outputs, gates)
 
 
 def evaluate_expected(gates: list[tuple[str, list[str]]], primary: dict[str, int]) -> dict[str, int]:
@@ -268,7 +309,7 @@ def block_state_string(b: Block) -> str:
         # context as soon as anything nearby changes. See probes.py's DUST
         # convention, which this deliberately matches.
         return b.name
-    raise ValueError(f"and4_conformance does not know how to place block kind {b.kind!r} ({b.name})")
+    raise ValueError(f"circuit_conformance does not know how to place block kind {b.kind!r} ({b.name})")
 
 
 def lever_state_string(b: Block, on: bool) -> str:
@@ -314,32 +355,124 @@ def build_phase_commands(blocks: list[Block], origin: tuple[int, int, int]) -> l
 
 
 def clear_region(client: RconClient, origin: tuple[int, int, int], size: tuple[int, int, int]) -> None:
+    """Fill the circuit's bounding box (plus margin) with air, sliced along X
+    so no single `/fill` exceeds vanilla's 32768-block cap.
+
+    Found the hard way, on the seven-segment decoder: the slice-volume
+    calculation here used to compute `(hi[1] - lo[1]) * (hi[2] - lo[2])` --
+    missing the `+1` every one of these bounds needs because `/fill`'s
+    coordinates are inclusive on both ends. That silently under-counted the
+    true per-slice volume (e.g. and4's own region: undercounted as 891,
+    really 1,092; the decoder's: undercounted enough that `step` came out at
+    10 when it needed to be closer to 9), which computed a `step` one notch
+    too generous. The resulting `/fill` commands then asked for slightly
+    *more* than 32768 blocks each -- rejected outright by the server with
+    "Too many blocks in the specified area" -- and because nothing here ever
+    inspected `client.command()`'s return string, every single one of those
+    rejections was swallowed in silence. `clear_region` would report success
+    (there is nothing to report -- it never raised) while leaving the entire
+    previous build standing untouched underneath whatever got placed next.
+    This never surfaced on `and4` in isolation because a region visited for
+    the first time is already blank, so a no-op "clear" of already-air
+    ground is indistinguishable from a working one -- it only became visible
+    once a *second*, different, larger circuit was built at the same origin
+    right after an `and4` run, and `verify_region_is_air`'s necessarily
+    coarse sample grid happened not to land on any of the leftover blocks.
+    Fixed by counting inclusively and, belt-and-braces, by making a rejected
+    fill loud instead of silent -- see the response check below."""
     ox, oy, oz = origin
     sx, sy, sz = size
     margin = 3
     lo = (ox - margin, oy - margin, oz - margin)
     hi = (ox + sx + margin, oy + sy + margin, oz + sz + margin)
-    volume_per_x_slice = (hi[1] - lo[1]) * (hi[2] - lo[2])
+    dy = hi[1] - lo[1] + 1
+    dz = hi[2] - lo[2] + 1
+    volume_per_x_slice = dy * dz
     step = max(1, FILL_LIMIT // max(1, volume_per_x_slice))
     x = lo[0]
     while x <= hi[0]:
         x2 = min(x + step - 1, hi[0])
-        client.command(f"fill {x} {lo[1]} {lo[2]} {x2} {hi[1]} {hi[2]} minecraft:air")
+        response = client.command(f"fill {x} {lo[1]} {lo[2]} {x2} {hi[1]} {hi[2]} minecraft:air")
+        if "Too many blocks" in response:
+            raise RegionNotReady(
+                f"clear_region's fill slice x={x}..{x2} was rejected by the server: {response!r} -- "
+                "this slice's volume exceeds vanilla's /fill cap; clear_region's slicing math is wrong "
+                "again, or FILL_LIMIT needs to come down further. Refusing to proceed silently onto "
+                "ground that was never actually confirmed cleared."
+            )
         x = x2 + 1
+
+
+# Measured directly against this project's own live 1.20.1 server (not taken
+# on faith from any wiki): a single `/forceload add` call rejects outright
+# with "Too many chunks in the specified area (maximum 256, specified 441)"
+# once its rectangle exceeds 256 chunks -- confirmed by requesting a 21x21
+# chunk area (441) and getting that exact refusal. This is a *per-command*
+# cap, not a per-dimension total: two separate calls of 225 chunks each (well
+# under 256 individually) were both accepted and `/forceload query` then
+# reported all 450 chunks force-loaded simultaneously. So the fix is not to
+# shrink the forceloaded area -- it is to split one oversized request into
+# several requests that each stay under the cap.
+#
+# and4's whole build (66x75 blocks, +8 margin -> ~6x6 chunks = 36) is nowhere
+# near 256 and would fit in one call regardless. The seven-segment decoder
+# (232x280 blocks, +8 margin -> roughly 16x19 = 304 chunks) is the circuit
+# that actually exceeds the cap in this project -- see the module docstring
+# for that finding reported plainly, since a decoder-sized build not fitting
+# in a single vanilla command is a genuine, worth-recording property of our
+# output's size, not a harness bug to quietly paper over.
+FORCELOAD_CHUNK_LIMIT = 256
+# 16x16 chunks = 256, exactly at the cap, and a whole-number divisor of any
+# chunk-aligned rectangle -- simplest possible tiling that always stays
+# legal regardless of how large a future circuit's footprint grows to.
+FORCELOAD_TILE_CHUNKS = 16
+
+
+def _forceload_tiles(x_lo: int, z_lo: int, x_hi: int, z_hi: int) -> list[tuple[int, int, int, int]]:
+    """Split the block-coordinate rectangle [x_lo, x_hi] x [z_lo, z_hi] into
+    tiles of at most FORCELOAD_TILE_CHUNKS x FORCELOAD_TILE_CHUNKS chunks
+    each (<= FORCELOAD_CHUNK_LIMIT chunks per tile), returned as
+    (bx0, bz0, bx1, bz1) block-coordinate rectangles ready for
+    `forceload add`/`forceload remove`. A rectangle that already fits under
+    the cap comes back as a single tile, unchanged from the pre-tiling
+    behaviour of this function's callers."""
+    cx0, cx1 = x_lo // 16, x_hi // 16  # inclusive chunk coordinates
+    cz0, cz1 = z_lo // 16, z_hi // 16
+    tiles = []
+    cx = cx0
+    while cx <= cx1:
+        cx2 = min(cx + FORCELOAD_TILE_CHUNKS - 1, cx1)
+        cz = cz0
+        while cz <= cz1:
+            cz2 = min(cz + FORCELOAD_TILE_CHUNKS - 1, cz1)
+            bx0 = max(x_lo, cx * 16)
+            bx1 = min(x_hi, cx2 * 16 + 15)
+            bz0 = max(z_lo, cz * 16)
+            bz1 = min(z_hi, cz2 * 16 + 15)
+            tiles.append((bx0, bz0, bx1, bz1))
+            cz = cz2 + 1
+        cx = cx2 + 1
+    return tiles
 
 
 def forceload(client: RconClient, origin: tuple[int, int, int], size: tuple[int, int, int]) -> None:
     ox, _, oz = origin
     sx, _, sz = size
     margin = 8
-    client.command(f"forceload add {ox - margin} {oz - margin} {ox + sx + margin} {oz + sz + margin}")
+    x_lo, x_hi = ox - margin, ox + sx + margin
+    z_lo, z_hi = oz - margin, oz + sz + margin
+    for bx0, bz0, bx1, bz1 in _forceload_tiles(x_lo, z_lo, x_hi, z_hi):
+        client.command(f"forceload add {bx0} {bz0} {bx1} {bz1}")
 
 
 def forceload_release(client: RconClient, origin: tuple[int, int, int], size: tuple[int, int, int]) -> None:
     ox, _, oz = origin
     sx, _, sz = size
     margin = 8
-    client.command(f"forceload remove {ox - margin} {oz - margin} {ox + sx + margin} {oz + sz + margin}")
+    x_lo, x_hi = ox - margin, ox + sx + margin
+    z_lo, z_hi = oz - margin, oz + sz + margin
+    for bx0, bz0, bx1, bz1 in _forceload_tiles(x_lo, z_lo, x_hi, z_hi):
+        client.command(f"forceload remove {bx0} {bz0} {bx1} {bz1}")
 
 
 class RegionNotReady(RuntimeError):
@@ -508,24 +641,27 @@ def read_state(
     client: RconClient,
     dump: Dump,
     origin: tuple[int, int, int],
-    output_pos: tuple[int, int, int],
-) -> tuple[int | None, dict[str, int | None]]:
-    """Read the lamp and every gate's output torch once, as a snapshot."""
+) -> tuple[dict[str, int | None], dict[str, int | None]]:
+    """Read every output lamp and every gate's output torch once, as a
+    snapshot. Generalised from a single `output_pos` to `dump.outputs` (any
+    number of lamps) -- and4 has one, the seven-segment decoder has seven;
+    nothing below needs to know which."""
     ox, oy, oz = origin
-    lamp_val = read_lamp(client, (ox + output_pos[0], oy + output_pos[1], oz + output_pos[2]))
+    lamp_vals = {}
+    for output_name, output_pos in dump.outputs.items():
+        pos = (ox + output_pos[0], oy + output_pos[1], oz + output_pos[2])
+        lamp_vals[output_name] = read_lamp(client, pos)
     gate_vals = {}
     for gate_name, gate_pos in dump.gate_outputs.items():
         pos = (ox + gate_pos[0], oy + gate_pos[1], oz + gate_pos[2])
         gate_vals[gate_name] = read_torch(client, pos)
-    return lamp_val, gate_vals
+    return lamp_vals, gate_vals
 
 
 def assert_quiescent(
     client: RconClient,
     dump: Dump,
     origin: tuple[int, int, int],
-    output_signal: str,
-    output_pos: tuple[int, int, int],
     oscillation_probe_seconds: float = 1.0,
 ) -> None:
     """After the initial build settles (every lever placed off), confirm
@@ -539,7 +675,12 @@ def assert_quiescent(
 
     (2) and (3) both raise CircuitMismatch: by that point the world is
     confirmed to hold exactly the blocks we asked for, so any remaining
-    disagreement is the compiled circuit's logic, not the harness's."""
+    disagreement is the compiled circuit's logic, not the harness's.
+
+    Generalised from a single output lamp to every entry in `dump.outputs`
+    -- every check below already iterated "every gate"; the only and4-
+    specific thing was ever the one hardcoded lamp position, which is now
+    just one more dict to loop over."""
     ox, oy, oz = origin
     expected = evaluate_expected(dump.gates, {name: 0 for name in sorted(dump.inputs)})
 
@@ -547,8 +688,10 @@ def assert_quiescent(
     # redstone state -- see block_id_present's docstring. Deliberately
     # checked before we interpret lit/powered at all, so a missing or
     # wrong block here can never be misread as a circuit-logic failure.
-    lamp_pos = (ox + output_pos[0], oy + output_pos[1], oz + output_pos[2])
-    checks: list[tuple[tuple[int, int, int], str]] = [(lamp_pos, "minecraft:redstone_lamp")]
+    checks: list[tuple[tuple[int, int, int], str]] = []
+    for output_pos in dump.outputs.values():
+        pos = (ox + output_pos[0], oy + output_pos[1], oz + output_pos[2])
+        checks.append((pos, "minecraft:redstone_lamp"))
     for gate_pos in dump.gate_outputs.values():
         pos = (ox + gate_pos[0], oy + gate_pos[1], oz + gate_pos[2])
         checks.append((pos, "minecraft:redstone_wall_torch"))
@@ -564,12 +707,15 @@ def assert_quiescent(
     # 2. Settled, or still moving? Two reads spaced apart; any signal that
     # differs between them means the circuit has not reached a fixed point
     # at all -- a different failure shape from "settled but wrong".
-    lamp1, gates1 = read_state(client, dump, origin, output_pos)
+    lamps1, gates1 = read_state(client, dump, origin)
     time.sleep(oscillation_probe_seconds)
-    lamp2, gates2 = read_state(client, dump, origin, output_pos)
+    lamps2, gates2 = read_state(client, dump, origin)
     changed: list[str] = []
-    if lamp1 != lamp2:
-        changed.append(f"output {output_signal}: {lamp1!r} -> {lamp2!r}")
+    for output_name in lamps1:
+        if lamps1[output_name] != lamps2[output_name]:
+            changed.append(
+                f"output {dump.output_display_name(output_name)}: {lamps1[output_name]!r} -> {lamps2[output_name]!r}"
+            )
     for gate_name in gates1:
         if gates1[gate_name] != gates2[gate_name]:
             changed.append(f"gate {gate_name}: {gates1[gate_name]!r} -> {gates2[gate_name]!r}")
@@ -582,8 +728,11 @@ def assert_quiescent(
 
     # 3. Settled -- but to the values the simulator predicts?
     mismatches: list[str] = []
-    if lamp2 != expected[output_signal]:
-        mismatches.append(f"output {output_signal}: expected {expected[output_signal]}, read {lamp2!r}")
+    for output_name, actual in lamps2.items():
+        if actual != expected[output_name]:
+            mismatches.append(
+                f"output {dump.output_display_name(output_name)}: expected {expected[output_name]}, read {actual!r}"
+            )
     for gate_name, actual in gates2.items():
         if actual != expected[gate_name]:
             mismatches.append(f"gate {gate_name}: expected {expected[gate_name]}, read {actual!r}")
@@ -611,11 +760,15 @@ def run(args: argparse.Namespace) -> int:
     origin = tuple(int(v) for v in args.origin.split(","))
     assert len(origin) == 3
 
-    input_names = sorted(dump.inputs.keys())  # a, b, c, d
-    if len(dump.outputs) != 1:
-        print(f"error: expected exactly one output, dump has {list(dump.outputs)}", file=sys.stderr)
+    input_names = sorted(dump.inputs.keys())  # a, b, c, d -- or d3, d2, d1, d0
+    if not dump.outputs:
+        print("error: dump has no OUTPUT lines", file=sys.stderr)
         return 1
-    (output_signal, output_pos), = dump.outputs.items()
+    # Internal signal names, ordered by human label (a..g) when mc_dump
+    # supplied OUTLABEL lines. Everything below is written for "however many
+    # outputs the dump has" -- and4 has one, the seven-segment decoder has
+    # seven -- rather than assuming exactly one.
+    output_names = dump.sorted_output_names()
 
     if args.vectors:
         vectors = [tuple(int(c) for c in v) for v in args.vectors.split(",")]
@@ -680,17 +833,14 @@ def run(args: argparse.Namespace) -> int:
         time.sleep(args.settle_build)
 
         print("Checking placement landed and the build settled to the expected all-zero state...")
-        assert_quiescent(
-            client, dump, origin, output_signal, output_pos,
-            oscillation_probe_seconds=args.oscillation_probe,
-        )
+        assert_quiescent(client, dump, origin, oscillation_probe_seconds=args.oscillation_probe)
 
         current = {name: False for name in input_names}
 
         for vector in vectors:
             primary = {name: bit for name, bit in zip(input_names, vector)}
             expected = evaluate_expected(dump.gates, primary)
-            expected_output = expected[output_signal]
+            expected_outputs = {name: expected[name] for name in output_names}
 
             changed = [name for name in input_names if bool(primary[name]) != current[name]]
             for name in input_names:
@@ -701,7 +851,11 @@ def run(args: argparse.Namespace) -> int:
 
             time.sleep(args.settle_vector)
 
-            actual_output = read_lamp(client, (ox + output_pos[0], oy + output_pos[1], oz + output_pos[2]))
+            actual_outputs = {}
+            for output_name in output_names:
+                output_pos = dump.outputs[output_name]
+                pos = (ox + output_pos[0], oy + output_pos[1], oz + output_pos[2])
+                actual_outputs[output_name] = read_lamp(client, pos)
 
             gate_readings = {}
             for gate_name, gate_pos in dump.gate_outputs.items():
@@ -714,11 +868,27 @@ def run(args: argparse.Namespace) -> int:
                     first_disagreement = gate_name
                     break
 
+            # A vector matches only if every single output does -- one wrong
+            # segment out of seven is still a failing vector, not a partial
+            # pass. mismatched_outputs names exactly which ones disagreed, by
+            # their human label, so a decoder failure can say "segments c, e"
+            # rather than just "something was wrong".
+            per_output_match = {name: actual_outputs[name] == expected_outputs[name] for name in output_names}
+            match = all(per_output_match.values())
+            mismatched_outputs = [dump.output_display_name(n) for n in output_names if not per_output_match[n]]
+
             vec_str = "".join(str(b) for b in vector)
-            match = actual_output == expected_output
+            expected_by_label = {dump.output_display_name(n): expected_outputs[n] for n in output_names}
+            actual_by_label = {dump.output_display_name(n): actual_outputs[n] for n in output_names}
+            if len(output_names) == 1:
+                summary = f"expected={next(iter(expected_by_label.values()))} actual={next(iter(actual_by_label.values()))}"
+            else:
+                summary = " ".join(f"{label}={actual_by_label[label]}/{expected_by_label[label]}" for label in expected_by_label)
+                summary = f"[{summary}] (actual/expected)"
             print(
-                f"  {vec_str} -> expected={expected_output} actual={actual_output} "
+                f"  {vec_str} -> {summary} "
                 f"{'OK' if match else 'MISMATCH'}"
+                + (f" (bad outputs: {','.join(mismatched_outputs)})" if mismatched_outputs else "")
                 + (f" (first bad gate: {first_disagreement})" if first_disagreement else "")
             )
 
@@ -726,9 +896,10 @@ def run(args: argparse.Namespace) -> int:
                 {
                     "vector": vec_str,
                     "changed_levers": changed,
-                    "expected_output": expected_output,
-                    "actual_output": actual_output,
+                    "expected_outputs": expected_by_label,
+                    "actual_outputs": actual_by_label,
                     "match": match,
+                    "mismatched_outputs": mismatched_outputs,
                     "expected_gates": expected,
                     "actual_gates": gate_readings,
                     "first_disagreeing_gate": first_disagreement,
@@ -754,7 +925,7 @@ def run(args: argparse.Namespace) -> int:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--dump", required=True, help="path to mc_dump's text output for and4")
+    ap.add_argument("--dump", required=True, help="path to mc_dump's text output for the circuit under test (any circuit mc_dump knows)")
     ap.add_argument("--properties", required=True, help="path to the target server's server.properties")
     ap.add_argument("--host", default="127.0.0.1")
     ap.add_argument("--out", required=True, help="path to write the JSON report")
@@ -762,7 +933,7 @@ def main() -> int:
     ap.add_argument("--origin", default="{},{},{}".format(*DEFAULT_ORIGIN), help="x,y,z world origin to place the circuit at")
     ap.add_argument("--settle-build", type=float, default=8.0, help="seconds to wait after the initial static build")
     ap.add_argument("--settle-vector", type=float, default=6.0, help="seconds to wait after setting levers for one vector")
-    ap.add_argument("--vectors", default=None, help="comma-separated 4-bit vectors to test, e.g. 0000,1111 (default: all 16)")
+    ap.add_argument("--vectors", default=None, help="comma-separated input vectors to test, one bit per input in sorted-input-name order, e.g. 0000,1111 (default: all 2^n)")
     ap.add_argument("--no-clear", action="store_true", help="skip the pre-build air clear (region already known clean)")
     ap.add_argument("--keep", action="store_true", help="leave the circuit standing and the region forceloaded after the run")
     ap.add_argument(
