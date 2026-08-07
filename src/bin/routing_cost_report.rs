@@ -165,15 +165,26 @@ fn run_and_report(label: &str, netlist: &Netlist, input_names: &[&str], outputs:
     let lever_positions: Vec<(i32, i32, i32)> =
         input_names.iter().map(|&n| *compiled.input_positions.get(n).unwrap()).collect();
     let watched = watch_all_nets(&compiled);
-    let mut simulator = Simulator::new(compiled.world);
+    // Simulate on a clone of the world -- `compiled` is kept intact (its
+    // block kinds/positions never change during simulation) so it can still
+    // be handed to `summarize_worst_case` below, which needs it to count the
+    // actual measured critical path's repeaters.
+    let mut simulator = Simulator::new(compiled.world.clone());
     simulator.run_until_stable(MAX_TICKS).expect("must settle before the first reading");
     simulator.attach_observer(watched);
     let transitions = sweep(&mut simulator, &lever_positions);
-    let summary = summarize_worst_case(netlist, outputs, &transitions);
+    let summary = summarize_worst_case(netlist, &compiled, outputs, &transitions);
 
     println!(
         "\nWorst-case settle: {} game ticks; logic-depth bound: {} game ticks; ratio: {:.2}x",
         summary.worst_settle_game_ticks, summary.logic_depth_bound_game_ticks, summary.ratio
+    );
+    println!(
+        "Critical-path settle model: {} gates + {} repeaters -> {} game ticks predicted ({} measured)",
+        summary.critical_path_gate_count,
+        summary.critical_path_repeater_count,
+        summary.critical_path_model_game_ticks,
+        summary.worst_settle_game_ticks,
     );
     println!("Critical path: {}", summary.critical_path.join(" -> "));
 

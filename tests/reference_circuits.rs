@@ -19,7 +19,7 @@ use reda::circuits::seven_segment::{
     build_seven_segment_netlist, build_single_segment_netlist,
     INPUT_NAMES as DECODER_INPUT_NAMES, TRUTH_TABLE,
 };
-use reda::compile::{compile, Netlist};
+use reda::compile::{compile, CompiledCircuit, Netlist};
 use reda::redstone::rules::taxonomy::flags_of;
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::{BlockKind, Face, Facing};
@@ -59,11 +59,19 @@ fn read_output(simulator: &Simulator, position: (i32, i32, i32)) -> bool {
 
 /// Print the worst case across an instrumented sweep: settle time (game
 /// ticks / redstone ticks / seconds), the logic-depth lower bound, the ratio
-/// between them, the critical path, and how many input vectors glitched
-/// which outputs. This is dynamic timing analysis (`reda::timing`) applied
-/// to the same sweep the correctness check above already ran.
-fn report_timing(label: &str, netlist: &Netlist, outputs: &[String], transitions: &[TransitionResult]) {
-    let summary = summarize_worst_case(netlist, outputs, transitions);
+/// between them, the corrected critical-path settle model (and its exactness
+/// against the measured settle time), the critical path itself, and how many
+/// input vectors glitched which outputs. This is dynamic timing analysis
+/// (`reda::timing`) applied to the same sweep the correctness check above
+/// already ran.
+fn report_timing(
+    label: &str,
+    netlist: &Netlist,
+    compiled: &CompiledCircuit,
+    outputs: &[String],
+    transitions: &[TransitionResult],
+) {
+    let summary = summarize_worst_case(netlist, compiled, outputs, transitions);
     eprintln!(
         "{label} timing: worst-case settle = {} game ticks ({:.1} redstone ticks, {:.3}s)",
         summary.worst_settle_game_ticks,
@@ -71,8 +79,21 @@ fn report_timing(label: &str, netlist: &Netlist, outputs: &[String], transitions
         game_ticks_to_seconds(summary.worst_settle_game_ticks),
     );
     eprintln!(
-        "{label} timing: logic-depth bound = {} gates -> {} game ticks; ratio (measured/bound) = {:.2}x",
+        "{label} timing: logic-depth bound (netlist, layout-independent) = {} gates -> {} game ticks; \
+         ratio (measured/bound) = {:.2}x",
         summary.logic_depth, summary.logic_depth_bound_game_ticks, summary.ratio,
+    );
+    eprintln!(
+        "{label} timing: critical-path settle model (this layout) = {} gates + {} repeaters -> \
+         {} game ticks predicted, {} measured",
+        summary.critical_path_gate_count,
+        summary.critical_path_repeater_count,
+        summary.critical_path_model_game_ticks,
+        summary.worst_settle_game_ticks,
+    );
+    assert_eq!(
+        summary.critical_path_model_game_ticks, summary.worst_settle_game_ticks,
+        "{label}: the critical-path settle model must exactly reconstruct the measured settle time"
     );
     eprintln!(
         "{label} timing: critical path to worst output `{}`: {}",
@@ -97,7 +118,12 @@ fn the_compiled_and4_matches_its_truth_table() {
     let output_position = *compiled.output_positions.get(&output_signal).unwrap();
     let watched = watch_all_nets(&compiled);
 
-    let mut simulator = Simulator::new(compiled.world);
+    // Simulate on a clone of the world -- `compiled` itself is kept intact
+    // (repeater kinds/positions never change during simulation, only `lit`
+    // states do) so `report_timing` can hand it to
+    // `compile::routing_stats::analyze` afterwards to count the actual
+    // measured critical path's repeaters.
+    let mut simulator = Simulator::new(compiled.world.clone());
     simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
     simulator.attach_observer(watched);
 
@@ -129,7 +155,7 @@ fn the_compiled_and4_matches_its_truth_table() {
         mismatches.join("\n")
     );
 
-    report_timing("and4", &netlist, &[output_signal], &transitions);
+    report_timing("and4", &netlist, &compiled, &[output_signal], &transitions);
 }
 
 #[test]
@@ -145,7 +171,9 @@ fn the_compiled_full_adder_matches_its_truth_table() {
     let cout_position = *compiled.output_positions.get(&output_signal["cout"]).unwrap();
     let watched = watch_all_nets(&compiled);
 
-    let mut simulator = Simulator::new(compiled.world);
+    // See the and4 test above for why this simulates on a clone of the
+    // world rather than the world moved out of `compiled`.
+    let mut simulator = Simulator::new(compiled.world.clone());
     simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
     simulator.attach_observer(watched);
 
@@ -179,7 +207,13 @@ fn the_compiled_full_adder_matches_its_truth_table() {
         mismatches.join("\n")
     );
 
-    report_timing("full_adder", &netlist, &[output_signal["sum"].clone(), output_signal["cout"].clone()], &transitions);
+    report_timing(
+        "full_adder",
+        &netlist,
+        &compiled,
+        &[output_signal["sum"].clone(), output_signal["cout"].clone()],
+        &transitions,
+    );
 }
 
 #[test]
@@ -195,7 +229,9 @@ fn the_compiled_segment_a_matches_its_truth_table() {
     let output_position = *compiled.output_positions.get(&output_signal).unwrap();
     let watched = watch_all_nets(&compiled);
 
-    let mut simulator = Simulator::new(compiled.world);
+    // See the and4 test above for why this simulates on a clone of the
+    // world rather than the world moved out of `compiled`.
+    let mut simulator = Simulator::new(compiled.world.clone());
     simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
     simulator.attach_observer(watched);
 
@@ -223,7 +259,7 @@ fn the_compiled_segment_a_matches_its_truth_table() {
         mismatches.join("\n")
     );
 
-    report_timing("segment_a", &netlist, &[output_signal], &transitions);
+    report_timing("segment_a", &netlist, &compiled, &[output_signal], &transitions);
 }
 
 // ---------------------------------------------------------------------
