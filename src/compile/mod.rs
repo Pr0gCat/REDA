@@ -30,6 +30,8 @@ use crate::redstone::simulator::position::{Position, HORIZONTAL};
 use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use crate::redstone::world::storage::World;
 
+pub mod routing_stats;
+
 // ---------------------------------------------------------------------
 // 網表
 // ---------------------------------------------------------------------
@@ -973,6 +975,128 @@ fn reserve_feedthrough(
     unreachable!("the search walks east without bound, so it always terminates")
 }
 
+/// Column reservation: fill in every net's `hops` (the feed-through columns
+/// that connect consecutive channels it has to appear in). Pure function of
+/// the floorplan and each net's channel/sink structure -- no world access,
+/// so it is exactly as reusable by routing analysis as it is by `compile`.
+///
+/// Extracted verbatim from `compile`'s "Column reservation" section; see the
+/// comment there (still in place) for why the forced columns come first and
+/// feed-throughs are placed last, against everything else.
+fn reserve_columns(plan: &Floorplan, nets: &mut [Net], row_count: usize, channel_count: usize) {
+    let mut used_columns: Vec<BTreeSet<i32>> = vec![BTreeSet::new(); channel_count.max(1)];
+    let mut row_blocked: Vec<Vec<(i32, i32)>> = vec![Vec::new(); row_count];
+
+    for &x in &plan.lever_x {
+        row_blocked[0].push((x - COLUMN_CLEARANCE + 1, x + COLUMN_CLEARANCE - 1));
+    }
+    for (g, &cx) in plan.centre_x.iter().enumerate() {
+        row_blocked[plan.row_of[g]].push((
+            cx - GATE_HALF_WIDTH - COLUMN_CLEARANCE + 1,
+            cx + GATE_HALF_WIDTH + COLUMN_CLEARANCE - 1,
+        ));
+    }
+
+    for net in nets.iter() {
+        used_columns[net.channels[0]].insert(net.source_column);
+        for (slot, &channel) in net.channels.iter().enumerate() {
+            for &(gate, input_index) in &net.sinks[slot] {
+                used_columns[channel].insert(approach_column(plan.centre_x[gate], input_index));
+            }
+        }
+    }
+
+    for net in nets.iter_mut() {
+        for slot in 0..net.channels.len().saturating_sub(1) {
+            let from = net.channels[slot];
+            let to = net.channels[slot + 1];
+            let target = net.entry_column(slot);
+            let column = reserve_feedthrough(
+                target,
+                from..=to,
+                (from + 1)..=to,
+                &used_columns,
+                &row_blocked,
+                ORIGIN_X - GATE_HALF_WIDTH,
+            );
+            for columns in used_columns[from..=to].iter_mut() {
+                columns.insert(column);
+            }
+            net.hops.push(column);
+        }
+    }
+}
+
+/// Left-edge track assignment: fill in every net's per-slot `tracks` index,
+/// and return how many tracks each channel ended up needing.
+///
+/// Extracted verbatim from `compile`'s "Left-edge track assignment" section;
+/// see the comment there for why one track can carry many nets.
+fn assign_tracks(plan: &Floorplan, nets: &mut [Net], channel_count: usize) -> Vec<usize> {
+    let mut track_count = vec![0usize; channel_count];
+    for (channel, count) in track_count.iter_mut().enumerate() {
+        let mut members: Vec<(i32, i32, usize, usize)> = Vec::new();
+        for (n, net) in nets.iter().enumerate() {
+            for (slot, &c) in net.channels.iter().enumerate() {
+                if c == channel {
+                    let (lo, hi) = net.span(slot, &plan.centre_x);
+                    members.push((lo, hi, n, slot));
+                }
+            }
+        }
+        members.sort_by_key(|&(lo, _, n, slot)| (lo, n, slot));
+
+        let mut track_end: Vec<i32> = Vec::new();
+        for (lo, hi, n, slot) in members {
+            let track = match track_end.iter().position(|&end| lo - end >= TRACK_SHARE_GAP) {
+                Some(t) => t,
+                None => {
+                    track_end.push(i32::MIN / 2);
+                    track_end.len() - 1
+                }
+            };
+            track_end[track] = hi;
+            nets[n].tracks[slot] = track;
+        }
+        *count = track_end.len();
+    }
+    track_count
+}
+
+/// Z layout: each row's Z and every channel's track Zs, laid out northwards
+/// from row 0 and then shifted back into the non-negative range.
+///
+/// Extracted verbatim from `compile`'s "Z layout" section; see the comment
+/// there for the per-channel depth derivation.
+fn layout_z(row_count: usize, channel_count: usize, track_count: &[usize]) -> (Vec<i32>, Vec<Vec<i32>>) {
+    let mut row_z = vec![0i32; row_count];
+    let mut track_z: Vec<Vec<i32>> = vec![Vec::new(); channel_count];
+    for channel in 0..channel_count {
+        // Three blocks clear of the row's own south socket leaves the first
+        // ramp somewhere to start.
+        let channel_south = row_z[channel] - 3;
+        track_z[channel] = (0..track_count[channel])
+            .map(|k| channel_south - TRACK_SPACING * (k as i32 + 1))
+            .collect();
+        let depth = TRACK_SPACING * track_count[channel].max(1) as i32;
+        // The last descending ramp lands `RAMP_LENGTH` north of the last
+        // track, and the column then needs room to reach the next row's south
+        // socket approach.
+        row_z[channel + 1] = channel_south - depth - RAMP_LENGTH - 4;
+    }
+
+    let z_offset = 3 - row_z[row_count - 1] + 2;
+    for z in &mut row_z {
+        *z += z_offset;
+    }
+    for channel in &mut track_z {
+        for z in channel {
+            *z += z_offset;
+        }
+    }
+    (row_z, track_z)
+}
+
 /// 把一個網表編譯成一個紅石世界。
 pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     for gate in &netlist.gates {
@@ -1000,128 +1124,9 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     let channel_count = row_count.saturating_sub(1);
     let mut nets = build_nets(netlist, &order, &plan, &producer_of);
 
-    // ---------------------------------------------------------------
-    // Column reservation
-    // ---------------------------------------------------------------
-    //
-    // Two kinds of column meet in a channel. The forced ones come straight
-    // from the cell geometry -- a gate's output pin leaves at its own centre X,
-    // a socket is entered from `approach_column` -- and the alternating row
-    // shift already keeps those apart. Feed-through columns are the free
-    // choice, so they are placed last, against everything else.
-    let mut used_columns: Vec<BTreeSet<i32>> = vec![BTreeSet::new(); channel_count.max(1)];
-    let mut row_blocked: Vec<Vec<(i32, i32)>> = vec![Vec::new(); row_count];
-
-    for &x in &plan.lever_x {
-        row_blocked[0].push((x - COLUMN_CLEARANCE + 1, x + COLUMN_CLEARANCE - 1));
-    }
-    for (g, &cx) in plan.centre_x.iter().enumerate() {
-        row_blocked[plan.row_of[g]].push((
-            cx - GATE_HALF_WIDTH - COLUMN_CLEARANCE + 1,
-            cx + GATE_HALF_WIDTH + COLUMN_CLEARANCE - 1,
-        ));
-    }
-
-    for net in &nets {
-        used_columns[net.channels[0]].insert(net.source_column);
-        for (slot, &channel) in net.channels.iter().enumerate() {
-            for &(gate, input_index) in &net.sinks[slot] {
-                used_columns[channel].insert(approach_column(plan.centre_x[gate], input_index));
-            }
-        }
-    }
-
-    for net in &mut nets {
-        for slot in 0..net.channels.len().saturating_sub(1) {
-            let from = net.channels[slot];
-            let to = net.channels[slot + 1];
-            let target = net.entry_column(slot);
-            let column = reserve_feedthrough(
-                target,
-                from..=to,
-                (from + 1)..=to,
-                &used_columns,
-                &row_blocked,
-                ORIGIN_X - GATE_HALF_WIDTH,
-            );
-            for columns in used_columns[from..=to].iter_mut() {
-                columns.insert(column);
-            }
-            net.hops.push(column);
-        }
-    }
-
-    // ---------------------------------------------------------------
-    // Left-edge track assignment
-    // ---------------------------------------------------------------
-    //
-    // This is the change that kills the old router's O(edges) width. Sorting
-    // the nets of one channel by their leftmost pin and dropping each on the
-    // first track whose last net already ended lets one track carry many nets,
-    // so a channel needs as many tracks as the netlist's maximum horizontal
-    // overlap -- not one per edge.
-    let mut track_count = vec![0usize; channel_count];
-    for (channel, count) in track_count.iter_mut().enumerate() {
-        let mut members: Vec<(i32, i32, usize, usize)> = Vec::new();
-        for (n, net) in nets.iter().enumerate() {
-            for (slot, &c) in net.channels.iter().enumerate() {
-                if c == channel {
-                    let (lo, hi) = net.span(slot, &plan.centre_x);
-                    members.push((lo, hi, n, slot));
-                }
-            }
-        }
-        members.sort_by_key(|&(lo, _, n, slot)| (lo, n, slot));
-
-        let mut track_end: Vec<i32> = Vec::new();
-        for (lo, hi, n, slot) in members {
-            let track = match track_end
-                .iter()
-                .position(|&end| lo - end >= TRACK_SHARE_GAP)
-            {
-                Some(t) => t,
-                None => {
-                    track_end.push(i32::MIN / 2);
-                    track_end.len() - 1
-                }
-            };
-            track_end[track] = hi;
-            nets[n].tracks[slot] = track;
-        }
-        *count = track_end.len();
-    }
-
-    // ---------------------------------------------------------------
-    // Z layout
-    // ---------------------------------------------------------------
-    //
-    // Laid out from row 0 northwards, so Z decreases; everything is shifted
-    // back into the positive range afterwards.
-    let mut row_z = vec![0i32; row_count];
-    let mut track_z: Vec<Vec<i32>> = vec![Vec::new(); channel_count];
-    for channel in 0..channel_count {
-        // Three blocks clear of the row's own south socket leaves the first
-        // ramp somewhere to start.
-        let channel_south = row_z[channel] - 3;
-        track_z[channel] = (0..track_count[channel])
-            .map(|k| channel_south - TRACK_SPACING * (k as i32 + 1))
-            .collect();
-        let depth = TRACK_SPACING * track_count[channel].max(1) as i32;
-        // The last descending ramp lands `RAMP_LENGTH` north of the last
-        // track, and the column then needs room to reach the next row's south
-        // socket approach.
-        row_z[channel + 1] = channel_south - depth - RAMP_LENGTH - 4;
-    }
-
-    let z_offset = 3 - row_z[row_count - 1] + 2;
-    for z in &mut row_z {
-        *z += z_offset;
-    }
-    for channel in &mut track_z {
-        for z in channel {
-            *z += z_offset;
-        }
-    }
+    reserve_columns(&plan, &mut nets, row_count, channel_count);
+    let track_count = assign_tracks(&plan, &mut nets, channel_count);
+    let (row_z, track_z) = layout_z(row_count, channel_count, &track_count);
 
     let size_x = plan
         .centre_x
