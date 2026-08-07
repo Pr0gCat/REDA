@@ -322,11 +322,20 @@
 }
 </script>
 <script type="module">
-import init, { list_circuits, Session, Axis } from './pkg/reda_viewer.js';
 import * as THREE from 'three';
 import { OrbitControls } from './vendor/examples/jsm/controls/OrbitControls.js';
 
-await init();
+// The wasm bundle is a build artifact that changes every time the compiler
+// changes, and browsers cache it aggressively enough that an ordinary reload
+// keeps serving a stale one -- which looks exactly like "the compiler change
+// did nothing". A per-load cache buster on both the glue and the .wasm makes
+// a plain refresh always show the current build. three.js and OrbitControls
+// are vendored and pinned, so they are imported normally and stay cached.
+const bust = `?v=${Date.now()}`;
+const wasm = await import(`./pkg/reda_viewer.js${bust}`);
+const { list_circuits, Session, Axis } = wasm;
+
+await wasm.default(new URL(`./pkg/reda_viewer_bg.wasm${bust}`, import.meta.url));
 
 // ---------------------------------------------------------------------
 // DOM handles
