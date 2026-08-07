@@ -21,6 +21,9 @@
 # committed. See docs/minecraft-server.md.
 /minecraft-server/
 
+# Python bytecode cache (conformance/ scripts)
+__pycache__/
+
 # IDE
 .idea/
 .vscode/
