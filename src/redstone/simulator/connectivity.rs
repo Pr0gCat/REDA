@@ -95,6 +95,40 @@ pub fn dust_connects(world: &World, from: Position, direction: Facing) -> Option
     dust_connections(world, from, direction).iter().next()
 }
 
+/// `dust_connections`, read in reverse: not "does dust already there join
+/// `from`'s net", but "which cells, if they held dust, *would* join it".
+///
+/// This is the derivation a spacing/keep-out model needs. `dust_connections`
+/// requires its same-layer, climb and descend targets to already be
+/// `RedstoneWire`; `dust_reach` drops exactly that one requirement and keeps
+/// every other condition identical -- same-layer is unconditional in both,
+/// and climb/descend still gate on the same neighbour's conductivity and
+/// `from.up()`'s, because that gating is about the *geometry already in the
+/// world* (a support block, an open ceiling), not about whether the target
+/// itself happens to be dust yet.
+///
+/// Climb and descend stay mutually exclusive for the same reason they are in
+/// `dust_connections`: they read the opposite conductivity of the same
+/// `neighbour` cell. So this never returns more than the same two slots
+/// `Connections` already provides for `dust_connections`.
+pub fn dust_reach(world: &World, from: Position, direction: Facing) -> Connections {
+    let mut reach = Connections::none();
+    let neighbour = from.offset(direction);
+
+    // same layer: nothing gates this in `dust_connections` either.
+    reach.push(neighbour);
+
+    let neighbour_conducts = is_conductive(world, neighbour);
+    if neighbour_conducts && !is_conductive(world, from.up()) {
+        reach.push(neighbour.up());
+    }
+    if !neighbour_conducts {
+        reach.push(neighbour.down());
+    }
+
+    reach
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -309,5 +343,63 @@ mod tests {
             backward.contains(&lower),
             "connection must be mutual: forward={forward:?} backward={backward:?}"
         );
+    }
+
+    #[test]
+    fn dust_reach_finds_an_empty_same_layer_neighbour_that_dust_connections_would_miss() {
+        // `dust_connections` requires the target to already be dust, so an
+        // empty neighbour is invisible to it -- but it would join the
+        // network the moment something filled it in, which is exactly what
+        // `dust_reach` has to report. The neighbour is open air, which also
+        // satisfies the descend rule's "not conductive" gate, so the cell
+        // below it is a second, independent reach target -- not a copy of
+        // the same-layer one.
+        let mut w = World::new(5, 5, 5);
+        place_dust_on_stone(&mut w, 1, 0, 2);
+
+        let from = Position::new(1, 1, 2);
+        assert!(dust_connections(&w, from, Facing::East).is_empty());
+        let reach: Vec<Position> = dust_reach(&w, from, Facing::East).iter().collect();
+        assert!(reach.contains(&Position::new(2, 1, 2)), "reach was {reach:?}");
+    }
+
+    #[test]
+    fn dust_reach_finds_an_open_climb_target() {
+        let mut w = World::new(5, 5, 5);
+        place_dust_on_stone(&mut w, 1, 0, 2);
+        w.set(2, 1, 2, stone());
+        // (2, 2, 2) left empty -- nothing sits there yet, but dust would climb into it.
+
+        let from = Position::new(1, 1, 2);
+        let reach: Vec<Position> = dust_reach(&w, from, Facing::East).iter().collect();
+        assert!(reach.contains(&Position::new(2, 2, 2)), "reach was {reach:?}");
+    }
+
+    #[test]
+    fn dust_reach_finds_an_open_descend_target() {
+        let mut w = World::new(5, 5, 5);
+        w.set(1, 1, 2, stone());
+        w.set(1, 2, 2, dust());
+        w.set(2, 0, 2, stone());
+        // (2, 1, 2) left empty -- nothing sits there yet, but dust would descend into it.
+
+        let from = Position::new(1, 2, 2);
+        let reach: Vec<Position> = dust_reach(&w, from, Facing::East).iter().collect();
+        assert!(reach.contains(&Position::new(2, 1, 2)), "reach was {reach:?}");
+    }
+
+    #[test]
+    fn dust_reach_does_not_climb_a_neighbour_that_is_not_conductive() {
+        // Same shape as `signal_does_not_climb_a_non_conductive_block`, but
+        // for the empty-neighbour case: glass can't carry the climb even as
+        // a hypothetical.
+        let mut w = World::new(5, 5, 5);
+        place_dust_on_stone(&mut w, 1, 0, 2);
+        w.set(2, 1, 2, glass());
+        // (2, 2, 2) left empty.
+
+        let from = Position::new(1, 1, 2);
+        let reach: Vec<Position> = dust_reach(&w, from, Facing::East).iter().collect();
+        assert!(!reach.contains(&Position::new(2, 2, 2)), "reach was {reach:?}");
     }
 }

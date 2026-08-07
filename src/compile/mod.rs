@@ -24,8 +24,9 @@
 //! dust does not charge a block sideways (only weakly, straight down), so
 //! every wire has to be terminated by an active component.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
+use crate::redstone::simulator::connectivity::{dust_connections, dust_reach};
 use crate::redstone::simulator::position::Position;
 use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
 use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
@@ -412,7 +413,46 @@ pub enum CompileError {
     CyclicNetlist,
     /// 訊號沒有驅動來源
     UndrivenSignal(String),
+    /// Two nets' routed dust physically joined into one electrical network --
+    /// the connectivity invariant `compile` checks right before it would
+    /// otherwise return a circuit (see `verify_connectivity`). This is the
+    /// only failure mode this module cannot attribute to a specific input:
+    /// it means the router itself produced a world whose actual
+    /// connectivity does not match the netlist that asked for it.
+    ConnectivityViolation {
+        /// The dust cell where the merge was discovered while walking the
+        /// network outward from `expected_cell`.
+        cell: (i32, i32, i32),
+        /// The net `cell` belongs to by the router's own bookkeeping --
+        /// not the net whose network reached it.
+        found_net: String,
+        /// The cell that first established which net this whole dust
+        /// network belongs to.
+        expected_cell: (i32, i32, i32),
+        /// The net `expected_cell` -- and therefore, if the invariant held,
+        /// every dust cell reachable from it -- belongs to.
+        expected_net: String,
+    },
 }
+
+impl std::fmt::Display for CompileError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CompileError::CyclicNetlist => write!(f, "netlist has a cycle"),
+            CompileError::UndrivenSignal(name) => write!(f, "signal `{name}` is never driven"),
+            CompileError::ConnectivityViolation { cell, found_net, expected_cell, expected_net } => {
+                write!(
+                    f,
+                    "connectivity violation: the dust at {cell:?} belongs to net `{found_net}`, \
+                     but is electrically connected to the network of net `{expected_net}` \
+                     (established at {expected_cell:?})"
+                )
+            }
+        }
+    }
+}
+
+impl std::error::Error for CompileError {}
 
 /// 編譯完成的電路。
 pub struct CompiledCircuit {
@@ -513,6 +553,7 @@ fn lay_dust_run(
     stop_before: Position,
     incoming_strength: u8,
     reserve: i32,
+    route: &mut Route,
 ) -> u8 {
     let len = straight_run_length(start, direction, stop_before);
     let (is_repeater, ending_strength) = plan_straight_run(len, incoming_strength, reserve);
@@ -520,11 +561,13 @@ fn lay_dust_run(
     let mut pos = start.offset(direction);
     for &place_repeater in &is_repeater {
         ensure_floor(world, pos);
+        route.claim(pos.down());
         if place_repeater {
             world.set(pos.x, pos.y, pos.z, repeater(direction));
         } else {
             world.set(pos.x, pos.y, pos.z, dust());
         }
+        route.claim(pos);
         pos = pos.offset(direction);
     }
     ending_strength
@@ -542,17 +585,21 @@ fn lay_dust_run(
 /// This segment always ends in that mandatory repeater, so it can never die
 /// no matter how weak `incoming_strength` is (as long as it is nonzero) --
 /// `reserve` is 0.
-fn lay_segment_to_corner(world: &mut World, start: Position, corner: Position, incoming_strength: u8) {
+fn lay_segment_to_corner(world: &mut World, start: Position, corner: Position, incoming_strength: u8, route: &mut Route) {
     let direction = direction_from(start, corner);
     let refresh_point = corner.offset(direction.opposite());
 
-    lay_dust_run(world, start, direction, refresh_point, incoming_strength, 0);
+    lay_dust_run(world, start, direction, refresh_point, incoming_strength, 0, route);
 
     ensure_floor(world, refresh_point);
+    route.claim(refresh_point.down());
     world.set(refresh_point.x, refresh_point.y, refresh_point.z, repeater(direction));
+    route.claim(refresh_point);
 
     ensure_floor(world, corner);
+    route.claim(corner.down());
     world.set(corner.x, corner.y, corner.z, dust());
+    route.claim(corner);
 }
 
 /// 鋪一段路線的最後一段，終點是某個閘的輸入插座：這一格**一定**是中繼器，
@@ -562,15 +609,23 @@ fn lay_segment_to_corner(world: &mut World, start: Position, corner: Position, i
 ///
 /// Same reasoning as `lay_segment_to_corner`: the mandatory repeater at
 /// `socket` means this segment can never die, so `reserve` is 0.
-fn lay_segment_to_socket(world: &mut World, start: Position, socket: Position, incoming_strength: u8) {
+fn lay_segment_to_socket(world: &mut World, start: Position, socket: Position, incoming_strength: u8, route: &mut Route) {
     let direction = direction_from(start, socket);
-    lay_dust_run(world, start, direction, socket, incoming_strength, 0);
+    lay_dust_run(world, start, direction, socket, incoming_strength, 0, route);
     ensure_floor(world, socket);
+    route.claim(socket.down());
     world.set(socket.x, socket.y, socket.z, repeater(direction));
+    route.claim(socket);
 }
 
 /// The two horizontal directions perpendicular to `direction` -- the only
 /// two `seal_cross_talk` may ever seal.
+///
+/// This is a fact about *this router's own layout* (a staircase only ever
+/// writes its direction of travel and the reverse, so only the sides are
+/// ever still open when a landing is placed), not a copy of any connection
+/// rule -- the rule itself (which of those side cells actually matters) is
+/// `dust_reach`'s job, called below.
 fn side_directions(direction: Facing) -> [Facing; 2] {
     match direction {
         Facing::North | Facing::South => [Facing::East, Facing::West],
@@ -579,25 +634,125 @@ fn side_directions(direction: Facing) -> [Facing; 2] {
     }
 }
 
-/// Seal `pos`'s two neighbours perpendicular to `direction` with stone,
-/// wherever they are still air.
+/// Which net a conductor cell belongs to. Built once, before a single seal
+/// is written for real, by replaying the whole circuit's placement against a
+/// throwaway world (`Footprint::record`) -- so the real pass already knows,
+/// for every net, exactly which cells *every other net* will end up using,
+/// not just whatever happens to already be on the page.
+type Reservation = HashMap<Position, usize>;
+
+/// The state one `emit` pass threads through every routing write.
 ///
-/// This is `move_between_layers`'s cross-talk guard, and it is deliberately
-/// narrower than the repeater ramp's old `seal_horizontal_neighbours` (which
-/// sealed all four horizontal neighbours). That was safe there because the
-/// old ramp never relied on `dust_connections`' climb/descend rule at all --
-/// a repeater and a support block drove the landing dust directly, so every
-/// neighbour was free to fill in. A dust staircase *is* built from that
-/// diagonal rule (see `move_between_layers`), and the rule requires one
-/// specific neighbour -- the one along the direction of travel -- to stay
-/// exactly as the climb/descend step leaves it; sealing it would sever the
-/// very connection the staircase exists to make. Only the two side
-/// neighbours are ever free of that constraint.
-fn seal_cross_talk(world: &mut World, pos: Position, direction: Facing) {
+/// A keep-out cell only ever needs stone if nothing else in the entire
+/// circuit will ever legitimately occupy it -- and that question can only be
+/// answered once every net's footprint is known, not one net at a time as
+/// the router happens to visit them. So `emit` runs twice: once recording,
+/// against a throwaway world, to build a complete `Reservation`; once
+/// enforcing, against the real world, consulting that now-complete
+/// reservation before it ever writes a seal.
+struct Footprint {
+    reservation: Reservation,
+    recording: bool,
+}
+
+impl Footprint {
+    fn record() -> Self {
+        Footprint { reservation: Reservation::new(), recording: true }
+    }
+
+    fn enforce(reservation: Reservation) -> Self {
+        Footprint { reservation, recording: false }
+    }
+
+    /// Record that `pos` is this net's conductor cell -- dust, a repeater,
+    /// or a block that physically supports either. A no-op once the
+    /// reservation is complete (`recording == false`): nothing should still
+    /// be discovering new cells at that point, only consulting them.
+    fn claim(&mut self, pos: Position, net: usize) {
+        if self.recording {
+            self.reservation.insert(pos, net);
+        }
+    }
+}
+
+/// Which net a routing write belongs to, and where to record the cells it
+/// touches -- bundled into one value purely so the low-level writers below
+/// take one parameter instead of two (`net` and `footprint` always travel
+/// together; every one of them ends up wanting both).
+struct Route<'a> {
+    net: usize,
+    footprint: &'a mut Footprint,
+}
+
+impl Route<'_> {
+    fn claim(&mut self, pos: Position) {
+        self.footprint.claim(pos, self.net);
+    }
+}
+
+/// Seal `pos`'s keep-out cells -- the neighbours that `dust_reach` says would
+/// join its net if they held dust -- wherever the completed reservation shows
+/// a *different* net will actually occupy one.
+///
+/// The other two cases are both left alone, and for the same underlying
+/// reason: this router always writes unconditionally, so a seal placed here
+/// now would simply be overwritten by whatever legitimately comes later --
+/// there is no case where materialising stone changes the outcome, only ones
+/// where it would either be redundant or futile:
+///
+/// - **Unclaimed** (`reservation` has no entry): nothing in the whole circuit
+///   ever touches this cell, so it stays air either way and an unreachable
+///   cell can never join anything. This is the case that made the old,
+///   undirected `seal_cross_talk` expensive -- it sealed every such cell on
+///   every ramp step, unconditionally, and every one of those blocks turns
+///   out to have been unnecessary (see this module's own doc comment on
+///   `compile`'s size, or the spacing-model spec's "Success" section).
+/// - **This net's own cell**: whatever gets written here later is exactly
+///   the connection this cell is supposed to carry.
+///
+/// Only the remaining case -- reserved for a *different* net -- is an actual
+/// keep-out violation, and even then sealing it cannot prevent the
+/// connection (the other net's write overwrites the seal regardless). It is
+/// sealed anyway, as a physically visible marker of a threat that
+/// `verify_connectivity` is what actually catches, loudly, once the world is
+/// finished -- this is defence in depth, not the mechanism the invariant
+/// depends on. In practice this case has never fired on any of this
+/// project's reference circuits: their existing column/track clearances
+/// already keep every net's footprint clear of every other's.
+///
+/// Only ever called while enforcing (`Footprint::recording == false`) --
+/// during the recording pass the reservation is necessarily incomplete, so a
+/// sealing decision made from it could not be trusted.
+fn seal_cross_talk(world: &mut World, pos: Position, direction: Facing, route: &Route) {
+    debug_assert!(!route.footprint.recording, "sealing must only happen once the reservation is complete");
     for side in side_directions(direction) {
-        let neighbour = pos.offset(side);
-        if world.get(neighbour.x, neighbour.y, neighbour.z).kind == BlockKind::Air {
-            world.set(neighbour.x, neighbour.y, neighbour.z, stone());
+        for candidate in dust_reach(world, pos, side).iter() {
+            if world.get(candidate.x, candidate.y, candidate.z).kind != BlockKind::Air {
+                continue;
+            }
+            match route.footprint.reservation.get(&candidate) {
+                // Nobody will ever occupy this cell -- leaving it air costs
+                // nothing, because nothing can ever turn it into a live
+                // connection either. Sealing it would only spend a block to
+                // guard against a write that will never happen.
+                None => {}
+                // This net's own material: whatever comes later here is
+                // exactly the connection this cell is supposed to carry.
+                Some(&owner) if owner == route.net => {}
+                // A different net will legitimately place its own conductor
+                // here. Sealing cannot stop that connection -- this router
+                // always writes unconditionally, so any later write simply
+                // overwrites the seal -- but it is a certain, not merely
+                // possible, cross-talk threat, so it is worth making
+                // physically obvious rather than silently trusting the later
+                // write to happen to land exactly here. `verify_connectivity`
+                // is what actually catches this, loudly, once the world is
+                // finished; this is defence in depth, not the mechanism the
+                // invariant depends on.
+                Some(_) => {
+                    world.set(candidate.x, candidate.y, candidate.z, stone());
+                }
+            }
         }
     }
 }
@@ -628,20 +783,19 @@ fn seal_cross_talk(world: &mut World, pos: Position, direction: Facing) {
 /// (`RAMP_LENGTH`'s comment derives why) and places no repeater -- the
 /// caller is responsible for having reserved that strength in whatever run
 /// feeds this ramp (`MAX_DUST_RUN`'s comment).
-fn move_between_layers(
-    world: &mut World,
-    entry: Position,
-    direction: Facing,
-    target_y: i32,
-) -> Position {
+fn move_between_layers(world: &mut World, entry: Position, direction: Facing, target_y: i32, route: &mut Route) -> Position {
     let mut current = entry;
     if target_y >= current.y {
         while current.y != target_y {
             let riser = current.offset(direction);
             world.set(riser.x, riser.y, riser.z, stone());
+            route.claim(riser);
             let landing = riser.up();
             world.set(landing.x, landing.y, landing.z, dust());
-            seal_cross_talk(world, landing, direction);
+            route.claim(landing);
+            if !route.footprint.recording {
+                seal_cross_talk(world, landing, direction, route);
+            }
             current = landing;
         }
     } else {
@@ -649,8 +803,12 @@ fn move_between_layers(
             let stepped = current.offset(direction);
             let landing = Position::new(stepped.x, stepped.y - 1, stepped.z);
             ensure_floor(world, landing);
+            route.claim(landing.down());
             world.set(landing.x, landing.y, landing.z, dust());
-            seal_cross_talk(world, landing, direction);
+            route.claim(landing);
+            if !route.footprint.recording {
+                seal_cross_talk(world, landing, direction, route);
+            }
             current = landing;
         }
     }
@@ -759,11 +917,12 @@ fn lay_track(
     world: &mut World,
     z: i32,
     source_x: i32,
-    min_x: i32,
-    max_x: i32,
+    span: (i32, i32),
     taps: &BTreeSet<i32>,
     incoming_strength: u8,
+    route: &mut Route,
 ) -> BTreeMap<i32, u8> {
+    let (min_x, max_x) = span;
     let mut exit_strength = BTreeMap::new();
     for (end, step) in [(min_x, -1i32), (max_x, 1i32)] {
         let length = (end - source_x) * step;
@@ -777,11 +936,13 @@ fn lay_track(
         for (k, &x) in cells.iter().enumerate() {
             let pos = Position::new(x, TRACK_Y, z);
             ensure_floor(world, pos);
+            route.claim(pos.down());
             if is_repeater[k] {
                 world.set(pos.x, pos.y, pos.z, repeater(direction));
             } else {
                 world.set(pos.x, pos.y, pos.z, dust());
             }
+            route.claim(pos);
             if taps.contains(&x) {
                 exit_strength.insert(x, strengths[k]);
             }
@@ -1394,6 +1555,299 @@ fn plan_strengths(
     (entry_strength, exit_strength)
 }
 
+/// What `emit` produces besides the blocks it writes into `world` --
+/// everything `CompiledCircuit` needs that is not the world itself.
+struct EmitResult {
+    input_positions: BTreeMap<String, (i32, i32, i32)>,
+    output_positions: BTreeMap<String, (i32, i32, i32)>,
+    gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
+}
+
+/// Write the whole circuit into `world`: every gate, every primary input,
+/// every net's ramps/columns/tracks, and every output lamp.
+///
+/// This is called twice by `compile` against two different worlds and two
+/// different `Footprint` modes (see `Footprint`'s own doc comment) -- once
+/// to record where everything ends up before a single seal is written for
+/// real, once to actually build the circuit enforcing keep-out against that
+/// now-complete picture. Both calls run the exact same code, so the two
+/// worlds can never disagree about where anything is -- only about whether
+/// the orphaned keep-out cells around a ramp landing got sealed.
+fn emit(
+    world: &mut World,
+    netlist: &Netlist,
+    plan: &Floorplan,
+    row_z: &[i32],
+    nets: &[Net],
+    track_z: &[Vec<i32>],
+    footprint: &mut Footprint,
+) -> EmitResult {
+    let mut gate_cell: Vec<NorCell> = Vec::with_capacity(netlist.gates.len());
+    for _ in 0..netlist.gates.len() {
+        gate_cell.push(NorCell { size: (0, 0, 0), input_offsets: Vec::new(), output_offset: (0, 0, 0) });
+    }
+    for (g, gate) in netlist.gates.iter().enumerate() {
+        let origin = (plan.centre_x[g], GATE_Y, row_z[plan.row_of[g]]);
+        gate_cell[g] = place_nor_gate(world, origin, gate.inputs.len());
+    }
+
+    let mut input_positions: BTreeMap<String, (i32, i32, i32)> = BTreeMap::new();
+    let mut lever_pin: Vec<Position> = Vec::with_capacity(netlist.inputs.len());
+    for (i, name) in netlist.inputs.iter().enumerate() {
+        let home = Position::new(plan.lever_x[i], GATE_Y, row_z[0]);
+        let (lever_pos, pin) = place_primary_input(world, home);
+        input_positions.insert(name.clone(), (lever_pos.x, lever_pos.y, lever_pos.z));
+        lever_pin.push(pin);
+    }
+
+    let torch_of = |g: usize, cell: &NorCell| -> Position {
+        Position::new(
+            plan.centre_x[g] + cell.output_offset.0,
+            GATE_Y + cell.output_offset.1,
+            row_z[plan.row_of[g]] + cell.output_offset.2,
+        )
+    };
+
+    let mut gate_pin: Vec<Position> = Vec::with_capacity(netlist.gates.len());
+    let mut gate_output_positions: BTreeMap<String, (i32, i32, i32)> = BTreeMap::new();
+    for (g, cell) in gate_cell.iter().enumerate() {
+        let torch = torch_of(g, cell);
+        gate_output_positions.insert(netlist.gates[g].output.clone(), (torch.x, torch.y, torch.z));
+        let pin = torch.offset(OUTPUT_DIRECTION);
+        ensure_floor(world, pin);
+        world.set(pin.x, pin.y, pin.z, dust());
+        gate_pin.push(pin);
+    }
+
+    // Strength planning: work out what every ramp's entry and every track's
+    // exits will carry, before any of them are actually built. See
+    // `plan_strengths` for why this has to happen up front rather than
+    // inline in the passes below.
+    let (entry_strength, exit_strength) = plan_strengths(nets, plan, track_z, &lever_pin, &gate_pin);
+
+    // Every net's own pin -- the first cell of its route -- belongs to that
+    // net too, exactly like everything the passes below claim as they write
+    // it. Claiming it here, once, up front covers every net regardless of
+    // whether it turns out to have any ramps at all.
+    for (n, net) in nets.iter().enumerate() {
+        match net.source {
+            Source::Lever(i) => footprint.claim(lever_pin[i], n),
+            Source::Gate(g) => footprint.claim(gate_pin[g], n),
+        }
+    }
+
+    // Ramps first. `move_between_layers` seals the blocks around each landing,
+    // and a seal only fills air -- so anything that has to run *through* a
+    // sealed cell (the tracks, and the columns) has to be laid afterwards to
+    // overwrite it.
+    for (n, net) in nets.iter().enumerate() {
+        let mut route = Route { net: n, footprint: &mut *footprint };
+        for slot in 0..net.channels.len() {
+            let channel = net.channels[slot];
+            let z = track_z[channel][net.tracks[slot]];
+            let entry = Position::new(net.entry_column(slot), GATE_Y, z + RAMP_LENGTH);
+            move_between_layers(world, entry, Facing::North, TRACK_Y, &mut route);
+            for exit in net.exits(slot, &plan.centre_x) {
+                let top = Position::new(exit.x(), TRACK_Y, z);
+                move_between_layers(world, top, Facing::North, GATE_Y, &mut route);
+            }
+        }
+    }
+
+    // Columns at `GATE_Y`: from a source pin up to its ramp, and from a ramp's
+    // landing on to whatever it feeds.
+    for (n, net) in nets.iter().enumerate() {
+        let mut route = Route { net: n, footprint: &mut *footprint };
+        for slot in 0..net.channels.len() {
+            let channel = net.channels[slot];
+            let z = track_z[channel][net.tracks[slot]];
+            let entry = Position::new(net.entry_column(slot), GATE_Y, z + RAMP_LENGTH);
+            if slot == 0 {
+                let pin = match net.source {
+                    Source::Lever(i) => lever_pin[i],
+                    Source::Gate(g) => gate_pin[g],
+                };
+                lay_dust_run(
+                    world,
+                    pin,
+                    Facing::North,
+                    entry.offset(Facing::North),
+                    MAX_SIGNAL_STRENGTH,
+                    RAMP_LENGTH,
+                    &mut route,
+                );
+            }
+            for exit in net.exits(slot, &plan.centre_x) {
+                let landing = Position::new(exit.x(), GATE_Y, z - RAMP_LENGTH);
+                let landing_strength = exit_strength[n][slot][&exit.x()] - RAMP_LENGTH as u8;
+                match exit {
+                    Exit::Socket { gate, input_index, .. } => {
+                        let (dx, dy, dz) = gate_cell[gate].input_offsets[input_index];
+                        let socket = Position::new(
+                            plan.centre_x[gate] + dx,
+                            GATE_Y + dy,
+                            row_z[plan.row_of[gate]] + dz,
+                        );
+                        if socket.x == landing.x {
+                            lay_segment_to_socket(world, landing, socket, landing_strength, &mut route);
+                        } else {
+                            let corner =
+                                Position::new(landing.x, GATE_Y, row_z[plan.row_of[gate]]);
+                            lay_segment_to_corner(world, landing, corner, landing_strength, &mut route);
+                            // `corner` always follows `lay_segment_to_corner`'s own
+                            // mandatory repeater, so it is always fresh.
+                            lay_segment_to_socket(world, corner, socket, MAX_SIGNAL_STRENGTH, &mut route);
+                        }
+                    }
+                    Exit::Feedthrough { x, next_slot } => {
+                        let next_channel = net.channels[next_slot];
+                        let next_z = track_z[next_channel][net.tracks[next_slot]];
+                        let next_entry = Position::new(x, GATE_Y, next_z + RAMP_LENGTH);
+                        lay_dust_run(
+                            world,
+                            landing,
+                            Facing::North,
+                            next_entry.offset(Facing::North),
+                            landing_strength,
+                            RAMP_LENGTH,
+                            &mut route,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    // Tracks last, so they overwrite the ramps' seal blocks where they have to
+    // pass through them.
+    for (n, net) in nets.iter().enumerate() {
+        let mut route = Route { net: n, footprint: &mut *footprint };
+        for slot in 0..net.channels.len() {
+            let channel = net.channels[slot];
+            let z = track_z[channel][net.tracks[slot]];
+            let source_x = net.entry_column(slot);
+            let (lo, hi) = net.span(slot, &plan.centre_x);
+            let mut taps: BTreeSet<i32> = BTreeSet::new();
+            taps.insert(source_x);
+            for exit in net.exits(slot, &plan.centre_x) {
+                taps.insert(exit.x());
+            }
+            let track_incoming = entry_strength[n][slot] - RAMP_LENGTH as u8;
+            lay_track(world, z, source_x, (lo, hi), &taps, track_incoming, &mut route);
+        }
+    }
+
+    // Every netlist output gets a lamp so a person can read it by eye instead
+    // of having to know which buried wall torch to stare at.
+    //
+    // The obvious placement -- directly above the output torch, the one
+    // direction a wall torch's power is never withheld (`power_emitted_toward`:
+    // `direction == Facing::Up => full`, and `full.block_power` there is
+    // `Strong`) -- turns out to be wrong. Verified in the simulator: it makes
+    // `compile()`'s own reference circuits oscillate and never settle. The
+    // reason is indirect power: `recompute_dust_strengths` treats *any*
+    // strongly-powered solid block as a conduit that recharges every redstone
+    // wire adjacent to it, not just wires that are meant to be on that net
+    // (this is also how a NOR cell's own merge dust weakly powers its centre
+    // block -- the same mechanism, just at `Strong` instead of `Weak`
+    // strength). A lamp sitting right above the torch is orthogonally
+    // adjacent to that gate's own merge dust one row south of it at the same
+    // Y, so a strongly-lit lamp would immediately re-inject the gate's own
+    // output back into its input pool -- output high -> merge dust charged ->
+    // centre block powered -> torch (and lamp) should go off -> merge dust
+    // uncharged -> torch back on -> repeat forever.
+    //
+    // The safe fix is to only ever weakly power the lamp, since
+    // `recompute_dust_strengths` only treats *strongly* powered blocks as
+    // conduits (`if kind == BlockPower::Strong`) -- a weakly powered lamp can
+    // never leak back into a neighbouring wire, whatever it happens to be
+    // adjacent to. Redstone dust only ever weakly powers the block directly
+    // *beneath* it (`power_emitted_toward`'s `RedstoneWire` arm), so the lamp
+    // goes under the gate's own output pin dust (`gate_pin`), replacing the
+    // plain floor block `ensure_floor` already put there to hold that dust up
+    // -- a lamp satisfies the same "full top face" support requirement a
+    // stone floor does, so nothing else about that dust changes. That
+    // location is otherwise never touched by any other net (each gate owns
+    // its output column exclusively), so the lamp is guaranteed to be powered
+    // by nothing but its own gate's output.
+    let mut output_positions: BTreeMap<String, (i32, i32, i32)> = BTreeMap::new();
+    for output_name in &netlist.outputs {
+        let g = netlist
+            .gates
+            .iter()
+            .position(|gate| &gate.output == output_name)
+            .expect("every output was checked to be driven by a gate above");
+        let lamp_pos = gate_pin[g].down();
+        world.set(lamp_pos.x, lamp_pos.y, lamp_pos.z, lamp());
+        output_positions.insert(output_name.clone(), (lamp_pos.x, lamp_pos.y, lamp_pos.z));
+    }
+
+    EmitResult { input_positions, output_positions, gate_output_positions }
+}
+
+/// Which net `nets[index]` is, by the name a person compiling the netlist
+/// would recognise -- the lever's own input name, or the gate output the net
+/// carries. Used only for naming cells in a `ConnectivityViolation`.
+fn net_name(netlist: &Netlist, nets: &[Net], index: usize) -> String {
+    match nets[index].source {
+        Source::Lever(i) => netlist.inputs[i].clone(),
+        Source::Gate(g) => netlist.gates[g].output.clone(),
+    }
+}
+
+/// The connectivity invariant: every dust network the finished world
+/// actually contains must belong to exactly one net.
+///
+/// This does not know anything about tracks, columns or ramps -- it only
+/// knows what `dust_connections` says is physically joined (the same rule
+/// the simulator itself walks) and what `reservation` says every cell was
+/// *for*, and it fails the moment those two disagree. That independence is
+/// the point: it catches a routing bug regardless of which pass caused it,
+/// including ones this module's own keep-out logic has never heard of.
+fn verify_connectivity(world: &World, reservation: &Reservation, netlist: &Netlist, nets: &[Net]) -> Result<(), CompileError> {
+    let mut visited: HashSet<Position> = HashSet::new();
+
+    for flat in world.positions_of(BlockKind::RedstoneWire) {
+        let (x, y, z) = world.decode(flat);
+        let start = Position::new(x, y, z);
+        if !visited.insert(start) {
+            continue;
+        }
+
+        let mut owner: Option<(usize, Position)> = reservation.get(&start).map(|&net| (net, start));
+        let mut queue: VecDeque<Position> = VecDeque::new();
+        queue.push_back(start);
+
+        while let Some(pos) = queue.pop_front() {
+            for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
+                for next in dust_connections(world, pos, direction).iter() {
+                    if !visited.insert(next) {
+                        continue;
+                    }
+                    queue.push_back(next);
+
+                    if let Some(&found_net) = reservation.get(&next) {
+                        match owner {
+                            None => owner = Some((found_net, next)),
+                            Some((expected_net, expected_cell)) if expected_net != found_net => {
+                                return Err(CompileError::ConnectivityViolation {
+                                    cell: (next.x, next.y, next.z),
+                                    found_net: net_name(netlist, nets, found_net),
+                                    expected_cell: (expected_cell.x, expected_cell.y, expected_cell.z),
+                                    expected_net: net_name(netlist, nets, expected_net),
+                                });
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// 把一個網表編譯成一個紅石世界。
 pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     for gate in &netlist.gates {
@@ -1443,195 +1897,113 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         + 4;
     let size_z = row_z[0] + 4;
 
-    let mut world = World::new(size_x.max(8), WORLD_HEIGHT, size_z.max(8));
-
     // ---------------------------------------------------------------
     // Emission
     // ---------------------------------------------------------------
-
-    let mut gate_cell: Vec<NorCell> = Vec::with_capacity(netlist.gates.len());
-    for _ in 0..netlist.gates.len() {
-        gate_cell.push(NorCell { size: (0, 0, 0), input_offsets: Vec::new(), output_offset: (0, 0, 0) });
-    }
-    for (g, gate) in netlist.gates.iter().enumerate() {
-        let origin = (plan.centre_x[g], GATE_Y, row_z[plan.row_of[g]]);
-        gate_cell[g] = place_nor_gate(&mut world, origin, gate.inputs.len());
-    }
-
-    let mut input_positions: BTreeMap<String, (i32, i32, i32)> = BTreeMap::new();
-    let mut lever_pin: Vec<Position> = Vec::with_capacity(netlist.inputs.len());
-    for (i, name) in netlist.inputs.iter().enumerate() {
-        let home = Position::new(plan.lever_x[i], GATE_Y, row_z[0]);
-        let (lever_pos, pin) = place_primary_input(&mut world, home);
-        input_positions.insert(name.clone(), (lever_pos.x, lever_pos.y, lever_pos.z));
-        lever_pin.push(pin);
-    }
-
-    let torch_of = |g: usize, cell: &NorCell| -> Position {
-        Position::new(
-            plan.centre_x[g] + cell.output_offset.0,
-            GATE_Y + cell.output_offset.1,
-            row_z[plan.row_of[g]] + cell.output_offset.2,
-        )
-    };
-
-    let mut gate_pin: Vec<Position> = Vec::with_capacity(netlist.gates.len());
-    let mut gate_output_positions: BTreeMap<String, (i32, i32, i32)> = BTreeMap::new();
-    for (g, cell) in gate_cell.iter().enumerate() {
-        let torch = torch_of(g, cell);
-        gate_output_positions.insert(netlist.gates[g].output.clone(), (torch.x, torch.y, torch.z));
-        let pin = torch.offset(OUTPUT_DIRECTION);
-        ensure_floor(&mut world, pin);
-        world.set(pin.x, pin.y, pin.z, dust());
-        gate_pin.push(pin);
-    }
-
-    // Strength planning: work out what every ramp's entry and every track's
-    // exits will carry, before any of them are actually built. See
-    // `plan_strengths` for why this has to happen up front rather than
-    // inline in the passes below.
-    let (entry_strength, exit_strength) = plan_strengths(&nets, &plan, &track_z, &lever_pin, &gate_pin);
-
-    // Ramps first. `move_between_layers` seals the blocks around each landing,
-    // and a seal only fills air -- so anything that has to run *through* a
-    // sealed cell (the tracks, and the columns) has to be laid afterwards to
-    // overwrite it.
-    for net in &nets {
-        for slot in 0..net.channels.len() {
-            let channel = net.channels[slot];
-            let z = track_z[channel][net.tracks[slot]];
-            let entry = Position::new(net.entry_column(slot), GATE_Y, z + RAMP_LENGTH);
-            move_between_layers(&mut world, entry, Facing::North, TRACK_Y);
-            for exit in net.exits(slot, &plan.centre_x) {
-                let top = Position::new(exit.x(), TRACK_Y, z);
-                move_between_layers(&mut world, top, Facing::North, GATE_Y);
-            }
-        }
-    }
-
-    // Columns at `GATE_Y`: from a source pin up to its ramp, and from a ramp's
-    // landing on to whatever it feeds.
-    for (n, net) in nets.iter().enumerate() {
-        for slot in 0..net.channels.len() {
-            let channel = net.channels[slot];
-            let z = track_z[channel][net.tracks[slot]];
-            let entry = Position::new(net.entry_column(slot), GATE_Y, z + RAMP_LENGTH);
-            if slot == 0 {
-                let pin = match net.source {
-                    Source::Lever(i) => lever_pin[i],
-                    Source::Gate(g) => gate_pin[g],
-                };
-                lay_dust_run(
-                    &mut world,
-                    pin,
-                    Facing::North,
-                    entry.offset(Facing::North),
-                    MAX_SIGNAL_STRENGTH,
-                    RAMP_LENGTH,
-                );
-            }
-            for exit in net.exits(slot, &plan.centre_x) {
-                let landing = Position::new(exit.x(), GATE_Y, z - RAMP_LENGTH);
-                let landing_strength = exit_strength[n][slot][&exit.x()] - RAMP_LENGTH as u8;
-                match exit {
-                    Exit::Socket { gate, input_index, .. } => {
-                        let (dx, dy, dz) = gate_cell[gate].input_offsets[input_index];
-                        let socket = Position::new(
-                            plan.centre_x[gate] + dx,
-                            GATE_Y + dy,
-                            row_z[plan.row_of[gate]] + dz,
-                        );
-                        if socket.x == landing.x {
-                            lay_segment_to_socket(&mut world, landing, socket, landing_strength);
-                        } else {
-                            let corner =
-                                Position::new(landing.x, GATE_Y, row_z[plan.row_of[gate]]);
-                            lay_segment_to_corner(&mut world, landing, corner, landing_strength);
-                            // `corner` always follows `lay_segment_to_corner`'s own
-                            // mandatory repeater, so it is always fresh.
-                            lay_segment_to_socket(&mut world, corner, socket, MAX_SIGNAL_STRENGTH);
-                        }
-                    }
-                    Exit::Feedthrough { x, next_slot } => {
-                        let next_channel = net.channels[next_slot];
-                        let next_z = track_z[next_channel][net.tracks[next_slot]];
-                        let next_entry = Position::new(x, GATE_Y, next_z + RAMP_LENGTH);
-                        lay_dust_run(
-                            &mut world,
-                            landing,
-                            Facing::North,
-                            next_entry.offset(Facing::North),
-                            landing_strength,
-                            RAMP_LENGTH,
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    // Tracks last, so they overwrite the ramps' seal blocks where they have to
-    // pass through them.
-    for (n, net) in nets.iter().enumerate() {
-        for slot in 0..net.channels.len() {
-            let channel = net.channels[slot];
-            let z = track_z[channel][net.tracks[slot]];
-            let source_x = net.entry_column(slot);
-            let (lo, hi) = net.span(slot, &plan.centre_x);
-            let mut taps: BTreeSet<i32> = BTreeSet::new();
-            taps.insert(source_x);
-            for exit in net.exits(slot, &plan.centre_x) {
-                taps.insert(exit.x());
-            }
-            let track_incoming = entry_strength[n][slot] - RAMP_LENGTH as u8;
-            lay_track(&mut world, z, source_x, lo, hi, &taps, track_incoming);
-        }
-    }
-
-    // Every netlist output gets a lamp so a person can read it by eye instead
-    // of having to know which buried wall torch to stare at.
     //
-    // The obvious placement -- directly above the output torch, the one
-    // direction a wall torch's power is never withheld (`power_emitted_toward`:
-    // `direction == Facing::Up => full`, and `full.block_power` there is
-    // `Strong`) -- turns out to be wrong. Verified in the simulator: it makes
-    // `compile()`'s own reference circuits oscillate and never settle. The
-    // reason is indirect power: `recompute_dust_strengths` treats *any*
-    // strongly-powered solid block as a conduit that recharges every redstone
-    // wire adjacent to it, not just wires that are meant to be on that net
-    // (this is also how a NOR cell's own merge dust weakly powers its centre
-    // block -- the same mechanism, just at `Strong` instead of `Weak`
-    // strength). A lamp sitting right above the torch is orthogonally
-    // adjacent to that gate's own merge dust one row south of it at the same
-    // Y, so a strongly-lit lamp would immediately re-inject the gate's own
-    // output back into its input pool -- output high -> merge dust charged ->
-    // centre block powered -> torch (and lamp) should go off -> merge dust
-    // uncharged -> torch back on -> repeat forever.
-    //
-    // The safe fix is to only ever weakly power the lamp, since
-    // `recompute_dust_strengths` only treats *strongly* powered blocks as
-    // conduits (`if kind == BlockPower::Strong`) -- a weakly powered lamp can
-    // never leak back into a neighbouring wire, whatever it happens to be
-    // adjacent to. Redstone dust only ever weakly powers the block directly
-    // *beneath* it (`power_emitted_toward`'s `RedstoneWire` arm), so the lamp
-    // goes under the gate's own output pin dust (`gate_pin`), replacing the
-    // plain floor block `ensure_floor` already put there to hold that dust up
-    // -- a lamp satisfies the same "full top face" support requirement a
-    // stone floor does, so nothing else about that dust changes. That
-    // location is otherwise never touched by any other net (each gate owns
-    // its output column exclusively), so the lamp is guaranteed to be powered
-    // by nothing but its own gate's output.
-    let mut output_positions: BTreeMap<String, (i32, i32, i32)> = BTreeMap::new();
-    for output_name in &netlist.outputs {
-        let g = netlist
-            .gates
-            .iter()
-            .position(|gate| &gate.output == output_name)
-            .expect("every output was checked to be driven by a gate above");
-        let lamp_pos = gate_pin[g].down();
-        world.set(lamp_pos.x, lamp_pos.y, lamp_pos.z, lamp());
-        output_positions.insert(output_name.clone(), (lamp_pos.x, lamp_pos.y, lamp_pos.z));
-    }
+    // Two passes over the exact same code (`emit`). The first, recording
+    // pass runs against a throwaway world purely to learn where every net's
+    // conductor cells end up -- ramps, columns and tracks alike, for every
+    // net, not just the ones already written when a given ramp is placed.
+    // Only once that whole-circuit picture exists does the second pass run
+    // for real, consulting it so a keep-out cell is only ever sealed with
+    // stone when nothing else in the circuit will ever legitimately use it.
+    // See `Footprint` and `seal_cross_talk` for why that split is what makes
+    // the spacing constraint free where nothing is near.
+
+    let mut scratch = World::new(size_x.max(8), WORLD_HEIGHT, size_z.max(8));
+    let mut footprint = Footprint::record();
+    emit(&mut scratch, netlist, &plan, &row_z, &nets, &track_z, &mut footprint);
+    drop(scratch);
+
+    let mut footprint = Footprint::enforce(footprint.reservation);
+    let mut world = World::new(size_x.max(8), WORLD_HEIGHT, size_z.max(8));
+    let EmitResult { input_positions, output_positions, gate_output_positions } =
+        emit(&mut world, netlist, &plan, &row_z, &nets, &track_z, &mut footprint);
+
+    // The connectivity invariant: whatever the two passes above actually
+    // wrote, it must partition into exactly the nets the netlist asked for.
+    // Checked here, unconditionally, on every compile -- not just the ones a
+    // test happens to exercise -- because a violation is a bug in *this*
+    // router, not in the netlist it was given.
+    verify_connectivity(&world, &footprint.reservation, netlist, &nets)?;
 
     Ok(CompiledCircuit { world, input_positions, output_positions, gate_output_positions })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A minimal `Net` for tests that only care about `net_name` / ownership
+    /// lookups, not real routing geometry -- `verify_connectivity` never
+    /// looks at anything but `source`.
+    fn nameless_net(source: Source) -> Net {
+        Net { source, source_column: 0, channels: Vec::new(), tracks: Vec::new(), sinks: Vec::new(), hops: Vec::new() }
+    }
+
+    /// The connectivity invariant, built directly rather than hoped for:
+    /// two separate dust cells, each reserved for a different net, placed
+    /// next to each other so `dust_connections`' same-layer rule joins them
+    /// into one electrical network. No router, no netlist compile -- this
+    /// exercises `verify_connectivity` on a world constructed by hand,
+    /// exactly the "two nets routed so their dust touches" case the spacing
+    /// model spec asks for.
+    #[test]
+    fn verify_connectivity_rejects_two_nets_whose_dust_touches() {
+        let netlist = Netlist { inputs: vec!["a".to_string(), "b".to_string()], outputs: Vec::new(), gates: Vec::new() };
+        let nets = vec![nameless_net(Source::Lever(0)), nameless_net(Source::Lever(1))];
+
+        let mut world = World::new(5, 5, 5);
+        let net_a_cell = Position::new(1, 1, 2);
+        let net_b_cell = Position::new(2, 1, 2);
+        world.set(net_a_cell.x, net_a_cell.y - 1, net_a_cell.z, stone());
+        world.set(net_a_cell.x, net_a_cell.y, net_a_cell.z, dust());
+        world.set(net_b_cell.x, net_b_cell.y - 1, net_b_cell.z, stone());
+        world.set(net_b_cell.x, net_b_cell.y, net_b_cell.z, dust());
+
+        let mut reservation = Reservation::new();
+        reservation.insert(net_a_cell, 0);
+        reservation.insert(net_b_cell, 1);
+
+        let err = verify_connectivity(&world, &reservation, &netlist, &nets)
+            .expect_err("adjacent dust reserved for two different nets must be rejected");
+
+        assert_eq!(
+            err,
+            CompileError::ConnectivityViolation {
+                cell: (net_b_cell.x, net_b_cell.y, net_b_cell.z),
+                found_net: "b".to_string(),
+                expected_cell: (net_a_cell.x, net_a_cell.y, net_a_cell.z),
+                expected_net: "a".to_string(),
+            }
+        );
+
+        let message = err.to_string();
+        assert!(message.contains("(2, 1, 2)"), "message must name the offending cell: {message}");
+        assert!(message.contains('a') && message.contains('b'), "message must name both nets: {message}");
+    }
+
+    /// The same two cells, but far enough apart that `dust_connections`
+    /// never joins them -- the invariant must stay silent when nothing
+    /// actually touches.
+    #[test]
+    fn verify_connectivity_accepts_two_nets_whose_dust_never_touches() {
+        let netlist = Netlist { inputs: vec!["a".to_string(), "b".to_string()], outputs: Vec::new(), gates: Vec::new() };
+        let nets = vec![nameless_net(Source::Lever(0)), nameless_net(Source::Lever(1))];
+
+        let mut world = World::new(6, 5, 6);
+        let net_a_cell = Position::new(1, 1, 2);
+        let net_b_cell = Position::new(4, 1, 2);
+        world.set(net_a_cell.x, net_a_cell.y - 1, net_a_cell.z, stone());
+        world.set(net_a_cell.x, net_a_cell.y, net_a_cell.z, dust());
+        world.set(net_b_cell.x, net_b_cell.y - 1, net_b_cell.z, stone());
+        world.set(net_b_cell.x, net_b_cell.y, net_b_cell.z, dust());
+
+        let mut reservation = Reservation::new();
+        reservation.insert(net_a_cell, 0);
+        reservation.insert(net_b_cell, 1);
+
+        assert_eq!(verify_connectivity(&world, &reservation, &netlist, &nets), Ok(()));
+    }
 }
