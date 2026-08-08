@@ -34,7 +34,10 @@ use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
 use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use crate::redstone::world::storage::World;
 
+pub mod equivalence;
+pub mod primitive_graph;
 pub mod routing_stats;
+pub mod topology;
 
 // ---------------------------------------------------------------------
 // 網表
