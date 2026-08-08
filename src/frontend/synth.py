@@ -7,10 +7,10 @@ Invoked as a subprocess by `src/frontend/mod.rs`:
 
 Runs the Verilog source through Yosys (via `yowasp-yosys`, a WASM build of
 Yosys with ABC built in) and technology-maps every bit of combinational logic
-onto exactly the NOR1/NOR2/NOR3/BUF cells described in `redstone_nor.genlib`
-in this same directory -- see that file for where its area/delay numbers
-come from. `write_json` then dumps the mapped netlist for the Rust side to
-read (`src/frontend/yosys_json.rs`).
+onto exactly the NOR1/NOR2/NOR3/BUF/OR2/OR3 cells described in
+`redstone_nor.genlib` in this same directory -- see that file for where its
+area/delay numbers come from. `write_json` then dumps the mapped netlist for
+the Rust side to read (`src/frontend/yosys_json.rs`).
 
 Requires the `yowasp-yosys` package (`pip install yowasp-yosys`, or see the
 project's `requirements.txt`). If it is missing, this prints a message that

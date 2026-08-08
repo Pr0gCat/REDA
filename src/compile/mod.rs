@@ -367,12 +367,36 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
 /// support is a solid block that a repeater must actively drive (dust
 /// cannot charge a block sideways); a merge's own junction is plain dust,
 /// which joins any adjacent dust directly, so nothing has to drive it at
-/// all. `output_offset` is `(0, 0, 0)` -- unlike a NOR's torch, which sits
-/// one cell out from its support with the gate's own outbound net starting
-/// one cell further still, a merge has no active output component to stand
-/// anywhere: `origin` itself doubles as the "output" position `emit`
-/// records for this gate, and `emit`'s own `is_merge` branch knows to start
-/// this gate's outbound net there directly instead of one hop further out.
+/// all.
+///
+/// `output_offset` stays `(0, 0, 0)`: `origin` -- the electrical junction
+/// itself -- is what `emit` records in `gate_output_positions` for this
+/// gate, exactly as before. But `origin` is directly adjacent to every one
+/// of this same gate's own occupied input sockets (`INPUT_DIRECTIONS`:
+/// west, east, south) -- so `emit` must **not** start this gate's own
+/// *outbound route* (`gate_pin`) from `origin` directly the way an earlier
+/// version of this function's own doc comment here used to say it should:
+/// a downstream route leaving from `origin` and heading in any of those
+/// three directions -- something every router pass does routinely, with no
+/// reason to think of `origin` as special -- would walk straight back
+/// through its own gate's input wiring, silently overwriting one branch's
+/// carefully-placed isolating repeater with plain dust. Caught by the real
+/// simulator disagreeing with the signal-strength invariant on the
+/// Verilog-derived seven-segment decoder (the first netlist dense enough
+/// with real merges to ever route one this way), not by any hand-built
+/// test.
+///
+/// The fix lives in `emit`, not here: it now starts a merge's outbound
+/// route one hop out from `origin`, in `OUTPUT_DIRECTION`, exactly the way
+/// it always started a NOR's own outbound route one hop out from *its*
+/// torch -- this function already reserved that cell (`output_socket`,
+/// below) in the bounding box it returns, it just never got a chance to
+/// matter as an actual routing origin until now. One hop is clearance
+/// enough: `output_socket` is not adjacent to any of `origin`'s own
+/// occupied faces, only to `origin` itself and to whatever this gate
+/// drives -- exactly the same safety a NOR's own two-stage
+/// support-then-torch-then-pin clearance provides, just one stage shorter
+/// because a merge has no torch cell to skip past in the first place.
 pub fn place_merge_gate(world: &mut World, origin: (i32, i32, i32), input_count: usize) -> NorCell {
     assert!(
         input_count <= INPUT_DIRECTIONS.len(),
@@ -392,10 +416,13 @@ pub fn place_merge_gate(world: &mut World, origin: (i32, i32, i32), input_count:
         input_offsets.push((socket.x - support.x, socket.y - support.y, socket.z - support.z));
     }
 
-    // No output torch to place -- `output_socket` here is where this gate's
-    // own outbound net's first cell (`emit`'s `gate_pin`) will end up, one
-    // hop out from the junction itself (see this function's own doc comment
-    // for why that is only one hop, not two).
+    // No output torch to place -- `output_socket` is where this gate's own
+    // outbound net's first cell (`emit`'s `gate_pin`) ends up, one hop out
+    // from the junction itself (see this function's own doc comment for why
+    // that clearance matters even though nothing physical stands there).
+    // `emit` writes the actual dust for it, exactly as it does for a NOR's
+    // own pin -- this function only reserves the cell in `input_offsets`'/
+    // the bounding box's terms, the same way it always has.
     let output_socket = support.offset(OUTPUT_DIRECTION);
     let mut min = (support.x, support.y, support.z);
     let mut max = (support.x, support.y, support.z);
@@ -414,6 +441,15 @@ pub fn place_merge_gate(world: &mut World, origin: (i32, i32, i32), input_count:
 
     let size = (max.0 - min.0 + 1, max.1 - min.1 + 1, max.2 - min.2 + 1);
 
+    // `output_offset` stays `(0, 0, 0)` -- `origin` itself is still what
+    // `gate_output_positions` records as this gate's own observable
+    // position (`compile_places_the_isolating_repeater_on_exactly_the_
+    // shared_branch`, `tests/or_merge.rs`, reads a socket straight off it:
+    // `junction.offset(Facing::West)`), and origin genuinely is the
+    // electrical junction. The one-hop clearance this function's own doc
+    // comment now explains is `emit`'s job to apply, to where its outbound
+    // *route* starts (`gate_pin`) -- not to this recorded position, which
+    // must stay put.
     NorCell { size, input_offsets, output_offset: (0, 0, 0) }
 }
 
@@ -868,6 +904,78 @@ const ORIGIN_X: i32 = 8;
 /// is what most calls actually use.
 const MAX_DUST_RUN: i32 = 14;
 
+/// The `reserve` **one hop** of a **bare**-terminated branch's own final
+/// approach (`plan_bent_path`, via `lay_bent_path_bare`/`bare_branch_
+/// landing_strength`) must budget, on top of the ordinary `MAX_DUST_RUN`
+/// cycle -- unlike every other termination this router lays, a bare
+/// branch's own last cell (the socket) is not where the signal's job ends.
+/// Redstone dust decays by exactly one per hop, with no floor above zero to
+/// protect against, so each hop past the socket has to be paid for up
+/// front, in whatever budget decided the *socket's* own strength:
+///
+/// - One hop, socket to the merge's own junction (`compute_net_source_
+///   strengths` already treats this as ordinary dust decay when combining
+///   branches: "`.saturating_sub(1)`").
+/// - One more hop, junction to the merge's own outbound pin (`emit`'s own
+///   one-hop clearance past the junction -- see `place_merge_gate`'s doc
+///   comment for why that pin is not the junction cell itself), which is
+///   where the *next* net downstream (another gate, or a declared output's
+///   lamp) starts counting from, and that next net's own
+///   `debug_assert!(incoming_strength > 0)` requires it to receive a
+///   genuinely live value, not the last surviving unit before zero.
+///
+/// So one bare hop must reserve 2, not 0: the ordinary budget already
+/// guarantees a live (non-zero) value *at the socket itself* (a plain
+/// mandatory-repeater socket needs nothing more, since a repeater there
+/// would refresh to full regardless of how decayed its input was) --
+/// reserving 2 more hops' worth keeps that same guarantee two hops further
+/// out, at the one cell this single hop's own value actually has to reach
+/// to be useful.
+///
+/// This is a *per-hop* unit, not the whole story: a chain of merges (an OR
+/// reduced as a tree, which Yosys builds routinely -- one merge's own
+/// output feeding straight into another merge, bare both times) needs one
+/// more of these for every additional bare hop the chain has, which
+/// [`bare_reserve_for_merge`] is what actually multiplies out per branch.
+/// Measured, not assumed: the Verilog-derived seven-segment decoder's own
+/// chained merges were the first netlist dense enough to expose a bare
+/// branch decaying to exactly the wrong side of a *fixed* one-hop margin --
+/// see `docs/superpowers/specs/2026-08-08-gate-types-and-wired-or.md`'s
+/// task history.
+const BARE_TERMINATION_RESERVE: i32 = 2;
+
+/// The real `reserve` a bare branch feeding into merge gate `into` must
+/// budget for its own final approach -- `BARE_TERMINATION_RESERVE` for
+/// reaching `into`'s own pin, plus, if `into`'s own output is *itself* a
+/// bare branch into a further merge, that merge's own requirement too,
+/// recursively.
+///
+/// A net's fan-out decides where the chain stops, the same fanout rule
+/// that decides bare vs. isolated everywhere else in this module
+/// (`merge_branch_is_bare`): if `into`'s own output net has more than one
+/// sink, or one sink that is not itself a merge, whatever terminates there
+/// resets the budget on its own (a mandatory repeater always refreshes to
+/// full, and a lamp reads whatever arrives with no requirement past it) --
+/// so the chain, and the extra reserve it costs, goes no further than
+/// `into` itself.
+fn bare_reserve_for_merge(netlist: &Netlist, nets: &[Net], into: usize) -> i32 {
+    let Some(net) = nets.iter().find(|n| matches!(n.source, Source::Gate(g) if g == into)) else {
+        // `into`'s own output feeds nothing further (a declared output
+        // only) -- the chain stops at its pin, same base reserve.
+        return BARE_TERMINATION_RESERVE;
+    };
+    let mut sinks = net.sinks.iter().flatten().copied();
+    let Some((first_gate, _)) = sinks.next() else {
+        return BARE_TERMINATION_RESERVE;
+    };
+    let single_sink = sinks.all(|(g, _)| g == first_gate);
+    if single_sink && netlist.gates[first_gate].is_merge {
+        BARE_TERMINATION_RESERVE + bare_reserve_for_merge(netlist, nets, first_gate)
+    } else {
+        BARE_TERMINATION_RESERVE
+    }
+}
+
 /// 編譯過程的錯誤。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompileError {
@@ -1214,46 +1322,12 @@ fn lay_bent_path(world: &mut World, start: Position, waypoints: &[Position], inc
     debug_assert!(incoming_strength > 0, "a run cannot start from an already-dead signal");
 
     let cells = bent_path_cells(start, waypoints);
-    let len = cells.len();
-    let bend_indices: BTreeSet<usize> = waypoints[..waypoints.len() - 1]
-        .iter()
-        .map(|&waypoint| {
-            cells
-                .iter()
-                .position(|&cell| cell == waypoint)
-                .expect("every waypoint before the last is pushed onto `cells` by `bent_path_cells`")
-        })
-        .collect();
-
-    // Same decision `plan_track_run` makes, generalised from X-coordinate
-    // taps to index-based ones: a repeater must never land on a bend, so
-    // when the budget would force one there, it goes on the last non-bend
-    // cell before it instead.
-    let threshold = MAX_DUST_RUN as i64;
-    let mut is_repeater = vec![false; len];
-    let mut last_refresh: i64 = incoming_strength as i64 - (MAX_SIGNAL_STRENGTH as i64 + 1);
-    let mut i = 0usize;
-    while i < len {
-        if (i as i64) - last_refresh <= threshold {
-            i += 1;
-            continue;
-        }
-        let mut j = i;
-        while (j as i64) > last_refresh + 1 && bend_indices.contains(&j) {
-            j -= 1;
-        }
-        debug_assert!(
-            !bend_indices.contains(&j),
-            "bends must never be dense enough to leave no room for a repeater"
-        );
-        is_repeater[j] = true;
-        last_refresh = j as i64;
-        i = j + 1;
-    }
+    let bend_indices = bent_path_bends(&cells, waypoints);
+    let (mut is_repeater, _ending_strength) = plan_bent_path(cells.len(), &bend_indices, incoming_strength, 0);
     // The final cell is a mandatory repeater regardless of the budget --
     // `waypoints`'s last element is never a bend, so this can never collide
     // with `bend_indices`.
-    is_repeater[len - 1] = true;
+    is_repeater[cells.len() - 1] = true;
 
     let mut prev = start;
     for (index, &pos) in cells.iter().enumerate() {
@@ -1270,28 +1344,17 @@ fn lay_bent_path(world: &mut World, start: Position, waypoints: &[Position], inc
     }
 }
 
-/// Same as [`lay_bent_path`], but the final cell is left as whatever the
-/// ordinary strength budget decides -- plain dust, unless this particular
-/// branch happens to be long enough to need an interior refresh anyway --
-/// rather than a *mandatory* repeater.
-///
-/// This is the termination a wire-merge OR's own **private** branches use
-/// (see `merge_branch_is_bare`): the destination is another net's own dust,
-/// not a gate's support block, and dust joins dust directly (the same
-/// same-layer rule `dust_connections` already applies everywhere else), so
-/// nothing has to actively drive the join at all -- see
-/// `docs/superpowers/specs/2026-08-08-gate-types-and-wired-or.md`, "In
-/// redstone an OR is free". A branch whose source fans out anywhere besides
-/// the merge it feeds must **not** use this -- it needs `lay_bent_path`'s
-/// mandatory repeater instead, so backflow through the merge can never run
-/// back up the shared wire to that other consumer.
-fn lay_bent_path_bare(world: &mut World, start: Position, waypoints: &[Position], incoming_strength: u8, route: &mut Route) {
-    debug_assert!(!waypoints.is_empty(), "a bent path must have somewhere to end");
-    debug_assert!(incoming_strength > 0, "a run cannot start from an already-dead signal");
-
-    let cells = bent_path_cells(start, waypoints);
-    let len = cells.len();
-    let bend_indices: BTreeSet<usize> = waypoints[..waypoints.len() - 1]
+/// The bend positions of a bent path from `start` through `waypoints`,
+/// found by looking each waypoint-before-the-last up in its own already-
+/// computed `cells` list -- shared by `lay_bent_path`, `lay_bent_path_bare`,
+/// and `bare_branch_landing_strength` (the merge-junction strength
+/// pre-pass's planning-only query), so all three can never derive a
+/// different bend set for what is geometrically the same path. A repeater
+/// must never land on one of these: it only reads what is directly behind
+/// it, and a path changes axis at a bend (see `lay_bent_path`'s own doc
+/// comment).
+fn bent_path_bends(cells: &[Position], waypoints: &[Position]) -> BTreeSet<usize> {
+    waypoints[..waypoints.len() - 1]
         .iter()
         .map(|&waypoint| {
             cells
@@ -1299,12 +1362,29 @@ fn lay_bent_path_bare(world: &mut World, start: Position, waypoints: &[Position]
                 .position(|&cell| cell == waypoint)
                 .expect("every waypoint before the last is pushed onto `cells` by `bent_path_cells`")
         })
-        .collect();
+        .collect()
+}
 
-    // Identical budget/bend-avoidance logic to `lay_bent_path` -- the only
-    // difference from it is what happens after this loop (nothing: the
-    // final cell is never forced to be a repeater here).
-    let threshold = MAX_DUST_RUN as i64;
+/// The `is_repeater` assignment for a `len`-cell bent path (`bend_indices`
+/// never eligible for one -- same decision `plan_track_run` makes,
+/// generalised from X-coordinate taps to index-based ones: when the budget
+/// would force a repeater onto a bend, it goes on the last non-bend cell
+/// before it instead), plus the real strength the path's own last cell ends
+/// up carrying under that assignment: `MAX_SIGNAL_STRENGTH` if a repeater
+/// naturally lands there, otherwise decayed by one hop per cell since
+/// whatever last refreshed it (another repeater, or the path's own start) --
+/// the same two facts `plan_straight_run` already encodes for a plain
+/// straight run, generalised past bends (which never host a repeater, and
+/// so never interrupt the decay either -- see `lay_bent_path`'s own doc
+/// comment for why that is correct and not merely convenient).
+///
+/// `lay_bent_path` and `lay_bent_path_bare` both build their own real
+/// `is_repeater` assignment from this (the former then forces its own
+/// mandatory final repeater on top); the ending strength is what
+/// `bare_branch_landing_strength` needs, to learn what a **bare** ending
+/// actually delivers before any block for it exists.
+fn plan_bent_path(len: usize, bend_indices: &BTreeSet<usize>, incoming_strength: u8, reserve: i32) -> (Vec<bool>, u8) {
+    let threshold = (MAX_DUST_RUN - reserve) as i64;
     let mut is_repeater = vec![false; len];
     let mut last_refresh: i64 = incoming_strength as i64 - (MAX_SIGNAL_STRENGTH as i64 + 1);
     let mut i = 0usize;
@@ -1325,6 +1405,47 @@ fn lay_bent_path_bare(world: &mut World, start: Position, waypoints: &[Position]
         last_refresh = j as i64;
         i = j + 1;
     }
+    let ending_strength = if len == 0 {
+        incoming_strength
+    } else if is_repeater[len - 1] {
+        MAX_SIGNAL_STRENGTH
+    } else {
+        (MAX_SIGNAL_STRENGTH as i64 - ((len as i64 - 1) - last_refresh)) as u8
+    };
+    (is_repeater, ending_strength)
+}
+
+/// Same as [`lay_bent_path`], but the final cell is left as whatever the
+/// ordinary strength budget decides -- plain dust, unless this particular
+/// branch happens to be long enough to need an interior refresh anyway --
+/// rather than a *mandatory* repeater. Returns the real strength that final
+/// cell ends up carrying (see [`plan_bent_path`]) -- `compute_net_source_
+/// strengths` needs the identical answer before any block exists, via
+/// `bare_branch_landing_strength`, which is why both go through the same
+/// `plan_bent_path` core rather than each risking their own copy of this
+/// budget/bend-avoidance logic.
+///
+/// This is the termination a wire-merge OR's own **private** branches use
+/// (see `merge_branch_is_bare`): the destination is another net's own dust,
+/// not a gate's support block, and dust joins dust directly (the same
+/// same-layer rule `dust_connections` already applies everywhere else), so
+/// nothing has to actively drive the join at all -- see
+/// `docs/superpowers/specs/2026-08-08-gate-types-and-wired-or.md`, "In
+/// redstone an OR is free". A branch whose source fans out anywhere besides
+/// the merge it feeds must **not** use this -- it needs `lay_bent_path`'s
+/// mandatory repeater instead, so backflow through the merge can never run
+/// back up the shared wire to that other consumer.
+///
+/// `reserve` is [`bare_reserve_for_merge`]'s answer for whichever merge
+/// this branch actually feeds, not a fixed constant -- a chain of merges
+/// needs more than one hop's worth (see that function's own doc comment).
+fn lay_bent_path_bare(world: &mut World, start: Position, waypoints: &[Position], incoming_strength: u8, reserve: i32, route: &mut Route) -> u8 {
+    debug_assert!(!waypoints.is_empty(), "a bent path must have somewhere to end");
+    debug_assert!(incoming_strength > 0, "a run cannot start from an already-dead signal");
+
+    let cells = bent_path_cells(start, waypoints);
+    let bend_indices = bent_path_bends(&cells, waypoints);
+    let (is_repeater, ending_strength) = plan_bent_path(cells.len(), &bend_indices, incoming_strength, reserve);
 
     let mut prev = start;
     for (index, &pos) in cells.iter().enumerate() {
@@ -1339,6 +1460,7 @@ fn lay_bent_path_bare(world: &mut World, start: Position, waypoints: &[Position]
         route.claim(pos);
         prev = pos;
     }
+    ending_strength
 }
 
 /// The two horizontal directions perpendicular to `direction` -- the only
@@ -2494,6 +2616,16 @@ type StrengthPlan = (Vec<Vec<u8>>, Vec<Vec<BTreeMap<i32, u8>>>);
 /// decisions `lay_dust_run` and `lay_track` make when they actually write
 /// blocks later, so the numbers this produces are guaranteed to match what
 /// ends up in the world, not just a plausible estimate of it.
+///
+/// `net_source_strength[n]` is what `net` `n`'s own source pin actually
+/// carries -- `MAX_SIGNAL_STRENGTH` for a lever or an ordinary NOR gate
+/// (both always full strength), but honestly computed for a net sourced by
+/// a merge gate (see `compute_net_source_strengths`, which every real
+/// caller of this function runs first to build it). Before `Gate::is_merge`
+/// existed this was `MAX_SIGNAL_STRENGTH` unconditionally, which is why
+/// every net used to start from that literal constant here -- a merge's own
+/// junction can carry less, so this now has to be told rather than assume.
+#[allow(clippy::too_many_arguments)]
 fn plan_strengths(
     nets: &[Net],
     plan: &Floorplan,
@@ -2502,6 +2634,7 @@ fn plan_strengths(
     lever_pin: &[Position],
     gate_pin: &[Position],
     bypass: &[bool],
+    net_source_strength: &[u8],
 ) -> StrengthPlan {
     let mut entry_strength: Vec<Vec<u8>> = Vec::with_capacity(nets.len());
     let mut exit_strength: Vec<Vec<BTreeMap<i32, u8>>> = Vec::with_capacity(nets.len());
@@ -2536,7 +2669,7 @@ fn plan_strengths(
                     Source::Gate(g) => gate_pin[g],
                 };
                 let len = straight_run_length(pin, Facing::North, entry.offset(Facing::North));
-                plan_straight_run(len, MAX_SIGNAL_STRENGTH, reserve).1
+                plan_straight_run(len, net_source_strength[n], reserve).1
             } else {
                 let prev_band = net.tracks[slot - 1];
                 let prev_channel = net.channels[slot - 1];
@@ -2567,6 +2700,227 @@ fn plan_strengths(
     }
 
     (entry_strength, exit_strength)
+}
+
+/// The real, decayed strength `net` -- known to start at `source_strength`
+/// at its own source pin -- delivers to `target`'s socket `(gate,
+/// input_index)`, found in `net`'s own `slot`-th channel, via a **bare**
+/// termination (no mandatory final repeater -- see `merge_branch_is_bare`).
+///
+/// Replicates exactly the same geometry and strength math `emit`'s own
+/// Ramps/Columns passes use to lay `net`'s real blocks -- the bypass branch
+/// mirrors `emit`'s direct-connection Columns code, the tracked branch
+/// re-runs `plan_strengths` against `net` alone (a net's own slot-by-slot
+/// computation never reads any *other* net, so slicing to one is exact, not
+/// an approximation) to get the same `exit_strength` a batch call would --
+/// without writing anything, so `compute_net_source_strengths` can learn
+/// this before a single real block for `net`, or the merge gate waiting on
+/// the answer, exists.
+///
+/// Only ever called for a bare-terminated socket: every other socket in
+/// this compiler lands via `lay_bent_path`'s own mandatory repeater, which
+/// always delivers `MAX_SIGNAL_STRENGTH` regardless of anything computed
+/// here (`compute_net_source_strengths` never calls this otherwise).
+#[allow(clippy::too_many_arguments)]
+fn bare_branch_landing_strength(
+    netlist: &Netlist,
+    nets: &[Net],
+    net: &Net,
+    slot: usize,
+    source_strength: u8,
+    target: (usize, usize),
+    plan: &Floorplan,
+    row_z: &[i32],
+    track_z: &[Vec<i32>],
+    track_count: &[usize],
+    is_bypass: bool,
+    gate_cell: &[NorCell],
+    lever_pin: &[Position],
+    gate_pin: &[Position],
+) -> u8 {
+    let (gate, input_index) = target;
+    let reserve = bare_reserve_for_merge(netlist, nets, gate);
+    let row_z_gate = row_z[plan.row_of[gate]];
+    let (dx, dy, dz) = gate_cell[gate].input_offsets[input_index];
+    let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
+    let exit_x = approach_column(plan.centre_x[gate], input_index);
+
+    if is_bypass {
+        // Mirrors `emit`'s own bypass Columns code exactly: at most one bend
+        // onto the sink's approach column, then the socket.
+        let pin = match net.source {
+            Source::Lever(i) => lever_pin[i],
+            Source::Gate(g) => gate_pin[g],
+        };
+        let mut waypoints: Vec<Position> = Vec::new();
+        if pin.x != exit_x {
+            waypoints.push(Position::new(exit_x, GATE_Y, pin.z));
+        }
+        if socket.x != exit_x {
+            waypoints.push(Position::new(exit_x, GATE_Y, row_z_gate));
+        }
+        waypoints.push(socket);
+
+        let cells = bent_path_cells(pin, &waypoints);
+        let bend_indices = bent_path_bends(&cells, &waypoints);
+        return plan_bent_path(cells.len(), &bend_indices, source_strength, reserve).1;
+    }
+
+    // Tracked: replay this one net's own ramp/track chain (slicing `plan_
+    // strengths` to just `net` is exact, per this function's own doc
+    // comment) up to and including `slot`, then the same short final bend
+    // to the socket `emit`'s ordinary Columns pass lays.
+    let (_entry, exit) = plan_strengths(
+        std::slice::from_ref(net),
+        plan,
+        track_z,
+        track_count,
+        lever_pin,
+        gate_pin,
+        &[false],
+        &[source_strength],
+    );
+    let channel = net.channels[slot];
+    let band = net.tracks[slot];
+    let eff_band = effective_band(track_count, channel, band);
+    let z = track_z[channel][band];
+    let track_exit = exit[0][slot][&exit_x];
+    let landing_strength = ramp_ending_strength(band_levels(eff_band), track_exit);
+    let landing = Position::new(exit_x, GATE_Y, z - band_ramp_length(eff_band));
+
+    let mut waypoints: Vec<Position> = Vec::new();
+    if socket.x != landing.x {
+        waypoints.push(Position::new(landing.x, GATE_Y, row_z_gate));
+    }
+    waypoints.push(socket);
+
+    let cells = bent_path_cells(landing, &waypoints);
+    let bend_indices = bent_path_bends(&cells, &waypoints);
+    plan_bent_path(cells.len(), &bend_indices, landing_strength, reserve).1
+}
+
+/// The real strength each net's own source pin delivers -- what
+/// `plan_strengths` and `emit`'s own Ramps/Columns passes need instead of
+/// assuming `MAX_SIGNAL_STRENGTH` unconditionally, now that a net can be
+/// sourced by a **merge** gate.
+///
+/// `MAX_SIGNAL_STRENGTH` is still exactly right for a lever or an ordinary
+/// NOR gate -- both are driven by an always-full-strength active component
+/// (a lever's own power, or a torch's fixed output, independent of how
+/// decayed the signal reaching the torch's *support* was). A merge's own
+/// junction is different: `place_merge_gate` puts no active component
+/// there at all, just the point where its declared inputs' own dust is
+/// allowed to touch, so its real strength is whatever its branches deliver.
+/// An isolated branch (see `merge_branch_is_bare`) still guarantees
+/// `MAX_SIGNAL_STRENGTH` on its own (it ends in a mandatory repeater), so a
+/// merge's junction can only carry less than full strength when *every one*
+/// of its branches is bare -- a fully private merge, whose own branches may
+/// have already decayed by the time they reach the junction.
+///
+/// Processes gates in `netlist`'s own topological order, so a merge's own
+/// junction strength -- which depends on whatever nets feed *its* own
+/// sockets -- is always resolved after those nets' own source strengths are
+/// already known, however many merges deep a chain goes (an OR of ORs is
+/// still just gates in dependency order; nothing here is special-cased for
+/// nesting).
+#[allow(clippy::too_many_arguments)]
+fn compute_net_source_strengths(
+    netlist: &Netlist,
+    nets: &[Net],
+    plan: &Floorplan,
+    row_z: &[i32],
+    track_z: &[Vec<i32>],
+    track_count: &[usize],
+    bypass: &[bool],
+    lever_pin: &[Position],
+    gate_pin: &[Position],
+    gate_cell: &[NorCell],
+) -> Vec<u8> {
+    let mut net_source_strength = vec![MAX_SIGNAL_STRENGTH; nets.len()];
+
+    // Gate -> the net it drives, for gates that drive anything at all (a
+    // merge whose own output is a declared circuit output but feeds no
+    // *other* gate has none, and needs none: its lamp reads `gate_pin`
+    // directly, unaffected by this).
+    let mut net_of_gate: HashMap<usize, usize> = HashMap::new();
+    for (n, net) in nets.iter().enumerate() {
+        if let Source::Gate(g) = net.source {
+            net_of_gate.insert(g, n);
+        }
+    }
+
+    // (gate, input_index) -> which net feeds that socket, and at which of
+    // that net's own slots -- every gate input names exactly one net (by
+    // construction in `build_nets`), so this is a total, collision-free map.
+    let mut feeder: HashMap<(usize, usize), (usize, usize)> = HashMap::new();
+    for (n, net) in nets.iter().enumerate() {
+        for (slot, sinks) in net.sinks.iter().enumerate() {
+            for &(g, idx) in sinks {
+                feeder.insert((g, idx), (n, slot));
+            }
+        }
+    }
+
+    let order = netlist.topological_order().expect("compile() already rejected a cyclic netlist before emit() runs");
+    for &g in &order {
+        let gate = &netlist.gates[g];
+        if !gate.is_merge {
+            continue; // stays MAX_SIGNAL_STRENGTH -- a torch's output always is.
+        }
+        let mut junction = 0u8;
+        for idx in 0..gate.inputs.len() {
+            let &(feeding_net, slot) = feeder
+                .get(&(g, idx))
+                .expect("every gate input names a real net, which therefore lists it as a sink");
+            let net = &nets[feeding_net];
+            let delivered = if merge_branch_is_bare(netlist, net, g) {
+                // `bare_branch_landing_strength` gives the strength at the
+                // *socket* -- one hop away from the junction itself (the
+                // same `INPUT_DIRECTIONS` offset every socket sits at), and
+                // that last hop is ordinary dust-to-dust decay like any
+                // other, so the junction's own share of it is one less.
+                bare_branch_landing_strength(
+                    netlist,
+                    nets,
+                    net,
+                    slot,
+                    net_source_strength[feeding_net],
+                    (g, idx),
+                    plan,
+                    row_z,
+                    track_z,
+                    track_count,
+                    bypass[feeding_net],
+                    gate_cell,
+                    lever_pin,
+                    gate_pin,
+                )
+                .saturating_sub(1)
+            } else {
+                // An isolated branch ends in a repeater sitting *at* the
+                // socket (`lay_bent_path`'s own mandatory termination), and
+                // a repeater's output is always exactly `MAX_SIGNAL_STRENGTH`
+                // one hop on -- unlike dust, that hop costs no decay, so the
+                // junction receives the full value, not one less.
+                MAX_SIGNAL_STRENGTH
+            };
+            junction = junction.max(delivered);
+        }
+        if let Some(&out_net) = net_of_gate.get(&g) {
+            // `net_source_strength` means "the strength at this net's own
+            // source *pin*" everywhere else (a lever or a torch delivers
+            // its full output straight to the adjacent pin cell, no decay
+            // on that first hop) -- but a merge's pin is one hop of *plain
+            // dust* out from its junction (see `emit`'s own doc comment on
+            // why it is not the junction cell itself), and dust always
+            // decays by one per hop. So the pin's own strength is the
+            // junction's, minus that one hop -- not the junction's value
+            // directly, which is what `junction` itself is.
+            net_source_strength[out_net] = junction.saturating_sub(1);
+        }
+    }
+
+    net_source_strength
 }
 
 /// What `emit` produces besides the blocks it writes into `world` --
@@ -2673,28 +3027,36 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
     for (g, cell) in gate_cell.iter().enumerate() {
         let torch = torch_of(g, cell);
         gate_output_positions.insert(netlist.gates[g].output.clone(), (torch.x, torch.y, torch.z));
-        let pin = if netlist.gates[g].is_merge {
-            // A merge has no active output component to stand one hop past
-            // -- `place_merge_gate` already wrote the junction itself
-            // (`torch`, per its own `output_offset == (0, 0, 0)`) as dust,
-            // and that same cell is where this gate's own outbound net
-            // begins.
-            torch
-        } else {
-            let p = torch.offset(OUTPUT_DIRECTION);
-            ensure_floor(world, p);
-            world.set(p.x, p.y, p.z, dust());
-            p
-        };
-        gate_pin.push(pin);
+        // A merge's own outbound route starts one hop out from `torch`
+        // (== `origin` for a merge, since `output_offset == (0, 0, 0)`),
+        // exactly like a NOR's -- not *at* `torch` directly. `torch` itself
+        // is directly adjacent to every one of this same gate's own
+        // occupied input sockets (west/east/south), so a route starting
+        // there could walk straight back through its own gate's input
+        // wiring the moment it needed to head in any of those directions
+        // (see `place_merge_gate`'s own doc comment for the failure this
+        // caused, and how it was found). One more hop out is exactly as
+        // clear of them as a NOR's own pin is of *its* input sockets.
+        let p = torch.offset(OUTPUT_DIRECTION);
+        ensure_floor(world, p);
+        world.set(p.x, p.y, p.z, dust());
+        gate_pin.push(p);
     }
+
+    // What every net's own source pin actually carries -- `MAX_SIGNAL_
+    // STRENGTH` for a lever or an ordinary NOR gate, honestly computed for
+    // one sourced by a merge (see `compute_net_source_strengths`'s own doc
+    // comment). Has to run before `plan_strengths`, which now consumes this
+    // instead of assuming the constant unconditionally.
+    let net_source_strength =
+        compute_net_source_strengths(netlist, nets, plan, row_z, track_z, track_count, bypass, &lever_pin, &gate_pin, &gate_cell);
 
     // Strength planning: work out what every ramp's entry and every track's
     // exits will carry, before any of them are actually built. See
     // `plan_strengths` for why this has to happen up front rather than
     // inline in the passes below.
     let (entry_strength, exit_strength) =
-        plan_strengths(nets, plan, track_z, track_count, &lever_pin, &gate_pin, bypass);
+        plan_strengths(nets, plan, track_z, track_count, &lever_pin, &gate_pin, bypass, &net_source_strength);
 
     // Every net's own pin -- the first cell of its route -- belongs to that
     // net too, exactly like everything the passes below claim as they write
@@ -2705,6 +3067,23 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
             Source::Lever(i) => footprint.claim(lever_pin[i], n),
             Source::Gate(g) => footprint.claim(gate_pin[g], n),
         }
+    }
+
+    // A merge's own junction, too -- `place_merge_gate` writes it as dust,
+    // but the loop above only ever claims a gate's *pin*, so a merge's own
+    // junction would otherwise be the one dust cell in the whole compiled
+    // world with no `Reservation` entry at all (see `merge_gate_body_
+    // owners`'s own doc comment for why that is a real gap, not a
+    // formality): every keep-out decision downstream -- `seal_cross_talk`,
+    // and every other net's own track/ramp placement deciding where it is
+    // and is not allowed to run -- reads `Reservation`, so an unclaimed
+    // junction cell is invisible to it, free for some *other* net's own
+    // route to be planned straight through. Claimed under the same
+    // representative net index `merge_gate_body_owners` already uses for
+    // the connectivity and signal-strength invariants, so all three agree
+    // on which declared group this cell belongs to.
+    for (&position, &owner) in &merge_gate_body_owners(netlist, nets, &gate_output_positions) {
+        footprint.claim(position, owner);
     }
 
     // Ramps first. `move_between_layers` seals the blocks around each landing,
@@ -2783,9 +3162,10 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
             }
             waypoints.push(socket);
             if merge_branch_is_bare(netlist, net, gate) {
-                lay_bent_path_bare(world, pin, &waypoints, MAX_SIGNAL_STRENGTH, &mut route);
+                let reserve = bare_reserve_for_merge(netlist, nets, gate);
+                let _ = lay_bent_path_bare(world, pin, &waypoints, net_source_strength[n], reserve, &mut route);
             } else {
-                lay_bent_path(world, pin, &waypoints, MAX_SIGNAL_STRENGTH, &mut route);
+                lay_bent_path(world, pin, &waypoints, net_source_strength[n], &mut route);
             }
             continue;
         }
@@ -2810,7 +3190,7 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
                     pin,
                     Facing::North,
                     entry.offset(Facing::North),
-                    MAX_SIGNAL_STRENGTH,
+                    net_source_strength[n],
                     ramp_reserve(eff_band),
                     &mut route,
                 );
@@ -2835,7 +3215,8 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
                         }
                         waypoints.push(socket);
                         if merge_branch_is_bare(netlist, net, gate) {
-                            lay_bent_path_bare(world, landing, &waypoints, landing_strength, &mut route);
+                            let reserve = bare_reserve_for_merge(netlist, nets, gate);
+                            let _ = lay_bent_path_bare(world, landing, &waypoints, landing_strength, reserve, &mut route);
                         } else {
                             lay_bent_path(world, landing, &waypoints, landing_strength, &mut route);
                         }
@@ -3387,6 +3768,56 @@ impl MergeGroups {
     }
 }
 
+/// Every merge gate's own gate-*body* cells -- its junction, and the
+/// one-hop outbound pin `emit` starts its downstream route from -- mapped
+/// to a representative net index from that gate's own declared-merge group
+/// (any member works: callers only ever feed this into [`MergeGroups::
+/// same_group`] or an equivalent root comparison, never read it as "the"
+/// net).
+///
+/// These cells are dust (`RedstoneWire`), which is what makes them
+/// different from a NOR's own support-and-torch body: a NOR's body is
+/// stone and a torch, neither of which `verify_connectivity`'s wire walk or
+/// `verify_signal_strength`'s decay walk ever visits, so it never had to
+/// know about them. A merge's body is dust like everything around it, so
+/// both walks *do* visit it -- but neither one ever finds it in
+/// `Reservation`, because `place_merge_gate` writes it directly as gate
+/// placement, the same way a NOR's support and torch are, and routing
+/// (`Route::claim`) only ever claims *wire*. Without this lookup as a
+/// fallback wherever `Reservation` comes up empty, that gap is a false
+/// negative for connectivity (a foreign net's dust touching exactly at an
+/// unclaimed junction cell has nothing to disagree with) and a dead end for
+/// signal strength (a walk that cannot continue past an unclaimed cell
+/// strands whatever sits beyond it -- see `emit`'s own doc comment on why
+/// the outbound pin is one hop *past* the junction, not the junction
+/// itself).
+fn merge_gate_body_owners(
+    netlist: &Netlist,
+    nets: &[Net],
+    gate_output_positions: &BTreeMap<String, (i32, i32, i32)>,
+) -> HashMap<Position, usize> {
+    let groups = MergeGroups::build(netlist, nets);
+    let index_of_signal: HashMap<&str, usize> =
+        nets.iter().enumerate().map(|(i, net)| (net_source_name(netlist, net), i)).collect();
+
+    let mut owners = HashMap::new();
+    for (g, gate) in netlist.gates.iter().enumerate() {
+        if !gate.is_merge {
+            continue;
+        }
+        let Some(root) = merge_output_group_root(netlist, g, &index_of_signal, &groups) else {
+            continue;
+        };
+        let Some(&(jx, jy, jz)) = gate_output_positions.get(&gate.output) else {
+            continue;
+        };
+        let junction = Position::new(jx, jy, jz);
+        owners.insert(junction, root);
+        owners.insert(junction.offset(OUTPUT_DIRECTION), root);
+    }
+    owners
+}
+
 /// The connectivity invariant: every dust network the finished world
 /// actually contains must belong to exactly one net -- or, when the
 /// netlist declares a merge (`MergeGroups`), to one *declared group* of
@@ -3402,8 +3833,23 @@ impl MergeGroups {
 /// exactly as before for every netlist that declares no merge at all,
 /// since `MergeGroups` gives every net its own singleton group in that
 /// case.
-fn verify_connectivity(world: &World, reservation: &Reservation, netlist: &Netlist, nets: &[Net]) -> Result<(), CompileError> {
+///
+/// `gate_output_positions` feeds [`merge_gate_body_owners`], the fallback
+/// this now checks whenever `reservation` itself has nothing for a cell --
+/// exactly the case for a merge's own junction and outbound pin (see that
+/// function's own doc comment). Every hand-built test below that declares
+/// no merge passes an empty map, which makes the fallback a no-op and this
+/// exactly the check it always was.
+fn verify_connectivity(
+    world: &World,
+    reservation: &Reservation,
+    netlist: &Netlist,
+    nets: &[Net],
+    gate_output_positions: &BTreeMap<String, (i32, i32, i32)>,
+) -> Result<(), CompileError> {
     let groups = MergeGroups::build(netlist, nets);
+    let gate_body_owners = merge_gate_body_owners(netlist, nets, gate_output_positions);
+    let owner_of = |pos: &Position| reservation.get(pos).or_else(|| gate_body_owners.get(pos)).copied();
     let mut visited: HashSet<Position> = HashSet::new();
 
     for flat in world.positions_of(BlockKind::RedstoneWire) {
@@ -3413,7 +3859,7 @@ fn verify_connectivity(world: &World, reservation: &Reservation, netlist: &Netli
             continue;
         }
 
-        let mut owner: Option<(usize, Position)> = reservation.get(&start).map(|&net| (net, start));
+        let mut owner: Option<(usize, Position)> = owner_of(&start).map(|net| (net, start));
         let mut queue: VecDeque<Position> = VecDeque::new();
         queue.push_back(start);
 
@@ -3425,7 +3871,7 @@ fn verify_connectivity(world: &World, reservation: &Reservation, netlist: &Netli
                     }
                     queue.push_back(next);
 
-                    if let Some(&found_net) = reservation.get(&next) {
+                    if let Some(found_net) = owner_of(&next) {
                         match owner {
                             None => owner = Some((found_net, next)),
                             Some((expected_net, expected_cell))
@@ -4158,6 +4604,19 @@ fn verify_signal_strength(
         group_cells.entry(groups.root(n)).or_default().extend(cells.iter().copied());
     }
 
+    // Every merge's own junction and outbound-pin cells, too -- see
+    // `merge_gate_body_owners`'s own doc comment for why they are never in
+    // `reservation` (gate body, not routed wire) and why that is a real gap
+    // here specifically: the walk below only ever continues past a cell it
+    // considers "this group's own" (deliberately, to stop it crossing into
+    // an unrelated net that happens to physically touch), so an unclaimed
+    // junction cell would otherwise be a dead end it can record a value at
+    // but never propagate *through*, silently stranding whatever sits past
+    // it (its own outbound pin, and everything downstream of that).
+    for (&position, &root) in &merge_gate_body_owners(netlist, nets, gate_output_positions) {
+        group_cells.entry(root).or_default().insert(position);
+    }
+
     // Group sources: one true origin per net in the group whose own source
     // is a genuine active component -- a lever, or a *non-merge* gate's
     // output torch. See this function's own doc comment for why a
@@ -4375,7 +4834,7 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     // Checked here, unconditionally, on every compile -- not just the ones a
     // test happens to exercise -- because a violation is a bug in *this*
     // router, not in the netlist it was given.
-    verify_connectivity(&world, &footprint.reservation, netlist, &nets)?;
+    verify_connectivity(&world, &footprint.reservation, netlist, &nets, &gate_output_positions)?;
 
     // The torch-merge invariant: connectivity alone never looks at a torch,
     // so it cannot tell a working NOR from one whose input is wired into
@@ -4437,7 +4896,7 @@ mod tests {
         reservation.insert(net_a_cell, 0);
         reservation.insert(net_b_cell, 1);
 
-        let err = verify_connectivity(&world, &reservation, &netlist, &nets)
+        let err = verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new())
             .expect_err("adjacent dust reserved for two different nets must be rejected");
 
         assert_eq!(
@@ -4475,7 +4934,7 @@ mod tests {
         reservation.insert(net_a_cell, 0);
         reservation.insert(net_b_cell, 1);
 
-        assert_eq!(verify_connectivity(&world, &reservation, &netlist, &nets), Ok(()));
+        assert_eq!(verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()), Ok(()));
     }
 
     // -----------------------------------------------------------------
@@ -4533,7 +4992,7 @@ mod tests {
         let (netlist, nets, world, reservation) = merge_touch_fixture(true);
 
         assert_eq!(
-            verify_connectivity(&world, &reservation, &netlist, &nets),
+            verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()),
             Ok(()),
             "gate `m`'s `is_merge` declares nets `a`, `b` and `y` electrically one -- their \
              dust touching is exactly what was asked for, not the bug this invariant hunts"
@@ -4544,7 +5003,7 @@ mod tests {
     fn verify_connectivity_still_rejects_the_same_touch_without_a_declared_merge() {
         let (netlist, nets, world, reservation) = merge_touch_fixture(false);
 
-        let err = verify_connectivity(&world, &reservation, &netlist, &nets).expect_err(
+        let err = verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()).expect_err(
             "the identical geometry, with `is_merge` false, is nothing but three nets whose \
              dust happens to touch -- undeclared, that must still be rejected",
         );
@@ -4604,7 +5063,7 @@ mod tests {
         let (netlist, nets, world, reservation) = merge_touch_fixture_with_no_net_for_the_output(true);
 
         assert_eq!(
-            verify_connectivity(&world, &reservation, &netlist, &nets),
+            verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()),
             Ok(()),
             "`a` and `b` must be unioned directly with each other, not only through `y`'s own net -- \
              `y` has none here, exactly as a merge feeding only a declared output produces"
@@ -4615,7 +5074,7 @@ mod tests {
     fn verify_connectivity_still_rejects_the_same_touch_without_a_declared_merge_even_with_no_net_for_the_output() {
         let (netlist, nets, world, reservation) = merge_touch_fixture_with_no_net_for_the_output(false);
 
-        let err = verify_connectivity(&world, &reservation, &netlist, &nets).expect_err(
+        let err = verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()).expect_err(
             "undeclared, this is still nothing but two nets whose dust happens to touch",
         );
         assert!(matches!(err, CompileError::ConnectivityViolation { .. }), "expected a connectivity violation, got: {err}");
@@ -5165,7 +5624,7 @@ mod tests {
         let output_positions = BTreeMap::new();
 
         assert_eq!(
-            verify_connectivity(&world, &reservation, &netlist, &nets),
+            verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()),
             Ok(()),
             "one continuous, uncontested dust network must satisfy connectivity"
         );
@@ -5251,7 +5710,7 @@ mod tests {
         let output_positions = BTreeMap::new();
 
         assert_eq!(
-            verify_connectivity(&world, &reservation, &netlist, &nets),
+            verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()),
             Ok(()),
             "every claimed cell here is its own isolated island -- no cross-net merge for connectivity to catch"
         );
@@ -5330,7 +5789,7 @@ mod tests {
         gate_output_positions.insert("out".to_string(), (torch.x, torch.y, torch.z));
         let output_positions = BTreeMap::new();
 
-        assert_eq!(verify_connectivity(&world, &reservation, &netlist, &nets), Ok(()));
+        assert_eq!(verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()), Ok(()));
         assert_eq!(
             verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions),
             Ok(()),
@@ -5394,7 +5853,7 @@ mod tests {
         gate_output_positions.insert("out".to_string(), (torch.x, torch.y, torch.z));
         let output_positions = BTreeMap::new();
 
-        assert_eq!(verify_connectivity(&world, &reservation, &netlist, &nets), Ok(()));
+        assert_eq!(verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()), Ok(()));
         assert_eq!(
             verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions),
             Ok(())

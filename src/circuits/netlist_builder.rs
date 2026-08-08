@@ -1,4 +1,6 @@
-//! 網表產生器：只用 NOR，fan-in 硬性上限 3。
+//! 網表產生器：以 NOR 為主，fan-in 硬性上限 3；另外提供 `merge`（免費
+//! wire-merge OR），但這四個參考電路刻意不用它 —— 詳見 `merge` 自己的
+//! doc comment。
 //!
 //! Shared by every reference circuit under `circuits/` -- the seven-segment
 //! decoder, and the smaller circuits alongside it -- so the NOR-tree
@@ -18,6 +20,8 @@ use crate::compile::Gate;
 ///   `place_nor_gate` 的硬體限制。
 /// - `and_reduce` / `or_reduce`：把任意長度的訊號清單摺成一棵 fan-in <= 3
 ///   的樹，分別算出它們的 AND / OR。
+/// - `merge`：免費的 wire-merge OR（`Gate::is_merge`），只給 Yosys frontend
+///   用；這四個手寫電路一律走 `or_reduce`，是刻意保留的對照組。
 pub(crate) struct NetlistBuilder {
     pub(crate) gates: Vec<Gate>,
     not_cache: HashMap<String, String>,
@@ -49,6 +53,36 @@ impl NetlistBuilder {
             output: output.clone(),
             is_merge: false,
         });
+        output
+    }
+
+    /// Build a **declared wire merge** -- the free OR realisation from
+    /// `docs/superpowers/specs/2026-08-08-gate-types-and-wired-or.md`: no
+    /// torch, no support, just the point where `inputs`' own routes are
+    /// allowed to touch (`compile::place_merge_gate`). `inputs.len()` must
+    /// be 2..=3, the same hardware ceiling `nor` enforces (a merge shares
+    /// `place_nor_gate`'s three input faces -- see `place_merge_gate`'s own
+    /// doc comment).
+    ///
+    /// Nothing under `circuits/` calls this today, and per the task that
+    /// added it, nothing should: `and4`/`full_adder`/`segment_a`/
+    /// `seven_segment` (via `or_reduce`, above) stay built the expensive
+    /// NOR-decomposed way deliberately, as the control group the
+    /// Verilog-derived decoder -- which *does* reach this, through
+    /// `frontend::yosys_json::Context::build_or` -- is measured against.
+    /// This lives here rather than as a one-off `Gate` literal in the
+    /// frontend because `Context` already owns a `NetlistBuilder`, and
+    /// constructing a `Gate` by hand outside this module's one choke point
+    /// would be exactly the kind of second, drifting copy this type exists
+    /// to prevent.
+    pub(crate) fn merge(&mut self, inputs: &[String]) -> String {
+        assert!(
+            (2..=3).contains(&inputs.len()),
+            "place_merge_gate 支援 2 或 3 個輸入，收到 {}",
+            inputs.len()
+        );
+        let output = self.fresh_name();
+        self.gates.push(Gate { name: output.clone(), inputs: inputs.to_vec(), output: output.clone(), is_merge: true });
         output
     }
 
