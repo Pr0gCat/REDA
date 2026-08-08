@@ -34,9 +34,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use super::{
-    approach_column, assign_tracks, bent_path_cells, build_floorplan, build_nets, compute_bypass, direction_from,
-    layout_z, place_nor_gate, reserve_columns, CompileError, CompiledCircuit, Exit, Floorplan, Net, Netlist, NorCell,
-    Source, GATE_Y, OUTPUT_DIRECTION, RAMP_LENGTH, TRACK_Y,
+    approach_column, bent_path_cells, build_floorplan, build_nets, cell_geometry_by_input_count, direction_from,
+    reserve_columns, resolve_bypass_and_geometry, CompileError, CompiledCircuit, Exit, Floorplan, Net, Netlist,
+    Source, BYPASS_QUERY_MAX_DISTANCE, GATE_Y, OUTPUT_DIRECTION, RAMP_LENGTH, TRACK_Y,
 };
 use crate::redstone::simulator::position::Position;
 use crate::redstone::world::block::{BlockKind, Facing};
@@ -146,9 +146,12 @@ pub struct RoutingReport {
 type Geometry = (Floorplan, Vec<Net>, Vec<i32>, Vec<Vec<i32>>, Vec<usize>, Vec<bool>);
 
 /// Recompute the floorplan, nets (with columns and tracks already assigned),
-/// Z layout and bypass decisions for `netlist` -- the same pure, world-free
-/// stages `compile` runs, called here verbatim so this module's geometry
-/// cannot drift from what actually got built.
+/// Z layout and bypass decisions for `netlist` -- the same stages `compile`
+/// runs, called here verbatim so this module's geometry cannot drift from
+/// what actually got built. Every stage except the last is pure and
+/// world-free; `resolve_bypass_and_geometry` itself builds one throwaway
+/// probe `World` internally (see its own doc comment) purely to decide the
+/// widened bypass set, and never hands that world back out.
 fn recompute_geometry(netlist: &Netlist) -> Result<Geometry, CompileError> {
     for gate in &netlist.gates {
         for input in &gate.inputs {
@@ -175,25 +178,17 @@ fn recompute_geometry(netlist: &Netlist) -> Result<Geometry, CompileError> {
     let mut nets = build_nets(netlist, &order, &plan, &producer_of);
 
     reserve_columns(&plan, &mut nets, row_count, channel_count);
-    let bypass = compute_bypass(&nets, &plan);
-    let track_count = assign_tracks(&plan, &mut nets, channel_count, &bypass);
-    let (row_z, track_z) = layout_z(row_count, channel_count, &track_count);
+    let (bypass, row_z, track_z) = resolve_bypass_and_geometry(
+        netlist,
+        &plan,
+        &mut nets,
+        row_count,
+        channel_count,
+        BYPASS_QUERY_MAX_DISTANCE,
+    );
+    let track_count: Vec<usize> = track_z.iter().map(Vec::len).collect();
 
     Ok((plan, nets, row_z, track_z, track_count, bypass))
-}
-
-/// One gate cell's socket geometry per distinct input count (1..=3) --
-/// `NorCell`'s offsets are relative, so they do not depend on where a given
-/// gate actually sits, only on how many inputs it has.
-fn cell_geometry_by_input_count(netlist: &Netlist) -> HashMap<usize, NorCell> {
-    let mut cells = HashMap::new();
-    let mut scratch = World::new(20, 5, 20);
-    for gate in &netlist.gates {
-        cells
-            .entry(gate.inputs.len())
-            .or_insert_with(|| place_nor_gate(&mut scratch, (8, GATE_Y, 8), gate.inputs.len()));
-    }
-    cells
 }
 
 // ---------------------------------------------------------------------

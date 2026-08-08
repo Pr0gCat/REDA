@@ -27,7 +27,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::redstone::simulator::connectivity::{dust_connections, dust_reach};
-use crate::redstone::simulator::position::Position;
+use crate::redstone::simulator::position::{Position, HORIZONTAL};
 use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
 use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use crate::redstone::world::storage::World;
@@ -311,13 +311,19 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
 // lane for its whole length.
 //
 // A net with exactly one sink whose source column and sink approach column
-// are close enough (`compute_bypass`) skips this whole climb-cross-descend
-// dance and instead connects straight across at `GATE_Y`, never touching
-// `TRACK_Y` at all. "Close enough" is not tuned -- `BYPASS_MAX_DISTANCE`
-// derives it from the same clearance invariant that keeps every other column
-// apart, so a bypass route is provably clear of every other net's column
-// before it is ever laid. See that constant's doc comment for the proof, and
-// `lay_bent_path` for how the route itself is built without paying for a
+// are close enough skips this whole climb-cross-descend dance and instead
+// connects straight across at `GATE_Y`, never touching `TRACK_Y` at all.
+// "Close enough" is decided two ways. Inside `BYPASS_MAX_DISTANCE`, it is not
+// tuned at all -- that constant derives it from the same clearance invariant
+// that keeps every other column apart, so a bypass route in that range is
+// provably clear of every other net's column before it is ever laid (see
+// that constant's doc comment for the proof). Beyond it, out to
+// `BYPASS_QUERY_MAX_DISTANCE`, `resolve_bypass_and_geometry` asks instead of
+// proving: it checks a candidate route's actual cells against the
+// `Reservation` every other net's routing already claims, and against every
+// row it crosses, and only takes the ones that come back clear. See
+// `compute_bypass` and `resolve_bypass_and_geometry` for the two passes, and
+// `lay_bent_path` for how either kind of route is built without paying for a
 // mandatory strength refresh it does not need.
 
 /// Y of the gate bodies, their input sockets, the output pins, and every
@@ -409,6 +415,24 @@ const COLUMN_CLEARANCE: i32 = 2;
 /// derived threshold rather than a tuned one; see `compute_bypass`, the only
 /// caller.
 const BYPASS_MAX_DISTANCE: i32 = 2 * COLUMN_CLEARANCE - 1;
+
+/// The largest X gap `resolve_bypass_and_geometry` will even *ask* about --
+/// past `BYPASS_MAX_DISTANCE`, where the proof above no longer applies and
+/// the answer has to come from an actual `Reservation` query instead of a
+/// geometric guarantee.
+///
+/// This is a measured cutoff, not a derived one -- see
+/// `resolve_bypass_and_geometry`'s doc comment for the numbers it was picked
+/// from. Widening the *query* range costs nothing by itself (a query that
+/// finds a collision just falls back to the ramp/track route it would have
+/// taken anyway); what stops this from growing without bound is that a
+/// candidate this far out is asking a horizontal jog to run past
+/// `BYPASS_MAX_DISTANCE`'s own row-body margin (`GATE_HALF_WIDTH +
+/// COLUMN_CLEARANCE` from the *next* gate in the same row, `SLOT_PITCH` away
+/// from this one) -- so past a certain distance every remaining candidate is
+/// rejected by `jog_crosses_another_row_zone` anyway, and asking further out
+/// only spends compile time, not correctness.
+const BYPASS_QUERY_MAX_DISTANCE: i32 = 12;
 
 /// West edge of the floorplan. Everything is laid out eastwards from here, so
 /// no coordinate can go negative on the X axis.
@@ -1558,6 +1582,13 @@ fn build_nets(
 /// like `reserve_columns` and `assign_tracks`, no world access, so it can run
 /// before either of them and its answer feeds straight into `assign_tracks`
 /// (a bypassed net needs no track at all).
+///
+/// This is the proof-only half of bypass eligibility. `resolve_bypass_and_
+/// geometry` widens the *distance* this reaches beyond `BYPASS_MAX_DISTANCE`
+/// by asking an actual `Reservation` instead of proving one, but keeps this
+/// function's single-channel/single-sink restriction exactly as is for that
+/// wider query too -- fan-out and feed-through bypasses are a different, and
+/// harder, problem (see `resolve_bypass_and_geometry`'s own doc comment).
 fn compute_bypass(nets: &[Net], plan: &Floorplan) -> Vec<bool> {
     nets.iter()
         .map(|net| {
@@ -1619,6 +1650,31 @@ fn reserve_feedthrough(
     unreachable!("the search walks east without bound, so it always terminates")
 }
 
+/// Every row's keep-out X intervals: a lever's clearance zone (row 0) or a
+/// gate's body padded by `COLUMN_CLEARANCE` on both sides (every other row).
+/// Nothing may run a column, a feed-through, or (see
+/// `resolve_bypass_and_geometry`'s widened bypass jog) a horizontal jog
+/// through one of these without risking that row's own hardware.
+///
+/// Extracted out of `reserve_columns` so `resolve_bypass_and_geometry` can
+/// run the identical check against a *candidate* jog before `reserve_columns`
+/// itself has any reason to care about one -- a gate or lever body is never a
+/// conductor, so it never shows up in a `Reservation` the way another net's
+/// dust would, and this is the only place that keep-out is recorded at all.
+fn row_body_zones(plan: &Floorplan, row_count: usize) -> Vec<Vec<(i32, i32)>> {
+    let mut row_blocked: Vec<Vec<(i32, i32)>> = vec![Vec::new(); row_count];
+    for &x in &plan.lever_x {
+        row_blocked[0].push((x - COLUMN_CLEARANCE + 1, x + COLUMN_CLEARANCE - 1));
+    }
+    for (g, &cx) in plan.centre_x.iter().enumerate() {
+        row_blocked[plan.row_of[g]].push((
+            cx - GATE_HALF_WIDTH - COLUMN_CLEARANCE + 1,
+            cx + GATE_HALF_WIDTH + COLUMN_CLEARANCE - 1,
+        ));
+    }
+    row_blocked
+}
+
 /// Column reservation: fill in every net's `hops` (the feed-through columns
 /// that connect consecutive channels it has to appear in). Pure function of
 /// the floorplan and each net's channel/sink structure -- no world access,
@@ -1629,17 +1685,7 @@ fn reserve_feedthrough(
 /// feed-throughs are placed last, against everything else.
 fn reserve_columns(plan: &Floorplan, nets: &mut [Net], row_count: usize, channel_count: usize) {
     let mut used_columns: Vec<BTreeSet<i32>> = vec![BTreeSet::new(); channel_count.max(1)];
-    let mut row_blocked: Vec<Vec<(i32, i32)>> = vec![Vec::new(); row_count];
-
-    for &x in &plan.lever_x {
-        row_blocked[0].push((x - COLUMN_CLEARANCE + 1, x + COLUMN_CLEARANCE - 1));
-    }
-    for (g, &cx) in plan.centre_x.iter().enumerate() {
-        row_blocked[plan.row_of[g]].push((
-            cx - GATE_HALF_WIDTH - COLUMN_CLEARANCE + 1,
-            cx + GATE_HALF_WIDTH + COLUMN_CLEARANCE - 1,
-        ));
-    }
+    let row_blocked = row_body_zones(plan, row_count);
 
     for net in nets.iter() {
         used_columns[net.channels[0]].insert(net.source_column);
@@ -1962,13 +2008,19 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
         let mut route = Route { net: n, footprint: &mut *footprint };
 
         if bypass[n] {
-            // A direct connection: no ramp, no track. `compute_bypass`
-            // guarantees this net has exactly one channel and exactly one
-            // sink, and that the sink's approach column is within
-            // `BYPASS_MAX_DISTANCE` of this net's own source column -- close
-            // enough that no other net's column can possibly sit between
-            // them (see that constant's derivation), so a plain path from the
-            // source pin straight to the socket is provably safe.
+            // A direct connection: no ramp, no track. `resolve_bypass_and_
+            // geometry` guarantees this net has exactly one channel and
+            // exactly one sink, and that the direct path is safe -- either
+            // proven so by `compute_bypass` (the sink's approach column is
+            // within `BYPASS_MAX_DISTANCE` of this net's own source column,
+            // close enough that no other net's column can possibly sit
+            // between them -- see that constant's derivation), or checked so
+            // against the actual `Reservation` and every row it crosses
+            // (`resolve_bypass_and_geometry`'s widened pass, for a source/sink
+            // gap up to `BYPASS_QUERY_MAX_DISTANCE`). Either way, this exact
+            // path -- the same waypoints, laid out the same way below -- is
+            // what was checked, so a plain path from the source pin straight
+            // to the socket is safe here too.
             //
             // The path bends at most twice: once to get from the pin's own
             // column onto the sink's approach column (skipped if they are
@@ -2133,6 +2185,306 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
     EmitResult { input_positions, output_positions, gate_output_positions }
 }
 
+/// The X/Z footprint the world needs to hold `plan`/`nets` laid out with
+/// `row_z` -- shared by every world `compile` and `resolve_bypass_and_geometry`
+/// allocate (the real one, and the throwaway probe the latter builds).
+///
+/// `size_x` never depends on `row_z` (every column's X, including a
+/// feed-through hop, is fixed by `reserve_columns` before any bypass decision
+/// exists at all), so the same value serves the baseline probe's world and
+/// the final one; only `size_z` moves with `row_z`.
+fn world_size(plan: &Floorplan, nets: &[Net], row_z: &[i32]) -> (i32, i32) {
+    let size_x = plan
+        .centre_x
+        .iter()
+        .chain(plan.lever_x.iter())
+        .copied()
+        .max()
+        .unwrap_or(ORIGIN_X)
+        .max(
+            nets.iter()
+                .flat_map(|net| net.hops.iter())
+                .copied()
+                .max()
+                .unwrap_or(ORIGIN_X),
+        )
+        + GATE_HALF_WIDTH
+        + 4;
+    let size_z = row_z[0] + 4;
+    (size_x, size_z)
+}
+
+/// One gate cell's socket geometry per distinct input count (1..=3) --
+/// `NorCell`'s offsets are relative, so they do not depend on where a given
+/// gate actually sits, only on how many inputs it has. Shared by
+/// `resolve_bypass_and_geometry` (needs a candidate socket position before
+/// any real gate is placed) and `routing_stats` (needs the same lookup to
+/// read results back out of an already-compiled world).
+fn cell_geometry_by_input_count(netlist: &Netlist) -> HashMap<usize, NorCell> {
+    let mut cells = HashMap::new();
+    let mut scratch = World::new(20, WORLD_HEIGHT, 20);
+    for gate in &netlist.gates {
+        cells
+            .entry(gate.inputs.len())
+            .or_insert_with(|| place_nor_gate(&mut scratch, (8, GATE_Y, 8), gate.inputs.len()));
+    }
+    cells
+}
+
+/// Where a net's own source signal enters the router -- the same position
+/// `emit` computes when it actually places the lever/gate output pin
+/// (`place_primary_input`, `torch_of`), recomputed purely from geometry and a
+/// `NorCell` lookup so `resolve_bypass_and_geometry` can size up a
+/// *candidate* bypass path before any real `World` exists to place it in.
+fn source_pin_position(
+    netlist: &Netlist,
+    plan: &Floorplan,
+    row_z: &[i32],
+    cell_of_count: &HashMap<usize, NorCell>,
+    source: Source,
+) -> Position {
+    match source {
+        Source::Lever(i) => Position::new(plan.lever_x[i], GATE_Y, row_z[0]).offset(Facing::North),
+        Source::Gate(g) => {
+            let cell = &cell_of_count[&netlist.gates[g].inputs.len()];
+            let torch = Position::new(
+                plan.centre_x[g] + cell.output_offset.0,
+                GATE_Y + cell.output_offset.1,
+                row_z[plan.row_of[g]] + cell.output_offset.2,
+            );
+            torch.offset(OUTPUT_DIRECTION)
+        }
+    }
+}
+
+/// Whether `pos` -- one cell of a *candidate* bypass path -- is safe to
+/// write: neither `pos` itself nor any of its four same-layer neighbours may
+/// already belong to a different net in `reservation`. Same-layer adjacency
+/// is exactly what `dust_connections` joins unconditionally (see its own doc
+/// comment: same-layer is unconditional there, unlike the climb/descend
+/// rules), so it is the one hazard a flat `GATE_Y` bypass path -- which never
+/// ramps, so never needs those climb/descend rules `dust_reach` also models
+/// -- actually has to avoid.
+fn cell_is_free_for(reservation: &Reservation, pos: Position, net: usize) -> bool {
+    let owned_by_other = |p: Position| matches!(reservation.get(&p), Some(&owner) if owner != net);
+    !owned_by_other(pos) && HORIZONTAL.iter().all(|&direction| !owned_by_other(pos.offset(direction)))
+}
+
+/// Whether a horizontal jog from `lo` to `hi` (inclusive, one row's own Z --
+/// see `resolve_bypass_and_geometry`) crosses any *other* gate's or lever's
+/// body in that row. `self_zone` is the jog's own source's body, which the
+/// jog necessarily starts inside of; a gate or lever body is never a
+/// conductor, so `row_body_zones` is the only place this keep-out is
+/// recorded at all -- a `Reservation` alone would miss it entirely.
+fn jog_crosses_another_row_zone(zones: &[(i32, i32)], self_zone: (i32, i32), lo: i32, hi: i32) -> bool {
+    zones.iter().any(|&zone| zone != self_zone && zone.0 <= hi && lo <= zone.1)
+}
+
+/// Resolve which nets bypass the ramp/track machinery, and lay out the
+/// geometry that follows from that decision.
+///
+/// Two passes:
+///
+/// 1. **Proven-safe pass.** `compute_bypass`'s geometric proof (see
+///    `BYPASS_MAX_DISTANCE`) decides an initial, conservative bypass set;
+///    `assign_tracks`/`layout_z` turn that into a real geometry, and one
+///    throwaway `emit` (`Footprint::record`, against a scratch `World`) turns
+///    that geometry into a complete `Reservation` -- exactly what `compile`
+///    itself built before this function existed.
+/// 2. **Widened pass.** Every net the proof does not already cover, but whose
+///    source/sink columns are within `query_limit`, gets a candidate direct
+///    path built against that same baseline geometry, then checked against
+///    the `Reservation` from step 1 (`cell_is_free_for`, for every *other*
+///    net's conductors) and against every row it jogs through
+///    (`jog_crosses_another_row_zone`, for gate/lever bodies, which are never
+///    conductors and so never appear in a `Reservation` at all). A clear
+///    candidate is promoted.
+///
+/// # Why the *baseline* reservation is still exactly right for the *final*
+/// (larger) bypass set
+///
+/// Every column this router ever places is, by construction
+/// (`reserve_columns`'s own doc comment), at least `COLUMN_CLEARANCE` from
+/// every other column in the same channel. A net's own source and sink
+/// columns sit at the same X whether or not that net ends up bypassing --
+/// bypassing only changes whether it ever reaches `TRACK_Y`, never which X it
+/// occupies -- so "does some *other* net have a column between mine" is a
+/// fact about `reserve_columns`'s output alone, never about who else happens
+/// to be promoted already. The baseline `Reservation` already contains every
+/// such column, as either a conventionally-routed net's own entry/exit dust
+/// or a feed-through's permanent hop (feed-throughs are never bypass-eligible
+/// at all, so their columns are identical in every candidate reservation).
+/// So it is exactly as informative as any "final" reservation would be, and
+/// every candidate can be checked against the one baseline pass and promoted
+/// all at once -- no candidate's promotion can invalidate another's answer.
+///
+/// # Fan-out and feed-through: still excluded, on purpose
+///
+/// This still only ever considers nets with exactly one channel and exactly
+/// one sink -- the same restriction `compute_bypass` already had. The
+/// `Reservation` query does not, by itself, make either of the excluded
+/// shapes safe to add:
+///
+/// - **Fan-out** (one channel, several sinks) needs more than one jog leaving
+///   the same trunk cell. Those jogs would have to share one strength budget
+///   from a single branch point, the way `lay_track`'s taps already do for a
+///   real track -- but a track's taps are all on one shared straight run,
+///   while a bypass fan-out's branches point in different directions from
+///   the trunk, which `lay_bent_path` (built for one single-source-to-single-
+///   sink path) cannot express at all. That is new plumbing, not a
+///   consequence of trusting the `Reservation` instead of a proof; the query
+///   would still be answerable, but the *route* it would be answering for
+///   does not exist yet.
+/// - **Feed-through** (more than one channel) is harder for a sharper reason:
+///   its whole reason to exist is reaching a row that is *not* the next one,
+///   which means its direct path would have to cross an entire intervening
+///   row -- gate bodies and all, at the row's own Z, not just skirt one row's
+///   edge the way a single-channel jog does. `jog_crosses_another_row_zone`
+///   generalises to "any number of rows" without difficulty, but a feed-
+///   through's *own* channel-to-channel hop column (`net.hops`) already
+///   exists specifically to solve this by going around the row instead of
+///   through it -- so the reservation-query win here would only ever be
+///   skipping a hop column's own two short ramp-free stretches, not the
+///   track/ramp machinery a single-channel bypass skips. Far smaller payoff
+///   for materially more surface area to get wrong.
+///
+/// Both are left to the existing feed-through/track machinery. If a later
+/// measurement shows either payoff is worth the extra plumbing, this is
+/// where it would plug in -- the `Reservation` this function already builds
+/// does not need to change to support it.
+///
+/// # Where `BYPASS_QUERY_MAX_DISTANCE` came from
+///
+/// Measured on the four reference circuits, release build (`cargo run --bin
+/// build_circuit` for box/blocks, `cargo run --bin routing_cost_report` for
+/// settle and bypass counts), sweeping the query limit with
+/// `BYPASS_MAX_DISTANCE` (3, i.e. the proof alone, no query at all) as the
+/// "off" baseline:
+///
+/// ```text
+/// bypass edges (direct GATE_Y route) out of all routed edges:
+///   limit            and4    full_adder   segment_a   seven_segment
+///   3  (off)         6/10     6/32        15/83        34/156
+///   6                7/10    11/32        26/83        45/156
+///   8                8/10    13/32        27/83        45/156
+///   9-11             8/10    13/32        27/83        45/156
+///   12               8/10    13/32        27/83        46/156
+///   15-30            8/10    13/32        27/83        46/156  (unchanged past 12)
+///
+/// non-air blocks:
+///   limit            and4    full_adder   segment_a   seven_segment
+///   3  (off)          571     2246         6716        16694
+///   6                 551     2116         6686        16694
+///   8                 551     2066         6686        16694
+///   9-11              551     2066         6686        16694
+///   12                551     2066         6686        16654
+///   15-30             551     2066         6686        16654  (unchanged past 12)
+///
+/// worst-case settle (game ticks):
+///   limit            and4    full_adder   segment_a   seven_segment
+///   3  (off)           30       82           94          124
+///   6                  28       78           92          124
+///   8                  28       76           92          124
+///   9-11               28       76           92          124
+///   12                 28       76           92          122
+///   15-30              28       76           92          122  (unchanged past 12)
+/// ```
+///
+/// Every circuit is flat from 12 all the way to 30 -- checked directly, not
+/// extrapolated -- which matches the geometric ceiling this router actually
+/// has: past a certain jog length a gate-sourced candidate runs into the
+/// *next* gate in its own row (`jog_crosses_another_row_zone`), and once
+/// every net that will ever clear that check has been found, asking about a
+/// longer one only spends compile time, never finds another win. 12 is the
+/// smallest limit at which all four circuits already show that flatness (11
+/// still leaves `seven_segment` one edge and 40 blocks short of where 12-30
+/// all land), so it is what `BYPASS_QUERY_MAX_DISTANCE` is set to -- nothing
+/// past it was observed to help even once.
+fn resolve_bypass_and_geometry(
+    netlist: &Netlist,
+    plan: &Floorplan,
+    nets: &mut [Net],
+    row_count: usize,
+    channel_count: usize,
+    query_limit: i32,
+) -> (Vec<bool>, Vec<i32>, Vec<Vec<i32>>) {
+    let bypass_proven = compute_bypass(nets, plan);
+    let baseline_track_count = assign_tracks(plan, nets, channel_count, &bypass_proven);
+    let (baseline_row_z, baseline_track_z) = layout_z(row_count, channel_count, &baseline_track_count);
+
+    let (size_x, size_z) = world_size(plan, nets, &baseline_row_z);
+    let mut scratch = World::new(size_x.max(8), WORLD_HEIGHT, size_z.max(8));
+    let mut footprint = Footprint::record();
+    {
+        let geometry = RoutingGeometry {
+            plan,
+            row_z: &baseline_row_z,
+            nets,
+            track_z: &baseline_track_z,
+            bypass: &bypass_proven,
+        };
+        emit(&mut scratch, netlist, &geometry, &mut footprint);
+    }
+    let probe_reservation = footprint.reservation;
+    drop(scratch);
+
+    let cell_of_count = cell_geometry_by_input_count(netlist);
+    let row_zones = row_body_zones(plan, row_count);
+    let mut bypass_final = bypass_proven.clone();
+
+    for (n, net) in nets.iter().enumerate() {
+        if bypass_proven[n] || net.channels.len() != 1 || net.sinks[0].len() != 1 {
+            continue;
+        }
+        let (gate, input_index) = net.sinks[0][0];
+        let exit_x = approach_column(plan.centre_x[gate], input_index);
+        let distance = (exit_x - net.source_column).abs();
+        if distance <= BYPASS_MAX_DISTANCE || distance > query_limit {
+            continue;
+        }
+
+        let pin = source_pin_position(netlist, plan, &baseline_row_z, &cell_of_count, net.source);
+        let row_z_gate = baseline_row_z[plan.row_of[gate]];
+        let cell = &cell_of_count[&netlist.gates[gate].inputs.len()];
+        let (dx, dy, dz) = cell.input_offsets[input_index];
+        let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
+
+        if pin.x != exit_x {
+            let self_zone = match net.source {
+                Source::Lever(_) => {
+                    (net.source_column - COLUMN_CLEARANCE + 1, net.source_column + COLUMN_CLEARANCE - 1)
+                }
+                Source::Gate(_) => (
+                    net.source_column - GATE_HALF_WIDTH - COLUMN_CLEARANCE + 1,
+                    net.source_column + GATE_HALF_WIDTH + COLUMN_CLEARANCE - 1,
+                ),
+            };
+            let (lo, hi) = (pin.x.min(exit_x), pin.x.max(exit_x));
+            if jog_crosses_another_row_zone(&row_zones[net.channels[0]], self_zone, lo, hi) {
+                continue;
+            }
+        }
+
+        let mut waypoints: Vec<Position> = Vec::new();
+        if pin.x != exit_x {
+            waypoints.push(Position::new(exit_x, GATE_Y, pin.z));
+        }
+        if socket.x != exit_x {
+            waypoints.push(Position::new(exit_x, GATE_Y, row_z_gate));
+        }
+        waypoints.push(socket);
+
+        let cells = bent_path_cells(pin, &waypoints);
+        if cells.iter().all(|&pos| cell_is_free_for(&probe_reservation, pos, n)) {
+            bypass_final[n] = true;
+        }
+    }
+
+    let track_count = assign_tracks(plan, nets, channel_count, &bypass_final);
+    let (row_z, track_z) = layout_z(row_count, channel_count, &track_count);
+    (bypass_final, row_z, track_z)
+}
+
 /// Which net `nets[index]` is, by the name a person compiling the netlist
 /// would recognise -- the lever's own input name, or the gate output the net
 /// carries. Used only for naming cells in a `ConnectivityViolation`.
@@ -2224,27 +2576,10 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     let mut nets = build_nets(netlist, &order, &plan, &producer_of);
 
     reserve_columns(&plan, &mut nets, row_count, channel_count);
-    let bypass = compute_bypass(&nets, &plan);
-    let track_count = assign_tracks(&plan, &mut nets, channel_count, &bypass);
-    let (row_z, track_z) = layout_z(row_count, channel_count, &track_count);
+    let (bypass, row_z, track_z) =
+        resolve_bypass_and_geometry(netlist, &plan, &mut nets, row_count, channel_count, BYPASS_QUERY_MAX_DISTANCE);
 
-    let size_x = plan
-        .centre_x
-        .iter()
-        .chain(plan.lever_x.iter())
-        .copied()
-        .max()
-        .unwrap_or(ORIGIN_X)
-        .max(
-            nets.iter()
-                .flat_map(|net| net.hops.iter())
-                .copied()
-                .max()
-                .unwrap_or(ORIGIN_X),
-        )
-        + GATE_HALF_WIDTH
-        + 4;
-    let size_z = row_z[0] + 4;
+    let (size_x, size_z) = world_size(&plan, &nets, &row_z);
 
     // ---------------------------------------------------------------
     // Emission
