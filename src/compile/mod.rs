@@ -109,21 +109,61 @@ impl Netlist {
 }
 
 // ---------------------------------------------------------------------
-// Cell library：一個 NOR 閘在紅石裡的實體佈局
+// The NOR primitive: a torch plus its support block, nothing else
 // ---------------------------------------------------------------------
+//
+// There used to be a "cell" here: a fixed 3x3/5x3/5x5 template with its own
+// interior wiring (one support block *per input direction*, each with its own
+// dust on top, all merging into one wire network above a separate centre
+// block). That interior has been dissolved -- see
+// `docs/superpowers/specs/2026-08-08-3d-codesign.md`, "Dissolving it". A NOR
+// gate is now exactly what that spec says it is: a torch plus its support
+// block, where the support block is the single physical sink every input's
+// own route terminates against directly. There is no merge dust and no
+// per-input support block to merge it through, because a solid block is
+// already powered by *any* neighbour that drives it -- feeding three
+// different faces of the same block from three different repeaters *is* a
+// 3-input NOR merge, with nothing routed "inside" it at all.
+//
+// What is left of the old cell is placement, not wiring: where the support
+// block and its torch go, and which of the support's free faces each input's
+// route is asked to terminate against. `place_nor_gate` below decides both;
+// the router (`emit`'s Ramps/Columns/Tracks passes) plans every dust cell
+// that gets a signal there, exactly as it already does between gates -- so
+// "inside a gate" and "between gates" are no longer different routing
+// regimes, only different distances.
 
 /// 輸入的方向，固定順序。最多支援 3 個輸入 —— 第四個水平方向留給輸出。
+///
+/// A repeater can only drive the block directly in front of it, and it has to
+/// sit on the ground next to the support at `GATE_Y` -- so a horizontal input
+/// can only ever approach from one of the four compass directions, and one of
+/// those (`OUTPUT_DIRECTION`) is already spoken for. Three is the hardware
+/// maximum fan-in this gives every NOR gate this compiler ever places (see
+/// `place_nor_gate`'s own `assert!`), not a placeholder for something larger
+/// later -- a fourth input would need a face a repeater cannot stand on.
 const INPUT_DIRECTIONS: [Facing; 3] = [Facing::West, Facing::East, Facing::South];
 
 /// 輸出固定朝北。
 const OUTPUT_DIRECTION: Facing = Facing::North;
 
-/// 一個 NOR 閘在紅石裡的實體佈局。
+/// Where a NOR gate's support block sits, and where its output torch and
+/// input sockets are relative to it. `size` is the ground-plan bounding box
+/// this occupies -- support block, output torch and its pin, and every input
+/// socket this gate actually uses -- for callers that need a footprint
+/// without touching a `World` (`resolve_bypass_and_geometry`'s candidate
+/// paths, and the genlib area figures documented in
+/// `frontend/redstone_nor.genlib`).
 pub struct NorCell {
     /// 這個 cell 佔的空間
     pub size: (i32, i32, i32),
-    /// 每個輸入的相對座標 —— 外部訊號要在這裡接一個中繼器（面朝支撐塊）
-    /// 或拉桿才能驅動這個輸入。
+    /// Each input's socket -- the cell immediately against the support block
+    /// on that input's face, relative to the support block itself. Left
+    /// empty by `place_nor_gate`: the caller (the router) is the one who
+    /// decides whether a lever or a repeater ends up there, and terminates
+    /// its own route with it directly against the support -- no interior
+    /// hop between "socket" and "support" exists anymore, because they are
+    /// the same face of the same block.
     pub input_offsets: Vec<(i32, i32, i32)>,
     /// 輸出的相對座標 —— 就是輸出火把本身，讀它的 `lit` 就是這個閘的輸出。
     pub output_offset: (i32, i32, i32),
@@ -204,14 +244,23 @@ fn repeater(direction: Facing) -> BlockState {
     state
 }
 
-/// 把一個 n 輸入的 NOR 閘畫進世界。
+/// 把一個 n 輸入的 NOR 閘畫進世界：一個支撐塊，加上貼在它北面的輸出火把。
+/// 就這樣 —— 沒有內部佈線。
 ///
-/// 佈局跟 `tests/simulator_circuits.rs` 裡手搭的 NOR 閘一樣：中心方塊
-/// 正上方是匯流紅石粉；每個輸入各自一個支撐塊（西、東、南三個方向），
-/// 支撐塊上方的紅石粉跟匯流粉水平相鄰；輸出是貼在中心方塊北側的牆上
-/// 火把。輸入的「插座」留在支撐塊再往外一格（`input_offsets`），外部
-/// 訊號要用主動元件（中繼器或拉桿）從那裡強充能支撐塊 —— 紅石粉本身不會
-/// 水平充能方塊，這是它辦不到的。
+/// The support block is placed; the torch is placed, attached to it; and
+/// every input this gate actually uses gets a socket coordinate
+/// (`input_offsets`) immediately against one of the support's three free
+/// horizontal faces (west/east/south -- `INPUT_DIRECTIONS`). The socket
+/// itself is left as air, exactly as before: the caller (the router) decides
+/// whether a lever or a repeater ends up there, and that repeater's own
+/// output *is* what powers the support -- there is no support-per-input
+/// block or merge dust standing between the socket and the block it drives
+/// anymore, because a solid block is already powered by any conductor that
+/// faces into it, regardless of which of its faces that happens to be.
+///
+/// This is `verify_torch_merge`'s N-sources-one-sink invariant made
+/// physical: `support` is the one sink; every input's own route is one
+/// source, terminating directly against it.
 pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: usize) -> NorCell {
     assert!(
         input_count <= INPUT_DIRECTIONS.len(),
@@ -219,25 +268,18 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
         INPUT_DIRECTIONS.len()
     );
 
-    let center = Position::new(origin.0, origin.1, origin.2);
-    world.set(center.x, center.y, center.z, stone());
+    let support = Position::new(origin.0, origin.1, origin.2);
+    world.set(support.x, support.y, support.z, stone());
 
-    let merge_dust = center.up();
-    world.set(merge_dust.x, merge_dust.y, merge_dust.z, dust());
-
+    // 插座留空 —— 由呼叫端（router）決定要接拉桿還是中繼器，並直接面朝
+    // `support` 把它充能。
     let mut input_offsets = Vec::with_capacity(input_count);
     for &direction in INPUT_DIRECTIONS.iter().take(input_count) {
-        let support = center.offset(direction);
-        let support_dust = support.up();
-        world.set(support.x, support.y, support.z, stone());
-        world.set(support_dust.x, support_dust.y, support_dust.z, dust());
-
-        // 插座本身留空 —— 由呼叫端（router）決定要接拉桿還是中繼器。
         let socket = support.offset(direction);
-        input_offsets.push((socket.x - center.x, socket.y - center.y, socket.z - center.z));
+        input_offsets.push((socket.x - support.x, socket.y - support.y, socket.z - support.z));
     }
 
-    let output_torch_pos = center.offset(OUTPUT_DIRECTION);
+    let output_torch_pos = support.offset(OUTPUT_DIRECTION);
     world.set(
         output_torch_pos.x,
         output_torch_pos.y,
@@ -245,11 +287,11 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
         wall_torch(OUTPUT_DIRECTION),
     );
 
-    // 邊界盒：涵蓋中心、所有輸入插座、輸出插座（火把再往外一格，給繞線
-    // 留出跟輸出火把不直接相鄰的緩衝），以及地板（y-1）跟匯流粉（y+1）。
+    // 邊界盒：涵蓋支撐塊、所有用到的輸入插座，以及輸出插座（火把再往外
+    // 一格 -- `emit`稍後會在那裡放這個閘輸出淨路的第一格紅石粉）。
     let output_socket = output_torch_pos.offset(OUTPUT_DIRECTION);
-    let mut min = (center.x, center.y - 1, center.z);
-    let mut max = (center.x, center.y + 1, center.z);
+    let mut min = (support.x, support.y, support.z);
+    let mut max = (support.x, support.y, support.z);
     let mut extend = |p: Position| {
         min.0 = min.0.min(p.x);
         min.1 = min.1.min(p.y);
@@ -260,7 +302,7 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
     };
     extend(output_socket);
     for &(dx, dy, dz) in &input_offsets {
-        extend(Position::new(center.x + dx, center.y + dy, center.z + dz));
+        extend(Position::new(support.x + dx, support.y + dy, support.z + dz));
     }
 
     let size = (max.0 - min.0 + 1, max.1 - min.1 + 1, max.2 - min.2 + 1);
@@ -269,9 +311,9 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
         size,
         input_offsets,
         output_offset: (
-            output_torch_pos.x - center.x,
-            output_torch_pos.y - center.y,
-            output_torch_pos.z - center.z,
+            output_torch_pos.x - support.x,
+            output_torch_pos.y - support.y,
+            output_torch_pos.z - support.z,
         ),
     }
 }
@@ -335,20 +377,56 @@ const GATE_Y: i32 = 1;
 /// Y of the east-west routing tracks. `TRACK_Y - 1` is their stone floor.
 const TRACK_Y: i32 = 3;
 
-/// Floor, gates, merge dust / track floor, tracks, and one spare layer of air
-/// above the tracks so nothing is ever written outside the world.
+/// Floor, gates, track floor, tracks, and one spare layer of air above the
+/// tracks so nothing is ever written outside the world.
 const WORLD_HEIGHT: i32 = 5;
 
 /// X distance between two neighbouring gates of the same row.
 ///
-/// A gate cell reaches out to `cx ± GATE_HALF_WIDTH`, so 14 leaves a five-wide
-/// gap between two cells -- room for exactly one feed-through column that is
-/// still at least `COLUMN_CLEARANCE` clear of everything on either side.
+/// A gate cell reaches out to `cx ± ENTRY_OFFSET` for spacing purposes, so 14
+/// leaves a five-wide gap between two cells -- room for exactly one
+/// feed-through column that is still at least `COLUMN_CLEARANCE` clear of
+/// everything on either side. Unchanged by cells dissolving: a gate's actual
+/// physical footprint shrank (`place_nor_gate` no longer builds anything past
+/// one cell from its support block), but the spacing this constant provides
+/// was never actually about that footprint -- see `ENTRY_OFFSET`'s own doc
+/// comment for why its value stayed put too.
 const SLOT_PITCH: i32 = 14;
 
-/// Half the X width of a gate cell: the west and east socket approach columns
-/// sit at `cx ± GATE_HALF_WIDTH`.
-const GATE_HALF_WIDTH: i32 = 4;
+/// Where a gate's west/east routing entry column sits -- and, since
+/// `row_body_zones` pads a gate's own keep-out zone by the same amount, the
+/// effective half-width of a gate's footprint for spacing purposes.
+///
+/// A west/east socket cannot be entered by a plain north-south column,
+/// however close that column runs to it: the socket-to-support relationship
+/// is along the *X* axis (`place_nor_gate`'s `input_offsets` puts it one cell
+/// out), so the final hop into it has to be an east-west one -- a repeater
+/// only powers what is directly in front of it -- which needs a real jog, not
+/// merely a nearby column. (A south input has no such jog at all: its socket
+/// sits along *Z*, the same direction the column already travels, so
+/// `approach_column` puts its entry column dead on the socket -- see that
+/// function's doc comment.)
+///
+/// This kept its pre-dissolution name, `GATE_HALF_WIDTH`, until it was
+/// renamed here to describe what it now does rather than what it used to be
+/// the width of. Its value, 4, is left exactly as it was for a reason worth
+/// stating plainly: this router's spacing proof only actually covers a
+/// column's clearance from *feed-through* candidates and from other members
+/// of the *same net* (`reserve_columns`'s own doc comment, and
+/// `reserve_feedthrough`'s clearance search) -- it never checks that one
+/// gate's own output column and an unrelated gate's socket-approach column,
+/// meeting in the same channel by coincidence rather than by producer/
+/// consumer relationship, land `COLUMN_CLEARANCE` apart. In practice they
+/// almost always do, because 4 leaves generous slack around `SLOT_PITCH`'s
+/// row spacing -- but `full_adder` was enough to falsify a tighter value (3,
+/// the tightest this jog reasoning by itself requires) with an actual
+/// `ConnectivityViolation` during this change's own development, between
+/// gate `g1`'s own output column and gate `g5`'s unrelated east-input
+/// approach column. Shrinking this constant is therefore a placement/
+/// spacing-proof change, not a socket-geometry one, and belongs with
+/// `docs/superpowers/specs/2026-08-08-3d-codesign.md`'s "Placement as an
+/// optimisation" -- so it stays at its old, empirically-safe value here.
+const ENTRY_OFFSET: i32 = 4;
 
 /// Z distance between two neighbouring tracks of the same channel.
 ///
@@ -429,7 +507,7 @@ const BYPASS_MAX_DISTANCE: i32 = 2 * COLUMN_CLEARANCE - 1;
 /// finds a collision just falls back to the ramp/track route it would have
 /// taken anyway); what stops this from growing without bound is that a
 /// candidate this far out is asking a horizontal jog to run past
-/// `BYPASS_MAX_DISTANCE`'s own row-body margin (`GATE_HALF_WIDTH +
+/// `BYPASS_MAX_DISTANCE`'s own row-body margin (`ENTRY_OFFSET +
 /// COLUMN_CLEARANCE` from the *next* gate in the same row, `SLOT_PITCH` away
 /// from this one) -- so past a certain distance every remaining candidate is
 /// rejected by `jog_crosses_another_row_zone` anyway, and asking further out
@@ -712,51 +790,6 @@ fn lay_dust_run(
     ending_strength
 }
 
-/// 鋪一段路線，終點是一個**轉角**：下一段線要換一個軸繼續走，所以這一格
-/// 必須是紅石粉，不能是中繼器 —— 中繼器只認一個方向，換軸就接不到訊號。
-///
-/// 為了保證轉角這一格一定是滿強度 15（讓下一段線可以放心地從頭算起自己
-/// 的 15 格預算），轉角**前一格**強制放一個面朝這一段方向的中繼器，不管
-/// 前面累計了幾格 —— 中繼器正前方的粉一定是新鮮的滿強度，這是它存在的
-/// 意義。呼叫端保證 `start` 到 `corner` 至少有 2 格距離，所以「轉角前一
-/// 格」不會撞到 `start` 自己。
-///
-/// This segment always ends in that mandatory repeater, so it can never die
-/// no matter how weak `incoming_strength` is (as long as it is nonzero) --
-/// `reserve` is 0.
-fn lay_segment_to_corner(world: &mut World, start: Position, corner: Position, incoming_strength: u8, route: &mut Route) {
-    let direction = direction_from(start, corner);
-    let refresh_point = corner.offset(direction.opposite());
-
-    lay_dust_run(world, start, direction, refresh_point, incoming_strength, 0, route);
-
-    ensure_floor(world, refresh_point);
-    route.claim(refresh_point.down());
-    world.set(refresh_point.x, refresh_point.y, refresh_point.z, repeater(direction));
-    route.claim(refresh_point);
-
-    ensure_floor(world, corner);
-    route.claim(corner.down());
-    world.set(corner.x, corner.y, corner.z, dust());
-    route.claim(corner);
-}
-
-/// 鋪一段路線的最後一段，終點是某個閘的輸入插座：這一格**一定**是中繼器，
-/// 面朝這一段前進的方向 —— 而這個方向剛好就是「面朝支撐塊」的方向，因為
-/// 插座本來就在支撐塊的正對外側。這是唯一能強充能支撐塊的方法：紅石粉
-/// 水平方向不會充能方塊。
-///
-/// Same reasoning as `lay_segment_to_corner`: the mandatory repeater at
-/// `socket` means this segment can never die, so `reserve` is 0.
-fn lay_segment_to_socket(world: &mut World, start: Position, socket: Position, incoming_strength: u8, route: &mut Route) {
-    let direction = direction_from(start, socket);
-    lay_dust_run(world, start, direction, socket, incoming_strength, 0, route);
-    ensure_floor(world, socket);
-    route.claim(socket.down());
-    world.set(socket.x, socket.y, socket.z, repeater(direction));
-    route.claim(socket);
-}
-
 /// Break a multi-segment axis-aligned path from `start` through every point
 /// of `waypoints` in order into its individual cells, in write order. Each
 /// consecutive pair -- `start`/`waypoints[0]`, then each pair after it --
@@ -783,29 +816,39 @@ fn bent_path_cells(start: Position, waypoints: &[Position]) -> Vec<Position> {
 /// Lay a multi-segment axis-aligned dust path from `start` (exclusive,
 /// already lit at `incoming_strength`) through every point of `waypoints` in
 /// order, ending in a mandatory repeater facing into `waypoints`'s last
-/// element -- same convention as `lay_segment_to_socket`, which this
-/// generalises for a path used by `compute_bypass`'s direct routes: unlike
-/// every fixed two-or-three-segment route elsewhere in this module, a bypass
-/// may bend zero, one or two times depending on where its one sink sits
-/// relative to its source column.
+/// element -- the one active component every route this router ever lays
+/// ends in, because redstone dust cannot charge a block sideways.
 ///
-/// Every waypoint except the last stays plain dust, because the path
-/// changes axis there: a repeater only reads what is directly behind it, so
-/// one sitting where the path turns would not be connected to the segment
-/// after the turn at all. Unlike `lay_segment_to_corner`, this does *not*
-/// force a mandatory refresh at those turns -- a corner costs exactly the
-/// same one hop of strength a straight cell does
+/// This is the one path-laying primitive every socket termination in this
+/// module uses, whatever kind of route it ends: `compute_bypass`'s direct
+/// routes (which may bend zero or one time getting from the source pin onto
+/// the sink's approach column), and `emit`'s ordinary post-track/ramp
+/// Columns pass (which may bend zero or one time getting from that approach
+/// column onto the socket itself -- zero for a south input, whose socket
+/// already sits on the column's own line of travel, one for a west/east
+/// input, whose socket sits to the side of it; see `approach_column`'s doc
+/// comment). Both call sites hand this a `waypoints` list with at most two
+/// entries for exactly that reason -- an optional bend, then the socket.
+///
+/// The one waypoint before the last, if there is one, stays plain dust,
+/// because the path changes axis there: a repeater only reads what is
+/// directly behind it, so one sitting where the path turns would not be
+/// connected to the segment after the turn at all. This does *not* force a
+/// mandatory refresh at that turn -- a corner costs exactly the same one hop
+/// of strength a straight cell does
 /// (`recompute_dust_strengths`'s BFS does not distinguish them), so forcing
-/// one would spend a repeater a short bypass never needs, which is exactly
-/// what made an earlier version of this route regress settle time instead of
-/// improving it. Instead the whole path shares one strength budget end to
-/// end, exactly as if it had no bends at all, with turns simply excluded
-/// from ever hosting the occasional repeater that budget calls for --
-/// mirrors `plan_track_run`'s handling of taps it must route around.
+/// one would spend a repeater a short route never needs, which is exactly
+/// what made an earlier version of this function's own bypass-only
+/// predecessor regress settle time instead of improving it, and exactly what
+/// the old cell-based design's dedicated `lay_segment_to_corner` paid on
+/// every west/east gate-entry edge before this function took over that job
+/// too. Instead the whole path shares one strength budget end to end,
+/// exactly as if it had no bends at all, with turns simply excluded from
+/// ever hosting the occasional repeater that budget calls for -- mirrors
+/// `plan_track_run`'s handling of taps it must route around.
 ///
 /// This path always ends in its own mandatory repeater, so nothing after it
-/// needs preserved strength -- `reserve` is 0, same as
-/// `lay_segment_to_socket`.
+/// needs preserved strength -- `reserve` is 0.
 fn lay_bent_path(world: &mut World, start: Position, waypoints: &[Position], incoming_strength: u8, route: &mut Route) {
     debug_assert!(!waypoints.is_empty(), "a bent path must have somewhere to end");
     debug_assert!(incoming_strength > 0, "a run cannot start from an already-dead signal");
@@ -1227,13 +1270,35 @@ fn place_primary_input(world: &mut World, home: Position) -> (Position, Position
 /// The final repeater of a route must face the gate's support block, and a
 /// repeater only reads from directly behind it, so each socket can only be
 /// entered from one side: the west socket from the west, the east socket from
-/// the east, and the south socket from the south. The first two therefore turn
-/// a corner on the gate's own row, `GATE_HALF_WIDTH` out from the centre; the
-/// third is reached by running straight north.
+/// the east, and the south socket from the south.
+///
+/// South is special: its socket sits one cell *south* of the support --
+/// exactly the direction a routing column already travels along (signal flow
+/// is northwards) -- so a plain north-running column can terminate directly
+/// on it with the right repeater orientation, no jog required. West and east
+/// sockets sit to the *side* of a column that only ever runs north-south, so
+/// entering either one needs a genuine east-west leg first: `emit`'s Columns
+/// pass brings the signal down at `centre_x ± ENTRY_OFFSET` and jogs the
+/// final `ENTRY_OFFSET - 1` cells sideways onto the socket itself (see
+/// `ENTRY_OFFSET`'s own doc comment for why that distance, not a fixed cell
+/// width, is what decides how far out this lands).
+///
+/// The old cell-based design paid for this same jog with a mandatory,
+/// unconditional refresh repeater right before the corner
+/// (`lay_segment_to_corner`), on top of the socket's own mandatory repeater
+/// -- two guaranteed repeaters on every west/east edge, the largest single
+/// share of `docs/superpowers/specs/2026-08-08-3d-codesign.md`'s measured
+/// "gate-entry" cost. That forced refresh was never required by the jog
+/// itself, only by treating "entering a gate" as a different kind of routing
+/// problem from "entering anywhere else". `emit`'s Columns pass now lays this
+/// whole leg -- landing, optional jog, socket -- with `lay_bent_path`, the
+/// same general bent-path primitive `compute_bypass`'s direct routes already
+/// used, sharing one strength budget end to end and forcing only the one
+/// repeater every route needs at its very end.
 fn approach_column(centre_x: i32, input_index: usize) -> i32 {
     match input_index {
-        0 => centre_x - GATE_HALF_WIDTH,
-        1 => centre_x + GATE_HALF_WIDTH,
+        0 => centre_x - ENTRY_OFFSET,
+        1 => centre_x + ENTRY_OFFSET,
         _ => centre_x,
     }
 }
@@ -1546,12 +1611,12 @@ fn build_floorplan(
         let shift = if r % 2 == 0 { 0 } else { COLUMN_CLEARANCE };
         let left = ((widest - row.len()) / 2) as i32 * SLOT_PITCH;
         for (i, &g) in row.iter().enumerate() {
-            centre_x[g] = ORIGIN_X + left + i as i32 * SLOT_PITCH + GATE_HALF_WIDTH + shift;
+            centre_x[g] = ORIGIN_X + left + i as i32 * SLOT_PITCH + ENTRY_OFFSET + shift;
         }
     }
     let lever_left = ((widest - netlist.inputs.len()) / 2) as i32 * SLOT_PITCH;
     let lever_x: Vec<i32> = (0..netlist.inputs.len())
-        .map(|i| ORIGIN_X + lever_left + i as i32 * SLOT_PITCH + GATE_HALF_WIDTH)
+        .map(|i| ORIGIN_X + lever_left + i as i32 * SLOT_PITCH + ENTRY_OFFSET)
         .collect();
 
     let row_of: Vec<usize> = level.iter().map(|&l| l + 1).collect();
@@ -1743,8 +1808,8 @@ fn row_body_zones(plan: &Floorplan, row_count: usize) -> Vec<Vec<(i32, i32)>> {
     }
     for (g, &cx) in plan.centre_x.iter().enumerate() {
         row_blocked[plan.row_of[g]].push((
-            cx - GATE_HALF_WIDTH - COLUMN_CLEARANCE + 1,
-            cx + GATE_HALF_WIDTH + COLUMN_CLEARANCE - 1,
+            cx - ENTRY_OFFSET - COLUMN_CLEARANCE + 1,
+            cx + ENTRY_OFFSET + COLUMN_CLEARANCE - 1,
         ));
     }
     row_blocked
@@ -1782,7 +1847,7 @@ fn reserve_columns(plan: &Floorplan, nets: &mut [Net], row_count: usize, channel
                 (from + 1)..=to,
                 &used_columns,
                 &row_blocked,
-                ORIGIN_X - GATE_HALF_WIDTH,
+                ORIGIN_X - ENTRY_OFFSET,
             );
             for columns in used_columns[from..=to].iter_mut() {
                 columns.insert(column);
@@ -2154,21 +2219,19 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
                 match exit {
                     Exit::Socket { gate, input_index, .. } => {
                         let (dx, dy, dz) = gate_cell[gate].input_offsets[input_index];
-                        let socket = Position::new(
-                            plan.centre_x[gate] + dx,
-                            GATE_Y + dy,
-                            row_z[plan.row_of[gate]] + dz,
-                        );
-                        if socket.x == landing.x {
-                            lay_segment_to_socket(world, landing, socket, landing_strength, &mut route);
-                        } else {
-                            let corner =
-                                Position::new(landing.x, GATE_Y, row_z[plan.row_of[gate]]);
-                            lay_segment_to_corner(world, landing, corner, landing_strength, &mut route);
-                            // `corner` always follows `lay_segment_to_corner`'s own
-                            // mandatory repeater, so it is always fresh.
-                            lay_segment_to_socket(world, corner, socket, MAX_SIGNAL_STRENGTH, &mut route);
+                        let row_z_gate = row_z[plan.row_of[gate]];
+                        let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
+                        // South's socket sits dead on `landing`'s own column
+                        // (see `approach_column`'s doc comment), so this
+                        // waypoint list is just `[socket]` there -- no bend.
+                        // West/east need one bend, onto the socket's own X,
+                        // before `lay_bent_path` can reach it.
+                        let mut waypoints: Vec<Position> = Vec::new();
+                        if socket.x != landing.x {
+                            waypoints.push(Position::new(landing.x, GATE_Y, row_z_gate));
                         }
+                        waypoints.push(socket);
+                        lay_bent_path(world, landing, &waypoints, landing_strength, &mut route);
                     }
                     Exit::Feedthrough { x, next_slot } => {
                         let next_channel = net.channels[next_slot];
@@ -2283,7 +2346,7 @@ fn world_size(plan: &Floorplan, nets: &[Net], row_z: &[i32]) -> (i32, i32) {
                 .max()
                 .unwrap_or(ORIGIN_X),
         )
-        + GATE_HALF_WIDTH
+        + ENTRY_OFFSET
         + 4;
     let size_z = row_z[0] + 4;
     (size_x, size_z)
@@ -2530,8 +2593,8 @@ fn resolve_bypass_and_geometry(
                     (net.source_column - COLUMN_CLEARANCE + 1, net.source_column + COLUMN_CLEARANCE - 1)
                 }
                 Source::Gate(_) => (
-                    net.source_column - GATE_HALF_WIDTH - COLUMN_CLEARANCE + 1,
-                    net.source_column + GATE_HALF_WIDTH + COLUMN_CLEARANCE - 1,
+                    net.source_column - ENTRY_OFFSET - COLUMN_CLEARANCE + 1,
+                    net.source_column + ENTRY_OFFSET + COLUMN_CLEARANCE - 1,
                 ),
             };
             let (lo, hi) = (pin.x.min(exit_x), pin.x.max(exit_x));

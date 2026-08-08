@@ -27,19 +27,28 @@
 # delay.
 #
 # Area is a different story: an NOR cell's footprint on the ground plane
-# *does* grow with its fan-in, because each extra input needs its own
-# support block and dust run out to a socket (`place_nor_gate`'s
-# `INPUT_DIRECTIONS`: West, East, South -- North is reserved for the output
-# torch). The AREA figure below is exactly that footprint -- the compiled
-# ground-plan rectangle's X*Z, in blocks -- for a gate with 1, 2, and 3
-# inputs respectively, read straight off `place_nor_gate`'s own bounding-box
+# *does* grow with its fan-in, because each extra input needs its own socket
+# against the shared support block (`place_nor_gate`'s `INPUT_DIRECTIONS`:
+# West, East, South -- North is reserved for the output torch). The AREA
+# figure below is exactly that footprint -- the compiled ground-plan
+# rectangle's X*Z, in blocks -- for a gate with 1, 2, and 3 inputs
+# respectively, read straight off `place_nor_gate`'s own bounding-box
 # computation (verified by placing one of each into a scratch `World` and
 # reading back `NorCell.size`):
 #
 #   inputs   NorCell.size (x,y,z)   ground footprint (x * z)
-#   1        (3, 3, 3)              9
-#   2        (5, 3, 3)              15
-#   3        (5, 3, 5)              25
+#   1        (2, 1, 3)              6
+#   2        (3, 1, 3)              9
+#   3        (3, 1, 4)              12
+#
+# (These shrank from an earlier revision of this library -- 9/15/25 -- when
+# `docs/superpowers/specs/2026-08-08-3d-codesign.md`'s cell dissolution
+# removed a NOR gate's separate per-input support block and merge dust: a
+# gate is now just one support block plus its output torch, with every
+# input's own route terminating directly against a free face of that same
+# block. The *ratios* between fan-in counts shifted too (2.78x -> 2.0x for
+# 3-input vs. 1-input), which is a genlib change ABC's technology mapper sees,
+# not merely a cosmetic renumbering -- see the note on `NOR3` below.)
 #
 # So fan-in is cheap but not free -- exactly the asymmetry this project's
 # whole cost model rests on, now expressed in ABC's own terms instead of
@@ -68,30 +77,30 @@ GATE $__ONE 0 Y=CONST1;
 # is no native "wire-only" primitive in redstone either: every real signal
 # path here ends in a torch. The Rust reader realizes a BUF as two chained
 # 1-input NOR cells (NOT(NOT(x)) == x), so its cost here is honestly
-# `2 * NOR1`: area 2*9 = 18, delay 2*2 = 4 game ticks.
-GATE BUF 18 Y=A;
+# `2 * NOR1`: area 2*6 = 12, delay 2*2 = 4 game ticks.
+GATE BUF 12 Y=A;
 PIN * NONINV 1 9999 4 0 4 0
 
-# NOR1 (== an inverter): area 9 from the table above; delay is one torch,
+# NOR1 (== an inverter): area 6 from the table above; delay is one torch,
 # `TORCH_DELAY_GAME_TICKS` = 2 game ticks, in the "rise/fall block delay"
 # fields (the "fanout delay" fields are 0 -- this library models delay as a
 # pure per-gate constant, since wire delay is a placement/routing cost this
 # genlib deliberately has no visibility into; see the top-level task comment
 # for why that split is the right one here).
-GATE NOR1 9 Y=!A;
+GATE NOR1 6 Y=!A;
 PIN * INV 1 9999 2 0 2 0
 
-# NOR2: area 15 from the table above. Same delay as every other NOR here --
+# NOR2: area 9 from the table above. Same delay as every other NOR here --
 # one torch, independent of fan-in.
-GATE NOR2 15 Y=!(A+B);
+GATE NOR2 9 Y=!(A+B);
 PIN * INV 1 9999 2 0 2 0
 
-# NOR3: area 25 from the table above -- the hardware maximum fan-in
+# NOR3: area 12 from the table above -- the hardware maximum fan-in
 # (`place_nor_gate` only has three input faces free; the fourth is the
 # output). Same delay as NOR1/NOR2. ABC therefore has no delay incentive at
-# all to prefer a narrower gate, and only a mild area incentive (25 for one
+# all to prefer a narrower gate, and only a mild area incentive (12 for one
 # NOR3 vs. paying for two separate gates plus the wire between them to get
 # the same fan-in another way) -- which is exactly the redstone trade-off,
 # not the CMOS one.
-GATE NOR3 25 Y=!(A+B+C);
+GATE NOR3 12 Y=!(A+B+C);
 PIN * INV 1 9999 2 0 2 0

@@ -34,9 +34,9 @@
 use std::collections::{BTreeMap, HashMap};
 
 use super::{
-    approach_column, bent_path_cells, build_floorplan, build_nets, cell_geometry_by_input_count, direction_from,
-    reserve_columns, resolve_bypass_and_geometry, CompileError, CompiledCircuit, Exit, Floorplan, Net, Netlist,
-    Source, BYPASS_QUERY_MAX_DISTANCE, GATE_Y, OUTPUT_DIRECTION, RAMP_LENGTH, TRACK_Y,
+    approach_column, bent_path_cells, build_floorplan, build_nets, cell_geometry_by_input_count, reserve_columns,
+    resolve_bypass_and_geometry, CompileError, CompiledCircuit, Exit, Floorplan, Net, Netlist, Source,
+    BYPASS_QUERY_MAX_DISTANCE, GATE_Y, OUTPUT_DIRECTION, RAMP_LENGTH, TRACK_Y,
 };
 use crate::redstone::simulator::position::Position;
 use crate::redstone::world::block::{BlockKind, Facing};
@@ -66,16 +66,26 @@ pub enum RoutePart {
     /// net's own share of it, not the whole physical track.
     Track,
     /// The final approach into a consuming gate's input socket: a run north
-    /// into the row, an optional corner turn (west/east inputs only, since
-    /// their approach column does not line up with their socket), and the
-    /// mandatory terminating repeater every socket needs.
+    /// into the row and the mandatory terminating repeater every socket
+    /// needs -- nothing else, now that a gate has no interior. Before cells
+    /// dissolved (see `docs/superpowers/specs/2026-08-08-3d-codesign.md`),
+    /// this also carried an unconditional corner-plus-repeater jog for every
+    /// west/east input, because the column the router landed a signal on
+    /// was `SOCKET_REACH` away from centre for *row-spacing* reasons while
+    /// the cell's own socket sat only 2 away -- two different numbers that
+    /// happened to both be called "the gate's width". `approach_column` is
+    /// now defined to equal the gate's actual socket X, so that jog is gone
+    /// structurally, not merely rarer -- this category still measures the
+    /// same thing (the last-mile approach into a socket), just without the
+    /// cost that never had to exist.
     GateEntry,
     /// A whole edge routed directly at `GATE_Y`, with no ramp and no track at
     /// all -- `compute_bypass`'s "close enough" case. Covers everything from
-    /// the source pin to the consuming socket: the optional sideways corner
-    /// onto the sink's approach column, and the final approach into the
-    /// socket. Mutually exclusive with `Column`/`Ramp`/`Track`/`GateEntry`
-    /// for the same edge -- a bypassed edge has none of those parts at all.
+    /// the source pin to the consuming socket: an optional sideways jog onto
+    /// the sink's approach column (skipped if the pin is already on it), and
+    /// the final approach into the socket. Mutually exclusive with
+    /// `Column`/`Ramp`/`Track`/`GateEntry` for the same edge -- a bypassed
+    /// edge has none of those parts at all.
     Bypass,
 }
 
@@ -215,27 +225,6 @@ fn scan_dust_run(world: &World, start: Position, direction: Facing, stop_before:
     totals
 }
 
-/// Mirrors `lay_segment_to_corner`'s structure: a dust run up to the
-/// mandatory refresh repeater, then the refresh repeater and the corner cell
-/// themselves, both read back rather than assumed.
-fn scan_to_corner(world: &World, start: Position, corner: Position) -> PartTotals {
-    let direction = direction_from(start, corner);
-    let refresh_point = corner.offset(direction.opposite());
-    let mut totals = scan_dust_run(world, start, direction, refresh_point);
-    totals += classify(world, refresh_point);
-    totals += classify(world, corner);
-    totals
-}
-
-/// Mirrors `lay_segment_to_socket`'s structure: a dust run up to the socket,
-/// then the mandatory terminating repeater at the socket cell itself.
-fn scan_to_socket(world: &World, start: Position, socket: Position) -> PartTotals {
-    let direction = direction_from(start, socket);
-    let mut totals = scan_dust_run(world, start, direction, socket);
-    totals += classify(world, socket);
-    totals
-}
-
 /// Mirrors `lay_bent_path`'s own cell list (`bent_path_cells`) exactly, so
 /// this reads back precisely the cells that call wrote -- one classification
 /// per cell, with no assumption about which of them (if any) turned out to
@@ -244,8 +233,21 @@ fn scan_bent_path(world: &World, start: Position, waypoints: &[Position]) -> Par
     bent_path_cells(start, waypoints).into_iter().fold(PartTotals::default(), |acc, pos| acc + classify(world, pos))
 }
 
-/// Mirrors the bypass branch of `emit`'s Columns pass exactly: from `pin`,
-/// an optional sideways bend onto the sink's approach column (`exit_x`), an
+/// Mirrors the last leg of `emit`'s ordinary (non-bypass) Columns pass: from
+/// a track/ramp `landing`, an optional sideways bend onto the socket's own X
+/// (skipped for a south input, whose socket already sits on `landing`'s own
+/// column -- see `approach_column`'s doc comment), then the socket.
+fn scan_socket_entry(world: &World, landing: Position, socket: Position, row_z_gate: i32) -> PartTotals {
+    let mut waypoints: Vec<Position> = Vec::new();
+    if socket.x != landing.x {
+        waypoints.push(Position::new(landing.x, landing.y, row_z_gate));
+    }
+    waypoints.push(socket);
+    scan_bent_path(world, landing, &waypoints)
+}
+
+/// Mirrors the bypass branch of `emit`'s Columns pass exactly: from `pin`, an
+/// optional sideways bend onto the sink's approach column (`exit_x`), an
 /// optional second bend at the destination row, then the socket.
 fn scan_bypass(world: &World, pin: Position, exit_x: i32, socket: Position, row_z_gate: i32) -> PartTotals {
     let mut waypoints: Vec<Position> = Vec::new();
@@ -431,22 +433,12 @@ pub fn analyze(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<RoutingR
                         *parts.entry(RoutePart::Ramp).or_default() += scan_ramp(world, top, Facing::North, GATE_Y);
 
                         let landing = Position::new(exit_x, GATE_Y, z - RAMP_LENGTH);
+                        let row_z_gate = row_z[plan.row_of[gate]];
                         let cell = &cell_of_count[&netlist.gates[gate].inputs.len()];
                         let (dx, dy, dz) = cell.input_offsets[input_index];
-                        let socket = Position::new(
-                            plan.centre_x[gate] + dx,
-                            GATE_Y + dy,
-                            row_z[plan.row_of[gate]] + dz,
-                        );
-                        let mut entry_total = PartTotals::default();
-                        if socket.x == landing.x {
-                            entry_total += scan_to_socket(world, landing, socket);
-                        } else {
-                            let corner = Position::new(landing.x, GATE_Y, row_z[plan.row_of[gate]]);
-                            entry_total += scan_to_corner(world, landing, corner);
-                            entry_total += scan_to_socket(world, corner, socket);
-                        }
-                        *parts.entry(RoutePart::GateEntry).or_default() += entry_total;
+                        let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
+                        *parts.entry(RoutePart::GateEntry).or_default() +=
+                            scan_socket_entry(world, landing, socket, row_z_gate);
                     }
                 }
 
@@ -513,20 +505,12 @@ pub fn distinct_totals_by_part(
 
                 match exit {
                     Exit::Socket { gate, input_index, .. } => {
+                        let row_z_gate = row_z[plan.row_of[gate]];
                         let cell = &cell_of_count[&netlist.gates[gate].inputs.len()];
                         let (dx, dy, dz) = cell.input_offsets[input_index];
-                        let socket = Position::new(
-                            plan.centre_x[gate] + dx,
-                            GATE_Y + dy,
-                            row_z[plan.row_of[gate]] + dz,
-                        );
-                        let entry_total = if socket.x == landing.x {
-                            scan_to_socket(world, landing, socket)
-                        } else {
-                            let corner = Position::new(landing.x, GATE_Y, row_z[plan.row_of[gate]]);
-                            scan_to_corner(world, landing, corner) + scan_to_socket(world, corner, socket)
-                        };
-                        *total.entry(RoutePart::GateEntry).or_default() += entry_total;
+                        let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
+                        *total.entry(RoutePart::GateEntry).or_default() +=
+                            scan_socket_entry(world, landing, socket, row_z_gate);
                     }
                     Exit::Feedthrough { x, next_slot } => {
                         let next_channel = net.channels[next_slot];
