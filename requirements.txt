@@ -1,0 +1,13 @@
+# Python dependencies for REDA's Verilog frontend (src/frontend/).
+#
+# `synthesize_verilog` shells out to Yosys via `yowasp-yosys` -- a WASM build
+# of Yosys 0.68 with ABC built in -- to parse and synthesize Verilog before
+# REDA's own frontend (src/frontend/yosys_json.rs) technology-maps the result
+# onto this project's real NOR cell library (src/frontend/redstone_nor.genlib)
+# and reads it into a Netlist. See src/frontend/mod.rs's module doc comment.
+#
+# This is the only part of the crate that needs Python at all -- the rest of
+# the build, and every test outside tests/verilog_frontend.rs, has no
+# dependency on it. `conformance/`'s own Python scripts are unrelated to this
+# file and manage their own environment.
+yowasp-yosys>=0.68

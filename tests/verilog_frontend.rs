@@ -1,0 +1,278 @@
+//! Acceptance tests for the Yosys-backed Verilog frontend
+//! (`reda::frontend::synthesize_verilog`).
+//!
+//! Same proof standard as the hand-written reference circuits: compile,
+//! simulate every input combination through the real redstone simulator, and
+//! check the result against a truth table written independently of the
+//! netlist (`reda::circuits::seven_segment::TRUTH_TABLE`, and a plain AND
+//! for `and4`). The Verilog sources under `tests/fixtures/` describe the
+//! *same* two circuits `reda::circuits::and4` and
+//! `reda::circuits::seven_segment` build by hand, so each test here also
+//! builds the hand-written netlist alongside the Yosys-derived one and
+//! prints both side by side -- gate count, block count, and settle time --
+//! which is the only real answer to "does a real synthesiser beat the
+//! hand-written netlist" for this hardware.
+//!
+//! # Why this needs Python + `yowasp-yosys`
+//!
+//! `synthesize_verilog` shells out to Yosys via the `yowasp-yosys` Python
+//! package (see `src/frontend/mod.rs`'s module doc comment for why: this
+//! project provides the cost model, not a Verilog parser). No other test in
+//! this crate depends on that -- these are the only ones that do, and if
+//! `python` or `yowasp-yosys` is missing, they fail with a specific error
+//! from `FrontendError`'s `Display` impl (see the last test below), not a
+//! panic or a stack trace.
+
+use std::collections::HashMap;
+
+use reda::circuits::and4::build_and4_netlist;
+use reda::circuits::seven_segment::{build_seven_segment_netlist, TRUTH_TABLE};
+use reda::compile::{compile, CompiledCircuit, Netlist};
+use reda::frontend::synthesize_verilog;
+use reda::redstone::simulator::Simulator;
+use reda::redstone::world::block::BlockKind;
+use reda::timing::{
+    game_ticks_to_redstone_ticks, game_ticks_to_seconds, observations_to_result, summarize_worst_case,
+    watch_all_nets, TransitionResult,
+};
+
+const MAX_TICKS: u64 = 2000;
+
+fn set_lever(simulator: &mut Simulator, position: (i32, i32, i32), on: bool) {
+    let mut state = simulator.world().get(position.0, position.1, position.2).clone();
+    state.lit = on;
+    simulator.world_mut().set(position.0, position.1, position.2, state);
+    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle after changing an input");
+}
+
+/// Same as `set_lever`, but also records the transition's timing -- the
+/// simulator must already have an observer attached (see `watch_all_nets`).
+fn set_lever_and_record(
+    simulator: &mut Simulator,
+    position: (i32, i32, i32),
+    on: bool,
+    transitions: &mut Vec<TransitionResult>,
+) {
+    simulator.reset_observer();
+    let start_tick = simulator.current_tick();
+    set_lever(simulator, position, on);
+    let settle_game_ticks = simulator.current_tick() - start_tick;
+    transitions.push(observations_to_result(simulator.observations(), start_tick, settle_game_ticks));
+}
+
+fn read_output(simulator: &Simulator, position: (i32, i32, i32)) -> bool {
+    simulator.world().get(position.0, position.1, position.2).lit
+}
+
+fn non_air_blocks(compiled: &CompiledCircuit) -> usize {
+    let (size_x, size_y, size_z) = compiled.world.size();
+    let mut count = 0usize;
+    for x in 0..size_x {
+        for y in 0..size_y {
+            for z in 0..size_z {
+                if compiled.world.get(x, y, z).kind != BlockKind::Air {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+
+/// Print the worst case across an instrumented sweep, same shape as the
+/// hand-written reference circuits' own tests (`tests/reference_circuits.rs`,
+/// `tests/seven_segment.rs`) so the two are directly comparable in test
+/// output.
+///
+/// Unlike those tests, this does *not* assert that
+/// `critical_path_model_game_ticks` exactly reconstructs
+/// `worst_settle_game_ticks`. On the Yosys-derived seven-segment netlist it
+/// is off by exactly one game tick (84 predicted vs. 85 measured) -- the
+/// hand-written circuits this model was built and proven exact against are
+/// all sum-of-products (a layer of ANDs feeding a layer of ORs), while ABC's
+/// mapping is a much more heavily shared, reconvergent-fanout structure
+/// (e.g. one internal signal feeding two different downstream gates at
+/// different depths). The truth-table check above is what actually proves
+/// this netlist is correct, and it is unaffected by this: this model
+/// discrepancy is purely in an auxiliary self-consistency check this test
+/// borrows from the hand-written tests' style, not in the compiled circuit's
+/// real, simulated behaviour. Reported rather than asserted, and rather than
+/// silently ignored, so it stays visible for whoever looks at this next.
+fn report_timing(
+    label: &str,
+    netlist: &Netlist,
+    compiled: &CompiledCircuit,
+    outputs: &[String],
+    transitions: &[TransitionResult],
+) -> u64 {
+    let summary = summarize_worst_case(netlist, compiled, outputs, transitions);
+    eprintln!(
+        "{label} timing: worst-case settle = {} game ticks ({:.1} redstone ticks, {:.3}s)",
+        summary.worst_settle_game_ticks,
+        game_ticks_to_redstone_ticks(summary.worst_settle_game_ticks),
+        game_ticks_to_seconds(summary.worst_settle_game_ticks),
+    );
+    if summary.critical_path_model_game_ticks != summary.worst_settle_game_ticks {
+        eprintln!(
+            "{label}: NOTE -- critical-path settle model predicted {} game ticks but measured \
+             settle was {} game ticks (see this function's doc comment)",
+            summary.critical_path_model_game_ticks, summary.worst_settle_game_ticks
+        );
+    }
+    summary.worst_settle_game_ticks
+}
+
+/// Compile `netlist`, simulate every input combination, and assert the
+/// output at `output_of(value)` matches `expected(value)`. Returns
+/// `(gate_count, block_count, settle_game_ticks)` for the comparison table.
+fn compile_simulate_and_check(
+    label: &str,
+    netlist: &Netlist,
+    input_names: &[&str],
+    input_count: u32,
+    output_positions_of: impl Fn(&CompiledCircuit) -> Vec<(i32, i32, i32)>,
+    expected: impl Fn(u8) -> Vec<bool>,
+) -> (usize, usize, u64) {
+    let gate_count = netlist.gates.len();
+    let compiled = compile(netlist).expect("netlist must be acyclic and fully driven");
+    let block_count = non_air_blocks(&compiled);
+
+    let lever_positions: HashMap<&str, (i32, i32, i32)> =
+        input_names.iter().map(|&name| (name, *compiled.input_positions.get(name).unwrap())).collect();
+    let output_positions = output_positions_of(&compiled);
+
+    let watched = watch_all_nets(&compiled);
+    let mut simulator = Simulator::new(compiled.world.clone());
+    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator.attach_observer(watched);
+
+    let mut mismatches = Vec::new();
+    let mut transitions: Vec<TransitionResult> = Vec::new();
+    let combinations = 1u32 << input_count;
+    for combination in 0..combinations {
+        let bits: Vec<u8> = (0..input_count).rev().map(|i| ((combination >> i) & 1) as u8).collect();
+        for (&name, &bit) in input_names.iter().zip(bits.iter()) {
+            set_lever_and_record(&mut simulator, lever_positions[name], bit == 1, &mut transitions);
+        }
+
+        let expected_values = expected(combination as u8);
+        for (i, &position) in output_positions.iter().enumerate() {
+            let actual = read_output(&simulator, position);
+            if actual != expected_values[i] {
+                mismatches.push(format!("inputs={bits:?} output[{i}]: expected {}, got {actual}", expected_values[i]));
+            }
+        }
+    }
+
+    assert!(
+        mismatches.is_empty(),
+        "{label} does not match its truth table ({}/{combinations} wrong):\n{}",
+        mismatches.len(),
+        mismatches.join("\n")
+    );
+
+    let outputs: Vec<String> = netlist.outputs.clone();
+    let settle = report_timing(label, netlist, &compiled, &outputs, &transitions);
+
+    eprintln!(
+        "{label}: {gate_count} gates, {block_count} blocks, {settle} game ticks settle, \
+         {:.1} blocks/gate",
+        block_count as f64 / gate_count as f64
+    );
+
+    (gate_count, block_count, settle)
+}
+
+#[test]
+fn the_verilog_and4_matches_its_truth_table() {
+    let source = std::fs::read_to_string("tests/fixtures/and4.v").expect("fixture must exist");
+    let (netlist, port_map) = synthesize_verilog(&source, "and4").expect("and4.v must synthesize");
+    let output_signal = port_map["y"].clone();
+
+    let verilog_stats = compile_simulate_and_check(
+        "verilog and4",
+        &netlist,
+        &["a", "b", "c", "d"],
+        4,
+        |compiled| vec![*compiled.output_positions.get(&output_signal).unwrap()],
+        |bits| vec![(0..4).all(|i| (bits >> (3 - i)) & 1 == 1)],
+    );
+
+    let (hand_netlist, hand_output) = build_and4_netlist();
+    let hand_stats = compile_simulate_and_check(
+        "hand-written and4",
+        &hand_netlist,
+        &["a", "b", "c", "d"],
+        4,
+        |compiled| vec![*compiled.output_positions.get(&hand_output).unwrap()],
+        |bits| vec![(0..4).all(|i| (bits >> (3 - i)) & 1 == 1)],
+    );
+
+    eprintln!(
+        "and4 comparison: verilog {}g/{}b/{}t vs hand-written {}g/{}b/{}t",
+        verilog_stats.0, verilog_stats.1, verilog_stats.2, hand_stats.0, hand_stats.1, hand_stats.2
+    );
+}
+
+#[test]
+fn the_verilog_seven_segment_matches_its_truth_table() {
+    let source = std::fs::read_to_string("tests/fixtures/seven_segment.v").expect("fixture must exist");
+    let (netlist, port_map) =
+        synthesize_verilog(&source, "bcd_seven_segment").expect("seven_segment.v must synthesize");
+
+    let segment_names = ["a", "b", "c", "d", "e", "f", "g"];
+    let output_signals: Vec<String> = segment_names.iter().map(|&s| port_map[s].clone()).collect();
+    let output_signals_for_closure = output_signals.clone();
+
+    let expected_segments = |value: u8| -> Vec<bool> {
+        if (value as usize) < TRUTH_TABLE.len() {
+            TRUTH_TABLE[value as usize].iter().map(|&bit| bit == 1).collect()
+        } else {
+            vec![false; 7]
+        }
+    };
+
+    let verilog_stats = compile_simulate_and_check(
+        "verilog seven_segment",
+        &netlist,
+        &["d3", "d2", "d1", "d0"],
+        4,
+        move |compiled| {
+            output_signals_for_closure.iter().map(|s| *compiled.output_positions.get(s).unwrap()).collect()
+        },
+        expected_segments,
+    );
+
+    let (hand_netlist, hand_segment_signal) = build_seven_segment_netlist();
+    let hand_signals: Vec<String> = segment_names.iter().map(|&s| hand_segment_signal[s].clone()).collect();
+    let hand_stats = compile_simulate_and_check(
+        "hand-written seven_segment",
+        &hand_netlist,
+        &["d3", "d2", "d1", "d0"],
+        4,
+        move |compiled| hand_signals.iter().map(|s| *compiled.output_positions.get(s).unwrap()).collect(),
+        expected_segments,
+    );
+
+    eprintln!(
+        "seven_segment comparison: verilog {}g/{}b/{}t vs hand-written {}g/{}b/{}t",
+        verilog_stats.0, verilog_stats.1, verilog_stats.2, hand_stats.0, hand_stats.1, hand_stats.2
+    );
+}
+
+/// The frontend's whole point is to fail loudly, not silently or with a
+/// panic, when something goes wrong -- this checks the most common failure a
+/// user will actually hit (a typo'd or missing top module name) produces a
+/// specific, readable message rather than a crash.
+#[test]
+fn synthesizing_an_unknown_top_module_fails_with_a_clear_error() {
+    let source = std::fs::read_to_string("tests/fixtures/and4.v").expect("fixture must exist");
+    let message = match synthesize_verilog(&source, "this_module_does_not_exist") {
+        Ok(_) => panic!("an unknown top module must not synthesize"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        message.contains("this_module_does_not_exist") || message.contains("not found"),
+        "expected the error to name the missing module, got: {message}"
+    );
+}

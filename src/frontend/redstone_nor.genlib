@@ -1,0 +1,97 @@
+# Redstone NOR-only cell library, in SIS Genlib format (the format Yosys's
+# `abc -genlib <file>` pass reads: see `help abc` in Yosys, and ABC's own
+# `mio.c` parser). This is the frontend's cost model: it tells ABC's
+# technology mapper what our cells actually cost in redstone, in the same
+# units the rest of this codebase already measures itself in, so that ABC's
+# own logic-optimisation choices land in the same place a human designing for
+# this hardware would land.
+#
+# Every number below is derived, not invented -- see the comment above each
+# GATE for its source. Nothing here was tuned to make a particular circuit
+# come out smaller.
+#
+# ---------------------------------------------------------------------
+# Why NOR, and why fan-in barely matters
+# ---------------------------------------------------------------------
+#
+# `place_nor_gate` (src/compile/mod.rs) is the one cell this whole project
+# builds circuits out of: redstone dust merging into a block with a torch on
+# it. Its *delay* is one redstone torch's propagation delay, completely
+# independent of how many inputs feed the merge -- `TORCH_DELAY_GAME_TICKS`
+# (src/redstone/simulator/component.rs) is a flat 2 game ticks whether 1, 2,
+# or 3 signals merge into the same charge. That is the opposite of CMOS,
+# where more fan-in means a slower, larger gate, and it is exactly why a
+# synthesiser tuned for CMOS (which decomposes aggressively into small gates)
+# optimises in the wrong direction here: decomposing into more, narrower NOR
+# gates only adds gate delay and wiring, for zero improvement in per-gate
+# delay.
+#
+# Area is a different story: an NOR cell's footprint on the ground plane
+# *does* grow with its fan-in, because each extra input needs its own
+# support block and dust run out to a socket (`place_nor_gate`'s
+# `INPUT_DIRECTIONS`: West, East, South -- North is reserved for the output
+# torch). The AREA figure below is exactly that footprint -- the compiled
+# ground-plan rectangle's X*Z, in blocks -- for a gate with 1, 2, and 3
+# inputs respectively, read straight off `place_nor_gate`'s own bounding-box
+# computation (verified by placing one of each into a scratch `World` and
+# reading back `NorCell.size`):
+#
+#   inputs   NorCell.size (x,y,z)   ground footprint (x * z)
+#   1        (3, 3, 3)              9
+#   2        (5, 3, 3)              15
+#   3        (5, 3, 5)              25
+#
+# So fan-in is cheap but not free -- exactly the asymmetry this project's
+# whole cost model rests on, now expressed in ABC's own terms instead of
+# CMOS's.
+#
+# ---------------------------------------------------------------------
+# The cells
+# ---------------------------------------------------------------------
+#
+# $__ZERO / $__ONE: constant drivers. ABC's newer "&nf" mapper (the one
+# `abc -genlib` invokes by default -- see `help abc`'s default-script list)
+# requires a library to define these before it will run at all; a genlib
+# without them fails technology mapping outright, even for designs that
+# never need a constant. This library still has no way to *realize* a true
+# constant driver in redstone (there is no "always-on" cell), so the Rust
+# reader (`src/frontend/yosys_json.rs`) treats either one actually appearing
+# in a mapped netlist as an unsupported construct and fails loudly, rather
+# than silently inventing a value.
+GATE $__ZERO 0 Y=CONST0;
+GATE $__ONE 0 Y=CONST1;
+
+# BUF: a pass-through. ABC's mapper also needs a buffer cell to exist in the
+# library for internal bookkeeping (e.g. reconciling a wire that a
+# `assign out = in;` turns into with no logic in between at all) -- without
+# one, mapping fails the same way it does without the constants above. There
+# is no native "wire-only" primitive in redstone either: every real signal
+# path here ends in a torch. The Rust reader realizes a BUF as two chained
+# 1-input NOR cells (NOT(NOT(x)) == x), so its cost here is honestly
+# `2 * NOR1`: area 2*9 = 18, delay 2*2 = 4 game ticks.
+GATE BUF 18 Y=A;
+PIN * NONINV 1 9999 4 0 4 0
+
+# NOR1 (== an inverter): area 9 from the table above; delay is one torch,
+# `TORCH_DELAY_GAME_TICKS` = 2 game ticks, in the "rise/fall block delay"
+# fields (the "fanout delay" fields are 0 -- this library models delay as a
+# pure per-gate constant, since wire delay is a placement/routing cost this
+# genlib deliberately has no visibility into; see the top-level task comment
+# for why that split is the right one here).
+GATE NOR1 9 Y=!A;
+PIN * INV 1 9999 2 0 2 0
+
+# NOR2: area 15 from the table above. Same delay as every other NOR here --
+# one torch, independent of fan-in.
+GATE NOR2 15 Y=!(A+B);
+PIN * INV 1 9999 2 0 2 0
+
+# NOR3: area 25 from the table above -- the hardware maximum fan-in
+# (`place_nor_gate` only has three input faces free; the fourth is the
+# output). Same delay as NOR1/NOR2. ABC therefore has no delay incentive at
+# all to prefer a narrower gate, and only a mild area incentive (25 for one
+# NOR3 vs. paying for two separate gates plus the wire between them to get
+# the same fan-in another way) -- which is exactly the redstone trade-off,
+# not the CMOS one.
+GATE NOR3 25 Y=!(A+B+C);
+PIN * INV 1 9999 2 0 2 0

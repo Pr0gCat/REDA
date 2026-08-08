@@ -3,6 +3,7 @@
 pub mod circuits;
 pub mod compile;
 pub mod formats;
+pub mod frontend;
 pub mod macro_cells;
 pub mod redstone;
 pub mod timing;
