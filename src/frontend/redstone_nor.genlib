@@ -128,10 +128,30 @@ PIN * INV 1 9999 2 0 2 0
 # location but the point where its declared inputs' own dust runs are
 # allowed to physically touch (`place_merge_gate`, `src/compile/mod.rs`).
 #
-# AREA 0 and delay 0 below are not an approximation of two different real
-# costs, or a placeholder waiting on more infrastructure -- they are this
-# genlib's honest price for *both* ways `compile` can terminate a branch
-# into a merge:
+# But "no torch" is not "no cell". `place_merge_gate` returns a real
+# `NorCell` with a real `size`, computed by the same bounding-box walk over
+# the same `INPUT_DIRECTIONS` sockets `place_nor_gate` uses, and the
+# floorplanner hands it a row and a slot exactly as it hands one to a NOR
+# (`compute_asap_levels` levelises merge and non-merge gates identically).
+# AREA in this file has only ever meant that reserved ground plan -- the
+# compiled rectangle's X*Z -- so a merge's area is its own rectangle, read
+# off `place_merge_gate` the same way NOR1/NOR2/NOR3's are read off
+# `place_nor_gate`:
+#
+#   inputs   NorCell.size (x,y,z)   ground footprint (x * z)   a NOR's, for comparison
+#   2        (3, 1, 2)              6                          9
+#   3        (3, 1, 3)              9                          12
+#
+# A merge is one row of Z cheaper than a NOR of the same fan-in, and that
+# is the whole difference: its output socket sits one hop north of the
+# junction, where a NOR's sits two hops north of its support (torch, then
+# socket). `topology::merge_footprint_area` holds the same table, and
+# `topology::tests::every_cell_footprint_matches_what_the_placer_actually_reserves`
+# checks both tables against what the placer really writes into a scratch
+# `World`, so neither can drift from `place_merge_gate`/`place_nor_gate`.
+#
+# The DELAY fields stay 0, and that number is honest for *both* ways
+# `compile` can terminate a branch into a merge:
 #
 #   - A **private** branch (its source drives nothing besides this merge)
 #     joins as bare dust: no repeater, no gate, and the real, measured
@@ -150,11 +170,10 @@ PIN * INV 1 9999 2 0 2 0
 #     the one special case (a bare join) that gets to omit it.
 #
 # So the isolated branch's repeater is exactly as much "this gate's own
-# cost" as a plain NOR's own input-route repeater is: not at all. This
-# genlib has never priced wire/route delay or area for any cell above --
-# that is the whole point of NOR1/NOR2/NOR3's own "fanout delay" fields
-# being 0 -- so pricing OR the same way is applying the one rule this file
-# has always used, not carving out a special case for it. See
+# cost" as a plain NOR's own input-route repeater is: not at all. Neither
+# realisation puts a torch on the path, and both reserve the identical
+# rectangle (`place_merge_gate` does not know which one it is building), so
+# the one pair of numbers below prices both honestly. See
 # `src/compile/topology.rs`'s `genlib_cost`, "OR: one number, honestly
 # standing for two realisations", for the full derivation, and
 # `frontend::tests::genlib_numbers_match_what_the_topology_library_derives`
@@ -162,13 +181,76 @@ PIN * INV 1 9999 2 0 2 0
 # apart, across *every* registered entry for `Or(2)`/`Or(3)` -- not just
 # the first one -- so "one number for both" is proven, not asserted.
 #
+# ---------------------------------------------------------------------
+# Why not AREA 0: measured, not argued
+# ---------------------------------------------------------------------
+#
+# These lines were introduced at AREA 0, on the reasoning that this genlib
+# prices gate bodies, has never priced wire for any cell, and a merge is
+# entirely wire. Every step of that is true except the conclusion -- it
+# skips the step above, that a merge is still a cell with a reserved
+# footprint. And a cell priced at zero is one ABC will buy without limit.
+# It did: the Verilog-derived seven-segment decoder got *bigger*, from
+# 37 gates / 8130 blocks (OR absent from the library) to 50 / 10668.
+#
+# Re-measured through the real compiler -- `cargo test --release --test
+# verilog_frontend the_verilog_seven_segment`, one full recompile per row,
+# OR3 held at 1.5x OR2 (the footprint ratio above), every other cell
+# untouched. Columns are the mapped decoder's gates / non-air blocks /
+# worst-case settle in game ticks:
+#
+#   OR2  OR3 | delay 0        | delay 1        | delay 2        | delay 3
+#   ---------+----------------+----------------+----------------+---------------
+#     1    2 | 50 10668  80   | 44 10556  74   |      (a)       | 40 10254  67
+#     2    3 | 44  9130  72   | 41  9372  68   | 42  9170  68   |      (a)
+#     3    4 | 34  8454  84   | 34  8060  66   | 34  7952  60   | 33  9050  62
+#     4    6 | 31  7888  82   | 31  7572  78   | 31  7162  60   | 30  8730  64
+#     5    7 | 31  7888  82   | 31  7572  78   | 30  7578  62   | 30  8730  64
+#     6    9 | 31  7888  82   | 31  7572  78   |      (a)       | 30  8730  64   <- derived
+#     7   10 | 31  7888  82   | 31  7572  78   |      (a)       | 30  8730  64
+#     8   12 | 31  8396  76   | 31  8478  74   |      (a)       | 29  8212  63
+#     9   13 |      (a)       | 31  8880  78   | 30  8816  76   | 29  8212  63
+#    12   18 | 31 10278  82   | 31  9036  69   | 30  8816  76   |      (a)
+#    18   27 | 32  8546  75   | 32  9546  65   | 35  8472  66   | 35  8646  68
+#   1000 1000| 37  8130  70   -- priced out of reach; ABC uses no OR at all
+#
+#   (a) the run compiled and matched its truth table, but tripped
+#       `tests/verilog_frontend.rs`'s exactness assertion on the
+#       critical-path settle *model* (it under-predicts on some
+#       merge-heavy netlists). A pre-existing limitation of
+#       `timing::summarize_worst_case`, not of this price list -- it is
+#       recorded here rather than worked around, and the derived row is
+#       not one of them.
+#
+# Two things this table settles, neither of which was knowable by argument:
+#
+# 1. **The area price is the whole story for size.** Priced out of reach,
+#    the decoder is exactly the 37/8130/70 it was before OR existed -- so
+#    the merge routing added in the same change is size-neutral, and the
+#    entire 37 -> 50 gate regression was AREA 0. At the derived price it is
+#    31 gates / 7888 blocks: better than the pre-OR decoder on both, and
+#    the 4..7 plateau means the derived 6 is not perched on a knife edge.
+#
+# 2. **Settle does not follow.** At the honest delay of 0 no area price in
+#    this table reaches the pre-OR 70 ticks -- the best is 75, and the
+#    derived row is 82. This is not a mispricing, it is what a merge costs
+#    in this floorplan: the critical path goes from 5 gates + 28 repeaters
+#    (no OR, 70 ticks) to 3 gates + 36 repeaters (derived, 82). Merges
+#    genuinely shorten the logic chain, by two whole gates; they lengthen
+#    the wire more than that saves, because a merge still occupies a level
+#    and its branches have to reach it. Rows that do beat 70 ticks all buy
+#    it by telling ABC an OR has a *gate delay* it does not have -- there
+#    is no torch on the path through a merge, so those are fabricated
+#    numbers and none of them is used here. Making settle follow size is a
+#    floorplanning problem (the router's own cost model), not a genlib one.
+#
 # Yosys/ABC's own naming: a design's `$_OR_` cells (Yosys's pre-mapping,
 # generic name) never appear in a mapped netlist -- `abc -genlib` renames
 # every cell it maps to whichever GATE line it chose, so a mapped OR is
 # always literally `OR2` or `OR3` here, the same way a mapped NOR is
 # `NOR2`/`NOR3`, never `$_NOR_`.
-GATE OR2 0 Y=(A+B);
+GATE OR2 6 Y=(A+B);
 PIN * NONINV 1 9999 0 0 0 0
 
-GATE OR3 0 Y=(A+B+C);
+GATE OR3 9 Y=(A+B+C);
 PIN * NONINV 1 9999 0 0 0 0

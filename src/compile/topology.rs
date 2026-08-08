@@ -150,10 +150,14 @@ pub enum Primitive {
 /// ordered this work flagged as genuinely open: bare and isolated cost
 /// differently at the whole-circuit level, so which price does ABC get
 /// told, and can one number honestly stand for both? [`genlib_cost`]'s own
-/// doc comment works this out -- the short answer is that both entries
-/// price at exactly zero, honestly, because the isolating repeater is not
-/// part of either entry's own "gate", the same way a NOR's mandatory
-/// input-route repeater has never been part of *its* genlib price.
+/// doc comment works this out -- the short answer is that one number does
+/// stand for both, and it is the ground plan `place_merge_gate` reserves
+/// (`merge_footprint_area`), at zero torch delay. Bare and isolated differ
+/// only in what terminates each branch's *route*, which is not either
+/// entry's own "gate" -- the same way a NOR's mandatory input-route
+/// repeater has never been part of *its* genlib price. Note that "no
+/// primitive at all" is not "no cell at all": a merge still occupies a row
+/// and a rectangle, which is why its area is not zero.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GateKind {
     Nor(usize),
@@ -525,6 +529,40 @@ fn nor_footprint_area(arity: usize) -> u32 {
     }
 }
 
+/// `place_merge_gate`'s own ground-plan footprint (X*Z, in blocks) for a
+/// wire-merge cell with `arity` inputs -- read off its bounding-box
+/// computation exactly the way [`nor_footprint_area`] is read off
+/// `place_nor_gate`'s, and for the same reason (a footprint is a
+/// realisation fact a positionless [`Template`] cannot derive).
+///
+/// A merge places no support block and no torch. It is still a *cell* the
+/// floorplanner has to hand a row, an X and a Z to, though:
+/// `place_merge_gate` returns a real `NorCell` with a real `size`, computed
+/// by the same bounding-box walk `place_nor_gate` uses, over the same
+/// `INPUT_DIRECTIONS` sockets. The one thing it does not reserve is the
+/// cell the absent output torch would have stood in, so its output socket
+/// sits one hop north of the junction where a NOR's sits two hops north of
+/// its support -- which is exactly, and only, one row of Z cheaper:
+///
+/// ```text
+///   inputs   NorCell.size (x,y,z)   ground footprint (x * z)   NOR's, for comparison
+///   2        (3, 1, 2)              6                          9
+///   3        (3, 1, 3)              9                          12
+/// ```
+///
+/// `every_cell_footprint_matches_what_the_placer_actually_reserves` (below)
+/// checks both this table and [`nor_footprint_area`] against what
+/// `place_merge_gate`/`place_nor_gate` really write into a scratch `World`,
+/// so neither can drift from the placer the way this one silently could
+/// while it did not exist at all.
+fn merge_footprint_area(arity: usize) -> u32 {
+    match arity {
+        2 => 6,
+        3 => 9,
+        other => unreachable!("a wire-merge OR's fan-in is 2..=3, got {other}"),
+    }
+}
+
 impl Template {
     /// This node's fan-in in `self`'s own graph: how many of the entry's
     /// declared inputs land here, plus how many internal edges terminate
@@ -589,54 +627,81 @@ pub struct RealisationCost {
 ///
 /// # OR: one number, honestly standing for two realisations
 ///
-/// `output.is_none()` -- both OR entries -- returns `(0, 0)` immediately,
-/// without looking at `nodes` at all. For `or_bare_entry` that was always
-/// obviously right: it has no nodes to price, and its real, measured cost
-/// genuinely is zero (see the referenced cost-table spec). The question the
-/// spec that ordered this genlib line flagged as a real one, not a
-/// formality, is whether the *same* zero is honest for `or_isolated_entry`
-/// too -- a real repeater sits on an isolated branch, and a repeater has
-/// real area and real delay in this project's own units.
+/// An OR is the one [`GateKind`] here whose entries realise to no output
+/// primitive at all, so its cost cannot come from counting torches. It
+/// comes from [`merge_footprint_area`] instead -- the same ground plan
+/// `place_merge_gate` actually reserves -- and its delay is zero, because
+/// zero torches stand on the path through it.
 ///
-/// It is honest, and the reason is what makes OR different from every
-/// entry above: **the isolating repeater is not part of the OR's own gate
-/// body at all.** Trace where `compile::emit` actually places it
-/// (`compile::merge_branch_is_bare` choosing between `lay_bent_path_bare`
-/// and `lay_bent_path`): an isolated branch's repeater is the exact same
-/// mandatory route-terminating repeater that *every* socket in this
-/// compiler already pays unconditionally -- a plain `Nor` gate's input
-/// sockets included (`compile`'s own module doc comment: "a route always
-/// ends in a repeater facing the next gate's support block"). Choosing
+/// **This function used to return `(0, 0)` for an OR, and that area was
+/// wrong.** The reasoning behind it went: this genlib prices gate bodies
+/// and has never priced wire for any cell, a merge has no body, therefore a
+/// merge costs nothing. Every step of that is true except the conclusion,
+/// and the step it skips is the one that matters -- *a merge is still a
+/// cell*. `place_merge_gate` returns a real `NorCell` with a real `size`,
+/// computed by the same bounding-box walk over the same `INPUT_DIRECTIONS`
+/// sockets `place_nor_gate` uses; the floorplanner gives it a row and a
+/// slot exactly as it gives one to a NOR (`compile::compute_asap_levels`
+/// levelises merge and non-merge gates identically). "Area" in this cost
+/// model has only ever meant that reserved ground plan, never the torch
+/// standing on it, so a merge's area is its own rectangle -- 6 for `Or(2)`,
+/// 9 for `Or(3)` -- and not zero.
+///
+/// Zero was not merely imprecise, it was unbounded: an OR priced at zero is
+/// an OR ABC will buy any number of, and every one it buys costs real
+/// blocks. Measured through the real compiler, that is what happened -- the
+/// Verilog-derived seven-segment decoder went from 37 gates / 8130 blocks
+/// to 50 / 10668 when `OR2`/`OR3` were added to the genlib at area 0. See
+/// `redstone_nor.genlib`'s own "OR2 / OR3" section for the price sweep that
+/// re-measured it.
+///
+/// The **delay** half of the old derivation was right, and survives
+/// unchanged at zero. A merge places no torch, so nothing on the path
+/// through it costs `TORCH_DELAY_GAME_TICKS`; and the repeater an isolated
+/// branch gets is not this gate's own cost either. Trace where
+/// `compile::emit` puts it (`compile::merge_branch_is_bare` choosing
+/// between `lay_bent_path_bare` and `lay_bent_path`): it is the exact same
+/// mandatory route-terminating repeater *every* socket in this compiler
+/// already pays unconditionally -- a plain `Nor` gate's input sockets
+/// included (`compile`'s own module doc comment: "a route always ends in a
+/// repeater facing the next gate's support block"). Choosing
 /// `or_isolated_entry` over `or_bare_entry` does not add a repeater on top
 /// of some cheaper baseline route; it is simply *not* the one special case
 /// (`lay_bent_path_bare`) that gets to omit the repeater every other route
-/// in the whole compiled circuit already has. So the isolated entry's
-/// repeater is exactly as much "this gate's own cost" as a plain NOR
-/// gate's own input-route repeater is -- which is to say, not at all: this
-/// genlib has never priced that repeater for `Nor`/`Buf` either (see
-/// `redstone_nor.genlib`'s own "the 'fanout delay' fields are 0" note --
-/// wire/route delay, and by the same accounting, wire/route area, are
-/// categorically outside what a `GATE` line here describes, for every cell
-/// this library has ever shipped).
+/// in the whole compiled circuit already has. This genlib has never priced
+/// that repeater for `Nor`/`Buf` either (see `redstone_nor.genlib`'s own
+/// "the 'fanout delay' fields are 0" note), so not pricing it here is the
+/// rule being applied, not suspended.
 ///
-/// So the two OR entries do not have two different true prices that this
-/// function is dishonestly averaging or pessimistically upper-bounding.
-/// Measured at the *circuit* level they clearly differ (0 vs. several
-/// blocks and game ticks -- see the referenced cost-table spec's numbers).
-/// But at the level this genlib has only ever spoken at -- a gate's own
-/// body, never the wires reaching it -- both realisations place no support
-/// block and no torch, ever, so both cost nothing, and the same true zero
-/// prices both. This is also why the promise is one ABC's mapper can
-/// actually keep: choosing OR never costs *more* gate-body area or delay
-/// than genlib says (zero, exactly, every time), and the isolated case's
-/// extra circuit cost is the same wire-only cost every other gate's own
-/// input routes were already allowed to have without this genlib ever
-/// claiming otherwise.
-pub fn genlib_cost(entry: &LibraryEntry) -> RealisationCost {
+/// That is also why **one number still honestly prices both entries.** Bare
+/// and isolated differ only in what terminates each branch's route, which
+/// is route cost on both sides of the comparison; the cell itself --
+/// `place_merge_gate`'s reserved rectangle -- is byte-for-byte the same
+/// either way, and neither ever places a torch. So the promise stays one
+/// ABC's mapper can keep: choosing an OR never costs more reserved ground
+/// or more torch delay than this says, whichever realisation each branch
+/// ends up with.
+pub fn genlib_cost(kind: GateKind, entry: &LibraryEntry) -> RealisationCost {
     let template = &entry.template;
-    let Some(output) = template.output else {
-        return RealisationCost { area: 0, delay_game_ticks: 0 };
-    };
+
+    // An OR realises to no primitive, so there is nothing in `nodes` to
+    // price -- but there is still a reserved ground plan, and its size
+    // depends on the gate's declared arity, which only `kind` carries (an
+    // entry that realises to nothing cannot record its arity in `inputs`:
+    // there is no node for a declared input to land on -- see
+    // `or_bare_entry`).
+    if let GateKind::Or(arity) = kind {
+        assert!(
+            template.output.is_none(),
+            "`{}` realises an OR, which has no output primitive to take a signal from",
+            entry.name
+        );
+        return RealisationCost { area: merge_footprint_area(arity), delay_game_ticks: 0 };
+    }
+
+    let output = template
+        .output
+        .unwrap_or_else(|| panic!("`{}` ({kind:?}) has no output node to measure a delay to", entry.name));
     let mut area = 0u32;
     for &(node, primitive) in &template.nodes {
         assert_eq!(primitive, Primitive::Torch, "genlib_cost only knows how to price a Torch node");
@@ -732,7 +797,7 @@ mod tests {
     #[test]
     fn genlib_cost_of_every_nor_arity_is_its_own_footprint_at_one_torch_delay() {
         for arity in 1..=3 {
-            let cost = genlib_cost(&nor_entry(arity));
+            let cost = genlib_cost(GateKind::Nor(arity), &nor_entry(arity));
             assert_eq!(cost.area, nor_footprint_area(arity), "arity {arity}");
             assert_eq!(cost.delay_game_ticks, crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS, "arity {arity}");
         }
@@ -740,9 +805,50 @@ mod tests {
 
     #[test]
     fn genlib_cost_of_buf_is_two_nor1_footprints_at_two_torch_delays() {
-        let cost = genlib_cost(&buf_entry());
+        let cost = genlib_cost(GateKind::Buf, &buf_entry());
         assert_eq!(cost.area, 2 * nor_footprint_area(1));
         assert_eq!(cost.delay_game_ticks, 2 * crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS);
+    }
+
+    /// Both footprint tables are the one realisation fact `genlib_cost`
+    /// cannot derive from a positionless `Template`, so both are checked
+    /// against what the placer actually reserves -- by placing one cell of
+    /// each kind and arity into a scratch `World` and reading `NorCell.size`
+    /// back, exactly the measurement `redstone_nor.genlib`'s derivation
+    /// comment claims was done by hand. Without this, `nor_footprint_area`
+    /// and `merge_footprint_area` are two numbers nothing stops from
+    /// drifting away from `place_nor_gate`/`place_merge_gate`.
+    #[test]
+    fn every_cell_footprint_matches_what_the_placer_actually_reserves() {
+        use crate::redstone::world::storage::World;
+
+        // Big enough that a cell placed in the middle cannot be clipped by
+        // the world bounds in any direction.
+        const ORIGIN: (i32, i32, i32) = (8, 1, 8);
+
+        for arity in 1..=3 {
+            let mut world = World::new(20, 6, 20);
+            let cell = super::super::place_nor_gate(&mut world, ORIGIN, arity);
+            let (x, _, z) = cell.size;
+            assert_eq!(
+                (x * z) as u32,
+                nor_footprint_area(arity),
+                "NOR arity {arity}: place_nor_gate reserves {x}x{z}, nor_footprint_area says {}",
+                nor_footprint_area(arity)
+            );
+        }
+
+        for arity in 2..=3 {
+            let mut world = World::new(20, 6, 20);
+            let cell = super::super::place_merge_gate(&mut world, ORIGIN, arity);
+            let (x, _, z) = cell.size;
+            assert_eq!(
+                (x * z) as u32,
+                merge_footprint_area(arity),
+                "OR arity {arity}: place_merge_gate reserves {x}x{z}, merge_footprint_area says {}",
+                merge_footprint_area(arity)
+            );
+        }
     }
 
     // -----------------------------------------------------------------
@@ -796,29 +902,52 @@ mod tests {
     }
 
     #[test]
-    fn genlib_cost_of_a_bare_or_merge_is_genuinely_zero() {
-        // The real, measured cost (see the referenced cost-table spec: 0
-        // gates, 0 game ticks to settle).
+    fn genlib_cost_of_a_bare_or_merge_is_its_reserved_ground_plan_at_no_torch_delay() {
+        // Not zero area: a merge places no primitive, but `place_merge_gate`
+        // still reserves a rectangle for it (see `merge_footprint_area`).
+        // Zero *delay* is the real, measured figure -- a bare merge settles
+        // instantaneously, there being no active component in it at all (see
+        // the referenced cost-table spec, and `tests/cell_type_costs.rs`'s
+        // `or_is_a_free_wire_merge_when_nothing_else_shares_the_branch`).
         for arity in 2..=3 {
-            let cost = genlib_cost(&or_bare_entry(arity));
-            assert_eq!(cost.area, 0, "arity {arity}");
+            let cost = genlib_cost(GateKind::Or(arity), &or_bare_entry(arity));
+            assert_eq!(cost.area, merge_footprint_area(arity), "arity {arity}");
             assert_eq!(cost.delay_game_ticks, 0, "arity {arity}");
         }
     }
 
     #[test]
-    fn genlib_cost_of_an_isolated_or_merge_is_also_genuinely_zero() {
+    fn genlib_cost_of_an_isolated_or_merge_is_exactly_the_bare_entrys() {
         // Not a placeholder, and not a different (understated) number from
         // the bare entry's -- see `genlib_cost`'s own doc comment, "OR: one
-        // number, honestly standing for two realisations": the isolating
-        // repeater is the same mandatory route-terminating repeater every
-        // socket in this compiler already pays, never a cost this entry's
-        // own gate body adds on top, so its true genlib price is the same
-        // zero as the bare entry's, not merely the same *placeholder*.
+        // number, honestly standing for two realisations": the two entries
+        // reserve the identical ground plan (`place_merge_gate` does not
+        // know which one it is building), and the isolating repeater is the
+        // same mandatory route-terminating repeater every socket in this
+        // compiler already pays, never a cost this entry's own cell adds on
+        // top.
         for arity in 2..=3 {
-            let cost = genlib_cost(&or_isolated_entry(arity));
-            assert_eq!(cost.area, 0, "arity {arity}");
-            assert_eq!(cost.delay_game_ticks, 0, "arity {arity}");
+            let bare = genlib_cost(GateKind::Or(arity), &or_bare_entry(arity));
+            let isolated = genlib_cost(GateKind::Or(arity), &or_isolated_entry(arity));
+            assert_eq!(isolated, bare, "arity {arity}: one genlib number has to price both realisations");
+            assert_eq!(isolated.area, merge_footprint_area(arity), "arity {arity}");
+            assert_eq!(isolated.delay_game_ticks, 0, "arity {arity}");
+        }
+    }
+
+    /// The regression that made this price list worth re-deriving at all,
+    /// stated as an invariant rather than as a number: no cell in this
+    /// library may cost ABC *nothing*. A cell priced at zero is one the
+    /// mapper will buy without limit, and every cell here -- merge included
+    /// -- occupies real ground when `compile` places it.
+    #[test]
+    fn no_library_entry_is_priced_at_zero_area() {
+        let library = Library::default_library();
+        for (&kind, entries) in &library.entries {
+            for entry in entries {
+                let cost = genlib_cost(kind, entry);
+                assert!(cost.area > 0, "{kind:?}'s entry `{}` is priced at zero area", entry.name);
+            }
         }
     }
 

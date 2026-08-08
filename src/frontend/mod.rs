@@ -299,7 +299,7 @@ mod tests {
             assert!(!entries.is_empty(), "{cell_name} ({kind:?}) has no library entry");
             let (genlib_area, genlib_delay) = genlib_area_and_delay(cell_name);
             for entry in entries {
-                let cost = topology::genlib_cost(entry);
+                let cost = topology::genlib_cost(kind, entry);
                 assert_eq!(
                     cost.area, genlib_area,
                     "{cell_name} ({}): derived area disagrees with redstone_nor.genlib",
