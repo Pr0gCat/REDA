@@ -176,6 +176,12 @@
     color: var(--muted);
     pointer-events: none;
   }
+  #topo-wrap {
+    overflow: hidden;
+    cursor: grab;
+  }
+  #topo-wrap.dragging { cursor: grabbing; }
+  #topo-canvas { width: 100%; height: 100%; display: block; }
 </style>
 </head>
 <body>
@@ -186,6 +192,7 @@
   <div class="view-toggle" id="view-toggle">
     <button id="view-2d-btn" data-active="true">2D Slice</button>
     <button id="view-3d-btn" data-active="false">3D View</button>
+    <button id="view-topo-btn" data-active="false">Topology</button>
   </div>
 </header>
 <main>
@@ -255,6 +262,27 @@
       </div>
     </div>
 
+    <div class="panel hidden" data-view="topo">
+      <h2>Topology</h2>
+      <div class="row">
+        <label for="topo-focus-select">Focus gate</label>
+        <select id="topo-focus-select">
+          <option value="">All gates</option>
+        </select>
+      </div>
+      <div class="btn-row">
+        <button id="topo-relayout-btn">Re-layout</button>
+      </div>
+      <div class="status" id="topo-status"></div>
+      <h2 style="margin-top:10px;">Primitives</h2>
+      <div class="legend-list" id="topo-primitive-legend"></div>
+      <h2 style="margin-top:10px;">Edges</h2>
+      <div class="legend-list" id="topo-edge-legend">
+        <span><span class="legend-swatch" style="background:#cfd3d8"></span>Rigid -- must become physical adjacency</span>
+        <span><span class="legend-swatch" style="background:#ff3b3b"></span>Routable -- a dust path of any length</span>
+      </div>
+    </div>
+
     <div class="panel">
       <h2>Simulation</h2>
       <div class="btn-row">
@@ -310,6 +338,14 @@
         <div id="three-hint">Loading...</div>
       </div>
       <div id="three-hover-readout">&nbsp;</div>
+    </div>
+
+    <div class="panel hidden" data-view="topo" style="margin-bottom:6px;">
+      <h2 id="topo-caption">Primitive topology -- force-directed layout, no positions from the compiler</h2>
+      <div class="canvas-wrap" id="topo-wrap" style="height:76vh;">
+        <canvas id="topo-canvas" width="10" height="10"></canvas>
+      </div>
+      <div id="topo-hover-readout">&nbsp;</div>
     </div>
   </div>
 </main>
@@ -380,6 +416,17 @@ const clipValues = {
   zMin: document.getElementById('clip-z-min-value'), zMax: document.getElementById('clip-z-max-value'),
 };
 const clipResetBtn = document.getElementById('clip-reset-btn');
+
+// Topology view DOM handles
+const viewTopoBtn = document.getElementById('view-topo-btn');
+const topoWrap = document.getElementById('topo-wrap');
+const topoCanvas = document.getElementById('topo-canvas');
+const topoCtx = topoCanvas.getContext('2d');
+const topoHoverReadout = document.getElementById('topo-hover-readout');
+const topoFocusSelect = document.getElementById('topo-focus-select');
+const topoRelayoutBtn = document.getElementById('topo-relayout-btn');
+const topoStatus = document.getElementById('topo-status');
+const topoPrimitiveLegend = document.getElementById('topo-primitive-legend');
 
 // Offscreen 1px-per-cell canvas the visible canvas is scaled up from.
 const offscreen = document.createElement('canvas');
@@ -577,6 +624,7 @@ function loadCircuit(name) {
   syncAxisRange(true);
   refreshOutputs();
   build3DGeometry();
+  buildTopology();
 }
 
 function updateTickCount() {
@@ -1229,7 +1277,13 @@ function ensureThreeInitialized() {
   renderer3d.domElement.addEventListener('mouseleave', () => {
     threeHoverReadout.textContent = ' ';
   });
-  window.addEventListener('resize', resizeThree);
+  window.addEventListener('resize', () => {
+    resizeThree();
+    if (currentView === 'topo') {
+      resizeTopoCanvas();
+      drawTopology();
+    }
+  });
 
   function animate() {
     requestAnimationFrame(animate);
@@ -1490,24 +1544,543 @@ function onThreeHover(e) {
   threeHoverReadout.textContent = `(${x}, ${y}, ${z}) -- ${name}, strength ${strength}${delaySuffix}`;
 }
 
-/** Switch which of the 2D/3D panels are visible. Both views read the same
- * `Session`; nothing here touches the simulator, so toggling never resets
- * it. */
+// ---------------------------------------------------------------------
+// Topology view
+//
+// Renders `Session::topology()` -- the flat `compile::primitive_graph`
+// expansion of the circuit's netlist. Unlike the 2D/3D views, this graph
+// carries no positions at all (see that method's doc comment and
+// `docs/superpowers/specs/2026-08-08-primitive-level-flow.md`'s "Topology
+// carries no positions"), so this view's whole job, uniquely among the
+// three, is to invent a layout rather than just project one that already
+// exists.
+//
+// Layout: a hand-rolled 2D force-directed simulation (no extra library --
+// three.js is vendored for the 3D view but this stays plain <canvas> 2D,
+// per the task's own steer that "a 2D layout is likely clearer than 3D for
+// a graph"). Three kinds of force decide where a node ends up:
+//   - repulsion between every pair of nodes (keeps the graph from
+//     collapsing to a point);
+//   - a spring per edge, with **rigid edges pulled much shorter and
+//     stiffer than routable ones** -- this is the one piece of physics that
+//     does double duty as the answer to "how are rigid and routable edges
+//     told apart structurally, not just by colour": a gate's own rigid
+//     cluster (support + torch + input pins) collapses to a tight knot
+//     almost by itself, while routable edges (a would-be dust run of any
+//     length) are freer to stretch across the picture;
+//   - a soft pull toward an x position from each node's topological
+//     "layer" (0 for a gate driven only by primary inputs, primary inputs
+//     at layer -1, primary outputs one past the last gate layer -- see
+//     `compute_gate_layers` in viewer/src/lib.rs). This is a bias, not a
+//     placement: it only breaks left-right symmetry so the picture reads
+//     roughly input-to-output, left to right, the way a schematic would.
+//
+// Scale: `and4` (a handful of gates) lays out and reads as one uncluttered
+// picture with nothing else needed. `seven_segment` (84 gates, several
+// hundred primitives) does not -- a force layout at that size is a
+// legible-at-a-glance blob of clusters, not a picture you can trace edge by
+// edge. Two things are provided for it rather than pretending the full view
+// is enough: gate hulls (see `drawTopology`'s translucent rounded boxes,
+// one per gate, labelled with that gate's own output name) make "which
+// primitives came from which gate" checkable without reading positions at
+// all, and "Focus gate" isolates one gate plus its direct neighbours
+// (`computeEgoSet`) and fits the view to just that -- the tool this task's
+// own hand cross-check uses. The unfiltered view at this size is still
+// honest (nothing is hidden or decimated) but is explicitly a "does this
+// look like the right order of magnitude and density" tool, not a "read
+// off individual wires" tool -- that degradation is real and is called out
+// here rather than left for someone to discover by squinting.
+// ---------------------------------------------------------------------
+
+const PRIMITIVE_COLOR = {
+  // Same hex values as `block_kind_colour` in viewer/src/lib.rs for the
+  // closest matching `BlockKind`, so a primitive's colour here means the
+  // same thing it would in the 2D/3D views.
+  Torch: '#ff8c00',
+  Dust: '#ff3b3b',
+  Repeater: '#c9a227',
+  Block: '#8a8a8a',
+  Lever: '#7a5230',
+  Lamp: '#ffd54a',
+};
+const TOPO_NODE_RADIUS = 5; // constant screen pixels, independent of zoom
+const TOPO_LAYER_SPACING = 130;
+
+let topoGates = [];   // raw TopologyGate[] from session.topology()
+let topoNodes = [];   // { id, primitive, provenance, targetX, x, y, vx, vy, fx, fy }
+let topoEdges = [];   // { from, to, kind }
+let topoView = { scale: 1, offsetX: 0, offsetY: 0 };
+let topoLayoutSeed = 0;
+
+/** Deterministic pseudo-random value in [0, 1) from an integer seed -- used
+ * for the layout's initial jitter so the same circuit lays out the same way
+ * every time it is (re)loaded (only "Re-layout" perturbs it, via
+ * `topoLayoutSeed`), matching this project's own preference for
+ * reproducible results over convenient ones. */
+function detRand(seed) {
+  const x = Math.sin(seed * 12.9898 + topoLayoutSeed * 37.719) * 43758.5453;
+  return x - Math.floor(x);
+}
+
+function buildPrimitiveLegend() {
+  topoPrimitiveLegend.innerHTML = '';
+  for (const [name, colour] of Object.entries(PRIMITIVE_COLOR)) {
+    const span = document.createElement('span');
+    span.innerHTML = `<span class="legend-swatch" style="background:${colour}"></span>${name}`;
+    topoPrimitiveLegend.appendChild(span);
+  }
+}
+buildPrimitiveLegend(); // static -- independent of any circuit
+
+/** Rebuild `topoNodes`/`topoEdges`/`topoGates` from `session.topology()` and
+ * lay out the fresh graph. Called once per circuit load/reset, same as
+ * `build3DGeometry` -- topology is as static per-circuit as geometry is. */
+function buildTopology() {
+  const raw = session.topology();
+  topoGates = raw.gates || [];
+  const maxLayer = topoGates.reduce((m, g) => Math.max(m, g.layer), 0);
+
+  const layerOf = (node) => {
+    if (node.provenance.kind === 'PrimaryInput') return -1;
+    if (node.provenance.kind === 'PrimaryOutput') return maxLayer + 1;
+    return topoGates[node.provenance.gate].layer;
+  };
+
+  topoNodes = (raw.nodes || []).map((n) => ({
+    id: n.id,
+    primitive: n.primitive,
+    provenance: n.provenance,
+    targetX: layerOf(n) * TOPO_LAYER_SPACING,
+    x: 0, y: 0, vx: 0, vy: 0, fx: 0, fy: 0,
+  }));
+  topoEdges = raw.edges || [];
+
+  topoFocusSelect.innerHTML = '<option value="">All gates</option>';
+  for (const gate of topoGates) {
+    const opt = document.createElement('option');
+    opt.value = String(gate.index);
+    opt.textContent = `${gate.output} (NOR${gate.arity})`;
+    topoFocusSelect.appendChild(opt);
+  }
+
+  reinitTopoPositions();
+  runLayoutAndRender();
+}
+
+/** (Re)seed every node's starting position from its layer plus deterministic
+ * jitter, and zero its velocity -- the state a fresh force-layout pass reads
+ * before its first iteration. Split out from `buildTopology` so
+ * "Re-layout" can call it again (with a new `topoLayoutSeed`) without
+ * re-fetching `session.topology()`. */
+function reinitTopoPositions() {
+  for (const node of topoNodes) {
+    node.x = node.targetX + (detRand(node.id * 2 + 1) - 0.5) * 60;
+    node.y = (detRand(node.id * 2 + 2) - 0.5) * 500;
+    node.vx = 0;
+    node.vy = 0;
+  }
+}
+
+const TOPO_REPULSE_K = 4200;
+const TOPO_RIGID_STIFFNESS = 0.12, TOPO_RIGID_REST = 20;
+const TOPO_ROUTABLE_STIFFNESS = 0.02, TOPO_ROUTABLE_REST = 90;
+const TOPO_LAYER_K = 0.008;   // pull toward targetX
+const TOPO_CENTER_Y_K = 0.01; // pull toward y=0, so the graph doesn't drift
+const TOPO_DAMPING = 0.82;
+
+/** Run the force simulation to (approximate) rest, in place on `topoNodes`.
+ * Bounded two ways -- a hard iteration cap and a wall-clock budget -- so a
+ * large circuit degrades to "stops a bit short of settled" rather than
+ * freezing the tab; see this section's own doc comment on what that means
+ * for `seven_segment`.
+ *
+ * The repulsion cutoff and iteration budget both scale with node count: a
+ * fixed cutoff tuned for `and4`'s ~30 nodes left `seven_segment`'s ~335 in a
+ * single dense clump (only near neighbours ever felt a push apart, so the
+ * pile never had a reason to expand to the size it actually needed). Scaling
+ * by sqrt(n) keeps the same qualitative behaviour -- effective push radius
+ * grows with the graph, not a constant that only happened to suit one
+ * circuit's size. */
+function runLayout() {
+  const nodes = topoNodes;
+  const n = nodes.length;
+  if (n === 0) return;
+
+  const repulseMaxDist = Math.max(260, 60 * Math.sqrt(n));
+  const repulseMaxDistSq = repulseMaxDist * repulseMaxDist;
+  const start = performance.now();
+  const maxIterations = Math.min(900, 200 + n * 2);
+  const maxMillis = 2000;
+
+  for (let iter = 0; iter < maxIterations; iter++) {
+    for (const node of nodes) { node.fx = 0; node.fy = 0; }
+
+    // Repulsion -- every pair. O(n^2), the one thing that caps how large a
+    // circuit this view can lay out interactively; fine through
+    // seven_segment's few hundred nodes, not meant to scale past that.
+    for (let i = 0; i < n; i++) {
+      const a = nodes[i];
+      for (let j = i + 1; j < n; j++) {
+        const b = nodes[j];
+        let dx = b.x - a.x, dy = b.y - a.y;
+        let distSq = dx * dx + dy * dy;
+        if (distSq < 1e-4) {
+          dx = (detRand(i * 997 + j) - 0.5) * 0.1;
+          dy = (detRand(i * 131 + j * 7) - 0.5) * 0.1;
+          distSq = dx * dx + dy * dy + 1e-4;
+        }
+        if (distSq > repulseMaxDistSq) continue;
+        const dist = Math.sqrt(distSq);
+        const force = TOPO_REPULSE_K / distSq;
+        const fx = (dx / dist) * force, fy = (dy / dist) * force;
+        a.fx -= fx; a.fy -= fy;
+        b.fx += fx; b.fy += fy;
+      }
+    }
+
+    // Springs -- one per edge, rigid much shorter/stiffer than routable.
+    for (const edge of topoEdges) {
+      const a = nodes[edge.from], b = nodes[edge.to];
+      const rigid = edge.kind === 'Rigid';
+      const stiffness = rigid ? TOPO_RIGID_STIFFNESS : TOPO_ROUTABLE_STIFFNESS;
+      const rest = rigid ? TOPO_RIGID_REST : TOPO_ROUTABLE_REST;
+      const dx = b.x - a.x, dy = b.y - a.y;
+      const dist = Math.sqrt(dx * dx + dy * dy) || 1e-3;
+      const force = (dist - rest) * stiffness;
+      const ux = dx / dist, uy = dy / dist;
+      a.fx += ux * force; a.fy += uy * force;
+      b.fx -= ux * force; b.fy -= uy * force;
+    }
+
+    // Layer bias + vertical centering.
+    for (const node of nodes) {
+      node.fx += (node.targetX - node.x) * TOPO_LAYER_K;
+      node.fy += -node.y * TOPO_CENTER_Y_K;
+    }
+
+    // Integrate, and check for convergence.
+    let totalMovement = 0;
+    for (const node of nodes) {
+      node.vx = (node.vx + node.fx) * TOPO_DAMPING;
+      node.vy = (node.vy + node.fy) * TOPO_DAMPING;
+      node.x += node.vx;
+      node.y += node.vy;
+      totalMovement += Math.abs(node.vx) + Math.abs(node.vy);
+    }
+    if (totalMovement / n < 0.02) break;
+    if (performance.now() - start > maxMillis) break;
+  }
+}
+
+/** Every node id in `gate`'s own cluster plus every node directly connected
+ * to it by an edge (either direction, either kind) -- exactly one hop, not
+ * a transitive closure, so "Focus gate" shows a gate's immediate producers
+ * and consumers without pulling in the whole graph. */
+function computeEgoSet(gateIndex) {
+  const gate = topoGates[gateIndex];
+  const core = new Set(gate.nodes);
+  const result = new Set(core);
+  for (const edge of topoEdges) {
+    if (core.has(edge.from)) result.add(edge.to);
+    if (core.has(edge.to)) result.add(edge.from);
+  }
+  return result;
+}
+
+/** Fit `topoView` (scale + offset) so every node in `ids` is visible with
+ * some padding. Used both for "show me everything" (all node ids) and for
+ * "Focus gate" (one ego set). */
+function fitViewToNodes(ids) {
+  const w = topoWrap.clientWidth || 400, h = topoWrap.clientHeight || 400;
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const id of ids) {
+    const node = topoNodes[id];
+    minX = Math.min(minX, node.x); maxX = Math.max(maxX, node.x);
+    minY = Math.min(minY, node.y); maxY = Math.max(maxY, node.y);
+  }
+  if (!Number.isFinite(minX)) { topoView = { scale: 1, offsetX: w / 2, offsetY: h / 2 }; return; }
+  const graphW = Math.max(maxX - minX, 1), graphH = Math.max(maxY - minY, 1);
+  const pad = 60;
+  const scale = Math.min((w - 2 * pad) / graphW, (h - 2 * pad) / graphH, 6);
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+  topoView = { scale: Math.max(scale, 0.02), offsetX: w / 2 - cx * scale, offsetY: h / 2 - cy * scale };
+}
+
+function resetTopoView() {
+  fitViewToNodes(topoNodes.map((n) => n.id));
+}
+
+function resizeTopoCanvas() {
+  const w = topoWrap.clientWidth || 1, h = topoWrap.clientHeight || 1;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  topoCanvas.width = Math.round(w * dpr);
+  topoCanvas.height = Math.round(h * dpr);
+  topoCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+}
+
+// `buildTopology` runs on every circuit load regardless of which tab is
+// currently visible (same as `build3DGeometry`) -- but unlike the 3D view,
+// this view's initial pan/zoom is computed *from* the canvas's on-screen
+// size (`fitViewToNodes`), and a hidden `[data-view="topo"]` panel reports
+// `clientWidth`/`clientHeight` of 0. Running the fit against that now would
+// bake in a wrong view that only gets corrected by resizing the canvas (see
+// `setView`), never by re-fitting -- so the first switch into this tab after
+// a load/reset would show whatever that 0-sized fit happened to produce.
+// This flag defers the fit (not the physics -- that part is resolution-
+// independent) until the tab is actually visible and its real size is known.
+let topoViewNeedsFit = true;
+
+function runLayoutAndRender() {
+  const t0 = performance.now();
+  runLayout();
+  const elapsed = performance.now() - t0;
+  topoViewNeedsFit = true;
+  if (currentView === 'topo') {
+    resizeTopoCanvas();
+    resetTopoView();
+    topoViewNeedsFit = false;
+  }
+  drawTopology();
+  topoStatus.textContent =
+    `${topoNodes.length} nodes, ${topoEdges.length} edges, ${topoGates.length} gates -- `
+    + `layout settled in ${elapsed.toFixed(0)} ms.`;
+}
+
+function gateHue(index) {
+  return (index * 47) % 360;
+}
+
+function roundRect(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.arcTo(x + w, y, x + w, y + h, rr);
+  ctx.arcTo(x + w, y + h, x, y + h, rr);
+  ctx.arcTo(x, y + h, x, y, rr);
+  ctx.arcTo(x, y, x + w, y, rr);
+  ctx.closePath();
+}
+
+/** Draw one node, shaped by its `Primitive` kind so a glance (not just
+ * colour) distinguishes them: a square support block, a diamond repeater
+ * (an input pin, in every NOR entry this library ships), a circular torch
+ * or lamp, a triangular lever. */
+function drawNodeShape(ctx, primitive, x, y, r, colour, alpha) {
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.fillStyle = colour;
+  ctx.strokeStyle = 'rgba(0,0,0,0.65)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  switch (primitive) {
+    case 'Block':
+      ctx.rect(x - r, y - r, r * 2, r * 2);
+      break;
+    case 'Repeater':
+      ctx.moveTo(x, y - r * 1.3); ctx.lineTo(x + r * 1.3, y);
+      ctx.lineTo(x, y + r * 1.3); ctx.lineTo(x - r * 1.3, y);
+      ctx.closePath();
+      break;
+    case 'Lever':
+      ctx.moveTo(x, y - r * 1.3); ctx.lineTo(x + r * 1.2, y + r);
+      ctx.lineTo(x - r * 1.2, y + r); ctx.closePath();
+      break;
+    case 'Lamp':
+      ctx.arc(x, y, r * 1.35, 0, Math.PI * 2);
+      break;
+    default: // Torch, Dust
+      ctx.arc(x, y, r, 0, Math.PI * 2);
+      break;
+  }
+  ctx.fill();
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** Human-readable description of one node's `Provenance`, for the hover
+ * readout -- exactly the "which gate did this come from" question this
+ * whole view exists to make answerable at a glance, spelled out in text for
+ * the one node under the cursor. */
+function provenanceDescription(node) {
+  if (node.provenance.kind === 'Gate') {
+    const gate = topoGates[node.provenance.gate];
+    return `gate ${gate.output} (NOR${gate.arity}, layer ${gate.layer}), role ${node.provenance.role}`;
+  }
+  if (node.provenance.kind === 'PrimaryInput') return `primary input "${node.provenance.name}"`;
+  return `primary output "${node.provenance.name}"`;
+}
+
+function drawTopology() {
+  const w = topoWrap.clientWidth || 1, h = topoWrap.clientHeight || 1;
+  topoCtx.clearRect(0, 0, w, h);
+  topoCtx.fillStyle = '#101113';
+  topoCtx.fillRect(0, 0, w, h);
+  if (topoNodes.length === 0) return;
+
+  const toScreen = (x, y) => [topoView.offsetX + x * topoView.scale, topoView.offsetY + y * topoView.scale];
+  const focusValue = topoFocusSelect.value;
+  const focusGate = focusValue === '' ? null : Number(focusValue);
+  const egoSet = focusGate === null ? null : computeEgoSet(focusGate);
+
+  // Gate hulls -- what turns "primitives that happen to cluster" into
+  // "primitives you can tell came from the same gate at a glance".
+  for (const gate of topoGates) {
+    if (gate.nodes.length === 0) continue;
+    const dim = focusGate !== null && gate.index !== focusGate;
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const id of gate.nodes) {
+      const node = topoNodes[id];
+      minX = Math.min(minX, node.x); maxX = Math.max(maxX, node.x);
+      minY = Math.min(minY, node.y); maxY = Math.max(maxY, node.y);
+    }
+    const pad = 14;
+    const [sx0, sy0] = toScreen(minX - pad, minY - pad);
+    const [sx1, sy1] = toScreen(maxX + pad, maxY + pad);
+    const hue = gateHue(gate.index);
+    topoCtx.fillStyle = `hsla(${hue}, 65%, 55%, ${dim ? 0.025 : 0.10})`;
+    topoCtx.strokeStyle = `hsla(${hue}, 70%, 65%, ${dim ? 0.10 : 0.45})`;
+    topoCtx.lineWidth = 1;
+    roundRect(topoCtx, sx0, sy0, sx1 - sx0, sy1 - sy0, 8);
+    topoCtx.fill();
+    topoCtx.stroke();
+    if (topoView.scale > 0.35 || focusGate === gate.index) {
+      topoCtx.fillStyle = dim ? 'rgba(230,230,230,0.12)' : 'rgba(230,230,230,0.8)';
+      topoCtx.font = '11px ui-monospace, monospace';
+      topoCtx.textAlign = 'left';
+      topoCtx.textBaseline = 'bottom';
+      topoCtx.fillText(`${gate.output} (NOR${gate.arity})`, sx0 + 2, sy0 - 2);
+    }
+  }
+
+  // Edges -- rigid drawn solid and heavier, routable dashed and lighter, so
+  // the two kinds are never confusable even before reading colour.
+  for (const edge of topoEdges) {
+    const inFocus = egoSet ? (egoSet.has(edge.from) && egoSet.has(edge.to)) : true;
+    const a = topoNodes[edge.from], b = topoNodes[edge.to];
+    const [sx0, sy0] = toScreen(a.x, a.y);
+    const [sx1, sy1] = toScreen(b.x, b.y);
+    topoCtx.beginPath();
+    topoCtx.moveTo(sx0, sy0);
+    topoCtx.lineTo(sx1, sy1);
+    if (edge.kind === 'Rigid') {
+      topoCtx.setLineDash([]);
+      topoCtx.strokeStyle = `rgba(207,211,216,${inFocus ? 0.85 : 0.05})`;
+      topoCtx.lineWidth = 2.4;
+    } else {
+      topoCtx.setLineDash([5, 4]);
+      topoCtx.strokeStyle = `rgba(255,59,59,${inFocus ? 0.6 : 0.04})`;
+      topoCtx.lineWidth = 1.3;
+    }
+    topoCtx.stroke();
+  }
+  topoCtx.setLineDash([]);
+
+  // Nodes, on top of edges.
+  for (const node of topoNodes) {
+    const inFocus = egoSet ? egoSet.has(node.id) : true;
+    const [sx, sy] = toScreen(node.x, node.y);
+    const colour = PRIMITIVE_COLOR[node.primitive] || '#ff00ff';
+    drawNodeShape(topoCtx, node.primitive, sx, sy, TOPO_NODE_RADIUS, colour, inFocus ? 1 : 0.12);
+  }
+}
+
+// Pan (drag) and zoom (wheel, toward the cursor).
+let topoDragging = false;
+let topoDragStart = { x: 0, y: 0 };
+let topoViewStart = { offsetX: 0, offsetY: 0 };
+topoCanvas.addEventListener('mousedown', (e) => {
+  topoDragging = true;
+  topoWrap.classList.add('dragging');
+  topoDragStart = { x: e.clientX, y: e.clientY };
+  topoViewStart = { offsetX: topoView.offsetX, offsetY: topoView.offsetY };
+});
+window.addEventListener('mousemove', (e) => {
+  if (!topoDragging) return;
+  topoView.offsetX = topoViewStart.offsetX + (e.clientX - topoDragStart.x);
+  topoView.offsetY = topoViewStart.offsetY + (e.clientY - topoDragStart.y);
+  if (currentView === 'topo') drawTopology();
+});
+window.addEventListener('mouseup', () => {
+  topoDragging = false;
+  topoWrap.classList.remove('dragging');
+});
+topoCanvas.addEventListener('wheel', (e) => {
+  e.preventDefault();
+  const rect = topoCanvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  const zoomFactor = Math.pow(1.0015, -e.deltaY);
+  const newScale = Math.min(Math.max(topoView.scale * zoomFactor, 0.02), 10);
+  const gx = (mx - topoView.offsetX) / topoView.scale;
+  const gy = (my - topoView.offsetY) / topoView.scale;
+  topoView.offsetX = mx - gx * newScale;
+  topoView.offsetY = my - gy * newScale;
+  topoView.scale = newScale;
+  drawTopology();
+}, { passive: false });
+
+topoCanvas.addEventListener('mousemove', (e) => {
+  if (topoNodes.length === 0) return;
+  const rect = topoCanvas.getBoundingClientRect();
+  const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  let best = null, bestDist = 10; // px threshold
+  for (const node of topoNodes) {
+    const sx = topoView.offsetX + node.x * topoView.scale;
+    const sy = topoView.offsetY + node.y * topoView.scale;
+    const d = Math.hypot(sx - mx, sy - my);
+    if (d < bestDist) { bestDist = d; best = node; }
+  }
+  topoHoverReadout.textContent = best
+    ? `#${best.id} -- ${best.primitive} -- ${provenanceDescription(best)}`
+    : ' ';
+});
+topoCanvas.addEventListener('mouseleave', () => { topoHoverReadout.textContent = ' '; });
+
+topoFocusSelect.addEventListener('change', () => {
+  const val = topoFocusSelect.value;
+  if (val !== '') {
+    fitViewToNodes(computeEgoSet(Number(val)));
+  } else {
+    resetTopoView();
+  }
+  drawTopology();
+});
+
+topoRelayoutBtn.addEventListener('click', () => {
+  topoLayoutSeed += 1;
+  reinitTopoPositions();
+  runLayoutAndRender();
+});
+
+/** Switch which of the 2D/3D/Topology panels are visible. All three views
+ * read the same `Session`; nothing here touches the simulator, so toggling
+ * never resets it. */
 function setView(view) {
   currentView = view;
   const is3d = view === '3d';
-  view2dBtn.dataset.active = String(!is3d);
+  const isTopo = view === 'topo';
+  view2dBtn.dataset.active = String(view === '2d');
   view3dBtn.dataset.active = String(is3d);
-  for (const el of document.querySelectorAll('[data-view="2d"]')) el.classList.toggle('hidden', is3d);
+  viewTopoBtn.dataset.active = String(isTopo);
+  for (const el of document.querySelectorAll('[data-view="2d"]')) el.classList.toggle('hidden', view !== '2d');
   for (const el of document.querySelectorAll('[data-view="3d"]')) el.classList.toggle('hidden', !is3d);
+  for (const el of document.querySelectorAll('[data-view="topo"]')) el.classList.toggle('hidden', !isTopo);
   if (is3d) {
     ensureThreeInitialized();
     resizeThree();
+  }
+  if (isTopo) {
+    resizeTopoCanvas();
+    if (topoViewNeedsFit) {
+      resetTopoView();
+      topoViewNeedsFit = false;
+    }
+    drawTopology();
   }
 }
 
 view2dBtn.addEventListener('click', () => setView('2d'));
 view3dBtn.addEventListener('click', () => setView('3d'));
+viewTopoBtn.addEventListener('click', () => setView('topo'));
 
 // ---------------------------------------------------------------------
 // Slice fetch + axis/index UI sync

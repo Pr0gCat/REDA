@@ -25,9 +25,11 @@
 //! `list_circuits`, `Session::new`, `set_lever`, `run_until_stable`, `size`,
 //! and `slice`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use reda::circuits::{and4, full_adder, seven_segment};
+use reda::compile::primitive_graph::{self, EdgeKind, PrimitiveGraph, Provenance};
+use reda::compile::topology::{Library, Primitive as TopoPrimitive, TemplateNode};
 use reda::compile::{compile, Netlist};
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::{BlockKind, BlockState, Face, Facing};
@@ -343,6 +345,141 @@ struct Pinout {
 }
 
 // ---------------------------------------------------------------------
+// Primitive topology
+//
+// A JSON view of `compile::primitive_graph::PrimitiveGraph` -- the flat,
+// position-free graph of redstone primitives `compile::primitive_graph::expand`
+// builds from a `Netlist`. See
+// `docs/superpowers/specs/2026-08-08-primitive-level-flow.md`, "The primitive
+// level" and "Topology carries no positions": this is connectivity only, no
+// coordinates -- a page consuming it has to invent its own layout (a
+// force-directed one, in this viewer's case), which is exactly why this is a
+// separate view from `slice()`/`geometry()` rather than another overlay on
+// them.
+//
+// These types mirror `Primitive`, `Provenance`, `TemplateNode` and `EdgeKind`
+// as plain, `Serialize`-able shadows rather than adding `#[derive(Serialize)]`
+// to `src/compile/topology.rs` / `primitive_graph.rs` themselves -- exposing
+// this data should not mean changing those modules (see this crate's own
+// module doc comment: "This crate does not reimplement any redstone
+// behaviour").
+// ---------------------------------------------------------------------
+
+fn primitive_name(primitive: TopoPrimitive) -> &'static str {
+    match primitive {
+        TopoPrimitive::Torch => "Torch",
+        TopoPrimitive::Dust => "Dust",
+        TopoPrimitive::Repeater => "Repeater",
+        TopoPrimitive::Block => "Block",
+        TopoPrimitive::Lever => "Lever",
+        TopoPrimitive::Lamp => "Lamp",
+    }
+}
+
+fn template_role_name(role: TemplateNode) -> String {
+    match role {
+        TemplateNode::Support => "Support".to_string(),
+        TemplateNode::Torch => "Torch".to_string(),
+        TemplateNode::Input(i) => format!("Input{i}"),
+    }
+}
+
+fn edge_kind_name(kind: EdgeKind) -> &'static str {
+    match kind {
+        EdgeKind::Rigid => "Rigid",
+        EdgeKind::Routable => "Routable",
+    }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "kind")]
+enum TopologyProvenance {
+    Gate { gate: usize, role: String },
+    PrimaryInput { name: String },
+    PrimaryOutput { name: String },
+}
+
+fn topology_provenance(provenance: &Provenance) -> TopologyProvenance {
+    match provenance {
+        Provenance::Gate { gate, role } => {
+            TopologyProvenance::Gate { gate: *gate, role: template_role_name(*role) }
+        }
+        Provenance::PrimaryInput { name } => TopologyProvenance::PrimaryInput { name: name.clone() },
+        Provenance::PrimaryOutput { name } => TopologyProvenance::PrimaryOutput { name: name.clone() },
+    }
+}
+
+#[derive(Serialize)]
+struct TopologyNode {
+    id: usize,
+    primitive: &'static str,
+    provenance: TopologyProvenance,
+}
+
+#[derive(Serialize)]
+struct TopologyEdge {
+    from: usize,
+    to: usize,
+    kind: &'static str,
+}
+
+#[derive(Serialize)]
+struct TopologyGate {
+    index: usize,
+    /// This gate's own output signal name -- `Netlist::Gate::output` --
+    /// carried through separately from `PrimitiveGraph`, which only ever
+    /// remembers a gate by its index (see `Provenance::Gate`'s doc comment).
+    output: String,
+    arity: usize,
+    /// Topological layer: 0 for a gate driven only by primary inputs, one
+    /// more than the greatest layer among any gate that drives it otherwise.
+    /// A display hint for the topology view's layout only -- `compile()`
+    /// never consults this, and it carries no positions of its own, just an
+    /// ordering. See [`compute_gate_layers`].
+    layer: i32,
+    /// Every node id instantiated for this gate -- `PrimitiveGraph::gate_nodes[index]`
+    /// verbatim -- so a page can group and hull them without recomputing the
+    /// grouping from `nodes`' own provenance.
+    nodes: Vec<usize>,
+}
+
+#[derive(Serialize)]
+struct Topology {
+    nodes: Vec<TopologyNode>,
+    edges: Vec<TopologyEdge>,
+    gates: Vec<TopologyGate>,
+}
+
+/// Topological layer of each gate in `netlist.gates`' own indexing: 0 for a
+/// gate driven only by primary inputs, one more than the greatest layer among
+/// its own gate-driven inputs otherwise. Purely a display hint for
+/// [`Session::topology`]'s layout -- `compile()` never consults this, unlike
+/// `Netlist::topological_order` (an ordering consistent with this layering,
+/// but not the same information: two gates can share a layer and still need
+/// relative ordering against unrelated gates).
+fn compute_gate_layers(netlist: &Netlist) -> Vec<i32> {
+    let mut producer_of: HashMap<&str, usize> = HashMap::with_capacity(netlist.gates.len());
+    for (g, gate) in netlist.gates.iter().enumerate() {
+        producer_of.insert(gate.output.as_str(), g);
+    }
+    let order = netlist
+        .topological_order()
+        .expect("compile() already validated this netlist has no combinational cycle");
+
+    let mut layer = vec![0i32; netlist.gates.len()];
+    for g in order {
+        let mut max_layer = 0i32;
+        for input in &netlist.gates[g].inputs {
+            if let Some(&producer) = producer_of.get(input.as_str()) {
+                max_layer = max_layer.max(layer[producer] + 1);
+            }
+        }
+        layer[g] = max_layer;
+    }
+    layer
+}
+
+// ---------------------------------------------------------------------
 // Session
 // ---------------------------------------------------------------------
 
@@ -360,6 +497,18 @@ pub struct Session {
     /// order (not alphabetical -- `full_adder`'s `sum` before `cout`,
     /// `seven_segment`'s `a` before `b`, etc).
     output_positions: Vec<(String, (i32, i32, i32))>,
+    /// The primitive-topology expansion of this circuit's own netlist --
+    /// connectivity only, no positions (see this module's "Primitive
+    /// topology" section and `compile::primitive_graph`'s own doc comment).
+    /// Built once alongside `simulator` and never touched afterwards: unlike
+    /// the world, nothing about a circuit's topology changes as the
+    /// simulation runs.
+    primitive_graph: PrimitiveGraph,
+    /// `(output signal name, arity, topological layer)` for every gate,
+    /// indexed exactly as `primitive_graph`'s own `Provenance::Gate::gate`
+    /// and `gate_nodes` are -- see [`compute_gate_layers`] for what "layer"
+    /// means.
+    gate_meta: Vec<(String, usize, i32)>,
 }
 
 impl Session {
@@ -375,6 +524,29 @@ impl Session {
         let (netlist, outputs) = build_netlist();
         let compiled =
             compile(&netlist).map_err(|error| format!("compile() failed: {error:?}"))?;
+
+        // Every circuit in `CIRCUITS` is built through `NetlistBuilder::nor`
+        // (or the Yosys genlib frontend), both of which already enforce
+        // fan-in 1..=3 before a `Gate` ever exists -- the same range
+        // `Library::default_library` covers -- and `compile()` above just
+        // succeeded, which means every input and output name it checks
+        // (`CompileError::UndrivenSignal`) already resolves. So `expand` has
+        // no way to fail here that `compile` would not already have caught;
+        // see `topology::Library`'s doc comment and `primitive_graph::expand`'s
+        // `ExpandError` for the two things it does check.
+        let primitive_graph = primitive_graph::expand(&netlist, &Library::default_library())
+            .unwrap_or_else(|error| {
+                panic!("expand() failed on a netlist compile() already accepted: {error}")
+            });
+        let gate_meta: Vec<(String, usize, i32)> = {
+            let layers = compute_gate_layers(&netlist);
+            netlist
+                .gates
+                .iter()
+                .zip(layers)
+                .map(|(gate, layer)| (gate.output.clone(), gate.inputs.len(), layer))
+                .collect()
+        };
 
         let output_positions = outputs
             .into_iter()
@@ -405,6 +577,8 @@ impl Session {
             simulator,
             input_positions: compiled.input_positions,
             output_positions,
+            primitive_graph,
+            gate_meta,
         })
     }
 }
@@ -613,6 +787,48 @@ impl Session {
         bytes
     }
 
+    /// `{ nodes: [{id, primitive, provenance}], edges: [{from, to, kind}],
+    /// gates: [{index, output, arity, layer, nodes}] }` -- the whole
+    /// primitive-topology graph this circuit's netlist expands into, per
+    /// this module's "Primitive topology" section. No positions: the graph
+    /// itself carries none (see `compile::primitive_graph`'s doc comment),
+    /// so a page consuming this has to lay it out itself. Same native-test
+    /// caveat as `pinout`/`legend`.
+    pub fn topology(&self) -> JsValue {
+        let nodes = self
+            .primitive_graph
+            .nodes
+            .iter()
+            .enumerate()
+            .map(|(id, node)| TopologyNode {
+                id,
+                primitive: primitive_name(node.primitive),
+                provenance: topology_provenance(&node.provenance),
+            })
+            .collect();
+        let edges = self
+            .primitive_graph
+            .edges
+            .iter()
+            .map(|edge| TopologyEdge { from: edge.from, to: edge.to, kind: edge_kind_name(edge.kind) })
+            .collect();
+        let gates = self
+            .gate_meta
+            .iter()
+            .zip(self.primitive_graph.gate_nodes.iter())
+            .enumerate()
+            .map(|(index, ((output, arity, layer), nodes))| TopologyGate {
+                index,
+                output: output.clone(),
+                arity: *arity,
+                layer: *layer,
+                nodes: nodes.clone(),
+            })
+            .collect();
+        serde_wasm_bindgen::to_value(&Topology { nodes, edges, gates })
+            .expect("Topology serializes without error -- it is plain strings and integers")
+    }
+
     /// One byte per non-air cell, in **exactly** `geometry()`'s order (see
     /// [`non_air_coords`]): byte `i` here is
     /// [`signal_strength`] of the cell `geometry()`'s entry `i` describes.
@@ -670,11 +886,21 @@ mod repeater_delay_geometry_tests {
             world.set(i as i32 * 2, 0, 0, state);
         }
         let simulator = Simulator::new(world);
+        // This fixture bypasses `Session::build` entirely (see this module's
+        // doc comment), so `primitive_graph`/`gate_meta` need a value from
+        // somewhere else -- an empty `Netlist` expands to an empty, but
+        // still real, `PrimitiveGraph` rather than needing a second
+        // "uninitialised" constructor on that type just for this one test.
+        let empty_netlist = Netlist { inputs: Vec::new(), outputs: Vec::new(), gates: Vec::new() };
+        let primitive_graph = primitive_graph::expand(&empty_netlist, &Library::default_library())
+            .expect("an empty netlist has nothing for expand() to fail on");
         Session {
             circuit_name: "repeater_delay_test_fixture".to_string(),
             simulator,
             input_positions: BTreeMap::new(),
             output_positions: Vec::new(),
+            primitive_graph,
+            gate_meta: Vec::new(),
         }
     }
 
