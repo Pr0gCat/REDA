@@ -208,7 +208,7 @@ fn list_circuits(circuits: &[CircuitInfo]) {
     println!();
     println!("Verilog circuits (synthesized on demand; need `python` with `yowasp-yosys`):");
     for circuit in verilog::CIRCUITS {
-        println!("  {:<14} module {} ", circuit.name, circuit.top_module);
+        println!("  {:<22} module {}", circuit.name, circuit.top_module);
     }
 }
 
