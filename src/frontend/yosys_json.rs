@@ -194,6 +194,19 @@ impl<'a> Context<'a> {
         match topology::gate_kind_for_yosys_cell(cell.cell_type) {
             Some(GateKind::Nor(arity)) => self.build_nor(cell, &NOR_PIN_NAMES[..arity]),
             Some(GateKind::Buf) => self.build_buf(cell),
+            // `gate_kind_for_yosys_cell` never actually returns this today
+            // (see that function's own doc comment: no genlib line produces
+            // `$_OR_` yet), so this arm exists only so the match stays
+            // exhaustive as `GateKind` grows -- mapping `$_OR_` onto the
+            // library's wire-merge entries is step 4 of the referenced
+            // spec's Order, not this one.
+            Some(GateKind::Or(_)) => Err(unsupported(format!(
+                "cell `{}` has type `{}`, which names a `GateKind::Or` -- the topology library can \
+                 realize that, but this frontend cannot reach it yet: `redstone_nor.genlib` has no \
+                 GATE line that produces it, so `gate_kind_for_yosys_cell` never actually returns it \
+                 today either. Mapping `$_OR_` onto the library's wire-merge entries is a later task.",
+                cell.name, cell.cell_type
+            ))),
             None => Err(unsupported(format!(
                 "cell `{}` has type `{}`, which `topology::gate_kind_for_yosys_cell` does not map to any \
                  redstone realization. Only NOR1/NOR2/NOR3/BUF from redstone_nor.genlib are supported -- \
@@ -294,7 +307,12 @@ fn realize_template(builder: &mut NetlistBuilder, template: &Template, inputs: V
     }
 
     let mut built: HashMap<TemplateNode, String> = HashMap::new();
-    resolve_node(template.output, template, &incoming, &mut built, builder)
+    let output = template.output.expect(
+        "realize_template only ever runs on GateKind::Nor/Buf entries, which always name a real \
+         output primitive -- an entry with none (a wire-merge OR) is not reachable through this \
+         frontend yet (see build_cell's own GateKind::Or arm)",
+    );
+    resolve_node(output, template, &incoming, &mut built, builder)
 }
 
 /// One node of `realize_template`'s walk: build `node`'s own NOR gate (its

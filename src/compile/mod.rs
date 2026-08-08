@@ -349,6 +349,74 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
     }
 }
 
+/// Place an `input_count`-input wire-merge OR into the world: no support
+/// block, no torch -- just the point downstream of where its declared
+/// inputs' own routes are allowed to touch. See
+/// `docs/superpowers/specs/2026-08-08-gate-types-and-wired-or.md`, "An OR is
+/// a node, not a disappearing act": a merge is still a node this router has
+/// to place *somewhere* (it needs a row, an X, a Z, the same as any other
+/// gate), it just has nothing functional to place there.
+///
+/// Deliberately built to the *exact same footprint* `place_nor_gate` uses
+/// for the same `input_count` -- the same `input_offsets` (the three
+/// horizontal `INPUT_DIRECTIONS` faces around `origin`) and an
+/// `output_offset` chosen so `emit`'s generic, gate-kind-agnostic geometry
+/// code (`torch_of`, `cell_geometry_by_input_count`, `source_pin_position`,
+/// `resolve_bypass_and_geometry`) needs no merge-specific case at all --
+/// only *what gets physically written* at `origin` differs. A NOR's
+/// support is a solid block that a repeater must actively drive (dust
+/// cannot charge a block sideways); a merge's own junction is plain dust,
+/// which joins any adjacent dust directly, so nothing has to drive it at
+/// all. `output_offset` is `(0, 0, 0)` -- unlike a NOR's torch, which sits
+/// one cell out from its support with the gate's own outbound net starting
+/// one cell further still, a merge has no active output component to stand
+/// anywhere: `origin` itself doubles as the "output" position `emit`
+/// records for this gate, and `emit`'s own `is_merge` branch knows to start
+/// this gate's outbound net there directly instead of one hop further out.
+pub fn place_merge_gate(world: &mut World, origin: (i32, i32, i32), input_count: usize) -> NorCell {
+    assert!(
+        input_count <= INPUT_DIRECTIONS.len(),
+        "place_merge_gate 最多支援 {} 個輸入，收到 {input_count}",
+        INPUT_DIRECTIONS.len()
+    );
+
+    let support = Position::new(origin.0, origin.1, origin.2);
+    ensure_floor(world, support);
+    world.set(support.x, support.y, support.z, dust());
+
+    // 插座留空 -- 由呼叫端（router）決定要接哪一種收尾：私有分支收裸紅石粉，
+    // 有外部扇出的分支收隔離用中繼器。
+    let mut input_offsets = Vec::with_capacity(input_count);
+    for &direction in INPUT_DIRECTIONS.iter().take(input_count) {
+        let socket = support.offset(direction);
+        input_offsets.push((socket.x - support.x, socket.y - support.y, socket.z - support.z));
+    }
+
+    // No output torch to place -- `output_socket` here is where this gate's
+    // own outbound net's first cell (`emit`'s `gate_pin`) will end up, one
+    // hop out from the junction itself (see this function's own doc comment
+    // for why that is only one hop, not two).
+    let output_socket = support.offset(OUTPUT_DIRECTION);
+    let mut min = (support.x, support.y, support.z);
+    let mut max = (support.x, support.y, support.z);
+    let mut extend = |p: Position| {
+        min.0 = min.0.min(p.x);
+        min.1 = min.1.min(p.y);
+        min.2 = min.2.min(p.z);
+        max.0 = max.0.max(p.x);
+        max.1 = max.1.max(p.y);
+        max.2 = max.2.max(p.z);
+    };
+    extend(output_socket);
+    for &(dx, dy, dz) in &input_offsets {
+        extend(Position::new(support.x + dx, support.y + dy, support.z + dz));
+    }
+
+    let size = (max.0 - min.0 + 1, max.1 - min.1 + 1, max.2 - min.2 + 1);
+
+    NorCell { size, input_offsets, output_offset: (0, 0, 0) }
+}
+
 // ---------------------------------------------------------------------
 // Placement and routing
 // ---------------------------------------------------------------------
@@ -1186,6 +1254,77 @@ fn lay_bent_path(world: &mut World, start: Position, waypoints: &[Position], inc
     // `waypoints`'s last element is never a bend, so this can never collide
     // with `bend_indices`.
     is_repeater[len - 1] = true;
+
+    let mut prev = start;
+    for (index, &pos) in cells.iter().enumerate() {
+        let direction = direction_from(prev, pos);
+        ensure_floor(world, pos);
+        route.claim(pos.down());
+        if is_repeater[index] {
+            world.set(pos.x, pos.y, pos.z, repeater(direction));
+        } else {
+            world.set(pos.x, pos.y, pos.z, dust());
+        }
+        route.claim(pos);
+        prev = pos;
+    }
+}
+
+/// Same as [`lay_bent_path`], but the final cell is left as whatever the
+/// ordinary strength budget decides -- plain dust, unless this particular
+/// branch happens to be long enough to need an interior refresh anyway --
+/// rather than a *mandatory* repeater.
+///
+/// This is the termination a wire-merge OR's own **private** branches use
+/// (see `merge_branch_is_bare`): the destination is another net's own dust,
+/// not a gate's support block, and dust joins dust directly (the same
+/// same-layer rule `dust_connections` already applies everywhere else), so
+/// nothing has to actively drive the join at all -- see
+/// `docs/superpowers/specs/2026-08-08-gate-types-and-wired-or.md`, "In
+/// redstone an OR is free". A branch whose source fans out anywhere besides
+/// the merge it feeds must **not** use this -- it needs `lay_bent_path`'s
+/// mandatory repeater instead, so backflow through the merge can never run
+/// back up the shared wire to that other consumer.
+fn lay_bent_path_bare(world: &mut World, start: Position, waypoints: &[Position], incoming_strength: u8, route: &mut Route) {
+    debug_assert!(!waypoints.is_empty(), "a bent path must have somewhere to end");
+    debug_assert!(incoming_strength > 0, "a run cannot start from an already-dead signal");
+
+    let cells = bent_path_cells(start, waypoints);
+    let len = cells.len();
+    let bend_indices: BTreeSet<usize> = waypoints[..waypoints.len() - 1]
+        .iter()
+        .map(|&waypoint| {
+            cells
+                .iter()
+                .position(|&cell| cell == waypoint)
+                .expect("every waypoint before the last is pushed onto `cells` by `bent_path_cells`")
+        })
+        .collect();
+
+    // Identical budget/bend-avoidance logic to `lay_bent_path` -- the only
+    // difference from it is what happens after this loop (nothing: the
+    // final cell is never forced to be a repeater here).
+    let threshold = MAX_DUST_RUN as i64;
+    let mut is_repeater = vec![false; len];
+    let mut last_refresh: i64 = incoming_strength as i64 - (MAX_SIGNAL_STRENGTH as i64 + 1);
+    let mut i = 0usize;
+    while i < len {
+        if (i as i64) - last_refresh <= threshold {
+            i += 1;
+            continue;
+        }
+        let mut j = i;
+        while (j as i64) > last_refresh + 1 && bend_indices.contains(&j) {
+            j -= 1;
+        }
+        debug_assert!(
+            !bend_indices.contains(&j),
+            "bends must never be dense enough to leave no room for a repeater"
+        );
+        is_repeater[j] = true;
+        last_refresh = j as i64;
+        i = j + 1;
+    }
 
     let mut prev = start;
     for (index, &pos) in cells.iter().enumerate() {
@@ -2456,6 +2595,37 @@ struct RoutingGeometry<'a> {
     bypass: &'a [bool],
 }
 
+/// Whether a route terminating at `gate`'s `input_index`-th socket should
+/// end in a bare dust cell (`lay_bent_path_bare`) rather than the usual
+/// mandatory repeater (`lay_bent_path`) -- true exactly when `gate` is a
+/// declared merge (`Gate::is_merge`) and `net` -- the whole net landing on
+/// that socket, source and every one of its sinks -- drives nothing besides
+/// this one merge.
+///
+/// This is the fanout rule from
+/// `docs/superpowers/specs/2026-08-08-gate-types-and-wired-or.md`, "When
+/// isolation is actually needed, and how to know", read directly off the
+/// netlist: "isolate a branch when its source fans out to anything besides
+/// this merge; otherwise a bare join is correct." `net.sinks` is exactly
+/// that fan-out list -- every `(gate, input_index)` pair this net's source
+/// feeds, across every channel it appears in -- so "fans out to anything
+/// besides this merge" is simply "some sink names a gate other than this
+/// one". A net that feeds *this same* merge on a second socket (unusual,
+/// but not excluded) is still bare: both sinks name `gate` itself, so there
+/// is nothing "besides this merge" to protect against -- backflow between
+/// the two sockets only circulates this source's own signal back into a
+/// branch that was already carrying it, which corrupts nothing.
+///
+/// A non-merge `gate` always returns `false` here (its own condition on
+/// `gate.is_merge` fails first), which is exactly what keeps every existing
+/// NOR socket -- including one whose net happens to fan out to several
+/// consumers -- routed exactly as before: this function only ever changes
+/// behaviour for a gate that declares itself a merge, and nothing produces
+/// one yet outside this task's own tests.
+fn merge_branch_is_bare(netlist: &Netlist, net: &Net, gate: usize) -> bool {
+    netlist.gates[gate].is_merge && net.sinks.iter().flatten().all(|&(g, _)| g == gate)
+}
+
 /// Write the whole circuit into `world`: every gate, every primary input,
 /// every net's ramps/columns/tracks, and every output lamp.
 ///
@@ -2474,7 +2644,11 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
     }
     for (g, gate) in netlist.gates.iter().enumerate() {
         let origin = (plan.centre_x[g], GATE_Y, row_z[plan.row_of[g]]);
-        gate_cell[g] = place_nor_gate(world, origin, gate.inputs.len());
+        gate_cell[g] = if gate.is_merge {
+            place_merge_gate(world, origin, gate.inputs.len())
+        } else {
+            place_nor_gate(world, origin, gate.inputs.len())
+        };
     }
 
     let mut input_positions: BTreeMap<String, (i32, i32, i32)> = BTreeMap::new();
@@ -2499,9 +2673,19 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
     for (g, cell) in gate_cell.iter().enumerate() {
         let torch = torch_of(g, cell);
         gate_output_positions.insert(netlist.gates[g].output.clone(), (torch.x, torch.y, torch.z));
-        let pin = torch.offset(OUTPUT_DIRECTION);
-        ensure_floor(world, pin);
-        world.set(pin.x, pin.y, pin.z, dust());
+        let pin = if netlist.gates[g].is_merge {
+            // A merge has no active output component to stand one hop past
+            // -- `place_merge_gate` already wrote the junction itself
+            // (`torch`, per its own `output_offset == (0, 0, 0)`) as dust,
+            // and that same cell is where this gate's own outbound net
+            // begins.
+            torch
+        } else {
+            let p = torch.offset(OUTPUT_DIRECTION);
+            ensure_floor(world, p);
+            world.set(p.x, p.y, p.z, dust());
+            p
+        };
         gate_pin.push(pin);
     }
 
@@ -2598,7 +2782,11 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
                 waypoints.push(Position::new(exit_x, GATE_Y, row_z_gate));
             }
             waypoints.push(socket);
-            lay_bent_path(world, pin, &waypoints, MAX_SIGNAL_STRENGTH, &mut route);
+            if merge_branch_is_bare(netlist, net, gate) {
+                lay_bent_path_bare(world, pin, &waypoints, MAX_SIGNAL_STRENGTH, &mut route);
+            } else {
+                lay_bent_path(world, pin, &waypoints, MAX_SIGNAL_STRENGTH, &mut route);
+            }
             continue;
         }
 
@@ -2646,7 +2834,11 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
                             waypoints.push(Position::new(landing.x, GATE_Y, row_z_gate));
                         }
                         waypoints.push(socket);
-                        lay_bent_path(world, landing, &waypoints, landing_strength, &mut route);
+                        if merge_branch_is_bare(netlist, net, gate) {
+                            lay_bent_path_bare(world, landing, &waypoints, landing_strength, &mut route);
+                        } else {
+                            lay_bent_path(world, landing, &waypoints, landing_strength, &mut route);
+                        }
                     }
                     Exit::Feedthrough { x, next_slot } => {
                         let next_channel = net.channels[next_slot];
@@ -3107,18 +3299,27 @@ impl MergeGroups {
             if !gate.is_merge {
                 continue;
             }
-            // The merge's own output feeding no other gate (only a
-            // declared circuit output, say) leaves nothing to union it
-            // with here -- and nothing downstream that could mistake its
-            // branches for a foreign net either, so skipping it is exactly
-            // right, not a gap.
-            let Some(&output_index) = index_of_signal.get(gate.output.as_str()) else {
-                continue;
-            };
-            for input in &gate.inputs {
-                if let Some(&input_index) = index_of_signal.get(input.as_str()) {
-                    Self::union(&mut parent, output_index, input_index);
-                }
+            // Union every one of this merge's declared inputs together,
+            // plus its own output net when it has one. The output can be
+            // missing (`build_nets` drops a signal with no gate-input sink,
+            // which is exactly what a merge feeding *only* a declared
+            // circuit output looks like) -- but the inputs' own dust still
+            // physically touches at the junction regardless of whether
+            // anything reads the result any further, so they must still be
+            // unioned with *each other* even then. Routing every union
+            // through `output_index` alone (the previous version of this
+            // loop) silently skipped exactly that case: with no output net
+            // to hang the union on, two private branches sharing a junction
+            // would have looked like two unrelated nets whose dust
+            // happened to touch -- the very bug this whole relaxation
+            // exists to keep catching everywhere else.
+            let mut members: Vec<usize> =
+                gate.inputs.iter().filter_map(|input| index_of_signal.get(input.as_str()).copied()).collect();
+            if let Some(&output_index) = index_of_signal.get(gate.output.as_str()) {
+                members.push(output_index);
+            }
+            for pair in members.windows(2) {
+                Self::union(&mut parent, pair[0], pair[1]);
             }
         }
 
@@ -3675,17 +3876,26 @@ fn verify_torch_merge(
 /// nothing continues from, ends up with an unreached sink instead of a
 /// falsely "reachable" one.
 ///
-/// `source` and `source_state` are the net's true origin -- a lever or a
-/// gate's own output torch -- read directly from the world, not from
-/// `own_cells`: unlike `net_reach`, which can start from every reserved
-/// cell at once because it never has to ask "how far", this function has to
-/// know exactly where the signal actually starts so its decay count means
-/// anything. `source` is assumed driven at `MAX_SIGNAL_STRENGTH` regardless
-/// of its real, placeholder `lit`/`power` value in the freshly emitted
-/// world -- the same assumption `structural_output` documents for the same
-/// reason (nothing about a fresh world's activation fields means anything
-/// yet). Only what happens to that assumed-driven signal *after* it leaves
-/// the source is real physics, never assumed.
+/// `sources` are the group's true origins -- every lever or non-merge
+/// gate's own output torch that genuinely drives something in `own_cells`,
+/// read directly from the world, not from `own_cells` itself: unlike
+/// `net_reach`, which can start from every reserved cell at once because it
+/// never has to ask "how far", this function has to know exactly where the
+/// signal actually starts so its decay count means anything. For an
+/// ordinary (non-merge) net this is always exactly one origin -- its own
+/// source -- so this generalises rather than changes that case. For a
+/// declared wire merge's whole group (see `verify_signal_strength`), it is
+/// every branch's own true origin seeded into *one* shared walk: `deliver`
+/// below only ever keeps the larger of two arrivals at the same cell, so
+/// seeding several origins at once computes exactly the max-of-sources a
+/// real merge's dust does, not several independent answers that would need
+/// combining afterwards. Each origin is assumed driven at
+/// `MAX_SIGNAL_STRENGTH` regardless of its real, placeholder `lit`/`power`
+/// value in the freshly emitted world -- the same assumption
+/// `structural_output` documents for the same reason (nothing about a
+/// fresh world's activation fields means anything yet). Only what happens
+/// to that assumed-driven signal *after* it leaves its source is real
+/// physics, never assumed.
 ///
 /// The walk mixes two different propagation rules, applied by `pos`'s own
 /// kind once it is popped:
@@ -3714,8 +3924,7 @@ fn verify_torch_merge(
 fn net_signal_strength(
     world: &World,
     own_cells: &HashSet<Position>,
-    source: Position,
-    source_state: &BlockState,
+    sources: &[(Position, &BlockState)],
 ) -> HashMap<Position, u8> {
     let mut strength: HashMap<Position, u8> = HashMap::new();
     let mut queue: VecDeque<Position> = VecDeque::new();
@@ -3758,9 +3967,11 @@ fn net_signal_strength(
         }
     }
 
-    for direction in ALL_SIX {
-        if structural_output(source_state, direction).0 {
-            deliver(world, own_cells, &mut strength, &mut queue, source.offset(direction), direction, MAX_SIGNAL_STRENGTH);
+    for &(source, source_state) in sources {
+        for direction in ALL_SIX {
+            if structural_output(source_state, direction).0 {
+                deliver(world, own_cells, &mut strength, &mut queue, source.offset(direction), direction, MAX_SIGNAL_STRENGTH);
+            }
         }
     }
 
@@ -3862,6 +4073,35 @@ fn net_signal_strength(
 /// reuses `torch_support_position` exactly as `verify_torch_merge` does to
 /// find each gate's support block, without re-checking that the torch
 /// resolves to one at all.
+///
+/// # Declared wire merges
+///
+/// A merge gate has no torch or support of its own, and its own net (if it
+/// even has one -- see below) has no independent source: electrically, its
+/// output net and every one of its declared input nets are the *same* net
+/// (`MergeGroups`, as `verify_connectivity`/`verify_torch_merge` already
+/// treat it). So this checks strength per *declared merge group*, not per
+/// raw net index -- mirroring `verify_torch_merge`'s own `group_cells`/
+/// `group_reach` split, for the same reason: a repeater-isolated branch's
+/// own reservation is disjoint from the junction it feeds (a repeater
+/// breaks the wire-to-wire chain `net_signal_strength`'s walk otherwise
+/// follows), so checking each raw net alone would show it reaching nothing
+/// past its own final cell, even on a perfectly working merge. Uniting a
+/// group's cells and seeding *every* branch's own true origin into one
+/// shared `net_signal_strength` walk answers the real question instead:
+/// does the max of every branch that is actually driven reach this group's
+/// real, further-downstream sinks -- exactly what a real OR's dust does.
+///
+/// A net sourced from a merge gate (`Source::Gate(g)` where `g.is_merge`)
+/// contributes no origin of its own to `group_sources` -- its whole signal
+/// is already the other branches sharing its group, seeding it too would
+/// double up nothing (there is no active component there to seed from
+/// anyway: `place_merge_gate` puts plain dust at that position, not a torch
+/// or a lever). A merge gate is likewise never itself checked as a *sink*
+/// in the loop below (`gate.is_merge` skips it): it has nothing -- no torch,
+/// no support -- for a signal to "arrive at", and whether its own output
+/// eventually reaches a *real* sink is exactly what the same shared group
+/// walk already answers for whatever net does declare that real sink.
 fn verify_signal_strength(
     world: &World,
     reservation: &Reservation,
@@ -3871,12 +4111,34 @@ fn verify_signal_strength(
     input_positions: &BTreeMap<String, (i32, i32, i32)>,
     output_positions: &BTreeMap<String, (i32, i32, i32)>,
 ) -> Result<(), CompileError> {
+    let groups = MergeGroups::build(netlist, nets);
+    let index_of_signal: HashMap<&str, usize> =
+        nets.iter().enumerate().map(|(i, net)| (net_source_name(netlist, net), i)).collect();
+
     let mut net_cells: Vec<HashSet<Position>> = vec![HashSet::new(); nets.len()];
     for (&pos, &owner) in reservation {
         net_cells[owner].insert(pos);
     }
 
+    // Group cells: the union of every net's own cells within the same
+    // declared-merge group (singleton groups, one per net, when nothing in
+    // the netlist declares a merge at all -- same generalisation
+    // `verify_torch_merge`'s `group_cells` already makes).
+    let mut group_cells: HashMap<usize, HashSet<Position>> = HashMap::new();
+    for (n, cells) in net_cells.iter().enumerate() {
+        group_cells.entry(groups.root(n)).or_default().extend(cells.iter().copied());
+    }
+
+    // Group sources: one true origin per net in the group whose own source
+    // is a genuine active component -- a lever, or a *non-merge* gate's
+    // output torch. See this function's own doc comment for why a
+    // merge-sourced net contributes none of its own.
+    let mut group_sources: HashMap<usize, Vec<(Position, &BlockState)>> = HashMap::new();
     for (n, net) in nets.iter().enumerate() {
+        let merge_sourced = matches!(net.source, Source::Gate(g) if netlist.gates[g].is_merge);
+        if merge_sourced {
+            continue;
+        }
         let (source, source_state) = match net.source {
             Source::Lever(i) => {
                 let &(x, y, z) = input_positions
@@ -3891,10 +4153,27 @@ fn verify_signal_strength(
                 (Position::new(x, y, z), world.get(x, y, z))
             }
         };
+        group_sources.entry(groups.root(n)).or_default().push((source, source_state));
+    }
 
-        let strength = net_signal_strength(world, &net_cells[n], source, source_state);
+    let empty_sources: Vec<(Position, &BlockState)> = Vec::new();
+    let group_strength: HashMap<usize, HashMap<Position, u8>> = group_cells
+        .iter()
+        .map(|(&root, cells)| {
+            let sources = group_sources.get(&root).unwrap_or(&empty_sources);
+            (root, net_signal_strength(world, cells, sources))
+        })
+        .collect();
+
+    for (n, net) in nets.iter().enumerate() {
+        let strength = &group_strength[&groups.root(n)];
 
         for &(gate, _input_index) in net.sinks.iter().flatten() {
+            // A merge gate has no torch or support to check strength
+            // against at all -- see this function's own doc comment.
+            if netlist.gates[gate].is_merge {
+                continue;
+            }
             let &(tx, ty, tz) = gate_output_positions
                 .get(&netlist.gates[gate].output)
                 .expect("emit records a torch position for every gate");
@@ -3923,13 +4202,13 @@ fn verify_signal_strength(
     // any `Net`: a gate whose output drives *only* a lamp and no other
     // gate gets no `Net` of its own at all (`build_nets` drops a signal
     // with no gate-input sink), yet the lamp is still a real sink this
-    // invariant has to answer for. The connection is always exactly one
-    // hop -- the torch directly drives the pin dust the lamp sits under
-    // (see `emit`'s own doc comment on lamp placement) -- so it is checked
-    // with `structural_output` directly rather than a full
-    // `net_signal_strength` walk, which would have nothing to do beyond
-    // that single hop anyway.
+    // invariant has to answer for.
     for output_name in &netlist.outputs {
+        let g = netlist
+            .gates
+            .iter()
+            .position(|gate| &gate.output == output_name)
+            .expect("every output was checked to be driven by a gate above");
         let &(tx, ty, tz) = gate_output_positions
             .get(output_name)
             .expect("every output was checked to be driven by a gate above");
@@ -3941,9 +4220,24 @@ fn verify_signal_strength(
         let lamp_pos = Position::new(lx, ly, lz);
         let pin = lamp_pos.up();
 
-        let delivers = ALL_SIX
-            .into_iter()
-            .any(|direction| torch_pos.offset(direction) == pin && structural_output(torch_state, direction).0);
+        let delivers = if netlist.gates[g].is_merge {
+            // A merge's "torch position" is plain dust (see
+            // `place_merge_gate`), so the ordinary single-hop
+            // `structural_output` check below cannot see it at all -- worse,
+            // `torch_pos == pin` for a merge (see `emit`'s own `is_merge`
+            // branch for `gate_pin`), so that check could never even ask the
+            // right question. Ask the same shared group-strength map every
+            // net in this merge's group already answers instead: does `pin`
+            // (the merge's own junction, and this net's own reservation
+            // whenever it has one) ever receive a non-zero signal.
+            let root = merge_output_group_root(netlist, g, &index_of_signal, &groups)
+                .expect("an undriven merge input would already have failed compile's own UndrivenSignal check");
+            group_strength.get(&root).and_then(|strength| strength.get(&pin)).copied().unwrap_or(0) > 0
+        } else {
+            ALL_SIX
+                .into_iter()
+                .any(|direction| torch_pos.offset(direction) == pin && structural_output(torch_state, direction).0)
+        };
 
         if !delivers {
             return Err(CompileError::SignalStrengthViolation {
@@ -3954,6 +4248,29 @@ fn verify_signal_strength(
     }
 
     Ok(())
+}
+
+/// The `MergeGroups` root that governs `gate`'s own output signal, whether
+/// or not that signal has its own `Net` -- a merge whose output feeds
+/// nothing but a declared circuit output has no `Net` of its own at all
+/// (`build_nets` drops a signal with no gate-input sink), but every one of
+/// its declared inputs still does (each was checked to be driven before
+/// `compile` ever started placing anything), and `MergeGroups::build` unions
+/// all of a merge's declared inputs together regardless of whether its own
+/// output has a net -- so any one of them names the right group. `None`
+/// only if `gate` (already known to be a merge) declares no input that is
+/// driven by anything at all, which `compile`'s own `UndrivenSignal` check
+/// rules out before this ever runs.
+fn merge_output_group_root(
+    netlist: &Netlist,
+    gate: usize,
+    index_of_signal: &HashMap<&str, usize>,
+    groups: &MergeGroups,
+) -> Option<usize> {
+    if let Some(&output_index) = index_of_signal.get(netlist.gates[gate].output.as_str()) {
+        return Some(groups.root(output_index));
+    }
+    netlist.gates[gate].inputs.iter().find_map(|input| index_of_signal.get(input.as_str()).map(|&i| groups.root(i)))
 }
 
 /// 把一個網表編譯成一個紅石世界。
@@ -4206,6 +4523,150 @@ mod tests {
             matches!(err, CompileError::ConnectivityViolation { .. }),
             "expected a connectivity violation, got: {err}"
         );
+    }
+
+    /// The same touch as `merge_touch_fixture`, but built to exercise the
+    /// case that fixture's own `nets` (built by hand with an explicit `Net`
+    /// for `y`) never actually reaches: a merge whose output feeds *only* a
+    /// declared circuit output has no `Net` of its own at all (`build_nets`
+    /// drops a signal with no gate-input sink), so `y` is simply absent
+    /// from `nets` here. `MergeGroups::build` still has to union `a` and
+    /// `b` with each other directly in this case -- unioning only through
+    /// `y`'s own (non-existent) net index, as an earlier version of that
+    /// function did, would silently un-relax the check for exactly the
+    /// circuits this task builds.
+    fn merge_touch_fixture_with_no_net_for_the_output(declare_merge: bool) -> (Netlist, Vec<Net>, World, Reservation) {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec!["y".to_string()],
+            gates: vec![Gate {
+                name: "m".to_string(),
+                inputs: vec!["a".to_string(), "b".to_string()],
+                output: "y".to_string(),
+                is_merge: declare_merge,
+            }],
+        };
+        // No net for `y` at all -- exactly what `build_nets` would produce
+        // for a merge whose output drives nothing but a declared output.
+        let nets = vec![nameless_net(Source::Lever(0)), nameless_net(Source::Lever(1))];
+
+        let mut world = World::new(6, 5, 6);
+        let a_cell = Position::new(1, 1, 2);
+        let y_cell = Position::new(2, 1, 2);
+        let b_cell = Position::new(2, 1, 3);
+        for cell in [a_cell, y_cell, b_cell] {
+            world.set(cell.x, cell.y - 1, cell.z, stone());
+            world.set(cell.x, cell.y, cell.z, dust());
+        }
+
+        let mut reservation = Reservation::new();
+        reservation.insert(a_cell, 0);
+        reservation.insert(b_cell, 1);
+        // `y_cell` is deliberately unclaimed too -- nothing claims it in a
+        // real `compile()` run either, when the merge has no net of its own
+        // (see `emit`'s "every net's own pin" loop, which only ever runs
+        // over `nets`).
+
+        (netlist, nets, world, reservation)
+    }
+
+    #[test]
+    fn verify_connectivity_accepts_a_bare_merge_touch_even_when_its_output_has_no_net_of_its_own() {
+        let (netlist, nets, world, reservation) = merge_touch_fixture_with_no_net_for_the_output(true);
+
+        assert_eq!(
+            verify_connectivity(&world, &reservation, &netlist, &nets),
+            Ok(()),
+            "`a` and `b` must be unioned directly with each other, not only through `y`'s own net -- \
+             `y` has none here, exactly as a merge feeding only a declared output produces"
+        );
+    }
+
+    #[test]
+    fn verify_connectivity_still_rejects_the_same_touch_without_a_declared_merge_even_with_no_net_for_the_output() {
+        let (netlist, nets, world, reservation) = merge_touch_fixture_with_no_net_for_the_output(false);
+
+        let err = verify_connectivity(&world, &reservation, &netlist, &nets).expect_err(
+            "undeclared, this is still nothing but two nets whose dust happens to touch",
+        );
+        assert!(matches!(err, CompileError::ConnectivityViolation { .. }), "expected a connectivity violation, got: {err}");
+    }
+
+    // -----------------------------------------------------------------
+    // `merge_branch_is_bare`: the isolation rule itself, tested directly
+    // against hand-built `Net`/`Gate` fixtures rather than through a full
+    // `compile()` run -- so the decision is checked independent of
+    // whatever incidental, length-driven repeaters a specific circuit's
+    // general row/channel placement happens to add elsewhere (see
+    // `tests/or_merge.rs`'s own notes on exactly that noise).
+    // -----------------------------------------------------------------
+
+    fn merge_gate(inputs: &[&str], output: &str) -> Gate {
+        Gate { name: output.to_string(), inputs: inputs.iter().map(|s| s.to_string()).collect(), output: output.to_string(), is_merge: true }
+    }
+
+    fn net_with_sinks(source: Source, sinks: Vec<(usize, usize)>) -> Net {
+        Net { source, source_column: 0, channels: vec![0], tracks: vec![0], sinks: vec![sinks], hops: Vec::new() }
+    }
+
+    #[test]
+    fn merge_branch_is_bare_when_its_net_feeds_only_the_merge() {
+        let netlist =
+            Netlist { inputs: vec!["a".to_string()], outputs: Vec::new(), gates: vec![merge_gate(&["a", "b"], "y")] };
+        // `a`'s only sink is the merge's own first input.
+        let net = net_with_sinks(Source::Lever(0), vec![(0, 0)]);
+        assert!(merge_branch_is_bare(&netlist, &net, 0), "a's only sink is the merge itself -- this branch is private");
+    }
+
+    #[test]
+    fn merge_branch_is_not_bare_when_its_net_also_feeds_a_different_gate() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: Vec::new(),
+            gates: vec![
+                Gate { name: "s".to_string(), inputs: vec!["a".to_string()], output: "s".to_string(), is_merge: false },
+                merge_gate(&["a", "b"], "y"),
+            ],
+        };
+        // `a` feeds both gate 0 (`s`, a real consumer) and gate 1 (the
+        // merge's first input) -- the fanout rule says isolate.
+        let net = net_with_sinks(Source::Lever(0), vec![(0, 0), (1, 0)]);
+        assert!(
+            !merge_branch_is_bare(&netlist, &net, 1),
+            "a's source also feeds gate 0 besides the merge -- this branch must be isolated"
+        );
+    }
+
+    #[test]
+    fn merge_branch_is_never_bare_for_a_non_merge_gate() {
+        // The exact same net shape as the private-branch case above, but
+        // the target gate itself is an ordinary NOR, not a declared merge --
+        // `merge_branch_is_bare` must never apply to it, regardless of how
+        // few sinks its net has, since an ordinary NOR socket always needs
+        // its usual mandatory repeater to drive a real support block.
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: Vec::new(),
+            gates: vec![Gate { name: "g0".to_string(), inputs: vec!["a".to_string()], output: "g0".to_string(), is_merge: false }],
+        };
+        let net = net_with_sinks(Source::Lever(0), vec![(0, 0)]);
+        assert!(!merge_branch_is_bare(&netlist, &net, 0), "a non-merge gate's socket is never a bare join");
+    }
+
+    #[test]
+    fn merge_branch_is_still_bare_when_it_feeds_the_same_merge_on_two_sockets() {
+        // An unusual shape (the same net wired to two of a merge's own
+        // inputs), but the fanout rule's own wording is exact about this:
+        // isolate when the source fans out to anything *besides this
+        // merge*. Both sockets here belong to the one merge gate itself, so
+        // there is nothing besides it to protect against -- backflow
+        // between the two sockets only ever circulates `a`'s own signal
+        // back into a branch that was already carrying it, which corrupts
+        // nothing.
+        let netlist =
+            Netlist { inputs: vec!["a".to_string()], outputs: Vec::new(), gates: vec![merge_gate(&["a", "a"], "y")] };
+        let net = net_with_sinks(Source::Lever(0), vec![(0, 0), (0, 1)]);
+        assert!(merge_branch_is_bare(&netlist, &net, 0), "both sinks are this same merge -- still nothing to isolate against");
     }
 
     // -----------------------------------------------------------------

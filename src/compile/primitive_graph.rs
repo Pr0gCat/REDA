@@ -163,7 +163,17 @@ fn instantiate(graph: &mut PrimitiveGraph, gate: usize, entry: &LibraryEntry) ->
 
     graph.gate_nodes[gate] = instance_nodes;
 
-    let output = id_of[&entry.template.output];
+    // `expand` only ever asks the library for `GateKind::Nor`/`Buf` entries
+    // today (see below), and every one of those names a real output
+    // primitive -- an entry with none (a wire-merge OR) has no node for
+    // this to look up, and `expand` does not yet know how to wire one in
+    // (its whole model is "one output node feeds its consumers"; a merge's
+    // consumers are fed by its own *inputs* instead, which is a different
+    // wiring shape this module has not been taught yet).
+    let output = entry.template.output.map(|role| id_of[&role]).expect(
+        "instantiate only ever runs on an entry with a real output primitive -- a wire-merge OR \
+         entry is not reachable through `expand` yet",
+    );
     let inputs: Vec<NodeId> = entry.template.inputs.iter().map(|role| id_of[role]).collect();
     (output, inputs)
 }

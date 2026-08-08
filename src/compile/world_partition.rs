@@ -362,6 +362,20 @@ fn resolve_node_position(
                 netlist.gates[*gate].output
             ),
         }),
+        // Same situation as `SecondTorch` above: `primitive_graph::expand`
+        // never chooses a `GateKind::Or` entry for a real `Netlist::Gate`
+        // today (it always looks up `GateKind::Nor(arity)`), so this node
+        // kind cannot appear in a `PrimitiveGraph` built from a real
+        // `compile()` run yet. Reachable only once the frontend/genlib work
+        // that maps `$_OR_` onto the library lands.
+        Provenance::Gate { gate, role: TemplateNode::IsolatingRepeater(index) } => Err(PartitionError::CannotResolveNodePosition {
+            detail: format!(
+                "gate `{}`'s primitive graph has an `IsolatingRepeater({index})` node, which \
+                 `compiled` has no recorded position for -- no OR library entry is ever chosen for a \
+                 real `Netlist::Gate` today",
+                netlist.gates[*gate].output
+            ),
+        }),
     }
 }
 

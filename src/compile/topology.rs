@@ -57,13 +57,14 @@ use std::collections::BTreeMap;
 ///
 /// - `Torch` -- the only element with a function: dark when its support is
 ///   powered. A NOR gate's realisation.
-/// - `Repeater` -- restores strength, costs a tick, one-way. Not used by any
-///   entry this module ships today (a NOR's own input sockets are
-///   realisation, not topology -- see this module's doc comment), but it is
-///   a functional, directional signal element in its own right, exactly the
-///   kind of thing a deliberate-delay or latch entry would place as an
-///   internal `Template` node, so it belongs to the vocabulary now rather
-///   than being bolted on later.
+/// - `Repeater` -- restores strength, costs a tick, one-way. Used today by
+///   the isolated-merge OR entry (`or_isolated_entry`): a branch whose
+///   source fans out anywhere besides the merge it feeds gets one of these
+///   in series, so backflow through the merge can never reach the rest of
+///   that branch (see [`GateKind::Or`]'s doc comment). Every NOR entry still
+///   has none of its own (a NOR's own input sockets are realisation, not
+///   topology -- see this module's doc comment) -- this is a second
+///   technique adding a use, not NOR growing one.
 /// - `Comparator` -- compares or subtracts two inputs, one-way. Also unused
 ///   today; also a real functional element a future entry (a
 ///   comparator-based subtractor, the spec's own example) would need, and
@@ -123,10 +124,31 @@ pub enum Primitive {
 /// `NOT(NOT(x)) == x`. It earns its own `GateKind` rather than being folded
 /// into `Nor` because it is a second technique this library ships, not a
 /// third arity -- see [`gate_kind_for_yosys_cell`] for where it enters.
+/// `Or(arity)` is the first `GateKind` this library realises with **no
+/// primitive at all**: a wire-merge OR needs no torch, no support, no gate
+/// body -- redstone dust joining is already the maximum-of-sources operation
+/// an OR is (see
+/// `docs/superpowers/specs/2026-08-08-gate-types-and-wired-or.md`, "In
+/// redstone an OR is free"). It is also the first `GateKind` with **more
+/// than one genuinely different entry** (`or_bare_entry`/`or_isolated_entry`
+/// below): dust is bidirectional, so a branch whose source also feeds
+/// something besides this merge needs a repeater to stop backflow, and one
+/// that does not needs nothing at all. Which entry a *specific* branch of a
+/// *specific* gate instance needs is a per-instance, per-input fact about
+/// the netlist (whether that one input's own source fans out elsewhere),
+/// not a fixed property of the technique the way NOR's arity is -- so
+/// `compile`'s own emission code decides that directly from the netlist
+/// (see `merge_branch_is_bare`), rather than through `Library::choose`,
+/// which only ever picks one whole-gate technique at a time. The two
+/// entries this module registers for each arity still matter as data: they
+/// are what makes "no primitive at all" and "one isolating repeater per
+/// branch" real, named, inspectable techniques instead of something only
+/// `compile` privately knows how to build.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GateKind {
     Nor(usize),
     Buf,
+    Or(usize),
 }
 
 impl GateKind {
@@ -191,6 +213,13 @@ pub enum TemplateNode {
     /// The second torch in a two-torch chain -- today, only `Buf`'s entry
     /// (`NOT(NOT(x)) == x`) has one.
     SecondTorch,
+    /// One input branch's own isolating repeater, in `or_isolated_entry`'s
+    /// per-arity template -- indexed (`0..arity`) because, unlike a NOR's
+    /// interchangeable inputs sharing one `Torch`, each branch here is a
+    /// physically distinct repeater: one input landing on the same node as
+    /// another would mean two branches sharing one repeater's single input
+    /// face, which is not a real technique.
+    IsolatingRepeater(usize),
 }
 
 /// A relational preference between two of a template's own nodes --
@@ -241,14 +270,28 @@ pub struct Template {
     /// its torch) would use this for the edge between them.
     pub internal_edges: Vec<(TemplateNode, TemplateNode)>,
     /// Which node this entry's `i`-th declared input's signal edge lands on,
-    /// in order (`inputs.len()` is this entry's arity). Every entry this
-    /// module ships names the same node (`Torch`) for every index, because a
-    /// NOR's inputs are interchangeable and land directly on the one
-    /// functional element there is.
+    /// in order (`inputs.len()` is this entry's arity, *except* for
+    /// `or_bare_entry`, where it is empty -- see that function's own doc
+    /// comment for why an entry with no nodes at all has nowhere for an
+    /// input to land). Every NOR entry names the same node (`Torch`) for
+    /// every index, because a NOR's inputs are interchangeable and land
+    /// directly on the one functional element there is; `or_isolated_entry`
+    /// names a *different* node per index, since each branch is its own
+    /// physical repeater.
     pub inputs: Vec<TemplateNode>,
     /// Which node this gate's own outbound signal edge (to whatever it
-    /// drives, or to a declared output's lamp) originates from.
-    pub output: TemplateNode,
+    /// drives, or to a declared output's lamp) originates from -- `None`
+    /// exactly when this entry realises to **no primitive at all**: both OR
+    /// entries (`or_bare_entry`/`or_isolated_entry`) leave this `None`,
+    /// because even isolated, a merge has no functional element of its own
+    /// that a signal could be said to leave *from*. Electrically, this
+    /// gate's own declared output net is simply the same net as its inputs
+    /// (or, for the isolated entry, the same net as what its own repeaters
+    /// forward into) -- see
+    /// `docs/superpowers/specs/2026-08-08-gate-types-and-wired-or.md`, "An
+    /// OR is a node, not a disappearing act". Every entry with a real
+    /// primitive names `Some` node, exactly as before.
+    pub output: Option<TemplateNode>,
     /// See [`EmbeddingHint`]. Empty for every entry this module ships.
     pub embedding_hints: Vec<EmbeddingHint>,
 }
@@ -285,15 +328,25 @@ impl Library {
 
     /// Today's library: one entry per NOR arity this compiler ever places
     /// (1..=3 -- see [`GateKind`]'s doc comment for why fan-in never
-    /// exceeds 3), plus `Buf`'s two-torch chain -- every `GateKind` named in
+    /// exceeds 3), `Buf`'s two-torch chain -- every `GateKind` named in
     /// [`gate_kind_for_yosys_cell`]'s table, so the Yosys frontend never
-    /// meets a mapped cell type with nothing here to build it from.
+    /// meets a mapped cell type with nothing here to build it from -- plus
+    /// `Or(2)` and `Or(3)`, each with two entries (bare, then isolated; see
+    /// [`GateKind::Or`]'s doc comment for why both are registered even
+    /// though nothing outside `compile`'s own emission code picks between
+    /// them yet). No Yosys cell maps onto `Or` yet -- that is the genlib and
+    /// frontend step the referenced spec puts after this one -- so `Or`'s
+    /// absence from `gate_kind_for_yosys_cell`'s table is deliberate, not an
+    /// oversight.
     pub fn default_library() -> Self {
         let mut entries = BTreeMap::new();
         for arity in 1..=3 {
             entries.insert(GateKind::Nor(arity), vec![nor_entry(arity)]);
         }
         entries.insert(GateKind::Buf, vec![buf_entry()]);
+        for arity in 2..=3 {
+            entries.insert(GateKind::Or(arity), vec![or_bare_entry(arity), or_isolated_entry(arity)]);
+        }
         Library { entries }
     }
 
@@ -339,7 +392,7 @@ fn nor_entry(arity: usize) -> LibraryEntry {
             nodes: vec![(TemplateNode::Torch, Primitive::Torch)],
             internal_edges: Vec::new(),
             inputs: vec![TemplateNode::Torch; arity],
-            output: TemplateNode::Torch,
+            output: Some(TemplateNode::Torch),
             embedding_hints: Vec::new(),
         },
     }
@@ -358,9 +411,67 @@ fn buf_entry() -> LibraryEntry {
             nodes: vec![(TemplateNode::Torch, Primitive::Torch), (TemplateNode::SecondTorch, Primitive::Torch)],
             internal_edges: vec![(TemplateNode::Torch, TemplateNode::SecondTorch)],
             inputs: vec![TemplateNode::Torch],
-            output: TemplateNode::SecondTorch,
+            output: Some(TemplateNode::SecondTorch),
             embedding_hints: Vec::new(),
         },
+    }
+}
+
+/// The bare-merge technique for an `arity`-input OR: **no nodes at all**.
+///
+/// This is the entry the spec's "An OR is a node, not a disappearing act"
+/// and this module's own doc comment ("the first entry that maps a gate
+/// onto no primitive at all") are about. A wire-merge OR has nothing to
+/// place -- no torch, no support, not even a repeater -- so `nodes` is
+/// empty, `inputs` is empty (there is no node for a declared input's signal
+/// edge to land on -- the input *is* the output, electrically), and
+/// `output` is `None`. `compile`'s own emission code is what actually knows
+/// how to build this (a join at the point downstream of where the declared
+/// inputs' own routes are allowed to touch -- see `place_merge_gate`); this
+/// entry exists so the technique is named and inspectable in the library
+/// even though nothing here needs instantiating.
+///
+/// Correct only when none of the gate's declared inputs fans out to
+/// anything besides this merge -- see [`GateKind::Or`]'s doc comment and
+/// `or_isolated_entry` for the alternative when that does not hold.
+fn or_bare_entry(arity: usize) -> LibraryEntry {
+    assert!((2..=3).contains(&arity), "an OR entry's fan-in is 2..=3, got {arity}");
+    LibraryEntry {
+        name: match arity {
+            2 => "wire-merge-or2 (bare)",
+            3 => "wire-merge-or3 (bare)",
+            _ => unreachable!("checked by the assert above"),
+        },
+        template: Template { nodes: Vec::new(), internal_edges: Vec::new(), inputs: Vec::new(), output: None, embedding_hints: Vec::new() },
+    }
+}
+
+/// The fully-isolated technique for an `arity`-input OR: one
+/// [`TemplateNode::IsolatingRepeater`] per branch, and still **no output
+/// primitive** -- even isolated, a merge has no functional element of its
+/// own; only its inputs gain one apiece. `output` stays `None` for the same
+/// reason `or_bare_entry`'s does (see that function's doc comment and
+/// `Template::output`'s own).
+///
+/// This is the safe-for-any-instance technique: isolating a branch that did
+/// not actually need it (a private one) costs an unnecessary repeater, never
+/// correctness, so registering "every branch isolated" as one named entry is
+/// sound even though `compile`'s own emission code, per gate instance,
+/// mixes bare and isolated branches individually according to the fanout
+/// rule (see [`GateKind::Or`]'s doc comment for why that per-branch mixing
+/// is not itself expressed as further library entries).
+fn or_isolated_entry(arity: usize) -> LibraryEntry {
+    assert!((2..=3).contains(&arity), "an OR entry's fan-in is 2..=3, got {arity}");
+    let nodes: Vec<(TemplateNode, Primitive)> =
+        (0..arity).map(|i| (TemplateNode::IsolatingRepeater(i), Primitive::Repeater)).collect();
+    let inputs: Vec<TemplateNode> = (0..arity).map(TemplateNode::IsolatingRepeater).collect();
+    LibraryEntry {
+        name: match arity {
+            2 => "wire-merge-or2 (isolated)",
+            3 => "wire-merge-or3 (isolated)",
+            _ => unreachable!("checked by the assert above"),
+        },
+        template: Template { nodes, internal_edges: Vec::new(), inputs, output: None, embedding_hints: Vec::new() },
     }
 }
 
@@ -450,15 +561,29 @@ pub struct RealisationCost {
 /// parses, which this crate has no other reason to generate, and a
 /// byte-identical static file is the only way to guarantee ABC's own mapping
 /// decisions cannot shift as a side effect of this refactor).
+///
+/// `output.is_none()` -- both OR entries -- returns `(0, 0)` immediately,
+/// without looking at `nodes` at all. That is exactly right for
+/// `or_bare_entry` (it has no nodes to price, and its real, measured cost
+/// genuinely is zero -- see the referenced cost-table spec). It is *not*
+/// yet right for `or_isolated_entry` (a real repeater has real area and
+/// delay), but pricing a `Repeater` node honestly, and deciding how ABC
+/// should be told to choose between an entry that costs nothing and one
+/// that costs a repeater, is the genlib step the referenced spec puts after
+/// this one -- see that spec's own "Do not write the genlib yet for OR".
+/// Returning zero here rather than tripping the `assert_eq!` below is a
+/// deliberate placeholder, not a claim that an isolated merge is free.
 pub fn genlib_cost(entry: &LibraryEntry) -> RealisationCost {
     let template = &entry.template;
+    let Some(output) = template.output else {
+        return RealisationCost { area: 0, delay_game_ticks: 0 };
+    };
     let mut area = 0u32;
     for &(node, primitive) in &template.nodes {
         assert_eq!(primitive, Primitive::Torch, "genlib_cost only knows how to price a Torch node");
         area += nor_footprint_area(template.fan_in(node));
     }
-    let delay_game_ticks =
-        crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS * template.torch_depth(template.output) as u64;
+    let delay_game_ticks = crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS * template.torch_depth(output) as u64;
     RealisationCost { area, delay_game_ticks }
 }
 
@@ -487,7 +612,7 @@ mod tests {
             let entry = nor_entry(arity);
             assert_eq!(entry.template.nodes, vec![(TemplateNode::Torch, Primitive::Torch)], "arity {arity}");
             assert!(entry.template.internal_edges.is_empty(), "arity {arity}: a single-node entry has nothing to connect internally");
-            assert_eq!(entry.template.output, TemplateNode::Torch, "arity {arity}");
+            assert_eq!(entry.template.output, Some(TemplateNode::Torch), "arity {arity}");
         }
     }
 
@@ -542,7 +667,7 @@ mod tests {
         );
         assert_eq!(entry.template.internal_edges, vec![(TemplateNode::Torch, TemplateNode::SecondTorch)]);
         assert_eq!(entry.template.inputs, vec![TemplateNode::Torch]);
-        assert_eq!(entry.template.output, TemplateNode::SecondTorch);
+        assert_eq!(entry.template.output, Some(TemplateNode::SecondTorch));
     }
 
     #[test]
@@ -559,5 +684,87 @@ mod tests {
         let cost = genlib_cost(&buf_entry());
         assert_eq!(cost.area, 2 * nor_footprint_area(1));
         assert_eq!(cost.delay_game_ticks, 2 * crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS);
+    }
+
+    // -----------------------------------------------------------------
+    // OR: the first gate type that realises to no primitive at all, and the
+    // first with genuinely alternative entries.
+    // -----------------------------------------------------------------
+
+    #[test]
+    fn default_library_registers_a_bare_and_an_isolated_entry_for_or_two_and_three() {
+        let library = Library::default_library();
+        for arity in 2..=3 {
+            let entries = library.entries_for(GateKind::Or(arity));
+            assert_eq!(entries.len(), 2, "arity {arity} should have exactly the bare and isolated entries");
+            assert!(entries[0].name.contains("bare"), "arity {arity}: bare entry should be registered first");
+            assert!(entries[1].name.contains("isolated"), "arity {arity}");
+        }
+        assert!(library.entries_for(GateKind::Or(4)).is_empty(), "fan-in 4 has no entry -- it is not hardware");
+        assert!(library.entries_for(GateKind::Or(1)).is_empty(), "a 1-input OR is not registered");
+    }
+
+    #[test]
+    fn or_bare_entry_has_no_nodes_no_inputs_and_no_output_primitive() {
+        for arity in 2..=3 {
+            let entry = or_bare_entry(arity);
+            assert!(entry.template.nodes.is_empty(), "arity {arity}: a bare merge places nothing");
+            assert!(entry.template.internal_edges.is_empty(), "arity {arity}");
+            assert!(
+                entry.template.inputs.is_empty(),
+                "arity {arity}: there is no node for a declared input to land on"
+            );
+            assert_eq!(entry.template.output, None, "arity {arity}: no primitive realises this gate's output");
+        }
+    }
+
+    #[test]
+    fn or_isolated_entry_has_one_distinct_repeater_per_branch_and_still_no_output_primitive() {
+        for arity in 2..=3 {
+            let entry = or_isolated_entry(arity);
+            assert_eq!(entry.template.nodes.len(), arity, "arity {arity}: one repeater per branch");
+            for &(role, primitive) in &entry.template.nodes {
+                assert_eq!(primitive, Primitive::Repeater, "arity {arity}: every node here is a repeater");
+                assert!(matches!(role, TemplateNode::IsolatingRepeater(_)), "arity {arity}");
+            }
+            // Every branch lands on its *own* node -- no two inputs share a
+            // repeater's single input face.
+            let distinct: std::collections::BTreeSet<TemplateNode> = entry.template.inputs.iter().copied().collect();
+            assert_eq!(distinct.len(), arity, "arity {arity}: every input must name a distinct node");
+            assert!(entry.template.internal_edges.is_empty(), "arity {arity}: branches do not feed each other");
+            assert_eq!(entry.template.output, None, "arity {arity}: even isolated, a merge has no output primitive");
+        }
+    }
+
+    #[test]
+    fn genlib_cost_of_a_bare_or_merge_is_genuinely_zero() {
+        // Not a placeholder like the isolated entry's -- this is the real,
+        // measured cost (see the referenced cost-table spec: 0 gates, 0
+        // game ticks to settle).
+        for arity in 2..=3 {
+            let cost = genlib_cost(&or_bare_entry(arity));
+            assert_eq!(cost.area, 0, "arity {arity}");
+            assert_eq!(cost.delay_game_ticks, 0, "arity {arity}");
+        }
+    }
+
+    #[test]
+    fn genlib_cost_of_an_isolated_or_merge_is_a_deliberate_zero_placeholder_not_yet_the_real_price() {
+        // Documents today's actual (wrong) answer so a future genlib change
+        // that fixes it is a visible, intentional diff here, not a silent
+        // behaviour change nothing caught.
+        for arity in 2..=3 {
+            let cost = genlib_cost(&or_isolated_entry(arity));
+            assert_eq!(cost.area, 0, "arity {arity}: not yet priced -- see genlib_cost's own doc comment");
+            assert_eq!(cost.delay_game_ticks, 0, "arity {arity}: not yet priced -- see genlib_cost's own doc comment");
+        }
+    }
+
+    #[test]
+    fn gate_kind_for_yosys_cell_has_no_mapping_for_or_yet() {
+        // Step 4 of the referenced spec's Order (the genlib gaining OR and
+        // the frontend mapping `$_OR_` onto it) is a later task -- confirm
+        // this module does not silently jump ahead of it.
+        assert_eq!(gate_kind_for_yosys_cell("$_OR_"), None);
     }
 }
