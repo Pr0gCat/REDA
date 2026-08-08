@@ -26,8 +26,10 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
+use crate::redstone::rules::taxonomy::{flags_of, BlockPower};
+use crate::redstone::simulator::component::torch_support_position;
 use crate::redstone::simulator::connectivity::{dust_connections, dust_reach};
-use crate::redstone::simulator::position::{Position, HORIZONTAL};
+use crate::redstone::simulator::position::{Position, ALL_SIX, HORIZONTAL};
 use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
 use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use crate::redstone::world::storage::World;
@@ -496,6 +498,48 @@ pub enum CompileError {
         /// every dust cell reachable from it -- belongs to.
         expected_net: String,
     },
+    /// A gate's geometry does not actually implement a NOR -- the invariant
+    /// `verify_torch_merge` checks right after `verify_connectivity` (see
+    /// that function's doc comment for exactly what each variant asserts
+    /// and why `verify_connectivity` cannot catch it: that check proves a
+    /// net reaches the cells it should, never whether a torch inverts).
+    TorchMergeViolation {
+        /// The gate whose geometry failed to check out.
+        gate: String,
+        reason: TorchMergeFailure,
+    },
+}
+
+/// Which condition of the torch-merge invariant failed. See
+/// `verify_torch_merge`'s doc comment for how each of these is derived from
+/// the simulator's own rules.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TorchMergeFailure {
+    /// The gate's declared output position holds nothing `component::
+    /// torch_support_position` can resolve a support for -- either it is
+    /// not a torch at all, or it is a wall torch with no recorded `facing`.
+    NoSupport { torch: (i32, i32, i32) },
+    /// The support block fails `taxonomy::flags_of(..).is_conductive()` --
+    /// the same gate `propagate::block_signal_at` itself enforces before it
+    /// will ever report a block as powered. No input could ever invert
+    /// this torch, no matter how it is wired, because the support can
+    /// never be observed as powered at all.
+    SupportNotConductive { torch: (i32, i32, i32), support: (i32, i32, i32) },
+    /// A declared input net never structurally reaches the support block --
+    /// driving that input would never darken this torch.
+    InputDoesNotReachSupport { torch: (i32, i32, i32), support: (i32, i32, i32), input: String },
+    /// A net that is *not* one of the gate's declared inputs also
+    /// structurally reaches the support block, corrupting the merge --
+    /// driving that unrelated net would darken a torch it has no business
+    /// influencing.
+    ForeignNetReachesSupport { torch: (i32, i32, i32), support: (i32, i32, i32), net: String },
+    /// The torch's own output leaks into some other net's conductor
+    /// instead of only the net it is meant to drive. A torch does not
+    /// power the block it is attached to (that asymmetry is what makes it
+    /// invert), but it powers every *other* neighbour -- so a stray
+    /// conductor sitting on any of those other faces gets fed by this
+    /// gate's own output.
+    OutputLeaksIntoForeignNet { torch: (i32, i32, i32), leaked_cell: (i32, i32, i32), net: String },
 }
 
 impl std::fmt::Display for CompileError {
@@ -511,6 +555,37 @@ impl std::fmt::Display for CompileError {
                      (established at {expected_cell:?})"
                 )
             }
+            CompileError::TorchMergeViolation { gate, reason } => match reason {
+                TorchMergeFailure::NoSupport { torch } => write!(
+                    f,
+                    "torch-merge violation: gate `{gate}`'s output torch at {torch:?} has no \
+                     resolvable support block"
+                ),
+                TorchMergeFailure::SupportNotConductive { torch, support } => write!(
+                    f,
+                    "torch-merge violation: gate `{gate}`'s torch at {torch:?} is attached to \
+                     {support:?}, which is not conductive and can never be observed as powered -- \
+                     this torch can never invert"
+                ),
+                TorchMergeFailure::InputDoesNotReachSupport { torch, support, input } => write!(
+                    f,
+                    "torch-merge violation: gate `{gate}`'s input `{input}` never reaches the \
+                     support block {support:?} of its torch at {torch:?} -- driving `{input}` \
+                     would never affect this gate"
+                ),
+                TorchMergeFailure::ForeignNetReachesSupport { torch, support, net } => write!(
+                    f,
+                    "torch-merge violation: net `{net}`, which is not a declared input of gate \
+                     `{gate}`, reaches the support block {support:?} of its torch at {torch:?} -- \
+                     driving `{net}` would corrupt this gate's output"
+                ),
+                TorchMergeFailure::OutputLeaksIntoForeignNet { torch, leaked_cell, net } => write!(
+                    f,
+                    "torch-merge violation: gate `{gate}`'s torch at {torch:?} powers \
+                     {leaked_cell:?}, which belongs to net `{net}` -- the torch's own output is \
+                     leaking into a net it does not drive"
+                ),
+            },
         }
     }
 }
@@ -2487,7 +2562,8 @@ fn resolve_bypass_and_geometry(
 
 /// Which net `nets[index]` is, by the name a person compiling the netlist
 /// would recognise -- the lever's own input name, or the gate output the net
-/// carries. Used only for naming cells in a `ConnectivityViolation`.
+/// carries. Used for naming cells in a `ConnectivityViolation` or a
+/// `TorchMergeViolation`.
 fn net_name(netlist: &Netlist, nets: &[Net], index: usize) -> String {
     match nets[index].source {
         Source::Lever(i) => netlist.inputs[i].clone(),
@@ -2540,6 +2616,351 @@ fn verify_connectivity(world: &World, reservation: &Reservation, netlist: &Netli
                             _ => {}
                         }
                     }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------
+// The torch-merge invariant
+// ---------------------------------------------------------------------
+//
+// `verify_connectivity` proves a net reaches exactly the cells it should.
+// It says nothing about *function*: it never looks at a torch, so it
+// cannot tell a working NOR from a torch standing on the wrong block, or
+// an input wired straight into the torch instead of its support. This is
+// the missing half -- see `docs/superpowers/specs/2026-08-08-3d-codesign.md`,
+// "What this costs, honestly".
+//
+// Every condition below is derived from the simulator's own rules
+// (`taxonomy.rs`, `component.rs`, `propagate.rs`), not from the shape
+// `place_nor_gate` happens to produce -- so it accepts any geometry that
+// implements a NOR, not just this module's own template.
+
+/// Whether `state`, if it were actually driven, would deliver power toward
+/// `direction` -- `(drives_dust, block_power)`, the same two independent
+/// axes `taxonomy::PowerOutput` tracks, minus strength (this invariant only
+/// ever asks "does *any* power arrive", never "how much").
+///
+/// This mirrors `taxonomy::power_emitted_by`/`power_emitted_toward`'s
+/// per-kind directionality exactly, arm for arm, but drops every
+/// activation gate (`state.lit`, `state.power > 0`, a comparator's stored
+/// strength). That is deliberate, not an oversight: `verify_torch_merge`
+/// runs on a freshly emitted, not-yet-settled world, where every active
+/// component is hardcoded to a placeholder activation value --
+/// `place_nor_gate`'s `wall_torch`/`repeater` helpers construct their
+/// blocks pre-lit unconditionally, and dust is placed with `power == 0`
+/// because nothing has run `recompute_dust_strengths` yet (`compile` never
+/// calls it -- that is the simulator's job, once a `Simulator` is actually
+/// constructed over the result). Asking "is it *currently* lit" would
+/// therefore answer nothing about whether the *geometry* works once the
+/// circuit is actually driven; what is left, once the activation gates are
+/// dropped, is a purely geometric fact -- which directions a component of
+/// this kind, in this orientation, is even *capable* of reaching.
+fn structural_output(state: &BlockState, direction: Facing) -> (bool, BlockPower) {
+    match state.kind {
+        // Repeater/comparator: forward only (`power_emitted_toward`'s
+        // `Repeater | Comparator` arm), strong when active.
+        BlockKind::Repeater | BlockKind::Comparator => {
+            let active = state.facing == Some(direction.opposite());
+            (active, if active { BlockPower::Strong } else { BlockPower::None })
+        }
+        // Standing torch: strong straight up, weak to the four sides,
+        // inert straight down -- its own support
+        // (`power_emitted_toward`'s `Torch` arm; the withheld direction
+        // matches `component::torch_support_position`'s `Down` case).
+        BlockKind::Torch => match direction {
+            Facing::Down => (false, BlockPower::None),
+            Facing::Up => (true, BlockPower::Strong),
+            _ => (true, BlockPower::Weak),
+        },
+        // Wall torch: same shape, but the withheld direction is
+        // `facing.opposite()` -- the wall it hangs on -- not a fixed
+        // `Down`. Missing `facing` cannot be reasoned about at all,
+        // matching `torch_support_position`'s own fail-safe `None`.
+        BlockKind::WallTorch => match state.facing {
+            None => (false, BlockPower::None),
+            Some(facing) => {
+                let attached_to = facing.opposite();
+                if direction == attached_to {
+                    (false, BlockPower::None)
+                } else if direction == Facing::Up {
+                    (true, BlockPower::Strong)
+                } else {
+                    (true, BlockPower::Weak)
+                }
+            }
+        },
+        // Redstone wire only ever weakly powers the block directly
+        // beneath it (`power_emitted_toward`'s `RedstoneWire` arm) --
+        // wire-to-wire connectivity is handled separately, by
+        // `dust_connections`, not by this function.
+        BlockKind::RedstoneWire => {
+            if direction == Facing::Down {
+                (true, BlockPower::Weak)
+            } else {
+                (false, BlockPower::None)
+            }
+        }
+        // Lever, button, pressure plate, observer: isotropic and strong in
+        // this model (`power_emitted_toward`'s `_ => full` fallback --
+        // these components' directionality is not yet modelled).
+        BlockKind::Lever | BlockKind::Button | BlockKind::PressurePlate | BlockKind::Observer => {
+            (true, BlockPower::Strong)
+        }
+        // A redstone block drives adjacent dust but powers no block at all
+        // (`power_emitted_by`'s `RedstoneBlock` arm) -- same for target,
+        // daylight detector and weighted pressure plate.
+        BlockKind::RedstoneBlock
+        | BlockKind::Target
+        | BlockKind::DaylightDetector
+        | BlockKind::WeightedPressurePlate => (true, BlockPower::None),
+        _ => (false, BlockPower::None),
+    }
+}
+
+/// Add `pos` to the propagation frontier if it is not already in it.
+fn enqueue(pos: Position, in_network: &mut HashSet<Position>, queue: &mut VecDeque<Position>) {
+    if in_network.insert(pos) {
+        queue.push_back(pos);
+    }
+}
+
+/// Record that `pos` receives `power` (if any), honouring the same
+/// conductivity gate `propagate::block_signal_at` enforces before it will
+/// ever report a block as powered -- a non-conductive block (glass, a
+/// fence, a honey block) never becomes "powered" in this model no matter
+/// what touches it, and that is a real, load-bearing fact: it is exactly
+/// what makes a torch standing on glass never invert (see
+/// `TorchMergeFailure::SupportNotConductive`).
+///
+/// A block that ends up `Strong`ly powered can re-drive every redstone
+/// wire adjacent to it, in all six directions -- not just the one
+/// direction whatever powered it happens to face
+/// (`BlockPower::can_repower_dust`) -- so those wires are queued too. A
+/// `Weak`ly powered block is recorded (enough to satisfy "this net reaches
+/// it") but propagates no further, matching `block_power_at`'s own
+/// asymmetry between the two.
+fn mark_powered(
+    world: &World,
+    powered: &mut HashSet<Position>,
+    in_network: &mut HashSet<Position>,
+    queue: &mut VecDeque<Position>,
+    pos: Position,
+    power: BlockPower,
+) {
+    if power == BlockPower::None {
+        return;
+    }
+    if !flags_of(world.get(pos.x, pos.y, pos.z)).is_conductive() {
+        return;
+    }
+    powered.insert(pos);
+    if power == BlockPower::Strong {
+        for direction in ALL_SIX {
+            let wire = pos.offset(direction);
+            if world.get(wire.x, wire.y, wire.z).kind == BlockKind::RedstoneWire {
+                enqueue(wire, in_network, queue);
+            }
+        }
+    }
+}
+
+/// Every block position that would receive *any* power (weak or strong) if
+/// `cells` -- one net's own conductor path, as claimed in `reservation` --
+/// were actually driven at its source. Computed structurally, walking the
+/// same wire-connectivity (`dust_connections`) and block-power rules
+/// (`structural_output`, `mark_powered`'s conductivity gate) the simulator
+/// itself uses, but without trusting the freshly emitted world's
+/// placeholder `lit`/`power` fields (see `structural_output`'s doc comment
+/// for why).
+///
+/// This is `verify_torch_merge`'s core query: comparing this set, for
+/// every net, against a gate's support block is "does every declared input
+/// reach it" and "does nothing else" asked in the same breath -- a net
+/// belongs in the answer if and only if it is one of the gate's own
+/// inputs.
+fn net_reach(world: &World, cells: &[Position]) -> HashSet<Position> {
+    let mut in_network: HashSet<Position> = HashSet::new();
+    let mut queue: VecDeque<Position> = VecDeque::new();
+    let mut powered: HashSet<Position> = HashSet::new();
+
+    for &pos in cells {
+        enqueue(pos, &mut in_network, &mut queue);
+    }
+
+    while let Some(pos) = queue.pop_front() {
+        let state = world.get(pos.x, pos.y, pos.z);
+
+        if state.kind == BlockKind::RedstoneWire {
+            // Wire-to-wire: the whole connected network is one electrical
+            // node, so every cell `dust_connections` says joins it
+            // (same-layer, climb, descend) becomes reachable too.
+            for direction in HORIZONTAL {
+                for neighbour in dust_connections(world, pos, direction).iter() {
+                    enqueue(neighbour, &mut in_network, &mut queue);
+                }
+            }
+        }
+
+        for direction in ALL_SIX {
+            let (drives_dust, block_power) = structural_output(state, direction);
+            let neighbour = pos.offset(direction);
+            if drives_dust && world.get(neighbour.x, neighbour.y, neighbour.z).kind == BlockKind::RedstoneWire {
+                enqueue(neighbour, &mut in_network, &mut queue);
+            }
+            mark_powered(world, &mut powered, &mut in_network, &mut queue, neighbour, block_power);
+        }
+    }
+
+    powered
+}
+
+/// The torch-merge invariant: every gate's output torch must genuinely
+/// implement a NOR of exactly its declared inputs.
+///
+/// Precisely, for every gate:
+///
+/// 1. Its output position resolves to a torch with a support block
+///    (`TorchMergeFailure::NoSupport` otherwise).
+/// 2. That support block is conductive, so it can ever be observed as
+///    powered at all (`SupportNotConductive` otherwise -- see
+///    `propagate::block_signal_at`'s own conductivity gate).
+/// 3. `net_reach` says the support block is reached by exactly the nets
+///    feeding this gate's declared inputs -- no fewer
+///    (`InputDoesNotReachSupport`) and no more
+///    (`ForeignNetReachesSupport`). `verify_connectivity` already
+///    guarantees each *routed* net's own dust stays a single, uncontaminated
+///    network; what it does not check is whether that network actually
+///    lands on *this* torch's support rather than merely near it, or
+///    whether it lands on some *other* gate's support too -- that is
+///    exactly what condition 3 adds.
+/// 4. No conductor the torch itself directly powers -- any of its six
+///    neighbours other than its own support -- belongs to a net other than
+///    the one this gate's output actually drives
+///    (`OutputLeaksIntoForeignNet`). A torch does not power the block it
+///    is attached to; that asymmetry is what makes it invert, and it is
+///    exactly the fact a freely-planned geometry could get wrong by
+///    routing some other net's conductor onto one of the torch's other
+///    five faces.
+///
+/// Nothing here duplicates `verify_connectivity`'s own check (it never
+/// looks at a torch or a support block at all), but conditions 3 and 4
+/// both lean on it having already run and passed: they trust that a net's
+/// own claimed cells form one clean network, so `net_reach` only has to
+/// ask where that network's power actually ends up, not re-derive that it
+/// is one network in the first place.
+fn verify_torch_merge(
+    world: &World,
+    reservation: &Reservation,
+    netlist: &Netlist,
+    nets: &[Net],
+    gate_output_positions: &BTreeMap<String, (i32, i32, i32)>,
+) -> Result<(), CompileError> {
+    // (gate, input_index) -> the net index that drives that input.
+    let mut input_net: HashMap<(usize, usize), usize> = HashMap::new();
+    // gate -> the net index this gate's own output feeds, if it feeds any
+    // other gate at all. A gate whose output only reaches a circuit output
+    // lamp has no `Net` of its own (`build_nets` drops nets with no
+    // gate-input sinks) -- nothing claims its pin, so nothing can leak
+    // into it either, and `None` here means exactly that.
+    let mut output_net: HashMap<usize, usize> = HashMap::new();
+    for (n, net) in nets.iter().enumerate() {
+        if let Source::Gate(g) = net.source {
+            output_net.insert(g, n);
+        }
+        for sinks in &net.sinks {
+            for &(gate, input_index) in sinks {
+                input_net.insert((gate, input_index), n);
+            }
+        }
+    }
+
+    let mut net_cells: Vec<Vec<Position>> = vec![Vec::new(); nets.len()];
+    for (&pos, &owner) in reservation {
+        net_cells[owner].push(pos);
+    }
+    let reach: Vec<HashSet<Position>> =
+        net_cells.iter().map(|cells| net_reach(world, cells)).collect();
+
+    for (g, gate) in netlist.gates.iter().enumerate() {
+        let &(tx, ty, tz) = gate_output_positions
+            .get(&gate.output)
+            .expect("emit records a torch position for every gate");
+        let torch_pos = Position::new(tx, ty, tz);
+        let torch_state = world.get(tx, ty, tz);
+
+        let Some(support) = torch_support_position(torch_state, torch_pos) else {
+            return Err(CompileError::TorchMergeViolation {
+                gate: gate.name.clone(),
+                reason: TorchMergeFailure::NoSupport { torch: (tx, ty, tz) },
+            });
+        };
+        let support_tuple = (support.x, support.y, support.z);
+
+        if !flags_of(world.get(support.x, support.y, support.z)).is_conductive() {
+            return Err(CompileError::TorchMergeViolation {
+                gate: gate.name.clone(),
+                reason: TorchMergeFailure::SupportNotConductive { torch: (tx, ty, tz), support: support_tuple },
+            });
+        }
+
+        let declared: HashSet<usize> = (0..gate.inputs.len())
+            .map(|input_index| {
+                *input_net
+                    .get(&(g, input_index))
+                    .expect("every gate input was assigned a net by build_nets")
+            })
+            .collect();
+
+        for (n, reached) in reach.iter().enumerate() {
+            match (declared.contains(&n), reached.contains(&support)) {
+                (true, false) => {
+                    return Err(CompileError::TorchMergeViolation {
+                        gate: gate.name.clone(),
+                        reason: TorchMergeFailure::InputDoesNotReachSupport {
+                            torch: (tx, ty, tz),
+                            support: support_tuple,
+                            input: net_name(netlist, nets, n),
+                        },
+                    });
+                }
+                (false, true) => {
+                    return Err(CompileError::TorchMergeViolation {
+                        gate: gate.name.clone(),
+                        reason: TorchMergeFailure::ForeignNetReachesSupport {
+                            torch: (tx, ty, tz),
+                            support: support_tuple,
+                            net: net_name(netlist, nets, n),
+                        },
+                    });
+                }
+                (true, true) | (false, false) => {}
+            }
+        }
+
+        let legitimate_output = output_net.get(&g).copied();
+        for direction in ALL_SIX {
+            let neighbour = torch_pos.offset(direction);
+            if neighbour == support {
+                continue;
+            }
+            if world.get(neighbour.x, neighbour.y, neighbour.z).kind != BlockKind::RedstoneWire {
+                continue;
+            }
+            if let Some(&owner) = reservation.get(&neighbour) {
+                if Some(owner) != legitimate_output {
+                    return Err(CompileError::TorchMergeViolation {
+                        gate: gate.name.clone(),
+                        reason: TorchMergeFailure::OutputLeaksIntoForeignNet {
+                            torch: (tx, ty, tz),
+                            leaked_cell: (neighbour.x, neighbour.y, neighbour.z),
+                            net: net_name(netlist, nets, owner),
+                        },
+                    });
                 }
             }
         }
@@ -2613,6 +3034,11 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     // test happens to exercise -- because a violation is a bug in *this*
     // router, not in the netlist it was given.
     verify_connectivity(&world, &footprint.reservation, netlist, &nets)?;
+
+    // The torch-merge invariant: connectivity alone never looks at a torch,
+    // so it cannot tell a working NOR from one whose input is wired into
+    // the wrong block. Checked unconditionally too, for the same reason.
+    verify_torch_merge(&world, &footprint.reservation, netlist, &nets, &gate_output_positions)?;
 
     Ok(CompiledCircuit { world, input_positions, output_positions, gate_output_positions })
 }
@@ -2691,5 +3117,271 @@ mod tests {
         reservation.insert(net_b_cell, 1);
 
         assert_eq!(verify_connectivity(&world, &reservation, &netlist, &nets), Ok(()));
+    }
+
+    // -----------------------------------------------------------------
+    // The torch-merge invariant
+    // -----------------------------------------------------------------
+    //
+    // Each test below builds a world by hand that violates exactly one
+    // condition of `verify_torch_merge` -- never a circuit that merely
+    // happens to trigger it -- and confirms both the specific variant and
+    // the message. A single-gate `Net`/`Netlist` pair, wired directly
+    // rather than through `compile`'s own placement, is enough for every
+    // one of them.
+
+    fn glass() -> BlockState {
+        let mut state = BlockState::air();
+        state.kind = BlockKind::Glass;
+        state.name = "minecraft:glass".to_string();
+        state
+    }
+
+    /// A standing torch (as opposed to `wall_torch`, already defined above
+    /// for the router's own use) -- attached to the block directly below
+    /// it, per `component::torch_support_position`'s `Torch` arm.
+    fn standing_torch() -> BlockState {
+        let mut state = BlockState::air();
+        state.kind = BlockKind::Torch;
+        state.name = "minecraft:redstone_torch".to_string();
+        state.lit = true;
+        state
+    }
+
+    fn single_input_gate(gate_output: &str) -> Netlist {
+        Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: Vec::new(),
+            gates: vec![Gate { name: "g0".to_string(), inputs: vec!["a".to_string()], output: gate_output.to_string() }],
+        }
+    }
+
+    fn single_input_net() -> Net {
+        Net {
+            source: Source::Lever(0),
+            source_column: 0,
+            channels: vec![0],
+            tracks: vec![0],
+            sinks: vec![vec![(0, 0)]],
+            hops: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn torch_merge_rejects_an_output_that_is_not_a_torch_at_all() {
+        let netlist = single_input_gate("out");
+        let nets = vec![single_input_net()];
+
+        let mut world = World::new(5, 5, 5);
+        // Plain stone standing in for what should be the output torch --
+        // `torch_support_position` returns `None` for every kind but
+        // `Torch`/`WallTorch`.
+        world.set(2, 1, 2, stone());
+
+        let mut gate_output_positions = BTreeMap::new();
+        gate_output_positions.insert("out".to_string(), (2, 1, 2));
+
+        let err = verify_torch_merge(&world, &Reservation::new(), &netlist, &nets, &gate_output_positions)
+            .expect_err("a plain block standing in for the output torch must be rejected");
+
+        assert_eq!(
+            err,
+            CompileError::TorchMergeViolation {
+                gate: "g0".to_string(),
+                reason: TorchMergeFailure::NoSupport { torch: (2, 1, 2) },
+            }
+        );
+        assert!(err.to_string().contains("g0"), "message must name the gate: {err}");
+    }
+
+    #[test]
+    fn torch_merge_rejects_a_support_block_that_is_not_conductive() {
+        let netlist = single_input_gate("out");
+        let nets = vec![single_input_net()];
+
+        let mut world = World::new(5, 5, 5);
+        // Glass is a full cube -- it holds a standing torch just fine
+        // (`SUPPORT_CENTER`) -- but `taxonomy::flags_of` marks it
+        // explicitly non-conductive, so `propagate::block_signal_at` can
+        // never observe it as powered no matter what surrounds it.
+        world.set(2, 0, 2, glass());
+        world.set(2, 1, 2, standing_torch());
+
+        let mut gate_output_positions = BTreeMap::new();
+        gate_output_positions.insert("out".to_string(), (2, 1, 2));
+
+        let err = verify_torch_merge(&world, &Reservation::new(), &netlist, &nets, &gate_output_positions)
+            .expect_err("a non-conductive support must be rejected -- this torch could never invert");
+
+        assert_eq!(
+            err,
+            CompileError::TorchMergeViolation {
+                gate: "g0".to_string(),
+                reason: TorchMergeFailure::SupportNotConductive { torch: (2, 1, 2), support: (2, 0, 2) },
+            }
+        );
+        let message = err.to_string();
+        assert!(message.contains("g0") && message.contains("(2, 0, 2)"), "message: {message}");
+    }
+
+    #[test]
+    fn torch_merge_rejects_a_declared_input_whose_net_never_reaches_the_support() {
+        let netlist = single_input_gate("out");
+        let nets = vec![single_input_net()];
+
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, stone()); // the torch's support -- conductive, correctly attached
+        world.set(2, 1, 2, standing_torch());
+
+        // The netlist declares input "a", but its route was never laid --
+        // `reservation` has no cells for net 0 at all, so nothing can
+        // structurally reach the support no matter how far the flood runs.
+        let reservation = Reservation::new();
+
+        let mut gate_output_positions = BTreeMap::new();
+        gate_output_positions.insert("out".to_string(), (2, 1, 2));
+
+        let err = verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions)
+            .expect_err("an input net with no conductor at all must not be accepted as reaching the support");
+
+        assert_eq!(
+            err,
+            CompileError::TorchMergeViolation {
+                gate: "g0".to_string(),
+                reason: TorchMergeFailure::InputDoesNotReachSupport {
+                    torch: (2, 1, 2),
+                    support: (2, 0, 2),
+                    input: "a".to_string(),
+                },
+            }
+        );
+        let message = err.to_string();
+        assert!(message.contains('a') && message.contains("g0"), "message: {message}");
+    }
+
+    #[test]
+    fn torch_merge_rejects_a_foreign_net_that_reaches_the_support() {
+        // g0 declares *no* inputs -- so nothing may reach its support at
+        // all -- but net "b" (undeclared: its `sinks` never mention g0)
+        // has a repeater whose output lands directly on the support block,
+        // strongly powering it regardless.
+        let netlist = Netlist {
+            inputs: vec!["b".to_string()],
+            outputs: Vec::new(),
+            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string() }],
+        };
+        let nets = vec![Net {
+            source: Source::Lever(0),
+            source_column: 0,
+            channels: Vec::new(),
+            tracks: Vec::new(),
+            sinks: vec![Vec::new()],
+            hops: Vec::new(),
+        }];
+
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, stone()); // g0's support
+        world.set(2, 1, 2, standing_torch());
+        // West of the support, outputting straight into it.
+        world.set(1, 0, 2, repeater(Facing::East));
+
+        let mut reservation = Reservation::new();
+        reservation.insert(Position::new(1, 0, 2), 0);
+
+        let mut gate_output_positions = BTreeMap::new();
+        gate_output_positions.insert("out".to_string(), (2, 1, 2));
+
+        let err = verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions)
+            .expect_err("a repeater from an undeclared net feeding the support must be rejected");
+
+        assert_eq!(
+            err,
+            CompileError::TorchMergeViolation {
+                gate: "g0".to_string(),
+                reason: TorchMergeFailure::ForeignNetReachesSupport {
+                    torch: (2, 1, 2),
+                    support: (2, 0, 2),
+                    net: "b".to_string(),
+                },
+            }
+        );
+        let message = err.to_string();
+        assert!(message.contains('b') && message.contains("g0"), "message: {message}");
+    }
+
+    #[test]
+    fn torch_merge_rejects_a_torch_that_leaks_its_output_into_a_foreign_net() {
+        // g0 declares no inputs and feeds no other gate (`output_net` will
+        // find no legitimate net at all for it), so the torch's own
+        // structural power must reach *nothing* claimed by any net. A
+        // stray wire sits directly above it -- one of the four directions
+        // (plus the support itself) a standing torch always powers.
+        let netlist = Netlist {
+            inputs: vec!["leak".to_string()],
+            outputs: Vec::new(),
+            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string() }],
+        };
+        let nets = vec![Net {
+            source: Source::Lever(0),
+            source_column: 0,
+            channels: Vec::new(),
+            tracks: Vec::new(),
+            sinks: vec![Vec::new()],
+            hops: Vec::new(),
+        }];
+
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, stone());
+        world.set(2, 1, 2, standing_torch());
+        world.set(2, 2, 2, dust()); // directly above the torch
+
+        let mut reservation = Reservation::new();
+        reservation.insert(Position::new(2, 2, 2), 0);
+
+        let mut gate_output_positions = BTreeMap::new();
+        gate_output_positions.insert("out".to_string(), (2, 1, 2));
+
+        let err = verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions)
+            .expect_err("a torch powering a foreign net's wire must be rejected");
+
+        assert_eq!(
+            err,
+            CompileError::TorchMergeViolation {
+                gate: "g0".to_string(),
+                reason: TorchMergeFailure::OutputLeaksIntoForeignNet {
+                    torch: (2, 1, 2),
+                    leaked_cell: (2, 2, 2),
+                    net: "leak".to_string(),
+                },
+            }
+        );
+        let message = err.to_string();
+        assert!(message.contains("leak") && message.contains("g0"), "message: {message}");
+    }
+
+    /// The positive case, built with the same by-hand machinery as the
+    /// five violations above: a correctly wired single-input gate must
+    /// pass every condition. Without this, a check that only ever fails
+    /// would not be distinguishable from one that works.
+    #[test]
+    fn torch_merge_accepts_a_correctly_wired_single_input_gate() {
+        let netlist = single_input_gate("out");
+        let nets = vec![single_input_net()];
+
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, stone());
+        world.set(2, 1, 2, standing_torch());
+        world.set(1, 0, 2, repeater(Facing::East)); // net "a"'s own conductor, facing straight into the support
+
+        let mut reservation = Reservation::new();
+        reservation.insert(Position::new(1, 0, 2), 0);
+
+        let mut gate_output_positions = BTreeMap::new();
+        gate_output_positions.insert("out".to_string(), (2, 1, 2));
+
+        assert_eq!(
+            verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions),
+            Ok(())
+        );
     }
 }
