@@ -383,12 +383,19 @@ fn primitive_name(primitive: TopoPrimitive) -> &'static str {
 
 /// Deliberately exhaustive, with no wildcard arm: a new `TemplateNode` is a
 /// new thing the topology view has to be able to name, and the compiler
-/// failing here is how we find that out. `cd186ad` added `SecondTorch` in the
-/// root crate and this match was the only thing that noticed.
+/// failing here is how we find that out.
+///
+/// It has done so twice — `cd186ad` added `SecondTorch`, `a0b485c` added
+/// `IsolatingRepeater` — and both times this match was the only thing that
+/// noticed, because the root crate's own tests and clippy run pass without
+/// ever building this crate. That is the real gap: a task that changes
+/// `topology` and checks only the root crate reports clean while leaving the
+/// viewer unbuildable.
 fn template_role_name(role: TemplateNode) -> String {
     match role {
         TemplateNode::Torch => "Torch".to_string(),
         TemplateNode::SecondTorch => "Torch 2".to_string(),
+        TemplateNode::IsolatingRepeater(branch) => format!("Isolating repeater {branch}"),
     }
 }
 
