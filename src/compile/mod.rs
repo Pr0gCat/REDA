@@ -3052,8 +3052,8 @@ fn jog_crosses_another_row_zone(zones: &[(i32, i32)], self_zone: (i32, i32), lo:
 ///    conductors and so never appear in a `Reservation` at all). A clear
 ///    candidate is promoted.
 ///
-/// # Why the *baseline* reservation is still exactly right for the *final*
-/// (larger) bypass set
+/// # Why the baseline reservation alone is *not* enough, and what closes the
+/// gap
 ///
 /// Every column this router ever places is, by construction
 /// (`reserve_columns`'s own doc comment), at least `COLUMN_CLEARANCE` from
@@ -3066,9 +3066,28 @@ fn jog_crosses_another_row_zone(zones: &[(i32, i32)], self_zone: (i32, i32), lo:
 /// such column, as either a conventionally-routed net's own entry/exit dust
 /// or a feed-through's permanent hop (feed-throughs are never bypass-eligible
 /// at all, so their columns are identical in every candidate reservation).
-/// So it is exactly as informative as any "final" reservation would be, and
-/// every candidate can be checked against the one baseline pass and promoted
-/// all at once -- no candidate's promotion can invalidate another's answer.
+///
+/// That argument covers the *columns* -- it says nothing about the
+/// *horizontal jog* a widened candidate draws at its own row's Z when its pin
+/// and `exit_x` disagree (`waypoints` below). That jog is a new cell range
+/// that does not exist in the baseline at all, for any candidate, because the
+/// baseline was built entirely from `bypass_proven` -- nothing in it ever
+/// jogs. Two candidates in the same widened pass can introduce jogs that
+/// overlap in X at the same Z without either one's check, against the
+/// baseline alone, ever seeing the other's: this was a real, reproducible bug
+/// (see `docs/superpowers/specs/2026-08-09-channel-safety-condition.md`), not
+/// a hypothetical.
+///
+/// The fix is to stop treating the baseline as the final word: `probe_
+/// reservation` is mutated in place as each candidate is promoted, folding in
+/// every cell its `bent_path_cells` actually occupies (not just its fixed
+/// columns) under its own net index. So the loop below checks each candidate
+/// against "the baseline plus every sibling already promoted this pass", the
+/// same live-reservation discipline `reserve_feedthrough` already uses for
+/// feed-through columns -- and *that* is what makes "no candidate's promotion
+/// can invalidate another's answer" true: not because jogs cannot collide,
+/// but because a later candidate's check can now see an earlier one's jog and
+/// will correctly refuse to overlap it.
 ///
 /// # Fan-out and feed-through: still excluded, on purpose
 ///
@@ -3178,7 +3197,9 @@ fn resolve_bypass_and_geometry(
         };
         emit(&mut scratch, netlist, &geometry, &mut footprint);
     }
-    let probe_reservation = footprint.reservation;
+    // Mutated as each candidate below is promoted, not just read: see "Why
+    // the baseline reservation alone is not enough" above.
+    let mut probe_reservation = footprint.reservation;
     drop(scratch);
 
     let cell_of_count = cell_geometry_by_input_count(netlist);
@@ -3230,6 +3251,14 @@ fn resolve_bypass_and_geometry(
         let cells = bent_path_cells(pin, &waypoints);
         if cells.iter().all(|&pos| cell_is_free_for(&probe_reservation, pos, n)) {
             bypass_final[n] = true;
+            // Fold this candidate's own cells into the reservation before
+            // the next candidate is checked -- otherwise two candidates
+            // decided in the same pass, whose jogs overlap each other
+            // without overlapping anything in the baseline, would both look
+            // clear. See this function's doc comment.
+            for &pos in &cells {
+                probe_reservation.entry(pos).or_insert(n);
+            }
         }
     }
 

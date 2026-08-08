@@ -121,10 +121,12 @@ fn build_nor2() -> (Netlist, String, Vec<&'static str>) {
     (Netlist { inputs: vec!["a".to_string(), "b".to_string()], outputs: vec![y.clone()], gates: net.gates }, y, vec!["a", "b"])
 }
 
-/// **Does not compile** -- see `bare_nor3_from_three_raw_primary_inputs_hits_a_router_edge_case`
-/// below. Kept as its own builder (rather than folded into that test) so the
-/// discovered shape is named and reusable, the same way every other builder
-/// in this file is.
+/// A single NOR3 gate wired directly to three primary-input levers, nothing
+/// else in the netlist. Used to fail `compile` with a `ConnectivityViolation`
+/// -- see `bare_nor3_from_three_raw_primary_inputs_now_compiles_and_matches_
+/// its_truth_table` below for the fix. Kept as its own builder (rather than
+/// folded into that test) so the discovered shape is named and reusable, the
+/// same way every other builder in this file is.
 fn build_nor3() -> (Netlist, String, Vec<&'static str>) {
     let mut net = GateNet::new();
     let y = net.nor(&["a", "b", "c"]);
@@ -135,15 +137,16 @@ fn build_nor3() -> (Netlist, String, Vec<&'static str>) {
     )
 }
 
-/// The same function, `NOR3(a,b,c)`, built so it actually compiles: `c`'s
-/// socket is fed by a `BUF(c)` (two chained NOR1 torches, `NOT(NOT(c)) ==
-/// c`) instead of by `c`'s own lever directly. See
-/// `bare_nor3_from_three_raw_primary_inputs_hits_a_router_edge_case` for what
-/// this works around and how that was isolated to "all three of a gate's
-/// inputs are primary-input levers", not to arity 3 or to the South socket
-/// on their own. This is what `cost_of_nor3` actually measures -- 3 gates,
-/// not 1, so its own numbers are NOR3's cost plus one BUF's, not NOR3's
-/// alone (see that test's own comment for the practical reading).
+/// The same function, `NOR3(a,b,c)`, built the way this task originally
+/// worked around the bare form's failure: `c`'s socket is fed by a `BUF(c)`
+/// (two chained NOR1 torches, `NOT(NOT(c)) == c`) instead of by `c`'s own
+/// lever directly. See `bare_nor3_from_three_raw_primary_inputs_now_
+/// compiles_and_matches_its_truth_table` for how that failure was isolated
+/// to "all three of a gate's inputs are primary-input levers" and has since
+/// been fixed, so this workaround is no longer required to get a NOR3
+/// measurement -- kept here because it still gives one, and because
+/// `cost_of_nor3` below measures NOR3 plus one BUF with it, not NOR3 alone
+/// (see that test's own comment for the practical reading).
 fn build_nor3_measurable() -> (Netlist, String, Vec<&'static str>) {
     let mut net = GateNet::new();
     let c1 = net.not("c");
@@ -387,41 +390,40 @@ fn cost_of_nor2() {
     eprintln!("NOR2  : {cost:?}");
 }
 
-/// **A discovered router edge case, not this task's to fix.** The obvious
-/// way to price a bare `NOR3` -- one gate, three primary-input levers wired
-/// straight to it, nothing else in the netlist -- does not compile at all:
-/// `compile` returns `ConnectivityViolation` (two of the three input nets'
-/// routed dust ends up electrically joined). This is not a NOR3-arity
-/// problem in general: every reference circuit (`and4`, `full_adder`,
-/// `segment_a`, `seven_segment`, all 273 passing tests) is full of NOR3
-/// gates and none of them trips this, because `NetlistBuilder::and_reduce`
-/// always interposes a `NOT` gate before feeding any multi-input NOR, and
+/// **A previously discovered router edge case, now fixed.** The obvious way
+/// to price a bare `NOR3` -- one gate, three primary-input levers wired
+/// straight to it, nothing else in the netlist -- used to not compile at
+/// all: `compile` returned `ConnectivityViolation` (two of the three input
+/// nets' routed dust ended up electrically joined). This was never a
+/// NOR3-arity problem in general: every reference circuit (`and4`,
+/// `full_adder`, `segment_a`, `seven_segment`) is full of NOR3 gates and none
+/// of them tripped this, because `NetlistBuilder::and_reduce` always
+/// interposes a `NOT` gate before feeding any multi-input NOR, and
 /// `or_reduce` in practice is only ever called on already-derived signals,
-/// never on three raw top-level inputs at once. Isolated by construction
-/// (see the two probes that used to live here, folded into this comment
-/// once the isolation was confirmed): a 3-input NOR with any *one* of its
-/// three sockets fed by a gate output instead of a lever compiles and
-/// simulates correctly regardless of which socket that is (West, East, or
-/// the South one an arity-<=2 gate never even uses) -- only "all three
-/// inputs are primary-input levers" reproduces the failure. That points at
-/// the primary-input row / bypass-routing interaction specifically, not at
-/// `place_nor_gate`'s own geometry.
+/// never on three raw top-level inputs at once. Isolated by construction at
+/// the time: a 3-input NOR with any *one* of its three sockets fed by a gate
+/// output instead of a lever compiled and simulated correctly regardless of
+/// which socket that was -- only "all three inputs are primary-input
+/// levers" reproduced the failure, pointing at the primary-input row /
+/// bypass-routing interaction specifically, not at `place_nor_gate`'s own
+/// geometry.
 ///
-/// Flagged as a follow-up (see this task's own report), not fixed here --
-/// this task measures, it does not change the compiler.
+/// That interaction was `resolve_bypass_and_geometry`'s widened bypass pass
+/// checking each candidate's horizontal jog against a `Reservation`
+/// snapshotted once before its loop started, so two candidates approved in
+/// the same pass could never see each other's jogs -- see
+/// `docs/superpowers/specs/2026-08-09-channel-safety-condition.md` for the
+/// full derivation (found via a two-*gate* netlist, not this one-gate case,
+/// but the same root cause: three primary-input levers in one row can put
+/// two of their approach jogs in exactly the same blind spot a two-gate
+/// netlist can). Fixed by making that `Reservation` live -- updated as each
+/// candidate is promoted, jog cells included -- so this now compiles and is
+/// measured like every other cell type in this file.
 #[test]
-fn bare_nor3_from_three_raw_primary_inputs_hits_a_router_edge_case() {
-    let (netlist, _y, _inputs) = build_nor3();
-    match compile(&netlist) {
-        Ok(_) => panic!(
-            "if this starts compiling, the router edge case this test documents has been fixed (or moved) -- \
-             update `docs/superpowers/specs/2026-08-08-cell-type-costs.md` and this comment to match"
-        ),
-        Err(err) => assert!(
-            matches!(err, reda::compile::CompileError::ConnectivityViolation { .. }),
-            "expected a ConnectivityViolation, got {err:?}"
-        ),
-    }
+fn bare_nor3_from_three_raw_primary_inputs_now_compiles_and_matches_its_truth_table() {
+    let (n, y, i) = build_nor3();
+    let cost = measure_nor_network("bare NOR3", n, &y, &i, |b| !(b[0] || b[1] || b[2]));
+    eprintln!("bare NOR3 (three raw primary-input levers, no workaround): {cost:?}");
 }
 
 /// NOR3's practical cost, measured via `build_nor3_measurable` -- the same
@@ -512,8 +514,10 @@ fn cell_type_cost_table() {
         },
         {
             // See `cost_of_nor3`: measured as NOR3 + one BUF, not NOR3 alone
-            // (the bare form does not compile -- see
-            // `bare_nor3_from_three_raw_primary_inputs_hits_a_router_edge_case`).
+            // (the workaround this builder uses predates the fix in
+            // `bare_nor3_from_three_raw_primary_inputs_now_compiles_and_
+            // matches_its_truth_table`; kept as its own row since it is
+            // still a valid measurement).
             let (n, y, i) = build_nor3_measurable();
             ("NOR3*", measure_nor_network("NOR3", n, &y, &i, |b| !(b[0] || b[1] || b[2])))
         },

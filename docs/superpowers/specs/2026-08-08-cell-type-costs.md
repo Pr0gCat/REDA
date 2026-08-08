@@ -236,6 +236,19 @@ Flagged as a follow-up task (out of scope here -- this task measures, it
 does not change the compiler), and a background task suggestion was raised
 for it separately.
 
+**Fixed 2026-08-09.** `docs/superpowers/specs/2026-08-09-channel-safety-condition.md`
+derived the real dust-adjacency safety condition and, in the course of that,
+found the same "primary-input row / bypass-routing interaction" as a
+two-*gate* netlist, traced it to `resolve_bypass_and_geometry`'s widened
+bypass pass checking every candidate's horizontal jog against a `Reservation`
+snapshotted once before its loop (so two candidates approved in the same pass
+could never see each other's jogs), and fixed it by making that reservation
+live. `bare_nor3_from_three_raw_primary_inputs_hits_a_router_edge_case` (this
+report's test) is now `..._now_compiles_and_matches_its_truth_table` and
+measures the bare gate directly. NOR3 as a genlib-mapped target is no longer
+blocked on this specific bug, though the broader question below (whether it
+should be genlib-mapped at all yet) is unaffected.
+
 ## What this implies for the genlib
 
 **Do not write the genlib yet for OR or ANDNOT.** Both have a real, verified,
