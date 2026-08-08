@@ -34,6 +34,25 @@ Usage:
         --properties ../minecraft-server/server/server.properties \
         --out results/decoder_head.json --label head
 
+    cargo run --release --bin mc_dump -- verilog:seven_segment > /tmp/vdecoder.txt
+    python circuit_conformance.py --dump /tmp/vdecoder.txt \
+        --properties ../minecraft-server/server/server.properties \
+        --out results/verilog_decoder_head.json --label head
+
+# Wired-OR merges
+
+The third example above is the Yosys-synthesised decoder, and it is the first
+circuit run through here that is not pure NOR: the Verilog frontend maps
+Yosys's `OR2`/`OR3` cells onto **wire merges** rather than gates. A merge is a
+different animal in both of the ways this harness cares about -- it ORs its
+inputs instead of NOR-ing them, and it has no torch at all, just a dust
+junction -- so the `GATE` line now carries a kind (`nor`/`merge`) and this
+script honours it in `evaluate_expected`, `read_state`, and the placement
+check. Getting either half wrong does not merely under-report: NOR-ing a
+merge poisons every expected value downstream of it, and looking for a torch
+at a junction reports a correctly-built circuit as `RegionNotReady`. Nothing
+about a pure-NOR circuit changed -- every hand-written one emits only `nor`.
+
 No settle flags needed above, on either circuit: this harness polls each
 circuit until it is actually quiescent (see poll_until_quiescent) rather than
 sleeping a fixed guess, so a bigger circuit just takes however long it
@@ -221,6 +240,39 @@ class Block:
 
 
 @dataclass
+class Gate:
+    """One netlist gate, straight off a `GATE` line.
+
+    `kind` is `"nor"` or `"merge"`. A merge is a **wired OR**, not a NOR --
+    see mc_dump.rs's module docstring. It matters twice over, and neither
+    place is optional:
+
+    * `evaluate_expected` must OR a merge's inputs instead of NOR-ing them.
+      Getting this wrong is not a local error: every gate downstream of the
+      merge inherits the wrong value too, so a single mis-evaluated merge
+      turns into a report full of "first bad gate" names that are all
+      correct and one that is not.
+    * A merge has no torch at all -- it is a bare dust junction where its
+      inputs' routes are allowed to touch -- so the block sitting at its
+      `GATEOUT` position is `minecraft:redstone_wire`, and its logical value
+      is "this dust has non-zero power" rather than "this torch is lit". See
+      `read_merge_junction` and `expected_block_at`.
+
+    Every hand-written reference circuit is pure NOR, so nothing about it
+    changed; the Verilog frontend maps Yosys `OR2`/`OR3` cells onto merges,
+    which is what made this distinction load-bearing.
+    """
+
+    name: str
+    inputs: list[str]
+    kind: str
+
+    @property
+    def is_merge(self) -> bool:
+        return self.kind == "merge"
+
+
+@dataclass
 class Dump:
     size: tuple[int, int, int]
     blocks: list[Block]
@@ -228,7 +280,7 @@ class Dump:
     outputs: dict[str, tuple[int, int, int]]  # keyed by internal signal name, e.g. "g45"
     output_labels: dict[str, str]  # internal signal name -> human label, e.g. "g45" -> "a"
     gate_outputs: dict[str, tuple[int, int, int]]
-    gates: list[tuple[str, list[str]]]  # (output_name, input_names) in topological order
+    gates: list[Gate]  # in topological order
 
     def output_display_name(self, internal_name: str) -> str:
         """Human label for an output signal if `mc_dump` supplied one via
@@ -251,7 +303,7 @@ def parse_dump(path: Path) -> Dump:
     outputs: dict[str, tuple[int, int, int]] = {}
     output_labels: dict[str, str] = {}
     gate_outputs: dict[str, tuple[int, int, int]] = {}
-    gates: list[tuple[str, list[str]]] = []
+    gates: list[Gate] = []
 
     for line in path.read_text(encoding="utf-8").splitlines():
         parts = line.split()
@@ -288,9 +340,18 @@ def parse_dump(path: Path) -> Dump:
         elif tag == "GATEOUT":
             gate_outputs[parts[1]] = (int(parts[2]), int(parts[3]), int(parts[4]))
         elif tag == "GATE":
+            # "GATE output_name input1,input2,... kind". Inputs are "-" when
+            # a gate has none, so that `kind` is always the same field; kind
+            # itself defaults to "nor" so a dump from an mc_dump predating
+            # wired-OR merges still parses (every gate in one of those really
+            # was a NOR).
             name = parts[1]
-            ins = parts[2].split(",") if len(parts) > 2 else []
-            gates.append((name, ins))
+            raw_inputs = parts[2] if len(parts) > 2 else "-"
+            ins = [] if raw_inputs == "-" else raw_inputs.split(",")
+            kind = parts[3] if len(parts) > 3 else "nor"
+            if kind not in ("nor", "merge"):
+                raise ValueError(f"unrecognised gate kind {kind!r}: {line!r}")
+            gates.append(Gate(name, ins, kind))
         else:
             raise ValueError(f"unrecognised dump line tag {tag!r}: {line!r}")
 
@@ -299,14 +360,16 @@ def parse_dump(path: Path) -> Dump:
     return Dump(size, blocks, inputs, outputs, output_labels, gate_outputs, gates)
 
 
-def evaluate_expected(gates: list[tuple[str, list[str]]], primary: dict[str, int]) -> dict[str, int]:
-    """Pure-boolean NOR evaluation: every gate is NOR of its inputs. Gates
-    are already in topological order (mc_dump preserves Netlist::gates
-    order), so a single forward pass is enough -- no fixpoint iteration
-    needed, unlike the physical simulator."""
+def evaluate_expected(gates: list[Gate], primary: dict[str, int]) -> dict[str, int]:
+    """Pure-boolean evaluation: a `nor` gate is the NOR of its inputs, a
+    `merge` gate the OR of them (see `Gate`). Gates are already in
+    topological order (mc_dump preserves Netlist::gates order), so a single
+    forward pass is enough -- no fixpoint iteration needed, unlike the
+    physical simulator."""
     values = dict(primary)
-    for name, ins in gates:
-        values[name] = 0 if any(values[i] for i in ins) else 1
+    for gate in gates:
+        high = any(values[i] for i in gate.inputs)
+        values[gate.name] = int(high) if gate.is_merge else int(not high)
     return values
 
 
@@ -658,6 +721,39 @@ def read_torch(client: RconClient, pos: tuple[int, int, int]) -> int | None:
     return None
 
 
+def read_merge_junction(client: RconClient, pos: tuple[int, int, int]) -> int | None:
+    """Read a wired-OR merge's value off its dust junction.
+
+    A merge has no torch to read (see `Gate`): its `GATEOUT` position is the
+    bare dust cell where its inputs' routes join, and the value it carries is
+    whether that dust is powered at all. `power=0` is the one state that
+    means "low"; every other power level (1..15) means high, so this asks the
+    `power=0` question and treats a present-but-not-zero wire as 1 rather
+    than enumerating fifteen power levels over fifteen RCON round trips.
+
+    "Non-zero power at the junction" is not this harness's own invention of
+    what a merge means -- it is the same predicate the compiler itself
+    verifies for a merge that drives a declared output (see
+    src/compile/mod.rs's `delivers` check: "does `pin` ... ever receive a
+    non-zero signal"), read back out of the real world instead of the
+    router's model of it.
+    """
+    x, y, z = pos
+    if client.command(f"execute if block {x} {y} {z} minecraft:redstone_wire[power=0]").strip().startswith(
+        "Test passed"
+    ):
+        return 0
+    if client.command(f"execute if block {x} {y} {z} minecraft:redstone_wire").strip().startswith("Test passed"):
+        return 1
+    return None
+
+
+def expected_block_at(gate: Gate) -> str:
+    """The block id that must physically be at `gate`'s GATEOUT position: a
+    wall torch for a NOR, plain dust for a merge's junction."""
+    return "minecraft:redstone_wire" if gate.is_merge else "minecraft:redstone_wall_torch"
+
+
 def read_state(
     client: RconClient,
     dump: Dump,
@@ -673,13 +769,18 @@ def read_state(
         pos = (ox + output_pos[0], oy + output_pos[1], oz + output_pos[2])
         lamp_vals[output_name] = read_lamp(client, pos)
     gate_vals = {}
+    kind_of = {gate.name: gate for gate in dump.gates}
     for gate_name, gate_pos in dump.gate_outputs.items():
         pos = (ox + gate_pos[0], oy + gate_pos[1], oz + gate_pos[2])
-        gate_vals[gate_name] = read_torch(client, pos)
+        gate = kind_of.get(gate_name)
+        if gate is not None and gate.is_merge:
+            gate_vals[gate_name] = read_merge_junction(client, pos)
+        else:
+            gate_vals[gate_name] = read_torch(client, pos)
     return lamp_vals, gate_vals
 
 
-def gate_logic_depth(gates: list[tuple[str, list[str]]]) -> int:
+def gate_logic_depth(gates: list[Gate]) -> int:
     """Longest dependency chain among the netlist's gates, one level per NOR
     gate -- the same "logic-depth lower bound" concept src/timing/mod.rs
     computes for the compiler itself (see that module's docstring),
@@ -690,8 +791,8 @@ def gate_logic_depth(gates: list[tuple[str, list[str]]]) -> int:
     preserves that), so a single forward pass is enough. Used only to size
     compute_settle_ceiling's margin below -- not itself a timing prediction."""
     depth: dict[str, int] = {}
-    for name, ins in gates:
-        depth[name] = 1 + max((depth.get(i, 0) for i in ins), default=0)
+    for gate in gates:
+        depth[gate.name] = 1 + max((depth.get(i, 0) for i in gate.inputs), default=0)
     return max(depth.values(), default=0)
 
 
@@ -900,9 +1001,13 @@ def assert_quiescent(
     for output_pos in dump.outputs.values():
         pos = (ox + output_pos[0], oy + output_pos[1], oz + output_pos[2])
         checks.append((pos, "minecraft:redstone_lamp"))
-    for gate_pos in dump.gate_outputs.values():
+    gate_by_name = {gate.name: gate for gate in dump.gates}
+    for gate_name, gate_pos in dump.gate_outputs.items():
         pos = (ox + gate_pos[0], oy + gate_pos[1], oz + gate_pos[2])
-        checks.append((pos, "minecraft:redstone_wall_torch"))
+        gate = gate_by_name.get(gate_name)
+        # A merge's junction is dust, not a torch -- checking for a torch
+        # there would report a perfectly-placed circuit as RegionNotReady.
+        checks.append((pos, expected_block_at(gate) if gate else "minecraft:redstone_wall_torch"))
     missing = verify_positions_placed(client, checks)
     if missing:
         raise RegionNotReady(
@@ -931,7 +1036,8 @@ def assert_quiescent(
             )
     for gate_name, actual in gates.items():
         if actual != expected[gate_name]:
-            mismatches.append(f"gate {gate_name}: expected {expected[gate_name]}, read {actual!r}")
+            kind = gate_by_name[gate_name].kind if gate_name in gate_by_name else "?"
+            mismatches.append(f"gate {gate_name} ({kind}): expected {expected[gate_name]}, read {actual!r}")
     if mismatches:
         raise CircuitMismatch(
             "the compiled circuit disagrees with the simulator at rest -- placement is confirmed "
@@ -1061,9 +1167,12 @@ def run(args: argparse.Namespace) -> int:
             actual_outputs = {name: lamps[name] for name in output_names}
 
             first_disagreement = None
-            for gate_name, _ins in dump.gates:
-                if gate_readings.get(gate_name) is not None and gate_readings[gate_name] != expected[gate_name]:
-                    first_disagreement = gate_name
+            for gate in dump.gates:
+                if (
+                    gate_readings.get(gate.name) is not None
+                    and gate_readings[gate.name] != expected[gate.name]
+                ):
+                    first_disagreement = f"{gate.name} ({gate.kind})"
                     break
 
             # A vector matches only if every single output does -- one wrong

@@ -12,10 +12,25 @@
 //! browser-based litematic viewers, which have to build a mesh over that
 //! whole grid. The smaller circuits listed here are a size ladder meant to
 //! open quickly in the same kind of viewer.
+//!
+//! `<name>` also accepts the Verilog sources this project ships, under their
+//! `verilog:`-prefixed names (`verilog:and4`, `verilog:seven_segment`), and
+//! there is a `build_circuit verilog <file.v> <top-module>` form for one it
+//! does not -- the same three selection forms `mc_dump` has, for the same
+//! reason: the synthesised circuits are the ones this project quotes progress
+//! from, and being able to look at them in a viewer or paste them into a
+//! world should not be the one thing only the hand-written ones can do. See
+//! `reda::circuits::verilog` for why they are a separate catalog.
+//!
+//! They are deliberately *not* in the no-argument listing's size table,
+//! though -- that table compiles every circuit it prints, and doing that here
+//! would turn `build_circuit` with no arguments into a multi-second Yosys run
+//! that fails outright on a machine with no `python`/`yowasp-yosys`. They are
+//! listed by name only.
 
 use std::path::Path;
 
-use reda::circuits::{and4, full_adder, seven_segment};
+use reda::circuits::{and4, full_adder, seven_segment, verilog};
 use reda::compile::{compile, CompiledCircuit, Netlist};
 use reda::formats::litematic;
 use reda::redstone::world::block::BlockKind;
@@ -32,7 +47,7 @@ struct CircuitInfo {
     build: fn() -> Netlist,
     /// `(label, internal signal name)` pairs, in the order they should be
     /// printed.
-    output_labels: fn() -> Vec<(&'static str, String)>,
+    output_labels: fn() -> Vec<(String, String)>,
 }
 
 fn available_circuits() -> Vec<CircuitInfo> {
@@ -40,7 +55,7 @@ fn available_circuits() -> Vec<CircuitInfo> {
         CircuitInfo {
             name: "and4",
             build: || and4::build_and4_netlist().0,
-            output_labels: || vec![(and4::OUTPUT_NAME, and4::build_and4_netlist().1)],
+            output_labels: || vec![(and4::OUTPUT_NAME.to_string(), and4::build_and4_netlist().1)],
         },
         CircuitInfo {
             name: "full_adder",
@@ -49,7 +64,7 @@ fn available_circuits() -> Vec<CircuitInfo> {
                 let (_, signal_of) = full_adder::build_full_adder_netlist();
                 full_adder::OUTPUT_NAMES
                     .iter()
-                    .map(|&label| (label, signal_of[label].clone()))
+                    .map(|&label| (label.to_string(), signal_of[label].clone()))
                     .collect()
             },
         },
@@ -58,7 +73,10 @@ fn available_circuits() -> Vec<CircuitInfo> {
             build: || seven_segment::build_single_segment_netlist(0).0,
             // Segment index 0 is "a" in `seven_segment::SEGMENT_NAMES`.
             output_labels: || {
-                vec![(seven_segment::SEGMENT_NAMES[0], seven_segment::build_single_segment_netlist(0).1)]
+                vec![(
+                    seven_segment::SEGMENT_NAMES[0].to_string(),
+                    seven_segment::build_single_segment_netlist(0).1,
+                )]
             },
         },
         CircuitInfo {
@@ -68,11 +86,62 @@ fn available_circuits() -> Vec<CircuitInfo> {
                 let (_, signal_of) = seven_segment::build_seven_segment_netlist();
                 seven_segment::SEGMENT_NAMES
                     .iter()
-                    .map(|&label| (label, signal_of[label].clone()))
+                    .map(|&label| (label.to_string(), signal_of[label].clone()))
                     .collect()
             },
         },
     ]
+}
+
+/// A circuit selected off the command line: everything `main` needs, with no
+/// trace of which selection form produced it. The `name` doubles as the
+/// output file's stem, so it must stay filesystem-safe -- which is why the
+/// ad-hoc file form below names its output after the top module rather than
+/// after the path it came from.
+struct SelectedCircuit {
+    name: String,
+    netlist: Netlist,
+    output_labels: Vec<(String, String)>,
+}
+
+/// Turn the command line into a circuit, or into a message explaining why it
+/// could not be one. Only the `verilog` forms can fail -- see
+/// `reda::circuits::verilog`, and `mc_dump`'s identical `select`.
+fn select(args: &[String], circuits: &[CircuitInfo]) -> Result<SelectedCircuit, String> {
+    if args.first().map(String::as_str) == Some("verilog") {
+        let (Some(path), Some(top_module)) = (args.get(1), args.get(2)) else {
+            return Err("usage: build_circuit verilog <file.v> <top-module>".to_string());
+        };
+        let (netlist, output_labels) = verilog::synthesize_file(Path::new(path), top_module)
+            .map_err(|err| format!("could not synthesize {path} ({top_module}): {err}"))?;
+        return Ok(SelectedCircuit { name: top_module.clone(), netlist, output_labels });
+    }
+
+    let requested = args.first().expect("select is only called with at least one argument");
+
+    if let Some(circuit) = verilog::find(requested) {
+        let (netlist, output_labels) = circuit
+            .synthesize()
+            .map_err(|err| format!("could not synthesize '{}': {err}", circuit.name))?;
+        // `verilog:seven_segment` would be a colon in a filename -- illegal
+        // on Windows, and an alternate-data-stream separator at that. The
+        // written file is `verilog_seven_segment.litematic`.
+        return Ok(SelectedCircuit {
+            name: circuit.name.replace(':', "_"),
+            netlist,
+            output_labels,
+        });
+    }
+
+    if let Some(info) = circuits.iter().find(|c| c.name == requested.as_str()) {
+        return Ok(SelectedCircuit {
+            name: info.name.to_string(),
+            netlist: (info.build)(),
+            output_labels: (info.output_labels)(),
+        });
+    }
+
+    Err(format!("unknown circuit '{requested}'"))
 }
 
 fn count_non_air(world: &World) -> usize {
@@ -105,7 +174,7 @@ fn count_non_air(world: &World) -> usize {
 /// circuit is documented with, and fixes the print order -- `sum` before
 /// `cout`, `a` before `g`, rather than whatever order the internal names
 /// happen to sort into.
-fn print_pinout(compiled: &CompiledCircuit, output_labels: &[(&str, String)]) {
+fn print_pinout(compiled: &CompiledCircuit, output_labels: &[(String, String)]) {
     println!();
     println!("pinout (schematic-local coordinates: x,y,z from the corner the .litematic is pasted at)");
     println!("  inputs (lever):");
@@ -121,6 +190,7 @@ fn print_pinout(compiled: &CompiledCircuit, output_labels: &[(&str, String)]) {
 
 fn list_circuits(circuits: &[CircuitInfo]) {
     println!("Usage: build_circuit <name>");
+    println!("       build_circuit verilog <file.v> <top-module>");
     println!();
     println!("Available circuits:");
     for info in circuits {
@@ -132,29 +202,46 @@ fn list_circuits(circuits: &[CircuitInfo]) {
         let (size_x, size_y, size_z) = compiled.world.size();
         println!("  {name:<14} {gate_count:>4} gates   {size_x}x{size_y}x{size_z}");
     }
+    // No gate count or bounding box here: printing those means synthesizing,
+    // and synthesizing means a Yosys run per entry -- see this file's module
+    // doc comment for why a listing must not do that.
+    println!();
+    println!("Verilog circuits (synthesized on demand; need `python` with `yowasp-yosys`):");
+    for circuit in verilog::CIRCUITS {
+        println!("  {:<14} module {} ", circuit.name, circuit.top_module);
+    }
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().collect();
+    let args: Vec<String> = std::env::args().skip(1).collect();
     let circuits = available_circuits();
 
-    let Some(requested_name) = args.get(1) else {
+    if args.is_empty() {
         list_circuits(&circuits);
         return;
-    };
+    }
 
-    let Some(info) = circuits.iter().find(|c| c.name == requested_name.as_str()) else {
-        eprintln!("unknown circuit '{requested_name}'");
-        eprintln!();
-        list_circuits(&circuits);
-        std::process::exit(1);
+    let SelectedCircuit { name, netlist, output_labels } = match select(&args, &circuits) {
+        Ok(selected) => selected,
+        Err(message) => {
+            eprintln!("{message}");
+            eprintln!();
+            list_circuits(&circuits);
+            std::process::exit(1);
+        }
     };
-    let name = info.name;
-
-    let netlist = (info.build)();
     let gate_count = netlist.gates.len();
 
-    let compiled = compile(&netlist).expect("reference circuits are acyclic and fully driven");
+    // Not an `expect`: a synthesized netlist is only as well-formed as the
+    // Verilog it came from, so this has to be able to fail readably rather
+    // than panicking. See `mc_dump`'s identical reasoning.
+    let compiled = match compile(&netlist) {
+        Ok(compiled) => compiled,
+        Err(err) => {
+            eprintln!("circuit '{name}' failed to compile: {err:?}");
+            std::process::exit(1);
+        }
+    };
     let (size_x, size_y, size_z) = compiled.world.size();
     let non_air_blocks = count_non_air(&compiled.world);
 
@@ -162,7 +249,7 @@ fn main() {
     std::fs::create_dir_all(output_dir).expect("failed to create the output directory");
     let output_path = output_dir.join(format!("{name}.litematic"));
 
-    litematic::save(&output_path, &compiled.world, name).expect("failed to write the litematic file");
+    litematic::save(&output_path, &compiled.world, &name).expect("failed to write the litematic file");
 
     println!("circuit: {name}");
     println!("bounding box: {size_x} x {size_y} x {size_z}");
@@ -170,5 +257,5 @@ fn main() {
     println!("gate count: {gate_count}");
     println!("wrote {}", output_path.display());
 
-    print_pinout(&compiled, &(info.output_labels)());
+    print_pinout(&compiled, &output_labels);
 }
