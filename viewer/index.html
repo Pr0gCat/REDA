@@ -271,7 +271,7 @@
         </select>
       </div>
       <div class="btn-row">
-        <button id="topo-relayout-btn">Re-layout</button>
+        <button id="topo-relayout-btn">Reset view</button>
       </div>
       <div class="status" id="topo-status"></div>
       <h2 style="margin-top:10px;">Primitives</h2>
@@ -340,7 +340,7 @@
     </div>
 
     <div class="panel hidden" data-view="topo" style="margin-bottom:6px;">
-      <h2 id="topo-caption">Primitive topology -- force-directed layout, no positions from the compiler</h2>
+      <h2 id="topo-caption">Primitive topology -- layered (Sugiyama-style) layout, no positions from the compiler</h2>
       <div class="canvas-wrap" id="topo-wrap" style="height:76vh;">
         <canvas id="topo-canvas" width="10" height="10"></canvas>
       </div>
@@ -1575,39 +1575,66 @@ function onThreeHover(e) {
 // It stops being true the day a library entry is not one-to-one with its
 // gate.
 //
-// Layout: a hand-rolled 2D force-directed simulation (no extra library --
-// three.js is vendored for the 3D view but this stays plain <canvas> 2D,
-// per the task's own steer that "a 2D layout is likely clearer than 3D for
-// a graph"). Three kinds of force decide where a node ends up:
-//   - repulsion between every pair of nodes (keeps the graph from
-//     collapsing to a point);
-//   - one spring per edge, all sharing the same stiffness and rest length
-//     now that there is only one edge kind;
-//   - a soft pull toward an x position from each node's topological
-//     "layer" (0 for a gate driven only by primary inputs, primary inputs
-//     at layer -1, primary outputs one past the last gate layer -- see
-//     `compute_gate_layers` in viewer/src/lib.rs). This is a bias, not a
-//     placement: it only breaks left-right symmetry so the picture reads
-//     roughly input-to-output, left to right, the way a schematic would.
+// Layout: a layered DAG (Sugiyama-style) layout -- the same family of
+// algorithm graphviz's `dot` uses for a schematic or dataflow diagram, not
+// the force-directed simulation an earlier pass of this view used. A spring
+// system optimises pairwise distance; it has no notion of "signal flows
+// this way", so it draws a DAG legibly only by luck. A circuit is a DAG a
+// person wants to read left to right, so this lays it out as one directly,
+// in four steps:
 //
-// Scale: `and4` (a handful of gates) lays out and reads as one uncluttered
-// picture with nothing else needed. `seven_segment` (84 gates, ~180
-// primitives now that a gate is one node instead of a small cluster) does
-// not -- a force layout at that size is a legible-at-a-glance web of
-// connections, not a picture you can trace edge by edge from across the
-// room. Two things are provided for it rather than pretending the full view
-// is enough: gate badges (see `drawTopology`'s translucent rounded squares,
-// one per gate, labelled with that gate's own output name -- now a small
-// padded box around its single node rather than a hull around several,
-// since a gate is one node) make "which node is which gate" checkable
-// without reading positions at all, and "Focus gate" isolates one gate plus
-// its direct neighbours (`computeEgoSet`) and fits the view to just that --
-// the tool this task's own hand cross-check uses. The unfiltered view at
-// this size is still honest (nothing is hidden or decimated) but is
-// explicitly a "does this look like the right order of magnitude and
-// density" tool, not a "read off individual wires" tool -- that degradation
-// is real and is called out here rather than left for someone to discover
-// by squinting.
+//   1. `computeTopoLayers` gives every node a layer by longest path from a
+//      source (a node with no incoming edge -- exactly the primary inputs,
+//      since `primitive_graph::expand` never gives any other node an edge
+//      from nothing). Same idea as `compute_asap_levels` in
+//      `src/compile/mod.rs` -- longest path from the roots -- reimplemented
+//      here at the primitive-node granularity this view needs rather than
+//      shared across the crate boundary (wasm-bindgen's surface is
+//      deliberately thin, and the algorithm is a dozen lines); this comment
+//      is the pointer back to the original.
+//   2. `layoutTopology` gives every edge that would otherwise skip a layer
+//      a chain of dummy nodes, one per intermediate layer, so it spans
+//      exactly one layer at a time like every other edge. This is not an
+//      optimisation: without it, a long edge is one straight line from its
+//      source layer to its destination layer, cutting through whatever real
+//      nodes happen to sit in the layers between -- most of what made the
+//      previous force-directed picture unreadable past `and4`'s size.
+//   3. The same function then runs repeated barycentre sweeps (down, then
+//      up, several times) over every layer -- the ordering half of
+//      `build_floorplan`'s own pass in `src/compile/mod.rs`, reused as an
+//      idea rather than code for the same reason as step 1: reorder each
+//      layer by the average position of the neighbours pulling it from one
+//      side, alternating sides so a middle layer answers to both its
+//      producers and its consumers.
+//   4. Coordinates fall out of the result directly: a node's layer becomes
+//      its x (inputs at the left edge, outputs at the right, flow reading
+//      left to right), its final order within the layer becomes its y, and
+//      each layer is centred on y = 0 independently. Edges are drawn as
+//      polylines through their own dummy chain (`topoEdgePaths`), so a long
+//      edge visibly bends around the nodes in its way instead of passing
+//      through them.
+//
+// The whole thing is a deterministic function of the graph -- no jitter, no
+// physics, nothing to settle -- so "Reset view" (`topoRelayoutBtn`) only
+// re-fits the camera; a circuit's layout itself never changes between
+// loads or reloads.
+//
+// Scale: `and4` (12 nodes) lays out as one small, fully readable picture --
+// four layers, every edge traceable by eye, nothing left to a "Focus gate"
+// tool. `seven_segment` (84 gates, ~180 primitives) is a different story:
+// a layered layout removes the previous view's worst failure (edges cutting
+// through unrelated nodes, and flow direction being invisible) and keeps
+// flow visibly left-to-right at every zoom level, but 11 layers deep and up
+// to 16 nodes in its busiest layer is still more simultaneous edges than an
+// eye can trace node-by-node at full zoom -- an improvement in kind (readable
+// structure instead of a scattered web), not a claim that the full picture
+// is a "read off individual wires" tool. Gate badges (see `drawTopology`'s
+// translucent rounded squares, one per gate, labelled with that gate's own
+// output name) make "which node is which gate" checkable without reading
+// positions at all, and "Focus gate" isolates one gate plus its direct
+// neighbours (`computeEgoSet`) and fits the view to just that -- still the
+// tool this task's own hand cross-check uses, and still necessary at this
+// size even with the improved layout.
 // ---------------------------------------------------------------------
 
 const PRIMITIVE_COLOR = {
@@ -1626,23 +1653,15 @@ const PRIMITIVE_COLOR = {
   Lamp: '#ffd54a',
 };
 const TOPO_NODE_RADIUS = 5; // constant screen pixels, independent of zoom
-const TOPO_LAYER_SPACING = 130;
+const TOPO_LAYER_SPACING = 150; // px between two adjacent layers (x axis)
+const TOPO_NODE_SPACING = 34;   // px between two adjacent slots in one layer (y axis)
+const TOPO_BARYCENTRE_SWEEPS = 4; // same count `build_floorplan` uses, for the same reason
 
-let topoGates = [];   // raw TopologyGate[] from session.topology()
-let topoNodes = [];   // { id, primitive, provenance, targetX, x, y, vx, vy, fx, fy }
-let topoEdges = [];   // { from, to, kind }
+let topoGates = [];      // raw TopologyGate[] from session.topology()
+let topoNodes = [];      // { id, primitive, provenance, x, y }
+let topoEdges = [];      // raw { from, to } from session.topology()
+let topoEdgePaths = [];  // parallel to topoEdges: [{x,y}, ...] through any dummy chain
 let topoView = { scale: 1, offsetX: 0, offsetY: 0 };
-let topoLayoutSeed = 0;
-
-/** Deterministic pseudo-random value in [0, 1) from an integer seed -- used
- * for the layout's initial jitter so the same circuit lays out the same way
- * every time it is (re)loaded (only "Re-layout" perturbs it, via
- * `topoLayoutSeed`), matching this project's own preference for
- * reproducible results over convenient ones. */
-function detRand(seed) {
-  const x = Math.sin(seed * 12.9898 + topoLayoutSeed * 37.719) * 43758.5453;
-  return x - Math.floor(x);
-}
 
 function buildPrimitiveLegend() {
   topoPrimitiveLegend.innerHTML = '';
@@ -1660,22 +1679,13 @@ buildPrimitiveLegend(); // static -- independent of any circuit
 function buildTopology() {
   const raw = session.topology();
   topoGates = raw.gates || [];
-  const maxLayer = topoGates.reduce((m, g) => Math.max(m, g.layer), 0);
-
-  const layerOf = (node) => {
-    if (node.provenance.kind === 'PrimaryInput') return -1;
-    if (node.provenance.kind === 'PrimaryOutput') return maxLayer + 1;
-    return topoGates[node.provenance.gate].layer;
-  };
-
+  topoEdges = raw.edges || [];
   topoNodes = (raw.nodes || []).map((n) => ({
     id: n.id,
     primitive: n.primitive,
     provenance: n.provenance,
-    targetX: layerOf(n) * TOPO_LAYER_SPACING,
-    x: 0, y: 0, vx: 0, vy: 0, fx: 0, fy: 0,
+    x: 0, y: 0,
   }));
-  topoEdges = raw.edges || [];
 
   topoFocusSelect.innerHTML = '<option value="">All gates</option>';
   for (const gate of topoGates) {
@@ -1685,115 +1695,123 @@ function buildTopology() {
     topoFocusSelect.appendChild(opt);
   }
 
-  reinitTopoPositions();
-  runLayoutAndRender();
+  layoutAndRender();
 }
 
-/** (Re)seed every node's starting position from its layer plus deterministic
- * jitter, and zero its velocity -- the state a fresh force-layout pass reads
- * before its first iteration. Split out from `buildTopology` so
- * "Re-layout" can call it again (with a new `topoLayoutSeed`) without
- * re-fetching `session.topology()`. */
-function reinitTopoPositions() {
-  for (const node of topoNodes) {
-    node.x = node.targetX + (detRand(node.id * 2 + 1) - 0.5) * 60;
-    node.y = (detRand(node.id * 2 + 2) - 0.5) * 500;
-    node.vx = 0;
-    node.vy = 0;
+/** Longest-path layer for every node index `0..n`: 0 for a node with no
+ * incoming edge (a primary input -- see this section's doc comment, step
+ * 1), one more than the deepest layer among its own predecessors otherwise.
+ * Kahn's algorithm, processing each node only once all its predecessors
+ * have already fixed their own layer, so every `layer[v]` is final the
+ * first (only) time it is read. */
+function computeTopoLayers(n, edges) {
+  const succ = Array.from({ length: n }, () => []);
+  const indeg = new Array(n).fill(0);
+  for (const e of edges) { succ[e.from].push(e.to); indeg[e.to] += 1; }
+
+  const layer = new Array(n).fill(0);
+  const remaining = indeg.slice();
+  const queue = [];
+  for (let i = 0; i < n; i++) if (indeg[i] === 0) queue.push(i);
+  for (let qi = 0; qi < queue.length; qi++) {
+    const u = queue[qi];
+    for (const v of succ[u]) {
+      layer[v] = Math.max(layer[v], layer[u] + 1);
+      remaining[v] -= 1;
+      if (remaining[v] === 0) queue.push(v);
+    }
   }
+  // Every circuit `compile()` accepts is already known acyclic -- that is
+  // exactly what `Netlist::topological_order()` checks before this graph is
+  // ever built -- so `queue.length` above always reaches `n`. Nothing here
+  // depends on that beyond this comment: a node Kahn's algorithm never
+  // reaches simply keeps its initial layer 0, rather than this function
+  // throwing on a graph that should be impossible to receive.
+  return layer;
 }
 
-const TOPO_REPULSE_K = 4200;
-// One edge kind now (see this section's own doc comment on "There is one
-// kind of edge now") -- one stiffness/rest pair for every spring, where
-// there used to be a short/stiff pair for rigid edges and a long/loose pair
-// for routable ones. Chosen close to the old routable numbers: with no more
-// tight rigid clusters pulling gates into knots, this is what most of the
-// graph's own edges behaved like already.
-const TOPO_EDGE_STIFFNESS = 0.03, TOPO_EDGE_REST = 90;
-const TOPO_LAYER_K = 0.008;   // pull toward targetX
-const TOPO_CENTER_Y_K = 0.01; // pull toward y=0, so the graph doesn't drift
-const TOPO_DAMPING = 0.82;
-
-/** Run the force simulation to (approximate) rest, in place on `topoNodes`.
- * Bounded two ways -- a hard iteration cap and a wall-clock budget -- so a
- * large circuit degrades to "stops a bit short of settled" rather than
- * freezing the tab; see this section's own doc comment on what that means
- * for `seven_segment`.
- *
- * The repulsion cutoff and iteration budget both scale with node count: a
- * fixed cutoff tuned for `and4`'s ~30 nodes left `seven_segment`'s ~335 in a
- * single dense clump (only near neighbours ever felt a push apart, so the
- * pile never had a reason to expand to the size it actually needed). Scaling
- * by sqrt(n) keeps the same qualitative behaviour -- effective push radius
- * grows with the graph, not a constant that only happened to suit one
- * circuit's size. */
-function runLayout() {
-  const nodes = topoNodes;
-  const n = nodes.length;
+/** Build the layered layout in place on `topoNodes`, and fill
+ * `topoEdgePaths`: the four steps from this section's own doc comment
+ * (layer assignment, dummy-chain insertion, barycentre ordering,
+ * coordinate assignment), run fresh every call -- cheap enough at this
+ * graph size that there is no reason to cache intermediate state between
+ * calls the way the old force simulation cached node velocity. */
+function layoutTopology() {
+  const n = topoNodes.length;
+  topoEdgePaths = [];
   if (n === 0) return;
 
-  const repulseMaxDist = Math.max(260, 60 * Math.sqrt(n));
-  const repulseMaxDistSq = repulseMaxDist * repulseMaxDist;
-  const start = performance.now();
-  const maxIterations = Math.min(900, 200 + n * 2);
-  const maxMillis = 2000;
+  const layer = computeTopoLayers(n, topoEdges);
+  const maxLayer = layer.reduce((m, l) => Math.max(m, l), 0);
 
-  for (let iter = 0; iter < maxIterations; iter++) {
-    for (const node of nodes) { node.fx = 0; node.fy = 0; }
+  // One descriptor per real node, plus (built below) one per dummy. `up`/
+  // `down` collect the neighbours one layer earlier/later -- always exactly
+  // one layer away, since a dummy chain never skips one -- for the
+  // barycentre sweeps to read.
+  const real = topoNodes.map((_, i) => ({ real: true, nodeId: i, layer: layer[i], up: [], down: [] }));
+  const layers = Array.from({ length: maxLayer + 1 }, () => []);
+  for (const d of real) layers[d.layer].push(d);
 
-    // Repulsion -- every pair. O(n^2), the one thing that caps how large a
-    // circuit this view can lay out interactively; fine through
-    // seven_segment's few hundred nodes, not meant to scale past that.
-    for (let i = 0; i < n; i++) {
-      const a = nodes[i];
-      for (let j = i + 1; j < n; j++) {
-        const b = nodes[j];
-        let dx = b.x - a.x, dy = b.y - a.y;
-        let distSq = dx * dx + dy * dy;
-        if (distSq < 1e-4) {
-          dx = (detRand(i * 997 + j) - 0.5) * 0.1;
-          dy = (detRand(i * 131 + j * 7) - 0.5) * 0.1;
-          distSq = dx * dx + dy * dy + 1e-4;
-        }
-        if (distSq > repulseMaxDistSq) continue;
-        const dist = Math.sqrt(distSq);
-        const force = TOPO_REPULSE_K / distSq;
-        const fx = (dx / dist) * force, fy = (dy / dist) * force;
-        a.fx -= fx; a.fy -= fy;
-        b.fx += fx; b.fy += fy;
-      }
+  // Dummy-chain insertion (step 2): a chain of descriptors from source to
+  // destination, one dummy per layer the raw edge would otherwise skip.
+  const chains = topoEdges.map((edge) => {
+    const chain = [real[edge.from]];
+    for (let l = layer[edge.from] + 1; l < layer[edge.to]; l++) {
+      const dummy = { real: false, layer: l, up: [], down: [] };
+      layers[l].push(dummy);
+      chain.push(dummy);
     }
-
-    // Springs -- one per edge, all the same now that there is one edge kind.
-    for (const edge of topoEdges) {
-      const a = nodes[edge.from], b = nodes[edge.to];
-      const dx = b.x - a.x, dy = b.y - a.y;
-      const dist = Math.sqrt(dx * dx + dy * dy) || 1e-3;
-      const force = (dist - TOPO_EDGE_REST) * TOPO_EDGE_STIFFNESS;
-      const ux = dx / dist, uy = dy / dist;
-      a.fx += ux * force; a.fy += uy * force;
-      b.fx -= ux * force; b.fy -= uy * force;
+    chain.push(real[edge.to]);
+    for (let i = 0; i + 1 < chain.length; i++) {
+      chain[i].down.push(chain[i + 1]);
+      chain[i + 1].up.push(chain[i]);
     }
+    return chain;
+  });
 
-    // Layer bias + vertical centering.
-    for (const node of nodes) {
-      node.fx += (node.targetX - node.x) * TOPO_LAYER_K;
-      node.fy += -node.y * TOPO_CENTER_Y_K;
-    }
+  // Seed the ordering deterministically (first-seen order: reals first,
+  // then any dummy chains) before the barycentre sweeps improve it.
+  for (const row of layers) row.forEach((d, i) => { d.order = i; });
 
-    // Integrate, and check for convergence.
-    let totalMovement = 0;
-    for (const node of nodes) {
-      node.vx = (node.vx + node.fx) * TOPO_DAMPING;
-      node.vy = (node.vy + node.fy) * TOPO_DAMPING;
-      node.x += node.vx;
-      node.y += node.vy;
-      totalMovement += Math.abs(node.vx) + Math.abs(node.vy);
-    }
-    if (totalMovement / n < 0.02) break;
-    if (performance.now() - start > maxMillis) break;
+  // Barycentre ordering (step 3): `spread` maps a slot's order onto a
+  // common 0..widest scale first, same fix `build_floorplan`'s own `spread`
+  // helper applies, so a wide layer's barycentre isn't distorted by
+  // comparing raw indices against a much narrower neighbouring layer.
+  const widest = Math.max(1, ...layers.map((row) => row.length));
+  const spread = (order, len) => (order + 0.5) * (widest / Math.max(len, 1));
+  const reorder = (row, neighboursOf) => {
+    const keyed = row.map((d, i) => {
+      const neighbours = neighboursOf(d);
+      const key = neighbours.length === 0
+        ? spread(i, row.length)
+        : neighbours.reduce((sum, u) => sum + spread(u.order, layers[u.layer].length), 0) / neighbours.length;
+      return [key, i, d];
+    });
+    keyed.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
+    keyed.forEach(([, , d], i) => { row[i] = d; d.order = i; });
+  };
+  for (let sweep = 0; sweep < TOPO_BARYCENTRE_SWEEPS; sweep++) {
+    for (let l = 1; l <= maxLayer; l++) reorder(layers[l], (d) => d.up);
+    for (let l = maxLayer - 1; l >= 0; l--) reorder(layers[l], (d) => d.down);
   }
+
+  // Coordinates (step 4): layer -> x, final order -> y, each layer centred
+  // on y = 0 independently so the picture doesn't drift toward one edge as
+  // layer widths vary.
+  for (const row of layers) {
+    const offset = (row.length - 1) / 2;
+    for (const d of row) {
+      d.x = d.layer * TOPO_LAYER_SPACING;
+      d.y = (d.order - offset) * TOPO_NODE_SPACING;
+    }
+  }
+  for (const d of real) { topoNodes[d.nodeId].x = d.x; topoNodes[d.nodeId].y = d.y; }
+
+  // Edge paths for drawing: straight through the endpoints when an edge
+  // spans one layer (the common case), or a polyline through its dummy
+  // chain otherwise, so a long edge bends around whatever sits between its
+  // endpoints instead of passing through it.
+  topoEdgePaths = chains.map((chain) => chain.map((d) => ({ x: d.x, y: d.y })));
 }
 
 /** Every node id in `gate`'s own cluster plus every node directly connected
@@ -1854,9 +1872,9 @@ function resizeTopoCanvas() {
 // independent) until the tab is actually visible and its real size is known.
 let topoViewNeedsFit = true;
 
-function runLayoutAndRender() {
+function layoutAndRender() {
   const t0 = performance.now();
-  runLayout();
+  layoutTopology();
   const elapsed = performance.now() - t0;
   topoViewNeedsFit = true;
   if (currentView === 'topo') {
@@ -1867,7 +1885,7 @@ function runLayoutAndRender() {
   drawTopology();
   topoStatus.textContent =
     `${topoNodes.length} nodes, ${topoEdges.length} edges, ${topoGates.length} gates -- `
-    + `layout settled in ${elapsed.toFixed(0)} ms.`;
+    + `layered layout computed in ${elapsed.toFixed(0)} ms.`;
 }
 
 function gateHue(index) {
@@ -1989,14 +2007,20 @@ function drawTopology() {
   // Edges -- one kind, one style: solid, coloured the same as dust used to
   // be, since every edge here is exactly what a dust path once implied
   // ("realisation is not decided at this layer" -- see the edge legend).
-  for (const edge of topoEdges) {
+  // Drawn as a polyline through `topoEdgePaths`, not a straight line
+  // between endpoints: a long edge's path already runs through its own
+  // dummy-chain coordinates (this section's doc comment, step 2), so this
+  // is where that chain actually turns into a bend on screen instead of a
+  // line cutting through whatever real node sits between the two layers.
+  for (let i = 0; i < topoEdges.length; i++) {
+    const edge = topoEdges[i];
     const inFocus = egoSet ? (egoSet.has(edge.from) && egoSet.has(edge.to)) : true;
-    const a = topoNodes[edge.from], b = topoNodes[edge.to];
-    const [sx0, sy0] = toScreen(a.x, a.y);
-    const [sx1, sy1] = toScreen(b.x, b.y);
+    const path = topoEdgePaths[i];
     topoCtx.beginPath();
-    topoCtx.moveTo(sx0, sy0);
-    topoCtx.lineTo(sx1, sy1);
+    for (let j = 0; j < path.length; j++) {
+      const [sx, sy] = toScreen(path[j].x, path[j].y);
+      if (j === 0) topoCtx.moveTo(sx, sy); else topoCtx.lineTo(sx, sy);
+    }
     topoCtx.strokeStyle = `rgba(255,59,59,${inFocus ? 0.55 : 0.04})`;
     topoCtx.lineWidth = 1.6;
     topoCtx.stroke();
@@ -2072,10 +2096,13 @@ topoFocusSelect.addEventListener('change', () => {
   drawTopology();
 });
 
+// The layout itself is a deterministic function of the graph (see this
+// view's own doc comment) -- there is nothing left to reshuffle the way the
+// old force simulation's "Re-layout" did. What's still useful after panning
+// or zooming away is getting the camera back, so that's all this does now.
 topoRelayoutBtn.addEventListener('click', () => {
-  topoLayoutSeed += 1;
-  reinitTopoPositions();
-  runLayoutAndRender();
+  resetTopoView();
+  drawTopology();
 });
 
 /** Switch which of the 2D/3D/Topology panels are visible. All three views
