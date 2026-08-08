@@ -144,6 +144,16 @@ pub enum Primitive {
 /// are what makes "no primitive at all" and "one isolating repeater per
 /// branch" real, named, inspectable techniques instead of something only
 /// `compile` privately knows how to build.
+///
+/// `OR2`/`OR3` are real `GATE` lines in `redstone_nor.genlib` now (see
+/// [`gate_kind_for_yosys_cell`]), which raised the question the spec that
+/// ordered this work flagged as genuinely open: bare and isolated cost
+/// differently at the whole-circuit level, so which price does ABC get
+/// told, and can one number honestly stand for both? [`genlib_cost`]'s own
+/// doc comment works this out -- the short answer is that both entries
+/// price at exactly zero, honestly, because the isolating repeater is not
+/// part of either entry's own "gate", the same way a NOR's mandatory
+/// input-route repeater has never been part of *its* genlib price.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum GateKind {
     Nor(usize),
@@ -182,8 +192,24 @@ impl GateKind {
 /// and re-derives the real, possibly-smaller `GateKind` from what survives
 /// it). `Buf` has no such ambiguity -- its one pin either survives or the
 /// cell has no realisable output at all.
-const YOSYS_CELL_KINDS: &[(&str, GateKind)] =
-    &[("NOR1", GateKind::Nor(1)), ("NOR2", GateKind::Nor(2)), ("NOR3", GateKind::Nor(3)), ("BUF", GateKind::Buf)];
+///
+/// `OR2`/`OR3` name `Or`'s *declared* arity the same way `Nor`'s entries do,
+/// and fold the same way: `yosys_json::Context::build_or` re-derives the
+/// real arity from however many of a cell's pins survive constant-0
+/// folding, same as `build_nor`. Folding to exactly one real input is `Or`'s
+/// own extra case NOR never has -- `OR(x) == x` is a wire, not a gate of any
+/// kind, so `build_or` returns the surviving input's own signal name
+/// directly rather than asking this library for a one-input `Or` entry that
+/// does not exist (a bare wire is not a "technique" -- there is nothing for
+/// a `Library` entry to name).
+const YOSYS_CELL_KINDS: &[(&str, GateKind)] = &[
+    ("NOR1", GateKind::Nor(1)),
+    ("NOR2", GateKind::Nor(2)),
+    ("NOR3", GateKind::Nor(3)),
+    ("BUF", GateKind::Buf),
+    ("OR2", GateKind::Or(2)),
+    ("OR3", GateKind::Or(3)),
+];
 
 /// The [`GateKind`] this library realises Yosys cell type `cell_type` as, or
 /// `None` if `redstone_nor.genlib` never produces a cell by that name --
@@ -333,11 +359,10 @@ impl Library {
     /// meets a mapped cell type with nothing here to build it from -- plus
     /// `Or(2)` and `Or(3)`, each with two entries (bare, then isolated; see
     /// [`GateKind::Or`]'s doc comment for why both are registered even
-    /// though nothing outside `compile`'s own emission code picks between
-    /// them yet). No Yosys cell maps onto `Or` yet -- that is the genlib and
-    /// frontend step the referenced spec puts after this one -- so `Or`'s
-    /// absence from `gate_kind_for_yosys_cell`'s table is deliberate, not an
-    /// oversight.
+    /// though `gate_kind_for_yosys_cell`'s table -- `OR2`/`OR3` -- only ever
+    /// resolves to the whole `GateKind`, never to one specific entry:
+    /// `compile`'s own emission code, not `Library::choose`, is what picks
+    /// bare vs. isolated per branch, per gate instance).
     pub fn default_library() -> Self {
         let mut entries = BTreeMap::new();
         for arity in 1..=3 {
@@ -562,17 +587,51 @@ pub struct RealisationCost {
 /// byte-identical static file is the only way to guarantee ABC's own mapping
 /// decisions cannot shift as a side effect of this refactor).
 ///
+/// # OR: one number, honestly standing for two realisations
+///
 /// `output.is_none()` -- both OR entries -- returns `(0, 0)` immediately,
-/// without looking at `nodes` at all. That is exactly right for
-/// `or_bare_entry` (it has no nodes to price, and its real, measured cost
-/// genuinely is zero -- see the referenced cost-table spec). It is *not*
-/// yet right for `or_isolated_entry` (a real repeater has real area and
-/// delay), but pricing a `Repeater` node honestly, and deciding how ABC
-/// should be told to choose between an entry that costs nothing and one
-/// that costs a repeater, is the genlib step the referenced spec puts after
-/// this one -- see that spec's own "Do not write the genlib yet for OR".
-/// Returning zero here rather than tripping the `assert_eq!` below is a
-/// deliberate placeholder, not a claim that an isolated merge is free.
+/// without looking at `nodes` at all. For `or_bare_entry` that was always
+/// obviously right: it has no nodes to price, and its real, measured cost
+/// genuinely is zero (see the referenced cost-table spec). The question the
+/// spec that ordered this genlib line flagged as a real one, not a
+/// formality, is whether the *same* zero is honest for `or_isolated_entry`
+/// too -- a real repeater sits on an isolated branch, and a repeater has
+/// real area and real delay in this project's own units.
+///
+/// It is honest, and the reason is what makes OR different from every
+/// entry above: **the isolating repeater is not part of the OR's own gate
+/// body at all.** Trace where `compile::emit` actually places it
+/// (`compile::merge_branch_is_bare` choosing between `lay_bent_path_bare`
+/// and `lay_bent_path`): an isolated branch's repeater is the exact same
+/// mandatory route-terminating repeater that *every* socket in this
+/// compiler already pays unconditionally -- a plain `Nor` gate's input
+/// sockets included (`compile`'s own module doc comment: "a route always
+/// ends in a repeater facing the next gate's support block"). Choosing
+/// `or_isolated_entry` over `or_bare_entry` does not add a repeater on top
+/// of some cheaper baseline route; it is simply *not* the one special case
+/// (`lay_bent_path_bare`) that gets to omit the repeater every other route
+/// in the whole compiled circuit already has. So the isolated entry's
+/// repeater is exactly as much "this gate's own cost" as a plain NOR
+/// gate's own input-route repeater is -- which is to say, not at all: this
+/// genlib has never priced that repeater for `Nor`/`Buf` either (see
+/// `redstone_nor.genlib`'s own "the 'fanout delay' fields are 0" note --
+/// wire/route delay, and by the same accounting, wire/route area, are
+/// categorically outside what a `GATE` line here describes, for every cell
+/// this library has ever shipped).
+///
+/// So the two OR entries do not have two different true prices that this
+/// function is dishonestly averaging or pessimistically upper-bounding.
+/// Measured at the *circuit* level they clearly differ (0 vs. several
+/// blocks and game ticks -- see the referenced cost-table spec's numbers).
+/// But at the level this genlib has only ever spoken at -- a gate's own
+/// body, never the wires reaching it -- both realisations place no support
+/// block and no torch, ever, so both cost nothing, and the same true zero
+/// prices both. This is also why the promise is one ABC's mapper can
+/// actually keep: choosing OR never costs *more* gate-body area or delay
+/// than genlib says (zero, exactly, every time), and the isolated case's
+/// extra circuit cost is the same wire-only cost every other gate's own
+/// input routes were already allowed to have without this genlib ever
+/// claiming otherwise.
 pub fn genlib_cost(entry: &LibraryEntry) -> RealisationCost {
     let template = &entry.template;
     let Some(output) = template.output else {
@@ -738,9 +797,8 @@ mod tests {
 
     #[test]
     fn genlib_cost_of_a_bare_or_merge_is_genuinely_zero() {
-        // Not a placeholder like the isolated entry's -- this is the real,
-        // measured cost (see the referenced cost-table spec: 0 gates, 0
-        // game ticks to settle).
+        // The real, measured cost (see the referenced cost-table spec: 0
+        // gates, 0 game ticks to settle).
         for arity in 2..=3 {
             let cost = genlib_cost(&or_bare_entry(arity));
             assert_eq!(cost.area, 0, "arity {arity}");
@@ -749,22 +807,40 @@ mod tests {
     }
 
     #[test]
-    fn genlib_cost_of_an_isolated_or_merge_is_a_deliberate_zero_placeholder_not_yet_the_real_price() {
-        // Documents today's actual (wrong) answer so a future genlib change
-        // that fixes it is a visible, intentional diff here, not a silent
-        // behaviour change nothing caught.
+    fn genlib_cost_of_an_isolated_or_merge_is_also_genuinely_zero() {
+        // Not a placeholder, and not a different (understated) number from
+        // the bare entry's -- see `genlib_cost`'s own doc comment, "OR: one
+        // number, honestly standing for two realisations": the isolating
+        // repeater is the same mandatory route-terminating repeater every
+        // socket in this compiler already pays, never a cost this entry's
+        // own gate body adds on top, so its true genlib price is the same
+        // zero as the bare entry's, not merely the same *placeholder*.
         for arity in 2..=3 {
             let cost = genlib_cost(&or_isolated_entry(arity));
-            assert_eq!(cost.area, 0, "arity {arity}: not yet priced -- see genlib_cost's own doc comment");
-            assert_eq!(cost.delay_game_ticks, 0, "arity {arity}: not yet priced -- see genlib_cost's own doc comment");
+            assert_eq!(cost.area, 0, "arity {arity}");
+            assert_eq!(cost.delay_game_ticks, 0, "arity {arity}");
         }
     }
 
     #[test]
-    fn gate_kind_for_yosys_cell_has_no_mapping_for_or_yet() {
-        // Step 4 of the referenced spec's Order (the genlib gaining OR and
-        // the frontend mapping `$_OR_` onto it) is a later task -- confirm
-        // this module does not silently jump ahead of it.
+    fn gate_kind_for_yosys_cell_maps_or2_and_or3() {
+        // Step 4 of the referenced spec's Order: the genlib gains OR at its
+        // real cost, and the frontend maps it onto the library's wire-merge
+        // entries.
+        assert_eq!(gate_kind_for_yosys_cell("OR2"), Some(GateKind::Or(2)));
+        assert_eq!(gate_kind_for_yosys_cell("OR3"), Some(GateKind::Or(3)));
+    }
+
+    #[test]
+    fn gate_kind_for_yosys_cell_never_maps_yosys_native_or_names() {
+        // `$_OR_` is Yosys's own pre-`abc` cell name (the one a plain
+        // `synth`, with no technology mapping, would leave behind -- see the
+        // referenced cost-table spec's cell histogram). `abc -genlib`
+        // renames every cell it maps to the GATE line it chose, so a
+        // *mapped* netlist's OR cells are always literally `OR2`/`OR3`, the
+        // same way a mapped NOR cell is `NOR2`/`NOR3`, never `$_NOR_`. This
+        // table is exact-match against genlib's own names, so the
+        // pre-mapping name correctly has, and always will have, no entry.
         assert_eq!(gate_kind_for_yosys_cell("$_OR_"), None);
     }
 }

@@ -1,4 +1,4 @@
-# Redstone NOR-only cell library, in SIS Genlib format (the format Yosys's
+# Redstone cell library, in SIS Genlib format (the format Yosys's
 # `abc -genlib <file>` pass reads: see `help abc` in Yosys, and ABC's own
 # `mio.c` parser). This is the frontend's cost model: it tells ABC's
 # technology mapper what our cells actually cost in redstone, in the same
@@ -10,7 +10,7 @@
 # GATE for its source. Nothing here was tuned to make a particular circuit
 # come out smaller.
 #
-# NOR1/NOR2/NOR3/BUF's AREA and delay fields are not just derived by hand:
+# NOR1/NOR2/NOR3/BUF/OR2/OR3's AREA and delay fields are not just derived by hand:
 # `src/compile/topology.rs`'s `genlib_cost` computes the same numbers straight
 # from that module's own `Library` (which cell type maps to which entry is
 # `topology::gate_kind_for_yosys_cell`'s table; `src/frontend/yosys_json.rs`
@@ -116,3 +116,59 @@ PIN * INV 1 9999 2 0 2 0
 # not the CMOS one.
 GATE NOR3 12 Y=!(A+B+C);
 PIN * INV 1 9999 2 0 2 0
+
+# ---------------------------------------------------------------------
+# OR2 / OR3: a wire merge, not a gate
+# ---------------------------------------------------------------------
+#
+# Redstone dust joining is already the maximum-of-sources operation an OR
+# is -- see docs/superpowers/specs/2026-08-08-gate-types-and-wired-or.md,
+# "In redstone an OR is free". `compile` realizes an `is_merge` gate as
+# exactly that: no support block, no torch, nothing at the gate's own
+# location but the point where its declared inputs' own dust runs are
+# allowed to physically touch (`place_merge_gate`, `src/compile/mod.rs`).
+#
+# AREA 0 and delay 0 below are not an approximation of two different real
+# costs, or a placeholder waiting on more infrastructure -- they are this
+# genlib's honest price for *both* ways `compile` can terminate a branch
+# into a merge:
+#
+#   - A **private** branch (its source drives nothing besides this merge)
+#     joins as bare dust: no repeater, no gate, and the real, measured
+#     settle time contribution is 0 game ticks (see the referenced spec's
+#     verification, and `tests/cell_type_costs.rs`'s
+#     `or_is_a_free_wire_merge_when_nothing_else_shares_the_branch`).
+#   - A **shared** branch (its source also feeds something else) needs a
+#     repeater so backflow through the merge cannot corrupt that other
+#     consumer. But that repeater is not a new cost OR introduces: it is
+#     the exact same mandatory route-terminating repeater every socket in
+#     this compiler already pays unconditionally, NOR1/NOR2/NOR3's own
+#     input sockets included (`src/compile/mod.rs`'s module doc comment:
+#     "a route always ends in a repeater facing the next gate's support
+#     block"). Choosing a merge over a NOR-decomposition never adds that
+#     repeater on top of some cheaper baseline route -- it is simply not
+#     the one special case (a bare join) that gets to omit it.
+#
+# So the isolated branch's repeater is exactly as much "this gate's own
+# cost" as a plain NOR's own input-route repeater is: not at all. This
+# genlib has never priced wire/route delay or area for any cell above --
+# that is the whole point of NOR1/NOR2/NOR3's own "fanout delay" fields
+# being 0 -- so pricing OR the same way is applying the one rule this file
+# has always used, not carving out a special case for it. See
+# `src/compile/topology.rs`'s `genlib_cost`, "OR: one number, honestly
+# standing for two realisations", for the full derivation, and
+# `frontend::tests::genlib_numbers_match_what_the_topology_library_derives`
+# for the test that keeps this file and that derivation from drifting
+# apart, across *every* registered entry for `Or(2)`/`Or(3)` -- not just
+# the first one -- so "one number for both" is proven, not asserted.
+#
+# Yosys/ABC's own naming: a design's `$_OR_` cells (Yosys's pre-mapping,
+# generic name) never appear in a mapped netlist -- `abc -genlib` renames
+# every cell it maps to whichever GATE line it chose, so a mapped OR is
+# always literally `OR2` or `OR3` here, the same way a mapped NOR is
+# `NOR2`/`NOR3`, never `$_NOR_`.
+GATE OR2 0 Y=(A+B);
+PIN * NONINV 1 9999 0 0 0 0
+
+GATE OR3 0 Y=(A+B+C);
+PIN * NONINV 1 9999 0 0 0 0

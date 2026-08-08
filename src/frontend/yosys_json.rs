@@ -1,5 +1,5 @@
 //! Read Yosys's `write_json` output -- after `abc -genlib redstone_nor.genlib`
-//! has mapped every bit of logic onto NOR1/NOR2/NOR3/BUF -- into a
+//! has mapped every bit of logic onto NOR1/NOR2/NOR3/BUF/OR2/OR3 -- into a
 //! [`Netlist`].
 //!
 //! Yosys's JSON schema (see its own `docs/source/cmd/write_json.rst`) is
@@ -22,12 +22,16 @@ use crate::compile::Netlist;
 
 use super::FrontendError;
 
-/// Genlib/Yosys's own pin-naming convention for a NOR cell's inputs, in
-/// declaration order -- `A`, `B`, `C` for a 1-, 2-, and 3-input NOR
-/// respectively. This is a JSON-reading fact (which key names to look up in
-/// a cell's `connections` object), not a redstone one, so it lives here
-/// rather than in `topology`, which has no reason to know Yosys's pin names.
-const NOR_PIN_NAMES: [&str; 3] = ["A", "B", "C"];
+/// Genlib/Yosys's own pin-naming convention for this frontend's multi-input
+/// cells, in declaration order -- `A`, `B`, `C`, matching every `GATE`
+/// line's own boolean expression in `redstone_nor.genlib` (`Y=!(A+B+C)` for
+/// `NOR3`, `Y=(A+B+C)` for `OR3`, and so on). NOR and OR share this same
+/// table because they share the same declaration convention, not because
+/// they share a realisation -- this is a JSON-reading fact (which key names
+/// to look up in a cell's `connections` object), not a redstone one, so it
+/// lives here rather than in `topology`, which has no reason to know
+/// Yosys's pin names.
+const PIN_NAMES: [&str; 3] = ["A", "B", "C"];
 
 fn unsupported(message: impl Into<String>) -> FrontendError {
     FrontendError::Unsupported(message.into())
@@ -77,11 +81,11 @@ fn as_str<'a>(value: &'a Value, what: &str) -> Result<&'a str, FrontendError> {
 }
 
 /// The single bit on `pin` of a cell's `connections` object. Every cell type
-/// this reader supports (`NOR1`/`NOR2`/`NOR3`/`BUF`) has exactly one bit per
-/// pin -- `redstone_nor.genlib` never declares a multi-bit pin -- so a pin
-/// that is not exactly 1 bit wide means either a different, unsupported
-/// genlib produced this JSON, or Yosys did something this frontend does not
-/// expect.
+/// this reader supports (`NOR1`/`NOR2`/`NOR3`/`BUF`/`OR2`/`OR3`) has exactly
+/// one bit per pin -- `redstone_nor.genlib` never declares a multi-bit pin --
+/// so a pin that is not exactly 1 bit wide means either a different,
+/// unsupported genlib produced this JSON, or Yosys did something this
+/// frontend does not expect.
 fn single_bit<'a>(connections: &'a Map<String, Value>, pin: &str, cell_name: &str) -> Result<&'a Value, FrontendError> {
     let bits = connections
         .get(pin)
@@ -192,27 +196,15 @@ impl<'a> Context<'a> {
     /// dropped cell is a netlist that still compiles, to the wrong circuit.
     fn build_cell(&mut self, cell: &CellInfo<'a>) -> Result<String, FrontendError> {
         match topology::gate_kind_for_yosys_cell(cell.cell_type) {
-            Some(GateKind::Nor(arity)) => self.build_nor(cell, &NOR_PIN_NAMES[..arity]),
+            Some(GateKind::Nor(arity)) => self.build_nor(cell, &PIN_NAMES[..arity]),
             Some(GateKind::Buf) => self.build_buf(cell),
-            // `gate_kind_for_yosys_cell` never actually returns this today
-            // (see that function's own doc comment: no genlib line produces
-            // `$_OR_` yet), so this arm exists only so the match stays
-            // exhaustive as `GateKind` grows -- mapping `$_OR_` onto the
-            // library's wire-merge entries is step 4 of the referenced
-            // spec's Order, not this one.
-            Some(GateKind::Or(_)) => Err(unsupported(format!(
-                "cell `{}` has type `{}`, which names a `GateKind::Or` -- the topology library can \
-                 realize that, but this frontend cannot reach it yet: `redstone_nor.genlib` has no \
-                 GATE line that produces it, so `gate_kind_for_yosys_cell` never actually returns it \
-                 today either. Mapping `$_OR_` onto the library's wire-merge entries is a later task.",
-                cell.name, cell.cell_type
-            ))),
+            Some(GateKind::Or(arity)) => self.build_or(cell, &PIN_NAMES[..arity]),
             None => Err(unsupported(format!(
                 "cell `{}` has type `{}`, which `topology::gate_kind_for_yosys_cell` does not map to any \
-                 redstone realization. Only NOR1/NOR2/NOR3/BUF from redstone_nor.genlib are supported -- \
-                 was `abc -genlib redstone_nor.genlib` actually run, and did it fully map the design? (If \
-                 the type is `$__ZERO`/`$__ONE`: those drive a hard-wired constant, which this library has \
-                 no way to realize in real redstone.)",
+                 redstone realization. Only NOR1/NOR2/NOR3/BUF/OR2/OR3 from redstone_nor.genlib are \
+                 supported -- was `abc -genlib redstone_nor.genlib` actually run, and did it fully map the \
+                 design? (If the type is `$__ZERO`/`$__ONE`: those drive a hard-wired constant, which this \
+                 library has no way to realize in real redstone.)",
                 cell.name, cell.cell_type
             ))),
         }
@@ -239,7 +231,7 @@ impl<'a> Context<'a> {
 
         // Constant-0 folding can leave fewer real inputs than the cell's own
         // declared arity (a NOR3 with one pin tied to 0 is a real 2-input
-        // NOR) -- `pins.len()` is always <= 3 (it is one of `NOR_PIN_NAMES`'s
+        // NOR) -- `pins.len()` is always <= 3 (it is one of `PIN_NAMES`'s
         // own prefixes, one per registered `GateKind::Nor` arity), so
         // `inputs.len()` is too, and always names a real library entry.
         let kind = GateKind::Nor(inputs.len());
@@ -248,6 +240,45 @@ impl<'a> Context<'a> {
             .choose(kind)
             .unwrap_or_else(|| panic!("{kind:?} has no library entry -- default_library() should always register 1..=3"));
         Ok(realize_template(&mut self.builder, &entry.template, inputs))
+    }
+
+    /// Realize an `OR2`/`OR3` cell as a **declared wire merge**
+    /// (`NetlistBuilder::merge`, `Gate::is_merge`), never through
+    /// `topology::Library`/`realize_template` the way `build_nor`/
+    /// `build_buf` do -- see `topology::GateKind::Or`'s own doc comment for
+    /// why: which of the library's two OR entries (bare vs. isolated)
+    /// applies is a per-branch fact about the *whole* netlist (does this
+    /// branch's source fan out anywhere else?) that only exists once every
+    /// gate is built, so `compile::merge_branch_is_bare` decides it later,
+    /// directly from the assembled `Netlist` -- there is nothing for this
+    /// frontend to choose between at cell-construction time.
+    ///
+    /// Constant-0 folding works exactly like `build_nor`'s (0 is the
+    /// neutral element of OR too: `OR(x, 0) == x`, so a 0-tied pin just
+    /// drops out of the input list), but OR has one case NOR never does:
+    /// folding down to exactly one real input. `OR(x) == x` is a bare wire,
+    /// not a gate of any kind -- `topology::Library` has no `Or(1)` entry
+    /// (there is no one-branch "merge" to speak of), and there is nothing
+    /// to build: this just returns the surviving input's own signal name
+    /// directly, so this cell's own net becomes a plain alias rather than a
+    /// new gate.
+    fn build_or(&mut self, cell: &CellInfo<'a>, pins: &[&str]) -> Result<String, FrontendError> {
+        let mut inputs = Vec::with_capacity(pins.len());
+        for &pin in pins {
+            if let Some(name) = self.resolve_input_pin(cell.connections, pin, &cell.name)? {
+                inputs.push(name);
+            }
+        }
+
+        match inputs.len() {
+            0 => Err(unsupported(format!(
+                "cell `{}` has no real inputs left after folding constant-0 pins; a hard-wired-0 \
+                 output has no realization in the redstone OR library",
+                cell.name
+            ))),
+            1 => Ok(inputs.into_iter().next().expect("checked: exactly one input")),
+            _ => Ok(self.builder.merge(&inputs)),
+        }
     }
 
     fn build_buf(&mut self, cell: &CellInfo<'a>) -> Result<String, FrontendError> {

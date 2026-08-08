@@ -6,21 +6,24 @@
 //! package, a WASM build of Yosys with ABC built in) to do the actual
 //! parsing and logic synthesis, and technology-maps the result onto exactly
 //! the cells this project's hardware can build: `redstone_nor.genlib`
-//! describes a NOR-only library with 1, 2, and 3 input variants, priced in
-//! this project's own units (see that file for exactly where each number
-//! comes from). [`yosys_json`] then reads Yosys's mapped-netlist JSON back
-//! into a [`Netlist`].
+//! describes NOR (1, 2, and 3 input variants) and OR (2 and 3 input,
+//! realised as a free wire merge rather than a gate -- see that file's own
+//! "OR2 / OR3: a wire merge, not a gate" section), priced in this project's
+//! own units (see that file for exactly where each number comes from).
+//! [`yosys_json`] then reads Yosys's mapped-netlist JSON back into a
+//! [`Netlist`].
 //!
 //! # Why a cost model at all
 //!
 //! A generic synthesiser tuned for CMOS decomposes into small (usually
 //! 2-input) gates, because in CMOS more fan-in means a slower, larger gate.
 //! In this hardware a NOR gate is one redstone torch: a 1-, 2-, or 3-input
-//! NOR has the *same* delay, and only a little more area. Left to its
-//! default assumptions, ABC would optimise in exactly the wrong direction --
-//! decomposing multiplies gate count and wire, and wire is what actually
-//! costs delay here (see `src/compile/mod.rs`'s module doc comment). Feeding
-//! it this project's real cell costs via `-genlib` is what corrects that.
+//! NOR has the *same* delay, and only a little more area, and an OR is
+//! often free outright. Left to its default assumptions, ABC would optimise
+//! in exactly the wrong direction -- decomposing multiplies gate count and
+//! wire, and wire is what actually costs delay here (see
+//! `src/compile/mod.rs`'s module doc comment). Feeding it this project's
+//! real cell costs via `-genlib` is what corrects that.
 //!
 //! # The external dependency
 //!
@@ -271,20 +274,43 @@ mod tests {
     /// written to close -- if `place_nor_gate`'s footprint or a template's
     /// own shape changes without the other, this fails immediately instead
     /// of silently mapping to the wrong cost.
+    ///
+    /// `OR2`/`OR3` check **every** registered entry for `Or(2)`/`Or(3)`, not
+    /// just the one `Library::choose` would pick -- both `or_bare_entry` and
+    /// `or_isolated_entry` have to agree with the genlib's one `GATE OR2`/
+    /// `GATE OR3` line, since (per `genlib_cost`'s own "OR: one number,
+    /// honestly standing for two realisations") that one line is meant to
+    /// honestly price both. Checking only the first entry, the way NOR/BUF's
+    /// loop originally did (harmlessly, since they only ever have one entry
+    /// each), would not have caught it if a future change made the two OR
+    /// entries disagree with each other.
     #[test]
     fn genlib_numbers_match_what_the_topology_library_derives() {
         let library = Library::default_library();
-        for &(cell_name, kind) in
-            &[("NOR1", GateKind::Nor(1)), ("NOR2", GateKind::Nor(2)), ("NOR3", GateKind::Nor(3)), ("BUF", GateKind::Buf)]
-        {
-            let entry = library.choose(kind).unwrap_or_else(|| panic!("{cell_name} ({kind:?}) has no library entry"));
-            let cost = topology::genlib_cost(entry);
+        for &(cell_name, kind) in &[
+            ("NOR1", GateKind::Nor(1)),
+            ("NOR2", GateKind::Nor(2)),
+            ("NOR3", GateKind::Nor(3)),
+            ("BUF", GateKind::Buf),
+            ("OR2", GateKind::Or(2)),
+            ("OR3", GateKind::Or(3)),
+        ] {
+            let entries = library.entries_for(kind);
+            assert!(!entries.is_empty(), "{cell_name} ({kind:?}) has no library entry");
             let (genlib_area, genlib_delay) = genlib_area_and_delay(cell_name);
-            assert_eq!(cost.area, genlib_area, "{cell_name}: derived area disagrees with redstone_nor.genlib");
-            assert_eq!(
-                cost.delay_game_ticks, genlib_delay,
-                "{cell_name}: derived delay disagrees with redstone_nor.genlib"
-            );
+            for entry in entries {
+                let cost = topology::genlib_cost(entry);
+                assert_eq!(
+                    cost.area, genlib_area,
+                    "{cell_name} ({}): derived area disagrees with redstone_nor.genlib",
+                    entry.name
+                );
+                assert_eq!(
+                    cost.delay_game_ticks, genlib_delay,
+                    "{cell_name} ({}): derived delay disagrees with redstone_nor.genlib",
+                    entry.name
+                );
+            }
         }
     }
 
@@ -296,7 +322,7 @@ mod tests {
     #[test]
     fn every_mapped_yosys_cell_has_a_library_entry() {
         let library = Library::default_library();
-        for &cell_name in &["NOR1", "NOR2", "NOR3", "BUF"] {
+        for &cell_name in &["NOR1", "NOR2", "NOR3", "BUF", "OR2", "OR3"] {
             let kind = topology::gate_kind_for_yosys_cell(cell_name)
                 .unwrap_or_else(|| panic!("{cell_name} has no GateKind mapping"));
             assert!(library.choose(kind).is_some(), "{cell_name} maps to {kind:?}, which has no library entry");
