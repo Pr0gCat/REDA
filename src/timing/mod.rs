@@ -233,6 +233,34 @@ pub fn critical_path(netlist: &Netlist, arrivals: &BTreeMap<String, u64>, output
 // measured critical path, not the netlist's static depth.
 // ---------------------------------------------------------------------
 
+/// How many of `critical_path`'s own hops are driven by a **non-merge**
+/// gate -- what `critical_path_settle_model_game_ticks` actually charges
+/// `TORCH_DELAY_GAME_TICKS` for, since a merge gate contributes no torch of
+/// its own (see [`TimingSummary::critical_path_gate_count`]'s own doc
+/// comment for why).
+///
+/// `path[0]` is a primary input (or the path's own single element, if that
+/// primary input is also a declared output with nothing gate-driven behind
+/// it) and never a gate's output, so only `path[1..]` is ever checked --
+/// mirroring `critical_path_repeaters`'s own `.windows(2)` walk, which
+/// looks up exactly the same `producer_of` map for the same reason.
+fn critical_path_non_merge_gate_count(netlist: &Netlist, path: &[String]) -> usize {
+    if path.len() < 2 {
+        return 0;
+    }
+    let producer_of: HashMap<&str, usize> =
+        netlist.gates.iter().enumerate().map(|(i, gate)| (gate.output.as_str(), i)).collect();
+    path[1..]
+        .iter()
+        .filter(|signal| {
+            let &gate_index = producer_of
+                .get(signal.as_str())
+                .unwrap_or_else(|| panic!("critical path signal `{signal}` must be some gate's output"));
+            !netlist.gates[gate_index].is_merge
+        })
+        .count()
+}
+
 /// Sum the repeater blocks physically routed along `critical_path`'s edges,
 /// by looking each hop up in `compile::routing_stats::analyze` -- the same
 /// per-edge breakdown `routing_cost_report` uses, read back from the
@@ -289,7 +317,9 @@ pub fn critical_path_repeaters(netlist: &Netlist, compiled: &CompiledCircuit, cr
 /// `critical_path`; `critical_path_repeaters` repeaters, from the function
 /// above) rather than the netlist's static logic-depth bound.
 ///
-/// Each gate on the path costs one `TORCH_DELAY_GAME_TICKS`; each repeater
+/// Each **non-merge** gate on the path costs one `TORCH_DELAY_GAME_TICKS`
+/// (`critical_path_gate_count` already excludes merge hops -- see its own
+/// doc comment); each repeater
 /// its real, physically routed edges contain costs the same (every repeater
 /// this compiler places is set to the minimum one-redstone-tick delay, see
 /// `compile::repeater`); the terminating lamp delay accounts for the output
@@ -374,9 +404,15 @@ pub struct TimingSummary {
     pub logic_depth_bound_game_ticks: u64,
     /// `worst_settle_game_ticks / logic_depth_bound_game_ticks`.
     pub ratio: f64,
-    /// Gates on the *actual measured* critical path (`critical_path.len() -
-    /// 1`), which is not guaranteed to equal `logic_depth` -- see
-    /// `critical_path_settle_model_game_ticks`.
+    /// **Non-merge** gates on the *actual measured* critical path -- not
+    /// simply `critical_path.len() - 1`, and not guaranteed to equal
+    /// `logic_depth` either -- see `critical_path_settle_model_game_ticks`.
+    /// A merge gate on the path contributes no `TORCH_DELAY_GAME_TICKS` of
+    /// its own: a bare branch realises to no primitive at all (`GateKind::
+    /// Or`'s doc comment), and an isolated branch's only real primitive is
+    /// its own repeater, which `critical_path_repeater_count` already
+    /// prices -- charging a merge hop the same torch delay a real gate pays
+    /// would double- (or wrongly-) charge it.
     pub critical_path_gate_count: usize,
     /// Repeaters physically routed along the actual measured critical path's
     /// edges, read back from the compiled world.
@@ -442,7 +478,7 @@ pub fn summarize_worst_case(
     let bound = depth as u64 * TORCH_DELAY_GAME_TICKS;
     let ratio = worst_ticks as f64 / bound.max(1) as f64;
 
-    let critical_path_gate_count = path.len().saturating_sub(1);
+    let critical_path_gate_count = critical_path_non_merge_gate_count(netlist, &path);
     let critical_path_repeater_count = critical_path_repeaters(netlist, compiled, &path);
     // The critical output's own net (the driving gate's output torch, not the
     // physical lamp -- see `watch_all_nets`) carries the lamp's own final

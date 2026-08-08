@@ -68,6 +68,7 @@
 
 use std::collections::HashSet;
 
+use super::equivalence::{resolve_contributors, NetlistResolution};
 use super::primitive_graph::{NodeId, PrimitiveGraph, Provenance};
 use super::topology::TemplateNode;
 use super::{CompiledCircuit, Netlist, INPUT_DIRECTIONS};
@@ -169,11 +170,20 @@ pub fn partition_world(
     graph: &PrimitiveGraph,
     compiled: &CompiledCircuit,
 ) -> Result<WorldPartition, PartitionError> {
+    // Independent restatement of `expand`'s own bare/isolated decision per
+    // merge branch -- needed below because a bare branch legitimately has
+    // zero owned nodes and zero world repeaters (see this module's own doc
+    // comment on `routing_fill_repeater`: it is `Netlist`'s declared arity
+    // that check compares against for a `Nor`/`Buf` gate, but a merge's own
+    // "how many repeaters should this gate have" is its own count of
+    // *isolated* branches, not its full declared arity).
+    let resolution = resolve_contributors(netlist);
+
     // Checked first, and separately from the position-by-position walk
     // below: this is the one fact that makes bucketing an unclaimed
     // repeater as "routing fill" safe at all. See this function's own doc
     // comment on `WorldPartition::routing_fill_repeater`.
-    check_gate_input_arity_agrees(netlist, graph, compiled)?;
+    check_gate_input_arity_agrees(netlist, graph, compiled, &resolution)?;
 
     let explained = explained_positions(netlist, graph, compiled)?;
     let supports = known_support_positions(netlist, compiled)?;
@@ -227,9 +237,11 @@ pub fn partition_world(
     Ok(partition)
 }
 
-/// Cross-check, for every gate, that `Netlist`'s declared arity, the
-/// graph's own edge count into that gate's node cluster, and the world's
-/// own independently counted repeaters-facing-the-support all agree.
+/// Cross-check, for every gate, that the graph's own edge count into that
+/// gate's node cluster matches what [`NetlistResolution`] independently
+/// derives from `Netlist` alone, and that the world's own independently
+/// counted repeater-holding sockets match how many of this gate's own
+/// declared inputs actually need one.
 ///
 /// This is what stops [`WorldPartition::routing_fill_repeater`] from being
 /// the "shrug" a bare `BlockKind::Repeater => fill` rule would otherwise be:
@@ -240,61 +252,105 @@ pub fn partition_world(
 /// explained" as fill would absorb exactly the defect this whole module
 /// exists to surface.
 ///
-/// `graph_arity` here is *not* a count of `TemplateNode::Input` nodes --
-/// that role no longer exists (see `topology`'s doc comment: a NOR is one
-/// torch node, and its inputs are edges landing on it, not nodes of their
-/// own). The independent third source this check needs is instead: the
-/// number of edges the graph itself lands on gate `g`'s own node cluster
-/// from *outside* it. That is computed purely from `graph.edges` and
-/// `graph.gate_nodes` -- never from `Netlist`, never from the world -- so it
-/// remains a genuinely separate source from the other two: an `expand` bug
-/// that dropped one of a gate's producer edges shows up here as a lower
-/// edge count, exactly as a dropped `Input` node used to show up as a lower
-/// node count.
+/// # Two different quantities, not one three-way equality any more
+///
+/// Before merges existed, "one declared input" and "one edge" and "one
+/// socket" were the same count for every gate, so a single three-way
+/// equality against `Netlist`'s own declared arity was a correct check.
+/// That stopped being true the moment a producer could have more than one
+/// ultimate contributor (a bare-merge chain) or a declared input could need
+/// no socket at all (a merge's own bare branch) -- see `equivalence::
+/// resolve_contributors`'s own doc comment for why both are now real. So
+/// this checks two genuinely different things instead:
+///
+/// - **Edges**: the graph's own edge count into gate `g`'s node cluster
+///   (`TemplateNode::Input` no longer exists -- see `topology`'s doc
+///   comment -- so this is, as before, edges landing on a node `g` owns from
+///   a node it does not) must equal `resolution`'s own resolved contributor
+///   count, summed over every declared input for a `Nor`/`Buf` gate, or over
+///   only the *non-bare* declared inputs for a merge (a bare branch owns no
+///   node at all, so it can never receive an edge in the graph -- see
+///   `resolve_contributors`'s own doc comment).
+/// - **Sockets**: the world's own count of repeater-holding sockets (a
+///   physical position, always exactly one repeater regardless of how many
+///   logical contributors feed it, since they have already all joined into
+///   one wire before reaching it) must equal `Netlist`'s own declared arity
+///   for a `Nor`/`Buf` gate (found the ordinary way, via `torch_support_
+///   position`), or the number of *non-bare* declared inputs for a merge
+///   (found from the merge's own junction -- `gate_output_positions`,
+///   `place_merge_gate`'s `output_offset` being `(0, 0, 0)` -- directly,
+///   since a merge has no torch and so no support to resolve one from).
 fn check_gate_input_arity_agrees(
     netlist: &Netlist,
     graph: &PrimitiveGraph,
     compiled: &CompiledCircuit,
+    resolution: &NetlistResolution,
 ) -> Result<(), PartitionError> {
     for (g, gate) in netlist.gates.iter().enumerate() {
-        let netlist_arity = gate.inputs.len();
+        let arity = gate.inputs.len();
 
-        let graph_arity = graph
-            .gate_nodes
-            .get(g)
-            .map(|nodes| {
-                let own: HashSet<NodeId> = nodes.iter().copied().collect();
-                graph.edges.iter().filter(|e| own.contains(&e.to) && !own.contains(&e.from)).count()
-            })
-            .unwrap_or(0);
+        let own: HashSet<NodeId> = graph.gate_nodes.get(g).cloned().unwrap_or_default().into_iter().collect();
+        let graph_edges = graph.edges.iter().filter(|e| own.contains(&e.to) && !own.contains(&e.from)).count();
 
-        let &(tx, ty, tz) = compiled.gate_output_positions.get(&gate.output).ok_or_else(|| {
+        let &(jx, jy, jz) = compiled.gate_output_positions.get(&gate.output).ok_or_else(|| {
             PartitionError::CannotResolveNodePosition { detail: format!("gate `{}` has no recorded torch position", gate.output) }
         })?;
-        let torch_pos = Position::new(tx, ty, tz);
-        let torch_state = compiled.world.get(tx, ty, tz);
-        let world_arity = match torch_support_position(torch_state, torch_pos) {
-            Some(support) => INPUT_DIRECTIONS
+        let junction = Position::new(jx, jy, jz);
+
+        if gate.is_merge {
+            let expected_edges: usize =
+                (0..arity).filter(|index| !resolution.is_bare[&(g, *index)]).map(|index| resolution.contributors_of_input[&(g, index)].len()).sum();
+            let expected_sockets = (0..arity).filter(|index| !resolution.is_bare[&(g, *index)]).count();
+
+            // A merge's own junction is dust, not a torch -- its input
+            // sockets sit directly off the junction itself, at the same
+            // `INPUT_DIRECTIONS` offsets a NOR's own sockets use (see
+            // `place_merge_gate`'s own doc comment: it shares a NOR's input
+            // faces), never behind a resolved support.
+            let world_sockets = INPUT_DIRECTIONS
                 .iter()
                 .filter(|&&direction| {
-                    let socket = support.offset(direction);
+                    let socket = junction.offset(direction);
                     let socket_state = compiled.world.get(socket.x, socket.y, socket.z);
                     socket_state.kind == BlockKind::Repeater && socket_state.facing == Some(direction)
                 })
-                .count(),
-            // No resolvable support at all: as far as the world is
-            // concerned, this gate has zero working inputs, whatever the
-            // netlist or graph claim.
-            None => 0,
-        };
+                .count();
 
-        if netlist_arity != graph_arity || netlist_arity != world_arity {
-            return Err(PartitionError::GateInputArityDisagreement {
-                gate: gate.output.clone(),
-                netlist_arity,
-                graph_arity,
-                world_arity,
-            });
+            if graph_edges != expected_edges || world_sockets != expected_sockets {
+                return Err(PartitionError::GateInputArityDisagreement {
+                    gate: gate.output.clone(),
+                    netlist_arity: expected_sockets,
+                    graph_arity: graph_edges,
+                    world_arity: world_sockets,
+                });
+            }
+        } else {
+            let expected_edges: usize = (0..arity).map(|index| resolution.contributors_of_input[&(g, index)].len()).sum();
+
+            let torch_state = compiled.world.get(jx, jy, jz);
+            let world_sockets = match torch_support_position(torch_state, junction) {
+                Some(support) => INPUT_DIRECTIONS
+                    .iter()
+                    .filter(|&&direction| {
+                        let socket = support.offset(direction);
+                        let socket_state = compiled.world.get(socket.x, socket.y, socket.z);
+                        socket_state.kind == BlockKind::Repeater && socket_state.facing == Some(direction)
+                    })
+                    .count(),
+                // No resolvable support at all: as far as the world is
+                // concerned, this gate has zero working inputs, whatever the
+                // netlist or graph claim.
+                None => 0,
+            };
+
+            if graph_edges != expected_edges || world_sockets != arity {
+                return Err(PartitionError::GateInputArityDisagreement {
+                    gate: gate.output.clone(),
+                    netlist_arity: arity,
+                    graph_arity: graph_edges,
+                    world_arity: world_sockets,
+                });
+            }
         }
     }
     Ok(())
@@ -362,32 +418,46 @@ fn resolve_node_position(
                 netlist.gates[*gate].output
             ),
         }),
-        // Same situation as `SecondTorch` above: `primitive_graph::expand`
-        // never chooses a `GateKind::Or` entry for a real `Netlist::Gate`
-        // today (it always looks up `GateKind::Nor(arity)`), so this node
-        // kind cannot appear in a `PrimitiveGraph` built from a real
-        // `compile()` run yet. Reachable only once the frontend/genlib work
-        // that maps `$_OR_` onto the library lands.
-        Provenance::Gate { gate, role: TemplateNode::IsolatingRepeater(index) } => Err(PartitionError::CannotResolveNodePosition {
-            detail: format!(
-                "gate `{}`'s primitive graph has an `IsolatingRepeater({index})` node, which \
-                 `compiled` has no recorded position for -- no OR library entry is ever chosen for a \
-                 real `Netlist::Gate` today",
-                netlist.gates[*gate].output
-            ),
-        }),
+        // One merge branch's own isolating repeater: at the same
+        // `INPUT_DIRECTIONS[index]` offset off the merge's own junction that
+        // a NOR's own input socket sits off its support -- `place_merge_gate`
+        // shares a NOR's input faces (see its own doc comment), and
+        // `compiled.gate_output_positions` already *is* the junction for a
+        // merge (its own `output_offset` is `(0, 0, 0)`), so no separate
+        // lookup exists for it the way a NOR's support needs
+        // `torch_support_position` to find one.
+        Provenance::Gate { gate, role: TemplateNode::IsolatingRepeater(index) } => {
+            let gate_name = &netlist.gates[*gate].output;
+            let &(jx, jy, jz) = compiled.gate_output_positions.get(gate_name).ok_or_else(|| {
+                PartitionError::CannotResolveNodePosition { detail: format!("gate `{gate_name}` has no recorded junction position") }
+            })?;
+            let junction = Position::new(jx, jy, jz);
+            let direction = *INPUT_DIRECTIONS.get(*index).ok_or_else(|| PartitionError::CannotResolveNodePosition {
+                detail: format!("gate `{gate_name}`'s own branch {index} has no `INPUT_DIRECTIONS` entry"),
+            })?;
+            Ok(junction.offset(direction))
+        }
     }
 }
 
-/// Every position that is a NOR gate's own support block -- fill, not a
-/// graph node (see this module's doc comment on `routing_fill_support`).
-/// Found the same way `equivalence::verify_gate_structure` finds it: by
-/// walking from the gate's own (already resolved, graph-explained) torch
-/// position via `torch_support_position`, never guessed from the block's
-/// shape or its neighbours' arrangement.
+/// Every position that is a `Nor`/`Buf` gate's own support block -- fill,
+/// not a graph node (see this module's doc comment on
+/// `routing_fill_support`). Found the same way
+/// `equivalence::verify_gate_structure` finds it: by walking from the
+/// gate's own (already resolved, graph-explained) torch position via
+/// `torch_support_position`, never guessed from the block's shape or its
+/// neighbours' arrangement.
+///
+/// A merge gate has no support at all -- `place_merge_gate` writes dust at
+/// its own origin, never a support block (see `GateKind::Or`'s doc
+/// comment: an OR realises to no primitive of its own) -- so it is skipped
+/// here entirely, not merely absent from the result by coincidence.
 fn known_support_positions(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<HashSet<Position>, PartitionError> {
     let mut supports = HashSet::with_capacity(netlist.gates.len());
     for gate in &netlist.gates {
+        if gate.is_merge {
+            continue;
+        }
         let &(tx, ty, tz) = compiled.gate_output_positions.get(&gate.output).ok_or_else(|| {
             PartitionError::CannotResolveNodePosition { detail: format!("gate `{}` has no recorded torch position", gate.output) }
         })?;

@@ -976,6 +976,85 @@ fn bare_reserve_for_merge(netlist: &Netlist, nets: &[Net], into: usize) -> i32 {
     }
 }
 
+/// Where a **bypassed** net's own path must actually start from, instead of
+/// its raw `pin` (its source's own `gate_pin`/`lever_pin` entry), whenever
+/// (a) the net's source is a merge gate and (b) a bend is actually needed to
+/// get off that column at all (`pin.x != exit_x`) -- one hop further out
+/// from `pin`, along `OUTPUT_DIRECTION`, than the ordinary pin. Returns
+/// `pin` itself, unchanged, in every other case.
+///
+/// This has to be a *shifted starting position*, not an extra waypoint on
+/// top of the existing bend -- `lay_bent_path`/`lay_bent_path_bare` both
+/// document their `waypoints` list as never more than two entries (one
+/// optional bend, then the destination), and their whole shared
+/// bend-avoidance/strength-budget machinery (`bent_path_bends`,
+/// `plan_bent_path`) is built on that shape. Tried as a third waypoint
+/// first: it does not merely violate a documented assumption, it breaks
+/// two real invariants at once -- `bent_path_bends` marks the new waypoint
+/// itself as an extra forbidden repeater position (on top of the real bend),
+/// which shifted an interior refresh repeater late enough to let a real
+/// branch decay to zero before reaching it (confirmed: `and4`'s
+/// `[0,0,1,1]`/`[0,1,1,1]`/`[1,0,1,1]` truth-table rows went from correct to
+/// wrong when this was tried as a waypoint); and where `pin.x == exit_x` and
+/// `socket.x == exit_x` collapse to a single waypoint whose X and Z both
+/// differ from `pin` at once, `direction_from` cannot express a diagonal
+/// step at all -- it silently decides on X alone, and `bent_path_cells`'s
+/// `while pos != waypoint` loop then never terminates, since `pos` only
+/// ever moves in X while `waypoint`'s own Z stays forever out of reach
+/// (confirmed: reproduced the exact "memory allocation of 103079215104
+/// bytes failed" this produces). Shifting the *start* instead keeps the
+/// two-entries-total shape completely unchanged; the one extra hop this
+/// costs is paid explicitly by the caller (write the one dust cell between
+/// `pin` and this position, claim it under the same net, and decay
+/// `net_source_strength` by one more before calling `lay_bent_path*`) rather
+/// than folded into machinery that was never designed to know about it.
+///
+/// # Why the extra hop is needed at all
+///
+/// A merge's own bare-socket columns sit *on* its own row (`row_z[row_of[g]]`
+/// for merge `g`), completely unprotected by a repeater along most of their
+/// length (that is the entire point of a bare join -- see `GateKind::Or`'s
+/// doc comment). `pin` itself is one hop off that row (`emit`'s own
+/// `gate_pin` convention), so a bend placed at `pin`'s own row draws a new
+/// horizontal dust run exactly one cell -- not two -- from the merge's row:
+/// exactly the `dust_reach`-derived unsafe distance
+/// (`docs/superpowers/specs/2026-08-09-channel-safety-condition.md`'s "gap
+/// of at least 2"), regardless of which column the bend's own run happens to
+/// cross.
+///
+/// This is not a hypothetical: it produces a real, physical loop, confirmed
+/// with the real `Simulator`. `and4`'s Yosys-derived netlist chains two bare
+/// merges (`g2 = g0 OR g1`, feeding bare into `g6 = g2 OR g5`); `g6`'s own
+/// outbound net bends at exactly `g6`'s pin's row, one cell from `g6`'s own
+/// row, and that bend's run happens to cross both of `g6`'s own bare-socket
+/// columns end to end. One of those sockets needs an interior refresh
+/// repeater (`plan_bent_path`, over the branch's real routed distance); its
+/// output and input dust cells turn out to sit on either side of that same
+/// one-cell-adjacent bend -- so the bend electrically joins the repeater's
+/// own output back to its own input, a closed loop that self-sustains
+/// whatever value it powers up with regardless of the real logic upstream.
+/// Reduced (outside this codebase) to a two-level merge-of-merges with no
+/// Yosys involved at all, the same loop reproduces on the same geometry,
+/// confirming it is a property of this shape, not of ABC's particular
+/// choices.
+///
+/// The fix costs one extra hop of straight travel in `OUTPUT_DIRECTION`
+/// before the bend is allowed to turn -- moving the bend's own row to
+/// distance 2 from the merge's row, which `dust_reach`'s exhaustive case
+/// list already proves is always safe, independent of column. Only applied
+/// when the source is a merge (an ordinary gate's own pin sits one hop from
+/// a row whose *sockets* are always repeater-terminated, so the identical
+/// geometry is already safe there -- see this same spec's "repeater is a
+/// real firewall" point).
+fn bypass_source_start(netlist: &Netlist, net: &Net, pin: Position, exit_x: i32) -> Position {
+    let source_is_merge = matches!(net.source, Source::Gate(g) if netlist.gates[g].is_merge);
+    if source_is_merge && pin.x != exit_x {
+        pin.offset(OUTPUT_DIRECTION)
+    } else {
+        pin
+    }
+}
+
 /// 編譯過程的錯誤。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompileError {
@@ -1365,6 +1444,45 @@ fn bent_path_bends(cells: &[Position], waypoints: &[Position]) -> BTreeSet<usize
         .collect()
 }
 
+/// `bent_path_bends`, plus the path's own last cell -- what a **bare**
+/// merge branch's ending needs on top of an ordinary bent path's bends,
+/// and the reason it needs its own function rather than reusing
+/// `bent_path_bends` directly (both `lay_bent_path_bare` and
+/// `bare_branch_landing_strength` call this, not `bent_path_bends`, so the
+/// two can never derive a different forbidden set for the same path).
+///
+/// A bare branch's final cell is not a gate's own support/torch -- it is
+/// the socket, one hop of plain dust from the merge's junction (see
+/// `lay_bent_path_bare`'s own doc comment), and that last hop is a bare
+/// dust-to-dust join, not a driven connection: nothing propagates *through*
+/// a repeater in a direction its own facing was never chosen for, and a
+/// repeater placed there has its facing decided by `direction_from`'s
+/// *arrival* direction (whatever direction this path's own last segment
+/// happens to travel in), not by "towards the junction" -- those only agree
+/// by construction for a *bend-avoiding* repeater somewhere in the middle of
+/// a run, never for the one cell whose whole reason for existing is to
+/// physically touch a *different* net's own dust one hop further on. A
+/// repeater landing there is not merely redundant, it makes that hop
+/// electrically one-directional (a repeater's back side carries nothing),
+/// silently turning off the two nets' own real bare join -- so the
+/// terminal cell has to be forbidden from ever hosting one, on top of the
+/// existing bends, using the exact same "walk back to the nearest eligible
+/// cell" mechanism `plan_bent_path` already runs for a bend. Confirmed by a
+/// real failure this fixed: `and4`'s Yosys-derived netlist chains two
+/// bare merges (`NOT NOT` folded into a bare-branch OR of ORs), and its own
+/// last bent-path segment is short enough, at a low enough incoming
+/// strength, that the ordinary per-hop budget lands its one needed refresh
+/// repeater exactly on the last index -- see
+/// `docs/superpowers/specs/2026-08-08-gate-types-and-wired-or.md`'s task
+/// history for the truth-table mismatch this produced before the fix.
+fn bare_ending_bend_indices(cells: &[Position], waypoints: &[Position]) -> BTreeSet<usize> {
+    let mut bends = bent_path_bends(cells, waypoints);
+    if !cells.is_empty() {
+        bends.insert(cells.len() - 1);
+    }
+    bends
+}
+
 /// The `is_repeater` assignment for a `len`-cell bent path (`bend_indices`
 /// never eligible for one -- same decision `plan_track_run` makes,
 /// generalised from X-coordinate taps to index-based ones: when the budget
@@ -1444,7 +1562,7 @@ fn lay_bent_path_bare(world: &mut World, start: Position, waypoints: &[Position]
     debug_assert!(incoming_strength > 0, "a run cannot start from an already-dead signal");
 
     let cells = bent_path_cells(start, waypoints);
-    let bend_indices = bent_path_bends(&cells, waypoints);
+    let bend_indices = bare_ending_bend_indices(&cells, waypoints);
     let (is_repeater, ending_strength) = plan_bent_path(cells.len(), &bend_indices, incoming_strength, reserve);
 
     let mut prev = start;
@@ -2752,18 +2870,21 @@ fn bare_branch_landing_strength(
             Source::Lever(i) => lever_pin[i],
             Source::Gate(g) => gate_pin[g],
         };
+        let start = bypass_source_start(netlist, net, pin, exit_x);
+        let strength_at_start = if start != pin { source_strength.saturating_sub(1) } else { source_strength };
+
         let mut waypoints: Vec<Position> = Vec::new();
-        if pin.x != exit_x {
-            waypoints.push(Position::new(exit_x, GATE_Y, pin.z));
+        if start.x != exit_x {
+            waypoints.push(Position::new(exit_x, GATE_Y, start.z));
         }
         if socket.x != exit_x {
             waypoints.push(Position::new(exit_x, GATE_Y, row_z_gate));
         }
         waypoints.push(socket);
 
-        let cells = bent_path_cells(pin, &waypoints);
-        let bend_indices = bent_path_bends(&cells, &waypoints);
-        return plan_bent_path(cells.len(), &bend_indices, source_strength, reserve).1;
+        let cells = bent_path_cells(start, &waypoints);
+        let bend_indices = bare_ending_bend_indices(&cells, &waypoints);
+        return plan_bent_path(cells.len(), &bend_indices, strength_at_start, reserve).1;
     }
 
     // Tracked: replay this one net's own ramp/track chain (slicing `plan_
@@ -2795,7 +2916,7 @@ fn bare_branch_landing_strength(
     waypoints.push(socket);
 
     let cells = bent_path_cells(landing, &waypoints);
-    let bend_indices = bent_path_bends(&cells, &waypoints);
+    let bend_indices = bare_ending_bend_indices(&cells, &waypoints);
     plan_bent_path(cells.len(), &bend_indices, landing_strength, reserve).1
 }
 
@@ -2867,7 +2988,32 @@ fn compute_net_source_strengths(
         if !gate.is_merge {
             continue; // stays MAX_SIGNAL_STRENGTH -- a torch's output always is.
         }
-        let mut junction = 0u8;
+        // The *minimum* deliverable value across this merge's own branches,
+        // not the maximum. `delivered` is "what this one branch supplies
+        // when it alone is the live one" -- which branch that actually is
+        // depends on the input combination, and this value feeds downstream
+        // interior-repeater *placement* decisions (`net_source_strength`)
+        // that are made once at compile time, for every combination at
+        // once. Placing repeaters as if the least-decayed branch (typically
+        // the shortest bare route) were always the one carrying a real
+        // signal is an availability bug, not a conservative approximation:
+        // for whichever combination actually drives the *most*-decayed
+        // branch instead, the real junction value is that branch's own,
+        // smaller delivery -- exactly `min`, not `max` -- and a repeater
+        // placed on the assumption of the larger value can leave that real,
+        // smaller run decaying to zero before it ever reaches one.
+        //
+        // Confirmed with the real `Simulator`: `and4`'s Yosys-derived
+        // netlist chains `g6 = g2 OR g5`, where `g2`'s own branch decays far
+        // less than `g5`'s over their real routed distances. Combinations
+        // that drive `g5` alone (`g2` dark) reached a real junction value
+        // measurably lower than the `max`-based nominal this used to
+        // compute, and `g6`'s own downstream interior repeater -- placed
+        // against the `max`-optimistic nominal -- sat far enough out that
+        // exactly those combinations decayed to zero one hop short of it,
+        // corrupting `and4`'s and the decoder's own truth tables on the
+        // rows that depend on `g5` alone.
+        let mut junction = MAX_SIGNAL_STRENGTH;
         for idx in 0..gate.inputs.len() {
             let &(feeding_net, slot) = feeder
                 .get(&(g, idx))
@@ -2904,7 +3050,7 @@ fn compute_net_source_strengths(
                 // junction receives the full value, not one less.
                 MAX_SIGNAL_STRENGTH
             };
-            junction = junction.max(delivered);
+            junction = junction.min(delivered);
         }
         if let Some(&out_net) = net_of_gate.get(&g) {
             // `net_source_strength` means "the strength at this net's own
@@ -3153,9 +3299,25 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
             let (dx, dy, dz) = gate_cell[gate].input_offsets[input_index];
             let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
 
+            // See `bypass_source_start`'s own doc comment: a merge-sourced
+            // net that needs to jog off its own column gets one extra hop
+            // of straight travel first, laid here (not folded into
+            // `waypoints`) because the shared bent-path machinery is built
+            // on a strict "at most one bend, then the destination" shape.
+            let start = bypass_source_start(netlist, net, pin, exit_x);
+            let strength_at_start = if start != pin {
+                ensure_floor(world, start);
+                world.set(start.x, start.y, start.z, dust());
+                route.claim(start.down());
+                route.claim(start);
+                net_source_strength[n].saturating_sub(1)
+            } else {
+                net_source_strength[n]
+            };
+
             let mut waypoints: Vec<Position> = Vec::new();
-            if pin.x != exit_x {
-                waypoints.push(Position::new(exit_x, GATE_Y, pin.z));
+            if start.x != exit_x {
+                waypoints.push(Position::new(exit_x, GATE_Y, start.z));
             }
             if socket.x != exit_x {
                 waypoints.push(Position::new(exit_x, GATE_Y, row_z_gate));
@@ -3163,9 +3325,9 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
             waypoints.push(socket);
             if merge_branch_is_bare(netlist, net, gate) {
                 let reserve = bare_reserve_for_merge(netlist, nets, gate);
-                let _ = lay_bent_path_bare(world, pin, &waypoints, net_source_strength[n], reserve, &mut route);
+                let _ = lay_bent_path_bare(world, start, &waypoints, strength_at_start, reserve, &mut route);
             } else {
-                lay_bent_path(world, pin, &waypoints, net_source_strength[n], &mut route);
+                lay_bent_path(world, start, &waypoints, strength_at_start, &mut route);
             }
             continue;
         }
@@ -3620,16 +3782,28 @@ fn resolve_bypass_and_geometry(
             }
         }
 
+        // See `bypass_source_start`'s own doc comment -- this candidate's
+        // real geometry, once promoted, starts one hop further out than
+        // `pin` whenever the source is a merge and a jog is actually
+        // needed, so the safety check below has to examine that same
+        // shifted start (and its own extra cell) rather than `pin` alone,
+        // or a promoted candidate could pass this check against geometry
+        // `emit` never actually builds.
+        let start = bypass_source_start(netlist, net, pin, exit_x);
+
         let mut waypoints: Vec<Position> = Vec::new();
-        if pin.x != exit_x {
-            waypoints.push(Position::new(exit_x, GATE_Y, pin.z));
+        if start.x != exit_x {
+            waypoints.push(Position::new(exit_x, GATE_Y, start.z));
         }
         if socket.x != exit_x {
             waypoints.push(Position::new(exit_x, GATE_Y, row_z_gate));
         }
         waypoints.push(socket);
 
-        let cells = bent_path_cells(pin, &waypoints);
+        let mut cells = bent_path_cells(start, &waypoints);
+        if start != pin {
+            cells.push(start);
+        }
         if cells.iter().all(|&pos| cell_is_free_for(&probe_reservation, pos, n)) {
             bypass_final[n] = true;
             // Fold this candidate's own cells into the reservation before

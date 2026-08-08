@@ -1,18 +1,53 @@
-//! Watches a fixed set of positions for `lit` changes, at a cost proportional
-//! to the number of watched positions rather than to world volume.
+//! Watches a fixed set of positions for their own on/off signal changes, at
+//! a cost proportional to the number of watched positions rather than to
+//! world volume.
 //!
 //! This is the mechanism dynamic timing analysis (`crate::timing`) is built
 //! on: `Simulator` samples every watched position once per advanced game
-//! tick and appends an [`Observation`] only when that position's `lit` value
+//! tick and appends an [`Observation`] only when that position's own signal
 //! actually changed since the last sample. A `Simulator` with no observer
 //! attached never touches this module at all, so existing behaviour is
 //! unchanged.
+//!
+//! # Why "signal", not simply `lit`
+//!
+//! For a torch, lamp, lever or repeater, `BlockState::lit` already *is* the
+//! on/off signal this module needs -- `propagate::recompute_dust_strengths`
+//! and its neighbours only ever write those blocks' `lit` field, never
+//! their `power` (`comparator.power = 7` is the one exception, and a
+//! comparator is never `lit`-driven in the sense this module cares about
+//! either way). A `RedstoneWire` block is the opposite: only `power` is
+//! ever written for it (`recompute_dust_strengths`'s own write-back loop);
+//! `lit` starts `false` at construction (`compile::dust`) and nothing in
+//! this simulator ever sets it to anything else. Watching `lit` directly on
+//! a dust cell -- exactly what a wire-merge OR's own junction physically is
+//! (`compile::place_merge_gate`) -- would therefore never observe a single
+//! change, no matter how many real transitions its power level went
+//! through: not "rare", provably zero, for every dust cell that will ever
+//! exist. [`signal_of`] is the one place this module reads a block's own
+//! on/off state, precisely so this distinction is made once, not
+//! independently at both call sites below.
 
 use std::collections::HashMap;
 
+use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::storage::World;
 
 use super::position::Position;
+
+/// The on/off signal `position` actually carries, in the sense this module
+/// needs: `lit` for everything this simulator ever sets `lit` on, `power >
+/// 0` for a `RedstoneWire` cell, which this simulator never sets `lit` on
+/// at all -- see this module's own doc comment for why the distinction is
+/// not optional.
+fn signal_of(world: &World, position: Position) -> bool {
+    let state = world.get(position.x, position.y, position.z);
+    if state.kind == BlockKind::RedstoneWire {
+        state.power > 0
+    } else {
+        state.lit
+    }
+}
 
 /// One recorded change to a watched position's `lit` state.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,8 +95,7 @@ impl Observer {
         self.log.clear();
         self.last_value.clear();
         for &position in self.watched.keys() {
-            let lit = world.get(position.x, position.y, position.z).lit;
-            self.last_value.insert(position, lit);
+            self.last_value.insert(position, signal_of(world, position));
         }
     }
 
@@ -74,10 +108,10 @@ impl Observer {
     /// sparse (see `propagate::recompute_dust_strengths`).
     pub(super) fn sample(&mut self, world: &World, tick: u64) {
         for (&position, label) in &self.watched {
-            let lit = world.get(position.x, position.y, position.z).lit;
-            if self.last_value.get(&position) != Some(&lit) {
-                self.last_value.insert(position, lit);
-                self.log.push(Observation { tick, position, label: label.clone(), value: lit });
+            let signal = signal_of(world, position);
+            if self.last_value.get(&position) != Some(&signal) {
+                self.last_value.insert(position, signal);
+                self.log.push(Observation { tick, position, label: label.clone(), value: signal });
             }
         }
     }

@@ -127,6 +127,14 @@ pub enum ExpandError {
     /// independently so it stays correct as a standalone entry point, not
     /// only when called from inside `compile`.
     UndrivenSignal(String),
+    /// The netlist has a combinational cycle. `compile` already rejects this
+    /// before it ever builds a floorplan (`CompileError::CyclicNetlist`);
+    /// `expand` needs its own topological order to process a merge gate only
+    /// after every gate it reads from (see this module's own doc comment on
+    /// why a merge's own realisation, unlike a NOR's, actually depends on
+    /// that order), so it re-checks this independently for the same reason
+    /// `UndrivenSignal` does.
+    CyclicNetlist,
 }
 
 impl std::fmt::Display for ExpandError {
@@ -136,6 +144,7 @@ impl std::fmt::Display for ExpandError {
                 write!(f, "no library entry for gate `{gate}` (fan-in {arity})")
             }
             ExpandError::UndrivenSignal(name) => write!(f, "signal `{name}` is never driven"),
+            ExpandError::CyclicNetlist => write!(f, "netlist has a combinational cycle"),
         }
     }
 }
@@ -148,6 +157,11 @@ impl std::error::Error for ExpandError {}
 /// `expand` needs to wire up afterwards. Works the same way regardless of
 /// how many nodes the entry has, or whether two of its `inputs` happen to
 /// name the same node (every entry this module ships does, today).
+///
+/// Only ever called for a `GateKind::Nor`/`Buf` entry, both of which always
+/// name a real output primitive -- a wire-merge `Or` entry (which may have
+/// none, see `or_bare_entry`'s own doc comment) goes through
+/// [`expand`]'s own merge-specific branch instead, never through here.
 fn instantiate(graph: &mut PrimitiveGraph, gate: usize, entry: &LibraryEntry) -> (NodeId, Vec<NodeId>) {
     let mut id_of: HashMap<TemplateNode, NodeId> = HashMap::with_capacity(entry.template.nodes.len());
     let mut instance_nodes = Vec::with_capacity(entry.template.nodes.len());
@@ -163,17 +177,11 @@ fn instantiate(graph: &mut PrimitiveGraph, gate: usize, entry: &LibraryEntry) ->
 
     graph.gate_nodes[gate] = instance_nodes;
 
-    // `expand` only ever asks the library for `GateKind::Nor`/`Buf` entries
-    // today (see below), and every one of those names a real output
-    // primitive -- an entry with none (a wire-merge OR) has no node for
-    // this to look up, and `expand` does not yet know how to wire one in
-    // (its whole model is "one output node feeds its consumers"; a merge's
-    // consumers are fed by its own *inputs* instead, which is a different
-    // wiring shape this module has not been taught yet).
-    let output = entry.template.output.map(|role| id_of[&role]).expect(
-        "instantiate only ever runs on an entry with a real output primitive -- a wire-merge OR \
-         entry is not reachable through `expand` yet",
-    );
+    let output = entry
+        .template
+        .output
+        .map(|role| id_of[&role])
+        .expect("instantiate only ever runs on a Nor/Buf entry, which always names a real output primitive");
     let inputs: Vec<NodeId> = entry.template.inputs.iter().map(|role| id_of[role]).collect();
     (output, inputs)
 }
@@ -183,11 +191,83 @@ fn instantiate(graph: &mut PrimitiveGraph, gate: usize, entry: &LibraryEntry) ->
 /// the whole circuit -- "a mechanical pass, not a decision" (spec, "The
 /// topology library").
 ///
-/// Two shapes of edge come out of this, both the same [`Edge`] kind: one per
-/// gate input, from whatever drives it (another gate's output node, or a
-/// primary input's lever) to that input's own landing node; and one per
-/// declared output, from its driving gate's own output node to a fresh
-/// `Lamp` node.
+/// For a `Nor`/`Buf` gate this is exactly what it always was: one edge per
+/// gate input, from whatever drives it (another gate's own contribution, or
+/// a primary input's lever) to that input's own landing node (its single
+/// Torch); one edge per declared output, from its driving gate's own output
+/// node to a fresh `Lamp` node.
+///
+/// # Merges: a gate whose "output" is a *set* of nodes, not one
+///
+/// A `Nor`/`Buf` gate's own output is a single node (its own template's
+/// `output` role) that every consumer reads from -- `instantiate` returns
+/// exactly one `NodeId` for it, and that identity is what makes "one output
+/// node feeds its consumers" true throughout the rest of this module.
+///
+/// A merge has no such node. `or_bare_entry`/`or_isolated_entry`
+/// (`topology`) both leave `Template::output` `None`: a bare branch is nothing
+/// but the point where its own producer's dust and the merge's other
+/// branches touch, and an isolated branch's only real primitive is the
+/// branch's own repeater, whose *input* faces the producer -- neither one
+/// is a node a consumer could sensibly be said to "read the merge's output
+/// from". So a merge's own contribution to whoever reads its declared
+/// output is not one node, but the **set of nodes each of its own branches
+/// actually resolves to**: a bare branch contributes its own producer's own
+/// set of nodes directly (recursively -- if that producer is *itself* a
+/// bare merge, its own set flows through unchanged, exactly mirroring how
+/// `compile::place_merge_gate` really does let dust from arbitrarily many
+/// chained bare merges touch as one physical net); an isolated branch
+/// contributes exactly its own repeater's node (one physical, reconstituted
+/// signal, however many nodes fed into it).
+///
+/// This is why `output_of` below is `Vec<Vec<NodeId>>`, not `Vec<NodeId>`:
+/// every gate's own row is the *set* of nodes a consumer must draw an edge
+/// from *each* of to correctly read that gate's output -- a singleton set
+/// for `Nor`/`Buf`, `Or`'s own branch sets (concatenated in declaration
+/// order) for a merge. Consuming it is uniform either way: wherever this
+/// module used to draw one edge from `output_of[g]`, it now draws one edge
+/// from *every* element of `output_of[g]` -- multiple edges landing on the
+/// same consumer node is exactly how this graph already represents fan-out
+/// in the other direction (`a_shared_producer_fans_out_to_two_edges_from_
+/// one_torch_node`), so a bare-OR's own multi-source join needs no new
+/// graph machinery, only a producer side that can hand back more than one
+/// node.
+///
+/// # Why gates are processed in topological order now
+///
+/// A `Nor`/`Buf` gate's own instantiation never depended on any other
+/// gate's own result (its one Torch node exists regardless of what feeds
+/// it), so the old version of this function could instantiate every gate
+/// first and wire all the edges in a second, order-independent pass. A
+/// merge's own `output_of` entry is built *from* its branches' own already-
+/// resolved contributions, so a merge cannot be processed before every gate
+/// it (transitively, through bare chains) reads from has been. `topological_
+/// order` is exactly the order that guarantees that, and it is also
+/// `expand`'s own re-check that the netlist has no cycle -- `compile`
+/// already rejects one before this ever runs from inside it, but `expand`
+/// re-derives it independently for the same reason it re-checks
+/// `UndrivenSignal` (see `ExpandError::CyclicNetlist`'s own doc comment).
+///
+/// # Bare branches: no landing node, and so no input-wiring edge at all
+///
+/// For a `Nor`/`Buf` gate, "one edge per gate input" and "instantiating the
+/// gate" are two separate steps because every input lands on the same fixed
+/// Torch node regardless of which branch is bare or isolated -- a concept
+/// that does not even apply to `Nor`. For a merge, whether a branch is bare
+/// or isolated *is* the whole decision, and it is made once, per branch, via
+/// [`branch_is_bare`] -- the exact same fanout rule `compile::merge_branch_
+/// is_bare` uses (a branch is bare iff its own producer signal drives
+/// nothing besides this merge), restated over `Netlist` directly since this
+/// module never builds `compile`'s own `Net` structures. A bare branch gets
+/// no node and no edge of its own at all: its producer's own contribution
+/// set is spliced directly into this merge's own `output_of` entry, which is
+/// the entire realisation (see `or_bare_entry`'s own doc comment: "no
+/// primitive at all"). An isolated branch gets exactly one new
+/// `IsolatingRepeater` node (owned by this gate, so it appears in `gate_
+/// nodes[g]`), with one edge into it from *each* of the branch's own
+/// producer's contributions -- exactly mirroring `place_merge_gate`'s real
+/// isolation, where an isolated branch's repeater is the one thing standing
+/// between a shared producer and the junction.
 pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, ExpandError> {
     let mut graph = PrimitiveGraph::empty(netlist.gates.len());
 
@@ -204,54 +284,99 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
         producer_of.insert(gate.output.as_str(), g);
     }
 
-    // One node cluster per gate, from the library entry `Library::choose`
-    // picks for its arity.
-    let mut output_of: Vec<NodeId> = Vec::with_capacity(netlist.gates.len());
-    let mut input_targets_of: Vec<Vec<NodeId>> = Vec::with_capacity(netlist.gates.len());
+    // signal name -> every gate index it feeds an input of (repeated once
+    // per input, if it feeds the same gate more than once) -- `branch_is_
+    // bare`'s whole basis, and nothing else in this function needs it.
+    let mut consumers_of: HashMap<&str, Vec<usize>> = HashMap::new();
     for (g, gate) in netlist.gates.iter().enumerate() {
-        let arity = gate.inputs.len();
-        let kind = GateKind::Nor(arity);
-        let entry = library
-            .choose(kind)
-            .ok_or_else(|| ExpandError::NoLibraryEntry { gate: gate.output.clone(), arity })?;
-        let (output, inputs) = instantiate(&mut graph, g, entry);
-        output_of.push(output);
-        input_targets_of.push(inputs);
+        for input in &gate.inputs {
+            consumers_of.entry(input.as_str()).or_default().push(g);
+        }
     }
+    let branch_is_bare =
+        |signal: &str, into_gate: usize| consumers_of.get(signal).is_some_and(|gs| gs.iter().all(|&g| g == into_gate));
 
-    // One edge per gate input, from its producer to that input's own landing
-    // node.
-    for (g, gate) in netlist.gates.iter().enumerate() {
-        for (i, input_name) in gate.inputs.iter().enumerate() {
-            let producer = resolve_producer(input_name, &lever_of, &producer_of, &output_of)
-                .ok_or_else(|| ExpandError::UndrivenSignal(input_name.clone()))?;
-            graph.push_edge(producer, input_targets_of[g][i]);
+    let order = netlist.topological_order().ok_or(ExpandError::CyclicNetlist)?;
+
+    // Every gate's own contribution set -- see this function's own doc
+    // comment for why this is `Vec<NodeId>` per gate rather than one
+    // `NodeId`.
+    let mut output_of: Vec<Vec<NodeId>> = vec![Vec::new(); netlist.gates.len()];
+
+    for g in order {
+        let gate = &netlist.gates[g];
+
+        if gate.is_merge {
+            let mut contributions: Vec<NodeId> = Vec::new();
+            let mut owned_nodes: Vec<NodeId> = Vec::new();
+
+            for (index, input_name) in gate.inputs.iter().enumerate() {
+                let producer = resolve_producer(input_name, &lever_of, &producer_of, &output_of)
+                    .ok_or_else(|| ExpandError::UndrivenSignal(input_name.clone()))?;
+
+                if branch_is_bare(input_name, g) {
+                    contributions.extend(producer);
+                } else {
+                    let role = TemplateNode::IsolatingRepeater(index);
+                    let repeater = graph.push_node(Primitive::Repeater, Provenance::Gate { gate: g, role });
+                    for from in producer {
+                        graph.push_edge(from, repeater);
+                    }
+                    contributions.push(repeater);
+                    owned_nodes.push(repeater);
+                }
+            }
+
+            graph.gate_nodes[g] = owned_nodes;
+            output_of[g] = contributions;
+        } else {
+            let arity = gate.inputs.len();
+            let kind = GateKind::Nor(arity);
+            let entry = library
+                .choose(kind)
+                .ok_or_else(|| ExpandError::NoLibraryEntry { gate: gate.output.clone(), arity })?;
+            let (output, input_targets) = instantiate(&mut graph, g, entry);
+
+            for (index, input_name) in gate.inputs.iter().enumerate() {
+                let producer = resolve_producer(input_name, &lever_of, &producer_of, &output_of)
+                    .ok_or_else(|| ExpandError::UndrivenSignal(input_name.clone()))?;
+                for from in producer {
+                    graph.push_edge(from, input_targets[index]);
+                }
+            }
+
+            output_of[g] = vec![output];
         }
     }
 
-    // One edge per declared output, from its driving gate's own output node
-    // to a fresh Lamp node.
+    // One edge per declared output, from *every* one of its driving gate's
+    // own contributions to a fresh Lamp node.
     for output_name in &netlist.outputs {
         let &g = producer_of
             .get(output_name.as_str())
             .ok_or_else(|| ExpandError::UndrivenSignal(output_name.clone()))?;
         let lamp = graph.push_node(Primitive::Lamp, Provenance::PrimaryOutput { name: output_name.clone() });
-        graph.push_edge(output_of[g], lamp);
+        for &from in &output_of[g] {
+            graph.push_edge(from, lamp);
+        }
     }
 
     Ok(graph)
 }
 
+/// The set of nodes `signal` contributes -- a primary input's own lever (a
+/// singleton), or a gate's own `output_of` entry (which may hold more than
+/// one node; see [`expand`]'s own doc comment for why).
 fn resolve_producer(
     signal: &str,
     lever_of: &HashMap<&str, NodeId>,
     producer_of: &HashMap<&str, usize>,
-    output_of: &[NodeId],
-) -> Option<NodeId> {
+    output_of: &[Vec<NodeId>],
+) -> Option<Vec<NodeId>> {
     if let Some(&lever) = lever_of.get(signal) {
-        return Some(lever);
+        return Some(vec![lever]);
     }
-    producer_of.get(signal).map(|&g| output_of[g])
+    producer_of.get(signal).map(|&g| output_of[g].clone())
 }
 
 #[cfg(test)]

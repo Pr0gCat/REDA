@@ -247,19 +247,34 @@ fn scan_socket_entry(world: &World, landing: Position, socket: Position, row_z_g
     scan_bent_path(world, landing, &waypoints)
 }
 
-/// Mirrors the bypass branch of `emit`'s Columns pass exactly: from `pin`, an
-/// optional sideways bend onto the sink's approach column (`exit_x`), an
-/// optional second bend at the destination row, then the socket.
-fn scan_bypass(world: &World, pin: Position, exit_x: i32, socket: Position, row_z_gate: i32) -> PartTotals {
+/// Mirrors the bypass branch of `emit`'s Columns pass exactly: from `pin`
+/// (via `bypass_source_start`'s own one-extra-hop shift, whenever the net's
+/// source is a merge that needs to jog off its own column -- see that
+/// function's doc comment for why that hop exists and cannot be folded into
+/// `waypoints` the way an ordinary bend can), an optional sideways bend onto
+/// the sink's approach column (`exit_x`), an optional second bend at the
+/// destination row, then the socket.
+fn scan_bypass(
+    world: &World,
+    netlist: &Netlist,
+    net: &Net,
+    pin: Position,
+    exit_x: i32,
+    socket: Position,
+    row_z_gate: i32,
+) -> PartTotals {
+    let start = super::bypass_source_start(netlist, net, pin, exit_x);
+    let extra_hop = if start != pin { classify(world, start) } else { PartTotals::default() };
+
     let mut waypoints: Vec<Position> = Vec::new();
-    if pin.x != exit_x {
-        waypoints.push(Position::new(exit_x, pin.y, pin.z));
+    if start.x != exit_x {
+        waypoints.push(Position::new(exit_x, start.y, start.z));
     }
     if socket.x != exit_x {
-        waypoints.push(Position::new(exit_x, pin.y, row_z_gate));
+        waypoints.push(Position::new(exit_x, start.y, row_z_gate));
     }
     waypoints.push(socket);
-    scan_bent_path(world, pin, &waypoints)
+    extra_hop + scan_bent_path(world, start, &waypoints)
 }
 
 /// Mirrors `move_between_layers`'s loop exactly: one landing-dust cell per Y
@@ -387,7 +402,7 @@ pub fn analyze(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<RoutingR
             let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
 
             let mut parts: BTreeMap<RoutePart, PartTotals> = BTreeMap::new();
-            parts.insert(RoutePart::Bypass, scan_bypass(world, pin, exit_x, socket, row_z_gate));
+            parts.insert(RoutePart::Bypass, scan_bypass(world, netlist, net, pin, exit_x, socket, row_z_gate));
 
             let sink_label = format!("{}.in[{}]", netlist.gates[gate].output, input_index);
             edges.push(EdgeRoute { source: source_label, sink: sink_label, hops: 1, parts });
@@ -499,7 +514,7 @@ pub fn distinct_totals_by_part(
             let cell = &cell_of_count[&netlist.gates[gate].inputs.len()];
             let (dx, dy, dz) = cell.input_offsets[input_index];
             let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
-            *total.entry(RoutePart::Bypass).or_default() += scan_bypass(world, pin, exit_x, socket, row_z_gate);
+            *total.entry(RoutePart::Bypass).or_default() += scan_bypass(world, netlist, net, pin, exit_x, socket, row_z_gate);
             continue;
         }
 
