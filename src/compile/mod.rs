@@ -1226,17 +1226,91 @@ struct Floorplan {
     lever_x: Vec<i32>,
 }
 
-/// Levelise the DAG, order each row by barycentre, and give every gate an X.
-fn build_floorplan(
-    netlist: &Netlist,
-    order: &[usize],
-    producer_of: &HashMap<&str, usize>,
-) -> Floorplan {
-    let gate_count = netlist.gates.len();
-
-    // ASAP levels: a gate sits one row deeper than its deepest predecessor.
-    // `order` is topological, so one pass is enough.
-    let mut level = vec![0usize; gate_count];
+/// ASAP level of every gate: one row deeper than its deepest predecessor.
+/// `order` is topological, so one forward pass is enough.
+///
+/// # Why not ALAP, or something that uses the slack in between
+///
+/// ASAP puts a gate as early as its inputs allow with no regard for where
+/// its *consumer* sits -- which is exactly what stretches a single-fanout
+/// gate like `and4`'s `g5` (`¬d`) across the whole netlist depth even
+/// though its only consumer is the very last gate (see this module's
+/// top-of-file docs for the full trace). That looked like a real bug, so it
+/// was measured, not assumed: two alternatives were implemented and run
+/// through the exact same four reference circuits and the same routing
+/// pipeline below (ASAP itself unchanged either way -- only which level a
+/// gate gets handed to `build_floorplan` differs).
+///
+/// - **Full ALAP**: every gate sits one row above the *earliest* of its
+///   consumers' own ALAP levels; a gate with no consumer is pinned to the
+///   deepest level the netlist needs.
+/// - **Consumer-pulled**: a gate with *exactly one* consumer is pulled all
+///   the way to its ALAP level (right next to that consumer); every gate
+///   with zero or more-than-one consumer stays at ASAP. The reasoning
+///   going in: a single-fanout gate has nothing to lose by moving next to
+///   its one consumer, while a multi-fanout gate would only shorten one
+///   consumer's edge at the expense of lengthening the others (the sum of
+///   a multi-fanout gate's edge lengths does not depend on where it sits;
+///   only a single-fanout edge passes a level shift through unchanged).
+///
+/// Both looked plausible on paper. Neither won. Numbers (release build,
+/// `cargo run --bin build_circuit` for box/blocks, `cargo test --test
+/// reference_circuits`/`seven_segment -- --nocapture` for settle,
+/// `cargo run --bin routing_cost_report` for bypass count):
+///
+/// ```text
+/// non-air blocks (bounding box unchanged in Y/Z shape terms, only listing the number that matters):
+///   circuit         ASAP    ALAP    consumer-pulled
+///   and4             571     571     571   (same gate count, ¬d's cost just moves to whichever side is now the long edge)
+///   full_adder      2246    2872    3388   (+27.9%, +50.9%)
+///   segment_a       6716    8122    8110   (+21.0%, +20.7%)
+///   seven_segment  16694   16968   16694   (+1.6%, +0.0%)
+///
+/// blocks/gate:
+///   and4            81.6    81.6    81.6
+///   full_adder     102.1   130.5   154.0
+///   segment_a      146.0   176.6   176.3
+///   seven_segment  198.7   202.0   198.7
+///
+/// worst-case settle (game ticks):
+///   and4              30      30      30
+///   full_adder        82      86      86
+///   segment_a         94     100      98
+///   seven_segment    124     116     124
+///
+/// bypass edges (direct GATE_Y route, no ramp/track) out of all routed edges:
+///   and4             6/10    5/10    5/10
+///   full_adder       6/32    6/32    6/32
+///   segment_a       15/83   10/83   12/83
+///   seven_segment  34/156  30/156  34/156
+/// ```
+///
+/// ASAP wins or ties on every circuit's block count, blocks/gate, and
+/// bypass count. Its only loss anywhere is `seven_segment`'s settle time,
+/// where full ALAP is 8 ticks faster (116 vs. 124) -- but full ALAP is also
+/// 1.6% larger there and meaningfully larger everywhere else, so that one
+/// win does not generalise into a reason to switch.
+///
+/// The `g5`-shaped fix does not actually shrink anything: moving a
+/// single-fanin/single-fanout gate within its slack window does not
+/// eliminate its long edge, it relocates it -- `g5`'s incoming edge (from a
+/// lever, fixed at row 0) and outgoing edge (to `g6`, fixed at the deepest
+/// row) between them always span the netlist's full depth minus one hop,
+/// no matter which row `g5` itself occupies; ASAP puts the long hop on the
+/// output side, ALAP/consumer-pulled put it on the input side, and `and4`'s
+/// identical block count under all three (571) confirms neither is
+/// cheaper. Applied netlist-wide, the *only* effect visible in the larger
+/// circuits is the downside the module's own docs warned about: pushing
+/// gates later crowds the deepest rows (they must now fit more gates,
+/// widening the row and the channel under it) while several early-to-middle
+/// levels empty out without the channel machinery ever letting an empty
+/// level cost zero (`assign_tracks`/`layout_z` always reserve at least one
+/// track's depth per channel) -- pure overhead, no shorter critical path to
+/// show for it.
+///
+/// Kept: ASAP, unmodified.
+fn compute_asap_levels(netlist: &Netlist, order: &[usize], producer_of: &HashMap<&str, usize>) -> Vec<usize> {
+    let mut level = vec![0usize; netlist.gates.len()];
     for &g in order {
         let mut deepest = 0usize;
         for input in &netlist.gates[g].inputs {
@@ -1246,6 +1320,18 @@ fn build_floorplan(
         }
         level[g] = deepest;
     }
+    level
+}
+
+/// Levelise the DAG, order each row by barycentre, and give every gate an X.
+fn build_floorplan(
+    netlist: &Netlist,
+    order: &[usize],
+    producer_of: &HashMap<&str, usize>,
+) -> Floorplan {
+    let gate_count = netlist.gates.len();
+
+    let level = compute_asap_levels(netlist, order, producer_of);
     let level_count = level.iter().copied().max().map_or(0, |m| m + 1);
     let row_count = level_count + 1;
 
