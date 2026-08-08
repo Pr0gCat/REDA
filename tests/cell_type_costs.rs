@@ -74,6 +74,7 @@ impl GateNet {
             name: output.clone(),
             inputs: inputs.iter().map(|s| s.to_string()).collect(),
             output: output.clone(),
+            is_merge: false,
         });
         output
     }

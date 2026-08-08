@@ -488,6 +488,7 @@ mod tests {
             name: output.to_string(),
             inputs: inputs.iter().map(|s| s.to_string()).collect(),
             output: output.to_string(),
+            is_merge: false,
         }
     }
 

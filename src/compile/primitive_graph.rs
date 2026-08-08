@@ -251,7 +251,12 @@ mod tests {
     use crate::compile::Gate;
 
     fn gate(output: &str, inputs: &[&str]) -> Gate {
-        Gate { name: output.to_string(), inputs: inputs.iter().map(|s| s.to_string()).collect(), output: output.to_string() }
+        Gate {
+            name: output.to_string(),
+            inputs: inputs.iter().map(|s| s.to_string()).collect(),
+            output: output.to_string(),
+            is_merge: false,
+        }
     }
 
     #[test]

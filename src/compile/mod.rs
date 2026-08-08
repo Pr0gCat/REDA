@@ -49,6 +49,33 @@ pub struct Gate {
     pub name: String,
     pub inputs: Vec<String>,
     pub output: String,
+    /// Whether this gate's output net is a **declared wire merge** of its
+    /// inputs rather than a NOR of them.
+    ///
+    /// `false` -- the only value any gate in this project has ever had
+    /// until now -- means the usual thing: `place_nor_gate`, one torch, one
+    /// support. `true` means a bare join instead: no torch, no support, no
+    /// gate body at all -- just the point downstream of where this gate's
+    /// own declared inputs' dust runs are allowed to physically touch. See
+    /// `docs/superpowers/specs/2026-08-08-gate-types-and-wired-or.md`, "An
+    /// OR is a node, not a disappearing act", and `MergeGroups` below,
+    /// which both invariants consult to honour this.
+    ///
+    /// This is deliberately a bare `bool`, not the general gate-kind enum
+    /// that same spec's larger arc calls for eventually: today `Gate` has
+    /// exactly one alternative realisation worth declaring, and a `bool`
+    /// says precisely that with nothing left over to misinterpret. When a
+    /// real `GateKind` lands, this field's two states are exactly
+    /// `kind == GateKind::Merge` and everything else, so nothing here has
+    /// to be undone -- only renamed.
+    ///
+    /// Nothing in this compiler sets this to `true` yet: `NetlistBuilder`
+    /// and the Yosys frontend both still only ever emit ordinary NOR gates.
+    /// Consulting it only changes two things, both narrow: a declared
+    /// merge's branches joining is no longer the bug `verify_connectivity`
+    /// otherwise exists to catch, and `verify_torch_merge` no longer
+    /// requires a merge gate to have a torch it was never going to have.
+    pub is_merge: bool,
 }
 
 /// 一個邏輯閘網表。這是編譯器的輸入。
@@ -3024,22 +3051,129 @@ fn resolve_bypass_and_geometry(
 /// carries. Used for naming cells in a `ConnectivityViolation` or a
 /// `TorchMergeViolation`.
 fn net_name(netlist: &Netlist, nets: &[Net], index: usize) -> String {
-    match nets[index].source {
-        Source::Lever(i) => netlist.inputs[i].clone(),
-        Source::Gate(g) => netlist.gates[g].output.clone(),
+    net_source_name(netlist, &nets[index]).to_string()
+}
+
+/// The same lookup `net_name` does, without the allocation `.clone()` would
+/// force -- `MergeGroups::build` below calls this once per net just to find
+/// *another* net's index by name, never to display it, so paying for a
+/// `String` every time would be wasted work on every single `compile`.
+fn net_source_name<'a>(netlist: &'a Netlist, net: &Net) -> &'a str {
+    match net.source {
+        Source::Lever(i) => netlist.inputs[i].as_str(),
+        Source::Gate(g) => netlist.gates[g].output.as_str(),
+    }
+}
+
+// ---------------------------------------------------------------------
+// Declared wire merges
+// ---------------------------------------------------------------------
+//
+// A net with several sources is exactly what a wire-merge OR is (see
+// `docs/superpowers/specs/2026-08-08-gate-types-and-wired-or.md`, "The
+// invariants have to allow multi-source nets, carefully") -- and exactly
+// what two unrelated nets' dust touching by accident also looks like. The
+// only thing that tells them apart is whether the netlist *asked* for the
+// join, so that has to be checked, not assumed: `Gate::is_merge` is where
+// the netlist says so, and `MergeGroups` is the one place both invariants
+// below go to ask.
+//
+// A merge gate's "output" is not a separate pin the way a NOR's torch is --
+// it is only a name for the point downstream of where its declared inputs'
+// own dust runs are allowed to physically join. Electrically, the merge's
+// output net and every one of its declared input nets are the *same* net,
+// not several nets that happen to touch. `MergeGroups` computes exactly
+// that: the union-find closure, over every `is_merge` gate in the netlist,
+// of its output net with each of its declared input nets -- transitively,
+// so a merge feeding another merge collapses into one group exactly as far
+// as the netlist actually says it should, no further.
+//
+// A netlist with no `is_merge` gate at all gives every net its own
+// singleton group, which makes `same_group` agree with plain `==`
+// everywhere -- this is a strict generalisation of today's one-source-per-
+// net check, not a separate code path next to it.
+struct MergeGroups {
+    parent: Vec<usize>,
+}
+
+impl MergeGroups {
+    fn build(netlist: &Netlist, nets: &[Net]) -> Self {
+        let mut parent: Vec<usize> = (0..nets.len()).collect();
+
+        let index_of_signal: HashMap<&str, usize> =
+            nets.iter().enumerate().map(|(i, net)| (net_source_name(netlist, net), i)).collect();
+
+        for gate in &netlist.gates {
+            if !gate.is_merge {
+                continue;
+            }
+            // The merge's own output feeding no other gate (only a
+            // declared circuit output, say) leaves nothing to union it
+            // with here -- and nothing downstream that could mistake its
+            // branches for a foreign net either, so skipping it is exactly
+            // right, not a gap.
+            let Some(&output_index) = index_of_signal.get(gate.output.as_str()) else {
+                continue;
+            };
+            for input in &gate.inputs {
+                if let Some(&input_index) = index_of_signal.get(input.as_str()) {
+                    Self::union(&mut parent, output_index, input_index);
+                }
+            }
+        }
+
+        MergeGroups { parent }
+    }
+
+    fn find(parent: &mut [usize], x: usize) -> usize {
+        if parent[x] != x {
+            parent[x] = Self::find(parent, parent[x]);
+        }
+        parent[x]
+    }
+
+    fn union(parent: &mut [usize], a: usize, b: usize) {
+        let root_a = Self::find(parent, a);
+        let root_b = Self::find(parent, b);
+        if root_a != root_b {
+            parent[root_a] = root_b;
+        }
+    }
+
+    /// Read-only root lookup -- no path compression, since both call sites
+    /// below only ever hold a shared `&self`. `build`'s own unioning keeps
+    /// every chain at most as long as the number of merges feeding one
+    /// another, which nothing in this project constructs deep enough for
+    /// the missing compression to cost anything observable.
+    fn root(&self, mut index: usize) -> usize {
+        while self.parent[index] != index {
+            index = self.parent[index];
+        }
+        index
+    }
+
+    fn same_group(&self, a: usize, b: usize) -> bool {
+        self.root(a) == self.root(b)
     }
 }
 
 /// The connectivity invariant: every dust network the finished world
-/// actually contains must belong to exactly one net.
+/// actually contains must belong to exactly one net -- or, when the
+/// netlist declares a merge (`MergeGroups`), to one *declared group* of
+/// nets, which a legitimate wire-merge OR's several sources are.
 ///
 /// This does not know anything about tracks, columns or ramps -- it only
 /// knows what `dust_connections` says is physically joined (the same rule
 /// the simulator itself walks) and what `reservation` says every cell was
-/// *for*, and it fails the moment those two disagree. That independence is
-/// the point: it catches a routing bug regardless of which pass caused it,
-/// including ones this module's own keep-out logic has never heard of.
+/// *for*, and it fails the moment those two disagree without the netlist
+/// having asked for it. That independence is the point: it catches a
+/// routing bug regardless of which pass caused it, including ones this
+/// module's own keep-out logic has never heard of -- and it catches it
+/// exactly as before for every netlist that declares no merge at all,
+/// since `MergeGroups` gives every net its own singleton group in that
+/// case.
 fn verify_connectivity(world: &World, reservation: &Reservation, netlist: &Netlist, nets: &[Net]) -> Result<(), CompileError> {
+    let groups = MergeGroups::build(netlist, nets);
     let mut visited: HashSet<Position> = HashSet::new();
 
     for flat in world.positions_of(BlockKind::RedstoneWire) {
@@ -3064,7 +3198,9 @@ fn verify_connectivity(world: &World, reservation: &Reservation, netlist: &Netli
                     if let Some(&found_net) = reservation.get(&next) {
                         match owner {
                             None => owner = Some((found_net, next)),
-                            Some((expected_net, expected_cell)) if expected_net != found_net => {
+                            Some((expected_net, expected_cell))
+                                if expected_net != found_net && !groups.same_group(expected_net, found_net) =>
+                            {
                                 return Err(CompileError::ConnectivityViolation {
                                     cell: (next.x, next.y, next.z),
                                     found_net: net_name(netlist, nets, found_net),
@@ -3312,6 +3448,17 @@ fn net_reach(world: &World, cells: &[Position]) -> HashSet<Position> {
 /// own claimed cells form one clean network, so `net_reach` only has to
 /// ask where that network's power actually ends up, not re-derive that it
 /// is one network in the first place.
+///
+/// A `Gate` with `is_merge` set has no torch and no support at all -- see
+/// that field's doc comment -- so none of the four conditions above apply
+/// to it, and it is skipped outright. Condition 3, for every *other* gate,
+/// is widened by exactly the same `MergeGroups` `verify_connectivity` uses:
+/// a declared input's whole merge group counts as declared, so a merge's
+/// several branches are recognised as the one declared input they
+/// electrically are, not flagged as foreign nets corrupting the gate that
+/// actually consumes the merge's output. Nothing else changes -- a net
+/// outside every declared input's group is still exactly as foreign as it
+/// always was.
 fn verify_torch_merge(
     world: &World,
     reservation: &Reservation,
@@ -3319,6 +3466,8 @@ fn verify_torch_merge(
     nets: &[Net],
     gate_output_positions: &BTreeMap<String, (i32, i32, i32)>,
 ) -> Result<(), CompileError> {
+    let groups = MergeGroups::build(netlist, nets);
+
     // (gate, input_index) -> the net index that drives that input.
     let mut input_net: HashMap<(usize, usize), usize> = HashMap::new();
     // gate -> the net index this gate's own output feeds, if it feeds any
@@ -3342,10 +3491,42 @@ fn verify_torch_merge(
     for (&pos, &owner) in reservation {
         net_cells[owner].push(pos);
     }
-    let reach: Vec<HashSet<Position>> =
-        net_cells.iter().map(|cells| net_reach(world, cells)).collect();
+
+    // Reach is computed per *declared merge group*, not per raw net index.
+    // `MergeGroups` says a declared merge's several nets are electrically
+    // one, but `Reservation` still maps one physical cell to exactly one
+    // raw index -- so only one of a merge's several branches can ever
+    // literally own the mandatory repeater that terminates the join into a
+    // downstream support (this module's own routing rule: dust never
+    // charges a block sideways, only a repeater does). Asking `net_reach`
+    // to prove each raw index reaches a support *from its own cells alone*
+    // would therefore fail for every branch but the one that happens to own
+    // that repeater, even though the whole group genuinely reaches it.
+    // Grouping cells first is what makes the check match the physical fact
+    // `MergeGroups` already declares -- and it reproduces today's exact
+    // per-net reach whenever nothing is merged, since every net is then its
+    // own singleton group and this is just `net_reach(net_cells[n])` again.
+    let mut group_cells: HashMap<usize, Vec<Position>> = HashMap::new();
+    for (n, cells) in net_cells.iter().enumerate() {
+        group_cells.entry(groups.root(n)).or_default().extend(cells.iter().copied());
+    }
+    let group_reach: HashMap<usize, HashSet<Position>> =
+        group_cells.iter().map(|(&root, cells)| (root, net_reach(world, cells))).collect();
+    let reach: Vec<HashSet<Position>> = (0..nets.len())
+        .map(|n| group_reach.get(&groups.root(n)).cloned().unwrap_or_default())
+        .collect();
 
     for (g, gate) in netlist.gates.iter().enumerate() {
+        if gate.is_merge {
+            // A declared merge is a bare wire join: no torch, no support,
+            // nothing gate-shaped to check here at all. Whether the join
+            // is legitimate -- no foreign net touching it -- is exactly
+            // `verify_connectivity`'s job, generalised by the same
+            // `MergeGroups` this function consults below for the gates
+            // that actually consume a merge's output.
+            continue;
+        }
+
         let &(tx, ty, tz) = gate_output_positions
             .get(&gate.output)
             .expect("emit records a torch position for every gate");
@@ -3367,16 +3548,23 @@ fn verify_torch_merge(
             });
         }
 
+        // Each declared input's whole merge group, not just its own net
+        // index -- a wire-merge OR's several branches are, electrically,
+        // the one declared input they together feed (see `MergeGroups`),
+        // so any of them structurally reaching the support is exactly as
+        // legitimate as the input net itself reaching it.
         let declared: HashSet<usize> = (0..gate.inputs.len())
             .map(|input_index| {
-                *input_net
-                    .get(&(g, input_index))
-                    .expect("every gate input was assigned a net by build_nets")
+                groups.root(
+                    *input_net
+                        .get(&(g, input_index))
+                        .expect("every gate input was assigned a net by build_nets"),
+                )
             })
             .collect();
 
         for (n, reached) in reach.iter().enumerate() {
-            match (declared.contains(&n), reached.contains(&support)) {
+            match (declared.contains(&groups.root(n)), reached.contains(&support)) {
                 (true, false) => {
                     return Err(CompileError::TorchMergeViolation {
                         gate: gate.name.clone(),
@@ -3945,6 +4133,82 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
+    // Declared wire merges: the same geometry must discriminate
+    // -----------------------------------------------------------------
+    //
+    // A legitimate wire-merge OR and the bug this project has hunted the
+    // most -- two unrelated nets' dust touching -- are geometrically
+    // identical (see `docs/superpowers/specs/2026-08-08-gate-types-and-
+    // wired-or.md`, "The invariants have to allow multi-source nets,
+    // carefully"). So the only honest test is a pair built from the exact
+    // same world, reservation and nets, differing in nothing but the
+    // netlist's own `Gate::is_merge` flag -- if that single bit does not
+    // flip the outcome, the relaxation is either useless (never permits the
+    // merge) or dangerous (permits more than declared).
+
+    /// Three dust cells in an L: `a` and `b` each touch a third cell `y` --
+    /// exactly the shape a wire-merge OR (`y = a | b`) is built from, and
+    /// exactly the shape the connectivity bug this invariant exists to
+    /// catch also looks like. `declare_merge` selects which of those two
+    /// this world is claiming to be.
+    fn merge_touch_fixture(declare_merge: bool) -> (Netlist, Vec<Net>, World, Reservation) {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: Vec::new(),
+            gates: vec![Gate {
+                name: "m".to_string(),
+                inputs: vec!["a".to_string(), "b".to_string()],
+                output: "y".to_string(),
+                is_merge: declare_merge,
+            }],
+        };
+        let nets =
+            vec![nameless_net(Source::Lever(0)), nameless_net(Source::Lever(1)), nameless_net(Source::Gate(0))];
+
+        let mut world = World::new(6, 5, 6);
+        let a_cell = Position::new(1, 1, 2);
+        let y_cell = Position::new(2, 1, 2);
+        let b_cell = Position::new(2, 1, 3);
+        for cell in [a_cell, y_cell, b_cell] {
+            world.set(cell.x, cell.y - 1, cell.z, stone());
+            world.set(cell.x, cell.y, cell.z, dust());
+        }
+
+        let mut reservation = Reservation::new();
+        reservation.insert(a_cell, 0);
+        reservation.insert(y_cell, 2);
+        reservation.insert(b_cell, 1);
+
+        (netlist, nets, world, reservation)
+    }
+
+    #[test]
+    fn verify_connectivity_accepts_the_touch_when_the_netlist_declares_a_merge() {
+        let (netlist, nets, world, reservation) = merge_touch_fixture(true);
+
+        assert_eq!(
+            verify_connectivity(&world, &reservation, &netlist, &nets),
+            Ok(()),
+            "gate `m`'s `is_merge` declares nets `a`, `b` and `y` electrically one -- their \
+             dust touching is exactly what was asked for, not the bug this invariant hunts"
+        );
+    }
+
+    #[test]
+    fn verify_connectivity_still_rejects_the_same_touch_without_a_declared_merge() {
+        let (netlist, nets, world, reservation) = merge_touch_fixture(false);
+
+        let err = verify_connectivity(&world, &reservation, &netlist, &nets).expect_err(
+            "the identical geometry, with `is_merge` false, is nothing but three nets whose \
+             dust happens to touch -- undeclared, that must still be rejected",
+        );
+        assert!(
+            matches!(err, CompileError::ConnectivityViolation { .. }),
+            "expected a connectivity violation, got: {err}"
+        );
+    }
+
+    // -----------------------------------------------------------------
     // The torch-merge invariant
     // -----------------------------------------------------------------
     //
@@ -3977,7 +4241,12 @@ mod tests {
         Netlist {
             inputs: vec!["a".to_string()],
             outputs: Vec::new(),
-            gates: vec![Gate { name: "g0".to_string(), inputs: vec!["a".to_string()], output: gate_output.to_string() }],
+            gates: vec![Gate {
+                name: "g0".to_string(),
+                inputs: vec!["a".to_string()],
+                output: gate_output.to_string(),
+                is_merge: false,
+            }],
         }
     }
 
@@ -4093,7 +4362,7 @@ mod tests {
         let netlist = Netlist {
             inputs: vec!["b".to_string()],
             outputs: Vec::new(),
-            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string() }],
+            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string(), is_merge: false }],
         };
         let nets = vec![Net {
             source: Source::Lever(0),
@@ -4144,7 +4413,7 @@ mod tests {
         let netlist = Netlist {
             inputs: vec!["leak".to_string()],
             outputs: Vec::new(),
-            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string() }],
+            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string(), is_merge: false }],
         };
         let nets = vec![Net {
             source: Source::Lever(0),
@@ -4207,6 +4476,123 @@ mod tests {
         assert_eq!(
             verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions),
             Ok(())
+        );
+    }
+
+    // -----------------------------------------------------------------
+    // Declared wire merges: the same geometry must discriminate, here too
+    // -----------------------------------------------------------------
+    //
+    // The connectivity pair above proves the touch itself is allowed only
+    // when declared. This proves the other half: a gate that *consumes* a
+    // merge's output must see the merge's own branches as its declared
+    // input, not as foreign nets corrupting its support -- and must stop
+    // seeing them that way the moment the declaration is removed, with
+    // nothing else about the world changed.
+    //
+    // Two independent repeaters -- one per branch -- drive the same support
+    // block directly, from different faces (exactly how any multi-input NOR
+    // already merges its own inputs for free via block power; the only new
+    // thing here is that `g1` declares a *single* input, `y`, standing for
+    // both). `y` itself owns no physical cell at all: it is realised
+    // entirely as "`a`'s repeater plus `b`'s repeater", so a correct
+    // implementation has to resolve `y`'s own reach through its *group*
+    // (`a` and `b`'s cells), not through an empty cell list of its own --
+    // this is what actually exercises `verify_torch_merge`'s group-based
+    // reach, not just the `declared`-set widening.
+    struct MergeConsumerFixture {
+        netlist: Netlist,
+        nets: Vec<Net>,
+        world: World,
+        reservation: Reservation,
+        gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
+    }
+
+    fn merge_consumer_fixture(declare_merge: bool) -> MergeConsumerFixture {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: Vec::new(),
+            gates: vec![
+                // Checked first (see below): with no merge declared, this
+                // is where the rejection must fire.
+                Gate { name: "g1".to_string(), inputs: vec!["y".to_string()], output: "out".to_string(), is_merge: false },
+                // `m` is never actually reached by `verify_torch_merge`'s
+                // own loop in either scenario: declared, it is skipped
+                // outright (`is_merge`); undeclared, `g1` above already
+                // returns an error before the loop gets this far. So it
+                // needs no torch and no `gate_output_positions` entry at
+                // all -- exactly the point `is_merge` exists to make.
+                Gate {
+                    name: "m".to_string(),
+                    inputs: vec!["a".to_string(), "b".to_string()],
+                    output: "y".to_string(),
+                    is_merge: declare_merge,
+                },
+            ],
+        };
+
+        let nets = vec![
+            nameless_net(Source::Lever(0)), // a
+            nameless_net(Source::Lever(1)), // b
+            Net {
+                source: Source::Gate(1), // "m"
+                source_column: 0,
+                channels: Vec::new(),
+                tracks: Vec::new(),
+                sinks: vec![vec![(0, 0)]], // consumed by g1's own (only) input
+                hops: Vec::new(),
+            }, // y
+        ];
+
+        let mut world = World::new(6, 5, 6);
+        let support = Position::new(4, 0, 2);
+        let torch = Position::new(4, 1, 2);
+        let repeater_a = Position::new(3, 0, 2); // west of the support, facing east into it
+        let repeater_b = Position::new(4, 0, 1); // north of the support, facing south into it
+        world.set(support.x, support.y, support.z, stone());
+        world.set(torch.x, torch.y, torch.z, standing_torch());
+        world.set(repeater_a.x, repeater_a.y, repeater_a.z, repeater(Facing::East));
+        world.set(repeater_b.x, repeater_b.y, repeater_b.z, repeater(Facing::South));
+
+        let mut reservation = Reservation::new();
+        reservation.insert(repeater_a, 0);
+        reservation.insert(repeater_b, 1);
+        // Net `y` (index 2) is deliberately given no cell of its own.
+
+        let mut gate_output_positions = BTreeMap::new();
+        gate_output_positions.insert("out".to_string(), (torch.x, torch.y, torch.z));
+
+        MergeConsumerFixture { netlist, nets, world, reservation, gate_output_positions }
+    }
+
+    #[test]
+    fn torch_merge_accepts_both_branches_of_a_declared_merge_as_g1s_input() {
+        let MergeConsumerFixture { netlist, nets, world, reservation, gate_output_positions } =
+            merge_consumer_fixture(true);
+
+        assert_eq!(
+            verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions),
+            Ok(()),
+            "`m`'s `is_merge` declares `a` and `b` as the same net `y`, which `g1` declares as \
+             its own input -- both branches reaching the support is exactly what was asked for"
+        );
+    }
+
+    #[test]
+    fn torch_merge_still_rejects_the_same_two_repeaters_without_a_declared_merge() {
+        let MergeConsumerFixture { netlist, nets, world, reservation, gate_output_positions } =
+            merge_consumer_fixture(false);
+
+        let err = verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions).expect_err(
+            "the identical world, with `is_merge` false on `m`, is nothing but an undeclared \
+             net reaching g1's support -- `g1` only ever declared `y`, never `a`",
+        );
+        assert!(
+            matches!(
+                err,
+                CompileError::TorchMergeViolation { reason: TorchMergeFailure::ForeignNetReachesSupport { .. }, .. }
+            ),
+            "expected a foreign-net violation naming the undeclared branch, got: {err}"
         );
     }
 
@@ -4552,7 +4938,7 @@ mod tests {
         let netlist = Netlist {
             inputs: Vec::new(),
             outputs: vec!["out".to_string()],
-            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string() }],
+            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string(), is_merge: false }],
         };
         let nets: Vec<Net> = Vec::new();
 

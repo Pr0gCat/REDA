@@ -47,6 +47,7 @@ impl NetlistBuilder {
             name: output.clone(),
             inputs: inputs.to_vec(),
             output: output.clone(),
+            is_merge: false,
         });
         output
     }

@@ -472,7 +472,12 @@ mod tests {
         let netlist = Netlist {
             inputs: vec!["a".to_string(), "b".to_string()],
             outputs: vec![],
-            gates: vec![Gate { name: "g0".to_string(), inputs: vec!["a".to_string(), "b".to_string()], output: "g0".to_string() }],
+            gates: vec![Gate {
+                name: "g0".to_string(),
+                inputs: vec!["a".to_string(), "b".to_string()],
+                output: "g0".to_string(),
+                is_merge: false,
+            }],
         };
         let compiled = compile(&netlist).expect("a 2-input NOR gate compiles");
 
