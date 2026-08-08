@@ -381,9 +381,14 @@ fn primitive_name(primitive: TopoPrimitive) -> &'static str {
     }
 }
 
+/// Deliberately exhaustive, with no wildcard arm: a new `TemplateNode` is a
+/// new thing the topology view has to be able to name, and the compiler
+/// failing here is how we find that out. `cd186ad` added `SecondTorch` in the
+/// root crate and this match was the only thing that noticed.
 fn template_role_name(role: TemplateNode) -> String {
     match role {
         TemplateNode::Torch => "Torch".to_string(),
+        TemplateNode::SecondTorch => "Torch 2".to_string(),
     }
 }
 
