@@ -41,6 +41,7 @@ use crate::redstone::simulator::component::{
 };
 use crate::redstone::simulator::observer::Observation;
 use crate::redstone::simulator::position::Position;
+use crate::redstone::simulator::schedule::MIN_SCHEDULE_DELAY_GAME_TICKS;
 use crate::redstone::simulator::{SimulationError, Simulator};
 
 // ---------------------------------------------------------------------
@@ -310,12 +311,31 @@ pub fn critical_path_repeaters(netlist: &Netlist, compiled: &CompiledCircuit, cr
 /// or gate-entry corners) can now be slower than a longer chain that routes
 /// cleanly -- this model must be fed the path that was *actually* slowest,
 /// not the deepest one.
+///
+/// # The lamp-turning-on floor
+///
+/// `LAMP_TURN_ON_DELAY_GAME_TICKS` is `0`: a real lamp lights on the same
+/// game tick its power arrives (`component.rs`'s doc comment, confirmed
+/// against a real server). But this project's own scheduler cannot apply a
+/// change in fewer than `MIN_SCHEDULE_DELAY_GAME_TICKS` (one game tick) --
+/// `TickQueue::advance` always consumes the current tick's bucket before
+/// anything can schedule into it, so a `0`-tick request lands in the same
+/// bucket as a `1`-tick one (see `MIN_SCHEDULE_DELAY_GAME_TICKS`'s own doc
+/// comment). Every other delay in this model (`TORCH_DELAY_GAME_TICKS = 2`,
+/// `LAMP_TURN_OFF_DELAY_GAME_TICKS = 4`, and every repeater's minimum
+/// one-redstone-tick delay) is already `>= 1`, so this floor never changes
+/// them -- lamp-turn-on is the only delay in the whole model small enough
+/// for the floor to matter. Skipping it is exactly what produced this
+/// model's one-tick miss on the Yosys-derived seven-segment decoder: every
+/// hand-written reference circuit's worst-case transition happens to turn
+/// its output lamp *off*, so this floor had never been exercised before.
 pub fn critical_path_settle_model_game_ticks(
     critical_path_gate_count: usize,
     critical_path_repeaters: usize,
     lamp_turns_on: bool,
 ) -> u64 {
     let lamp_delay = if lamp_turns_on { LAMP_TURN_ON_DELAY_GAME_TICKS } else { LAMP_TURN_OFF_DELAY_GAME_TICKS };
+    let lamp_delay = lamp_delay.max(MIN_SCHEDULE_DELAY_GAME_TICKS);
     TORCH_DELAY_GAME_TICKS * (critical_path_gate_count as u64 + critical_path_repeaters as u64) + lamp_delay
 }
 

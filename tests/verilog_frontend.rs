@@ -79,25 +79,29 @@ fn non_air_blocks(compiled: &CompiledCircuit) -> usize {
     count
 }
 
-/// Print the worst case across an instrumented sweep, same shape as the
-/// hand-written reference circuits' own tests (`tests/reference_circuits.rs`,
+/// Print the worst case across an instrumented sweep, and assert the
+/// critical-path settle model exactly reconstructs the measured settle
+/// time -- same shape, and the same exactness check, as the hand-written
+/// reference circuits' own tests (`tests/reference_circuits.rs`,
 /// `tests/seven_segment.rs`) so the two are directly comparable in test
 /// output.
 ///
-/// Unlike those tests, this does *not* assert that
-/// `critical_path_model_game_ticks` exactly reconstructs
-/// `worst_settle_game_ticks`. On the Yosys-derived seven-segment netlist it
-/// is off by exactly one game tick (84 predicted vs. 85 measured) -- the
-/// hand-written circuits this model was built and proven exact against are
-/// all sum-of-products (a layer of ANDs feeding a layer of ORs), while ABC's
-/// mapping is a much more heavily shared, reconvergent-fanout structure
-/// (e.g. one internal signal feeding two different downstream gates at
-/// different depths). The truth-table check above is what actually proves
-/// this netlist is correct, and it is unaffected by this: this model
-/// discrepancy is purely in an auxiliary self-consistency check this test
-/// borrows from the hand-written tests' style, not in the compiled circuit's
-/// real, simulated behaviour. Reported rather than asserted, and rather than
-/// silently ignored, so it stays visible for whoever looks at this next.
+/// This netlist is the first one this model has been checked against that
+/// was not built by this project's own hand-written NOR-tree generator, and
+/// it genuinely has what none of the hand-written circuits do: reconvergent
+/// fan-out, where a signal splits and one of its own descendants feeds back
+/// into a later gate on the same path. That did surface a real bug (see
+/// `critical_path_settle_model_game_ticks`'s "lamp-turning-on floor" doc
+/// section) -- but the bug was not in how the model handles reconvergence at
+/// all. `summarize_worst_case`'s backward walk already resolves reconvergent
+/// fan-out correctly: it always follows the *measured* latest-arriving input
+/// at each gate, so the path it returns is provably the one whose own
+/// settling gated the gate above it, no matter how many other paths merge
+/// back into it. The bug was that every hand-written reference circuit's
+/// worst-case transition happens to turn its output lamp *off*, so the
+/// model's `LAMP_TURN_ON_DELAY_GAME_TICKS = 0` branch had never been
+/// exercised against a real simulation before this netlist's worst case
+/// turned out to turn its lamp *on*. Now fixed, the model is exact here too.
 fn report_timing(
     label: &str,
     netlist: &Netlist,
@@ -112,13 +116,18 @@ fn report_timing(
         game_ticks_to_redstone_ticks(summary.worst_settle_game_ticks),
         game_ticks_to_seconds(summary.worst_settle_game_ticks),
     );
-    if summary.critical_path_model_game_ticks != summary.worst_settle_game_ticks {
-        eprintln!(
-            "{label}: NOTE -- critical-path settle model predicted {} game ticks but measured \
-             settle was {} game ticks (see this function's doc comment)",
-            summary.critical_path_model_game_ticks, summary.worst_settle_game_ticks
-        );
-    }
+    eprintln!(
+        "{label} timing: critical-path settle model (this layout) = {} gates + {} repeaters -> \
+         {} game ticks predicted, {} measured",
+        summary.critical_path_gate_count,
+        summary.critical_path_repeater_count,
+        summary.critical_path_model_game_ticks,
+        summary.worst_settle_game_ticks,
+    );
+    assert_eq!(
+        summary.critical_path_model_game_ticks, summary.worst_settle_game_ticks,
+        "{label}: the critical-path settle model must exactly reconstruct the measured settle time"
+    );
     summary.worst_settle_game_ticks
 }
 

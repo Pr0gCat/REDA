@@ -23,6 +23,25 @@ pub enum TickPriority {
     Normal,
 }
 
+/// The queue's own floor on how soon a scheduled change can actually apply:
+/// one game tick, no matter what delay the caller asks for.
+///
+/// `advance` always moves `current_tick` forward *before* looking at that
+/// tick's bucket (see its own doc comment), so by the time anything calls
+/// `schedule`, "this tick" has already been consumed for this round -- there
+/// is no way to land a change in a bucket that has already been read.
+/// Requesting delay 0 therefore cannot mean "apply now"; the earliest any
+/// scheduled change can land is the *next* `advance`, exactly like delay 1.
+///
+/// This is not specific to any one component: it is a property of the queue
+/// itself, and applies identically to every caller. It only ever changes
+/// behaviour for a component whose real delay is `0` game ticks --
+/// `LAMP_TURN_ON_DELAY_GAME_TICKS` (see `component.rs`) is the only such
+/// constant in this codebase, and `crate::timing`'s settle-time model has to
+/// account for this same floor to predict a lamp turning on correctly (see
+/// `critical_path_settle_model_game_ticks`).
+pub const MIN_SCHEDULE_DELAY_GAME_TICKS: u64 = 1;
+
 /// 一筆排程。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScheduledTick {
@@ -80,8 +99,9 @@ impl TickQueue {
         // `advance` 一律先把 current_tick 往前推一格才檢查該格的排程，
         // 所以「這一格」的排程桶在呼叫 `schedule` 的當下必然已經被清空、
         // 不會再被檢查到。因此 delay 0（「就這個 tick」）實務上等同於
-        // 「下一次 advance 就會發生」，跟 delay 1 落在同一格。
-        let at_game_tick = self.current_tick + delay_game_ticks.max(1);
+        // 「下一次 advance 就會發生」，跟 delay 1 落在同一格 -- see
+        // `MIN_SCHEDULE_DELAY_GAME_TICKS`.
+        let at_game_tick = self.current_tick + delay_game_ticks.max(MIN_SCHEDULE_DELAY_GAME_TICKS);
         self.pending.entry(at_game_tick).or_default().push(ScheduledTick {
             position,
             at_game_tick,
