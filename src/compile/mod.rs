@@ -336,15 +336,20 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
 // torch on the cell's north face. Every gate of one level shares one row, so Z
 // grows with the *depth* of the netlist, not with its gate count.
 //
-// Inside a channel the two Manhattan directions live on two different Y
-// layers, and that is what lets nets cross each other at all:
+// Inside a channel the two Manhattan directions live on different Y layers,
+// and that is what lets nets cross each other at all:
 //
-//   Y = TRACK_Y      east-west "tracks". One track carries several nets when
-//                    their X spans are disjoint (left-edge assignment), so a
-//                    channel is as deep as the netlist's local *density*, not
-//                    as deep as its edge count.
-//   Y = TRACK_Y - 1  the tracks' stone floor. It doubles as the shield that
-//                    stops a track from reaching down into a column.
+//   Y = band_y(t)    east-west "tracks", one band per parallel track a
+//                    channel's density actually needs (see `BAND_CAP`).
+//                    One track carries several nets when their X spans are
+//                    disjoint (left-edge assignment), so a channel needs as
+//                    many bands as its local *density*, not its edge count.
+//                    `band_y(t) - 1` is that band's own stone floor, doubling
+//                    as the shield that stops a track from reaching down
+//                    into a column. Today's fixed `TRACK_Y` was `band_y(0)`,
+//                    the only band a channel could ever need before this was
+//                    generalised -- see `docs/superpowers/specs/2026-08-08-
+//                    3d-codesign.md`, "Layers, not two planes".
 //   Y = GATE_Y       north-south "columns", one per pin. A column passes
 //                    underneath any number of tracks without touching them.
 //
@@ -374,12 +379,244 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
 /// north-south routing column.
 const GATE_Y: i32 = 1;
 
-/// Y of the east-west routing tracks. `TRACK_Y - 1` is their stone floor.
-const TRACK_Y: i32 = 3;
+/// Vertical distance from one track band to the next -- one isolation/floor
+/// cell plus one track cell, exactly the gap the original two-plane design
+/// had between `GATE_Y` and its single track plane. This is the "layer
+/// pitch" of the generalised multi-layer stack described in
+/// `docs/superpowers/specs/2026-08-08-3d-codesign.md`, "Layers, not two
+/// planes": today's two planes are `band_y(0)`'s case of this, not a
+/// separate design.
+///
+/// Two bands separated by this much in Y never risk `dust_reach`'s
+/// same-layer (distance-1) adjacency rule joining them, and -- see
+/// `layout_z`'s doc comment for the full argument -- a net climbing past a
+/// *lower* band's own track always does so at least `BAND_HEIGHT` cells away
+/// from that band's Z, for the same reason. 1 would already clear the first
+/// property; 2 is kept because it is what makes the second one arithmetically
+/// exact (`layout_z`'s derivation divides through by it), and because it
+/// reproduces the original `GATE_Y`/`TRACK_Y` gap exactly when there is only
+/// one band.
+const BAND_HEIGHT: i32 = 2;
 
-/// Floor, gates, track floor, tracks, and one spare layer of air above the
-/// tracks so nothing is ever written outside the world.
-const WORLD_HEIGHT: i32 = 5;
+/// The most tracks a channel may spread across real Y bands before this
+/// module gives up on layering it and falls back to the old single-band,
+/// `TRACK_SPACING`-separated stacking for that *whole* channel (see
+/// `effective_band` and `layout_z`'s two branches).
+///
+/// # Where the value comes from
+///
+/// Not from the strength budget, even though that is the failure this cap
+/// was first built to avoid: `band_levels(BAND_CAP - 1)` only has to stay
+/// under `RAMP_REST_INTERVAL` (13) to avoid a mandatory rest stop -- a real
+/// repeater sitting mid-ramp that costs actual game ticks, unlike plain dust
+/// -- and that alone would allow a `BAND_CAP` as high as 6. Measured all the
+/// way up there, `seven_segment` (this project's own target circuit)
+/// confirmed the failure mode is real: worst-case settle went from 114
+/// ticks to 242 once a rest stop landed on the critical path, even though
+/// `verify_connectivity`/`verify_torch_merge` both still passed and the
+/// truth table still matched. A circuit that takes twice as long to settle
+/// has not been improved.
+///
+/// But sweeping `BAND_CAP` from 1 to 6 and re-measuring settle on all five
+/// reference circuits at every value (release build, `cargo test --test
+/// reference_circuits`/`seven_segment`/`verilog_frontend -- --nocapture`)
+/// found the *real* ceiling much lower, well before any rest stop is ever
+/// possible: past 2, `segment_a` and the Yosys-synthesised `seven_segment`
+/// both start settling *slower* than the two-plane baseline, even though
+/// every ramp involved is still a single, rest-free climb. The mechanism is
+/// distinct from the rest-stop one: entering band `b` still starts its
+/// straight column run `band_ramp_length(b)` cells further from the row than
+/// band 0 needed to, and that extra length can cross another `MAX_DUST_RUN`
+/// boundary and force one more mandatory repeater onto a path that never
+/// needed one before -- dust itself is free in ticks, but the repeater a
+/// long enough run of it eventually requires is not. 2 is the largest value
+/// at which this never happened on any of the five circuits; `and4` and
+/// `full_adder` never ask for more than two tracks in one channel regardless,
+/// so they are unaffected either way.
+///
+/// # Why the fallback is whole-channel, not per-track
+///
+/// Layering the first `BAND_CAP` tracks of a dense channel and Z-stacking
+/// only the overflow -- rather than reverting the whole channel -- very
+/// nearly shipped a second bug here. An overflow track's climb still has to
+/// pass *through* every lower band's own height on its way to the shared top
+/// band, at a Z offset from that band's own Z line of `-OVERFLOW_SPACING *
+/// k + BAND_HEIGHT * m` for some overflow index `k` and level gap `m` --
+/// which lands exactly `1` cell away (adjacent, not clear) for real `(k, m)`
+/// pairs at `OVERFLOW_SPACING = TRACK_SPACING`. Proving it clear in general
+/// needs `OVERFLOW_SPACING` far larger than `TRACK_SPACING` ever was, which
+/// erases the saving layering was meant to add back. Reverting the whole
+/// channel avoids the question entirely -- a reverted channel is byte-for-
+/// byte the original two-plane geometry, already proven safe, so there is
+/// nothing new to prove.
+const BAND_CAP: usize = 2;
+
+/// The band a net's slot actually climbs to, once its whole channel's
+/// density has been taken into account -- `raw_band` (`Net::tracks[slot]`,
+/// the left-edge track index `assign_tracks` gave it) unchanged for a
+/// channel with `BAND_CAP` tracks or fewer, or a hard `0` for every track of
+/// a denser channel (see `BAND_CAP`'s doc comment for why the fallback is
+/// whole-channel, not per-track).
+///
+/// `raw_band` still decides which physical *track* (X-disjoint sharing
+/// group, and for a reverted channel, which `TRACK_SPACING`-separated Z
+/// line) a net belongs to -- `layout_z` and `Net::entry_column` keep
+/// indexing `track_z[channel]` with it unchanged. This function only
+/// answers the *separate* question of which Y a climb into that track
+/// actually reaches, which is where the two schemes differ.
+fn effective_band(track_count: &[usize], channel: usize, raw_band: usize) -> usize {
+    if track_count[channel] > BAND_CAP {
+        0
+    } else {
+        raw_band
+    }
+}
+
+/// How many Y levels a climb or descent into/out of `band` (0-indexed, the
+/// same index `Net::tracks` already stored under the old two-plane name
+/// "track index") crosses. By the one-horizontal-cell-per-level rule a dust
+/// staircase always obeys (`move_between_layers`'s doc comment), this is
+/// also how many *diagonal* Z cells it costs -- but not the *whole* physical
+/// distance any more; see `band_ramp_length` for why those two used to be
+/// the same number and no longer are.
+///
+/// Every caller that reaches this with a raw `Net::tracks[slot]` value is
+/// expected to have already run it through `effective_band` first -- this
+/// function does not clamp on its own. It stays this simple deliberately:
+/// `effective_band` is the one place that has to know about `BAND_CAP`, so
+/// this is `BAND_CAP - 1`'s own `rest_stops_for(band_levels(..))` staying
+/// comfortably at 0 for every band this router ever actually asks a real
+/// climb to reach -- the mandatory rest-stop machinery below exists as a
+/// safety net for a larger `BAND_CAP`, not because today's circuits trigger
+/// it.
+fn band_levels(band: usize) -> i32 {
+    BAND_HEIGHT * (band as i32 + 1)
+}
+
+/// Y of the one east-west track a net assigned to `band` is routed on.
+/// `band_y(0) - 1` is that band's own stone floor, exactly mirroring the old
+/// `TRACK_Y - 1`.
+///
+/// Every band shares one Z line per channel (`layout_z` computes it once,
+/// not per band) -- only Y tells two bands' tracks apart. That is the whole
+/// generalisation this module makes: the old design's `TRACK_Y` was
+/// `band_y(0)`, hard-wired as the only band that could ever exist.
+fn band_y(band: usize) -> i32 {
+    GATE_Y + band_levels(band)
+}
+
+/// The longest run of climbing steps a dust staircase may take between two
+/// signal refreshes -- deliberately one short of `MAX_DUST_RUN` (see that
+/// constant's own doc comment for the underlying 14-cell budget a fresh
+/// strength-15 source affords), so that even the worst case this router ever
+/// hands a climb (arriving at strength 1, the minimum `plan_straight_run`'s
+/// own reserve mechanism ever allows) still has a cell of slack rather than
+/// landing exactly on the wire.
+///
+/// This is *not* the same kind of number as `MAX_DUST_RUN`: a flat run picks
+/// repeater positions from the actual incoming strength, because a flat
+/// cell can always become a repeater in place. A climbing step cannot -- see
+/// `band_ramp_length`'s doc comment -- so every rest stop here is placed at
+/// a fixed position, unconditionally, regardless of what the real strength
+/// turns out to be. That is what lets `band_ramp_length` stay a pure
+/// function of the band index alone, which the placement/Z-layout stages
+/// need (they run before a single signal strength is computed).
+const RAMP_REST_INTERVAL: i32 = MAX_DUST_RUN - 1;
+
+/// How many mandatory rest stops (see `RAMP_REST_INTERVAL`) a climb or
+/// descent of `levels` Y-levels needs.
+fn rest_stops_for(levels: i32) -> i32 {
+    if levels <= 0 { 0 } else { (levels - 1) / RAMP_REST_INTERVAL }
+}
+
+/// The physical Z (or X) distance a climb or descent into/out of `band`
+/// costs -- `band_levels(band)` diagonal steps, the same one-cell-per-level
+/// a dust staircase always pays, plus two extra *flat* cells per mandatory
+/// rest stop.
+///
+/// A rest stop cannot be folded into one of the climbing steps the way a
+/// flat run folds a repeater into one of its own cells: a repeater only
+/// reads the block directly behind it, at the *same* Y, and every cell of a
+/// climb sits one level above (or below) the one before it, so there is
+/// never a "behind" a repeater placed mid-climb could read from. A rest
+/// stop is therefore two genuine extra cells, not a relabelling of ones
+/// that would exist anyway: the repeater itself, and one plain dust cell
+/// to receive its output before the diagonal step can resume. That second
+/// cell is not optional even for a climb, where a repeater's output *could*
+/// charge the very next riser directly (a solid block, which then recharges
+/// the dust standing on it) -- because it is never optional for a descent,
+/// where the repeater's own front cell is deliberately left open air for
+/// the diagonal wire-to-wire rule instead of holding anything a repeater
+/// could charge (see `move_between_layers`'s own doc comment). Both
+/// directions pay the same two-cell cost so this stays one function instead
+/// of two.
+///
+/// `band_ramp_length(0)` (zero rest stops needed for `BAND_HEIGHT` levels)
+/// reproduces the old constant `RAMP_LENGTH` exactly; higher bands cost
+/// `BAND_HEIGHT` more levels each, plus two cells per rest stop, one every
+/// `RAMP_REST_INTERVAL` levels.
+///
+/// This is *why* two nets bound for different bands never collide even
+/// though every band's track sits on the very same Z line (`layout_z`'s doc
+/// comment carries the full derivation, in terms of `band_levels`, not this
+/// function -- a rest stop changes how *far* a climb travels, never how
+/// *high*, so it cannot bring one net's climb any closer to another band's Y
+/// than the vertical argument already guarantees).
+fn band_ramp_length(band: usize) -> i32 {
+    let levels = band_levels(band);
+    levels + 2 * rest_stops_for(levels)
+}
+
+/// The strength remaining after a climb or descent of `levels` Y-levels,
+/// with the same mandatory, position-fixed, two-cell rest stops
+/// `move_between_layers` actually places (see `RAMP_REST_INTERVAL` and
+/// `band_ramp_length`'s doc comment) -- the pure twin `plan_strengths`
+/// needs, since the real ramp is not written until later (Ramps, then
+/// Columns, then Tracks -- see the comment above `compile`'s Ramps loop).
+fn ramp_ending_strength(levels: i32, incoming_strength: u8) -> u8 {
+    let mut strength = incoming_strength;
+    for level in 0..levels {
+        if level > 0 && level % RAMP_REST_INTERVAL == 0 {
+            strength = MAX_SIGNAL_STRENGTH;
+            strength -= 1; // the rest stop's own output dust cell
+        }
+        strength -= 1; // the diagonal climb/descend step itself
+    }
+    strength
+}
+
+/// How much strength whatever *precedes* a climb or descent into/out of
+/// `band` must still reserve -- not the whole `band_ramp_length(band)` (that
+/// can exceed what a single strength-15 source can ever survive, once a
+/// band needs more than `RAMP_REST_INTERVAL` levels), only enough to reach
+/// the *first* mandatory rest stop, since every stop after that starts fresh
+/// at `MAX_SIGNAL_STRENGTH` regardless of what arrived at the previous one.
+fn ramp_reserve(band: usize) -> i32 {
+    band_levels(band).min(RAMP_REST_INTERVAL)
+}
+
+/// A small, fixed height for scratch worlds that only ever place gate bodies
+/// at `GATE_Y` (`cell_geometry_by_input_count`'s probe) -- no ramp, no track,
+/// so no dependency on how many bands the real circuit ends up needing.
+const GATE_ONLY_SCRATCH_HEIGHT: i32 = GATE_Y + 4;
+
+/// How tall the world must be to hold every band any channel actually uses,
+/// plus one spare layer of air above the highest track so nothing is ever
+/// written outside the world -- generalises the old fixed `WORLD_HEIGHT`
+/// (`band_y(0) + 2 == 5`, the original constant, when nothing needs a second
+/// band).
+fn world_height(track_count: &[usize]) -> i32 {
+    // A reverted channel (`BAND_CAP`'s doc comment) never climbs past
+    // `band_y(0)` regardless of how many raw tracks it has, so this has to
+    // run every channel's raw track count through `effective_band` -- the
+    // *tallest* channel by raw count is not necessarily the one that climbs
+    // highest.
+    let highest_band = (0..track_count.len())
+        .map(|channel| effective_band(track_count, channel, track_count[channel].max(1) - 1))
+        .max()
+        .unwrap_or(0);
+    band_y(highest_band) + 2
+}
 
 /// X distance between two neighbouring gates of the same row.
 ///
@@ -428,45 +665,28 @@ const SLOT_PITCH: i32 = 14;
 /// optimisation" -- so it stays at its old, empirically-safe value here.
 const ENTRY_OFFSET: i32 = 4;
 
-/// Z distance between two neighbouring tracks of the same channel.
-///
-/// This was originally chosen because the old repeater ramp's last
-/// descending step left a **strongly powered** support block one layer under
-/// the track plane -- a strongly powered block drives every redstone dust
-/// next to it in all six directions, so at spacing 4 that block would sit
-/// directly beneath the next track and inject this net's signal into it.
-/// Five put the ramp's landing on a Z row that could never hold a track.
-///
-/// The dust staircase that replaced that ramp (`move_between_layers`) has no
-/// such block: every solid cell it places is a stair's support, only ever
-/// *weakly* powered by the dust sitting on it (`dust_only_weakly_powers_the_
-/// block_beneath_it`), and weak power cannot re-drive a neighbour. So the
-/// original justification for 5 no longer applies -- but retuning it is a
-/// track-spacing change, a size win, not the delay win this module exists to
-/// produce right now (see `docs/superpowers/plans/2026-08-07-dust-staircase-
-/// ramps.md`, "Out of scope"). Left at 5 deliberately.
+/// Z distance between two neighbouring tracks of the same channel, when that
+/// channel is dense enough to revert to the pre-layering scheme (`BAND_CAP`'s
+/// doc comment) -- every track shares `band_y(0)`, so this is the only thing
+/// telling them apart, exactly as when it was the sole scheme this module
+/// had. The original justification (a strongly-powered landing from the old
+/// repeater-built ramp reaching the next track over) no longer applies to a
+/// dust staircase, but this is reverted geometry, not new geometry, so it is
+/// left at its old, empirically-safe value rather than retuned.
 const TRACK_SPACING: i32 = 5;
 
-/// How far a ramp travels horizontally while changing layer, *and* how much
-/// signal strength it spends doing so -- the two are the same number here,
-/// not a coincidence pasted together.
-///
-/// The old ramp was built from repeaters and spent two blocks of horizontal
-/// travel per Y level (a repeater, then the support block it drove). A dust
-/// staircase instead climbs or descends via `redstone::simulator::
-/// connectivity::dust_connections`' diagonal rule, which connects one dust
-/// cell straight to the next diagonal one -- exactly one block of horizontal
-/// travel per Y level, not two. So the footprint halves to `TRACK_Y - GATE_Y`.
-///
-/// That diagonal connection is still a single hop of `dust_connections`, and
-/// `recompute_dust_strengths`'s BFS spends exactly one strength per hop it
-/// walks, same-level or diagonal, without distinguishing them (see its
-/// `HORIZONTAL` loop, which is the only place hops are counted). So a ramp
-/// that changes `RAMP_LENGTH` levels also spends exactly `RAMP_LENGTH`
-/// signal strength -- one block of horizontal footprint, one point of
-/// strength, per level, always in lockstep. `MAX_DUST_RUN`'s comment below
-/// derives what that costs the surrounding dust runs.
-const RAMP_LENGTH: i32 = TRACK_Y - GATE_Y;
+// A dust staircase's diagonal rule (`redstone::simulator::connectivity::
+// dust_connections`) connects one dust cell straight to the next diagonal
+// one -- exactly one block of horizontal travel per Y level, unlike the old
+// repeater-built ramp this replaced (two blocks per level: a repeater, then
+// the support block it drove). `recompute_dust_strengths`'s BFS spends
+// exactly one strength per hop it walks, same-level or diagonal, without
+// distinguishing them (see its `HORIZONTAL` loop) -- so a climb of `n`
+// levels spends exactly `n` signal strength, one block of horizontal
+// footprint and one point of strength per level, always in lockstep. This
+// used to be a single flat constant (`RAMP_LENGTH = TRACK_Y - GATE_Y`, back
+// when there was only ever one track band); see `band_ramp_length`, which
+// replaces it now that different bands cost different amounts to reach.
 
 /// Minimum X gap between two nets that share one track.
 const TRACK_SHARE_GAP: i32 = 4;
@@ -1072,13 +1292,50 @@ fn seal_cross_talk(world: &mut World, pos: Position, direction: Facing, route: &
 ///   stays open.
 ///
 /// Either direction spends exactly one signal strength per level walked
-/// (`RAMP_LENGTH`'s comment derives why) and places no repeater -- the
-/// caller is responsible for having reserved that strength in whatever run
-/// feeds this ramp (`MAX_DUST_RUN`'s comment).
+/// (`band_ramp_length`'s comment derives why) -- the caller is responsible
+/// for having reserved that strength in whatever run feeds this ramp
+/// (`MAX_DUST_RUN`'s comment) for the first `RAMP_REST_INTERVAL` levels.
+/// Past that, this places its own mandatory rest-stop repeaters (see
+/// `RAMP_REST_INTERVAL`'s doc comment for why a climbing step cannot simply
+/// become one itself) at fixed, band-index-determined positions, so a climb
+/// or descent of any length this router ever asks for survives regardless
+/// of the real strength it happens to arrive with.
 fn move_between_layers(world: &mut World, entry: Position, direction: Facing, target_y: i32, route: &mut Route) -> Position {
+    let levels = (target_y - entry.y).abs();
+    let climbing = target_y >= entry.y;
     let mut current = entry;
-    if target_y >= current.y {
-        while current.y != target_y {
+    for level in 0..levels {
+        if level > 0 && level % RAMP_REST_INTERVAL == 0 {
+            // Mandatory rest stop: two extra flat cells, not a relabelling
+            // of the next climbing/descending step -- see
+            // `band_ramp_length`'s doc comment for why a repeater cannot
+            // stand in for one of those directly. A repeater only ever
+            // powers the block directly in front of it (same Y); a
+            // descending step's very next cell is deliberately left open
+            // air instead (the diagonal wire-to-wire rule needs it that
+            // way), so a repeater there would have nothing to charge. The
+            // repeater's own output has to land on an ordinary flat dust
+            // cell first -- the diagonal step then proceeds from *that*
+            // cell exactly as it would from any other cell mid-run.
+            let rest = current.offset(direction);
+            ensure_floor(world, rest);
+            route.claim(rest.down());
+            world.set(rest.x, rest.y, rest.z, repeater(direction));
+            route.claim(rest);
+            if !route.footprint.recording {
+                seal_cross_talk(world, rest, direction, route);
+            }
+            let rest_output = rest.offset(direction);
+            ensure_floor(world, rest_output);
+            route.claim(rest_output.down());
+            world.set(rest_output.x, rest_output.y, rest_output.z, dust());
+            route.claim(rest_output);
+            if !route.footprint.recording {
+                seal_cross_talk(world, rest_output, direction, route);
+            }
+            current = rest_output;
+        }
+        if climbing {
             let riser = current.offset(direction);
             world.set(riser.x, riser.y, riser.z, stone());
             route.claim(riser);
@@ -1089,9 +1346,7 @@ fn move_between_layers(world: &mut World, entry: Position, direction: Facing, ta
                 seal_cross_talk(world, landing, direction, route);
             }
             current = landing;
-        }
-    } else {
-        while current.y != target_y {
+        } else {
             let stepped = current.offset(direction);
             let landing = Position::new(stepped.x, stepped.y - 1, stepped.z);
             ensure_floor(world, landing);
@@ -1176,6 +1431,7 @@ fn track_exit_strengths(
     max_x: i32,
     taps: &BTreeSet<i32>,
     incoming_strength: u8,
+    reserve: i32,
 ) -> BTreeMap<i32, u8> {
     let mut exit_strength = BTreeMap::new();
     for (end, step) in [(min_x, -1i32), (max_x, 1i32)] {
@@ -1184,7 +1440,7 @@ fn track_exit_strengths(
             continue;
         }
         let cells: Vec<i32> = (1..=length).map(|k| source_x + k * step).collect();
-        let (_is_repeater, strengths) = plan_track_run(&cells, incoming_strength, RAMP_LENGTH, taps);
+        let (_is_repeater, strengths) = plan_track_run(&cells, incoming_strength, reserve, taps);
         for (k, &x) in cells.iter().enumerate() {
             if taps.contains(&x) {
                 exit_strength.insert(x, strengths[k]);
@@ -1194,26 +1450,40 @@ fn track_exit_strengths(
     exit_strength
 }
 
-/// Lay one east-west track: dust from `source_x` out to `min_x` and to
-/// `max_x`, with a repeater inserted before the signal can run out (see
-/// `plan_track_run`). Returns the strength delivered at each of `taps`,
-/// exactly as `track_exit_strengths` already predicted during planning.
+/// Lay one east-west track on band `band`'s own Y (`band_y`): dust from
+/// `source_x` out to `min_x` and to `max_x`, with a repeater inserted before
+/// the signal can run out (see `plan_track_run`). Returns the strength
+/// delivered at each of `taps`, exactly as `track_exit_strengths` already
+/// predicted during planning.
 ///
 /// `taps` are the X positions where a ramp joins or leaves the track; every
-/// one of them reserves `RAMP_LENGTH` strength for the ramp it feeds (see
-/// `MAX_DUST_RUN`'s comment) -- applied to the whole track rather than just
-/// at each tap, which is simpler and only ever costs an occasional early
-/// repeater on a run that was already close to the 14-cell limit, never a
-/// correctness problem.
+/// one of them reserves `ramp_reserve(band)` strength for the ramp it feeds
+/// (see `MAX_DUST_RUN`'s comment) -- applied to the whole track rather than
+/// just at each tap, which is simpler and only ever costs an occasional
+/// early repeater on a run that was already close to the 14-cell limit,
+/// never a correctness problem. Only the *reserve* -- the first leg up to
+/// the ramp's own first mandatory rest stop -- matters here, not the whole
+/// `band_ramp_length(band)`: once a rest stop refreshes the signal, nothing
+/// this track did beforehand affects it any more.
+///
+/// `band`, `z` and `source_x` travel together as `origin` purely to keep
+/// this under `clippy::too_many_arguments` -- every one of them describes
+/// where this one track physically is, not an independent knob. `band` here
+/// is already the *effective* band (`effective_band`'s result) -- the
+/// caller resolves whether this channel is layered or reverted before this
+/// function ever sees it, since `z` (already resolved from the raw track
+/// index) is the only thing that still needs to know the difference.
 fn lay_track(
     world: &mut World,
-    z: i32,
-    source_x: i32,
+    origin: (usize, i32, i32),
     span: (i32, i32),
     taps: &BTreeSet<i32>,
     incoming_strength: u8,
     route: &mut Route,
 ) -> BTreeMap<i32, u8> {
+    let (band, z, source_x) = origin;
+    let y = band_y(band);
+    let reserve = ramp_reserve(band);
     let (min_x, max_x) = span;
     let mut exit_strength = BTreeMap::new();
     for (end, step) in [(min_x, -1i32), (max_x, 1i32)] {
@@ -1223,10 +1493,10 @@ fn lay_track(
         }
         let direction = if step > 0 { Facing::East } else { Facing::West };
         let cells: Vec<i32> = (1..=length).map(|k| source_x + k * step).collect();
-        let (is_repeater, strengths) = plan_track_run(&cells, incoming_strength, RAMP_LENGTH, taps);
+        let (is_repeater, strengths) = plan_track_run(&cells, incoming_strength, reserve, taps);
 
         for (k, &x) in cells.iter().enumerate() {
-            let pos = Position::new(x, TRACK_Y, z);
+            let pos = Position::new(x, y, z);
             ensure_floor(world, pos);
             route.claim(pos.down());
             if is_repeater[k] {
@@ -1904,23 +2174,76 @@ fn assign_tracks(plan: &Floorplan, nets: &mut [Net], channel_count: usize, bypas
 /// Z layout: each row's Z and every channel's track Zs, laid out northwards
 /// from row 0 and then shifted back into the non-negative range.
 ///
-/// Extracted verbatim from `compile`'s "Z layout" section; see the comment
-/// there for the per-channel depth derivation.
+/// Extracted verbatim from `compile`'s "Z layout" section, generalised for
+/// `docs/superpowers/specs/2026-08-08-3d-codesign.md`'s "Layers, not two
+/// planes": a channel's `track_count[channel]` tracks used to be Z-separated
+/// copies of the one `TRACK_Y` plane (`TRACK_SPACING` apart, purely to avoid
+/// one track's descending ramp injecting its signal into its same-Y
+/// neighbour -- see the old constant's own doc comment, no longer present).
+/// They are now `band_y(0)`, `band_y(1)`, ... of the *same* channel, sharing
+/// one Z line (`shared_z` below) and telling each other apart only by Y.
+///
+/// # Why every band can safely share one Z line
+///
+/// A net assigned to band `b` enters this channel at `GATE_Y`, `band_ramp_
+/// length(b)` cells south of `shared_z`, and climbs one Y level per Z cell
+/// (`move_between_layers`) until it lands on `shared_z` at height `band_y(b)`.
+/// So at any height `h` between `GATE_Y` and `band_y(b)`, that climb sits at
+/// `Z = shared_z + (band_y(b) - h)`.
+///
+/// Consider two nets, bound for bands `b` and `k` with `b > k`. At the
+/// instant the *deeper* one (`b`) passes through the *shallower* one's own
+/// band height (`h = band_y(k)`), its Z is `shared_z + band_y(b) - band_y(k)
+/// = shared_z + BAND_HEIGHT * (b - k)` -- strictly `BAND_HEIGHT` cells (at
+/// least 2) away from `shared_z`, which is exactly where band `k`'s own
+/// track lives. It never reaches band `k`'s Z at band `k`'s height, so it
+/// never runs alongside band `k`'s track, only past it, at a stone's throw
+/// in Z that `dust_reach`'s same-layer (distance-1) rule cannot bridge. The
+/// two climbs also never share an X (`reserve_columns` keeps every column in
+/// one channel `COLUMN_CLEARANCE` apart, band or no band), so this holds
+/// regardless of which two nets happen to be climbing at once.
+///
+/// This is the "skip-band edge" the spec's Order section calls out as having
+/// no equivalent in the old two-plane design -- and the reason it is safe
+/// here is structural (a strict Z gap, provable from the climb geometry
+/// alone), not a hopeful placement choice; `verify_connectivity` and
+/// `verify_torch_merge` still check every compile regardless.
 fn layout_z(row_count: usize, channel_count: usize, track_count: &[usize]) -> (Vec<i32>, Vec<Vec<i32>>) {
     let mut row_z = vec![0i32; row_count];
     let mut track_z: Vec<Vec<i32>> = vec![Vec::new(); channel_count];
     for channel in 0..channel_count {
-        // Three blocks clear of the row's own south socket leaves the first
-        // ramp somewhere to start.
         let channel_south = row_z[channel] - 3;
-        track_z[channel] = (0..track_count[channel])
-            .map(|k| channel_south - TRACK_SPACING * (k as i32 + 1))
-            .collect();
-        let depth = TRACK_SPACING * track_count[channel].max(1) as i32;
-        // The last descending ramp lands `RAMP_LENGTH` north of the last
-        // track, and the column then needs room to reach the next row's south
-        // socket approach.
-        row_z[channel + 1] = channel_south - depth - RAMP_LENGTH - 4;
+
+        if track_count[channel] > BAND_CAP {
+            // Reverted channel (`BAND_CAP`'s doc comment): byte-for-byte the
+            // original two-plane geometry, at `band_y(0)` only. Every track
+            // gets its own Z, `TRACK_SPACING` apart, exactly as when this
+            // was the only scheme this module had.
+            track_z[channel] = (0..track_count[channel])
+                .map(|t| channel_south - TRACK_SPACING * (t as i32 + 1))
+                .collect();
+            let depth = TRACK_SPACING * track_count[channel] as i32;
+            row_z[channel + 1] = channel_south - depth - band_ramp_length(0) - 4;
+            continue;
+        }
+
+        // The highest band this channel actually uses -- 0 if it uses none
+        // at all (every net bypassed), matching the old code's `max(1)`
+        // treatment of a channel with zero real tracks.
+        let highest_band = track_count[channel].max(1) - 1;
+        let deepest_ramp = band_ramp_length(highest_band);
+
+        // Three blocks clear of the row's own south socket leaves the
+        // deepest band's ramp somewhere to start climbing from; shallower
+        // bands start their own (shorter) climb later, closer to
+        // `shared_z`, using the same south margin the deepest one needed.
+        let shared_z = channel_south - deepest_ramp;
+        track_z[channel] = vec![shared_z; track_count[channel]];
+
+        // Symmetric on the north side: the deepest band's descent needs the
+        // same `deepest_ramp` cells past `shared_z` before the column can
+        // reach the next row's south socket approach.
+        row_z[channel + 1] = shared_z - deepest_ramp - 4;
     }
 
     let z_offset = 3 - row_z[row_count - 1] + 2;
@@ -1964,6 +2287,7 @@ fn plan_strengths(
     nets: &[Net],
     plan: &Floorplan,
     track_z: &[Vec<i32>],
+    track_count: &[usize],
     lever_pin: &[Position],
     gate_pin: &[Position],
     bypass: &[bool],
@@ -1989,8 +2313,11 @@ fn plan_strengths(
 
         for slot in 0..net.channels.len() {
             let channel = net.channels[slot];
-            let z = track_z[channel][net.tracks[slot]];
-            let entry = Position::new(net.entry_column(slot), GATE_Y, z + RAMP_LENGTH);
+            let band = net.tracks[slot];
+            let eff_band = effective_band(track_count, channel, band);
+            let reserve = ramp_reserve(eff_band);
+            let z = track_z[channel][band];
+            let entry = Position::new(net.entry_column(slot), GATE_Y, z + band_ramp_length(eff_band));
 
             let arriving = if slot == 0 {
                 let pin = match net.source {
@@ -1998,20 +2325,22 @@ fn plan_strengths(
                     Source::Gate(g) => gate_pin[g],
                 };
                 let len = straight_run_length(pin, Facing::North, entry.offset(Facing::North));
-                plan_straight_run(len, MAX_SIGNAL_STRENGTH, RAMP_LENGTH).1
+                plan_straight_run(len, MAX_SIGNAL_STRENGTH, reserve).1
             } else {
+                let prev_band = net.tracks[slot - 1];
                 let prev_channel = net.channels[slot - 1];
-                let prev_z = track_z[prev_channel][net.tracks[slot - 1]];
+                let eff_prev_band = effective_band(track_count, prev_channel, prev_band);
+                let prev_z = track_z[prev_channel][prev_band];
                 let feed_x = net.hops[slot - 1];
                 let track_strength = net_exit[slot - 1][&feed_x];
-                let landing_strength = track_strength - RAMP_LENGTH as u8;
-                let landing = Position::new(feed_x, GATE_Y, prev_z - RAMP_LENGTH);
+                let landing_strength = ramp_ending_strength(band_levels(eff_prev_band), track_strength);
+                let landing = Position::new(feed_x, GATE_Y, prev_z - band_ramp_length(eff_prev_band));
                 let len = straight_run_length(landing, Facing::North, entry.offset(Facing::North));
-                plan_straight_run(len, landing_strength, RAMP_LENGTH).1
+                plan_straight_run(len, landing_strength, reserve).1
             };
             net_entry[slot] = arriving;
 
-            let track_incoming = arriving - RAMP_LENGTH as u8;
+            let track_incoming = ramp_ending_strength(band_levels(eff_band), arriving);
             let source_x = net.entry_column(slot);
             let (lo, hi) = net.span(slot, &plan.centre_x);
             let mut taps: BTreeSet<i32> = BTreeSet::new();
@@ -2019,7 +2348,7 @@ fn plan_strengths(
             for exit in net.exits(slot, &plan.centre_x) {
                 taps.insert(exit.x());
             }
-            net_exit[slot] = track_exit_strengths(source_x, lo, hi, &taps, track_incoming);
+            net_exit[slot] = track_exit_strengths(source_x, lo, hi, &taps, track_incoming, reserve);
         }
 
         entry_strength.push(net_entry);
@@ -2046,6 +2375,10 @@ struct RoutingGeometry<'a> {
     row_z: &'a [i32],
     nets: &'a [Net],
     track_z: &'a [Vec<i32>],
+    /// Tracks per channel -- how `effective_band` (and, before it,
+    /// `layout_z`) decides whether a channel is layered or reverted to the
+    /// pre-layering, single-band geometry (see `BAND_CAP`'s doc comment).
+    track_count: &'a [usize],
     /// Per-net: whether `compute_bypass` found this net's one sink close
     /// enough to connect directly at `GATE_Y` instead of via ramp and track.
     bypass: &'a [bool],
@@ -2062,7 +2395,7 @@ struct RoutingGeometry<'a> {
 /// worlds can never disagree about where anything is -- only about whether
 /// the orphaned keep-out cells around a ramp landing got sealed.
 fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footprint: &mut Footprint) -> EmitResult {
-    let RoutingGeometry { plan, row_z, nets, track_z, bypass } = *geometry;
+    let RoutingGeometry { plan, row_z, nets, track_z, track_count, bypass } = *geometry;
     let mut gate_cell: Vec<NorCell> = Vec::with_capacity(netlist.gates.len());
     for _ in 0..netlist.gates.len() {
         gate_cell.push(NorCell { size: (0, 0, 0), input_offsets: Vec::new(), output_offset: (0, 0, 0) });
@@ -2104,7 +2437,8 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
     // exits will carry, before any of them are actually built. See
     // `plan_strengths` for why this has to happen up front rather than
     // inline in the passes below.
-    let (entry_strength, exit_strength) = plan_strengths(nets, plan, track_z, &lever_pin, &gate_pin, bypass);
+    let (entry_strength, exit_strength) =
+        plan_strengths(nets, plan, track_z, track_count, &lever_pin, &gate_pin, bypass);
 
     // Every net's own pin -- the first cell of its route -- belongs to that
     // net too, exactly like everything the passes below claim as they write
@@ -2132,11 +2466,13 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
         let mut route = Route { net: n, footprint: &mut *footprint };
         for slot in 0..net.channels.len() {
             let channel = net.channels[slot];
-            let z = track_z[channel][net.tracks[slot]];
-            let entry = Position::new(net.entry_column(slot), GATE_Y, z + RAMP_LENGTH);
-            move_between_layers(world, entry, Facing::North, TRACK_Y, &mut route);
+            let band = net.tracks[slot];
+            let eff_band = effective_band(track_count, channel, band);
+            let z = track_z[channel][band];
+            let entry = Position::new(net.entry_column(slot), GATE_Y, z + band_ramp_length(eff_band));
+            move_between_layers(world, entry, Facing::North, band_y(eff_band), &mut route);
             for exit in net.exits(slot, &plan.centre_x) {
-                let top = Position::new(exit.x(), TRACK_Y, z);
+                let top = Position::new(exit.x(), band_y(eff_band), z);
                 move_between_layers(world, top, Facing::North, GATE_Y, &mut route);
             }
         }
@@ -2194,10 +2530,16 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
             continue;
         }
 
+        // `slot` indexes several independent containers here (`net.channels`,
+        // `net.tracks`, `exit_strength[n]`, plus `net.entry_column`/`net.exits`
+        // itself), so no single `.iter().enumerate()` covers all of them.
+        #[allow(clippy::needless_range_loop)]
         for slot in 0..net.channels.len() {
             let channel = net.channels[slot];
-            let z = track_z[channel][net.tracks[slot]];
-            let entry = Position::new(net.entry_column(slot), GATE_Y, z + RAMP_LENGTH);
+            let band = net.tracks[slot];
+            let eff_band = effective_band(track_count, channel, band);
+            let z = track_z[channel][band];
+            let entry = Position::new(net.entry_column(slot), GATE_Y, z + band_ramp_length(eff_band));
             if slot == 0 {
                 let pin = match net.source {
                     Source::Lever(i) => lever_pin[i],
@@ -2209,13 +2551,14 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
                     Facing::North,
                     entry.offset(Facing::North),
                     MAX_SIGNAL_STRENGTH,
-                    RAMP_LENGTH,
+                    ramp_reserve(eff_band),
                     &mut route,
                 );
             }
             for exit in net.exits(slot, &plan.centre_x) {
-                let landing = Position::new(exit.x(), GATE_Y, z - RAMP_LENGTH);
-                let landing_strength = exit_strength[n][slot][&exit.x()] - RAMP_LENGTH as u8;
+                let landing = Position::new(exit.x(), GATE_Y, z - band_ramp_length(eff_band));
+                let landing_strength =
+                    ramp_ending_strength(band_levels(eff_band), exit_strength[n][slot][&exit.x()]);
                 match exit {
                     Exit::Socket { gate, input_index, .. } => {
                         let (dx, dy, dz) = gate_cell[gate].input_offsets[input_index];
@@ -2235,15 +2578,17 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
                     }
                     Exit::Feedthrough { x, next_slot } => {
                         let next_channel = net.channels[next_slot];
-                        let next_z = track_z[next_channel][net.tracks[next_slot]];
-                        let next_entry = Position::new(x, GATE_Y, next_z + RAMP_LENGTH);
+                        let next_band = net.tracks[next_slot];
+                        let eff_next_band = effective_band(track_count, next_channel, next_band);
+                        let next_z = track_z[next_channel][next_band];
+                        let next_entry = Position::new(x, GATE_Y, next_z + band_ramp_length(eff_next_band));
                         lay_dust_run(
                             world,
                             landing,
                             Facing::North,
                             next_entry.offset(Facing::North),
                             landing_strength,
-                            RAMP_LENGTH,
+                            ramp_reserve(eff_next_band),
                             &mut route,
                         );
                     }
@@ -2260,9 +2605,14 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
             continue;
         }
         let mut route = Route { net: n, footprint: &mut *footprint };
+        // Same multi-container indexing as the Columns pass above -- see its
+        // own `#[allow]` comment.
+        #[allow(clippy::needless_range_loop)]
         for slot in 0..net.channels.len() {
             let channel = net.channels[slot];
-            let z = track_z[channel][net.tracks[slot]];
+            let band = net.tracks[slot];
+            let eff_band = effective_band(track_count, channel, band);
+            let z = track_z[channel][band];
             let source_x = net.entry_column(slot);
             let (lo, hi) = net.span(slot, &plan.centre_x);
             let mut taps: BTreeSet<i32> = BTreeSet::new();
@@ -2270,8 +2620,8 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
             for exit in net.exits(slot, &plan.centre_x) {
                 taps.insert(exit.x());
             }
-            let track_incoming = entry_strength[n][slot] - RAMP_LENGTH as u8;
-            lay_track(world, z, source_x, (lo, hi), &taps, track_incoming, &mut route);
+            let track_incoming = ramp_ending_strength(band_levels(eff_band), entry_strength[n][slot]);
+            lay_track(world, (eff_band, z, source_x), (lo, hi), &taps, track_incoming, &mut route);
         }
     }
 
@@ -2360,7 +2710,7 @@ fn world_size(plan: &Floorplan, nets: &[Net], row_z: &[i32]) -> (i32, i32) {
 /// read results back out of an already-compiled world).
 fn cell_geometry_by_input_count(netlist: &Netlist) -> HashMap<usize, NorCell> {
     let mut cells = HashMap::new();
-    let mut scratch = World::new(20, WORLD_HEIGHT, 20);
+    let mut scratch = World::new(20, GATE_ONLY_SCRATCH_HEIGHT, 20);
     for gate in &netlist.gates {
         cells
             .entry(gate.inputs.len())
@@ -2551,7 +2901,7 @@ fn resolve_bypass_and_geometry(
     let (baseline_row_z, baseline_track_z) = layout_z(row_count, channel_count, &baseline_track_count);
 
     let (size_x, size_z) = world_size(plan, nets, &baseline_row_z);
-    let mut scratch = World::new(size_x.max(8), WORLD_HEIGHT, size_z.max(8));
+    let mut scratch = World::new(size_x.max(8), world_height(&baseline_track_count), size_z.max(8));
     let mut footprint = Footprint::record();
     {
         let geometry = RoutingGeometry {
@@ -2559,6 +2909,7 @@ fn resolve_bypass_and_geometry(
             row_z: &baseline_row_z,
             nets,
             track_z: &baseline_track_z,
+            track_count: &baseline_track_count,
             bypass: &bypass_proven,
         };
         emit(&mut scratch, netlist, &geometry, &mut footprint);
@@ -3064,6 +3415,8 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         resolve_bypass_and_geometry(netlist, &plan, &mut nets, row_count, channel_count, BYPASS_QUERY_MAX_DISTANCE);
 
     let (size_x, size_z) = world_size(&plan, &nets, &row_z);
+    let track_count: Vec<usize> = track_z.iter().map(Vec::len).collect();
+    let size_y = world_height(&track_count);
 
     // ---------------------------------------------------------------
     // Emission
@@ -3079,15 +3432,22 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     // See `Footprint` and `seal_cross_talk` for why that split is what makes
     // the spacing constraint free where nothing is near.
 
-    let geometry = RoutingGeometry { plan: &plan, row_z: &row_z, nets: &nets, track_z: &track_z, bypass: &bypass };
+    let geometry = RoutingGeometry {
+        plan: &plan,
+        row_z: &row_z,
+        nets: &nets,
+        track_z: &track_z,
+        track_count: &track_count,
+        bypass: &bypass,
+    };
 
-    let mut scratch = World::new(size_x.max(8), WORLD_HEIGHT, size_z.max(8));
+    let mut scratch = World::new(size_x.max(8), size_y, size_z.max(8));
     let mut footprint = Footprint::record();
     emit(&mut scratch, netlist, &geometry, &mut footprint);
     drop(scratch);
 
     let mut footprint = Footprint::enforce(footprint.reservation);
-    let mut world = World::new(size_x.max(8), WORLD_HEIGHT, size_z.max(8));
+    let mut world = World::new(size_x.max(8), size_y, size_z.max(8));
     let EmitResult { input_positions, output_positions, gate_output_positions } =
         emit(&mut world, netlist, &geometry, &mut footprint);
 
