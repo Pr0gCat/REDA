@@ -10,6 +10,18 @@
 # GATE for its source. Nothing here was tuned to make a particular circuit
 # come out smaller.
 #
+# NOR1/NOR2/NOR3/BUF's AREA and delay fields are not just derived by hand:
+# `src/compile/topology.rs`'s `genlib_cost` computes the same numbers straight
+# from that module's own `Library` (which cell type maps to which entry is
+# `topology::gate_kind_for_yosys_cell`'s table; `src/frontend/yosys_json.rs`
+# consults both, instead of re-deciding what a Yosys cell type is on its own).
+# `src/frontend/mod.rs`'s `genlib_numbers_match_what_the_topology_library_derives`
+# test asserts this file's numbers agree with that derivation, so the two
+# cannot silently drift apart. This file itself stays hand-written rather than
+# generated -- it is SIS Genlib syntax ABC parses, and a byte-identical static
+# file is what guarantees ABC's own mapping decisions cannot shift as a side
+# effect of a refactor here.
+#
 # ---------------------------------------------------------------------
 # Why NOR, and why fan-in barely matters
 # ---------------------------------------------------------------------

@@ -212,3 +212,107 @@ fn run_synth(
     }
     Err(FrontendError::SynthesisFailed { stderr })
 }
+
+#[cfg(test)]
+mod tests {
+    use crate::compile::topology::{self, GateKind, Library};
+
+    /// `GENLIB`'s own `GATE`/`PIN` numbers for `cell_name`: `(area,
+    /// block_delay)`, read straight out of the SIS Genlib text with no
+    /// dependency on any crate parser -- deliberately dumb line-splitting,
+    /// so this test does not share a bug with whatever eventually reads this
+    /// format for real.
+    ///
+    /// Layout assumed (see `redstone_nor.genlib`'s own cells): a `GATE
+    /// <name> <area> Y=<expr>;` line, followed by exactly one `PIN * <phase>
+    /// <inputload> <maxload> <rise_block> <rise_fanout> <fall_block>
+    /// <fall_fanout>` line. Every cell this reader supports models delay as
+    /// a pure per-gate constant (`redstone_nor.genlib`'s own comment) --
+    /// `rise_block == fall_block` for all of them -- so reading `rise_block`
+    /// alone is reading "the" delay.
+    fn genlib_area_and_delay(cell_name: &str) -> (u32, u64) {
+        let gate_prefix = format!("GATE {cell_name} ");
+        let lines: Vec<&str> = super::GENLIB.lines().collect();
+        let gate_line_index = lines
+            .iter()
+            .position(|line| line.starts_with(&gate_prefix))
+            .unwrap_or_else(|| panic!("no `GATE {cell_name}` line in redstone_nor.genlib"));
+
+        let area: u32 = lines[gate_line_index]
+            .split_whitespace()
+            .nth(2)
+            .unwrap_or_else(|| panic!("`GATE {cell_name}` line has no area field"))
+            .parse()
+            .unwrap_or_else(|e| panic!("`GATE {cell_name}` area is not a number: {e}"));
+
+        let pin_line = lines[gate_line_index + 1..]
+            .iter()
+            .find(|line| line.trim_start().starts_with("PIN"))
+            .unwrap_or_else(|| panic!("no `PIN` line after `GATE {cell_name}`"));
+        // `PIN * <phase> <inputload> <maxload> <rise_block> <rise_fanout>
+        // <fall_block> <fall_fanout>`: "PIN", "*", phase and the two load
+        // fields are tokens 0..=4, so `rise_block` is token 5.
+        let rise_block: u64 = pin_line
+            .split_whitespace()
+            .nth(5)
+            .unwrap_or_else(|| panic!("`PIN` line for `{cell_name}` has no rise-block-delay field"))
+            .parse()
+            .unwrap_or_else(|e| panic!("`{cell_name}`'s rise-block-delay is not a number: {e}"));
+
+        (area, rise_block)
+    }
+
+    /// The whole point of `topology::genlib_cost`: `redstone_nor.genlib`'s
+    /// hand-written `GATE`/`PIN` numbers for every cell it maps a Yosys cell
+    /// type onto are exactly what deriving cost from that cell's own
+    /// `topology::Template` produces. This is what keeps the genlib (ABC's
+    /// cost model) and the topology library (this crate's own realisation
+    /// model) from drifting apart the way the task that added this test was
+    /// written to close -- if `place_nor_gate`'s footprint or a template's
+    /// own shape changes without the other, this fails immediately instead
+    /// of silently mapping to the wrong cost.
+    #[test]
+    fn genlib_numbers_match_what_the_topology_library_derives() {
+        let library = Library::default_library();
+        for &(cell_name, kind) in
+            &[("NOR1", GateKind::Nor(1)), ("NOR2", GateKind::Nor(2)), ("NOR3", GateKind::Nor(3)), ("BUF", GateKind::Buf)]
+        {
+            let entry = library.choose(kind).unwrap_or_else(|| panic!("{cell_name} ({kind:?}) has no library entry"));
+            let cost = topology::genlib_cost(entry);
+            let (genlib_area, genlib_delay) = genlib_area_and_delay(cell_name);
+            assert_eq!(cost.area, genlib_area, "{cell_name}: derived area disagrees with redstone_nor.genlib");
+            assert_eq!(
+                cost.delay_game_ticks, genlib_delay,
+                "{cell_name}: derived delay disagrees with redstone_nor.genlib"
+            );
+        }
+    }
+
+    /// Every Yosys cell type `redstone_nor.genlib` can produce maps to a
+    /// `GateKind` this library actually ships an entry for -- otherwise
+    /// `yosys_json::Context::build_cell` would map a cell to a `GateKind`
+    /// and then find nothing to build it from, a bug this test exists to
+    /// catch instead of letting it surface as a runtime panic mid-synthesis.
+    #[test]
+    fn every_mapped_yosys_cell_has_a_library_entry() {
+        let library = Library::default_library();
+        for &cell_name in &["NOR1", "NOR2", "NOR3", "BUF"] {
+            let kind = topology::gate_kind_for_yosys_cell(cell_name)
+                .unwrap_or_else(|| panic!("{cell_name} has no GateKind mapping"));
+            assert!(library.choose(kind).is_some(), "{cell_name} maps to {kind:?}, which has no library entry");
+        }
+    }
+
+    /// A cell type `redstone_nor.genlib` never produces -- including the
+    /// constant drivers, which this library deliberately has no realisation
+    /// for -- has no `GateKind` mapping at all, so the frontend's "unmapped
+    /// cell" error path is reached by data, not by falling through every
+    /// known name.
+    #[test]
+    fn an_unmapped_cell_type_has_no_gate_kind() {
+        assert!(topology::gate_kind_for_yosys_cell("$__ZERO").is_none());
+        assert!(topology::gate_kind_for_yosys_cell("$__ONE").is_none());
+        assert!(topology::gate_kind_for_yosys_cell("DFF").is_none());
+        assert!(topology::gate_kind_for_yosys_cell("").is_none());
+    }
+}

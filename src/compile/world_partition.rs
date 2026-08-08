@@ -346,6 +346,22 @@ fn resolve_node_position(
             })?;
             Ok(Position::new(tx, ty, tz))
         }
+        // `SecondTorch` only exists in `topology::GateKind::Buf`'s entry, and
+        // `primitive_graph::expand` never chooses it for a `Netlist::Gate`
+        // (it always looks up `GateKind::Nor(arity)` -- see `expand`'s own
+        // body): the Yosys frontend realizes `BUF` as two already-separate
+        // NOR gates before a `Netlist` ever exists, so a compiled
+        // `PrimitiveGraph`'s gate nodes are always plain `Torch`. Reachable
+        // only if that stops being true, so this is a real gap to close
+        // then, not dead code to delete now.
+        Provenance::Gate { gate, role: TemplateNode::SecondTorch } => Err(PartitionError::CannotResolveNodePosition {
+            detail: format!(
+                "gate `{}`'s primitive graph has a `SecondTorch` node, which `compiled.gate_output_positions` \
+                 has no recorded position for -- no multi-torch library entry is ever chosen for a real \
+                 `Netlist::Gate` today",
+                netlist.gates[*gate].output
+            ),
+        }),
     }
 }
 
