@@ -38,6 +38,7 @@ pub mod equivalence;
 pub mod primitive_graph;
 pub mod routing_stats;
 pub mod topology;
+pub mod world_partition;
 
 // ---------------------------------------------------------------------
 // 網表
