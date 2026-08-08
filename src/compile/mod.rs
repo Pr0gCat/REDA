@@ -806,6 +806,33 @@ pub enum CompileError {
         gate: String,
         reason: TorchMergeFailure,
     },
+    /// A net's own routed geometry is structurally connected -- connectivity
+    /// and torch-merge both pass -- but does not actually deliver a
+    /// non-zero signal to one of its declared sinks once real strength
+    /// decay and repeater refresh are accounted for (see
+    /// `verify_signal_strength`'s doc comment). This is the failure mode
+    /// neither of the first two invariants can see: a dust run one block
+    /// too long, or a repeater whose output lands somewhere nothing
+    /// continues from, both leave the world perfectly connected and every
+    /// torch genuinely inverting -- and silently wrong anyway.
+    SignalStrengthViolation {
+        /// The net that fails to deliver.
+        net: String,
+        /// Which of the net's own declared sinks never saw a non-zero
+        /// signal.
+        sink: SignalSink,
+    },
+}
+
+/// Which declared sink of a net `verify_signal_strength` found undelivered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SignalSink {
+    /// A gate input -- specifically the support block its route terminates
+    /// against, the same cell `verify_torch_merge` already proved is
+    /// *structurally* reached by this net.
+    GateInput { gate: String, support: (i32, i32, i32) },
+    /// A declared circuit output's lamp.
+    OutputLamp { output: String, lamp: (i32, i32, i32) },
 }
 
 /// Which condition of the torch-merge invariant failed. See
@@ -882,6 +909,20 @@ impl std::fmt::Display for CompileError {
                     "torch-merge violation: gate `{gate}`'s torch at {torch:?} powers \
                      {leaked_cell:?}, which belongs to net `{net}` -- the torch's own output is \
                      leaking into a net it does not drive"
+                ),
+            },
+            CompileError::SignalStrengthViolation { net, sink } => match sink {
+                SignalSink::GateInput { gate, support } => write!(
+                    f,
+                    "signal-strength violation: net `{net}` never delivers a non-zero signal to \
+                     gate `{gate}`'s support block {support:?} -- the geometry is structurally \
+                     connected but the real, decayed signal dies out before it arrives"
+                ),
+                SignalSink::OutputLamp { output, lamp } => write!(
+                    f,
+                    "signal-strength violation: net `{net}` never delivers a non-zero signal to \
+                     output `{output}`'s lamp at {lamp:?} -- the geometry is structurally \
+                     connected but the real, decayed signal dies out before it arrives"
                 ),
             },
         }
@@ -3383,6 +3424,346 @@ fn verify_torch_merge(
     Ok(())
 }
 
+// ---------------------------------------------------------------------
+// The signal-strength invariant
+// ---------------------------------------------------------------------
+//
+// Spacing proves nothing touches that shouldn't. `verify_connectivity`
+// proves every dust network partitions into exactly the right nets.
+// `verify_torch_merge` proves every torch genuinely inverts the nets that
+// are structurally wired to its support. None of the three knows that
+// redstone dust starts at 15 and loses one per step: a run one block too
+// long, or a repeater whose output lands on a cell nothing continues from,
+// leaves every one of those three invariants perfectly satisfied and the
+// circuit silently wrong -- right on the input vectors that never need the
+// far end of that run, wrong on the one that does.
+//
+// This is the fourth invariant: every net must deliver a non-zero signal to
+// every one of its own declared sinks. Unlike the first three, it cannot be
+// answered by "what touches what" -- it needs actual decay, so it derives
+// its propagation from the same two places the simulator itself does,
+// rather than restating them:
+//
+// - `connectivity::dust_connections` for which cells join, and in which
+//   direction climbing/descending is even legal -- exactly what
+//   `propagate::recompute_dust_strengths`'s own BFS walks.
+// - The fact (`taxonomy::power_emitted_by`'s `Repeater` arm) that a
+//   repeater's output is always exactly `MAX_SIGNAL_STRENGTH`, never a
+//   partial value, when its input carries any non-zero signal at all -- so
+//   a repeater is a step function on its own input, not a pass-through.
+//
+// What it must *not* do is ask the planner (`plan_straight_run`,
+// `plan_track_run`, `ramp_reserve`, and friends) what strength it *meant* to
+// deliver -- that would only prove the planner agrees with itself. It has
+// to walk the emitted blocks, the same way `verify_connectivity` walks the
+// world rather than trusting the router's intentions.
+
+/// The real, decayed signal strength this net's own routed cells would
+/// carry if its source were genuinely driven -- computed by walking
+/// `own_cells` (this net's own reservation, so the walk can never wander
+/// into a different net's dust even by accident) exactly the way
+/// `propagate::recompute_dust_strengths` walks the whole world: one hop of
+/// decay per `dust_connections` edge, with a repeater restoring to
+/// `MAX_SIGNAL_STRENGTH` wherever its own declared input cell is found, by
+/// this same walk, to carry a non-zero signal.
+///
+/// That last clause is the entire difference from `net_reach`
+/// (`verify_torch_merge`'s tool): `net_reach` and `structural_output` ask
+/// "could this component possibly reach that cell", assuming every active
+/// component is already lit -- which is deliberately right for a freshly
+/// emitted, not-yet-settled world when the question is "does this geometry
+/// implement a NOR at all". This function asks a different question --
+/// "given the actual dust run behind it, does this component ever receive
+/// enough to fire" -- so a repeater here only restores the signal if the
+/// cell that is genuinely, structurally its input (`structural_output`'s own
+/// direction test, reused unchanged) was itself reached by this same walk
+/// with a non-zero strength. A repeater whose own input never arrives stays
+/// silent, and nothing downstream of it is ever recorded -- which is exactly
+/// how a dust run one block too long, or a repeater refreshing into a cell
+/// nothing continues from, ends up with an unreached sink instead of a
+/// falsely "reachable" one.
+///
+/// `source` and `source_state` are the net's true origin -- a lever or a
+/// gate's own output torch -- read directly from the world, not from
+/// `own_cells`: unlike `net_reach`, which can start from every reserved
+/// cell at once because it never has to ask "how far", this function has to
+/// know exactly where the signal actually starts so its decay count means
+/// anything. `source` is assumed driven at `MAX_SIGNAL_STRENGTH` regardless
+/// of its real, placeholder `lit`/`power` value in the freshly emitted
+/// world -- the same assumption `structural_output` documents for the same
+/// reason (nothing about a fresh world's activation fields means anything
+/// yet). Only what happens to that assumed-driven signal *after* it leaves
+/// the source is real physics, never assumed.
+///
+/// The walk mixes two different propagation rules, applied by `pos`'s own
+/// kind once it is popped:
+///
+/// - **Dust** decays by one per `dust_connections` edge (same-layer, climb,
+///   descend -- whichever the geometry actually allows), *and* separately
+///   drives any horizontally adjacent repeater directly, since
+///   `dust_connections` only ever returns other dust cells and a repeater is
+///   never reached through it.
+/// - **A repeater** (the only kind this router ever places mid-route --
+///   `lay_dust_run`, `lay_bent_path` and `move_between_layers`'s rest stops
+///   all call `repeater(..)`, never a comparator or a torch) drives forward
+///   from its own position along its own single fixed output direction,
+///   whatever it lands on -- more dust, a gate's support block, or, in a
+///   back-to-back placement, directly into another repeater's own input
+///   side. This is what makes a chain of repeaters work regardless of
+///   length: each one, once *it* is found to have a real signal, forwards
+///   from itself exactly the way the first one did, rather than the first
+///   repeater trying to reach all the way to the final destination in one
+///   jump.
+///
+/// Either way, `deliver` is the single point that decides whether the
+/// receiving cell can actually accept what is being sent its way, so a
+/// repeater's own directionality is enforced identically regardless of
+/// which of the two rules produced the delivery.
+fn net_signal_strength(
+    world: &World,
+    own_cells: &HashSet<Position>,
+    source: Position,
+    source_state: &BlockState,
+) -> HashMap<Position, u8> {
+    let mut strength: HashMap<Position, u8> = HashMap::new();
+    let mut queue: VecDeque<Position> = VecDeque::new();
+
+    /// Record `value` arriving at `target` from `from_direction`, if `target`
+    /// is even capable of receiving it and it beats whatever is already
+    /// recorded there. A repeater or comparator only ever reads its one
+    /// declared input side (`facing`) -- a signal arriving from any other
+    /// side is exactly as inert as no signal at all, the same asymmetry
+    /// `power_emitted_toward`'s own direction gate enforces for output.
+    /// Every other kind (dust, a gate's support block, plain stone) does not
+    /// care which side it was reached from, so it always accepts.
+    ///
+    /// Only enqueues `target` for further propagation when it belongs to
+    /// this net's own reservation (`own_cells`) -- a gate's support block
+    /// never does (`place_nor_gate` places it outside the routing system
+    /// entirely), so recording its strength here is exactly what the sink
+    /// check below reads, without this walk ever trying to propagate
+    /// further from a cell nothing routes onward from.
+    fn deliver(
+        world: &World,
+        own_cells: &HashSet<Position>,
+        strength: &mut HashMap<Position, u8>,
+        queue: &mut VecDeque<Position>,
+        target: Position,
+        from_direction: Facing,
+        value: u8,
+    ) {
+        let target_state = world.get(target.x, target.y, target.z);
+        if matches!(target_state.kind, BlockKind::Repeater | BlockKind::Comparator)
+            && target_state.facing != Some(from_direction.opposite())
+        {
+            return;
+        }
+        if value > strength.get(&target).copied().unwrap_or(0) {
+            strength.insert(target, value);
+            if own_cells.contains(&target) {
+                queue.push_back(target);
+            }
+        }
+    }
+
+    for direction in ALL_SIX {
+        if structural_output(source_state, direction).0 {
+            deliver(world, own_cells, &mut strength, &mut queue, source.offset(direction), direction, MAX_SIGNAL_STRENGTH);
+        }
+    }
+
+    while let Some(pos) = queue.pop_front() {
+        let here = *strength.get(&pos).expect("only positions already given a strength are ever queued");
+        let state = world.get(pos.x, pos.y, pos.z);
+
+        if state.kind == BlockKind::RedstoneWire {
+            // Dust-to-dust decay, restricted (via `deliver`'s `own_cells`
+            // gate) to this net's own reservation so the walk can never
+            // cross into a different net's network even if the two happened
+            // to physically touch (a bug `verify_connectivity` would already
+            // have caught before this ever runs). Stops at `here == 1`:
+            // decaying further would only ever produce a 0, which is the
+            // same as never having recorded the cell at all.
+            if here > 1 {
+                let next = here - 1;
+                for direction in HORIZONTAL {
+                    for neighbour in dust_connections(world, pos, direction).iter() {
+                        deliver(world, own_cells, &mut strength, &mut queue, neighbour, direction, next);
+                    }
+                }
+            }
+            // Dust directly driving an adjacent repeater. This is *not* a
+            // `dust_connections` edge (that only ever returns other dust
+            // cells), and it fires on any non-zero `here` including 1 -- a
+            // repeater only needs some signal to arrive, not two hops' worth
+            // of it. `deliver`'s own facing check is what confirms `pos` is
+            // genuinely this repeater's declared input side, not merely
+            // adjacent to it.
+            for direction in HORIZONTAL {
+                let neighbour = pos.offset(direction);
+                if world.get(neighbour.x, neighbour.y, neighbour.z).kind == BlockKind::Repeater {
+                    deliver(world, own_cells, &mut strength, &mut queue, neighbour, direction, MAX_SIGNAL_STRENGTH);
+                }
+            }
+        } else if flags_of(state).is_conductive() {
+            // `pos` is a plain conductive block (never dust, never a
+            // repeater) that this walk has already found strongly powered --
+            // the only way such a block's own cell ends up in `strength` at
+            // all is as a repeater's direct output landing on it (a ramp's
+            // climbing riser, or an ordinary support/floor block). A
+            // strongly powered conductive block re-drives *every* redstone
+            // wire touching *any* of its six faces, not only the one
+            // direction the repeater's own output happened to arrive from --
+            // this is `propagate::recompute_dust_strengths`'s own
+            // "強充能的方塊也能驅動相鄰的紅石粉" rule (and `verify_torch_
+            // merge`'s `net_reach`/`mark_powered` equivalent), confirmed
+            // empirically against this exact geometry: a repeater climbing a
+            // ramp never touches the landing dust directly, it powers the
+            // riser underneath it, and the riser is what lights the dust
+            // sitting on its top face. Left out, a dust run that happens to
+            // need a mandatory repeater exactly at a ramp's entry would look
+            // stuck-at-zero one level up, even though the real simulator
+            // lights it fine.
+            for direction in ALL_SIX {
+                let neighbour = pos.offset(direction);
+                if world.get(neighbour.x, neighbour.y, neighbour.z).kind == BlockKind::RedstoneWire {
+                    deliver(world, own_cells, &mut strength, &mut queue, neighbour, direction, here);
+                }
+            }
+        } else {
+            // `pos` is an active component (in practice, always a repeater
+            // -- see this function's own doc comment) this walk has already
+            // established is fed (the only way its own cell -- as opposed to
+            // whatever it drives -- ever ends up in `strength` at all): it
+            // drives forward from itself along its one fixed output
+            // direction, exactly as `structural_output` already models for
+            // `verify_torch_merge`, reused here unchanged. Note this does
+            // *not* cover a repeater's output landing on thin air (the
+            // descend rule's own deliberately-open cell): `deliver` still
+            // records that dead end, but nothing is there to radiate from,
+            // and unlike the climbing case above, a repeater's output does
+            // not diagonally reach descending dust the way genuine dust does
+            // (confirmed empirically the same way) -- which is exactly the
+            // "repeater refreshing into a cell nothing continues from"
+            // failure mode this invariant exists to catch.
+            for direction in ALL_SIX {
+                if structural_output(state, direction).0 {
+                    deliver(world, own_cells, &mut strength, &mut queue, pos.offset(direction), direction, MAX_SIGNAL_STRENGTH);
+                }
+            }
+        }
+    }
+
+    strength
+}
+
+/// The signal-strength invariant: every net must deliver a non-zero signal
+/// to every one of its own declared gate-input sinks, and every declared
+/// circuit output must receive a non-zero signal from its driving gate's
+/// output torch. See this section's own doc comment for what makes this
+/// different from `verify_connectivity`/`verify_torch_merge`, and
+/// `net_signal_strength` for how the arriving strength is actually derived.
+///
+/// This assumes `verify_connectivity` and `verify_torch_merge` have already
+/// run and passed: it trusts that a net's own reservation is a single clean
+/// network (so `net_signal_strength` never has to re-derive that), and it
+/// reuses `torch_support_position` exactly as `verify_torch_merge` does to
+/// find each gate's support block, without re-checking that the torch
+/// resolves to one at all.
+fn verify_signal_strength(
+    world: &World,
+    reservation: &Reservation,
+    netlist: &Netlist,
+    nets: &[Net],
+    gate_output_positions: &BTreeMap<String, (i32, i32, i32)>,
+    input_positions: &BTreeMap<String, (i32, i32, i32)>,
+    output_positions: &BTreeMap<String, (i32, i32, i32)>,
+) -> Result<(), CompileError> {
+    let mut net_cells: Vec<HashSet<Position>> = vec![HashSet::new(); nets.len()];
+    for (&pos, &owner) in reservation {
+        net_cells[owner].insert(pos);
+    }
+
+    for (n, net) in nets.iter().enumerate() {
+        let (source, source_state) = match net.source {
+            Source::Lever(i) => {
+                let &(x, y, z) = input_positions
+                    .get(&netlist.inputs[i])
+                    .expect("emit records a lever position for every input");
+                (Position::new(x, y, z), world.get(x, y, z))
+            }
+            Source::Gate(g) => {
+                let &(x, y, z) = gate_output_positions
+                    .get(&netlist.gates[g].output)
+                    .expect("emit records a torch position for every gate");
+                (Position::new(x, y, z), world.get(x, y, z))
+            }
+        };
+
+        let strength = net_signal_strength(world, &net_cells[n], source, source_state);
+
+        for &(gate, _input_index) in net.sinks.iter().flatten() {
+            let &(tx, ty, tz) = gate_output_positions
+                .get(&netlist.gates[gate].output)
+                .expect("emit records a torch position for every gate");
+            let torch_pos = Position::new(tx, ty, tz);
+            let torch_state = world.get(tx, ty, tz);
+            let Some(support) = torch_support_position(torch_state, torch_pos) else {
+                // Not this invariant's finding to make -- `verify_torch_merge`
+                // already rejects a torch with no resolvable support, and it
+                // runs before this does.
+                continue;
+            };
+
+            if strength.get(&support).copied().unwrap_or(0) == 0 {
+                return Err(CompileError::SignalStrengthViolation {
+                    net: net_name(netlist, nets, n),
+                    sink: SignalSink::GateInput {
+                        gate: netlist.gates[gate].name.clone(),
+                        support: (support.x, support.y, support.z),
+                    },
+                });
+            }
+        }
+    }
+
+    // Every declared circuit output, checked directly rather than through
+    // any `Net`: a gate whose output drives *only* a lamp and no other
+    // gate gets no `Net` of its own at all (`build_nets` drops a signal
+    // with no gate-input sink), yet the lamp is still a real sink this
+    // invariant has to answer for. The connection is always exactly one
+    // hop -- the torch directly drives the pin dust the lamp sits under
+    // (see `emit`'s own doc comment on lamp placement) -- so it is checked
+    // with `structural_output` directly rather than a full
+    // `net_signal_strength` walk, which would have nothing to do beyond
+    // that single hop anyway.
+    for output_name in &netlist.outputs {
+        let &(tx, ty, tz) = gate_output_positions
+            .get(output_name)
+            .expect("every output was checked to be driven by a gate above");
+        let torch_pos = Position::new(tx, ty, tz);
+        let torch_state = world.get(tx, ty, tz);
+        let &(lx, ly, lz) = output_positions
+            .get(output_name)
+            .expect("emit records a lamp position for every declared output");
+        let lamp_pos = Position::new(lx, ly, lz);
+        let pin = lamp_pos.up();
+
+        let delivers = ALL_SIX
+            .into_iter()
+            .any(|direction| torch_pos.offset(direction) == pin && structural_output(torch_state, direction).0);
+
+        if !delivers {
+            return Err(CompileError::SignalStrengthViolation {
+                net: output_name.clone(),
+                sink: SignalSink::OutputLamp { output: output_name.clone(), lamp: (lx, ly, lz) },
+            });
+        }
+    }
+
+    Ok(())
+}
+
 /// 把一個網表編譯成一個紅石世界。
 pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     for gate in &netlist.gates {
@@ -3462,6 +3843,23 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     // so it cannot tell a working NOR from one whose input is wired into
     // the wrong block. Checked unconditionally too, for the same reason.
     verify_torch_merge(&world, &footprint.reservation, netlist, &nets, &gate_output_positions)?;
+
+    // The signal-strength invariant: connectivity and torch-merge both
+    // reason about what touches what; neither knows redstone dust decays.
+    // Checked last, unconditionally, and only after the first two have
+    // already passed -- it trusts their guarantees (a net's own reservation
+    // is one clean network, and every declared input structurally reaches
+    // its gate's support) rather than re-deriving them. See this module's
+    // "The signal-strength invariant" section for the full picture.
+    verify_signal_strength(
+        &world,
+        &footprint.reservation,
+        netlist,
+        &nets,
+        &gate_output_positions,
+        &input_positions,
+        &output_positions,
+    )?;
 
     Ok(CompiledCircuit { world, input_positions, output_positions, gate_output_positions })
 }
@@ -3806,5 +4204,385 @@ mod tests {
             verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions),
             Ok(())
         );
+    }
+
+    // -----------------------------------------------------------------
+    // The signal-strength invariant
+    // -----------------------------------------------------------------
+    //
+    // Every test below builds, by hand, a world that is perfectly clean by
+    // the first two invariants' own standards -- one electrically coherent
+    // network per net (`verify_connectivity`), every declared input
+    // structurally reaching its gate's support and nothing else
+    // (`verify_torch_merge`) -- and confirms both of them agree it is fine,
+    // *before* checking that `verify_signal_strength` is the one that
+    // catches it anyway. That double-check is the whole point: it proves
+    // the failure mode this invariant exists for is invisible to the other
+    // two, not merely untested by them.
+    //
+    // The reason `verify_connectivity`/`verify_torch_merge` cannot see any
+    // of this is the same reason every time: both reason about a net's
+    // reservation as a single, timelessly "in the network" set of cells
+    // (`verify_torch_merge`'s `net_reach` literally seeds every one of a
+    // net's own claimed cells into its flood at once), never about whether
+    // a real signal, starting at the true source and losing strength one
+    // hop at a time, would ever actually arrive there. A cell can be
+    // legitimately claimed by a net and still be electrically orphaned from
+    // everything upstream of it -- that gap is invisible to a check that
+    // never asks "how did the signal get here", only "is this consistent
+    // with everything else claimed for this net".
+
+    /// Lay `len` cells of plain dust from `start` (inclusive) along `+x`,
+    /// each claimed for `net`. Returns the position one past the last cell
+    /// laid -- where a caller's next component goes.
+    fn lay_test_dust_run(world: &mut World, reservation: &mut Reservation, start: Position, len: i32, net: usize) -> Position {
+        for i in 0..len {
+            let pos = Position::new(start.x + i, start.y, start.z);
+            world.set(pos.x, pos.y, pos.z, dust());
+            reservation.insert(pos, net);
+        }
+        Position::new(start.x + len, start.y, start.z)
+    }
+
+    /// A gate at `pos`: a stone support with a standing torch directly on
+    /// top, exactly like every other torch-merge fixture above. Returns the
+    /// torch's own position (what `gate_output_positions` records).
+    fn place_test_gate(world: &mut World, support: Position) -> Position {
+        world.set(support.x, support.y, support.z, stone());
+        let torch = support.up();
+        world.set(torch.x, torch.y, torch.z, standing_torch());
+        torch
+    }
+
+    #[test]
+    fn signal_strength_rejects_a_dust_run_one_block_too_long() {
+        // Lever -> 16 plain dust cells -> mandatory terminating repeater ->
+        // support. Sixteen cells is one too many: the pin itself (the first
+        // cell, directly lit by the lever) carries 15, so the sixteenth
+        // cell -- the sixteenth hop -- is the first one to actually reach
+        // zero, and the repeater immediately after it reads a dead input.
+        // No repeater anywhere in the run to refresh it -- the simplest
+        // possible way to trigger this invariant.
+        let netlist = single_input_gate("out");
+        let nets = vec![single_input_net()];
+
+        let mut world = World::new(25, 5, 5);
+        let lever_pos = Position::new(0, 0, 2);
+        world.set(lever_pos.x, lever_pos.y, lever_pos.z, lever(false));
+
+        let mut reservation = Reservation::new();
+        let after_run = lay_test_dust_run(&mut world, &mut reservation, Position::new(1, 0, 2), 16, 0);
+        world.set(after_run.x, after_run.y, after_run.z, repeater(Facing::East));
+        reservation.insert(after_run, 0);
+
+        let support = after_run.offset(Facing::East);
+        let torch = place_test_gate(&mut world, support);
+
+        let mut input_positions = BTreeMap::new();
+        input_positions.insert("a".to_string(), (lever_pos.x, lever_pos.y, lever_pos.z));
+        let mut gate_output_positions = BTreeMap::new();
+        gate_output_positions.insert("out".to_string(), (torch.x, torch.y, torch.z));
+        let output_positions = BTreeMap::new();
+
+        assert_eq!(
+            verify_connectivity(&world, &reservation, &netlist, &nets),
+            Ok(()),
+            "one continuous, uncontested dust network must satisfy connectivity"
+        );
+        assert_eq!(
+            verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions),
+            Ok(()),
+            "net_reach seeds every claimed cell at once, so it never notices the run is too long"
+        );
+
+        let err = verify_signal_strength(
+            &world,
+            &reservation,
+            &netlist,
+            &nets,
+            &gate_output_positions,
+            &input_positions,
+            &output_positions,
+        )
+        .expect_err("a 16-cell run with no refresh must never deliver a signal to the support");
+
+        assert_eq!(
+            err,
+            CompileError::SignalStrengthViolation {
+                net: "a".to_string(),
+                sink: SignalSink::GateInput { gate: "g0".to_string(), support: (support.x, support.y, support.z) },
+            }
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains("g0") && message.contains(&format!("{:?}", (support.x, support.y, support.z))),
+            "message must name the gate and the unreached support: {message}"
+        );
+    }
+
+    #[test]
+    fn signal_strength_rejects_a_repeater_refreshing_into_an_invalid_cell() {
+        // Exactly the failure the layering work hit: a repeater's own
+        // designated output cell is deliberately left as air (the shape
+        // `move_between_layers`'s descend rule requires -- see its own doc
+        // comment), while the *real* continuation of the route is a
+        // diagonal dust cell one level down that a repeater's straight-line
+        // output can never actually reach. That diagonal cell is still
+        // claimed by the net (the router laid it, meaning to connect it),
+        // and a second repeater sits past it, correctly oriented, ready to
+        // carry the signal the rest of the way to the support -- so
+        // structurally the net still looks completely fine, right up until
+        // a real signal tries to cross the gap.
+        let netlist = single_input_gate("out");
+        let nets = vec![single_input_net()];
+
+        let mut world = World::new(10, 5, 5);
+        let lever_pos = Position::new(0, 1, 2);
+        world.set(lever_pos.x, lever_pos.y, lever_pos.z, lever(false));
+
+        let mut reservation = Reservation::new();
+        let pin = Position::new(1, 1, 2);
+        world.set(pin.x, pin.y, pin.z, dust());
+        reservation.insert(pin, 0);
+
+        let repeater_a = Position::new(2, 1, 2);
+        world.set(repeater_a.x, repeater_a.y, repeater_a.z, repeater(Facing::East));
+        reservation.insert(repeater_a, 0);
+
+        // (3, 1, 2) -- repeater A's own designated output cell -- is left
+        // as air on purpose. `landing`, the cell the real connection needed
+        // to continue from, sits diagonally: one step further along and one
+        // level down.
+        let landing = Position::new(3, 0, 2);
+        world.set(landing.x, landing.y, landing.z, dust());
+        reservation.insert(landing, 0);
+
+        let repeater_b = Position::new(4, 0, 2);
+        world.set(repeater_b.x, repeater_b.y, repeater_b.z, repeater(Facing::East));
+        reservation.insert(repeater_b, 0);
+
+        let support = Position::new(5, 0, 2);
+        let torch = place_test_gate(&mut world, support);
+
+        let mut input_positions = BTreeMap::new();
+        input_positions.insert("a".to_string(), (lever_pos.x, lever_pos.y, lever_pos.z));
+        let mut gate_output_positions = BTreeMap::new();
+        gate_output_positions.insert("out".to_string(), (torch.x, torch.y, torch.z));
+        let output_positions = BTreeMap::new();
+
+        assert_eq!(
+            verify_connectivity(&world, &reservation, &netlist, &nets),
+            Ok(()),
+            "every claimed cell here is its own isolated island -- no cross-net merge for connectivity to catch"
+        );
+        assert_eq!(
+            verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions),
+            Ok(()),
+            "net_reach seeds `repeater_b` directly (it is one of the net's own claimed cells) and finds \
+             it structurally drives the support, regardless of whether anything upstream ever reaches it"
+        );
+
+        let err = verify_signal_strength(
+            &world,
+            &reservation,
+            &netlist,
+            &nets,
+            &gate_output_positions,
+            &input_positions,
+            &output_positions,
+        )
+        .expect_err("a repeater whose output lands on air must never deliver a signal past the gap");
+
+        assert_eq!(
+            err,
+            CompileError::SignalStrengthViolation {
+                net: "a".to_string(),
+                sink: SignalSink::GateInput { gate: "g0".to_string(), support: (support.x, support.y, support.z) },
+            }
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains("g0") && message.contains(&format!("{:?}", (support.x, support.y, support.z))),
+            "message must name the gate and the unreached support: {message}"
+        );
+    }
+
+    #[test]
+    fn signal_strength_rejects_a_sink_that_is_structurally_reachable_but_dead() {
+        // Two segments, not one: the first repeater is real and genuinely
+        // fires (fed by a run well inside budget), refreshing the signal
+        // back to full strength -- proof this net is not simply
+        // disconnected or trivially broken. The *second* segment, after
+        // that perfectly good repeater, is on its own one block too long,
+        // so the final mandatory repeater into the support never fires.
+        // `verify_torch_merge` -- which never decays anything, and would
+        // call this support "reached" even with *no* repeaters firing at
+        // all -- has no way to tell this apart from a working net; only
+        // walking the real, cumulative decay does.
+        let netlist = single_input_gate("out");
+        let nets = vec![single_input_net()];
+
+        let mut world = World::new(45, 5, 5);
+        let lever_pos = Position::new(0, 0, 2);
+        world.set(lever_pos.x, lever_pos.y, lever_pos.z, lever(false));
+
+        let mut reservation = Reservation::new();
+        // Segment 1: pin + 12 more cells (13 cells total, hops 0..12), the
+        // last one still carrying strength 3 -- comfortably non-zero.
+        let after_first_run = lay_test_dust_run(&mut world, &mut reservation, Position::new(1, 0, 2), 13, 0);
+        world.set(after_first_run.x, after_first_run.y, after_first_run.z, repeater(Facing::East));
+        reservation.insert(after_first_run, 0);
+
+        // Segment 2: 16 plain cells after the (genuinely firing) repeater --
+        // one too many again, exactly like the single-segment case, just
+        // moved one refresh later.
+        let segment_two_start = after_first_run.offset(Facing::East);
+        let after_second_run = lay_test_dust_run(&mut world, &mut reservation, segment_two_start, 16, 0);
+        world.set(after_second_run.x, after_second_run.y, after_second_run.z, repeater(Facing::East));
+        reservation.insert(after_second_run, 0);
+
+        let support = after_second_run.offset(Facing::East);
+        let torch = place_test_gate(&mut world, support);
+
+        let mut input_positions = BTreeMap::new();
+        input_positions.insert("a".to_string(), (lever_pos.x, lever_pos.y, lever_pos.z));
+        let mut gate_output_positions = BTreeMap::new();
+        gate_output_positions.insert("out".to_string(), (torch.x, torch.y, torch.z));
+        let output_positions = BTreeMap::new();
+
+        assert_eq!(verify_connectivity(&world, &reservation, &netlist, &nets), Ok(()));
+        assert_eq!(
+            verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions),
+            Ok(()),
+            "a torch-merge check that never decays anything calls the support reached \
+             regardless of how many segments, or how long, sit between the source and it"
+        );
+
+        let err = verify_signal_strength(
+            &world,
+            &reservation,
+            &netlist,
+            &nets,
+            &gate_output_positions,
+            &input_positions,
+            &output_positions,
+        )
+        .expect_err("the second, independently too-long segment must still zero out the support");
+
+        assert_eq!(
+            err,
+            CompileError::SignalStrengthViolation {
+                net: "a".to_string(),
+                sink: SignalSink::GateInput { gate: "g0".to_string(), support: (support.x, support.y, support.z) },
+            }
+        );
+    }
+
+    /// The positive case: the same two-segment shape as the test above, but
+    /// with the second segment shortened to comfortably fit in one budget
+    /// (10 cells instead of 16) -- so both repeaters genuinely fire and the
+    /// support is genuinely reached. Without this, nothing distinguishes a
+    /// signal-strength check that works from one that always fails, and
+    /// this project has already shipped two bugs whose tests could not
+    /// tell the difference (see this module's own "signal-strength
+    /// invariant" section doc comment).
+    #[test]
+    fn signal_strength_accepts_a_correctly_refreshed_multi_segment_net() {
+        let netlist = single_input_gate("out");
+        let nets = vec![single_input_net()];
+
+        let mut world = World::new(35, 5, 5);
+        let lever_pos = Position::new(0, 0, 2);
+        world.set(lever_pos.x, lever_pos.y, lever_pos.z, lever(false));
+
+        let mut reservation = Reservation::new();
+        let after_first_run = lay_test_dust_run(&mut world, &mut reservation, Position::new(1, 0, 2), 13, 0);
+        world.set(after_first_run.x, after_first_run.y, after_first_run.z, repeater(Facing::East));
+        reservation.insert(after_first_run, 0);
+
+        let segment_two_start = after_first_run.offset(Facing::East);
+        let after_second_run = lay_test_dust_run(&mut world, &mut reservation, segment_two_start, 10, 0);
+        world.set(after_second_run.x, after_second_run.y, after_second_run.z, repeater(Facing::East));
+        reservation.insert(after_second_run, 0);
+
+        let support = after_second_run.offset(Facing::East);
+        let torch = place_test_gate(&mut world, support);
+
+        let mut input_positions = BTreeMap::new();
+        input_positions.insert("a".to_string(), (lever_pos.x, lever_pos.y, lever_pos.z));
+        let mut gate_output_positions = BTreeMap::new();
+        gate_output_positions.insert("out".to_string(), (torch.x, torch.y, torch.z));
+        let output_positions = BTreeMap::new();
+
+        assert_eq!(verify_connectivity(&world, &reservation, &netlist, &nets), Ok(()));
+        assert_eq!(
+            verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions),
+            Ok(())
+        );
+        assert_eq!(
+            verify_signal_strength(
+                &world,
+                &reservation,
+                &netlist,
+                &nets,
+                &gate_output_positions,
+                &input_positions,
+                &output_positions,
+            ),
+            Ok(()),
+            "a correctly refreshed multi-segment net must satisfy the signal-strength invariant"
+        );
+    }
+
+    #[test]
+    fn signal_strength_rejects_an_unreached_declared_output_lamp() {
+        // The other kind of sink this invariant checks: a declared circuit
+        // output's lamp, fed directly by its driving gate's own output
+        // torch -- normally a single, unbreakable hop (`emit`'s own
+        // "Every netlist output gets a lamp" doc comment), but checked
+        // directly here rather than assumed, exactly like every other
+        // condition in this module. A wall torch with no recorded `facing`
+        // cannot resolve a direction to drive at all, so it cannot reach
+        // the lamp's pin either -- the simplest way to construct the
+        // failure without needing a real routing bug to produce it.
+        let netlist = Netlist {
+            inputs: Vec::new(),
+            outputs: vec!["out".to_string()],
+            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string() }],
+        };
+        let nets: Vec<Net> = Vec::new();
+
+        let mut world = World::new(5, 5, 5);
+        let mut torch = wall_torch(Facing::North);
+        torch.facing = None; // structurally incapable of driving any direction
+        world.set(2, 1, 2, torch);
+        world.set(2, 1, 1, dust()); // the pin a correctly-facing torch would drive
+        world.set(2, 0, 1, lamp());
+
+        let reservation = Reservation::new();
+        let gate_output_positions = BTreeMap::from([("out".to_string(), (2, 1, 2))]);
+        let input_positions = BTreeMap::new();
+        let output_positions = BTreeMap::from([("out".to_string(), (2, 0, 1))]);
+
+        let err = verify_signal_strength(
+            &world,
+            &reservation,
+            &netlist,
+            &nets,
+            &gate_output_positions,
+            &input_positions,
+            &output_positions,
+        )
+        .expect_err("a torch that cannot resolve a drive direction must never be treated as lighting its lamp");
+
+        assert_eq!(
+            err,
+            CompileError::SignalStrengthViolation {
+                net: "out".to_string(),
+                sink: SignalSink::OutputLamp { output: "out".to_string(), lamp: (2, 0, 1) },
+            }
+        );
+        let message = err.to_string();
+        assert!(message.contains("out") && message.contains("(2, 0, 1)"), "message: {message}");
     }
 }
