@@ -6,29 +6,40 @@
 //! module implements. Two things live here:
 //!
 //! - [`Primitive`], the vocabulary every entry (and the flat graph
-//!   `primitive_graph` expands into) is built from -- torch, dust, repeater,
-//!   solid block, plus the two circuit-boundary elements (lever, lamp) a
-//!   whole-circuit expansion needs.
+//!   `primitive_graph` expands into) is built from.
 //! - [`Library`], a gate type -> [`Template`] table, written once and
 //!   consulted by `primitive_graph::expand`, never derived per gate.
 //!
-//! # Why every entry still has a `Support` node, even though "no support
-//! blocks" is one of this step's own constraints
+//! # The governing rule: topology describes signal flow, and nothing else
 //!
-//! The spec's own illustrative example for `NOT` (`input — torch — output`)
-//! never mentions a support at all. What that elides -- and what "no support
-//! blocks" actually rules out -- is which *block*, at which *coordinate*, on
-//! which *face* realizes the support, not whether a support relationship
-//! exists in the first place. It has to: `Primitive::Torch`'s own defining
-//! behaviour ("dark when its support is powered") only makes sense if
-//! something plays that role, and once more than one input can darken the
-//! same torch, that something has to be a single shared node -- two inputs
-//! that both merely "point at the torch" cannot express "either one is
-//! enough" without a place for them to actually meet, since they generally
-//! sit on unrelated cells that are not themselves adjacent to each other.
-//! `Template::rigid_edges` records that merge point without ever naming its
-//! coordinates or which of the support's faces a given input lands on --
-//! both stay the planner's to choose, exactly as the spec requires.
+//! An earlier version of this module gave every NOR entry a `Support` node
+//! (a block) and one `Repeater` node per input, reading `place_nor_gate`'s
+//! own physical design back as a connectivity graph. That was a mistake this
+//! module no longer makes, for reasons worth stating plainly since the fix
+//! is a *smaller* graph, not a bigger one:
+//!
+//! - **A support block is not part of the signal.** It is how an input
+//!   physically reaches a torch -- realisation, not topology. A torch and
+//!   the block it is mounted on are one thing at this level.
+//! - **The repeaters at gate input sockets are not part of a NOR.** A NOR
+//!   does not need a repeater to be a NOR; those exist only because of how
+//!   the current emitter terminates a route. They are realisation too.
+//!
+//! So a NOR of arity `n` is **one node** -- a torch -- with `n` inbound
+//! signal edges and one outbound (`primitive_graph::expand` wires those
+//! edges; `nor_entry` below just says "one torch, and every input lands on
+//! it").
+//!
+//! One consequence follows directly, and is correct rather than a shortfall:
+//! for a NOR-only netlist, the flat primitive graph is isomorphic to the
+//! netlist itself -- this layer adds no information for the circuits this
+//! compiler builds today. It earns its place the day the library holds an
+//! entry that is *not* one-to-one with its gate: a deliberate repeater
+//! delay, a repeater latch, a comparator-based subtractor, diode isolation
+//! chosen as topology rather than falling out of routing. [`Template`]'s
+//! shape (a small node list plus internal edges, an output node and a list
+//! of input-landing nodes) is built to hold exactly those without changing
+//! again -- see its own doc comment.
 
 use std::collections::BTreeMap;
 
@@ -39,40 +50,56 @@ use std::collections::BTreeMap;
 /// The kind of thing a node in a [`Template`], or in the flat
 /// `primitive_graph::PrimitiveGraph` a netlist expands into, physically is.
 ///
-/// `Torch`, `Dust`, `Repeater` and `Block` are "the things the simulator
-/// actually models" (the spec's "The primitive level") -- everything a gate
-/// topology is built from. `Dust` is part of that vocabulary but never
-/// appears as a template node in this version of the library: a routable
-/// edge (see `primitive_graph::EdgeKind::Routable`) *becomes* a dust/repeater
-/// chain only once a planner decides how long that chain is and where it
-/// bends, which is later work (`Order` step 2 onward in the spec) -- nothing
-/// at this level ever needs to say "and here is a dust cell" itself.
+/// Every variant here **carries signal** -- has a function, a direction, or
+/// is where a signal originates or terminates. That is the one test a
+/// candidate primitive has to pass to belong in this enum, per the spec's
+/// "topology describes signal flow, and nothing else":
 ///
-/// `Lever` and `Lamp` are not part of any gate's topology -- no [`Library`]
-/// entry ever mentions them -- but expanding a whole `Netlist` needs
-/// something to stand for a primary input and a declared output, and those
-/// are exactly what `compile` already places there today, unconditionally,
-/// for every circuit. Naming them with the same enum keeps the flat graph in
-/// one vocabulary instead of inventing a separate "boundary primitive" type
-/// that would only ever hold two variants.
+/// - `Torch` -- the only element with a function: dark when its support is
+///   powered. A NOR gate's realisation.
+/// - `Repeater` -- restores strength, costs a tick, one-way. Not used by any
+///   entry this module ships today (a NOR's own input sockets are
+///   realisation, not topology -- see this module's doc comment), but it is
+///   a functional, directional signal element in its own right, exactly the
+///   kind of thing a deliberate-delay or latch entry would place as an
+///   internal `Template` node, so it belongs to the vocabulary now rather
+///   than being bolted on later.
+/// - `Comparator` -- compares or subtracts two inputs, one-way. Also unused
+///   today; also a real functional element a future entry (a
+///   comparator-based subtractor, the spec's own example) would need, and
+///   for the same reason as `Repeater` it belongs to the vocabulary rather
+///   than to a later, larger change.
+/// - `Lever` -- a primary input's switch: the source of a signal, never a
+///   sink.
+/// - `Lamp` -- a declared output's readable indicator: the sink of a signal,
+///   never a source.
+///
+/// Two things this project's earlier draft of this enum had are deliberately
+/// gone:
+///
+/// - **`Block`** (a support). A support is how an input physically reaches a
+///   torch, not part of the signal itself -- realisation, out of scope here.
+/// - **`Dust`**. Dust carries a strength that decays with distance, but it
+///   has no function of its own -- it is the *medium* a signal travels
+///   through, which makes it an edge's realisation, never a vertex. See the
+///   spec: "Dust is not a node... it is the medium -- an edge, not a
+///   vertex."
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Primitive {
     /// The only element with a function: dark when its support is powered.
     Torch,
-    /// Carries a strength that decays with distance. Not yet produced by
-    /// this module's expansion -- see the note above.
-    Dust,
-    /// Restores strength, costs a tick, one-way.
+    /// Restores strength, costs a tick, one-way. Unused by every entry this
+    /// module ships (see this type's own doc comment) until a technique
+    /// wants a repeater as *topology* rather than as routing.
     Repeater,
-    /// Carries power to what touches it, supports what stands on it. Used
-    /// here as a torch's shared support/merge point.
-    Block,
-    /// A primary input's switch -- the source of a routable edge, never the
-    /// target of a rigid one.
+    /// Compares or subtracts two inputs, one-way. Unused today; reserved for
+    /// a future comparator-based entry (see this type's own doc comment).
+    Comparator,
+    /// A primary input's switch -- the source of a signal, never the target
+    /// of one.
     Lever,
-    /// A declared output's readable indicator -- the target of a rigid edge
-    /// from its driving gate's torch (see `primitive_graph::expand`'s
-    /// doc comment for why that relationship is rigid, not routable).
+    /// A declared output's readable indicator -- the sink of a signal, never
+    /// its source.
     Lamp,
 }
 
@@ -104,21 +131,18 @@ impl GateKind {
 /// `primitive_graph::NodeId` once for every gate a `Library` entry expands
 /// (see `primitive_graph::expand`'s `instantiate`).
 ///
-/// `Torch` and `Input(i)` are fixed roles every entry must use for its
-/// output and its `i`-th declared input respectively -- `expand` looks
-/// specifically for these two roles by name. `Support` (or any other
-/// internal node a future entry might add) is opaque to `expand`; it exists
-/// purely to carry this entry's own rigid edges.
+/// One variant today: every entry this module ships needs exactly one node,
+/// so `Torch` is the only role there is anything to name. A future entry
+/// that needs more than one of its own internal nodes (a delay repeater in
+/// series with its torch, say) adds a variant here for that node -- a change
+/// of library data and this enum's own size, never of `Template`'s shape or
+/// of `primitive_graph::expand`, which only ever looks up whatever
+/// `Template::output` and `Template::inputs` name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TemplateNode {
-    /// The shared merge point every input drives and the torch depends on.
-    Support,
     /// This gate's output. Reading its `lit` state is reading the gate's
     /// output, exactly as `place_nor_gate`'s doc comment already puts it.
     Torch,
-    /// The `i`-th declared input's own terminal -- where a routable edge
-    /// from whatever drives that input must land.
-    Input(usize),
 }
 
 /// A relational preference between two of a template's own nodes --
@@ -142,21 +166,41 @@ pub enum EmbeddingHint {
     Coplanar(TemplateNode, TemplateNode),
 }
 
-/// One gate technique's connectivity graph: which primitives it needs, and
-/// which pairs of them must become physical adjacency (`rigid_edges`) rather
-/// than a dust path of any length. Carries no positions, no faces, no
-/// orientation -- see this module's doc comment, and the spec's "Topology
-/// carries no positions" / "Nothing physical lives here either".
+/// One gate technique's connectivity graph: which primitives it needs, how
+/// they connect to each other, and where its own inputs and output attach.
+/// Carries no positions, no faces, no orientation, and -- since "there are
+/// no rigid edges here" (the spec's own correction: rigidity is a
+/// realisation-time concept, not a topology one) -- no distinction between
+/// edge kinds either. See this module's doc comment, and the spec's
+/// "Topology carries no positions" / "Nothing physical lives here either".
+///
+/// `nodes` and `internal_edges` are what let this shape hold a future
+/// technique that is *not* one-to-one with its gate (a delay repeater in
+/// series, say: two nodes, one internal edge from the input-landing node to
+/// the torch). Every entry this module ships today has one node and no
+/// internal edges -- see this module's doc comment for why that is the
+/// correct state of the library now, not a placeholder for something
+/// missing.
 pub struct Template {
     /// Every node this entry's graph has, and the primitive kind it will be
     /// realised as. A `Vec`, not a set, so `expand` instantiates them in one
     /// deterministic order.
     pub nodes: Vec<(TemplateNode, Primitive)>,
-    /// Adjacency constraints between two of this entry's own nodes. Always
-    /// between two `nodes` of the *same* entry -- an entry describes one
-    /// gate's own internal structure, never what it connects to outside
-    /// itself (that is `primitive_graph::expand`'s job, via routable edges).
-    pub rigid_edges: Vec<(TemplateNode, TemplateNode)>,
+    /// Directed signal-flow edges between two of this entry's own nodes --
+    /// always between two `nodes` of the *same* entry. Empty for every entry
+    /// this module ships (a single-node entry has nothing to connect
+    /// internally); a multi-node technique (a delay repeater in series with
+    /// its torch) would use this for the edge between them.
+    pub internal_edges: Vec<(TemplateNode, TemplateNode)>,
+    /// Which node this entry's `i`-th declared input's signal edge lands on,
+    /// in order (`inputs.len()` is this entry's arity). Every entry this
+    /// module ships names the same node (`Torch`) for every index, because a
+    /// NOR's inputs are interchangeable and land directly on the one
+    /// functional element there is.
+    pub inputs: Vec<TemplateNode>,
+    /// Which node this gate's own outbound signal edge (to whatever it
+    /// drives, or to a declared output's lamp) originates from.
+    pub output: TemplateNode,
     /// See [`EmbeddingHint`]. Empty for every entry this module ships.
     pub embedding_hints: Vec<EmbeddingHint>,
 }
@@ -221,22 +265,15 @@ impl Library {
     }
 }
 
-/// The one technique this library ships for an `arity`-input NOR: every
-/// input, and the output torch, rigidly share one support node. This is
-/// `place_nor_gate`'s own physical design (a support block plus its output
-/// torch, every input's route terminating directly against a free face of
-/// that same block) read back as a connectivity graph, with the block's
-/// coordinates, faces and orientation -- everything `place_nor_gate` also
-/// decides -- left out, because none of that is topology.
+/// The one technique this library ships for an `arity`-input NOR: a single
+/// torch, with every one of its `arity` inputs landing directly on it and
+/// its own output originating from it too. This is deliberately *not* a
+/// reading-back of `place_nor_gate`'s physical design (that design's support
+/// block and its per-input repeaters are realisation -- see this module's
+/// doc comment) -- it is the gate's signal flow and nothing else: `n`
+/// inbound edges, one outbound.
 fn nor_entry(arity: usize) -> LibraryEntry {
     assert!((1..=3).contains(&arity), "a NOR gate's fan-in is 1..=3, got {arity}");
-
-    let mut nodes = vec![(TemplateNode::Support, Primitive::Block), (TemplateNode::Torch, Primitive::Torch)];
-    let mut rigid_edges = vec![(TemplateNode::Torch, TemplateNode::Support)];
-    for i in 0..arity {
-        nodes.push((TemplateNode::Input(i), Primitive::Repeater));
-        rigid_edges.push((TemplateNode::Input(i), TemplateNode::Support));
-    }
 
     let name = match arity {
         1 => "torch-nor1 (not)",
@@ -245,7 +282,16 @@ fn nor_entry(arity: usize) -> LibraryEntry {
         _ => unreachable!("checked by the assert above"),
     };
 
-    LibraryEntry { name, template: Template { nodes, rigid_edges, embedding_hints: Vec::new() } }
+    LibraryEntry {
+        name,
+        template: Template {
+            nodes: vec![(TemplateNode::Torch, Primitive::Torch)],
+            internal_edges: Vec::new(),
+            inputs: vec![TemplateNode::Torch; arity],
+            output: TemplateNode::Torch,
+            embedding_hints: Vec::new(),
+        },
+    }
 }
 
 #[cfg(test)]
@@ -268,27 +314,21 @@ mod tests {
     }
 
     #[test]
-    fn every_nor_entry_has_one_support_one_torch_and_arity_many_inputs_all_rigidly_adjacent_to_the_support() {
+    fn every_nor_entry_is_a_single_torch_node_with_no_internal_edges() {
         for arity in 1..=3 {
             let entry = nor_entry(arity);
-            let supports = entry.template.nodes.iter().filter(|&&(role, _)| role == TemplateNode::Support).count();
-            let torches = entry.template.nodes.iter().filter(|&&(role, _)| role == TemplateNode::Torch).count();
-            let inputs = entry
-                .template
-                .nodes
-                .iter()
-                .filter(|&&(role, _)| matches!(role, TemplateNode::Input(_)))
-                .count();
-            assert_eq!(supports, 1, "arity {arity}");
-            assert_eq!(torches, 1, "arity {arity}");
-            assert_eq!(inputs, arity);
-            // Torch and every input each have exactly one rigid edge, and it
-            // goes to Support.
-            assert_eq!(entry.template.rigid_edges.len(), arity + 1, "arity {arity}");
-            for &(a, b) in &entry.template.rigid_edges {
-                assert_eq!(b, TemplateNode::Support, "every rigid edge in a NOR entry ends at Support");
-                assert_ne!(a, TemplateNode::Support, "Support has no rigid edge to itself");
-            }
+            assert_eq!(entry.template.nodes, vec![(TemplateNode::Torch, Primitive::Torch)], "arity {arity}");
+            assert!(entry.template.internal_edges.is_empty(), "arity {arity}: a single-node entry has nothing to connect internally");
+            assert_eq!(entry.template.output, TemplateNode::Torch, "arity {arity}");
+        }
+    }
+
+    #[test]
+    fn every_nor_entry_lands_all_of_its_arity_many_inputs_on_the_torch() {
+        for arity in 1..=3 {
+            let entry = nor_entry(arity);
+            assert_eq!(entry.template.inputs.len(), arity, "arity {arity}");
+            assert!(entry.template.inputs.iter().all(|&role| role == TemplateNode::Torch), "arity {arity}");
         }
     }
 

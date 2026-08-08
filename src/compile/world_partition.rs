@@ -1,7 +1,7 @@
 //! The converse of `equivalence::verify_expansion_matches_compiled`.
 //!
 //! That check asks "is everything the graph claims present in the world".
-//! It cannot, by itself, catch a graph that silently drops a rigid edge or a
+//! It cannot, by itself, catch a graph that silently drops an edge or a
 //! whole primitive: nothing in a forward-only check ever looks at a block
 //! the graph never mentioned and asks what explains it. This module asks
 //! the other direction: **partition every non-air block of the compiled
@@ -14,35 +14,52 @@
 //! # The four categories
 //!
 //! - [`WorldPartition::graph_explained`]: a block that is exactly one
-//!   `PrimitiveGraph` node's own realisation -- a gate's support or torch,
-//!   one of its declared inputs' repeater, a primary input's lever, or a
-//!   declared output's lamp.
+//!   `PrimitiveGraph` node's own realisation -- a gate's own torch, a
+//!   primary input's lever, or a declared output's lamp. A gate's support
+//!   block and its per-input repeaters are **not** graph nodes any more
+//!   (see `topology::TemplateNode`'s doc comment: a NOR is one torch node,
+//!   and the block it is mounted on plus the repeaters that feed it are how
+//!   an input physically reaches that torch, not part of the signal graph
+//!   itself), so both fall into the fill buckets below instead of this one.
 //! - [`WorldPartition::routing_fill_dust`]: any non-air `RedstoneWire`
-//!   block. The graph never models dust at all (see
-//!   `topology::Primitive::Dust`'s doc comment: a routable edge becomes a
-//!   dust/repeater chain only once a planner exists to decide its length
-//!   and bends), so every dust block in the world is, by construction of
+//!   block. The graph never models dust at all (dust is the *medium* a
+//!   signal travels through, never a node -- see `topology::Primitive`'s
+//!   doc comment), so every dust block in the world is, by construction of
 //!   this compiler, routing fill and nothing else -- no further check is
 //!   possible or needed.
-//! - [`WorldPartition::routing_fill_repeater`]: a repeater that is not one
-//!   of a gate's declared input sockets. This is only safe to bucket as
-//!   fill *after* [`partition_world`] has independently confirmed
-//!   (`check_gate_input_arity_agrees`) that `Netlist`, `PrimitiveGraph` and
-//!   the world's own repeaters-facing-a-support count all agree, for every
-//!   gate -- otherwise a repeater the graph silently failed to claim as an
-//!   input would land here instead of being reported. See that function's
-//!   doc comment for the full argument.
-//! - [`WorldPartition::routing_fill_support`]: a `Solid` block, not a
-//!   gate's own support, with a redstone conductor (dust, a repeater, or a
-//!   lever) directly on top of it. `src/compile/mod.rs` places a bare solid
-//!   block in exactly two situations, and both satisfy this: `ensure_floor`
-//!   (every one of its call sites sets `pos` to a conductor in the same
-//!   breath it floors `pos.down()`) and `move_between_layers`'s climbing
-//!   riser (`riser.up()` is always the new landing dust it was placed to
-//!   hold). No other call site in this compiler ever places a bare `Solid`
-//!   block outside `place_nor_gate`'s own support -- checked directly
-//!   against the source, not assumed, since this is exactly the rule a
-//!   later change could quietly invalidate.
+//! - [`WorldPartition::routing_fill_repeater`]: every non-air `Repeater`
+//!   block, unconditionally. Earlier versions of this module excluded a
+//!   gate's own declared-input repeaters from this bucket, because those
+//!   were graph nodes (`TemplateNode::Input`); now that a NOR entry is a
+//!   single torch with no repeater node of its own ("the repeaters at gate
+//!   input sockets are not part of a NOR" -- they exist only because of how
+//!   the emitter terminates a route), *every* repeater the world contains is
+//!   realisation, whether it faces a gate's support or sits mid-route. This
+//!   is only safe to bucket unconditionally because
+//!   [`check_gate_input_arity_agrees`] independently confirms, *before* a
+//!   single block is bucketed, that `Netlist`'s declared arity, the graph's
+//!   own edge count into each gate, and the world's own count of
+//!   repeaters-facing-the-support all agree for every gate -- see that
+//!   function's doc comment for why a graph that silently dropped one of a
+//!   gate's inputs still cannot pass this check unnoticed.
+//! - [`WorldPartition::routing_fill_support`]: two things, both narrowly
+//!   identified rather than guessed from shape. First, a NOR gate's own
+//!   support block -- found by walking from that gate's own (graph-
+//!   explained) torch position via `torch_support_position`, the exact same
+//!   walk `equivalence::verify_gate_structure` uses, never inferred from
+//!   "something is on top of it" (a NOR's inputs and torch sit on its
+//!   support's horizontal faces, not above it, so that heuristic would miss
+//!   it entirely). Second, a `Solid` block, not any gate's support, with a
+//!   redstone conductor (dust, a repeater, or a lever) directly on top of
+//!   it -- `src/compile/mod.rs` places a bare solid block in exactly two
+//!   situations, and both satisfy this: `ensure_floor` (every one of its
+//!   call sites sets `pos` to a conductor in the same breath it floors
+//!   `pos.down()`) and `move_between_layers`'s climbing riser (`riser.up()`
+//!   is always the new landing dust it was placed to hold). No other call
+//!   site in this compiler ever places a bare `Solid` block outside
+//!   `place_nor_gate`'s own support -- checked directly against the source,
+//!   not assumed, since this is exactly the rule a later change could
+//!   quietly invalidate.
 //!
 //! Anything else -- including `seal_cross_talk`'s reactive keep-out stone,
 //! which this compiler's own doc comment on that function says has never
@@ -51,9 +68,8 @@
 
 use std::collections::HashSet;
 
-use super::primitive_graph::PrimitiveGraph;
+use super::primitive_graph::{NodeId, PrimitiveGraph, Provenance};
 use super::topology::TemplateNode;
-use super::primitive_graph::Provenance;
 use super::{CompiledCircuit, Netlist, INPUT_DIRECTIONS};
 use crate::redstone::simulator::component::torch_support_position;
 use crate::redstone::simulator::position::Position;
@@ -80,7 +96,8 @@ pub struct WorldPartition {
 
 impl WorldPartition {
     /// Every block placed by `lay_dust_run`/`lay_bent_path`/`move_between_layers`/
-    /// `lay_track`/`ensure_floor` that the graph deliberately does not model.
+    /// `lay_track`/`ensure_floor`/`place_nor_gate` that the graph deliberately
+    /// does not model.
     pub fn routing_fill(&self) -> usize {
         self.routing_fill_dust + self.routing_fill_repeater + self.routing_fill_support
     }
@@ -106,14 +123,14 @@ impl WorldPartition {
 /// compiled `World` serious enough that no partition would mean anything.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PartitionError {
-    /// `Netlist`'s own declared arity, `PrimitiveGraph::gate_nodes`' input
-    /// node count, and the compiled world's own independently-counted
-    /// repeaters-facing-the-support disagree for this gate. This is
-    /// precisely the failure this module exists to catch: a graph that
-    /// silently dropped (or duplicated) one of a gate's rigid inputs while
-    /// the world -- built by `compile` straight from `Netlist`, entirely
-    /// independent of the graph -- still has exactly what the netlist
-    /// declared.
+    /// `Netlist`'s own declared arity, the number of edges the graph lands
+    /// on this gate's own node cluster from outside it, and the compiled
+    /// world's own independently-counted repeaters-facing-the-support
+    /// disagree for this gate. This is precisely the failure this module
+    /// exists to catch: a graph that silently dropped (or duplicated) one of
+    /// a gate's inputs while the world -- built by `compile` straight from
+    /// `Netlist`, entirely independent of the graph -- still has exactly
+    /// what the netlist declared.
     GateInputArityDisagreement { gate: String, netlist_arity: usize, graph_arity: usize, world_arity: usize },
     /// Two different graph nodes resolved to the same world position -- the
     /// graph cannot be a lossless account of the world if two of its own
@@ -159,6 +176,7 @@ pub fn partition_world(
     check_gate_input_arity_agrees(netlist, graph, compiled)?;
 
     let explained = explained_positions(netlist, graph, compiled)?;
+    let supports = known_support_positions(netlist, compiled)?;
 
     let (size_x, size_y, size_z) = compiled.world.size();
     let mut found: HashSet<Position> = HashSet::with_capacity(explained.len());
@@ -181,6 +199,10 @@ pub fn partition_world(
                     BlockKind::RedstoneWire => partition.routing_fill_dust += 1,
                     BlockKind::Repeater => partition.routing_fill_repeater += 1,
                     BlockKind::Solid => {
+                        if supports.contains(&pos) {
+                            partition.routing_fill_support += 1;
+                            continue;
+                        }
                         let above = compiled.world.get(x, y + 1, z);
                         if matches!(above.kind, BlockKind::RedstoneWire | BlockKind::Repeater | BlockKind::Lever) {
                             partition.routing_fill_support += 1;
@@ -206,20 +228,29 @@ pub fn partition_world(
 }
 
 /// Cross-check, for every gate, that `Netlist`'s declared arity, the
-/// graph's own `Input` node count, and the world's own independently
-/// counted repeaters-facing-the-support all agree.
+/// graph's own edge count into that gate's node cluster, and the world's
+/// own independently counted repeaters-facing-the-support all agree.
 ///
 /// This is what stops [`WorldPartition::routing_fill_repeater`] from being
 /// the "shrug" a bare `BlockKind::Repeater => fill` rule would otherwise be:
-/// without it, a graph that quietly failed to instantiate one of a gate's
-/// `Input` nodes would still find that socket occupied by a real repeater
-/// in the world (`compile` builds the world straight from `Netlist`,
-/// entirely independent of this graph), and a rule that buckets "any
-/// repeater not already explained" as fill would absorb exactly the defect
-/// this whole module exists to surface. Checking the three counts against
-/// each other -- not just "does the graph's own claimed structure look
-/// internally consistent" -- closes that gap before a single block is ever
-/// bucketed.
+/// without it, a graph that quietly failed to wire one of a gate's inputs
+/// would still find that socket occupied by a real repeater in the world
+/// (`compile` builds the world straight from `Netlist`, entirely independent
+/// of this graph), and a rule that buckets "any repeater not already
+/// explained" as fill would absorb exactly the defect this whole module
+/// exists to surface.
+///
+/// `graph_arity` here is *not* a count of `TemplateNode::Input` nodes --
+/// that role no longer exists (see `topology`'s doc comment: a NOR is one
+/// torch node, and its inputs are edges landing on it, not nodes of their
+/// own). The independent third source this check needs is instead: the
+/// number of edges the graph itself lands on gate `g`'s own node cluster
+/// from *outside* it. That is computed purely from `graph.edges` and
+/// `graph.gate_nodes` -- never from `Netlist`, never from the world -- so it
+/// remains a genuinely separate source from the other two: an `expand` bug
+/// that dropped one of a gate's producer edges shows up here as a lower
+/// edge count, exactly as a dropped `Input` node used to show up as a lower
+/// node count.
 fn check_gate_input_arity_agrees(
     netlist: &Netlist,
     graph: &PrimitiveGraph,
@@ -232,12 +263,8 @@ fn check_gate_input_arity_agrees(
             .gate_nodes
             .get(g)
             .map(|nodes| {
-                nodes
-                    .iter()
-                    .filter(|&&id| {
-                        matches!(&graph.nodes[id].provenance, Provenance::Gate { gate: gg, role: TemplateNode::Input(_) } if *gg == g)
-                    })
-                    .count()
+                let own: HashSet<NodeId> = nodes.iter().copied().collect();
+                graph.edges.iter().filter(|e| own.contains(&e.to) && !own.contains(&e.from)).count()
             })
             .unwrap_or(0);
 
@@ -293,10 +320,7 @@ fn explained_positions(
 }
 
 /// Where one graph node's own `Provenance` says it must physically be, read
-/// off `compiled`'s recorded torch/lever/lamp positions (never off the
-/// graph's own say-so alone -- `TemplateNode::Support`/`Input` positions are
-/// derived by resolving the *real* torch's *real* support, exactly as
-/// `equivalence::verify_gate_rigid_structure` does).
+/// off `compiled`'s recorded torch/lever/lamp positions.
 fn resolve_node_position(
     netlist: &Netlist,
     compiled: &CompiledCircuit,
@@ -315,25 +339,32 @@ fn resolve_node_position(
             })?;
             Ok(Position::new(x, y, z))
         }
-        Provenance::Gate { gate, role } => {
+        Provenance::Gate { gate, role: TemplateNode::Torch } => {
             let gate_name = &netlist.gates[*gate].output;
             let &(tx, ty, tz) = compiled.gate_output_positions.get(gate_name).ok_or_else(|| {
                 PartitionError::CannotResolveNodePosition { detail: format!("gate `{gate_name}` has no recorded torch position") }
             })?;
-            let torch_pos = Position::new(tx, ty, tz);
-            match role {
-                TemplateNode::Torch => Ok(torch_pos),
-                TemplateNode::Support => resolve_support(compiled, gate_name, torch_pos),
-                TemplateNode::Input(i) => {
-                    let support = resolve_support(compiled, gate_name, torch_pos)?;
-                    let &direction = INPUT_DIRECTIONS.get(*i).ok_or_else(|| PartitionError::CannotResolveNodePosition {
-                        detail: format!("gate `{gate_name}` declares input index {i}, outside INPUT_DIRECTIONS' range"),
-                    })?;
-                    Ok(support.offset(direction))
-                }
-            }
+            Ok(Position::new(tx, ty, tz))
         }
     }
+}
+
+/// Every position that is a NOR gate's own support block -- fill, not a
+/// graph node (see this module's doc comment on `routing_fill_support`).
+/// Found the same way `equivalence::verify_gate_structure` finds it: by
+/// walking from the gate's own (already resolved, graph-explained) torch
+/// position via `torch_support_position`, never guessed from the block's
+/// shape or its neighbours' arrangement.
+fn known_support_positions(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<HashSet<Position>, PartitionError> {
+    let mut supports = HashSet::with_capacity(netlist.gates.len());
+    for gate in &netlist.gates {
+        let &(tx, ty, tz) = compiled.gate_output_positions.get(&gate.output).ok_or_else(|| {
+            PartitionError::CannotResolveNodePosition { detail: format!("gate `{}` has no recorded torch position", gate.output) }
+        })?;
+        let torch_pos = Position::new(tx, ty, tz);
+        supports.insert(resolve_support(compiled, &gate.output, torch_pos)?);
+    }
+    Ok(supports)
 }
 
 fn resolve_support(compiled: &CompiledCircuit, gate_name: &str, torch_pos: Position) -> Result<Position, PartitionError> {
@@ -412,6 +443,12 @@ mod tests {
     /// fill" -- the exact failure mode this module exists to prevent. Built
     /// directly (not via `expand`, which never produces this shape) so the
     /// test does not depend on being able to sabotage `expand` itself.
+    ///
+    /// Sabotage here means removing one of the *edges* that lands on the
+    /// gate's torch node from outside it -- a NOR gate is a single node now,
+    /// so there is no separate `Input` node left to drop; the graph's own
+    /// claim about its arity lives entirely in how many such edges point at
+    /// it (see `check_gate_input_arity_agrees`'s doc comment).
     #[test]
     fn a_graph_missing_one_declared_input_is_reported_not_absorbed() {
         use crate::compile::Gate;
@@ -426,16 +463,18 @@ mod tests {
         let library = Library::default_library();
         let mut graph = expand(&netlist, &library).expect("a 2-input NOR gate has a library entry");
 
-        // Sabotage: drop gate 0's second Input node and the routable edge
-        // that fed it, exactly what a buggy `expand` might do -- the world
-        // itself is untouched, so it still has both repeaters.
-        let dropped = graph
-            .gate_nodes[0]
+        // Sabotage: drop one of the two edges landing on gate 0's torch node
+        // (from lever "b"), exactly what a buggy `expand` might do -- the
+        // world itself is untouched, so it still has both repeaters.
+        let torch = graph.gate_nodes[0][0];
+        let lever_b = graph
+            .nodes
             .iter()
-            .position(|&id| matches!(&graph.nodes[id].provenance, Provenance::Gate { role: TemplateNode::Input(1), .. }))
-            .expect("gate 0 has an Input(1) node before sabotage");
-        let dropped_id = graph.gate_nodes[0].remove(dropped);
-        graph.edges.retain(|e| e.to != dropped_id);
+            .position(|n| matches!(&n.provenance, Provenance::PrimaryInput { name } if name == "b"))
+            .expect("lever \"b\" exists");
+        let before = graph.edges.len();
+        graph.edges.retain(|e| !(e.from == lever_b && e.to == torch));
+        assert_eq!(graph.edges.len(), before - 1, "sabotage must remove exactly one edge");
 
         let err = partition_world(&netlist, &graph, &compiled).expect_err("the dropped input must be reported");
         assert_eq!(

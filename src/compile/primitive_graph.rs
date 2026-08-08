@@ -11,6 +11,19 @@
 //! support-block placement: every node here is a primitive *kind*, not a
 //! placed block, exactly as `topology::Template` describes one gate's own
 //! internal structure.
+//!
+//! # Every edge is signal flow
+//!
+//! There is no `EdgeKind` here, and deliberately so: "rigidity" -- the idea
+//! that two primitives must become physical adjacency -- is a realisation
+//! concept, decided by a planner that does not exist yet, never a property
+//! of the signal graph itself (spec: "There are no rigid edges here"). Every
+//! [`Edge`] this module produces is directed the same way, producer to
+//! consumer, and means the same thing: a signal goes from `from` to `to`.
+//! For today's NOR-only library that makes the flat graph isomorphic to the
+//! netlist it expands -- see `topology`'s own doc comment for why that is
+//! the correct, unsurprising state of this layer rather than a sign it is
+//! missing something.
 
 use std::collections::HashMap;
 
@@ -21,26 +34,6 @@ use super::Netlist;
 /// `PrimitiveGraph` -- nothing in this module ever removes a node, so an id
 /// handed out earlier stays valid until the graph itself is dropped.
 pub type NodeId = usize;
-
-/// Which pair of primitives a graph edge connects, and why: "the planner
-/// does need to know that some connections must become physical adjacency
-/// while others become a dust path of any length... it follows from the
-/// primitive types at each end" (spec, "Rigid and routable, at realisation
-/// time"). Stored explicitly on every [`Edge`] rather than only left
-/// implicit in its endpoints' `Primitive` kinds, because distinguishing the
-/// two kinds is this step's own deliverable -- but every edge `expand`
-/// produces is self-consistent with that rule (see this module's tests).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum EdgeKind {
-    /// Must become physical adjacency (or another fixed, un-routed
-    /// relationship -- see `expand`'s own doc comment on the torch-to-lamp
-    /// edge for the one case that is fixed without being single-cell
-    /// adjacency). Never realised as a dust path of arbitrary length.
-    Rigid,
-    /// May become a dust path of any length, bent however the (not yet
-    /// built) planner and router decide.
-    Routable,
-}
 
 /// Where one node of the flat graph came from -- what lets a region be
 /// re-expanded later without rebuilding the rest of the graph (spec: "The
@@ -71,23 +64,19 @@ pub struct Node {
     pub provenance: Provenance,
 }
 
-/// One edge of the flat graph. Directed (`from` -> `to`) for bookkeeping
-/// convenience -- a rigid edge's direction records nothing about
-/// realisation (adjacency has no direction); a routable edge's direction is
-/// signal flow, producer to consumer, matching every other "source ->
-/// sink" convention already used in `compile`.
+/// One edge of the flat graph: a signal from `from` to `to`, and nothing
+/// else -- see this module's doc comment for why there is no `kind` field
+/// any more.
 #[derive(Debug)]
 pub struct Edge {
     pub from: NodeId,
     pub to: NodeId,
-    pub kind: EdgeKind,
 }
 
 /// One flat graph of primitives for a whole circuit -- the output of
-/// [`expand`]. No gate boundaries: a NOR gate's support, torch and input
-/// pins sit in exactly the same `nodes`/`edges` as every other gate's, tied
-/// back to their gate only through `Node::provenance` /
-/// [`PrimitiveGraph::gate_nodes`].
+/// [`expand`]. No gate boundaries: a NOR gate's torch sits in exactly the
+/// same `nodes`/`edges` as every other gate's, tied back to their gate only
+/// through `Node::provenance` / [`PrimitiveGraph::gate_nodes`].
 #[derive(Debug)]
 pub struct PrimitiveGraph {
     pub nodes: Vec<Node>,
@@ -109,8 +98,8 @@ impl PrimitiveGraph {
         id
     }
 
-    fn push_edge(&mut self, from: NodeId, to: NodeId, kind: EdgeKind) {
-        self.edges.push(Edge { from, to, kind });
+    fn push_edge(&mut self, from: NodeId, to: NodeId) {
+        self.edges.push(Edge { from, to });
     }
 
     /// Every edge whose `from` is `node`.
@@ -154,9 +143,11 @@ impl std::fmt::Display for ExpandError {
 impl std::error::Error for ExpandError {}
 
 /// Instantiate `entry`'s template as a fresh, numbered set of nodes and
-/// edges belonging to `gate`, and return the ids of its `Torch` node and its
-/// `Input(0..arity)` nodes in order -- the two roles `expand` needs to wire
-/// up afterwards.
+/// edges belonging to `gate`, and return the id of its `Template::output`
+/// node and the ids its `Template::inputs` name, in order -- the two things
+/// `expand` needs to wire up afterwards. Works the same way regardless of
+/// how many nodes the entry has, or whether two of its `inputs` happen to
+/// name the same node (every entry this module ships does, today).
 fn instantiate(graph: &mut PrimitiveGraph, gate: usize, entry: &LibraryEntry) -> (NodeId, Vec<NodeId>) {
     let mut id_of: HashMap<TemplateNode, NodeId> = HashMap::with_capacity(entry.template.nodes.len());
     let mut instance_nodes = Vec::with_capacity(entry.template.nodes.len());
@@ -166,16 +157,15 @@ fn instantiate(graph: &mut PrimitiveGraph, gate: usize, entry: &LibraryEntry) ->
         id_of.insert(role, id);
         instance_nodes.push(id);
     }
-    for &(a, b) in &entry.template.rigid_edges {
-        graph.push_edge(id_of[&a], id_of[&b], EdgeKind::Rigid);
+    for &(a, b) in &entry.template.internal_edges {
+        graph.push_edge(id_of[&a], id_of[&b]);
     }
 
     graph.gate_nodes[gate] = instance_nodes;
 
-    let torch = id_of[&TemplateNode::Torch];
-    let input_count = entry.template.nodes.iter().filter(|&&(role, _)| matches!(role, TemplateNode::Input(_))).count();
-    let inputs: Vec<NodeId> = (0..input_count).map(|i| id_of[&TemplateNode::Input(i)]).collect();
-    (torch, inputs)
+    let output = id_of[&entry.template.output];
+    let inputs: Vec<NodeId> = entry.template.inputs.iter().map(|role| id_of[role]).collect();
+    (output, inputs)
 }
 
 /// Substitute each gate in `netlist` for its `library` entry and stitch the
@@ -183,26 +173,11 @@ fn instantiate(graph: &mut PrimitiveGraph, gate: usize, entry: &LibraryEntry) ->
 /// the whole circuit -- "a mechanical pass, not a decision" (spec, "The
 /// topology library").
 ///
-/// # The two kinds of edge this produces
-///
-/// - **Rigid**: every gate's own internal structure (its entry's
-///   `rigid_edges`, instantiated once per gate), plus one edge per declared
-///   output, from its driving gate's torch to a new `Lamp` node.
-/// - **Routable**: one edge per gate input, from whatever drives it (another
-///   gate's torch, or a primary input's lever) to that input's own node.
-///
-/// # Why a declared output's lamp is rigid, not routable
-///
-/// `compile`'s `emit` places a declared output's lamp at a fixed offset from
-/// its driving gate's own output pin (`gate_pin[g].down()`), decided before
-/// any routing happens and never touched by where the net's dust
-/// subsequently travels -- see `emit`'s "Every netlist output gets a lamp"
-/// comment. That is a fixed relationship, not "a dust path of any length":
-/// the router never gets to choose how far the lamp sits from the pin, so it
-/// belongs on the rigid side of the distinction even though today's
-/// placement happens to insert one intermediate dust cell (the pin itself)
-/// between the torch and the lamp -- exactly the kind of "how it is built
-/// out of blocks" detail the spec assigns to the planner, not to this graph.
+/// Two shapes of edge come out of this, both the same [`Edge`] kind: one per
+/// gate input, from whatever drives it (another gate's output node, or a
+/// primary input's lever) to that input's own landing node; and one per
+/// declared output, from its driving gate's own output node to a fresh
+/// `Lamp` node.
 pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, ExpandError> {
     let mut graph = PrimitiveGraph::empty(netlist.gates.len());
 
@@ -219,39 +194,39 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
         producer_of.insert(gate.output.as_str(), g);
     }
 
-    // One gate cluster (support + torch + input pins) per gate, from the
-    // library entry `Library::choose` picks for its arity.
-    let mut torch_of: Vec<NodeId> = Vec::with_capacity(netlist.gates.len());
-    let mut input_pin_of: Vec<Vec<NodeId>> = Vec::with_capacity(netlist.gates.len());
+    // One node cluster per gate, from the library entry `Library::choose`
+    // picks for its arity.
+    let mut output_of: Vec<NodeId> = Vec::with_capacity(netlist.gates.len());
+    let mut input_targets_of: Vec<Vec<NodeId>> = Vec::with_capacity(netlist.gates.len());
     for (g, gate) in netlist.gates.iter().enumerate() {
         let arity = gate.inputs.len();
         let kind = GateKind::Nor(arity);
         let entry = library
             .choose(kind)
             .ok_or_else(|| ExpandError::NoLibraryEntry { gate: gate.output.clone(), arity })?;
-        let (torch, inputs) = instantiate(&mut graph, g, entry);
-        torch_of.push(torch);
-        input_pin_of.push(inputs);
+        let (output, inputs) = instantiate(&mut graph, g, entry);
+        output_of.push(output);
+        input_targets_of.push(inputs);
     }
 
-    // Routable edges: one per gate input, from its producer to that input's
-    // own node.
+    // One edge per gate input, from its producer to that input's own landing
+    // node.
     for (g, gate) in netlist.gates.iter().enumerate() {
         for (i, input_name) in gate.inputs.iter().enumerate() {
-            let producer = resolve_producer(input_name, &lever_of, &producer_of, &torch_of)
+            let producer = resolve_producer(input_name, &lever_of, &producer_of, &output_of)
                 .ok_or_else(|| ExpandError::UndrivenSignal(input_name.clone()))?;
-            graph.push_edge(producer, input_pin_of[g][i], EdgeKind::Routable);
+            graph.push_edge(producer, input_targets_of[g][i]);
         }
     }
 
-    // Rigid edges: one per declared output, from its driving gate's torch to
-    // a fresh Lamp node.
+    // One edge per declared output, from its driving gate's own output node
+    // to a fresh Lamp node.
     for output_name in &netlist.outputs {
         let &g = producer_of
             .get(output_name.as_str())
             .ok_or_else(|| ExpandError::UndrivenSignal(output_name.clone()))?;
         let lamp = graph.push_node(Primitive::Lamp, Provenance::PrimaryOutput { name: output_name.clone() });
-        graph.push_edge(torch_of[g], lamp, EdgeKind::Rigid);
+        graph.push_edge(output_of[g], lamp);
     }
 
     Ok(graph)
@@ -261,12 +236,12 @@ fn resolve_producer(
     signal: &str,
     lever_of: &HashMap<&str, NodeId>,
     producer_of: &HashMap<&str, usize>,
-    torch_of: &[NodeId],
+    output_of: &[NodeId],
 ) -> Option<NodeId> {
     if let Some(&lever) = lever_of.get(signal) {
         return Some(lever);
     }
-    producer_of.get(signal).map(|&g| torch_of[g])
+    producer_of.get(signal).map(|&g| output_of[g])
 }
 
 #[cfg(test)]
@@ -280,7 +255,7 @@ mod tests {
     }
 
     #[test]
-    fn expanding_a_single_not_gate_yields_one_lever_one_input_one_torch_one_lamp() {
+    fn expanding_a_single_not_gate_yields_one_lever_one_torch_one_lamp_and_two_edges() {
         let netlist =
             Netlist { inputs: vec!["a".to_string()], outputs: vec!["g0".to_string()], gates: vec![gate("g0", &["a"])] };
         let library = Library::default_library();
@@ -288,27 +263,23 @@ mod tests {
 
         let primitives: Vec<Primitive> = graph.nodes.iter().map(|n| n.primitive).collect();
         assert_eq!(primitives.iter().filter(|&&p| p == Primitive::Lever).count(), 1);
-        assert_eq!(primitives.iter().filter(|&&p| p == Primitive::Repeater).count(), 1);
-        assert_eq!(primitives.iter().filter(|&&p| p == Primitive::Block).count(), 1);
         assert_eq!(primitives.iter().filter(|&&p| p == Primitive::Torch).count(), 1);
         assert_eq!(primitives.iter().filter(|&&p| p == Primitive::Lamp).count(), 1);
+        assert_eq!(graph.nodes.len(), 3, "no Support, no per-input Repeater any more");
 
-        let rigid = graph.edges.iter().filter(|e| e.kind == EdgeKind::Rigid).count();
-        let routable = graph.edges.iter().filter(|e| e.kind == EdgeKind::Routable).count();
-        // Rigid: Input->Support, Torch->Support, Torch->Lamp.
-        assert_eq!(rigid, 3);
-        // Routable: Lever->Input.
-        assert_eq!(routable, 1);
+        // Lever->Torch, Torch->Lamp: exactly the netlist's own two edges,
+        // nothing else.
+        assert_eq!(graph.edges.len(), 2);
 
         assert_eq!(graph.gate_nodes.len(), 1);
-        assert_eq!(graph.gate_nodes[0].len(), 3, "support + torch + one input pin");
+        assert_eq!(graph.gate_nodes[0].len(), 1, "a NOR gate is one node: its torch");
     }
 
     #[test]
-    fn a_shared_producer_fans_out_to_two_routable_edges_from_one_torch_node() {
+    fn a_shared_producer_fans_out_to_two_edges_from_one_torch_node() {
         // g0 = NOR(a); g1 = NOR(g0); g2 = NOR(g0, a) -- g0's torch feeds two
         // consumers, so it should be exactly one node with two outgoing
-        // routable edges, not two copies of it.
+        // edges, not two copies of it.
         let netlist = Netlist {
             inputs: vec!["a".to_string()],
             outputs: vec!["g1".to_string(), "g2".to_string()],
@@ -317,19 +288,16 @@ mod tests {
         let library = Library::default_library();
         let graph = expand(&netlist, &library).expect("every gate here has 1 or 2 inputs");
 
-        let g0_torch = graph.gate_nodes[0]
-            .iter()
-            .find(|&&id| matches!(&graph.nodes[id].provenance, Provenance::Gate { role: TemplateNode::Torch, .. }))
-            .copied()
-            .expect("g0 has a torch node");
-        // `edges_from` also includes g0's own rigid Torch->Support edge, so
-        // filter down to the routable ones -- g1's input pin and g2's first
-        // input pin, and nothing else: g0 is not itself a declared output,
-        // so its torch gets no lamp edge (unlike g1's own torch, a different
-        // node, which does).
-        let outgoing_routable: Vec<&Edge> =
-            graph.edges_from(g0_torch).filter(|e| e.kind == EdgeKind::Routable).collect();
-        assert_eq!(outgoing_routable.len(), 2);
+        let g0_torch = graph.gate_nodes[0][0];
+        assert!(
+            matches!(&graph.nodes[g0_torch].provenance, Provenance::Gate { gate: 0, role: TemplateNode::Torch }),
+            "gate 0 is a single Torch node"
+        );
+        // g0 is not itself a declared output, so its torch gets no lamp
+        // edge -- just its two fan-out edges (g1's landing node and g2's
+        // first input's landing node).
+        let outgoing: Vec<&Edge> = graph.edges_from(g0_torch).collect();
+        assert_eq!(outgoing.len(), 2);
     }
 
     #[test]
@@ -360,12 +328,13 @@ mod tests {
         assert_eq!(err, ExpandError::UndrivenSignal("nowhere".to_string()));
     }
 
+    /// The consequence the spec calls out explicitly: for a NOR-only
+    /// netlist, the flat graph is isomorphic to the netlist -- one node per
+    /// gate (plus one per primary input/output), one edge per net endpoint.
+    /// Not a sign this layer is unfinished; the layer earns its keep the day
+    /// an entry stops being one-to-one (see `topology`'s doc comment).
     #[test]
-    fn every_rigid_edge_endpoint_pair_never_also_appears_as_a_routable_pair() {
-        // Cross-check for `EdgeKind`'s own doc comment: the (primitive kind
-        // of `from`, primitive kind of `to`) pair should determine the edge
-        // kind on its own, for every edge `expand` ever produces on a
-        // reasonably rich netlist.
+    fn the_graph_is_isomorphic_to_a_nor_only_netlist() {
         let netlist = Netlist {
             inputs: vec!["a".to_string(), "b".to_string()],
             outputs: vec!["g2".to_string()],
@@ -374,18 +343,14 @@ mod tests {
         let library = Library::default_library();
         let graph = expand(&netlist, &library).expect("valid netlist");
 
-        let mut rigid_pairs = std::collections::HashSet::new();
-        let mut routable_pairs = std::collections::HashSet::new();
-        for edge in &graph.edges {
-            let pair = (graph.nodes[edge.from].primitive, graph.nodes[edge.to].primitive);
-            match edge.kind {
-                EdgeKind::Rigid => rigid_pairs.insert(pair),
-                EdgeKind::Routable => routable_pairs.insert(pair),
-            };
-        }
-        assert!(
-            rigid_pairs.is_disjoint(&routable_pairs),
-            "rigid pairs {rigid_pairs:?} overlap routable pairs {routable_pairs:?}"
-        );
+        // One node per primary input/output/gate.
+        let expected_nodes = netlist.inputs.len() + netlist.outputs.len() + netlist.gates.len();
+        assert_eq!(graph.nodes.len(), expected_nodes);
+
+        // One edge per gate input, plus one per declared output -- exactly
+        // what the netlist itself declares, no more.
+        let expected_edges: usize =
+            netlist.gates.iter().map(|g| g.inputs.len()).sum::<usize>() + netlist.outputs.len();
+        assert_eq!(graph.edges.len(), expected_edges);
     }
 }

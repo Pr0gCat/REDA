@@ -28,7 +28,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use reda::circuits::{and4, full_adder, seven_segment};
-use reda::compile::primitive_graph::{self, EdgeKind, PrimitiveGraph, Provenance};
+use reda::compile::primitive_graph::{self, PrimitiveGraph, Provenance};
 use reda::compile::topology::{Library, Primitive as TopoPrimitive, TemplateNode};
 use reda::compile::{compile, Netlist};
 use reda::redstone::simulator::Simulator;
@@ -357,9 +357,15 @@ struct Pinout {
 // separate view from `slice()`/`geometry()` rather than another overlay on
 // them.
 //
-// These types mirror `Primitive`, `Provenance`, `TemplateNode` and `EdgeKind`
-// as plain, `Serialize`-able shadows rather than adding `#[derive(Serialize)]`
-// to `src/compile/topology.rs` / `primitive_graph.rs` themselves -- exposing
+// Every edge is signal flow now -- there is no more `EdgeKind` to mirror.
+// "Rigid" (must become physical adjacency) is a realisation-time idea, not a
+// topology one (spec: "There are no rigid edges here"), so a NOR gate is one
+// `Torch` node with its inputs landing directly on it; nothing here
+// distinguishes edges by kind any more.
+//
+// These types mirror `Primitive`, `Provenance` and `TemplateNode` as plain,
+// `Serialize`-able shadows rather than adding `#[derive(Serialize)]` to
+// `src/compile/topology.rs` / `primitive_graph.rs` themselves -- exposing
 // this data should not mean changing those modules (see this crate's own
 // module doc comment: "This crate does not reimplement any redstone
 // behaviour").
@@ -368,9 +374,8 @@ struct Pinout {
 fn primitive_name(primitive: TopoPrimitive) -> &'static str {
     match primitive {
         TopoPrimitive::Torch => "Torch",
-        TopoPrimitive::Dust => "Dust",
         TopoPrimitive::Repeater => "Repeater",
-        TopoPrimitive::Block => "Block",
+        TopoPrimitive::Comparator => "Comparator",
         TopoPrimitive::Lever => "Lever",
         TopoPrimitive::Lamp => "Lamp",
     }
@@ -378,16 +383,7 @@ fn primitive_name(primitive: TopoPrimitive) -> &'static str {
 
 fn template_role_name(role: TemplateNode) -> String {
     match role {
-        TemplateNode::Support => "Support".to_string(),
         TemplateNode::Torch => "Torch".to_string(),
-        TemplateNode::Input(i) => format!("Input{i}"),
-    }
-}
-
-fn edge_kind_name(kind: EdgeKind) -> &'static str {
-    match kind {
-        EdgeKind::Rigid => "Rigid",
-        EdgeKind::Routable => "Routable",
     }
 }
 
@@ -420,7 +416,6 @@ struct TopologyNode {
 struct TopologyEdge {
     from: usize,
     to: usize,
-    kind: &'static str,
 }
 
 #[derive(Serialize)]
@@ -787,7 +782,7 @@ impl Session {
         bytes
     }
 
-    /// `{ nodes: [{id, primitive, provenance}], edges: [{from, to, kind}],
+    /// `{ nodes: [{id, primitive, provenance}], edges: [{from, to}],
     /// gates: [{index, output, arity, layer, nodes}] }` -- the whole
     /// primitive-topology graph this circuit's netlist expands into, per
     /// this module's "Primitive topology" section. No positions: the graph
@@ -806,12 +801,8 @@ impl Session {
                 provenance: topology_provenance(&node.provenance),
             })
             .collect();
-        let edges = self
-            .primitive_graph
-            .edges
-            .iter()
-            .map(|edge| TopologyEdge { from: edge.from, to: edge.to, kind: edge_kind_name(edge.kind) })
-            .collect();
+        let edges =
+            self.primitive_graph.edges.iter().map(|edge| TopologyEdge { from: edge.from, to: edge.to }).collect();
         let gates = self
             .gate_meta
             .iter()

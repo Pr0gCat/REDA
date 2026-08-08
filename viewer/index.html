@@ -278,8 +278,7 @@
       <div class="legend-list" id="topo-primitive-legend"></div>
       <h2 style="margin-top:10px;">Edges</h2>
       <div class="legend-list" id="topo-edge-legend">
-        <span><span class="legend-swatch" style="background:#cfd3d8"></span>Rigid -- must become physical adjacency</span>
-        <span><span class="legend-swatch" style="background:#ff3b3b"></span>Routable -- a dust path of any length</span>
+        <span><span class="legend-swatch" style="background:#ff3b3b"></span>Signal flow -- producer to consumer; realisation (a dust path, adjacency, or otherwise) is not decided at this layer</span>
       </div>
     </div>
 
@@ -1555,19 +1554,35 @@ function onThreeHover(e) {
 // three, is to invent a layout rather than just project one that already
 // exists.
 //
+// # There is one kind of edge now
+//
+// An earlier version of this view distinguished "rigid" edges (must become
+// physical adjacency) from "routable" ones (a dust path of any length),
+// and used that distinction to drive the spring physics below. That
+// distinction is gone from the graph itself: rigidity is a realisation-time
+// idea, decided by a planner that does not exist yet, never a property of
+// signal flow (spec: "There are no rigid edges here"). A NOR gate is now one
+// `Torch` node with its inputs landing directly on it -- there is no
+// support, no per-input repeater, and so no second edge kind to draw
+// differently. Every edge here means the same thing: a signal goes from one
+// node to another, however it eventually gets realised.
+//
+// One consequence worth seeing rather than hiding: for the NOR-only
+// circuits this compiler builds today, this view now draws something
+// isomorphic to the netlist's own gate graph -- one node per gate/input/
+// output, one edge per net endpoint. That is the correct, current state of
+// this layer (see `topology.rs`'s own doc comment), not a bug in this view.
+// It stops being true the day a library entry is not one-to-one with its
+// gate.
+//
 // Layout: a hand-rolled 2D force-directed simulation (no extra library --
 // three.js is vendored for the 3D view but this stays plain <canvas> 2D,
 // per the task's own steer that "a 2D layout is likely clearer than 3D for
 // a graph"). Three kinds of force decide where a node ends up:
 //   - repulsion between every pair of nodes (keeps the graph from
 //     collapsing to a point);
-//   - a spring per edge, with **rigid edges pulled much shorter and
-//     stiffer than routable ones** -- this is the one piece of physics that
-//     does double duty as the answer to "how are rigid and routable edges
-//     told apart structurally, not just by colour": a gate's own rigid
-//     cluster (support + torch + input pins) collapses to a tight knot
-//     almost by itself, while routable edges (a would-be dust run of any
-//     length) are freer to stretch across the picture;
+//   - one spring per edge, all sharing the same stiffness and rest length
+//     now that there is only one edge kind;
 //   - a soft pull toward an x position from each node's topological
 //     "layer" (0 for a gate driven only by primary inputs, primary inputs
 //     at layer -1, primary outputs one past the last gate layer -- see
@@ -1576,30 +1591,37 @@ function onThreeHover(e) {
 //     roughly input-to-output, left to right, the way a schematic would.
 //
 // Scale: `and4` (a handful of gates) lays out and reads as one uncluttered
-// picture with nothing else needed. `seven_segment` (84 gates, several
-// hundred primitives) does not -- a force layout at that size is a
-// legible-at-a-glance blob of clusters, not a picture you can trace edge by
-// edge. Two things are provided for it rather than pretending the full view
-// is enough: gate hulls (see `drawTopology`'s translucent rounded boxes,
-// one per gate, labelled with that gate's own output name) make "which
-// primitives came from which gate" checkable without reading positions at
-// all, and "Focus gate" isolates one gate plus its direct neighbours
-// (`computeEgoSet`) and fits the view to just that -- the tool this task's
-// own hand cross-check uses. The unfiltered view at this size is still
-// honest (nothing is hidden or decimated) but is explicitly a "does this
-// look like the right order of magnitude and density" tool, not a "read
-// off individual wires" tool -- that degradation is real and is called out
-// here rather than left for someone to discover by squinting.
+// picture with nothing else needed. `seven_segment` (84 gates, ~180
+// primitives now that a gate is one node instead of a small cluster) does
+// not -- a force layout at that size is a legible-at-a-glance web of
+// connections, not a picture you can trace edge by edge from across the
+// room. Two things are provided for it rather than pretending the full view
+// is enough: gate badges (see `drawTopology`'s translucent rounded squares,
+// one per gate, labelled with that gate's own output name -- now a small
+// padded box around its single node rather than a hull around several,
+// since a gate is one node) make "which node is which gate" checkable
+// without reading positions at all, and "Focus gate" isolates one gate plus
+// its direct neighbours (`computeEgoSet`) and fits the view to just that --
+// the tool this task's own hand cross-check uses. The unfiltered view at
+// this size is still honest (nothing is hidden or decimated) but is
+// explicitly a "does this look like the right order of magnitude and
+// density" tool, not a "read off individual wires" tool -- that degradation
+// is real and is called out here rather than left for someone to discover
+// by squinting.
 // ---------------------------------------------------------------------
 
 const PRIMITIVE_COLOR = {
   // Same hex values as `block_kind_colour` in viewer/src/lib.rs for the
   // closest matching `BlockKind`, so a primitive's colour here means the
-  // same thing it would in the 2D/3D views.
+  // same thing it would in the 2D/3D views. `Repeater` and `Comparator`
+  // never appear as a node in today's library (see `topology::Primitive`'s
+  // doc comment: both are real signal-carrying elements reserved for a
+  // future, not-one-to-one entry), but are listed here anyway, same as
+  // `Dust` used to be, so the legend documents the whole vocabulary rather
+  // than only what happens to be in use today.
   Torch: '#ff8c00',
-  Dust: '#ff3b3b',
   Repeater: '#c9a227',
-  Block: '#8a8a8a',
+  Comparator: '#d9a441',
   Lever: '#7a5230',
   Lamp: '#ffd54a',
 };
@@ -1682,8 +1704,13 @@ function reinitTopoPositions() {
 }
 
 const TOPO_REPULSE_K = 4200;
-const TOPO_RIGID_STIFFNESS = 0.12, TOPO_RIGID_REST = 20;
-const TOPO_ROUTABLE_STIFFNESS = 0.02, TOPO_ROUTABLE_REST = 90;
+// One edge kind now (see this section's own doc comment on "There is one
+// kind of edge now") -- one stiffness/rest pair for every spring, where
+// there used to be a short/stiff pair for rigid edges and a long/loose pair
+// for routable ones. Chosen close to the old routable numbers: with no more
+// tight rigid clusters pulling gates into knots, this is what most of the
+// graph's own edges behaved like already.
+const TOPO_EDGE_STIFFNESS = 0.03, TOPO_EDGE_REST = 90;
 const TOPO_LAYER_K = 0.008;   // pull toward targetX
 const TOPO_CENTER_Y_K = 0.01; // pull toward y=0, so the graph doesn't drift
 const TOPO_DAMPING = 0.82;
@@ -1738,15 +1765,12 @@ function runLayout() {
       }
     }
 
-    // Springs -- one per edge, rigid much shorter/stiffer than routable.
+    // Springs -- one per edge, all the same now that there is one edge kind.
     for (const edge of topoEdges) {
       const a = nodes[edge.from], b = nodes[edge.to];
-      const rigid = edge.kind === 'Rigid';
-      const stiffness = rigid ? TOPO_RIGID_STIFFNESS : TOPO_ROUTABLE_STIFFNESS;
-      const rest = rigid ? TOPO_RIGID_REST : TOPO_ROUTABLE_REST;
       const dx = b.x - a.x, dy = b.y - a.y;
       const dist = Math.sqrt(dx * dx + dy * dy) || 1e-3;
-      const force = (dist - rest) * stiffness;
+      const force = (dist - TOPO_EDGE_REST) * TOPO_EDGE_STIFFNESS;
       const ux = dx / dist, uy = dy / dist;
       a.fx += ux * force; a.fy += uy * force;
       b.fx -= ux * force; b.fy -= uy * force;
@@ -1862,9 +1886,11 @@ function roundRect(ctx, x, y, w, h, r) {
 }
 
 /** Draw one node, shaped by its `Primitive` kind so a glance (not just
- * colour) distinguishes them: a square support block, a diamond repeater
- * (an input pin, in every NOR entry this library ships), a circular torch
- * or lamp, a triangular lever. */
+ * colour) distinguishes them: a diamond repeater, a hexagon comparator (both
+ * reserved shapes -- see `PRIMITIVE_COLOR`'s doc comment, neither appears in
+ * today's library), a triangular lever, a circular torch or lamp. No more
+ * square support block: `Block` is not a `Primitive` any more (a support is
+ * realisation, not signal -- see `topology.rs`'s doc comment). */
 function drawNodeShape(ctx, primitive, x, y, r, colour, alpha) {
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -1873,12 +1899,17 @@ function drawNodeShape(ctx, primitive, x, y, r, colour, alpha) {
   ctx.lineWidth = 1;
   ctx.beginPath();
   switch (primitive) {
-    case 'Block':
-      ctx.rect(x - r, y - r, r * 2, r * 2);
-      break;
     case 'Repeater':
       ctx.moveTo(x, y - r * 1.3); ctx.lineTo(x + r * 1.3, y);
       ctx.lineTo(x, y + r * 1.3); ctx.lineTo(x - r * 1.3, y);
+      ctx.closePath();
+      break;
+    case 'Comparator':
+      for (let i = 0; i < 6; i++) {
+        const angle = (Math.PI / 3) * i - Math.PI / 6;
+        const px = x + r * 1.3 * Math.cos(angle), py = y + r * 1.3 * Math.sin(angle);
+        if (i === 0) ctx.moveTo(px, py); else ctx.lineTo(px, py);
+      }
       ctx.closePath();
       break;
     case 'Lever':
@@ -1888,7 +1919,7 @@ function drawNodeShape(ctx, primitive, x, y, r, colour, alpha) {
     case 'Lamp':
       ctx.arc(x, y, r * 1.35, 0, Math.PI * 2);
       break;
-    default: // Torch, Dust
+    default: // Torch
       ctx.arc(x, y, r, 0, Math.PI * 2);
       break;
   }
@@ -1922,8 +1953,11 @@ function drawTopology() {
   const focusGate = focusValue === '' ? null : Number(focusValue);
   const egoSet = focusGate === null ? null : computeEgoSet(focusGate);
 
-  // Gate hulls -- what turns "primitives that happen to cluster" into
-  // "primitives you can tell came from the same gate at a glance".
+  // Gate badges -- a padded box around each gate's own node(s), labelled
+  // with its output name, so "which node is which gate" is checkable at a
+  // glance without reading positions. A NOR gate is one node today, so this
+  // draws as a small square around a single point rather than a hull
+  // wrapping several -- still legible, just smaller than it used to be.
   for (const gate of topoGates) {
     if (gate.nodes.length === 0) continue;
     const dim = focusGate !== null && gate.index !== focusGate;
@@ -1952,8 +1986,9 @@ function drawTopology() {
     }
   }
 
-  // Edges -- rigid drawn solid and heavier, routable dashed and lighter, so
-  // the two kinds are never confusable even before reading colour.
+  // Edges -- one kind, one style: solid, coloured the same as dust used to
+  // be, since every edge here is exactly what a dust path once implied
+  // ("realisation is not decided at this layer" -- see the edge legend).
   for (const edge of topoEdges) {
     const inFocus = egoSet ? (egoSet.has(edge.from) && egoSet.has(edge.to)) : true;
     const a = topoNodes[edge.from], b = topoNodes[edge.to];
@@ -1962,18 +1997,10 @@ function drawTopology() {
     topoCtx.beginPath();
     topoCtx.moveTo(sx0, sy0);
     topoCtx.lineTo(sx1, sy1);
-    if (edge.kind === 'Rigid') {
-      topoCtx.setLineDash([]);
-      topoCtx.strokeStyle = `rgba(207,211,216,${inFocus ? 0.85 : 0.05})`;
-      topoCtx.lineWidth = 2.4;
-    } else {
-      topoCtx.setLineDash([5, 4]);
-      topoCtx.strokeStyle = `rgba(255,59,59,${inFocus ? 0.6 : 0.04})`;
-      topoCtx.lineWidth = 1.3;
-    }
+    topoCtx.strokeStyle = `rgba(255,59,59,${inFocus ? 0.55 : 0.04})`;
+    topoCtx.lineWidth = 1.6;
     topoCtx.stroke();
   }
-  topoCtx.setLineDash([]);
 
   // Nodes, on top of edges.
   for (const node of topoNodes) {

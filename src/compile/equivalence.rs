@@ -21,12 +21,11 @@
 //! - The four invariants `compile` already runs unconditionally
 //!   (`verify_connectivity`, `verify_torch_merge`, `verify_signal_strength`,
 //!   and spacing) are, read structurally, precisely the correctness
-//!   conditions this graph's own rigid and routable edges assert: a NOR
-//!   gate's rigid inputs-converge-on-one-support-and-torch structure is
-//!   `verify_torch_merge`'s "N sources, one sink" invariant; a net's
-//!   routable edge delivering a real, undecayed signal from producer to
-//!   every declared sink is exactly what `verify_connectivity` and
-//!   `verify_signal_strength` already certify, on the *actual* emitted
+//!   conditions this graph's own edges assert: a NOR gate's N-inputs-one-
+//!   torch structure is `verify_torch_merge`'s "N sources, one sink"
+//!   invariant; a net's edge delivering a real, undecayed signal from
+//!   producer to every declared sink is exactly what `verify_connectivity`
+//!   and `verify_signal_strength` already certify, on the *actual* emitted
 //!   bytes. Reusing them here instead of re-implementing a second walk of
 //!   the world is the same "don't re-derive, reuse" principle
 //!   `routing_stats` already applies to the router's own geometry.
@@ -43,27 +42,37 @@
 //! and edges and nothing more. [`verify_expansion_matches_compiled`] is that
 //! check:
 //!
-//! - **Rigid edges** are checked directly against the compiled `World`'s own
-//!   bytes -- every gate's support block, its torch, and each of its input
-//!   sockets' repeater, read back cell by cell and confirmed to match
-//!   exactly the graph's own node count and rigid-edge structure for that
-//!   gate (no more, no fewer inputs than the netlist declares); likewise a
-//!   declared output's lamp, at the exact fixed offset `emit` places it.
-//! - **Routable edges** are checked two ways: independently, by comparing
-//!   the graph's own routable edges (translated back to netlist-level
-//!   signal names, not internal node ids) against the net structure
-//!   `Netlist` implies on its own, with no reference to `expand` at all; and
-//!   by relying on `compile`'s own connectivity/torch-merge/signal-strength
-//!   invariants, which have already read every byte of dust and every
-//!   repeater the router placed for that same net and found it delivers
-//!   exactly the declared producer to exactly the declared sinks. Together
-//!   these two facts chain into "the graph's routable edges are what the
+//! - **A gate's own torch and its support** are checked directly against the
+//!   compiled `World`'s own bytes -- the torch resolves to a real,
+//!   resolvable, conductive support, and exactly `arity` of `INPUT_DIRECTIONS`'
+//!   sockets (no more, no fewer) hold a repeater facing it. A gate's support
+//!   block and its per-input repeaters are not graph nodes any more (see
+//!   `topology::TemplateNode`'s doc comment on why `Support` and per-input
+//!   `Repeater` nodes are gone) -- this module still checks them, just as
+//!   physical facts about the compiled world rather than as a graph-vs-world
+//!   comparison at the individual-node level.
+//! - **The graph's own claimed arity** -- edges landing on a gate's node
+//!   cluster from outside it, since there is no `TemplateNode::Input` role
+//!   left to count -- is checked against `Netlist`'s declared arity
+//!   directly, independent of the world-side socket walk above. This is
+//!   what would catch `expand` quietly dropping one of a gate's inputs even
+//!   if (hypothetically) the world-side check above were somehow fooled.
+//! - **Edges** are checked two ways: independently, by comparing the
+//!   graph's own edges into each gate's node cluster (translated back to
+//!   netlist-level signal names, not internal node ids) against the net
+//!   structure `Netlist` implies on its own, with no reference to `expand`
+//!   at all; and by relying on `compile`'s own connectivity/torch-merge/
+//!   signal-strength invariants, which have already read every byte of dust
+//!   and every repeater the router placed for that same net and found it
+//!   delivers exactly the declared producer to exactly the declared sinks.
+//!   Together these two facts chain into "the graph's edges are what the
 //!   compiled bytes actually implement" without this module re-walking dust
 //!   itself.
 
+use std::collections::HashMap;
 use std::collections::HashSet;
 
-use super::primitive_graph::{EdgeKind, PrimitiveGraph, Provenance};
+use super::primitive_graph::{NodeId, PrimitiveGraph, Provenance};
 use super::topology::TemplateNode;
 use super::{CompiledCircuit, Netlist, INPUT_DIRECTIONS, OUTPUT_DIRECTION};
 use crate::redstone::rules::taxonomy::flags_of;
@@ -75,15 +84,18 @@ use crate::redstone::world::block::BlockKind;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EquivalenceError {
     /// The graph's total node count does not match what `Netlist` alone
-    /// implies (levers + lamps + `2 + arity` per gate).
+    /// implies (levers + lamps + one torch per gate).
     NodeCountMismatch { expected: usize, actual: usize },
-    /// The graph's rigid or routable edge count does not match what
-    /// `Netlist` alone implies.
-    EdgeCountMismatch { expected_rigid: usize, actual_rigid: usize, expected_routable: usize, actual_routable: usize },
-    /// A gate's own instance is missing a node for one of the fixed roles
-    /// (`TemplateNode::Torch`, `TemplateNode::Support`, or one of its
-    /// `Input`s) that every `topology::nor_entry` must provide.
+    /// The graph's total edge count does not match what `Netlist` alone
+    /// implies (one per gate input, plus one per declared output).
+    EdgeCountMismatch { expected: usize, actual: usize },
+    /// A gate's own instance is missing a node for the one fixed role
+    /// (`TemplateNode::Torch`) every `topology::nor_entry` must provide.
     MissingRole { gate: String, role: TemplateNode },
+    /// The number of edges landing on a gate's own node cluster from outside
+    /// it does not match `Netlist`'s own declared arity for that gate --
+    /// the graph-side half of "did `expand` wire up every declared input".
+    GraphInputEdgeCountMismatch { gate: String, netlist_arity: usize, graph_edge_count: usize },
     /// `CompiledCircuit::gate_output_positions` has no entry for this gate's
     /// output at all.
     TorchNotPlaced { gate: String },
@@ -95,13 +107,12 @@ pub enum EquivalenceError {
     /// `verify_torch_merge` would already reject this, but this module
     /// checks it directly rather than only trusting that invariant ran.
     SupportNotConductive { gate: String, support: (i32, i32, i32) },
-    /// One of the graph's declared `Input` nodes for this gate has no
-    /// matching repeater, facing into the support, at the corresponding
-    /// `INPUT_DIRECTIONS` socket.
+    /// One of this gate's declared input sockets (by `INPUT_DIRECTIONS`
+    /// index, `< arity`) has no repeater facing into the support.
     InputSocketNotARepeaterFacingSupport { gate: String, input_index: usize, socket: (i32, i32, i32) },
-    /// A socket direction the graph does *not* declare as one of this
-    /// gate's inputs is nonetheless occupied by a repeater facing into the
-    /// support -- an undeclared rigid input the graph is missing.
+    /// A socket direction beyond this gate's declared arity is nonetheless
+    /// occupied by a repeater facing into the support -- more inputs than
+    /// the netlist declares.
     UndeclaredInputFeedsSupport { gate: String, direction_index: usize, socket: (i32, i32, i32) },
     /// `CompiledCircuit::input_positions` has no entry for this primary
     /// input.
@@ -117,11 +128,11 @@ pub enum EquivalenceError {
     LampWrongKind { name: String, position: (i32, i32, i32) },
     /// A declared output's lamp is not at the fixed offset `emit` always
     /// places it at (one cell past its driving gate's torch, then straight
-    /// down) -- the physical realisation of the rigid torch-to-lamp edge.
-    LampNotAtRigidOffsetFromTorch { name: String, expected: (i32, i32, i32), actual: (i32, i32, i32) },
-    /// The graph's routable edges, translated back to netlist-level signal
+    /// down) -- the physical realisation of the torch-to-lamp edge.
+    LampNotAtFixedOffsetFromTorch { name: String, expected: (i32, i32, i32), actual: (i32, i32, i32) },
+    /// The graph's input edges, translated back to netlist-level signal
     /// names, do not match the net structure `Netlist` implies on its own.
-    RoutableEdgesDoNotMatchNetlist { only_in_graph: usize, only_in_netlist: usize },
+    InputEdgesDoNotMatchNetlist { only_in_graph: usize, only_in_netlist: usize },
 }
 
 impl std::fmt::Display for EquivalenceError {
@@ -132,15 +143,23 @@ impl std::fmt::Display for EquivalenceError {
 
 impl std::error::Error for EquivalenceError {}
 
-/// One (producer, consuming gate, input index) triple, in netlist-level
-/// terms rather than `NodeId`s -- what both sides of the routable-edge
-/// cross-check in [`verify_expansion_matches_compiled`] are reduced to
-/// before comparison.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-enum NetSink {
-    /// `producer` is `Some(gate output name)` for a gate-driven signal, or
-    /// `None` for a primary input.
-    Edge { producer_is_primary_input: bool, producer_name: String, consumer_gate: String, input_index: usize },
+/// One (producer, consuming gate) pair, in netlist-level terms rather than
+/// `NodeId`s -- what both sides of the input-edge cross-check in
+/// [`verify_expansion_matches_compiled`] are reduced to before comparison.
+///
+/// Deliberately carries no input *index*: `primitive_graph::expand` no
+/// longer records which of a gate's declared inputs a given edge realises
+/// (a NOR's inputs are interchangeable, so the flat graph never claimed an
+/// order beyond "this many edges land here" -- see `topology`'s doc
+/// comment). Comparison is therefore a multiset-of-pairs equality, not a
+/// set-of-triples one, so a gate fed the same producer on two different
+/// declared inputs is still counted correctly on both sides.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+struct NetEdge {
+    /// `true` for a primary input, `false` for a gate output.
+    producer_is_primary_input: bool,
+    producer_name: String,
+    consumer_gate: String,
 }
 
 /// Check that `graph` (built by `primitive_graph::expand(netlist, ..)`)
@@ -155,7 +174,7 @@ pub fn verify_expansion_matches_compiled(
     verify_counts(netlist, graph)?;
 
     for (g, gate) in netlist.gates.iter().enumerate() {
-        verify_gate_rigid_structure(netlist, graph, compiled, g, gate.inputs.len())?;
+        verify_gate_structure(netlist, graph, compiled, g, gate.inputs.len())?;
     }
 
     for name in &netlist.inputs {
@@ -166,7 +185,7 @@ pub fn verify_expansion_matches_compiled(
         verify_lamp(netlist, compiled, output_name)?;
     }
 
-    verify_routable_edges_match_netlist(netlist, graph)?;
+    verify_input_edges_match_netlist(netlist, graph)?;
 
     Ok(())
 }
@@ -176,36 +195,29 @@ pub fn verify_expansion_matches_compiled(
 /// little.
 fn verify_counts(netlist: &Netlist, graph: &PrimitiveGraph) -> Result<(), EquivalenceError> {
     let mut expected_nodes = netlist.inputs.len() + netlist.outputs.len();
-    let mut expected_rigid = netlist.outputs.len(); // one Torch->Lamp edge each
-    let mut expected_routable = 0usize;
+    let mut expected_edges = netlist.outputs.len(); // one Torch->Lamp edge each
     for gate in &netlist.gates {
         let arity = gate.inputs.len();
-        expected_nodes += 2 + arity; // Support + Torch + one node per input
-        expected_rigid += arity + 1; // each Input->Support, plus Torch->Support
-        expected_routable += arity; // each input is driven by exactly one routable edge
+        expected_nodes += 1; // one Torch node per gate -- no Support, no per-input Repeater
+        expected_edges += arity; // each input is driven by exactly one edge
     }
 
     if graph.nodes.len() != expected_nodes {
         return Err(EquivalenceError::NodeCountMismatch { expected: expected_nodes, actual: graph.nodes.len() });
     }
 
-    let actual_rigid = graph.edges.iter().filter(|e| e.kind == EdgeKind::Rigid).count();
-    let actual_routable = graph.edges.iter().filter(|e| e.kind == EdgeKind::Routable).count();
-    if actual_rigid != expected_rigid || actual_routable != expected_routable {
-        return Err(EquivalenceError::EdgeCountMismatch {
-            expected_rigid,
-            actual_rigid,
-            expected_routable,
-            actual_routable,
-        });
+    if graph.edges.len() != expected_edges {
+        return Err(EquivalenceError::EdgeCountMismatch { expected: expected_edges, actual: graph.edges.len() });
     }
 
     Ok(())
 }
 
-/// Check gate `g`'s rigid substructure (support, torch, `arity` input
-/// sockets) directly against the compiled world's own bytes.
-fn verify_gate_rigid_structure(
+/// Check gate `g`'s structure: the graph's own claim (a Torch node, fed by
+/// `arity`-many edges from outside its cluster) directly against the
+/// compiled world's own bytes (a resolvable, conductive support with
+/// exactly `arity` input sockets holding a repeater).
+fn verify_gate_structure(
     netlist: &Netlist,
     graph: &PrimitiveGraph,
     compiled: &CompiledCircuit,
@@ -214,23 +226,28 @@ fn verify_gate_rigid_structure(
 ) -> Result<(), EquivalenceError> {
     let gate_name = netlist.gates[g].output.clone();
 
-    // The graph must have exactly the roles a NOR entry provides: one
-    // Support, one Torch, and `arity` Input nodes, for this gate.
-    let has_role = |role: TemplateNode| {
-        graph.gate_nodes[g]
-            .iter()
-            .any(|&id| matches!(&graph.nodes[id].provenance, Provenance::Gate { gate, role: r } if *gate == g && *r == role))
-    };
-    if !has_role(TemplateNode::Support) {
-        return Err(EquivalenceError::MissingRole { gate: gate_name, role: TemplateNode::Support });
-    }
-    if !has_role(TemplateNode::Torch) {
+    // The graph must have the one role a NOR entry provides today: a Torch.
+    let has_torch = graph.gate_nodes[g]
+        .iter()
+        .any(|&id| matches!(&graph.nodes[id].provenance, Provenance::Gate { gate, role: TemplateNode::Torch } if *gate == g));
+    if !has_torch {
         return Err(EquivalenceError::MissingRole { gate: gate_name, role: TemplateNode::Torch });
     }
-    for i in 0..arity {
-        if !has_role(TemplateNode::Input(i)) {
-            return Err(EquivalenceError::MissingRole { gate: gate_name, role: TemplateNode::Input(i) });
-        }
+
+    // The graph's own claimed arity: edges landing on this gate's node
+    // cluster from outside it -- there is no `TemplateNode::Input` role left
+    // to count directly (see `topology`'s doc comment on why), so this is
+    // the structural replacement: an edge counts as one of gate `g`'s
+    // declared inputs iff it targets a node gate `g` owns and originates
+    // from a node gate `g` does not.
+    let own: HashSet<NodeId> = graph.gate_nodes[g].iter().copied().collect();
+    let graph_edge_count = graph.edges.iter().filter(|e| own.contains(&e.to) && !own.contains(&e.from)).count();
+    if graph_edge_count != arity {
+        return Err(EquivalenceError::GraphInputEdgeCountMismatch {
+            gate: gate_name,
+            netlist_arity: arity,
+            graph_edge_count,
+        });
     }
 
     // Now walk the actual world.
@@ -254,8 +271,7 @@ fn verify_gate_rigid_structure(
 
     // Every direction `place_nor_gate` could ever use for an input: the
     // declared ones must hold a repeater facing into the support; the rest
-    // must not (or the graph is missing a rigid input the world actually
-    // has).
+    // must not (or the world has more inputs than the netlist declares).
     for (index, &direction) in INPUT_DIRECTIONS.iter().enumerate() {
         let socket = support.offset(direction);
         let socket_state = compiled.world.get(socket.x, socket.y, socket.z);
@@ -319,7 +335,7 @@ fn verify_lamp(netlist: &Netlist, compiled: &CompiledCircuit, output_name: &str)
     let expected = Position::new(tx, ty, tz).offset(OUTPUT_DIRECTION).down();
     let expected = (expected.x, expected.y, expected.z);
     if expected != (lx, ly, lz) {
-        return Err(EquivalenceError::LampNotAtRigidOffsetFromTorch {
+        return Err(EquivalenceError::LampNotAtFixedOffsetFromTorch {
             name: output_name.to_string(),
             expected,
             actual: (lx, ly, lz),
@@ -329,52 +345,69 @@ fn verify_lamp(netlist: &Netlist, compiled: &CompiledCircuit, output_name: &str)
     Ok(())
 }
 
-/// Reduce `graph`'s routable edges, and `netlist`'s own gate-input
-/// structure, to the same netlist-level vocabulary and compare them as
-/// sets -- see this module's doc comment for why this, combined with
-/// `compile`'s own invariants, is enough to trust the compiled bytes match.
-fn verify_routable_edges_match_netlist(netlist: &Netlist, graph: &PrimitiveGraph) -> Result<(), EquivalenceError> {
-    let from_netlist: HashSet<NetSink> = netlist
+/// Reduce `graph`'s edges into every gate's own node cluster, and
+/// `netlist`'s own gate-input structure, to the same netlist-level
+/// vocabulary and compare them as multisets -- see this module's doc
+/// comment for why this, combined with `compile`'s own invariants, is
+/// enough to trust the compiled bytes match.
+fn verify_input_edges_match_netlist(netlist: &Netlist, graph: &PrimitiveGraph) -> Result<(), EquivalenceError> {
+    let from_netlist: Vec<NetEdge> = netlist
         .gates
         .iter()
         .flat_map(|gate| {
             let consumer_gate = gate.output.clone();
-            gate.inputs.iter().enumerate().map(move |(input_index, producer_name)| NetSink::Edge {
+            gate.inputs.iter().map(move |producer_name| NetEdge {
                 producer_is_primary_input: netlist.inputs.iter().any(|i| i == producer_name),
                 producer_name: producer_name.clone(),
                 consumer_gate: consumer_gate.clone(),
-                input_index,
             })
         })
         .collect();
 
-    let from_graph: HashSet<NetSink> = graph
+    // Which gate (if any) owns a given node -- an edge counts as "one of
+    // gate g's declared inputs" iff it lands on a node g owns, coming from a
+    // node g does not (see `verify_gate_structure`'s identical rule).
+    let owner_of: HashMap<NodeId, usize> = graph
+        .gate_nodes
+        .iter()
+        .enumerate()
+        .flat_map(|(g, nodes)| nodes.iter().map(move |&id| (id, g)))
+        .collect();
+
+    let from_graph: Vec<NetEdge> = graph
         .edges
         .iter()
-        .filter(|edge| edge.kind == EdgeKind::Routable)
-        .map(|edge| {
+        .filter_map(|edge| {
+            let &consumer_gate_idx = owner_of.get(&edge.to)?;
+            if owner_of.get(&edge.from) == Some(&consumer_gate_idx) {
+                return None; // an internal edge of the consumer's own template, not an input
+            }
             let producer = &graph.nodes[edge.from].provenance;
             let (producer_is_primary_input, producer_name) = match producer {
                 Provenance::PrimaryInput { name } => (true, name.clone()),
-                Provenance::Gate { role: TemplateNode::Torch, .. } => {
-                    let gate = gate_output_name(netlist, producer);
-                    (false, gate)
-                }
-                other => panic!("a routable edge's source is never {other:?}"),
+                Provenance::Gate { .. } => (false, gate_output_name(netlist, producer)),
+                other => panic!("an input edge's source is never {other:?}"),
             };
-            let consumer = &graph.nodes[edge.to].provenance;
-            let (consumer_gate, input_index) = match consumer {
-                Provenance::Gate { role: TemplateNode::Input(i), gate } => (netlist.gates[*gate].output.clone(), *i),
-                other => panic!("a routable edge's target is never {other:?}"),
-            };
-            NetSink::Edge { producer_is_primary_input, producer_name, consumer_gate, input_index }
+            let consumer_gate = netlist.gates[consumer_gate_idx].output.clone();
+            Some(NetEdge { producer_is_primary_input, producer_name, consumer_gate })
         })
         .collect();
 
-    if from_netlist != from_graph {
-        let only_in_graph = from_graph.difference(&from_netlist).count();
-        let only_in_netlist = from_netlist.difference(&from_graph).count();
-        return Err(EquivalenceError::RoutableEdgesDoNotMatchNetlist { only_in_graph, only_in_netlist });
+    let mut tally: HashMap<NetEdge, i64> = HashMap::new();
+    for edge in from_netlist {
+        *tally.entry(edge).or_insert(0) += 1;
+    }
+    for edge in from_graph {
+        *tally.entry(edge).or_insert(0) -= 1;
+    }
+    let only_in_netlist: i64 = tally.values().filter(|&&count| count > 0).sum();
+    let only_in_graph: i64 = tally.values().filter(|&&count| count < 0).map(|count| -count).sum();
+
+    if only_in_netlist != 0 || only_in_graph != 0 {
+        return Err(EquivalenceError::InputEdgesDoNotMatchNetlist {
+            only_in_graph: only_in_graph as usize,
+            only_in_netlist: only_in_netlist as usize,
+        });
     }
 
     Ok(())
