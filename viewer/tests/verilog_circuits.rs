@@ -28,6 +28,7 @@
 use reda::circuits::seven_segment::TRUTH_TABLE;
 use reda::circuits::verilog;
 use reda::compile::compile;
+use reda::compile::lowering::lower;
 use reda_viewer::{list_circuits, Axis, Session};
 
 /// Bytes per cell in `Session::geometry`'s packed output -- the layout that
@@ -69,6 +70,7 @@ fn evaluate(session: &mut Session, inputs: &[&str], value: u32, outputs: &[(i32,
 fn output_positions(circuit_name: &str) -> Vec<(i32, i32, i32)> {
     let circuit = verilog::find(circuit_name).expect("catalog entry must exist");
     let (netlist, labels) = circuit.baked_netlist();
+    let netlist = lower(&netlist).expect("a baked netlist lowers");
     let compiled = compile(&netlist).expect("a baked netlist compiles");
     labels
         .iter()
@@ -127,18 +129,28 @@ fn the_verilog_seven_segment_session_matches_its_truth_table_through_the_wasm_ap
     }
 }
 
-/// The synthesised decoder the viewer loads is the same 31-gate, 7888-block
-/// circuit the rest of this project quotes. `geometry()`'s length is the
-/// block count as the viewer itself sees it: one entry per non-air cell.
+/// The synthesised decoder the viewer loads is the same circuit the rest of
+/// this project quotes, at both of its levels: 31 gate-level cells as Yosys
+/// left them, 56 torches and merges once `compile::lowering` has had them,
+/// 12348 blocks once the compiler has. `geometry()`'s length is that block
+/// count as the viewer itself sees it: one entry per non-air cell.
 #[test]
 fn the_verilog_seven_segment_is_the_size_the_ladder_says_it_is() {
     let (netlist, _) = verilog::find("verilog:seven_segment").expect("catalog entry").baked_netlist();
-    assert_eq!(netlist.gates.len(), 31);
-    assert_eq!(netlist.gates.iter().filter(|gate| gate.is_merge).count(), 11);
+    assert_eq!(netlist.gates.len(), 31, "gate-level cell count has moved");
+    assert_eq!(
+        netlist.gates.iter().filter(|gate| gate.kind.is_realisable()).count(),
+        9,
+        "only 9 of the decoder's 31 cells are things redstone builds directly"
+    );
+
+    let lowered = lower(&netlist).expect("the decoder lowers");
+    assert_eq!(lowered.gates.len(), 56, "lowered gate count has moved");
+    assert_eq!(lowered.gates.iter().filter(|gate| gate.is_merge()).count(), 17);
 
     let session = Session::new("verilog:seven_segment").expect("session builds");
     let cells = session.geometry().len() / GEOMETRY_BYTES_PER_CELL;
-    assert_eq!(cells, 7888, "the synthesised decoder's block count has moved");
+    assert_eq!(cells, 12348, "the synthesised decoder's block count has moved");
     assert_eq!(session.geometry().len() % GEOMETRY_BYTES_PER_CELL, 0);
     assert_eq!(session.strengths().len(), cells, "one strength byte per geometry entry");
 }

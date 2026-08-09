@@ -1719,6 +1719,26 @@ function gateLabel(gate) {
   return isMergeGate(gate) ? `OR${gate.arity} merge` : `NOR${gate.arity}`;
 }
 
+/** The gate-level cell this torch or merge is part of, e.g. `mux g20`, or
+ * `null` when there is nothing to say.
+ *
+ * A `verilog:` circuit's netlist arrives at the **gate level** -- `$_AND_`,
+ * `$_NAND_`, `$_MUX_` -- and `compile::lowering::lower` rewrites it into
+ * torches and merges before anything is placed. This graph is therefore the
+ * realisation, which is correct: it is what actually gets built. But the
+ * realisation alone cannot say that five particular torches and one merge
+ * are, between them, one multiplexer -- and that is exactly the kind of
+ * thing this view exists to make visible. `Session::topology`'s `source`
+ * field carries it across; see `TopologyGate::source` in `viewer/src/lib.rs`.
+ *
+ * Hand-written circuits are NOR by construction, so lowering is the identity
+ * on them and every gate's `source` is absent -- there is no second level to
+ * report, and the view says nothing rather than saying "this NOR came from
+ * that NOR". */
+function gateSource(gate) {
+  return gate.source || null;
+}
+
 function buildPrimitiveLegend() {
   topoPrimitiveLegend.innerHTML = '';
   for (const [name, colour] of Object.entries(PRIMITIVE_COLOR)) {
@@ -1999,9 +2019,14 @@ function layoutAndRender() {
   }
   drawTopology();
   const merges = topoGates.filter(isMergeGate).length;
+  // Count the *distinct* gate-level cells these torches and merges were
+  // lowered from, so the status line reports both levels rather than
+  // implying the realisation is all there ever was.
+  const sources = new Set(topoGates.map(gateSource).filter(Boolean));
   topoStatus.textContent =
     `${topoNodes.length} nodes, ${topoEdges.length} edges, ${topoGates.length} gates `
     + `(${topoGates.length - merges} NOR, ${merges} wire merge${merges === 1 ? '' : 's'}) -- `
+    + (sources.size ? `lowered from ${sources.size} gate-level cell${sources.size === 1 ? '' : 's'} -- ` : '')
     + `layered layout computed in ${elapsed.toFixed(0)} ms.`;
 }
 
@@ -2271,12 +2296,17 @@ topoCanvas.addEventListener('mousemove', (e) => {
   } else if (best.kind === 'merge') {
     const gate = best.junction.gate;
     const joined = gate.outputs.map((id) => `#${id}`).join(', ');
+    const source = gateSource(gate);
     topoHoverReadout.textContent =
       `${gate.output} -- ${gateLabel(gate)}, layer ${gate.layer} -- no torch, no support: `
-      + `a dust junction joining ${joined}`;
+      + `a dust junction joining ${joined}`
+      + (source ? ` -- part of ${source}` : '');
   } else {
     const node = best.node;
-    topoHoverReadout.textContent = `#${node.id} -- ${node.primitive} -- ${provenanceDescription(node)}`;
+    const gate = node.provenance.kind === 'Gate' ? topoGates[node.provenance.gate] : null;
+    const source = gate ? gateSource(gate) : null;
+    topoHoverReadout.textContent = `#${node.id} -- ${node.primitive} -- ${provenanceDescription(node)}`
+      + (source ? ` -- part of ${source}` : '');
   }
 });
 topoCanvas.addEventListener('mouseleave', () => { topoHoverReadout.textContent = ' '; });

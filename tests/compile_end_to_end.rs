@@ -3,6 +3,7 @@
 //! 這是第一條端到端的編譯路徑 —— 前面所有測試都驗證手搭的電路；這裡驗證
 //! `compile()` 自己排出來的電路。
 
+use reda::compile::topology::GateKind;
 use std::path::PathBuf;
 
 use reda::compile::{compile, CompileError, Gate, Netlist};
@@ -37,7 +38,7 @@ fn not_netlist() -> Netlist {
             name: "g1".to_string(),
             inputs: vec!["a".to_string()],
             output: "y".to_string(),
-            is_merge: false,
+            kind: GateKind::Nor(1),
         }],
     }
 }
@@ -48,13 +49,13 @@ fn and_netlist() -> Netlist {
         inputs: vec!["a".to_string(), "b".to_string()],
         outputs: vec!["y".to_string()],
         gates: vec![
-            Gate { name: "not_a".to_string(), inputs: vec!["a".to_string()], output: "na".to_string(), is_merge: false },
-            Gate { name: "not_b".to_string(), inputs: vec!["b".to_string()], output: "nb".to_string(), is_merge: false },
+            Gate { name: "not_a".to_string(), inputs: vec!["a".to_string()], output: "na".to_string(), kind: GateKind::Nor(1) },
+            Gate { name: "not_b".to_string(), inputs: vec!["b".to_string()], output: "nb".to_string(), kind: GateKind::Nor(1) },
             Gate {
                 name: "final_nor".to_string(),
                 inputs: vec!["na".to_string(), "nb".to_string()],
                 output: "y".to_string(),
-                is_merge: false,
+                kind: GateKind::Nor(2),
             },
         ],
     }
@@ -185,8 +186,8 @@ fn a_cyclic_netlist_is_rejected() {
         inputs: vec![],
         outputs: vec!["loop_b".to_string()],
         gates: vec![
-            Gate { name: "g1".to_string(), inputs: vec!["loop_b".to_string()], output: "loop_a".to_string(), is_merge: false },
-            Gate { name: "g2".to_string(), inputs: vec!["loop_a".to_string()], output: "loop_b".to_string(), is_merge: false },
+            Gate { name: "g1".to_string(), inputs: vec!["loop_b".to_string()], output: "loop_a".to_string(), kind: GateKind::Nor(1) },
+            Gate { name: "g2".to_string(), inputs: vec!["loop_a".to_string()], output: "loop_b".to_string(), kind: GateKind::Nor(1) },
         ],
     };
 

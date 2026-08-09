@@ -73,7 +73,7 @@ pub fn build_seven_segment_netlist() -> (Netlist, HashMap<&'static str, String>)
     let netlist = Netlist {
         inputs: INPUT_NAMES.iter().map(|s| s.to_string()).collect(),
         outputs,
-        gates: builder.gates,
+        gates: builder.into_gates(),
     };
 
     (netlist, segment_signal)
@@ -104,7 +104,7 @@ pub fn build_single_segment_netlist(segment_index: usize) -> (Netlist, String) {
     let netlist = Netlist {
         inputs: INPUT_NAMES.iter().map(|s| s.to_string()).collect(),
         outputs: vec![signal.clone()],
-        gates: builder.gates,
+        gates: builder.into_gates(),
     };
 
     (netlist, signal)

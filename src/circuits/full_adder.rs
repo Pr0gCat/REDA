@@ -53,7 +53,7 @@ pub fn build_full_adder_netlist() -> (Netlist, HashMap<&'static str, String>) {
     let netlist = Netlist {
         inputs: INPUT_NAMES.iter().map(|s| s.to_string()).collect(),
         outputs: vec![sum, cout],
-        gates: builder.gates,
+        gates: builder.into_gates(),
     };
 
     (netlist, output_signal)

@@ -25,10 +25,17 @@ use reda::compile::equivalence::verify_expansion_matches_compiled;
 use reda::compile::primitive_graph::expand;
 use reda::compile::topology::Library;
 use reda::compile::world_partition::partition_world;
+use reda::compile::lowering::lower;
 use reda::compile::{compile, Netlist};
 use reda::frontend::synthesize_verilog;
 
-fn check(label: &str, netlist: &Netlist) {
+/// `netlist` may be at either level: this lowers it first, and every check
+/// below then runs against one and the same netlist. Both `expand` and
+/// `verify_expansion_matches_compiled` correlate gates by index with what
+/// `compile` placed, so handing them the gate-level netlist while compiling
+/// the lowered one would be comparing two different circuits.
+fn check(label: &str, source_netlist: &Netlist) {
+    let netlist = &lower(source_netlist).unwrap_or_else(|e| panic!("{label}: must lower: {e}"));
     let compiled = compile(netlist).unwrap_or_else(|e| panic!("{label}: must compile: {e}"));
     let library = Library::default_library();
     let graph = expand(netlist, &library).unwrap_or_else(|e| panic!("{label}: must expand: {e}"));

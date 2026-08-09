@@ -35,6 +35,7 @@ use std::collections::{BTreeMap, HashMap};
 use reda::circuits::{and4, full_adder, seven_segment, verilog};
 use reda::compile::primitive_graph::{self, PrimitiveGraph, Provenance};
 use reda::compile::topology::{Library, Primitive as TopoPrimitive, TemplateNode};
+use reda::compile::lowering::lower_with_provenance;
 use reda::compile::{compile, Netlist};
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::{BlockKind, BlockState, Face, Facing};
@@ -475,19 +476,31 @@ struct TopologyGate {
     /// carried through separately from `PrimitiveGraph`, which only ever
     /// remembers a gate by its index (see `Provenance::Gate`'s doc comment).
     output: String,
-    /// `"nor"` or `"merge"` -- `Gate::is_merge`, and the one field that lets
-    /// this view stop calling everything a NOR.
+    /// `"nor"` or `"merge"` -- the two things redstone builds, and the one
+    /// field that lets this view stop calling everything a NOR.
     ///
     /// Every hand-written circuit in [`CIRCUITS`] is pure NOR, so until the
     /// Verilog-derived circuits reached this crate there was nothing else
-    /// for a gate to be and nothing lost by assuming it. A synthesised
-    /// netlist is not pure NOR: Yosys `OR2`/`OR3` map onto wire merges, 11
-    /// of `verilog:seven_segment`'s 31 gates. A merge is a fundamentally
-    /// different object -- no torch, no support, no gate body at all, just
-    /// the point where several producers' dust are allowed to touch -- and
-    /// a view that draws it as one more NOR is not simplifying, it is
-    /// wrong.
+    /// for a gate to be and nothing lost by assuming it. A merge is a
+    /// fundamentally different object -- no torch, no support, no gate body
+    /// at all, just the point where several producers' dust are allowed to
+    /// touch -- and a view that draws it as one more NOR is not
+    /// simplifying, it is wrong.
     kind: &'static str,
+    /// The **gate-level** cell this torch or merge came from, as
+    /// `"<kind> <output>"` -- e.g. `"mux g20"`, `"nand g12"` -- or `None` if
+    /// this gate was already realisable in the netlist the session loaded
+    /// (every gate of every hand-written circuit).
+    ///
+    /// This is the one place the two levels meet in this crate. The netlist
+    /// the viewer loads for a `verilog:` circuit is at the gate level, and
+    /// `compile::lowering::lower` rewrites it into torches and merges before
+    /// anything is placed -- so the graph drawn here is, correctly, the
+    /// realisation. Without this field that is *all* it could ever be, and
+    /// the fact that five of those torches are one multiplexer would be
+    /// invisible in the view whose entire job is showing what a circuit
+    /// really is.
+    source: Option<String>,
     arity: usize,
     /// Topological layer: 0 for a gate driven only by primary inputs, one
     /// more than the greatest layer among any gate that drives it otherwise.
@@ -596,6 +609,9 @@ struct GateMeta {
     output: String,
     arity: usize,
     is_merge: bool,
+    /// See [`TopologyGate::source`]. `None` when the source gate was already
+    /// realisable, since "this NOR came from that NOR" says nothing.
+    source: Option<String>,
     layer: i32,
 }
 
@@ -604,19 +620,32 @@ impl Session {
     /// circuit's generator, compile it, and settle the simulator once so a
     /// caller sees a self-consistent world before ever calling `step`.
     fn build(circuit_name: &str) -> Result<Session, String> {
-        let (netlist, outputs) = build_named_circuit(circuit_name).ok_or_else(|| {
+        let (source_netlist, outputs) = build_named_circuit(circuit_name).ok_or_else(|| {
             format!(
                 "unknown circuit `{circuit_name}` -- see list_circuits() for the valid names"
             )
         })?;
+
+        // Lower once, here, and use the result for everything below.
+        //
+        // A `verilog:` circuit's baked netlist is at the **gate level**
+        // (`$_AND_`, `$_NAND_`, `$_MUX_`); the hand-written ones are already
+        // NOR gates and merges, on which this is the identity. Doing it once
+        // matters more than it looks: `compiled`, `primitive_graph` and
+        // `gate_meta` below are all correlated by gate index and signal
+        // name, so they have to come from one and the same netlist. That is
+        // exactly why `compile` refuses to lower on its own -- see its own
+        // doc comment.
+        let (netlist, provenance) = lower_with_provenance(&source_netlist)
+            .map_err(|error| format!("lower() failed: {error}"))?;
         let compiled =
             compile(&netlist).map_err(|error| format!("compile() failed: {error:?}"))?;
 
-        // Every circuit `build_named_circuit` can return went through
-        // `NetlistBuilder` -- the hand-written ones directly, the Verilog
-        // ones via the genlib frontend -- which enforces fan-in 1..=3 before
-        // a `Gate` ever exists, the same range `Library::default_library`
-        // covers. `compile()` above just succeeded, which means every input
+        // Every gate in `netlist` is a NOR or a merge of fan-in 1..=3 --
+        // `lower` produces nothing else, and `compile()` above rejects
+        // anything that is not -- which is the same range
+        // `Library::default_library` covers. `compile()` succeeding also
+        // means every input
         // and output name it checks (`CompileError::UndrivenSignal`) already
         // resolves, and that it found no combinational cycle either -- the
         // third thing `expand` re-checks now that a merge forces it to walk
@@ -633,12 +662,18 @@ impl Session {
             netlist
                 .gates
                 .iter()
+                .enumerate()
                 .zip(layers)
-                .map(|(gate, layer)| GateMeta {
-                    output: gate.output.clone(),
-                    arity: gate.inputs.len(),
-                    is_merge: gate.is_merge,
-                    layer,
+                .map(|((index, gate), layer)| {
+                    let origin = &source_netlist.gates[provenance[index]];
+                    GateMeta {
+                        output: gate.output.clone(),
+                        arity: gate.inputs.len(),
+                        is_merge: gate.is_merge(),
+                        source: (!origin.kind.is_realisable())
+                            .then(|| format!("{} {}", origin.kind.wire_name(), origin.output)),
+                        layer,
+                    }
                 })
                 .collect()
         };
@@ -918,6 +953,7 @@ impl Session {
                 index,
                 output: meta.output.clone(),
                 kind: if meta.is_merge { "merge" } else { "nor" },
+                source: meta.source.clone(),
                 arity: meta.arity,
                 layer: meta.layer,
                 nodes: nodes.clone(),

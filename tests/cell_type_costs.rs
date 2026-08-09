@@ -4,9 +4,12 @@
 //! See `docs/superpowers/specs/2026-08-08-cell-type-costs.md` for the report
 //! this harness produces the numbers for, and
 //! `docs/superpowers/specs/2026-08-08-gate-types-and-wired-or.md` for why the
-//! question matters: `redstone_nor.genlib` only prices NOR/BUF, so ABC's
-//! technology mapper has no honest number for any other gate shape and pays
-//! two gates for every OR.
+//! question matters. At the time these were measured, `redstone_nor.genlib`
+//! priced only NOR/BUF and ABC's technology mapper had no honest number for
+//! any other gate shape, so it paid two gates for every OR. That genlib is
+//! gone and ABC no longer maps at all (see `frontend/synth.py`); the numbers
+//! below became the input to `topology::expansion_for`'s recipes, which is
+//! where each of these cell types now gets its realisation decided.
 //!
 //! Two questions per cell type:
 //!
@@ -31,6 +34,7 @@
 //! This file only measures. It does not add a gate kind, a library entry, or
 //! a genlib line -- see the report doc for why not yet.
 
+use reda::compile::topology::GateKind;
 use reda::compile::{compile, Gate, Netlist};
 use reda::redstone::simulator::position::Position;
 use reda::redstone::simulator::Simulator;
@@ -74,7 +78,7 @@ impl GateNet {
             name: output.clone(),
             inputs: inputs.iter().map(|s| s.to_string()).collect(),
             output: output.clone(),
-            is_merge: false,
+            kind: GateKind::Nor(inputs.len()),
         });
         output
     }

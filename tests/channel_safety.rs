@@ -28,6 +28,7 @@
 //!   straight into a new minimal regression test the way the spec's own
 //!   two-gate case was.
 
+use reda::compile::topology::GateKind;
 use reda::compile::{compile, CompileError, Gate, Netlist};
 use reda::redstone::simulator::Simulator;
 
@@ -49,7 +50,7 @@ fn nor(name: &str, inputs: &[&str], output: &str) -> Gate {
         name: name.to_string(),
         inputs: inputs.iter().map(|s| s.to_string()).collect(),
         output: output.to_string(),
-        is_merge: false,
+        kind: GateKind::Nor(inputs.len()),
     }
 }
 

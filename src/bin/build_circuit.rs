@@ -230,6 +230,17 @@ fn main() {
             std::process::exit(1);
         }
     };
+    // Lower first: `compile` takes only NOR gates and wire merges, and a
+    // synthesized netlist arrives at the gate level. This is the identity on
+    // every hand-written circuit, so `gate_count` below still reports what
+    // really gets placed either way.
+    let netlist = match reda::compile::lowering::lower(&netlist) {
+        Ok(lowered) => lowered,
+        Err(err) => {
+            eprintln!("circuit '{name}' could not be lowered into redstone: {err}");
+            std::process::exit(1);
+        }
+    };
     let gate_count = netlist.gates.len();
 
     // Not an `expect`: a synthesized netlist is only as well-formed as the

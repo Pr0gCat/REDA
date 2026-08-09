@@ -57,17 +57,25 @@
 //! a failing run localise itself to the first disagreeing gate instead of
 //! only reporting "the lamp was wrong".
 //!
-//! `kind` is `nor` or `merge`, and it is not decoration: a `merge` gate
-//! (`Gate::is_merge`) is a **wired OR**, not a NOR, so a consumer that
-//! assumes every gate inverts computes the wrong expected value for that
-//! gate *and for everything downstream of it*. Every hand-written reference
-//! circuit is pure NOR and so emits nothing but `nor`; the Verilog frontend
-//! maps Yosys's `OR2`/`OR3` cells onto merges, so a `verilog:` circuit
-//! generally has both. A merge also has no torch and no gate body at all --
-//! just a dust junction where its inputs' routes are allowed to touch -- so
-//! its `GATEOUT` position holds `minecraft:redstone_wire`, and its logical
-//! value is "that dust has non-zero power", not "a torch is lit". Both facts
-//! are the reason this field exists rather than being inferrable.
+//! `kind` is `nor` or `merge`, and it is not decoration: a `merge` gate is a
+//! **wired OR**, not a NOR, so a consumer that assumes every gate inverts
+//! computes the wrong expected value for that gate *and for everything
+//! downstream of it*. Every hand-written reference circuit is pure NOR and
+//! so emits nothing but `nor`; a `verilog:` circuit generally has both. A
+//! merge also has no torch and no gate body at all -- just a dust junction
+//! where its inputs' routes are allowed to touch -- so its `GATEOUT`
+//! position holds `minecraft:redstone_wire`, and its logical value is "that
+//! dust has non-zero power", not "a torch is lit". Both facts are the reason
+//! this field exists rather than being inferrable.
+//!
+//! Those two are the only kinds that ever appear here, and that is a
+//! property of *when* the netlist is dumped, not of what a netlist can
+//! hold. A `verilog:` circuit arrives at the gate level -- `$_AND_`,
+//! `$_NAND_`, `$_MUX_` -- and this binary runs `compile::lowering::lower`
+//! over it first, exactly as `compile` requires. The `GATE` lines below
+//! therefore describe the netlist that was really placed, gate for gate
+//! with the `GATEOUT` positions beside them; the gate-level netlist it came
+//! from is in `src/circuits/baked/`.
 //!
 //! `input1,input2,...` is `-` when a gate has no inputs at all, so that
 //! `kind` is always the same whitespace-separated field.
@@ -86,6 +94,7 @@
 use std::path::Path;
 
 use reda::circuits::{and4, full_adder, seven_segment, verilog};
+use reda::compile::lowering::lower;
 use reda::compile::{compile, Netlist};
 use reda::redstone::world::block::{BlockKind, Face, Facing};
 use reda::redstone::world::storage::World;
@@ -300,6 +309,17 @@ fn main() {
         }
     };
 
+    // Lower before compiling -- `compile` requires it, and every `GATE` line
+    // below has to name a gate that was really placed (see this module's own
+    // doc comment).
+    let netlist = match lower(&netlist) {
+        Ok(lowered) => lowered,
+        Err(err) => {
+            eprintln!("circuit '{name}' could not be lowered into redstone: {err}");
+            std::process::exit(1);
+        }
+    };
+
     // Not an `expect`: a hand-written reference circuit is acyclic and fully
     // driven by construction, but a synthesized one is only as well-formed as
     // whatever Verilog it came from, and a compiler bug reaching this point
@@ -329,11 +349,10 @@ fn main() {
     }
     for gate in &netlist.gates {
         let inputs = if gate.inputs.is_empty() { "-".to_string() } else { gate.inputs.join(",") };
-        let kind = if gate.is_merge { "merge" } else { "nor" };
-        println!("GATE {} {inputs} {kind}", gate.output);
+        println!("GATE {} {inputs} {}", gate.output, gate.kind.wire_name());
     }
 
-    let merge_count = netlist.gates.iter().filter(|gate| gate.is_merge).count();
+    let merge_count = netlist.gates.iter().filter(|gate| gate.is_merge()).count();
     eprintln!(
         "dumped circuit '{name}': {} inputs, {} outputs, {} gate outputs ({} of them wired-OR merges)",
         netlist.inputs.len(),

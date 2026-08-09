@@ -19,7 +19,7 @@
 //!
 //! This is a developer tool, not part of any build: nothing in `cargo build`
 //! or `cargo test` runs it. Re-run it by hand after changing a fixture under
-//! `tests/fixtures/`, the genlib, or anything in `reda::frontend` that
+//! `tests/fixtures/`, `synth.py`, or anything in `reda::frontend` that
 //! changes what comes out the other side -- and commit the diff, which is
 //! the whole reason the format is a readable one (see
 //! `reda::circuits::verilog::baked`).
@@ -61,11 +61,11 @@ fn main() -> ExitCode {
             eprintln!("error: could not write {}: {error}", circuit.baked_path);
             return ExitCode::FAILURE;
         }
-        let merges = netlist.gates.iter().filter(|gate| gate.is_merge).count();
         eprintln!(
-            "  wrote {} -- {} gates, {merges} of them wire merges",
+            "  wrote {} -- {} gates: {}",
             circuit.baked_path,
-            netlist.gates.len()
+            netlist.gates.len(),
+            reda::compile::lowering::format_histogram(&netlist)
         );
         changed += 1;
     }

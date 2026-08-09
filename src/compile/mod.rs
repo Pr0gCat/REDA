@@ -35,6 +35,7 @@ use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use crate::redstone::world::storage::World;
 
 pub mod equivalence;
+pub mod lowering;
 pub mod primitive_graph;
 pub mod routing_stats;
 pub mod topology;
@@ -44,7 +45,7 @@ pub mod world_partition;
 // 網表
 // ---------------------------------------------------------------------
 
-/// 一個 NOR 閘：任一輸入為高則輸出為低。
+/// One gate of a netlist: what it is, what it reads, and what it drives.
 ///
 /// Plain data, and derives nothing but the plain-data traits: two netlists
 /// being comparable is what lets a test say "this is the same netlist" (see
@@ -55,41 +56,83 @@ pub struct Gate {
     pub name: String,
     pub inputs: Vec<String>,
     pub output: String,
-    /// Whether this gate's output net is a **declared wire merge** of its
-    /// inputs rather than a NOR of them.
+    /// Which gate this is -- see [`topology::GateKind`].
     ///
-    /// `false` -- the only value any gate in this project has ever had
-    /// until now -- means the usual thing: `place_nor_gate`, one torch, one
-    /// support. `true` means a bare join instead: no torch, no support, no
-    /// gate body at all -- just the point downstream of where this gate's
-    /// own declared inputs' dust runs are allowed to physically touch. See
-    /// `docs/superpowers/specs/2026-08-08-gate-types-and-wired-or.md`, "An
-    /// OR is a node, not a disappearing act", and `MergeGroups` below,
-    /// which both invariants consult to honour this.
+    /// This field used to be `is_merge: bool`, and the netlist was NOR by
+    /// construction: the Verilog frontend ran `abc -genlib
+    /// redstone_nor.genlib`, so Yosys handed this crate a design already
+    /// technology-mapped onto NOR and wire merges. That collapsed the gate
+    /// level before this project's own topology library ever saw it --
+    /// which is the one decision that library exists to make. The frontend
+    /// now reads Yosys's *gate-level* netlist (`$_AND_`, `$_NAND_`,
+    /// `$_XOR_`, `$_MUX_`, ...) and this field carries it.
     ///
-    /// This is deliberately a bare `bool`, not the general gate-kind enum
-    /// that same spec's larger arc calls for eventually: today `Gate` has
-    /// exactly one alternative realisation worth declaring, and a `bool`
-    /// says precisely that with nothing left over to misinterpret. When a
-    /// real `GateKind` lands, this field's two states are exactly
-    /// `kind == GateKind::Merge` and everything else, so nothing here has
-    /// to be undone -- only renamed.
+    /// Two kinds are realisable in redstone directly, and they are the only
+    /// two anything below this module ever sees:
     ///
-    /// The Yosys frontend is what sets this: `redstone_nor.genlib`'s
-    /// `OR2`/`OR3` cells map onto `NetlistBuilder::merge`, so a synthesised
-    /// netlist really does contain merges (11 of `verilog:seven_segment`'s
-    /// 31 gates). Every circuit this project writes by hand is still pure
-    /// NOR. Consulting it only changes two things, both narrow: a declared
-    /// merge's branches joining is no longer the bug `verify_connectivity`
-    /// otherwise exists to catch, and `verify_torch_merge` no longer
-    /// requires a merge gate to have a torch it was never going to have.
-    pub is_merge: bool,
+    /// - [`topology::GateKind::Nor`] -- `place_nor_gate`, one torch, one
+    ///   support.
+    /// - [`topology::GateKind::Or`] -- a **declared wire merge**: no torch,
+    ///   no support, no gate body at all, just the point downstream of where
+    ///   this gate's own declared inputs' dust runs are allowed to
+    ///   physically touch. See
+    ///   `docs/superpowers/specs/2026-08-08-gate-types-and-wired-or.md`,
+    ///   "An OR is a node, not a disappearing act", and `MergeGroups` below,
+    ///   which both invariants consult to honour this. [`Gate::is_merge`] is
+    ///   the predicate the placer and both invariants ask.
+    ///
+    /// Every other kind is gate level and has no realisation of its own;
+    /// [`lowering::lower`] rewrites it into the two that do, and [`compile`]
+    /// runs that pass before it places anything.
+    pub kind: topology::GateKind,
+}
+
+impl Gate {
+    /// A NOR gate driving `output` -- the ordinary case, and what every
+    /// hand-written circuit in this project is made of.
+    pub fn nor(output: impl Into<String>, inputs: &[&str]) -> Gate {
+        let output = output.into();
+        Gate {
+            name: output.clone(),
+            inputs: inputs.iter().map(|s| (*s).to_string()).collect(),
+            kind: topology::GateKind::Nor(inputs.len()),
+            output,
+        }
+    }
+
+    /// A declared wire merge driving `output`.
+    pub fn merge(output: impl Into<String>, inputs: &[&str]) -> Gate {
+        let output = output.into();
+        Gate {
+            name: output.clone(),
+            inputs: inputs.iter().map(|s| (*s).to_string()).collect(),
+            kind: topology::GateKind::Or(inputs.len()),
+            output,
+        }
+    }
+
+    /// Whether this gate's output net is a wire merge of its inputs rather
+    /// than a gate body of any kind. The one question the placer and both
+    /// invariants ask about a gate's kind: a declared merge's branches
+    /// joining is not the bug `verify_connectivity` otherwise exists to
+    /// catch, and `verify_torch_merge` must not require a torch a merge was
+    /// never going to have.
+    pub fn is_merge(&self) -> bool {
+        matches!(self.kind, topology::GateKind::Or(_))
+    }
 }
 
 /// 一個邏輯閘網表。這是編譯器的輸入。
 ///
-/// 只有 NOR 一種閘 —— 紅石的天然閘基底就是 NOR（多條紅石粉匯入一個方塊，
-/// 旁邊插一支火把），而 NOR 是通用閘，任何布林函數都能用它組出來。
+/// A netlist may be at either of two levels, and [`lowering::lower`] is the
+/// pass between them:
+///
+/// - **Gate level** -- what the Verilog frontend produces, in Yosys's own
+///   vocabulary (`$_AND_`, `$_NAND_`, `$_MUX_`, ...). Nothing here can be
+///   placed; each gate has an expansion into the level below.
+/// - **Realisable** -- NOR gates and wire merges, the two things redstone
+///   builds. Every hand-written circuit under `circuits/` is already at
+///   this level, so lowering is the identity on them.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Netlist {
     pub inputs: Vec<String>,
@@ -192,8 +235,8 @@ const OUTPUT_DIRECTION: Facing = Facing::North;
 /// this occupies -- support block, output torch and its pin, and every input
 /// socket this gate actually uses -- for callers that need a footprint
 /// without touching a `World` (`resolve_bypass_and_geometry`'s candidate
-/// paths, and the genlib area figures documented in
-/// `frontend/redstone_nor.genlib`).
+/// paths, and `topology::nor_footprint_area`, whose own table is checked
+/// against a really-placed cell's `size` here).
 pub struct NorCell {
     /// 這個 cell 佔的空間
     pub size: (i32, i32, i32),
@@ -978,7 +1021,7 @@ fn bare_reserve_for_merge(netlist: &Netlist, nets: &[Net], into: usize) -> i32 {
         return BARE_TERMINATION_RESERVE;
     };
     let single_sink = sinks.all(|(g, _)| g == first_gate);
-    if single_sink && netlist.gates[first_gate].is_merge {
+    if single_sink && netlist.gates[first_gate].is_merge() {
         BARE_TERMINATION_RESERVE + bare_reserve_for_merge(netlist, nets, first_gate)
     } else {
         BARE_TERMINATION_RESERVE
@@ -1056,7 +1099,7 @@ fn bare_reserve_for_merge(netlist: &Netlist, nets: &[Net], into: usize) -> i32 {
 /// geometry is already safe there -- see this same spec's "repeater is a
 /// real firewall" point).
 fn bypass_source_start(netlist: &Netlist, net: &Net, pin: Position, exit_x: i32) -> Position {
-    let source_is_merge = matches!(net.source, Source::Gate(g) if netlist.gates[g].is_merge);
+    let source_is_merge = matches!(net.source, Source::Gate(g) if netlist.gates[g].is_merge());
     if source_is_merge && pin.x != exit_x {
         pin.offset(OUTPUT_DIRECTION)
     } else {
@@ -1067,6 +1110,13 @@ fn bypass_source_start(netlist: &Netlist, net: &Net, pin: Position, exit_x: i32)
 /// 編譯過程的錯誤。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CompileError {
+    /// A gate is not something redstone builds: either it is still at the
+    /// gate level (an `$_AND_`, a `$_MUX_`) and needs [`lowering::lower`]
+    /// run over it first, or its declared arity disagrees with how many
+    /// inputs it actually has. Reached before anything is placed -- see
+    /// [`compile`]'s own doc comment for why this is an error rather than an
+    /// implicit lowering.
+    NotRealisable { gate: String, kind: topology::GateKind },
     /// 網表裡有迴路
     CyclicNetlist,
     /// 訊號沒有驅動來源
@@ -1165,6 +1215,10 @@ pub enum TorchMergeFailure {
 impl std::fmt::Display for CompileError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            CompileError::NotRealisable { gate, kind } => write!(
+                f,
+                "gate `{gate}` is a {kind:?}, which is not something redstone builds -- run                  `compile::lowering::lower` on this netlist first"
+            ),
             CompileError::CyclicNetlist => write!(f, "netlist has a cycle"),
             CompileError::UndrivenSignal(name) => write!(f, "signal `{name}` is never driven"),
             CompileError::ConnectivityViolation { cell, found_net, expected_cell, expected_net } => {
@@ -2994,7 +3048,7 @@ fn compute_net_source_strengths(
     let order = netlist.topological_order().expect("compile() already rejected a cyclic netlist before emit() runs");
     for &g in &order {
         let gate = &netlist.gates[g];
-        if !gate.is_merge {
+        if !gate.is_merge() {
             continue; // stays MAX_SIGNAL_STRENGTH -- a torch's output always is.
         }
         // The *minimum* deliverable value across this merge's own branches,
@@ -3126,13 +3180,13 @@ struct RoutingGeometry<'a> {
 /// branch that was already carrying it, which corrupts nothing.
 ///
 /// A non-merge `gate` always returns `false` here (its own condition on
-/// `gate.is_merge` fails first), which is exactly what keeps every existing
+/// `gate.is_merge()` fails first), which is exactly what keeps every existing
 /// NOR socket -- including one whose net happens to fan out to several
 /// consumers -- routed exactly as before: this function only ever changes
 /// behaviour for a gate that declares itself a merge, and nothing produces
 /// one yet outside this task's own tests.
 fn merge_branch_is_bare(netlist: &Netlist, net: &Net, gate: usize) -> bool {
-    netlist.gates[gate].is_merge && net.sinks.iter().flatten().all(|&(g, _)| g == gate)
+    netlist.gates[gate].is_merge() && net.sinks.iter().flatten().all(|&(g, _)| g == gate)
 }
 
 /// Write the whole circuit into `world`: every gate, every primary input,
@@ -3153,7 +3207,7 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
     }
     for (g, gate) in netlist.gates.iter().enumerate() {
         let origin = (plan.centre_x[g], GATE_Y, row_z[plan.row_of[g]]);
-        gate_cell[g] = if gate.is_merge {
+        gate_cell[g] = if gate.is_merge() {
             place_merge_gate(world, origin, gate.inputs.len())
         } else {
             place_nor_gate(world, origin, gate.inputs.len())
@@ -3889,7 +3943,7 @@ impl MergeGroups {
             nets.iter().enumerate().map(|(i, net)| (net_source_name(netlist, net), i)).collect();
 
         for gate in &netlist.gates {
-            if !gate.is_merge {
+            if !gate.is_merge() {
                 continue;
             }
             // Union every one of this merge's declared inputs together,
@@ -3985,7 +4039,7 @@ fn merge_gate_body_owners(
 
     let mut owners = HashMap::new();
     for (g, gate) in netlist.gates.iter().enumerate() {
-        if !gate.is_merge {
+        if !gate.is_merge() {
             continue;
         }
         let Some(root) = merge_output_group_root(netlist, g, &index_of_signal, &groups) else {
@@ -4376,7 +4430,7 @@ fn verify_torch_merge(
         .collect();
 
     for (g, gate) in netlist.gates.iter().enumerate() {
-        if gate.is_merge {
+        if gate.is_merge() {
             // A declared merge is a bare wire join: no torch, no support,
             // nothing gate-shaped to check here at all. Whether the join
             // is legitimate -- no foreign net touching it -- is exactly
@@ -4750,13 +4804,13 @@ fn net_signal_strength(
 /// does the max of every branch that is actually driven reach this group's
 /// real, further-downstream sinks -- exactly what a real OR's dust does.
 ///
-/// A net sourced from a merge gate (`Source::Gate(g)` where `g.is_merge`)
+/// A net sourced from a merge gate (`Source::Gate(g)` where `g.is_merge()`)
 /// contributes no origin of its own to `group_sources` -- its whole signal
 /// is already the other branches sharing its group, seeding it too would
 /// double up nothing (there is no active component there to seed from
 /// anyway: `place_merge_gate` puts plain dust at that position, not a torch
 /// or a lever). A merge gate is likewise never itself checked as a *sink*
-/// in the loop below (`gate.is_merge` skips it): it has nothing -- no torch,
+/// in the loop below (`gate.is_merge()` skips it): it has nothing -- no torch,
 /// no support -- for a signal to "arrive at", and whether its own output
 /// eventually reaches a *real* sink is exactly what the same shared group
 /// walk already answers for whatever net does declare that real sink.
@@ -4806,7 +4860,7 @@ fn verify_signal_strength(
     // merge-sourced net contributes none of its own.
     let mut group_sources: HashMap<usize, Vec<(Position, &BlockState)>> = HashMap::new();
     for (n, net) in nets.iter().enumerate() {
-        let merge_sourced = matches!(net.source, Source::Gate(g) if netlist.gates[g].is_merge);
+        let merge_sourced = matches!(net.source, Source::Gate(g) if netlist.gates[g].is_merge());
         if merge_sourced {
             continue;
         }
@@ -4842,7 +4896,7 @@ fn verify_signal_strength(
         for &(gate, _input_index) in net.sinks.iter().flatten() {
             // A merge gate has no torch or support to check strength
             // against at all -- see this function's own doc comment.
-            if netlist.gates[gate].is_merge {
+            if netlist.gates[gate].is_merge() {
                 continue;
             }
             let &(tx, ty, tz) = gate_output_positions
@@ -4891,7 +4945,7 @@ fn verify_signal_strength(
         let lamp_pos = Position::new(lx, ly, lz);
         let pin = lamp_pos.up();
 
-        let delivers = if netlist.gates[g].is_merge {
+        let delivers = if netlist.gates[g].is_merge() {
             // A merge's "torch position" is plain dust (see
             // `place_merge_gate`), so the ordinary single-hop
             // `structural_output` check below cannot see it at all -- worse,
@@ -4944,8 +4998,35 @@ fn merge_output_group_root(
     netlist.gates[gate].inputs.iter().find_map(|input| index_of_signal.get(input.as_str()).map(|&i| groups.root(i)))
 }
 
-/// 把一個網表編譯成一個紅石世界。
+/// Compile a netlist into a redstone world.
+///
+/// Every gate must already be **realisable** -- a NOR or a wire merge (see
+/// [`Netlist`]). A gate-level netlist, as the Verilog frontend produces, has
+/// to go through [`lowering::lower`] first.
+///
+/// # Why this does not lower for you
+///
+/// Lowering it here would be one line and would work. It would also hand
+/// every caller a trap: nearly everything that compiles a netlist keeps the
+/// netlist afterwards and pairs it with the result -- `timing`'s
+/// critical-path walk, `equivalence`'s structural check, `mc_dump`'s `GATE`
+/// lines beside its `GATEOUT` positions, the viewer's per-gate metadata
+/// beside its primitive graph. All of those correlate a gate in *the netlist
+/// they hold* with something in *the circuit this compiled*, so a silent
+/// lowering in here would mean those are two different netlists, silently.
+/// (`summarize_worst_case` does not fail an assertion on that; it walks
+/// forever.) Requiring the caller to lower makes holding the wrong netlist
+/// impossible rather than merely discouraged.
 pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
+    for gate in &netlist.gates {
+        let realisable = match gate.kind {
+            topology::GateKind::Nor(arity) | topology::GateKind::Or(arity) => arity == gate.inputs.len(),
+            _ => false,
+        };
+        if !realisable {
+            return Err(CompileError::NotRealisable { gate: gate.output.clone(), kind: gate.kind });
+        }
+    }
     for gate in &netlist.gates {
         for input in &gate.inputs {
             if !netlist.is_driven(input) {
@@ -5046,6 +5127,7 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
 
 #[cfg(test)]
 mod tests {
+    use super::topology::GateKind;
     use super::*;
 
     /// A minimal `Net` for tests that only care about `net_name` / ownership
@@ -5147,7 +5229,7 @@ mod tests {
                 name: "m".to_string(),
                 inputs: vec!["a".to_string(), "b".to_string()],
                 output: "y".to_string(),
-                is_merge: declare_merge,
+                kind: if declare_merge { GateKind::Or(2) } else { GateKind::Nor(2) },
             }],
         };
         let nets =
@@ -5214,7 +5296,7 @@ mod tests {
                 name: "m".to_string(),
                 inputs: vec!["a".to_string(), "b".to_string()],
                 output: "y".to_string(),
-                is_merge: declare_merge,
+                kind: if declare_merge { GateKind::Or(2) } else { GateKind::Nor(2) },
             }],
         };
         // No net for `y` at all -- exactly what `build_nets` would produce
@@ -5273,7 +5355,7 @@ mod tests {
     // -----------------------------------------------------------------
 
     fn merge_gate(inputs: &[&str], output: &str) -> Gate {
-        Gate { name: output.to_string(), inputs: inputs.iter().map(|s| s.to_string()).collect(), output: output.to_string(), is_merge: true }
+        Gate { name: output.to_string(), inputs: inputs.iter().map(|s| s.to_string()).collect(), output: output.to_string(), kind: GateKind::Or(inputs.len()) }
     }
 
     fn net_with_sinks(source: Source, sinks: Vec<(usize, usize)>) -> Net {
@@ -5295,7 +5377,7 @@ mod tests {
             inputs: vec!["a".to_string()],
             outputs: Vec::new(),
             gates: vec![
-                Gate { name: "s".to_string(), inputs: vec!["a".to_string()], output: "s".to_string(), is_merge: false },
+                Gate { name: "s".to_string(), inputs: vec!["a".to_string()], output: "s".to_string(), kind: GateKind::Nor(1) },
                 merge_gate(&["a", "b"], "y"),
             ],
         };
@@ -5318,7 +5400,7 @@ mod tests {
         let netlist = Netlist {
             inputs: vec!["a".to_string()],
             outputs: Vec::new(),
-            gates: vec![Gate { name: "g0".to_string(), inputs: vec!["a".to_string()], output: "g0".to_string(), is_merge: false }],
+            gates: vec![Gate { name: "g0".to_string(), inputs: vec!["a".to_string()], output: "g0".to_string(), kind: GateKind::Nor(1) }],
         };
         let net = net_with_sinks(Source::Lever(0), vec![(0, 0)]);
         assert!(!merge_branch_is_bare(&netlist, &net, 0), "a non-merge gate's socket is never a bare join");
@@ -5377,7 +5459,7 @@ mod tests {
                 name: "g0".to_string(),
                 inputs: vec!["a".to_string()],
                 output: gate_output.to_string(),
-                is_merge: false,
+                kind: GateKind::Nor(1),
             }],
         }
     }
@@ -5494,7 +5576,7 @@ mod tests {
         let netlist = Netlist {
             inputs: vec!["b".to_string()],
             outputs: Vec::new(),
-            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string(), is_merge: false }],
+            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string(), kind: GateKind::Nor(0) }],
         };
         let nets = vec![Net {
             source: Source::Lever(0),
@@ -5545,7 +5627,7 @@ mod tests {
         let netlist = Netlist {
             inputs: vec!["leak".to_string()],
             outputs: Vec::new(),
-            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string(), is_merge: false }],
+            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string(), kind: GateKind::Nor(0) }],
         };
         let nets = vec![Net {
             source: Source::Lever(0),
@@ -5647,7 +5729,7 @@ mod tests {
             gates: vec![
                 // Checked first (see below): with no merge declared, this
                 // is where the rejection must fire.
-                Gate { name: "g1".to_string(), inputs: vec!["y".to_string()], output: "out".to_string(), is_merge: false },
+                Gate { name: "g1".to_string(), inputs: vec!["y".to_string()], output: "out".to_string(), kind: GateKind::Nor(1) },
                 // `m` is never actually reached by `verify_torch_merge`'s
                 // own loop in either scenario: declared, it is skipped
                 // outright (`is_merge`); undeclared, `g1` above already
@@ -5658,7 +5740,7 @@ mod tests {
                     name: "m".to_string(),
                     inputs: vec!["a".to_string(), "b".to_string()],
                     output: "y".to_string(),
-                    is_merge: declare_merge,
+                    kind: if declare_merge { GateKind::Or(2) } else { GateKind::Nor(2) },
                 },
             ],
         };
@@ -6070,7 +6152,7 @@ mod tests {
         let netlist = Netlist {
             inputs: Vec::new(),
             outputs: vec!["out".to_string()],
-            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string(), is_merge: false }],
+            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string(), kind: GateKind::Nor(0) }],
         };
         let nets: Vec<Net> = Vec::new();
 

@@ -1,59 +1,126 @@
-//! 網表產生器：以 NOR 為主，fan-in 硬性上限 3；另外提供 `merge`（免費
-//! wire-merge OR），但這四個參考電路刻意不用它 —— 詳見 `merge` 自己的
-//! doc comment。
+//! Netlist construction, in the two things redstone actually builds: NOR
+//! gates (fan-in 1..=3) and wire merges (fan-in 2..=3).
 //!
 //! Shared by every reference circuit under `circuits/` -- the seven-segment
 //! decoder, and the smaller circuits alongside it -- so the NOR-tree
 //! expansion logic (`not`, `and_reduce`, `or_reduce`) lives in exactly one
-//! place instead of being copied per circuit.
+//! place instead of being copied per circuit. `compile::lowering` uses the
+//! same builder for the same reason: expanding a gate-level `$_XOR_` into
+//! torches and merges is the same job as expanding a hand-written
+//! `or_reduce`, and doing it through a second, parallel gate constructor is
+//! exactly the drift this type exists to prevent.
 
 use std::collections::HashMap;
 
+use crate::compile::topology::GateKind;
 use crate::compile::Gate;
 
-/// 一步一步把 NOR 閘疊起來的產生器。
+/// Builds a netlist one gate at a time.
 ///
-/// - `not`：對同一個訊號重複呼叫回傳同一個共用的反相閘（用 `not_cache`
-///   記住），這就是「四個輸入的反相閘只建一次，之後每個 minterm 共用」
-///   的機制。
-/// - `nor`：最原始的操作，建一個新的 NOR 閘，最多 3 個輸入 —— 對應
-///   `place_nor_gate` 的硬體限制。
-/// - `and_reduce` / `or_reduce`：把任意長度的訊號清單摺成一棵 fan-in <= 3
-///   的樹，分別算出它們的 AND / OR。
-/// - `merge`：免費的 wire-merge OR（`Gate::is_merge`），只給 Yosys frontend
-///   用；這四個手寫電路一律走 `or_reduce`，是刻意保留的對照組。
+/// - `not`: repeated calls for the same signal return the same shared
+///   inverter (remembered in `not_cache`). This is the mechanism behind
+///   "build the inverter of each of the four inputs once, then let every
+///   minterm share it" -- and, in `compile::lowering`, behind one `!a`
+///   serving every gate-level cell that wants one.
+/// - `nor`: the primitive operation -- one new NOR gate, at most 3 inputs,
+///   matching `place_nor_gate`'s hardware limit.
+/// - `merge`: a free wire-merge OR (`Gate::is_merge`), 2 or 3 inputs.
+/// - `and_reduce` / `or_reduce`: fold a signal list of any length into a
+///   tree of fan-in <= 3 gates computing their AND / OR.
+///
+/// The four hand-written reference circuits deliberately use `or_reduce`
+/// rather than `merge`, as the control group the synthesised circuits are
+/// measured against -- see `merge`'s own doc comment.
 pub(crate) struct NetlistBuilder {
-    pub(crate) gates: Vec<Gate>,
+    gates: Vec<Gate>,
     not_cache: HashMap<String, String>,
+    prefix: String,
     counter: usize,
 }
 
 impl NetlistBuilder {
     pub(crate) fn new() -> Self {
-        NetlistBuilder { gates: Vec::new(), not_cache: HashMap::new(), counter: 0 }
+        NetlistBuilder::with_prefix("g".to_string())
+    }
+
+    /// A builder whose generated gate names start with `prefix` instead of
+    /// `"g"`. `compile::lowering` uses this to guarantee that the names it
+    /// invents cannot collide with the names already in the netlist it is
+    /// lowering (see `lowering::fresh_prefix`).
+    pub(crate) fn with_prefix(prefix: String) -> Self {
+        NetlistBuilder { gates: Vec::new(), not_cache: HashMap::new(), prefix, counter: 0 }
+    }
+
+    /// Every gate built so far, in construction order.
+    pub(crate) fn into_gates(self) -> Vec<Gate> {
+        self.gates
+    }
+
+    /// How many gates have been built so far. `compile::lowering` uses this
+    /// to record which source gate each new gate came from, without this
+    /// type having to know what provenance is.
+    pub(crate) fn len(&self) -> usize {
+        self.gates.len()
     }
 
     fn fresh_name(&mut self) -> String {
-        let name = format!("g{}", self.counter);
+        let name = format!("{}{}", self.prefix, self.counter);
         self.counter += 1;
         name
     }
 
-    /// 建一個新的 NOR 閘，`inputs.len()` 必須在 1..=3 之間。
+    /// Take an already-built gate over verbatim -- name, output and kind
+    /// untouched. `compile::lowering` uses this for a gate that is already
+    /// realisable (a NOR or a merge), which is what makes lowering the
+    /// identity on the hand-written circuits.
+    ///
+    /// A 1-input NOR adopted this way also seeds `not_cache`, so a `$_NOT_`
+    /// the netlist already contained is reused as *the* inverter of its
+    /// input rather than being duplicated beside a freshly built one.
+    pub(crate) fn adopt(&mut self, gate: Gate) {
+        if gate.kind == GateKind::Nor(1) {
+            self.not_cache.entry(gate.inputs[0].clone()).or_insert_with(|| gate.output.clone());
+        }
+        self.gates.push(gate);
+    }
+
+    /// A new gate of any [`GateKind`], with a generated name -- what the
+    /// Verilog frontend builds a gate-level cell with. `inputs` must be in
+    /// the kind's own pin order, and as many as the kind declares.
+    ///
+    /// Use [`NetlistBuilder::nor`] / [`NetlistBuilder::merge`] for the two
+    /// realisable kinds instead: their arity comes from the input list
+    /// rather than from the caller, which is what constant folding needs.
+    pub(crate) fn cell(&mut self, kind: GateKind, inputs: &[String]) -> String {
+        assert!(!kind.is_realisable(), "use nor()/merge() for a realisable kind, not cell()");
+        assert_eq!(inputs.len(), kind.arity(), "{kind:?} takes {} input(s)", kind.arity());
+        let output = self.fresh_name();
+        self.gates.push(Gate { name: output.clone(), inputs: inputs.to_vec(), output: output.clone(), kind });
+        output
+    }
+
+    /// A new NOR gate; `inputs.len()` must be in 1..=3.
     pub(crate) fn nor(&mut self, inputs: &[String]) -> String {
+        let output = self.fresh_name();
+        self.nor_named(&output.clone(), &output, inputs)
+    }
+
+    /// A new NOR gate carrying a caller-chosen `name` and `output` instead
+    /// of a generated one -- what `compile::lowering` uses for the last step
+    /// of an expansion, so the gate's own declared output name survives.
+    pub(crate) fn nor_named(&mut self, name: &str, output: &str, inputs: &[String]) -> String {
         assert!(
             !inputs.is_empty() && inputs.len() <= 3,
-            "place_nor_gate 最多 3 個輸入，收到 {}",
+            "place_nor_gate takes at most 3 inputs, got {}",
             inputs.len()
         );
-        let output = self.fresh_name();
         self.gates.push(Gate {
-            name: output.clone(),
+            name: name.to_string(),
             inputs: inputs.to_vec(),
-            output: output.clone(),
-            is_merge: false,
+            output: output.to_string(),
+            kind: GateKind::Nor(inputs.len()),
         });
-        output
+        output.to_string()
     }
 
     /// Build a **declared wire merge** -- the free OR realisation from
@@ -64,29 +131,37 @@ impl NetlistBuilder {
     /// `place_nor_gate`'s three input faces -- see `place_merge_gate`'s own
     /// doc comment).
     ///
-    /// Nothing under `circuits/` calls this today, and per the task that
-    /// added it, nothing should: `and4`/`full_adder`/`segment_a`/
-    /// `seven_segment` (via `or_reduce`, above) stay built the expensive
-    /// NOR-decomposed way deliberately, as the control group the
-    /// Verilog-derived decoder -- which *does* reach this, through
-    /// `frontend::yosys_json::Context::build_or` -- is measured against.
-    /// This lives here rather than as a one-off `Gate` literal in the
-    /// frontend because `Context` already owns a `NetlistBuilder`, and
-    /// constructing a `Gate` by hand outside this module's one choke point
-    /// would be exactly the kind of second, drifting copy this type exists
-    /// to prevent.
+    /// Nothing under `circuits/` calls this, and nothing should:
+    /// `and4`/`full_adder`/`segment_a`/`seven_segment` (via `or_reduce`,
+    /// below) stay built the expensive NOR-decomposed way deliberately, as
+    /// the control group the synthesised decoder is measured against. The
+    /// synthesised side reaches it through `compile::lowering`, which is
+    /// where every `$_OR_`, `$_NAND_`, `$_XOR_` and `$_MUX_` finds its
+    /// merge.
     pub(crate) fn merge(&mut self, inputs: &[String]) -> String {
-        assert!(
-            (2..=3).contains(&inputs.len()),
-            "place_merge_gate 支援 2 或 3 個輸入，收到 {}",
-            inputs.len()
-        );
         let output = self.fresh_name();
-        self.gates.push(Gate { name: output.clone(), inputs: inputs.to_vec(), output: output.clone(), is_merge: true });
-        output
+        self.merge_named(&output.clone(), &output, inputs)
     }
 
-    /// `NOT x`，同一個 `x` 只會建一次閘，之後都回傳快取的輸出名稱。
+    /// A wire merge carrying a caller-chosen `name` and `output`, for the
+    /// same reason [`NetlistBuilder::nor_named`] exists.
+    pub(crate) fn merge_named(&mut self, name: &str, output: &str, inputs: &[String]) -> String {
+        assert!(
+            (2..=3).contains(&inputs.len()),
+            "place_merge_gate takes 2 or 3 inputs, got {}",
+            inputs.len()
+        );
+        self.gates.push(Gate {
+            name: name.to_string(),
+            inputs: inputs.to_vec(),
+            output: output.to_string(),
+            kind: GateKind::Or(inputs.len()),
+        });
+        output.to_string()
+    }
+
+    /// `NOT x`. One gate per distinct `x`: repeated calls return the cached
+    /// output name.
     pub(crate) fn not(&mut self, x: &str) -> String {
         if let Some(cached) = self.not_cache.get(x) {
             return cached.clone();
@@ -96,13 +171,15 @@ impl NetlistBuilder {
         output
     }
 
-    /// 任意長度訊號清單的 AND，摺成 fan-in <= 3 的樹。
+    /// The AND of a signal list of any length, folded into a tree of
+    /// fan-in <= 3.
     ///
-    /// 每一層把訊號三個三個分組：組裡的每個訊號先取 `NOT`（如果是原始
-    /// 輸入或別的 minterm 已經算過的反相，直接命中快取，不新建閘），
-    /// 再用一個 NOR 閘算這一組的 AND（De Morgan：
-    /// `AND(a,b,c) = NOR(NOT a, NOT b, NOT c)`）。落單的訊號直接晉級到
-    /// 下一層，不建新閘。
+    /// Each level groups the signals in threes: every signal in a group is
+    /// inverted first (hitting the cache if it is a primary input, or an
+    /// inversion another minterm already needed), then one NOR gate
+    /// computes that group's AND (De Morgan:
+    /// `AND(a,b,c) = NOR(NOT a, NOT b, NOT c)`). A signal left over on its
+    /// own is promoted to the next level without building a gate.
     pub(crate) fn and_reduce(&mut self, signals: Vec<String>) -> String {
         let mut level = signals;
         while level.len() > 1 {
@@ -120,11 +197,13 @@ impl NetlistBuilder {
         level.into_iter().next().expect("and_reduce called with an empty signal list")
     }
 
-    /// 任意長度訊號清單的 OR，摺成 fan-in <= 3 的樹。
+    /// The OR of a signal list of any length, folded into a tree of
+    /// fan-in <= 3.
     ///
-    /// `OR(a,b,c) = NOT(NOR(a,b,c))`：每組先算 NOR，再反相一次拿到真正
-    /// 的 OR 值，這樣才能繼續往上一層跟別組的 OR 值再取 OR。落單的訊號
-    /// 直接晉級,不建新閘。
+    /// `OR(a,b,c) = NOT(NOR(a,b,c))`: each group takes a NOR first, then one
+    /// inversion to recover the real OR value, so the next level up can OR
+    /// it with the other groups'. A signal left over on its own is promoted
+    /// without building a gate.
     pub(crate) fn or_reduce(&mut self, signals: Vec<String>) -> String {
         let mut level = signals;
         while level.len() > 1 {

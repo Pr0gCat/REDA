@@ -297,7 +297,7 @@ fn check_gate_input_arity_agrees(
         })?;
         let junction = Position::new(jx, jy, jz);
 
-        if gate.is_merge {
+        if gate.is_merge() {
             let expected_edges: usize =
                 (0..arity).filter(|index| !resolution.is_bare[&(g, *index)]).map(|index| resolution.contributors_of_input[&(g, index)].len()).sum();
             let expected_sockets = (0..arity).filter(|index| !resolution.is_bare[&(g, *index)]).count();
@@ -455,7 +455,7 @@ fn resolve_node_position(
 fn known_support_positions(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<HashSet<Position>, PartitionError> {
     let mut supports = HashSet::with_capacity(netlist.gates.len());
     for gate in &netlist.gates {
-        if gate.is_merge {
+        if gate.is_merge() {
             continue;
         }
         let &(tx, ty, tz) = compiled.gate_output_positions.get(&gate.output).ok_or_else(|| {
@@ -560,7 +560,7 @@ mod tests {
                 name: "g0".to_string(),
                 inputs: vec!["a".to_string(), "b".to_string()],
                 output: "g0".to_string(),
-                is_merge: false,
+                kind: crate::compile::topology::GateKind::Nor(2),
             }],
         };
         let compiled = compile(&netlist).expect("a 2-input NOR gate compiles");

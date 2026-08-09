@@ -4,26 +4,36 @@
 //! This is not a Verilog parser -- it shells out to
 //! [Yosys](https://github.com/YosysHQ/yosys) (via the `yowasp-yosys` Python
 //! package, a WASM build of Yosys with ABC built in) to do the actual
-//! parsing and logic synthesis, and technology-maps the result onto exactly
-//! the cells this project's hardware can build: `redstone_nor.genlib`
-//! describes NOR (1, 2, and 3 input variants) and OR (2 and 3 input,
-//! realised as a free wire merge rather than a gate -- see that file's own
-//! "OR2 / OR3: a wire merge, not a gate" section), priced in this project's
-//! own units (see that file for exactly where each number comes from).
-//! [`yosys_json`] then reads Yosys's mapped-netlist JSON back into a
-//! [`Netlist`].
+//! parsing and logic optimisation, and stops at the **gate level**:
+//! [`yosys_json`] reads Yosys's own `$_AND_`/`$_NAND_`/`$_XOR_`/`$_MUX_`
+//! cells back as [`Netlist`] gates, one for one. How each of those becomes
+//! redstone is `compile::topology`'s decision, applied by
+//! `compile::lowering`.
 //!
-//! # Why a cost model at all
+//! # Why this frontend stopped technology-mapping
 //!
-//! A generic synthesiser tuned for CMOS decomposes into small (usually
-//! 2-input) gates, because in CMOS more fan-in means a slower, larger gate.
-//! In this hardware a NOR gate is one redstone torch: a 1-, 2-, or 3-input
-//! NOR has the *same* delay, and only a little more area, and an OR is
-//! often free outright. Left to its default assumptions, ABC would optimise
-//! in exactly the wrong direction -- decomposing multiplies gate count and
-//! wire, and wire is what actually costs delay here (see
-//! `src/compile/mod.rs`'s module doc comment). Feeding it this project's
-//! real cell costs via `-genlib` is what corrects that.
+//! It used to run `abc -genlib redstone_nor.genlib`, which made ABC map the
+//! design onto NOR gates and wire merges before this crate ever saw it. The
+//! genlib existed to price those cells so ABC's mapper would choose the way
+//! a human designing for redstone would: a NOR gate is one torch, so a 1-,
+//! 2- or 3-input NOR has the *same* delay and only a little more area, and
+//! an OR is free outright -- exactly backwards from CMOS, where more fan-in
+//! means a slower, larger gate.
+//!
+//! Every word of that reasoning is still true, and it was still the wrong
+//! place to act on it. Technology mapping collapses the gate level, and the
+//! gate level is the input this project's own topology library needs: that
+//! library's entire job is deciding how a gate becomes redstone, and it was
+//! being handed a design where the decision had already been made. Teaching
+//! ABC our costs through a price list was working around that rather than
+//! fixing it.
+//!
+//! ABC still runs, and still does the half of its job that is genuinely
+//! valuable here -- logic optimisation, which takes the hand-written
+//! seven-segment decoder's 84 gates to 31. `redstone_nor.genlib` is gone: a
+//! genlib describes a mapping target, nothing maps any more, and a cost
+//! model nothing reads is a lie. Its derivation survives where it is
+//! actually used, as `compile::topology::expansion_cost`.
 //!
 //! # The external dependency
 //!
@@ -43,10 +53,6 @@ use std::process::Command;
 use crate::compile::Netlist;
 
 mod yosys_json;
-
-/// The frontend's cost model, embedded at build time. See the file itself
-/// for the derivation of every number in it.
-const GENLIB: &str = include_str!("redstone_nor.genlib");
 
 /// The Python driver that actually invokes Yosys. Kept as a standalone
 /// script (rather than a Rust-constructed `python -c "..."` one-liner) so it
@@ -74,9 +80,9 @@ pub enum FrontendError {
     /// Yosys's JSON output was not parseable as JSON at all.
     Json(serde_json::Error),
     /// The JSON parsed fine, but described something this frontend does not
-    /// know how to turn into a NOR-only [`Netlist`] -- an unrecognized cell
-    /// type, a constant this library cannot drive, a bit width this reader
-    /// does not handle, and so on. Deliberately a hard error rather than a
+    /// know how to turn into a [`Netlist`] -- an unrecognized cell type, a
+    /// constant nothing here can drive, a bit width this reader does not
+    /// handle, and so on. Deliberately a hard error rather than a
     /// silent skip: a dropped cell is a netlist that still compiles, just
     /// to the wrong circuit.
     Unsupported(String),
@@ -114,8 +120,10 @@ impl From<serde_json::Error> for FrontendError {
     }
 }
 
-/// Synthesize `verilog_source`'s `top_module` into a [`Netlist`], mapped
-/// entirely onto this project's real NOR cell library.
+/// Synthesize `verilog_source`'s `top_module` into a **gate-level**
+/// [`Netlist`] -- one gate per Yosys cell, in Yosys's own vocabulary. Run it
+/// through `compile::lowering::lower` (as `compile::compile` does) to get
+/// the NOR gates and wire merges redstone actually builds.
 ///
 /// Returns the netlist together with a lookup from each of `top_module`'s
 /// declared output port names (e.g. `"y"`, or `"q[3]"` for bit 3 of a
@@ -136,15 +144,13 @@ pub fn synthesize_verilog(
     let work_dir = make_work_dir()?;
 
     let verilog_path = work_dir.join("top.v");
-    let genlib_path = work_dir.join("redstone_nor.genlib");
     let synth_py_path = work_dir.join("synth.py");
     let output_json_path = work_dir.join("out.json");
 
     std::fs::write(&verilog_path, verilog_source)?;
-    std::fs::write(&genlib_path, GENLIB)?;
     std::fs::write(&synth_py_path, SYNTH_PY)?;
 
-    let result = run_synth(&synth_py_path, &verilog_path, top_module, &genlib_path, &output_json_path);
+    let result = run_synth(&synth_py_path, &verilog_path, top_module, &output_json_path);
 
     let netlist_result = match result {
         Ok(()) => {
@@ -188,7 +194,6 @@ fn run_synth(
     synth_py: &Path,
     verilog_path: &Path,
     top_module: &str,
-    genlib_path: &Path,
     output_json_path: &Path,
 ) -> Result<(), FrontendError> {
     let python = std::env::var("REDA_PYTHON").unwrap_or_else(|_| "python".to_string());
@@ -197,7 +202,6 @@ fn run_synth(
         .arg(synth_py)
         .arg(verilog_path)
         .arg(top_module)
-        .arg(genlib_path)
         .arg(output_json_path)
         .output()
         .map_err(FrontendError::PythonNotFound)?;
@@ -220,125 +224,48 @@ fn run_synth(
 mod tests {
     use crate::compile::topology::{self, GateKind, Library};
 
-    /// `GENLIB`'s own `GATE`/`PIN` numbers for `cell_name`: `(area,
-    /// block_delay)`, read straight out of the SIS Genlib text with no
-    /// dependency on any crate parser -- deliberately dumb line-splitting,
-    /// so this test does not share a bug with whatever eventually reads this
-    /// format for real.
+    /// The genlib is gone, so the test that used to live here -- checking
+    /// `redstone_nor.genlib`'s hand-written `GATE`/`PIN` numbers against
+    /// `topology::genlib_cost`'s derivation of the same fact -- has nothing
+    /// left to compare. Its successor lives in `topology` itself
+    /// (`entry_cost_and_expansion_cost_agree_for_every_realisable_kind`),
+    /// between the two cost models that remain.
     ///
-    /// Layout assumed (see `redstone_nor.genlib`'s own cells): a `GATE
-    /// <name> <area> Y=<expr>;` line, followed by exactly one `PIN * <phase>
-    /// <inputload> <maxload> <rise_block> <rise_fanout> <fall_block>
-    /// <fall_fanout>` line. Every cell this reader supports models delay as
-    /// a pure per-gate constant (`redstone_nor.genlib`'s own comment) --
-    /// `rise_block == fall_block` for all of them -- so reading `rise_block`
-    /// alone is reading "the" delay.
-    fn genlib_area_and_delay(cell_name: &str) -> (u32, u64) {
-        let gate_prefix = format!("GATE {cell_name} ");
-        let lines: Vec<&str> = super::GENLIB.lines().collect();
-        let gate_line_index = lines
-            .iter()
-            .position(|line| line.starts_with(&gate_prefix))
-            .unwrap_or_else(|| panic!("no `GATE {cell_name}` line in redstone_nor.genlib"));
-
-        let area: u32 = lines[gate_line_index]
-            .split_whitespace()
-            .nth(2)
-            .unwrap_or_else(|| panic!("`GATE {cell_name}` line has no area field"))
-            .parse()
-            .unwrap_or_else(|e| panic!("`GATE {cell_name}` area is not a number: {e}"));
-
-        let pin_line = lines[gate_line_index + 1..]
-            .iter()
-            .find(|line| line.trim_start().starts_with("PIN"))
-            .unwrap_or_else(|| panic!("no `PIN` line after `GATE {cell_name}`"));
-        // `PIN * <phase> <inputload> <maxload> <rise_block> <rise_fanout>
-        // <fall_block> <fall_fanout>`: "PIN", "*", phase and the two load
-        // fields are tokens 0..=4, so `rise_block` is token 5.
-        let rise_block: u64 = pin_line
-            .split_whitespace()
-            .nth(5)
-            .unwrap_or_else(|| panic!("`PIN` line for `{cell_name}` has no rise-block-delay field"))
-            .parse()
-            .unwrap_or_else(|e| panic!("`{cell_name}`'s rise-block-delay is not a number: {e}"));
-
-        (area, rise_block)
-    }
-
-    /// The whole point of `topology::genlib_cost`: `redstone_nor.genlib`'s
-    /// hand-written `GATE`/`PIN` numbers for every cell it maps a Yosys cell
-    /// type onto are exactly what deriving cost from that cell's own
-    /// `topology::Template` produces. This is what keeps the genlib (ABC's
-    /// cost model) and the topology library (this crate's own realisation
-    /// model) from drifting apart the way the task that added this test was
-    /// written to close -- if `place_nor_gate`'s footprint or a template's
-    /// own shape changes without the other, this fails immediately instead
-    /// of silently mapping to the wrong cost.
-    ///
-    /// `OR2`/`OR3` check **every** registered entry for `Or(2)`/`Or(3)`, not
-    /// just the one `Library::choose` would pick -- both `or_bare_entry` and
-    /// `or_isolated_entry` have to agree with the genlib's one `GATE OR2`/
-    /// `GATE OR3` line, since (per `genlib_cost`'s own "OR: one number,
-    /// honestly standing for two realisations") that one line is meant to
-    /// honestly price both. Checking only the first entry, the way NOR/BUF's
-    /// loop originally did (harmlessly, since they only ever have one entry
-    /// each), would not have caught it if a future change made the two OR
-    /// entries disagree with each other.
+    /// What is still this module's business is the boundary it owns: every
+    /// Yosys cell type the frontend accepts has to be something the rest of
+    /// the pipeline can actually build.
     #[test]
-    fn genlib_numbers_match_what_the_topology_library_derives() {
+    fn every_accepted_yosys_cell_type_lowers_to_something_the_library_can_place() {
         let library = Library::default_library();
-        for &(cell_name, kind) in &[
-            ("NOR1", GateKind::Nor(1)),
-            ("NOR2", GateKind::Nor(2)),
-            ("NOR3", GateKind::Nor(3)),
-            ("BUF", GateKind::Buf),
-            ("OR2", GateKind::Or(2)),
-            ("OR3", GateKind::Or(3)),
-        ] {
-            let entries = library.entries_for(kind);
-            assert!(!entries.is_empty(), "{cell_name} ({kind:?}) has no library entry");
-            let (genlib_area, genlib_delay) = genlib_area_and_delay(cell_name);
-            for entry in entries {
-                let cost = topology::genlib_cost(kind, entry);
-                assert_eq!(
-                    cost.area, genlib_area,
-                    "{cell_name} ({}): derived area disagrees with redstone_nor.genlib",
-                    entry.name
-                );
-                assert_eq!(
-                    cost.delay_game_ticks, genlib_delay,
-                    "{cell_name} ({}): derived delay disagrees with redstone_nor.genlib",
-                    entry.name
+        for (cell_type, kind) in topology::known_yosys_cell_types() {
+            let expansion = topology::expansion_for(kind);
+            assert!(!expansion.steps.is_empty(), "{cell_type} ({kind:?}) has no expansion");
+
+            // Every step of every expansion is a NOR or a merge of an arity
+            // `Library` ships an entry for -- so nothing the frontend
+            // accepts can reach `primitive_graph::expand` with no way to be
+            // turned into primitives.
+            for step in &expansion.steps {
+                let realised = match step {
+                    topology::Step::Nor(operands) => GateKind::Nor(operands.len()),
+                    topology::Step::Merge(operands) => GateKind::Or(operands.len()),
+                };
+                assert!(
+                    library.choose(realised).is_some(),
+                    "{cell_type} ({kind:?}) expands through {realised:?}, which has no library entry"
                 );
             }
         }
     }
 
-    /// Every Yosys cell type `redstone_nor.genlib` can produce maps to a
-    /// `GateKind` this library actually ships an entry for -- otherwise
-    /// `yosys_json::Context::build_cell` would map a cell to a `GateKind`
-    /// and then find nothing to build it from, a bug this test exists to
-    /// catch instead of letting it surface as a runtime panic mid-synthesis.
-    #[test]
-    fn every_mapped_yosys_cell_has_a_library_entry() {
-        let library = Library::default_library();
-        for &cell_name in &["NOR1", "NOR2", "NOR3", "BUF", "OR2", "OR3"] {
-            let kind = topology::gate_kind_for_yosys_cell(cell_name)
-                .unwrap_or_else(|| panic!("{cell_name} has no GateKind mapping"));
-            assert!(library.choose(kind).is_some(), "{cell_name} maps to {kind:?}, which has no library entry");
-        }
-    }
-
-    /// A cell type `redstone_nor.genlib` never produces -- including the
-    /// constant drivers, which this library deliberately has no realisation
-    /// for -- has no `GateKind` mapping at all, so the frontend's "unmapped
-    /// cell" error path is reached by data, not by falling through every
-    /// known name.
+    /// A cell type the frontend never accepts has no `GateKind` at all, so
+    /// the "unsupported construct" error path is reached by data rather than
+    /// by falling through every known name.
     #[test]
     fn an_unmapped_cell_type_has_no_gate_kind() {
         assert!(topology::gate_kind_for_yosys_cell("$__ZERO").is_none());
         assert!(topology::gate_kind_for_yosys_cell("$__ONE").is_none());
-        assert!(topology::gate_kind_for_yosys_cell("DFF").is_none());
+        assert!(topology::gate_kind_for_yosys_cell("$_DFF_P_").is_none());
         assert!(topology::gate_kind_for_yosys_cell("").is_none());
     }
 }

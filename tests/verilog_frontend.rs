@@ -28,6 +28,7 @@ use std::collections::HashMap;
 use reda::circuits::and4::build_and4_netlist;
 use reda::circuits::seven_segment::{build_seven_segment_netlist, TRUTH_TABLE};
 use reda::circuits::verilog;
+use reda::compile::lowering::{format_histogram, lower};
 use reda::compile::{compile, CompiledCircuit, Netlist};
 use reda::frontend::synthesize_verilog;
 use reda::redstone::simulator::Simulator;
@@ -132,17 +133,35 @@ fn report_timing(
     summary.worst_settle_game_ticks
 }
 
-/// Compile `netlist`, simulate every input combination, and assert the
-/// output at `output_of(value)` matches `expected(value)`. Returns
-/// `(gate_count, block_count, settle_game_ticks)` for the comparison table.
+/// Lower `netlist`, compile it, simulate every input combination, and assert
+/// the output at `output_of(value)` matches `expected(value)`. Returns
+/// `(gate_count, block_count, settle_game_ticks)` for the comparison table,
+/// where `gate_count` is the **lowered** netlist's -- the gates that really
+/// get placed.
+///
+/// The lowering happens here, once, and everything downstream uses its
+/// result: `compile` requires it (see that function's own doc comment for
+/// why it will not do it for you), and `summarize_worst_case` has to be
+/// handed the same netlist the circuit was compiled from or its backward
+/// walk is correlating two different graphs.
 fn compile_simulate_and_check(
     label: &str,
-    netlist: &Netlist,
+    source_netlist: &Netlist,
     input_names: &[&str],
     input_count: u32,
     output_positions_of: impl Fn(&CompiledCircuit) -> Vec<(i32, i32, i32)>,
     expected: impl Fn(u8) -> Vec<bool>,
 ) -> (usize, usize, u64) {
+    let netlist = &lower(source_netlist).expect("netlist must lower into torches and merges");
+    if netlist.gates.len() != source_netlist.gates.len() {
+        eprintln!(
+            "{label} cells: {} ({} gates) -> lowered {} ({} gates)",
+            format_histogram(source_netlist),
+            source_netlist.gates.len(),
+            format_histogram(netlist),
+            netlist.gates.len(),
+        );
+    }
     let gate_count = netlist.gates.len();
     let compiled = compile(netlist).expect("netlist must be acyclic and fully driven");
     let block_count = non_air_blocks(&compiled);

@@ -1,12 +1,22 @@
-//! Read Yosys's `write_json` output -- after `abc -genlib redstone_nor.genlib`
-//! has mapped every bit of logic onto NOR1/NOR2/NOR3/BUF/OR2/OR3 -- into a
-//! [`Netlist`].
+//! Read Yosys's `write_json` output -- a **gate-level** netlist in Yosys's
+//! own simple-cell vocabulary (`$_AND_`, `$_NAND_`, `$_XOR_`, `$_MUX_`,
+//! ...) -- into a [`Netlist`].
+//!
+//! This module used to read a netlist Yosys had already technology-mapped
+//! onto `redstone_nor.genlib`'s NOR and OR cells, and it built the redstone
+//! realisation of each one as it went. Both halves of that were wrong in
+//! the same way: ABC chose the realisation (it has no idea what redstone
+//! costs), and this reader hard-coded what a mapped cell became. What
+//! arrives here now is the gate level as Yosys left it, one [`Netlist`]
+//! gate per Yosys cell, and `compile::lowering` -- consulting
+//! `compile::topology`'s expansions -- is what turns each into torches and
+//! merges.
 //!
 //! Yosys's JSON schema (see its own `docs/source/cmd/write_json.rst`) is
 //! deliberately general: nets are just integers ("bits"), a constant is a
 //! `"0"`/`"1"`/`"x"`/`"z"` string in the same array a real net id would sit
 //! in, and cells reference nets by name-keyed connection lists. This module
-//! only has to handle the slice of that schema `redstone_nor.genlib` can
+//! only has to handle the slice of that schema `abc`'s gate mapping can
 //! actually produce -- but within that slice, every construct is either
 //! handled correctly or rejected with a specific error. Nothing is silently
 //! dropped: a dropped cell is a netlist that still compiles, to the wrong
@@ -17,32 +27,56 @@ use std::collections::{HashMap, HashSet};
 use serde_json::{Map, Value};
 
 use crate::circuits::netlist_builder::NetlistBuilder;
-use crate::compile::topology::{self, GateKind, Library, Primitive, Template, TemplateNode};
+use crate::compile::topology::{self, GateKind};
 use crate::compile::Netlist;
 
 use super::FrontendError;
 
-/// Genlib/Yosys's own pin-naming convention for this frontend's multi-input
-/// cells, in declaration order -- `A`, `B`, `C`, matching every `GATE`
-/// line's own boolean expression in `redstone_nor.genlib` (`Y=!(A+B+C)` for
-/// `NOR3`, `Y=(A+B+C)` for `OR3`, and so on). NOR and OR share this same
-/// table because they share the same declaration convention, not because
-/// they share a realisation -- this is a JSON-reading fact (which key names
-/// to look up in a cell's `connections` object), not a redstone one, so it
-/// lives here rather than in `topology`, which has no reason to know
-/// Yosys's pin names.
-const PIN_NAMES: [&str; 3] = ["A", "B", "C"];
+/// Yosys's own pin names for each simple cell type this frontend accepts,
+/// in declaration order (see Yosys's `techlibs/common/simcells.v`). The
+/// output pin is always `Y` and is not listed.
+///
+/// This is a JSON-reading fact -- which key names to look up in a cell's
+/// `connections` object -- not a redstone one, so it lives here rather than
+/// in `topology`, which has no reason to know Yosys's pin names. The two
+/// tables are held to covering the same set of cell types by
+/// `every_known_cell_type_has_pin_names`.
+///
+/// Note `$_MUX_`/`$_NMUX_`: their third pin is `S`, not `C`, and the order
+/// `A, B, S` is what `GateKind::Mux`'s `Y = S ? B : A` is written against.
+const CELL_PINS: &[(&str, &[&str])] = &[
+    ("$_NOT_", &["A"]),
+    ("$_BUF_", &["A"]),
+    ("$_AND_", &["A", "B"]),
+    ("$_NAND_", &["A", "B"]),
+    ("$_OR_", &["A", "B"]),
+    ("$_NOR_", &["A", "B"]),
+    ("$_XOR_", &["A", "B"]),
+    ("$_XNOR_", &["A", "B"]),
+    ("$_ANDNOT_", &["A", "B"]),
+    ("$_ORNOT_", &["A", "B"]),
+    ("$_AOI3_", &["A", "B", "C"]),
+    ("$_OAI3_", &["A", "B", "C"]),
+    ("$_AOI4_", &["A", "B", "C", "D"]),
+    ("$_OAI4_", &["A", "B", "C", "D"]),
+    ("$_MUX_", &["A", "B", "S"]),
+    ("$_NMUX_", &["A", "B", "S"]),
+];
+
+fn pins_for(cell_type: &str) -> Option<&'static [&'static str]> {
+    CELL_PINS.iter().find(|&&(name, _)| name == cell_type).map(|&(_, pins)| pins)
+}
 
 fn unsupported(message: impl Into<String>) -> FrontendError {
     FrontendError::Unsupported(message.into())
 }
 
 /// One bit of a Yosys "bits" array: either a real net id, or a literal
-/// constant. `redstone_nor.genlib` cannot realize a hard-wired driver of any
+/// constant. Nothing in this project can realize a hard-wired driver of any
 /// kind (there is no "always on" or "always off" cell in real redstone), so
 /// every constant this reader meets is a candidate for either folding away
-/// (a `0` feeding a NOR pin, which changes nothing) or a hard error (any
-/// other use).
+/// (a `0` feeding a NOR or OR pin, which changes nothing) or a hard error
+/// (any other use).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Bit {
     Net(i64),
@@ -60,8 +94,8 @@ fn parse_bit(value: &Value) -> Result<Bit, FrontendError> {
             "0" => Ok(Bit::Zero),
             "1" => Ok(Bit::One),
             other => Err(unsupported(format!(
-                "constant bit `{other}` -- the redstone NOR library has no way to drive a \
-                 hard-wired x/z value onto a real net"
+                "constant bit `{other}` -- there is no way to drive a hard-wired x/z value onto \
+                 a real net in redstone"
             ))),
         },
         other => Err(unsupported(format!("unexpected bit value in yosys JSON: {other}"))),
@@ -80,12 +114,11 @@ fn as_str<'a>(value: &'a Value, what: &str) -> Result<&'a str, FrontendError> {
     value.as_str().ok_or_else(|| unsupported(format!("expected {what} to be a JSON string")))
 }
 
-/// The single bit on `pin` of a cell's `connections` object. Every cell type
-/// this reader supports (`NOR1`/`NOR2`/`NOR3`/`BUF`/`OR2`/`OR3`) has exactly
-/// one bit per pin -- `redstone_nor.genlib` never declares a multi-bit pin --
-/// so a pin that is not exactly 1 bit wide means either a different,
-/// unsupported genlib produced this JSON, or Yosys did something this
-/// frontend does not expect.
+/// The single bit on `pin` of a cell's `connections` object. Every Yosys
+/// simple cell is scalar -- one bit per pin, by definition of the
+/// `$_*_` family -- so a pin that is not exactly 1 bit wide means Yosys
+/// emitted something this frontend does not expect (a word-level `$and`,
+/// say, which means `techmap` did not run).
 fn single_bit<'a>(connections: &'a Map<String, Value>, pin: &str, cell_name: &str) -> Result<&'a Value, FrontendError> {
     let bits = connections
         .get(pin)
@@ -93,7 +126,7 @@ fn single_bit<'a>(connections: &'a Map<String, Value>, pin: &str, cell_name: &st
     let bits = as_array(bits, &format!("cell `{cell_name}` pin `{pin}`"))?;
     if bits.len() != 1 {
         return Err(unsupported(format!(
-            "cell `{cell_name}` pin `{pin}` is {}-bit; every cell in redstone_nor.genlib is scalar",
+            "cell `{cell_name}` pin `{pin}` is {}-bit; every Yosys `$_*_` simple cell is scalar",
             bits.len()
         )));
     }
@@ -131,12 +164,6 @@ struct Context<'a> {
     /// output ports both directly wired to the same input share one buffer
     /// instead of each building their own.
     buffer_of_input: HashMap<i64, String>,
-    /// The redstone realisation of every gate type this frontend knows how
-    /// to build -- the boundary `build_cell` crosses instead of matching a
-    /// cell's type string and separately knowing what to build for it. See
-    /// `topology::gate_kind_for_yosys_cell` for the table that names which
-    /// Yosys cell type is which entry here.
-    library: Library,
     builder: NetlistBuilder,
 }
 
@@ -169,220 +196,132 @@ impl<'a> Context<'a> {
         Ok(name)
     }
 
-    /// Resolve a NOR pin's bit to a real input signal, or `None` if it was a
-    /// constant 0 (which just drops out of a NOR's input list: `NOR(x, 0)`
-    /// is `NOR(x)`). A constant 1 forces the whole gate's output to a
-    /// permanent 0, which this library has no way to drive, so that is a
-    /// hard error rather than a silent fold.
+    /// Resolve a pin's bit to a real input signal, or `None` if it was a
+    /// constant 0. A constant 1 is always a hard error: nothing in this
+    /// project can drive a hard-wired signal, so a gate forced permanently
+    /// high or low has no realisation.
+    ///
+    /// A constant 0 is only foldable on the two kinds where 0 is the
+    /// neutral element and the arity is free to shrink -- `NOR(x, 0)` is
+    /// `NOR(x)`, `OR(x, 0)` is `OR(x)`. Every other kind is fixed-arity and
+    /// its recipe is written against all of its pins, so [`Context::inputs_of`]
+    /// rejects a constant there by name rather than guessing which
+    /// simplification Yosys meant. In practice `opt` has already removed
+    /// them; this is the path that says so out loud if it ever has not.
     fn resolve_input_pin(&mut self, connections: &Map<String, Value>, pin: &str, cell_name: &str) -> Result<Option<String>, FrontendError> {
         let bit = single_bit(connections, pin, cell_name)?;
         match parse_bit(bit)? {
             Bit::Net(id) => Ok(Some(self.resolve(id)?)),
             Bit::Zero => Ok(None),
             Bit::One => Err(unsupported(format!(
-                "cell `{cell_name}` pin `{pin}` is tied to constant 1, which would force its \
-                 output permanently low -- the redstone NOR library has no tie-off cell to \
-                 realize that"
+                "cell `{cell_name}` pin `{pin}` is tied to constant 1 -- there is no tie-off cell \
+                 in real redstone, so a gate with a hard-wired input has no realization here"
             ))),
         }
+    }
+
+    /// Every pin of `cell`, resolved, in the cell type's own declaration
+    /// order. `None` entries are constant-0 pins, left in place so the
+    /// caller can decide whether folding one is sound for its kind.
+    fn inputs_of(&mut self, cell: &CellInfo<'a>, pins: &[&str]) -> Result<Vec<Option<String>>, FrontendError> {
+        let mut resolved = Vec::with_capacity(pins.len());
+        for &pin in pins {
+            resolved.push(self.resolve_input_pin(cell.connections, pin, &cell.name)?);
+        }
+        Ok(resolved)
     }
 
     /// Look `cell`'s type up in `topology::gate_kind_for_yosys_cell` and
-    /// realize whichever `GateKind` it names -- the boundary this reader
-    /// crosses instead of matching a cell's type string and separately
-    /// knowing what to build for it. A cell type the table has never heard
-    /// of (including the constant drivers, which this library has no way to
-    /// realize) is a hard, loud error naming the cell and its type: a
-    /// dropped cell is a netlist that still compiles, to the wrong circuit.
-    fn build_cell(&mut self, cell: &CellInfo<'a>) -> Result<String, FrontendError> {
-        match topology::gate_kind_for_yosys_cell(cell.cell_type) {
-            Some(GateKind::Nor(arity)) => self.build_nor(cell, &PIN_NAMES[..arity]),
-            Some(GateKind::Buf) => self.build_buf(cell),
-            Some(GateKind::Or(arity)) => self.build_or(cell, &PIN_NAMES[..arity]),
-            None => Err(unsupported(format!(
-                "cell `{}` has type `{}`, which `topology::gate_kind_for_yosys_cell` does not map to any \
-                 redstone realization. Only NOR1/NOR2/NOR3/BUF/OR2/OR3 from redstone_nor.genlib are \
-                 supported -- was `abc -genlib redstone_nor.genlib` actually run, and did it fully map the \
-                 design? (If the type is `$__ZERO`/`$__ONE`: those drive a hard-wired constant, which this \
-                 library has no way to realize in real redstone.)",
-                cell.name, cell.cell_type
-            ))),
-        }
-    }
-
-    fn build_nor(&mut self, cell: &CellInfo<'a>, pins: &[&str]) -> Result<String, FrontendError> {
-        let mut inputs = Vec::with_capacity(pins.len());
-        for &pin in pins {
-            if let Some(name) = self.resolve_input_pin(cell.connections, pin, &cell.name)? {
-                inputs.push(name);
-            }
-        }
-
-        if inputs.is_empty() {
-            // Every input pin was tied to constant 0. NOR() of nothing is a
-            // hard-wired 1, which (like constant 0) this library cannot
-            // drive.
-            return Err(unsupported(format!(
-                "cell `{}` has no real inputs left after folding constant-0 pins; a hard-wired-1 \
-                 output has no realization in the redstone NOR library",
-                cell.name
-            )));
-        }
-
-        // Constant-0 folding can leave fewer real inputs than the cell's own
-        // declared arity (a NOR3 with one pin tied to 0 is a real 2-input
-        // NOR) -- `pins.len()` is always <= 3 (it is one of `PIN_NAMES`'s
-        // own prefixes, one per registered `GateKind::Nor` arity), so
-        // `inputs.len()` is too, and always names a real library entry.
-        let kind = GateKind::Nor(inputs.len());
-        let entry = self
-            .library
-            .choose(kind)
-            .unwrap_or_else(|| panic!("{kind:?} has no library entry -- default_library() should always register 1..=3"));
-        Ok(realize_template(&mut self.builder, &entry.template, inputs))
-    }
-
-    /// Realize an `OR2`/`OR3` cell as a **declared wire merge**
-    /// (`NetlistBuilder::merge`, `Gate::is_merge`), never through
-    /// `topology::Library`/`realize_template` the way `build_nor`/
-    /// `build_buf` do -- see `topology::GateKind::Or`'s own doc comment for
-    /// why: which of the library's two OR entries (bare vs. isolated)
-    /// applies is a per-branch fact about the *whole* netlist (does this
-    /// branch's source fan out anywhere else?) that only exists once every
-    /// gate is built, so `compile::merge_branch_is_bare` decides it later,
-    /// directly from the assembled `Netlist` -- there is nothing for this
-    /// frontend to choose between at cell-construction time.
+    /// build one netlist gate of whichever `GateKind` it names -- the
+    /// boundary this reader crosses instead of matching a cell's type string
+    /// and separately knowing what to build for it. How that kind becomes
+    /// redstone is `compile::topology`'s decision, applied later by
+    /// `compile::lowering`; nothing is realised here.
     ///
-    /// Constant-0 folding works exactly like `build_nor`'s (0 is the
-    /// neutral element of OR too: `OR(x, 0) == x`, so a 0-tied pin just
-    /// drops out of the input list), but OR has one case NOR never does:
-    /// folding down to exactly one real input. `OR(x) == x` is a bare wire,
-    /// not a gate of any kind -- `topology::Library` has no `Or(1)` entry
-    /// (there is no one-branch "merge" to speak of), and there is nothing
-    /// to build: this just returns the surviving input's own signal name
-    /// directly, so this cell's own net becomes a plain alias rather than a
-    /// new gate.
-    fn build_or(&mut self, cell: &CellInfo<'a>, pins: &[&str]) -> Result<String, FrontendError> {
-        let mut inputs = Vec::with_capacity(pins.len());
-        for &pin in pins {
-            if let Some(name) = self.resolve_input_pin(cell.connections, pin, &cell.name)? {
-                inputs.push(name);
+    /// A cell type the table has never heard of is a hard, loud error naming
+    /// the cell and its type: a dropped cell is a netlist that still
+    /// compiles, to the wrong circuit.
+    fn build_cell(&mut self, cell: &CellInfo<'a>) -> Result<String, FrontendError> {
+        let Some(kind) = topology::gate_kind_for_yosys_cell(cell.cell_type) else {
+            let known: Vec<&str> = topology::known_yosys_cell_types().map(|(name, _)| name).collect();
+            return Err(unsupported(format!(
+                "cell `{}` has type `{}`, which this project's topology library has no realization \
+                 for. Supported: {known:?}. (A `$__ZERO`/`$__ONE` drives a hard-wired constant and \
+                 a `$_DFF_*_` holds state -- neither has any realization in real redstone. A \
+                 word-level type such as `$and` means `techmap` did not run.)",
+                cell.name, cell.cell_type
+            )));
+        };
+        let pins = pins_for(cell.cell_type)
+            .unwrap_or_else(|| panic!("`{}` has a GateKind but no pin names -- CELL_PINS is out of step", cell.cell_type));
+        let resolved = self.inputs_of(cell, pins)?;
+
+        match kind {
+            // The two realisable kinds are also the two whose arity is free
+            // to shrink: a constant-0 pin is the neutral element of both,
+            // so it simply drops out and a smaller real gate is built.
+            GateKind::Nor(_) => {
+                let inputs: Vec<String> = resolved.into_iter().flatten().collect();
+                if inputs.is_empty() {
+                    // Every pin was tied to 0. `NOR()` of nothing is a
+                    // hard-wired 1, which nothing here can drive.
+                    return Err(unsupported(format!(
+                        "cell `{}` has no real inputs left after folding constant-0 pins; a \
+                         hard-wired-1 output has no realization in redstone",
+                        cell.name
+                    )));
+                }
+                Ok(self.builder.nor(&inputs))
+            }
+            GateKind::Or(_) => {
+                let inputs: Vec<String> = resolved.into_iter().flatten().collect();
+                match inputs.len() {
+                    0 => Err(unsupported(format!(
+                        "cell `{}` has no real inputs left after folding constant-0 pins; a \
+                         hard-wired-0 output has no realization in redstone",
+                        cell.name
+                    ))),
+                    // `OR(x) == x` is a bare wire, not a gate of any kind --
+                    // this cell's net becomes a plain alias for its one
+                    // surviving input rather than a new gate.
+                    1 => Ok(inputs.into_iter().next().expect("checked: exactly one input")),
+                    _ => Ok(self.builder.merge(&inputs)),
+                }
+            }
+            // Every gate-level kind is fixed-arity, and its expansion is
+            // written against all of its pins.
+            _ => {
+                let mut inputs = Vec::with_capacity(resolved.len());
+                for (pin, value) in pins.iter().zip(resolved) {
+                    inputs.push(value.ok_or_else(|| {
+                        unsupported(format!(
+                            "cell `{}` ({}) has pin `{pin}` tied to constant 0. Folding a constant \
+                             into a {kind:?} would mean guessing which smaller gate Yosys meant, \
+                             and guessing wrong is a netlist that still compiles to the wrong \
+                             circuit -- run `opt` before `write_json` instead",
+                            cell.name, cell.cell_type
+                        ))
+                    })?);
+                }
+                Ok(self.builder.cell(kind, &inputs))
             }
         }
-
-        match inputs.len() {
-            0 => Err(unsupported(format!(
-                "cell `{}` has no real inputs left after folding constant-0 pins; a hard-wired-0 \
-                 output has no realization in the redstone OR library",
-                cell.name
-            ))),
-            1 => Ok(inputs.into_iter().next().expect("checked: exactly one input")),
-            _ => Ok(self.builder.merge(&inputs)),
-        }
     }
 
-    fn build_buf(&mut self, cell: &CellInfo<'a>) -> Result<String, FrontendError> {
-        let input = self
-            .resolve_input_pin(cell.connections, "A", &cell.name)?
-            .ok_or_else(|| unsupported(format!("cell `{}` (BUF) is tied to constant 0 on its input", cell.name)))?;
-        Ok(self.synthesize_buffer(&input))
-    }
-
-    /// A BUF cell (and a direct `assign out = in;` at the top level) is a
-    /// pass-through -- there is no native "wire only" primitive in
-    /// redstone, every real signal path here ends in a torch, so this
-    /// realizes it as `topology::GateKind::Buf`'s own entry: two chained
-    /// 1-input NOR gates, `NOT(NOT(x)) == x`. See `redstone_nor.genlib`'s
-    /// `BUF` entry for why ABC needs a BUF cell to exist in the library at
-    /// all even though it costs two real gates.
+    /// A direct `assign out = in;` at the top level is a pass-through with
+    /// no cell in between at all, but `compile` requires every declared
+    /// output to be driven by a real gate. `GateKind::Buf` is exactly that
+    /// gate -- and, unlike before, this frontend does not decide what it
+    /// becomes: `topology::expansion_for(Buf)` says two chained inverters,
+    /// because there is no wire-only primitive in redstone and every real
+    /// signal path here ends at a torch.
     fn synthesize_buffer(&mut self, input: &str) -> String {
-        let entry = self
-            .library
-            .choose(GateKind::Buf)
-            .expect("GateKind::Buf is always registered by Library::default_library()");
-        realize_template(&mut self.builder, &entry.template, vec![input.to_string()])
+        self.builder.cell(GateKind::Buf, &[input.to_string()])
     }
 }
 
-/// Realize `template` -- a `topology::Template` whose every node is a
-/// `Primitive::Torch` (the only primitive a NOR-only `NetlistBuilder` knows
-/// how to build) -- as concrete NOR gates: one `builder.nor(..)` call per
-/// node, landing `inputs` (in the same order as `template.inputs`) on the
-/// nodes they name and wiring each `internal_edges` source into its target
-/// as an extra input, then returning the signal name driving
-/// `template.output`.
-///
-/// This is what "the frontend maps a Yosys cell type onto a library entry"
-/// actually means at the point a gate gets built, not just chosen: every
-/// entry this frontend ever realizes (`topology::gate_kind_for_yosys_cell`'s
-/// `Nor` and `Buf` targets) is built entirely out of `Torch` nodes today, so
-/// this one function replaces what used to be a hand-written NOR call for
-/// `NOR1`/`NOR2`/`NOR3` and a separate hand-written two-gate chain for
-/// `BUF` -- both are now the same generic walk over whatever the library
-/// says a technique is built from. A future entry built from a `Repeater`
-/// or `Comparator` would need this frontend to grow the ability to build
-/// one (there is no such cell yet -- see `topology::Primitive`'s doc
-/// comment), so `resolve_node` panics rather than silently mis-realizing it.
-fn realize_template(builder: &mut NetlistBuilder, template: &Template, inputs: Vec<String>) -> String {
-    assert_eq!(
-        inputs.len(),
-        template.inputs.len(),
-        "template declares {} input(s), got {}",
-        template.inputs.len(),
-        inputs.len()
-    );
-
-    let mut incoming: HashMap<TemplateNode, Vec<String>> = HashMap::new();
-    for (&role, input) in template.inputs.iter().zip(inputs) {
-        incoming.entry(role).or_default().push(input);
-    }
-
-    let mut built: HashMap<TemplateNode, String> = HashMap::new();
-    let output = template.output.expect(
-        "realize_template only ever runs on GateKind::Nor/Buf entries, which always name a real \
-         output primitive -- an entry with none (a wire-merge OR) is not reachable through this \
-         frontend yet (see build_cell's own GateKind::Or arm)",
-    );
-    resolve_node(output, template, &incoming, &mut built, builder)
-}
-
-/// One node of `realize_template`'s walk: build `node`'s own NOR gate (its
-/// external inputs plus, recursively, whatever internal edges feed it),
-/// memoized in `built` so a node with more than one internal-edge consumer
-/// -- none exist yet, but nothing here assumes otherwise -- is built once.
-fn resolve_node(
-    node: TemplateNode,
-    template: &Template,
-    incoming: &HashMap<TemplateNode, Vec<String>>,
-    built: &mut HashMap<TemplateNode, String>,
-    builder: &mut NetlistBuilder,
-) -> String {
-    if let Some(name) = built.get(&node) {
-        return name.clone();
-    }
-
-    let primitive = template
-        .nodes
-        .iter()
-        .find_map(|&(role, primitive)| (role == node).then_some(primitive))
-        .expect("node belongs to its own template's node list");
-    assert_eq!(primitive, Primitive::Torch, "this frontend only realizes Torch nodes into NOR gates");
-
-    let mut node_inputs = incoming.get(&node).cloned().unwrap_or_default();
-    for &(from, to) in &template.internal_edges {
-        if to == node {
-            node_inputs.push(resolve_node(from, template, incoming, built, builder));
-        }
-    }
-
-    let output = builder.nor(&node_inputs);
-    built.insert(node, output.clone());
-    output
-}
-
-/// Convert Yosys's JSON (as produced by `write_json` after `abc -genlib
-/// redstone_nor.genlib`, see `synth.py`) into a [`Netlist`] for
-/// `top_module`.
+/// Convert Yosys's JSON (as produced by `write_json` after `abc`, see
+/// `synth.py`) into a gate-level [`Netlist`] for `top_module`.
 ///
 /// Returns the netlist together with a lookup from each declared output
 /// port's name (bit-indexed as `"name[i]"` for a multi-bit port) to that
@@ -461,7 +400,6 @@ pub(super) fn netlist_from_json(json: &Value, top_module: &str) -> Result<(Netli
         in_progress: HashSet::new(),
         input_names,
         buffer_of_input: HashMap::new(),
-        library: Library::default_library(),
         builder: NetlistBuilder::new(),
     };
 
@@ -479,7 +417,7 @@ pub(super) fn netlist_from_json(json: &Value, top_module: &str) -> Result<(Netli
             let signal = match parse_bit(bit)? {
                 Bit::Net(id) => resolve_output_net(&mut ctx, id)?,
                 Bit::Zero | Bit::One => {
-                    return Err(unsupported(format!("output port `{port_name}` is tied to a constant -- the redstone NOR library has no realizable driver for that")));
+                    return Err(unsupported(format!("output port `{port_name}` is tied to a constant -- there is no hard-wired driver in real redstone")));
                 }
             };
             if seen_outputs.insert(signal.clone()) {
@@ -499,7 +437,7 @@ pub(super) fn netlist_from_json(json: &Value, top_module: &str) -> Result<(Netli
         return Err(unsupported(format!("{} cell(s) are never used to drive any output: {leftover:?}", leftover.len())));
     }
 
-    let netlist = Netlist { inputs, outputs, gates: ctx.builder.gates };
+    let netlist = Netlist { inputs, outputs, gates: ctx.builder.into_gates() };
     Ok((netlist, port_map))
 }
 
@@ -540,13 +478,37 @@ mod tests {
 
     use super::*;
 
-    /// A `BUF` cell should realize as exactly `topology::GateKind::Buf`'s own
-    /// template says it does: two chained 1-input NOR gates, the first
-    /// reading the real input, the second reading the first's output and
-    /// driving the declared output -- the same shape `synthesize_buffer`
-    /// used to build by hand, now walked generically out of the library.
+    /// Both tables that key off a Yosys cell type -- `topology`'s
+    /// type-to-kind map and this module's type-to-pin-names map -- have to
+    /// cover exactly the same set, or a cell would resolve to a `GateKind`
+    /// and then have no pins to read (or the reverse).
     #[test]
-    fn a_buf_cell_realizes_as_two_chained_nor1_gates() {
+    fn every_known_cell_type_has_pin_names_and_vice_versa() {
+        for (cell_type, kind) in topology::known_yosys_cell_types() {
+            let pins = pins_for(cell_type).unwrap_or_else(|| panic!("{cell_type} has no CELL_PINS entry"));
+            assert!(!pins.contains(&"Y"), "{cell_type}: `Y` is the output, not an input pin");
+            if let Some(fixed) = kind.fixed_arity() {
+                assert_eq!(pins.len(), fixed, "{cell_type}: {kind:?} takes {fixed} input(s)");
+            } else {
+                // `Nor`/`Or` carry a declared arity that constant folding is
+                // free to shrink; the pin list is the *declared* one.
+                assert_eq!(pins.len(), kind.arity(), "{cell_type}");
+            }
+        }
+        for &(cell_type, _) in CELL_PINS {
+            assert!(
+                topology::gate_kind_for_yosys_cell(cell_type).is_some(),
+                "{cell_type} has pin names but no GateKind"
+            );
+        }
+    }
+
+    /// A `$_BUF_` cell becomes exactly one `GateKind::Buf` gate -- not the
+    /// two NOR gates it will eventually be realised as. That decision moved
+    /// to `topology::expansion_for`, which is the whole point: this reader
+    /// reports what Yosys said, and nothing more.
+    #[test]
+    fn a_buf_cell_becomes_one_buf_gate_not_a_realisation_of_one() {
         let json = json!({
             "modules": {
                 "top": {
@@ -556,7 +518,7 @@ mod tests {
                     },
                     "cells": {
                         "buf0": {
-                            "type": "BUF",
+                            "type": "$_BUF_",
                             "connections": { "A": [2], "Y": [3] }
                         }
                     }
@@ -564,52 +526,113 @@ mod tests {
             }
         });
 
-        let (netlist, port_map) = netlist_from_json(&json, "top").expect("a lone BUF cell must synthesize");
+        let (netlist, port_map) = netlist_from_json(&json, "top").expect("a lone $_BUF_ cell must synthesize");
 
         assert_eq!(netlist.inputs, vec!["a".to_string()]);
-        assert_eq!(netlist.gates.len(), 2, "BUF is two real NOR gates, never a gate of its own kind");
-        assert_eq!(netlist.gates[0].inputs, vec!["a".to_string()], "the first torch reads the real input");
-        assert_eq!(
-            netlist.gates[1].inputs,
-            vec![netlist.gates[0].output.clone()],
-            "the second torch reads the first torch's own output"
-        );
-        assert_eq!(netlist.outputs, vec![netlist.gates[1].output.clone()]);
-        assert_eq!(port_map["y"], netlist.gates[1].output);
+        assert_eq!(netlist.gates.len(), 1, "one Yosys cell is one netlist gate");
+        assert_eq!(netlist.gates[0].kind, GateKind::Buf);
+        assert_eq!(netlist.gates[0].inputs, vec!["a".to_string()]);
+        assert_eq!(port_map["y"], netlist.gates[0].output);
+
+        // ...and lowering is what makes it two chained inverters.
+        let lowered = crate::compile::lowering::lower(&netlist).expect("lowers");
+        assert_eq!(lowered.gates.len(), 2, "NOT(NOT(x)) == x: two real torches");
+        assert!(lowered.gates.iter().all(|g| g.kind == GateKind::Nor(1)));
     }
 
-    /// Constant-0 folding can leave a `NOR3` cell with fewer real inputs than
-    /// its declared arity -- `build_nor` has to re-derive the smaller
-    /// `GateKind` from what survives folding rather than realizing
-    /// `GateKind::Nor(3)`'s (3-input) template with a padded input list.
+    /// A gate-level cell keeps its kind and its pin order verbatim.
     #[test]
-    fn a_nor3_cell_with_a_constant_zero_pin_folds_to_a_real_2_input_nor() {
+    fn a_mux_cell_keeps_its_kind_and_its_a_b_s_pin_order() {
         let json = json!({
             "modules": {
                 "top": {
                     "ports": {
                         "a": { "direction": "input", "bits": [2] },
                         "b": { "direction": "input", "bits": [3] },
-                        "y": { "direction": "output", "bits": [4] }
+                        "s": { "direction": "input", "bits": [4] },
+                        "y": { "direction": "output", "bits": [5] }
                     },
                     "cells": {
-                        "nor0": {
-                            "type": "NOR3",
-                            "connections": { "A": [2], "B": [3], "C": ["0"], "Y": [4] }
+                        "mux0": {
+                            "type": "$_MUX_",
+                            "connections": { "A": [2], "B": [3], "S": [4], "Y": [5] }
                         }
                     }
                 }
             }
         });
 
-        let (netlist, port_map) = netlist_from_json(&json, "top").expect("NOR3 with one constant-0 pin must synthesize");
+        let (netlist, _) = netlist_from_json(&json, "top").expect("a lone $_MUX_ cell must synthesize");
+        assert_eq!(netlist.gates.len(), 1);
+        assert_eq!(netlist.gates[0].kind, GateKind::Mux);
+        assert_eq!(
+            netlist.gates[0].inputs,
+            vec!["a".to_string(), "b".to_string(), "s".to_string()],
+            "pin order is A, B, S -- `Y = S ? B : A` is written against it"
+        );
+    }
+
+    /// Constant-0 folding can leave a `$_NOR_` cell with fewer real inputs
+    /// than its declared arity: 0 is the neutral element of NOR and its
+    /// arity is free to shrink, so `NOR(a, 0)` is a real 1-input NOR.
+    #[test]
+    fn a_nor_cell_with_a_constant_zero_pin_folds_to_a_real_1_input_nor() {
+        let json = json!({
+            "modules": {
+                "top": {
+                    "ports": {
+                        "a": { "direction": "input", "bits": [2] },
+                        "y": { "direction": "output", "bits": [4] }
+                    },
+                    "cells": {
+                        "nor0": {
+                            "type": "$_NOR_",
+                            "connections": { "A": [2], "B": ["0"], "Y": [4] }
+                        }
+                    }
+                }
+            }
+        });
+
+        let (netlist, port_map) = netlist_from_json(&json, "top").expect("NOR with one constant-0 pin must synthesize");
 
         assert_eq!(netlist.gates.len(), 1, "folding must not synthesize an extra gate");
-        assert_eq!(netlist.gates[0].inputs, vec!["a".to_string(), "b".to_string()], "the folded C pin must not appear");
+        assert_eq!(netlist.gates[0].inputs, vec!["a".to_string()], "the folded B pin must not appear");
+        assert_eq!(netlist.gates[0].kind, GateKind::Nor(1));
         assert_eq!(port_map["y"], netlist.gates[0].output);
     }
 
-    /// A cell type `redstone_nor.genlib` never produces is a hard, loud
+    /// A fixed-arity gate-level cell is the opposite case: its expansion is
+    /// written against all of its pins, so a constant there is rejected by
+    /// name rather than folded into a guess.
+    #[test]
+    fn a_constant_pin_on_a_fixed_arity_cell_is_rejected_by_name() {
+        let json = json!({
+            "modules": {
+                "top": {
+                    "ports": {
+                        "a": { "direction": "input", "bits": [2] },
+                        "y": { "direction": "output", "bits": [4] }
+                    },
+                    "cells": {
+                        "and0": {
+                            "type": "$_AND_",
+                            "connections": { "A": [2], "B": ["0"], "Y": [4] }
+                        }
+                    }
+                }
+            }
+        });
+
+        let message = match netlist_from_json(&json, "top") {
+            Ok(_) => panic!("a constant pin on an $_AND_ must not be silently folded"),
+            Err(error) => error.to_string(),
+        };
+        assert!(message.contains("and0"), "error must name the cell: {message}");
+        assert!(message.contains('B'), "error must name the pin: {message}");
+    }
+
+    /// A cell type this library has no realisation for is a hard, loud
     /// error naming both the cell and its type -- never a silently dropped
     /// gate (which would be a netlist that still compiles, to the wrong
     /// circuit).

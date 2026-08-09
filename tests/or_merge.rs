@@ -11,6 +11,7 @@
 //! fanout rule alone -- gets it right, by building real `Netlist`s with a
 //! declared merge and running them all the way through.
 
+use reda::compile::topology::GateKind;
 use reda::compile::{compile, Gate, Netlist};
 use reda::redstone::simulator::position::Position;
 use reda::redstone::simulator::Simulator;
@@ -48,7 +49,7 @@ impl GateNet {
             name: output.clone(),
             inputs: inputs.iter().map(|s| s.to_string()).collect(),
             output: output.clone(),
-            is_merge: false,
+            kind: GateKind::Nor(inputs.len()),
         });
         output
     }
@@ -67,7 +68,7 @@ impl GateNet {
             name: output.clone(),
             inputs: inputs.iter().map(|s| s.to_string()).collect(),
             output: output.clone(),
-            is_merge: true,
+            kind: GateKind::Or(inputs.len()),
         });
         output
     }
@@ -144,7 +145,7 @@ fn measure(
     outputs: &[&str],
     truth: impl Fn(&[bool]) -> Vec<bool>,
 ) -> CellCost {
-    let real_gates = netlist.gates.iter().filter(|g| !g.is_merge).count();
+    let real_gates = netlist.gates.iter().filter(|g| !g.is_merge()).count();
     let compiled = compile(netlist).unwrap_or_else(|err| panic!("{label} failed to compile: {err}"));
     let blocks = count_non_air(&compiled.world);
 

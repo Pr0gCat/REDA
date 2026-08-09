@@ -273,7 +273,7 @@ pub(super) fn resolve_contributors(netlist: &Netlist) -> NetlistResolution {
 
     for g in order {
         let gate = &netlist.gates[g];
-        if gate.is_merge {
+        if gate.is_merge() {
             let mut acc = Vec::new();
             for (index, input) in gate.inputs.iter().enumerate() {
                 let feeding = resolve_signal(input, &contributors_of_gate);
@@ -330,7 +330,7 @@ pub fn verify_expansion_matches_compiled(
     verify_counts(netlist, graph, &resolution)?;
 
     for (g, gate) in netlist.gates.iter().enumerate() {
-        if gate.is_merge {
+        if gate.is_merge() {
             verify_merge_gate_structure(netlist, graph, compiled, g, &resolution)?;
         } else {
             verify_gate_structure(netlist, graph, compiled, g, gate.inputs.len(), &resolution)?;
@@ -358,7 +358,7 @@ fn verify_counts(netlist: &Netlist, graph: &PrimitiveGraph, resolution: &Netlist
     let mut expected_edges = 0usize;
 
     for (g, gate) in netlist.gates.iter().enumerate() {
-        if gate.is_merge {
+        if gate.is_merge() {
             for index in 0..gate.inputs.len() {
                 if !resolution.is_bare[&(g, index)] {
                     expected_nodes += 1; // this branch's own IsolatingRepeater
@@ -675,7 +675,7 @@ fn verify_input_edges_match_netlist(
 
     let mut from_netlist: Vec<NetEdge> = Vec::new();
     for (g, gate) in netlist.gates.iter().enumerate() {
-        if gate.is_merge {
+        if gate.is_merge() {
             for index in 0..gate.inputs.len() {
                 if resolution.is_bare[&(g, index)] {
                     continue; // no node, no edge -- see `resolve_contributors`'s own doc comment.

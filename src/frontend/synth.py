@@ -3,14 +3,21 @@
 
 Invoked as a subprocess by `src/frontend/mod.rs`:
 
-    python synth.py <verilog-file> <top-module> <genlib-file> <output-json>
+    python synth.py <verilog-file> <top-module> <output-json>
 
 Runs the Verilog source through Yosys (via `yowasp-yosys`, a WASM build of
-Yosys with ABC built in) and technology-maps every bit of combinational logic
-onto exactly the NOR1/NOR2/NOR3/BUF/OR2/OR3 cells described in
-`redstone_nor.genlib` in this same directory -- see that file for where its
-area/delay numbers come from. `write_json` then dumps the mapped netlist for
-the Rust side to read (`src/frontend/yosys_json.rs`).
+Yosys with ABC built in) and leaves the design at the **gate level** -- Yosys's
+own `$_AND_`/`$_NAND_`/`$_XOR_`/`$_MUX_` simple cells. `write_json` then dumps
+that netlist for the Rust side to read (`src/frontend/yosys_json.rs`).
+
+This script used to pass `abc -genlib redstone_nor.genlib`, which made ABC
+technology-map the design onto NOR gates and wire merges before this project
+ever saw it. That handed the one decision REDA's own topology library exists
+to make -- how a gate becomes redstone -- to a tool that does not know what
+redstone costs. Plain `abc` keeps the half of ABC that is genuinely valuable
+here (logic optimisation: it takes the hand-written seven-segment decoder's 84
+gates to 31) and stops at the gate level, which `compile::lowering` then
+expands using `compile::topology`'s own recipes.
 
 Requires the `yowasp-yosys` package (`pip install yowasp-yosys`, or see the
 project's `requirements.txt`). If it is missing, this prints a message that
@@ -21,16 +28,22 @@ says so explicitly and exits non-zero, rather than leaking a bare
 script includes `proc_rom`, which recognizes a `case` statement that just
 maps an index to constants (exactly what a segment decoder's truth table
 looks like) and turns it into a `$mem` primitive instead of logic. `abc`
-cannot map a `$mem` cell against any genlib, so without `-norom` a decoder
-written the natural way (a `case` per digit) fails to synthesize at all.
+cannot do anything with a `$mem` cell, so without `-norom` a decoder written
+the natural way (a `case` per digit) fails to synthesize at all.
+
+`abc` with no library argument maps onto Yosys's default gate set -- AND,
+NAND, OR, NOR, XOR, XNOR, ANDNOT, ORNOT, MUX, NMUX, AOI3, OAI3, AOI4, OAI4
+(`help abc`'s `-g` option). `src/compile/topology.rs`'s `YOSYS_CELL_KINDS`
+has an entry for every one of them, and the frontend rejects anything else
+by name rather than guessing.
 """
 import os
 import sys
 
 
 def main() -> int:
-    if len(sys.argv) != 5:
-        print("usage: synth.py <verilog-file> <top-module> <genlib-file> <output-json>", file=sys.stderr)
+    if len(sys.argv) != 4:
+        print("usage: synth.py <verilog-file> <top-module> <output-json>", file=sys.stderr)
         return 2
 
     # Normalise every path to forward slashes up front. Yosys's own argument
@@ -39,7 +52,7 @@ def main() -> int:
     # POSIX-style mounts (see yowasp_runtime's `preopen_dir` calls) -- a
     # literal backslash is not a path separator there, so a raw Windows path
     # silently fails to open rather than erroring clearly.
-    verilog_file, top_module, genlib_file, output_json = (arg.replace("\\", "/") for arg in sys.argv[1:5])
+    verilog_file, top_module, output_json = (arg.replace("\\", "/") for arg in sys.argv[1:4])
 
     try:
         from yowasp_yosys import run_yosys
@@ -65,7 +78,7 @@ proc -norom
 opt
 techmap
 opt
-abc -genlib {quoted(genlib_file)}
+abc
 opt_clean -purge
 write_json {quoted(output_json)}
 """

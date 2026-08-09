@@ -223,7 +223,7 @@ fn sorted_output_labels(port_map: HashMap<String, String>) -> Vec<(String, Strin
 /// synthesize for itself (see [`VerilogCircuit::baked_netlist`]), and the
 /// way anyone ever notices it changed is a diff. `gate merge g21 <- g14 g17`
 /// says what it is on one line; the same gate as a JSON object spread over
-/// five lines of `"name"`/`"inputs"`/`"output"`/`"is_merge"` says the same
+/// five lines of `"name"`/`"inputs"`/`"output"`/`"kind"` says the same
 /// thing with the shape of the change buried in punctuation. The format is
 /// also the reason no `Serialize` derive had to be bolted onto
 /// [`crate::compile::Netlist`] -- the compiler's own input type stays a
@@ -242,7 +242,8 @@ fn sorted_output_labels(port_map: HashMap<String, String>) -> Vec<(String, Strin
 /// top and4                      -- the top module within that HDL
 /// input a                       -- one per Netlist::inputs, in order
 /// gate nor g0 <- a b            -- one per Netlist::gates, in order
-/// gate merge g4 <- g2 g3        -- `merge` is Gate::is_merge (no torch)
+/// gate merge g4 <- g2 g3        -- a wire merge: no torch, no gate body
+/// gate nand g7 <- g4 g5         -- a gate-level cell, not yet realised
 /// output g5                     -- one per Netlist::outputs, in order
 /// label y g5                    -- port name -> internal signal
 /// ```
@@ -255,6 +256,7 @@ pub mod baked {
     use std::fmt;
 
     use super::VerilogCircuit;
+    use crate::compile::topology::GateKind;
     use crate::compile::{Gate, Netlist};
 
     /// One parsed baked file: the netlist and its output labels, plus the
@@ -325,22 +327,24 @@ pub mod baked {
             }
         };
 
-        let merges = netlist.gates.iter().filter(|gate| gate.is_merge).count();
         let mut out = String::new();
         out.push_str("# reda baked netlist -- generated, do not edit by hand.\n");
         out.push_str("# Regenerate with: cargo run --release --bin bake_verilog\n");
         out.push_str("#\n");
-        out.push_str("# The netlist Yosys produced for the source named below, technology-mapped\n");
-        out.push_str("# onto redstone_nor.genlib and read back by `reda::frontend`. It is checked\n");
-        out.push_str("# in so a build that cannot run Yosys -- the browser viewer's wasm32 build\n");
-        out.push_str("# above all -- can still load a synthesised circuit. A stale copy would\n");
-        out.push_str("# misrepresent this project's own compiler, so\n");
-        out.push_str("# `the_baked_netlists_match_fresh_synthesis` re-synthesizes and fails\n");
-        out.push_str("# unless a fresh run renders byte-for-byte identically to this file.\n");
+        out.push_str("# The gate-level netlist Yosys produced for the source named below, read\n");
+        out.push_str("# back by `reda::frontend`. It is checked in so a build that cannot run\n");
+        out.push_str("# Yosys -- the browser viewer's wasm32 build above all -- can still load a\n");
+        out.push_str("# synthesised circuit. A stale copy would misrepresent this project's own\n");
+        out.push_str("# compiler, so `the_baked_netlists_match_fresh_synthesis` re-synthesizes\n");
+        out.push_str("# and fails unless a fresh run renders byte-for-byte identically to this\n");
+        out.push_str("# file.\n");
         out.push_str("#\n");
-        out.push_str("# `gate nor y <- a b` is NOR(a, b) driving signal `y`. `gate merge y <- a b`\n");
-        out.push_str("# is a wire merge (`Gate::is_merge`): no torch and no gate body at all, just\n");
-        out.push_str("# the point where `a`'s and `b`'s dust are allowed to physically touch.\n");
+        out.push_str("# A gate's kind is `topology::GateKind::wire_name`. Two of them are what\n");
+        out.push_str("# redstone builds directly: `gate nor y <- a b` is NOR(a, b) driving `y`,\n");
+        out.push_str("# and `gate merge y <- a b` is a wire merge -- no torch and no gate body at\n");
+        out.push_str("# all, just the point where `a`'s and `b`'s dust are allowed to touch.\n");
+        out.push_str("# Every other kind (`and`, `nand`, `xor`, `mux`, ...) is gate level, and\n");
+        out.push_str("# `compile::lowering` expands it into those two.\n");
         out.push_str("#\n");
         // Counts in the header are derived, never read back -- they exist so
         // that "this circuit grew two gates and lost a merge" is visible in
@@ -349,12 +353,12 @@ pub mod baked {
             format!("{count} {singular}{}", if count == 1 { "" } else { "s" })
         };
         out.push_str(&format!(
-            "# {} ({}), {}, {}.\n",
+            "# {}, {}, {}.\n",
             plural(netlist.gates.len(), "gate"),
-            plural(merges, "wire merge"),
             plural(netlist.inputs.len(), "input"),
             plural(netlist.outputs.len(), "output")
         ));
+        out.push_str(&format!("# cells: {}\n", crate::compile::lowering::format_histogram(netlist)));
 
         check(circuit.name, "circuit name")?;
         check(circuit.source_path, "source path")?;
@@ -378,8 +382,7 @@ pub mod baked {
             for input in &gate.inputs {
                 check(input, "gate input")?;
             }
-            let kind = if gate.is_merge { "merge" } else { "nor" };
-            out.push_str(&format!("gate {kind} {} <-", gate.output));
+            out.push_str(&format!("gate {} {} <-", gate.kind.wire_name(), gate.output));
             for input in &gate.inputs {
                 out.push(' ');
                 out.push_str(input);
@@ -448,17 +451,8 @@ pub mod baked {
                     output_labels.push((port.to_string(), signal.to_string()));
                 }
                 "gate" => {
-                    let kind = words.next().ok_or_else(|| parse_error(line_number, "`gate` needs a kind"))?;
-                    let is_merge = match kind {
-                        "nor" => false,
-                        "merge" => true,
-                        other => {
-                            return Err(parse_error(
-                                line_number,
-                                format!("unknown gate kind `{other}` -- expected `nor` or `merge`"),
-                            ))
-                        }
-                    };
+                    let kind_name =
+                        words.next().ok_or_else(|| parse_error(line_number, "`gate` needs a kind"))?.to_string();
                     let output = words.next().ok_or_else(|| parse_error(line_number, "`gate` needs an output"))?;
                     match words.next() {
                         Some("<-") => {}
@@ -470,12 +464,24 @@ pub mod baked {
                         }
                     }
                     let inputs: Vec<String> = words.map(str::to_string).collect();
-                    netlist.gates.push(Gate {
-                        name: output.to_string(),
-                        inputs,
-                        output: output.to_string(),
-                        is_merge,
-                    });
+                    // A kind's arity comes from the input list on the same
+                    // line, which is what lets `nor`/`merge` stay
+                    // arity-free in the text while a fixed-arity kind is
+                    // still checked: `and g0 <- a b c` is rejected rather
+                    // than silently reinterpreted.
+                    let kind = GateKind::from_wire_name(&kind_name, inputs.len())
+                        .ok_or_else(|| parse_error(line_number, format!("unknown gate kind `{kind_name}`")))?;
+                    if kind.arity() != inputs.len() {
+                        return Err(parse_error(
+                            line_number,
+                            format!(
+                                "`{kind_name}` takes {} input(s), but this gate has {}",
+                                kind.arity(),
+                                inputs.len()
+                            ),
+                        ));
+                    }
+                    netlist.gates.push(Gate { name: output.to_string(), inputs, output: output.to_string(), kind });
                     continue; // `gate` consumed the rest of the line by design
                 }
                 other => {
@@ -607,17 +613,46 @@ mod tests {
         }
     }
 
-    /// The one thing the viewer's topology tab actually needs from this
-    /// catalog: a circuit that is *not* pure NOR. Every hand-written circuit
-    /// this project ships is, so if the synthesised decoder ever stopped
-    /// containing wire merges, the topology view would silently go back to
-    /// drawing a wall of identical gates with nothing to say so.
+    /// The one thing this catalog exists to provide that nothing else in the
+    /// project does: a circuit that is *not* NOR by construction. Every
+    /// hand-written circuit here is pure NOR, and until the frontend stopped
+    /// technology-mapping, so was every synthesised one -- `abc -genlib
+    /// redstone_nor.genlib` collapsed the gate level inside Yosys, and the
+    /// most this test could ask for was that some of those NORs were merges
+    /// instead (it pinned 31 gates, 11 of them merges).
+    ///
+    /// It can ask for the real thing now: the decoder arrives as the gate
+    /// level Yosys actually produced, and this pins that histogram exactly.
+    /// If it ever collapses back to two kinds, something has started mapping
+    /// again upstream and the number to re-check is not the gate count.
     #[test]
-    fn the_baked_seven_segment_is_the_non_pure_nor_circuit_the_topology_view_needs() {
+    fn the_baked_seven_segment_is_a_gate_level_circuit_not_a_wall_of_nors() {
+        use crate::compile::topology::GateKind;
+
         let (netlist, _) = find("verilog:seven_segment").expect("catalog entry must exist").baked_netlist();
-        let merges = netlist.gates.iter().filter(|gate| gate.is_merge).count();
         assert_eq!(netlist.gates.len(), 31, "gate count has moved -- re-check the whole size ladder");
-        assert_eq!(merges, 11, "merge count has moved -- re-check the whole size ladder");
+        assert_eq!(
+            crate::compile::lowering::format_histogram(&netlist),
+            "nor2:3 merge2:6 and:5 nand:9 andnot:6 ornot:1 mux:1",
+            "the decoder's cell-type histogram has moved"
+        );
+
+        let gate_level = netlist.gates.iter().filter(|gate| !gate.kind.is_realisable()).count();
+        assert_eq!(gate_level, 22, "22 of the 31 cells have no redstone realisation of their own");
+        assert!(
+            netlist.gates.iter().any(|gate| gate.kind == GateKind::Mux),
+            "the decoder's one $_MUX_ is the cell the cost-table spec left as an open question -- \
+             losing it silently would lose the only test coverage its expansion has"
+        );
+
+        // And it still lowers to something redstone builds, entirely.
+        let lowered = crate::compile::lowering::lower(&netlist).expect("the decoder lowers");
+        assert!(lowered.gates.iter().all(|gate| gate.kind.is_realisable()));
+        assert_eq!(
+            crate::compile::lowering::format_histogram(&lowered),
+            "nor1:23 nor2:16 merge2:17",
+            "the lowered decoder's shape has moved -- re-check the whole size ladder"
+        );
     }
 
     /// Round-trip: whatever `render` writes, `parse` reads back as the same

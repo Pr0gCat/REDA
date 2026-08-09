@@ -1,19 +1,23 @@
 # reda baked netlist -- generated, do not edit by hand.
 # Regenerate with: cargo run --release --bin bake_verilog
 #
-# The netlist Yosys produced for the source named below, technology-mapped
-# onto redstone_nor.genlib and read back by `reda::frontend`. It is checked
-# in so a build that cannot run Yosys -- the browser viewer's wasm32 build
-# above all -- can still load a synthesised circuit. A stale copy would
-# misrepresent this project's own compiler, so
-# `the_baked_netlists_match_fresh_synthesis` re-synthesizes and fails
-# unless a fresh run renders byte-for-byte identically to this file.
+# The gate-level netlist Yosys produced for the source named below, read
+# back by `reda::frontend`. It is checked in so a build that cannot run
+# Yosys -- the browser viewer's wasm32 build above all -- can still load a
+# synthesised circuit. A stale copy would misrepresent this project's own
+# compiler, so `the_baked_netlists_match_fresh_synthesis` re-synthesizes
+# and fails unless a fresh run renders byte-for-byte identically to this
+# file.
 #
-# `gate nor y <- a b` is NOR(a, b) driving signal `y`. `gate merge y <- a b`
-# is a wire merge (`Gate::is_merge`): no torch and no gate body at all, just
-# the point where `a`'s and `b`'s dust are allowed to physically touch.
+# A gate's kind is `topology::GateKind::wire_name`. Two of them are what
+# redstone builds directly: `gate nor y <- a b` is NOR(a, b) driving `y`,
+# and `gate merge y <- a b` is a wire merge -- no torch and no gate body at
+# all, just the point where `a`'s and `b`'s dust are allowed to touch.
+# Every other kind (`and`, `nand`, `xor`, `mux`, ...) is gate level, and
+# `compile::lowering` expands it into those two.
 #
-# 31 gates (11 wire merges), 4 inputs, 7 outputs.
+# 31 gates, 4 inputs, 7 outputs.
+# cells: nor2:3 merge2:6 and:5 nand:9 andnot:6 ornot:1 mux:1
 circuit verilog:seven_segment
 source tests/fixtures/seven_segment.v
 top bcd_seven_segment
@@ -21,48 +25,48 @@ input d0
 input d1
 input d2
 input d3
-gate nor g0 <- d0
-gate nor g1 <- d2
-gate nor g2 <- d1
-gate merge g3 <- g1 g2 d3
-gate nor g4 <- g0 g3
-gate merge g5 <- d2 d3
-gate nor g6 <- g2 g5
-gate nor g7 <- g5
-gate nor g8 <- g2 d0
-gate nor g9 <- g1 g8
-gate nor g10 <- d3
-gate nor g11 <- g2 g10
-gate nor g12 <- g7 g9 g11
-gate nor g13 <- d1 d0 g5
-gate merge g14 <- g12 g13
-gate merge g15 <- g1 d1
-gate merge g16 <- d3 g15
-gate nor g17 <- g0 g16
-gate merge g18 <- g6 g14 g17
-gate merge g19 <- g4 g18
-gate nor g20 <- d0 g16
-gate nor g21 <- d2 g11
-gate merge g22 <- g4 g20 g21
-gate nor g23 <- d3 g15
-gate nor g24 <- g7 g23
-gate nor g25 <- g8 g24
-gate merge g26 <- g4 g12 g25
-gate nor g27 <- g15
-gate nor g28 <- d0 g11 g27
-gate merge g29 <- g23 g14
-gate merge g30 <- g12 g23 g6
-output g19
-output g22
-output g26
+gate andnot g0 <- d2 d3
+gate nand g1 <- d1 g0
+gate andnot g2 <- d0 g1
+gate andnot g3 <- d1 d0
+gate andnot g4 <- d2 g3
+gate nor g5 <- d2 d3
+gate and g6 <- d1 d3
+gate merge g7 <- g5 g6
+gate merge g8 <- g4 g7
+gate nor g9 <- d1 d0
+gate nand g10 <- g5 g9
+gate and g11 <- g8 g10
+gate nand g12 <- d1 g5
+gate ornot g13 <- d1 d2
+gate merge g14 <- d3 g13
+gate andnot g15 <- d0 g14
+gate andnot g16 <- g12 g15
+gate nand g17 <- g11 g16
+gate merge g18 <- g2 g17
+gate merge g19 <- d2 g6
+gate mux g20 <- g14 g1 d0
+gate nand g21 <- g19 g20
+gate merge g22 <- d2 d1
+gate nand g23 <- d3 g22
+gate nand g24 <- g3 g5
+gate and g25 <- g23 g24
+gate nor g26 <- d0 g6
+gate and g27 <- g13 g26
+gate nand g28 <- g14 g11
+gate and g29 <- g14 g12
+gate nand g30 <- g8 g29
 output g18
+output g21
+output g25
+output g17
+output g27
 output g28
-output g29
 output g30
-label a g19
-label b g22
-label c g26
-label d g18
-label e g28
-label f g29
+label a g18
+label b g21
+label c g25
+label d g17
+label e g27
+label f g28
 label g g30

@@ -163,6 +163,17 @@ pub enum ExpandError {
     /// that order), so it re-checks this independently for the same reason
     /// `UndrivenSignal` does.
     CyclicNetlist,
+    /// A gate is still at the **gate level** -- an `$_AND_`, `$_MUX_` and so
+    /// on -- which has no redstone realisation and therefore no primitives
+    /// to expand into. `compile::lowering::lower` is the pass that turns one
+    /// into torches and merges, and it has to run first.
+    ///
+    /// This is deliberately an error rather than an implicit lowering: this
+    /// module's `PrimitiveGraph::gate_nodes` and `Provenance::Gate` index
+    /// the caller's own `Netlist::gates`, so silently expanding a *different*
+    /// netlist than the caller handed over would make every one of those
+    /// indices point at the wrong gate.
+    NotRealisable { gate: String, kind: GateKind },
 }
 
 impl std::fmt::Display for ExpandError {
@@ -173,6 +184,10 @@ impl std::fmt::Display for ExpandError {
             }
             ExpandError::UndrivenSignal(name) => write!(f, "signal `{name}` is never driven"),
             ExpandError::CyclicNetlist => write!(f, "netlist has a combinational cycle"),
+            ExpandError::NotRealisable { gate, kind } => write!(
+                f,
+                "gate `{gate}` is a {kind:?}, which has no redstone realisation of its own -- run                  `compile::lowering::lower` on this netlist first"
+            ),
         }
     }
 }
@@ -337,7 +352,7 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
     for g in order {
         let gate = &netlist.gates[g];
 
-        if gate.is_merge {
+        if gate.is_merge() {
             let mut contributions: Vec<NodeId> = Vec::new();
             let mut owned_nodes: Vec<NodeId> = Vec::new();
 
@@ -361,6 +376,9 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
             graph.gate_nodes[g] = owned_nodes;
             output_of[g] = contributions;
         } else {
+            if gate.kind != GateKind::Nor(gate.inputs.len()) {
+                return Err(ExpandError::NotRealisable { gate: gate.output.clone(), kind: gate.kind });
+            }
             let arity = gate.inputs.len();
             let kind = GateKind::Nor(arity);
             let entry = library
@@ -423,12 +441,12 @@ mod tests {
             name: output.to_string(),
             inputs: inputs.iter().map(|s| s.to_string()).collect(),
             output: output.to_string(),
-            is_merge: false,
+            kind: GateKind::Nor(inputs.len()),
         }
     }
 
     fn merge(output: &str, inputs: &[&str]) -> Gate {
-        Gate { is_merge: true, ..gate(output, inputs) }
+        Gate { kind: GateKind::Or(inputs.len()), ..gate(output, inputs) }
     }
 
     /// For a NOR gate, "which nodes does this gate own" and "which nodes

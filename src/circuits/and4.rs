@@ -27,7 +27,7 @@ pub fn build_and4_netlist() -> (Netlist, String) {
     let inputs: Vec<String> = INPUT_NAMES.iter().map(|s| s.to_string()).collect();
     let output = builder.and_reduce(inputs.clone());
 
-    let netlist = Netlist { inputs, outputs: vec![output.clone()], gates: builder.gates };
+    let netlist = Netlist { inputs, outputs: vec![output.clone()], gates: builder.into_gates() };
 
     (netlist, output)
 }

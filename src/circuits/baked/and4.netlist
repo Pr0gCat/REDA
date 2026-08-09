@@ -1,19 +1,23 @@
 # reda baked netlist -- generated, do not edit by hand.
 # Regenerate with: cargo run --release --bin bake_verilog
 #
-# The netlist Yosys produced for the source named below, technology-mapped
-# onto redstone_nor.genlib and read back by `reda::frontend`. It is checked
-# in so a build that cannot run Yosys -- the browser viewer's wasm32 build
-# above all -- can still load a synthesised circuit. A stale copy would
-# misrepresent this project's own compiler, so
-# `the_baked_netlists_match_fresh_synthesis` re-synthesizes and fails
-# unless a fresh run renders byte-for-byte identically to this file.
+# The gate-level netlist Yosys produced for the source named below, read
+# back by `reda::frontend`. It is checked in so a build that cannot run
+# Yosys -- the browser viewer's wasm32 build above all -- can still load a
+# synthesised circuit. A stale copy would misrepresent this project's own
+# compiler, so `the_baked_netlists_match_fresh_synthesis` re-synthesizes
+# and fails unless a fresh run renders byte-for-byte identically to this
+# file.
 #
-# `gate nor y <- a b` is NOR(a, b) driving signal `y`. `gate merge y <- a b`
-# is a wire merge (`Gate::is_merge`): no torch and no gate body at all, just
-# the point where `a`'s and `b`'s dust are allowed to physically touch.
+# A gate's kind is `topology::GateKind::wire_name`. Two of them are what
+# redstone builds directly: `gate nor y <- a b` is NOR(a, b) driving `y`,
+# and `gate merge y <- a b` is a wire merge -- no torch and no gate body at
+# all, just the point where `a`'s and `b`'s dust are allowed to touch.
+# Every other kind (`and`, `nand`, `xor`, `mux`, ...) is gate level, and
+# `compile::lowering` expands it into those two.
 #
-# 6 gates (1 wire merge), 4 inputs, 1 output.
+# 3 gates, 4 inputs, 1 output.
+# cells: and:3
 circuit verilog:and4
 source tests/fixtures/and4.v
 top and4
@@ -21,11 +25,8 @@ input a
 input b
 input c
 input d
-gate nor g0 <- a
-gate nor g1 <- b
-gate nor g2 <- d
-gate nor g3 <- c
-gate merge g4 <- g2 g3
-gate nor g5 <- g0 g1 g4
-output g5
-label y g5
+gate and g0 <- d c
+gate and g1 <- a b
+gate and g2 <- g0 g1
+output g2
+label y g2

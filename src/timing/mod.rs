@@ -256,7 +256,7 @@ fn critical_path_non_merge_gate_count(netlist: &Netlist, path: &[String]) -> usi
             let &gate_index = producer_of
                 .get(signal.as_str())
                 .unwrap_or_else(|| panic!("critical path signal `{signal}` must be some gate's output"));
-            !netlist.gates[gate_index].is_merge
+            !netlist.gates[gate_index].is_merge()
         })
         .count()
 }
@@ -524,7 +524,7 @@ mod tests {
             name: output.to_string(),
             inputs: inputs.iter().map(|s| s.to_string()).collect(),
             output: output.to_string(),
-            is_merge: false,
+            kind: crate::compile::topology::GateKind::Nor(inputs.len()),
         }
     }
 
