@@ -806,3 +806,263 @@ conducts_target = _climb_probe(
     "its own analog signal.",
     "src/redstone/rules/java_1_20.rs: CONDUCTIVE_EXCEPTIONS includes minecraft:target",
 )
+
+
+# --------------------------------------------------------------------------
+# Dust directionality: which *blocks* a dust cell weakly powers
+# --------------------------------------------------------------------------
+#
+# Every probe above asks what dust does to other dust. These ask what dust
+# does to the block beside it, which is a different adjacency and, until
+# this section existed, an unmeasured one.
+#
+# The sensor is a redstone lamp used as the target block itself. A lamp
+# lights whenever any neighbour weakly powers it, so "lamp lit" reads
+# exactly "this dust cell powers the block in that direction" with no
+# second hop to go wrong -- and a lamp driven by directly-touching dust is
+# one of the shapes harness.py records as reliable. The torch probe at the
+# end of the section is the one that matters to the compiler, since a torch
+# reading its support block is how every gate in it works; it uses the same
+# dust-mediated support change `torch_inverts_when_its_support_is_genuinely_powered`
+# already established.
+#
+# A four-way cross is not probed, and cannot be: a dust cell with all four
+# sides connected has no free horizontal face left for a sensor to occupy.
+# The T lane covers the same question -- whether a perpendicular connection
+# is enough to kill the direction -- with one face still free to read.
+
+REDSTONE_BLOCK = "minecraft:redstone_block"
+
+
+def _lamp_target_lane(slot: Slot, dz: int) -> None:
+    """Dust at dx=1 with a lamp at dx=2 as the block it points into. The
+    feed (a redstone block at dx=0) is deliberately not placed here -- the
+    caller places it last, so the dust's power is a genuine transition."""
+    slot.floor(1, dz)
+    slot.set(1, 0, dz, DUST)
+    slot.set(2, 0, dz, LAMP)
+
+
+def _branch(slot: Slot, dz: int) -> None:
+    """A dust cell one step north or south of the cell under test, joining
+    it from the side and so making its shape a corner or a T."""
+    slot.floor(1, dz)
+    slot.set(1, 0, dz, DUST)
+
+
+@probe(
+    "dust_shape_decides_which_block_it_powers",
+    "dust-directionality",
+    "A dust cell weakly powers the block it points into: a straight run "
+    "(or a stub, which vanilla fills out into a straight run) powers the "
+    "blocks at both ends of its axis, while a corner, a T, or an isolated "
+    "dot powers no horizontal neighbour at all. One rule covers all four: "
+    "the neighbour in direction D is powered exactly when the opposite "
+    "side is connected and neither perpendicular side is.",
+    "src/redstone/simulator/propagate.rs: dust_power_toward and dust_side_connected",
+)
+def dust_shape_powers_block(slot: Slot) -> ProbeResult:
+    r = ProbeResult()
+
+    # Lane A (dz=0): straight. Only one side is connected (the feed), and
+    # vanilla completes a one-sided wire into a straight line.
+    _lamp_target_lane(slot, 0)
+    # Lane B (dz=4): corner -- the feed side plus one perpendicular branch.
+    _lamp_target_lane(slot, 4)
+    _branch(slot, 3)
+    # Lane C (dz=8): T -- the feed side plus both perpendicular branches.
+    _lamp_target_lane(slot, 8)
+    _branch(slot, 7)
+    _branch(slot, 9)
+    settle(1.0)
+
+    for dz in [0, 4, 8]:
+        slot.set(0, 0, dz, REDSTONE_BLOCK)
+    settle(1.5)
+
+    r.add("straight: the dust is powered at all", True, dust_power(slot, 1, 0, 0, 15))
+    r.add("straight: the lamp it points into lights", True, lamp_lit(slot, 2, 0, 0, True))
+    r.add("corner: the dust is powered at all", True, dust_power(slot, 1, 0, 4, 15))
+    r.add("corner: the lamp beside it stays dark", True, lamp_lit(slot, 2, 0, 4, False))
+    r.add("T: the dust is powered at all", True, dust_power(slot, 1, 0, 8, 15))
+    r.add("T: the lamp beside it stays dark", True, lamp_lit(slot, 2, 0, 8, False))
+
+    # Lane D (dz=12): a dot -- no horizontal connection at all, fed from
+    # below by replacing its own support with a redstone block, which
+    # cannot become a connection because connections are horizontal only.
+    #
+    # This lane carries its own positive control, and needs it: "the lamp
+    # stayed dark" is also what a dead sensor looks like. So after reading
+    # the dot, a dust cell is joined on the far side, turning that exact
+    # same cell into a straight run without its power ever changing -- and
+    # the same lamp, never touched, must light. It does.
+    slot.floor(1, 12)
+    slot.set(1, 0, 12, DUST)
+    slot.set(2, 0, 12, LAMP)
+    settle(1.0)
+    slot.set(1, -1, 12, REDSTONE_BLOCK)
+    settle(1.5)
+    r.add("dot: the dust is powered at all", True, dust_power(slot, 1, 0, 12, 15))
+    r.add(
+        "dot: the cell really has no connected side",
+        True,
+        slot.check(1, 0, 12, f"{DUST}[north=none,south=none,east=none,west=none]"),
+    )
+    r.add("dot: an unconnected dust powers no horizontal neighbour", True, lamp_lit(slot, 2, 0, 12, False))
+    slot.floor(0, 12)
+    slot.set(0, 0, 12, DUST)
+    settle(1.5)
+    r.add(
+        "control: joining one side turns the same cell into a straight run "
+        "(vanilla fills in the far side by itself)",
+        True,
+        slot.check(1, 0, 12, f"{DUST}[north=none,south=none,east=side,west=side]"),
+    )
+    r.add("control: and that same untouched lamp now lights", True, lamp_lit(slot, 2, 0, 12, True))
+    return r
+
+
+@probe(
+    "a_climb_side_counts_as_a_connection_for_directionality",
+    "dust-directionality",
+    "A side on which dust climbs is a connection like any other: it gives "
+    "the run its axis, so the cell at the foot of a climb still powers the "
+    "block on its far side -- and still loses that direction once a "
+    "perpendicular branch joins it.",
+    "src/redstone/simulator/propagate.rs: dust_side_connected, climb branch",
+)
+def climb_side_counts(slot: Slot) -> ProbeResult:
+    r = ProbeResult()
+
+    def lane(dz: int) -> None:
+        slot.floor(1, dz, dy=0)      # support for the upper feed dust
+        slot.set(1, 1, dz, DUST)     # upper dust
+        slot.set(2, 0, dz, STONE)    # the step the dust climbs
+        slot.set(2, 1, dz, DUST)     # dust on top of the step
+        slot.floor(3, dz)
+        slot.set(3, 0, dz, DUST)     # the cell under test, at the foot of the climb
+        slot.set(4, 0, dz, LAMP)     # the block it points into
+
+    lane(0)
+    lane(4)
+    slot.floor(3, 3)                 # ... but give lane B a perpendicular branch
+    slot.set(3, 0, 3, DUST)
+    settle(1.0)
+    slot.set(0, 1, 0, REDSTONE_BLOCK)
+    slot.set(0, 1, 4, REDSTONE_BLOCK)
+    settle(1.5)
+
+    r.add("climb lane: the cell at the foot of the climb is powered", True, dust_power(slot, 3, 0, 0, 13))
+    r.add("climb lane: it powers the block on its far side", True, lamp_lit(slot, 4, 0, 0, True))
+    r.add("climb + branch lane: the cell is still powered", True, dust_power(slot, 3, 0, 4, 13))
+    r.add("climb + branch lane: but no longer powers the block beside it", True, lamp_lit(slot, 4, 0, 4, False))
+    return r
+
+
+@probe(
+    "a_component_beside_a_line_can_cost_it_its_direction",
+    "dust-directionality",
+    "Whether an adjacent component destroys a run's direction depends on "
+    "whether dust connects to it, not on whether it is powered: a repeater "
+    "lying along the run's cross axis connects and kills the direction, "
+    "while the same repeater turned perpendicular does not connect and "
+    "changes nothing. Both repeaters here stay inert throughout.",
+    "src/redstone/simulator/propagate.rs: dust_side_connected, component branch",
+)
+def component_beside_a_line(slot: Slot) -> ProbeResult:
+    r = ProbeResult()
+    for dz in [0, 4, 8]:
+        _lamp_target_lane(slot, dz)
+    # Lane B: a repeater whose axis runs north-south, so dust connects to it.
+    slot.floor(1, 3)
+    slot.set(1, 0, 3, "minecraft:repeater[facing=north,delay=1,locked=false,powered=false]")
+    # Lane C: the same repeater turned across that axis, so dust does not.
+    slot.floor(1, 7)
+    slot.set(1, 0, 7, "minecraft:repeater[facing=east,delay=1,locked=false,powered=false]")
+    settle(1.0)
+    for dz in [0, 4, 8]:
+        slot.set(0, 0, dz, REDSTONE_BLOCK)
+    settle(2.5)
+
+    r.add("control: a bare straight run powers the block it points into", True, lamp_lit(slot, 2, 0, 0, True))
+    r.add("an aligned (connecting) repeater beside the run kills that", True, lamp_lit(slot, 2, 0, 4, False))
+    r.add("a perpendicular (non-connecting) repeater beside the run does not", True, lamp_lit(slot, 2, 0, 8, True))
+    r.add(
+        "both repeaters really are inert throughout",
+        True,
+        slot.check(1, 0, 3, "minecraft:repeater[powered=false]")
+        and slot.check(1, 0, 7, "minecraft:repeater[powered=false]"),
+    )
+    return r
+
+
+@probe(
+    "dust_powers_the_block_below_it_but_never_the_block_above",
+    "dust-directionality",
+    "The vertical half of the rule, which does not depend on shape at all: "
+    "dust weakly powers the block directly beneath it whatever its shape, "
+    "and never powers the block directly above it.",
+    "src/redstone/rules/taxonomy.rs: power_emitted_toward, RedstoneWire arm "
+    "(Facing::Down yields the full output, every other direction INERT)",
+)
+def dust_vertical_power(slot: Slot) -> ProbeResult:
+    r = ProbeResult()
+    # Lane A (dz=0): the lamp is the dust's own support block.
+    slot.set(1, -1, 0, LAMP)
+    slot.set(1, 0, 0, DUST)
+    # Lane B (dz=4): the lamp sits directly on top of the dust instead.
+    slot.floor(1, 4)
+    slot.set(1, 0, 4, DUST)
+    slot.set(1, 1, 4, LAMP)
+    settle(1.0)
+    slot.set(0, 0, 0, REDSTONE_BLOCK)
+    slot.set(0, 0, 4, REDSTONE_BLOCK)
+    settle(1.5)
+
+    r.add("below: the dust is powered", True, dust_power(slot, 1, 0, 0, 15))
+    r.add("below: dust lights the lamp it stands on", True, lamp_lit(slot, 1, -1, 0, True))
+    r.add("above: the dust is powered", True, dust_power(slot, 1, 0, 4, 15))
+    r.add("above: dust leaves the lamp above it dark", True, lamp_lit(slot, 1, 1, 4, False))
+    return r
+
+
+@probe(
+    "dust_weak_power_turns_off_a_torch_on_the_block_its_line_points_into",
+    "dust-directionality",
+    "The case the compiler's whole cell library rests on: the weak power a "
+    "dust run puts into the block it points into is enough to invert a "
+    "torch attached to that block -- and a perpendicular branch, which "
+    "costs the run its direction, leaves the same torch lit.",
+    "src/redstone/simulator/component.rs: torch_should_be_lit, via "
+    "propagate::block_power_at and dust_power_toward",
+)
+def dust_line_inverts_a_torch(slot: Slot) -> ProbeResult:
+    r = ProbeResult()
+
+    def lane(dz: int) -> None:
+        slot.floor(1, dz)
+        slot.set(1, 0, dz, DUST)                     # the run under test
+        slot.floor(2, dz)
+        slot.set(2, 0, dz, STONE)                    # B, the block it points into
+        slot.set(3, 0, dz, "minecraft:redstone_wall_torch[facing=east,lit=true]")
+        slot.floor(4, dz)
+        slot.set(4, 0, dz, DUST)                     # reads the torch directly
+
+    lane(0)
+    lane(4)
+    _branch(slot, 3)                                 # lane B gets a perpendicular branch
+    settle(1.5)
+    r.add("baseline: straight lane's torch starts lit", True, slot.check(3, 0, 0, "minecraft:redstone_wall_torch[lit=true]"))
+    r.add("baseline: branched lane's torch starts lit", True, slot.check(3, 0, 4, "minecraft:redstone_wall_torch[lit=true]"))
+
+    slot.set(0, 0, 0, REDSTONE_BLOCK)
+    slot.set(0, 0, 4, REDSTONE_BLOCK)
+    settle(2.0)
+
+    r.add("straight: the run is powered", True, dust_power(slot, 1, 0, 0, 15))
+    r.add("straight: the torch on the block it points into inverts off", True, slot.check(3, 0, 0, "minecraft:redstone_wall_torch[lit=false]"))
+    r.add("straight: and its own dust goes dark with it", True, dust_power(slot, 4, 0, 0, 0))
+    r.add("branched: the run is powered just the same", True, dust_power(slot, 1, 0, 4, 15))
+    r.add("branched: the torch stays lit", True, slot.check(3, 0, 4, "minecraft:redstone_wall_torch[lit=true]"))
+    r.add("branched: and its own dust stays at full strength", True, dust_power(slot, 4, 0, 4, 15))
+    return r

@@ -14,8 +14,8 @@
 //!
 //! 往上與往下兩條的方向不對稱，是最容易寫錯的地方，所以規則集中在這個檔案。
 
-use crate::redstone::rules::taxonomy::flags_of;
-use crate::redstone::simulator::position::Position;
+use crate::redstone::rules::taxonomy::{accepts_dust_connection, flags_of};
+use crate::redstone::simulator::position::{Position, HORIZONTAL};
 use crate::redstone::world::block::{BlockKind, Facing};
 use crate::redstone::world::storage::World;
 
@@ -146,6 +146,138 @@ pub fn dust_reach(world: &World, from: Position, direction: Facing) -> Connectio
     }
 
     reach
+}
+
+/// Which of a dust cell's four horizontal sides are attached, in the sense
+/// vanilla's `redstone_wire` blockstate means by `north`/`south`/`east`/
+/// `west` being something other than `none`.
+///
+/// Indexed by `HORIZONTAL`'s order. Not a connectivity question -- two dust
+/// cells that are electrically one node is `dust_connections`' business --
+/// but a *shape* question, and shape is what decides which blocks the dust
+/// powers (`propagate::dust_power_toward`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DustSides([bool; 4]);
+
+impl DustSides {
+    /// No side attached at all.
+    pub const NONE: DustSides = DustSides([false; 4]);
+
+    #[inline]
+    fn index(direction: Facing) -> Option<usize> {
+        HORIZONTAL.iter().position(|&d| d == direction)
+    }
+
+    /// Is the side facing `direction` attached? Vertical directions are
+    /// never attached -- dust has no vertical sides.
+    #[inline]
+    pub fn has(self, direction: Facing) -> bool {
+        Self::index(direction).is_some_and(|i| self.0[i])
+    }
+
+    /// Is every side unattached?
+    #[inline]
+    pub fn is_empty(self) -> bool {
+        !self.0.iter().any(|&b| b)
+    }
+}
+
+/// Whether the dust at `from` attaches to whatever lies in `direction`.
+///
+/// Deliberately built on `dust_connections` rather than restating the
+/// climb/descend geometry, so there is exactly one place in this crate that
+/// decides when dust reaches over a step. The one thing `dust_connections`
+/// cannot answer is a side attached to something that is not dust -- a
+/// redstone block, a torch, a repeater lying along the axis -- so that is
+/// the only case added here, via `accepts_dust_connection`.
+pub fn dust_side_connected(world: &World, from: Position, direction: Facing) -> bool {
+    if !dust_connections(world, from, direction).is_empty() {
+        return true;
+    }
+    let neighbour = from.offset(direction);
+    accepts_dust_connection(world.get(neighbour.x, neighbour.y, neighbour.z), direction)
+}
+
+/// The dust cell's shape at `pos`, after vanilla's rule that a wire attached
+/// on **one axis only** is filled out into a straight run.
+///
+/// That fill is not cosmetic. A run whose last cell touches nothing but the
+/// cell behind it still has a direction, and still powers the block in front
+/// of it, precisely because vanilla gives it the missing far side. Measured
+/// live: joining a lone dust cell from one side leaves it reading
+/// `east=side,west=side`, and the lamp on its far side lights (conformance
+/// probe `dust_shape_decides_which_block_it_powers`, the control at the end).
+///
+/// The one case this deliberately does not reproduce is vanilla's
+/// *history*-dependence: a wire with no attached side renders as a dot if it
+/// was placed that way and as a four-way cross if it once had connections
+/// and lost them. That distinction is unobservable here, because a dot and a
+/// cross power exactly the same set of blocks -- nothing horizontally -- so
+/// this function reports the honest geometric answer, `NONE`, for both.
+pub fn dust_sides(world: &World, pos: Position) -> DustSides {
+    let mut sides = [false; 4];
+    for (i, &direction) in HORIZONTAL.iter().enumerate() {
+        sides[i] = dust_side_connected(world, pos, direction);
+    }
+    if !sides.iter().any(|&b| b) {
+        return DustSides::NONE;
+    }
+
+    // Read every flag before writing any of them: vanilla decides all four
+    // fills from the pre-fill state, so filling in one axis must not then
+    // suppress the other.
+    let attached = |d: Facing| sides[DustSides::index(d).expect("HORIZONTAL")];
+    let no_north_south = !attached(Facing::North) && !attached(Facing::South);
+    let no_east_west = !attached(Facing::East) && !attached(Facing::West);
+    for (i, &direction) in HORIZONTAL.iter().enumerate() {
+        sides[i] |= match direction {
+            Facing::East | Facing::West => no_north_south,
+            Facing::North | Facing::South => no_east_west,
+            _ => false,
+        };
+    }
+
+    DustSides(sides)
+}
+
+/// The two horizontal directions perpendicular to `direction`.
+fn perpendicular(direction: Facing) -> [Facing; 2] {
+    match direction {
+        Facing::North | Facing::South => [Facing::East, Facing::West],
+        _ => [Facing::North, Facing::South],
+    }
+}
+
+/// Whether the dust at `pos` powers the block lying in `direction` --
+/// **geometry only**, saying nothing about whether the dust carries a signal
+/// right now.
+///
+/// Separated from `propagate::dust_power_toward` deliberately: `compile`'s
+/// `net_reach` asks this question of a freshly emitted world whose `power`
+/// fields are still placeholders, and must not be made to trust them.
+///
+/// The rule, measured against a real 1.20.1 server (conformance category
+/// `dust-directionality`):
+///
+/// | direction | powered? |
+/// |---|---|
+/// | down | always -- the block a dust cell stands on |
+/// | up | never |
+/// | horizontal `D` | only if the `D.opposite()` side is attached and **neither** perpendicular side is |
+///
+/// So a straight run powers the blocks at both ends of its own axis, and a
+/// corner, a T, a four-way cross and a lone dot power no horizontal
+/// neighbour at all: one bend anywhere in the cell costs it its direction.
+pub fn dust_powers_block_toward(world: &World, pos: Position, direction: Facing) -> bool {
+    match direction {
+        Facing::Down => true,
+        Facing::Up => false,
+        horizontal => {
+            let sides = dust_sides(world, pos);
+            sides.has(horizontal.opposite())
+                && !perpendicular(horizontal).iter().any(|&d| sides.has(d))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -421,6 +553,174 @@ mod tests {
             backward.contains(&lower),
             "connection must be mutual: forward={forward:?} backward={backward:?}"
         );
+    }
+
+    // ── Dust shape, and which blocks it powers ────────────────────────
+    //
+    // Every expectation below is measured, not reasoned about: conformance
+    // category `dust-directionality` against a real 1.20.1 server.
+
+    /// A straight east-west run of `len` dust cells at y=1, starting at
+    /// x=1, on a stone floor.
+    fn lay_run(world: &mut World, len: i32) {
+        for x in 1..=len {
+            place_dust_on_stone(world, x, 0, 2);
+        }
+    }
+
+    fn sides_of(world: &World, pos: Position) -> Vec<Facing> {
+        [Facing::North, Facing::South, Facing::East, Facing::West]
+            .into_iter()
+            .filter(|&d| dust_sides(world, pos).has(d))
+            .collect()
+    }
+
+    #[test]
+    fn a_run_of_two_is_straight_along_its_own_axis() {
+        let mut w = World::new(8, 4, 6);
+        lay_run(&mut w, 2);
+        assert_eq!(
+            sides_of(&w, Position::new(1, 1, 2)),
+            vec![Facing::East, Facing::West],
+            "the first cell attaches east to its neighbour, and vanilla fills in the west"
+        );
+    }
+
+    #[test]
+    fn a_one_sided_stub_is_completed_into_a_straight_run() {
+        // Measured directly: a lone cell joined from one side reads
+        // `east=side,west=side` on a live server. Without this fill a run's
+        // last cell would have no axis and would power nothing, which is
+        // the opposite of what the game does.
+        let mut w = World::new(8, 4, 6);
+        lay_run(&mut w, 2);
+        let end = Position::new(2, 1, 2);
+        assert_eq!(sides_of(&w, end), vec![Facing::East, Facing::West]);
+        assert!(
+            dust_powers_block_toward(&w, end, Facing::East),
+            "the completed far side is what gives the run's last cell its direction"
+        );
+    }
+
+    #[test]
+    fn a_lone_dot_has_no_side_and_powers_no_horizontal_block() {
+        let mut w = World::new(8, 4, 6);
+        place_dust_on_stone(&mut w, 1, 0, 2);
+        let dot = Position::new(1, 1, 2);
+        assert!(dust_sides(&w, dot).is_empty());
+        for d in HORIZONTAL {
+            assert!(
+                !dust_powers_block_toward(&w, dot, d),
+                "a dot must power nothing toward {d:?} -- measured, and the \
+                 opposite of what the vanilla source reads like at a glance"
+            );
+        }
+    }
+
+    #[test]
+    fn a_straight_run_powers_the_block_at_both_ends_of_its_axis() {
+        let mut w = World::new(10, 4, 6);
+        lay_run(&mut w, 3);
+        let middle = Position::new(2, 1, 2);
+        assert!(dust_powers_block_toward(&w, middle, Facing::East));
+        assert!(dust_powers_block_toward(&w, middle, Facing::West));
+        assert!(!dust_powers_block_toward(&w, middle, Facing::North));
+        assert!(!dust_powers_block_toward(&w, middle, Facing::South));
+    }
+
+    #[test]
+    fn one_perpendicular_branch_costs_the_cell_its_direction() {
+        let mut w = World::new(10, 4, 8);
+        lay_run(&mut w, 3);
+        let corner = Position::new(3, 1, 2);
+        assert!(dust_powers_block_toward(&w, corner, Facing::East));
+
+        // Join it from the south: a corner now, and corners power nothing.
+        place_dust_on_stone(&mut w, 3, 0, 3);
+        assert_eq!(sides_of(&w, corner), vec![Facing::South, Facing::West]);
+        for d in HORIZONTAL {
+            assert!(
+                !dust_powers_block_toward(&w, corner, d),
+                "a corner must power nothing toward {d:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_t_junction_powers_no_horizontal_block_either() {
+        let mut w = World::new(10, 4, 8);
+        lay_run(&mut w, 3);
+        place_dust_on_stone(&mut w, 3, 0, 3);
+        place_dust_on_stone(&mut w, 3, 0, 1);
+        let tee = Position::new(3, 1, 2);
+        assert_eq!(
+            sides_of(&w, tee),
+            vec![Facing::North, Facing::South, Facing::West]
+        );
+        for d in HORIZONTAL {
+            assert!(!dust_powers_block_toward(&w, tee, d));
+        }
+    }
+
+    #[test]
+    fn a_climb_side_counts_as_a_connection() {
+        // The cell at the foot of a climb still has an axis, so it still
+        // powers the block on its far side.
+        let mut w = World::new(10, 5, 6);
+        place_dust_on_stone(&mut w, 2, 0, 2);
+        w.set(1, 1, 2, stone());
+        w.set(1, 2, 2, dust()); // dust up a step to the west
+        let foot = Position::new(2, 1, 2);
+        assert_eq!(sides_of(&w, foot), vec![Facing::East, Facing::West]);
+        assert!(dust_powers_block_toward(&w, foot, Facing::East));
+    }
+
+    #[test]
+    fn an_aligned_repeater_connects_but_a_perpendicular_one_does_not() {
+        // Neither repeater is powered. What matters is the axis it lies on:
+        // measured live, an aligned repeater beside a run kills the run's
+        // direction and a perpendicular one leaves it alone.
+        let repeater = |facing: Facing| {
+            let mut r = block("minecraft:repeater", BlockKind::Repeater);
+            r.facing = Some(facing);
+            r
+        };
+
+        let mut aligned = World::new(10, 4, 8);
+        lay_run(&mut aligned, 3);
+        aligned.set(3, 0, 3, stone());
+        aligned.set(3, 1, 3, repeater(Facing::North));
+        let cell = Position::new(3, 1, 2);
+        assert!(dust_side_connected(&aligned, cell, Facing::South));
+        assert!(!dust_powers_block_toward(&aligned, cell, Facing::East));
+
+        let mut across = World::new(10, 4, 8);
+        lay_run(&mut across, 3);
+        across.set(3, 0, 3, stone());
+        across.set(3, 1, 3, repeater(Facing::East));
+        assert!(!dust_side_connected(&across, cell, Facing::South));
+        assert!(
+            dust_powers_block_toward(&across, cell, Facing::East),
+            "a repeater lying across the run is invisible to it"
+        );
+    }
+
+    #[test]
+    fn dust_always_powers_the_block_below_and_never_the_one_above() {
+        // Shape-independent, both ways round: check it on a dot, which has
+        // no shape at all, and on a corner, which has one that powers
+        // nothing horizontally.
+        let mut w = World::new(10, 4, 8);
+        place_dust_on_stone(&mut w, 1, 0, 2);
+        let dot = Position::new(1, 1, 2);
+        assert!(dust_powers_block_toward(&w, dot, Facing::Down));
+        assert!(!dust_powers_block_toward(&w, dot, Facing::Up));
+
+        lay_run(&mut w, 3);
+        place_dust_on_stone(&mut w, 3, 0, 3);
+        let corner = Position::new(3, 1, 2);
+        assert!(dust_powers_block_toward(&w, corner, Facing::Down));
+        assert!(!dust_powers_block_toward(&w, corner, Facing::Up));
     }
 
     #[test]

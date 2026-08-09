@@ -39,7 +39,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
 use crate::redstone::rules::taxonomy::{flags_of, BlockPower};
 use crate::redstone::simulator::component::torch_support_position;
-use crate::redstone::simulator::connectivity::{dust_connections, dust_reach};
+use crate::redstone::simulator::connectivity::{
+    dust_connections, dust_powers_block_toward, dust_reach,
+};
 use crate::redstone::simulator::position::{Position, ALL_SIX, HORIZONTAL};
 use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
 use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
@@ -4328,7 +4330,27 @@ fn net_reach(world: &World, cells: &[Position]) -> HashSet<Position> {
         }
 
         for direction in ALL_SIX {
-            let (drives_dust, block_power) = structural_output(state, direction);
+            let (drives_dust, mut block_power) = structural_output(state, direction);
+            // `structural_output` can only answer the vertical half of the
+            // dust rule, because which blocks a dust cell powers depends on
+            // its connection shape and that is a fact about the world, not
+            // about the `BlockState`. Correct it here, where the world is in
+            // hand -- `dust_powers_block_toward` is the same measured rule
+            // the simulator's `block_signal_at` uses, and asking it in its
+            // geometry-only form keeps this walk's refusal to trust the
+            // freshly emitted world's placeholder `power` fields intact.
+            //
+            // This is what makes `ForeignNetReachesSupport` able to see a
+            // foreign run that ends against a gate's support block. Nothing
+            // else in the compiler models that adjacency: `dust_reach` and
+            // `verify_connectivity` are both strictly dust-reaches-dust.
+            if state.kind == BlockKind::RedstoneWire {
+                block_power = if dust_powers_block_toward(world, pos, direction) {
+                    BlockPower::Weak
+                } else {
+                    BlockPower::None
+                };
+            }
             let neighbour = pos.offset(direction);
             if drives_dust && world.get(neighbour.x, neighbour.y, neighbour.z).kind == BlockKind::RedstoneWire {
                 enqueue(neighbour, &mut in_network, &mut queue);

@@ -22,7 +22,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "dust_climbs_when_open",
@@ -45,7 +46,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "dust_climb_blocked_by_conductive_above_source",
@@ -61,7 +63,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "dust_climb_blocked_by_nonconductive_step",
@@ -84,7 +87,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "dust_descends_when_open",
@@ -107,7 +111,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "dust_descend_blocked_by_conductive_neighbour",
@@ -130,7 +135,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "dust_strength_starts_at_15",
@@ -146,7 +152,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "dust_strength_decays_by_one_per_block",
@@ -183,7 +190,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "dust_dies_at_zero",
@@ -206,7 +214,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "torch_drives_adjacent_dust",
@@ -222,7 +231,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "torch_inverts_when_its_support_is_genuinely_powered",
@@ -259,7 +269,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "torch_does_not_power_its_own_support",
@@ -282,7 +293,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "wall_torch_facing_names_the_attached_block",
@@ -319,7 +331,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "repeater_facing_names_the_input_side",
@@ -342,7 +355,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "repeater_delay_is_two_to_eight_game_ticks",
@@ -359,19 +373,20 @@
         {
           "question": "delay=2: measured time from input transition to output reaching full strength",
           "note": "expected ~4 game ticks (200ms)",
-          "value_ticks": 4.4
+          "value_ticks": 3.8
         },
         {
           "question": "delay=3: measured time from input transition to output reaching full strength",
           "note": "expected ~6 game ticks (300ms)",
-          "value_ticks": 5.6
+          "value_ticks": 6.2
         },
         {
           "question": "delay=4: measured time from input transition to output reaching full strength",
           "note": "expected ~8 game ticks (400ms)",
-          "value_ticks": 8.1
+          "value_ticks": 7.8
         }
-      ]
+      ],
+      "never_transitioned": false
     },
     {
       "name": "repeater_locking",
@@ -415,7 +430,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "comparator_facing_names_the_input_side",
@@ -438,7 +454,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "comparator_compare_mode_passes_rear_signal",
@@ -461,7 +478,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "comparator_subtract_mode_with_unpowered_side",
@@ -477,7 +495,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "lamp_lights_from_weak_power",
@@ -500,7 +519,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "lamp_on_off_delay",
@@ -519,7 +539,8 @@
           "note": "our code and vanilla both expect ~2 ticks",
           "value_ticks": 4.1
         }
-      ]
+      ],
+      "never_transitioned": false
     },
     {
       "name": "conducts_stone",
@@ -542,7 +563,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "conducts_glass",
@@ -565,7 +587,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "conducts_soul_sand",
@@ -588,7 +611,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "conducts_honey_block",
@@ -611,7 +635,8 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
     },
     {
       "name": "conducts_target",
@@ -634,7 +659,275 @@
           "note": ""
         }
       ],
-      "measurements": []
+      "measurements": [],
+      "never_transitioned": false
+    },
+    {
+      "name": "dust_shape_decides_which_block_it_powers",
+      "category": "dust-directionality",
+      "assumption": "A dust cell weakly powers the block it points into: a straight run (or a stub, which vanilla fills out into a straight run) powers the blocks at both ends of its axis, while a corner, a T, or an isolated dot powers no horizontal neighbour at all. One rule covers all four: the neighbour in direction D is powered exactly when the opposite side is connected and neither perpendicular side is.",
+      "source": "src/redstone/simulator/propagate.rs: dust_power_toward and dust_side_connected",
+      "checks": [
+        {
+          "question": "straight: the dust is powered at all",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "straight: the lamp it points into lights",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "corner: the dust is powered at all",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "corner: the lamp beside it stays dark",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "T: the dust is powered at all",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "T: the lamp beside it stays dark",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dot: the dust is powered at all",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dot: the cell really has no connected side",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dot: an unconnected dust powers no horizontal neighbour",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "control: joining one side turns the same cell into a straight run (vanilla fills in the far side by itself)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "control: and that same untouched lamp now lights",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": [],
+      "never_transitioned": false
+    },
+    {
+      "name": "a_climb_side_counts_as_a_connection_for_directionality",
+      "category": "dust-directionality",
+      "assumption": "A side on which dust climbs is a connection like any other: it gives the run its axis, so the cell at the foot of a climb still powers the block on its far side -- and still loses that direction once a perpendicular branch joins it.",
+      "source": "src/redstone/simulator/propagate.rs: dust_side_connected, climb branch",
+      "checks": [
+        {
+          "question": "climb lane: the cell at the foot of the climb is powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "climb lane: it powers the block on its far side",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "climb + branch lane: the cell is still powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "climb + branch lane: but no longer powers the block beside it",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": [],
+      "never_transitioned": false
+    },
+    {
+      "name": "a_component_beside_a_line_can_cost_it_its_direction",
+      "category": "dust-directionality",
+      "assumption": "Whether an adjacent component destroys a run's direction depends on whether dust connects to it, not on whether it is powered: a repeater lying along the run's cross axis connects and kills the direction, while the same repeater turned perpendicular does not connect and changes nothing. Both repeaters here stay inert throughout.",
+      "source": "src/redstone/simulator/propagate.rs: dust_side_connected, component branch",
+      "checks": [
+        {
+          "question": "control: a bare straight run powers the block it points into",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "an aligned (connecting) repeater beside the run kills that",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "a perpendicular (non-connecting) repeater beside the run does not",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "both repeaters really are inert throughout",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": [],
+      "never_transitioned": false
+    },
+    {
+      "name": "dust_powers_the_block_below_it_but_never_the_block_above",
+      "category": "dust-directionality",
+      "assumption": "The vertical half of the rule, which does not depend on shape at all: dust weakly powers the block directly beneath it whatever its shape, and never powers the block directly above it.",
+      "source": "src/redstone/rules/taxonomy.rs: power_emitted_toward, RedstoneWire arm (Facing::Down yields the full output, every other direction INERT)",
+      "checks": [
+        {
+          "question": "below: the dust is powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "below: dust lights the lamp it stands on",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "above: the dust is powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "above: dust leaves the lamp above it dark",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": [],
+      "never_transitioned": false
+    },
+    {
+      "name": "dust_weak_power_turns_off_a_torch_on_the_block_its_line_points_into",
+      "category": "dust-directionality",
+      "assumption": "The case the compiler's whole cell library rests on: the weak power a dust run puts into the block it points into is enough to invert a torch attached to that block -- and a perpendicular branch, which costs the run its direction, leaves the same torch lit.",
+      "source": "src/redstone/simulator/component.rs: torch_should_be_lit, via propagate::block_power_at and dust_power_toward",
+      "checks": [
+        {
+          "question": "baseline: straight lane's torch starts lit",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "baseline: branched lane's torch starts lit",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "straight: the run is powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "straight: the torch on the block it points into inverts off",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "straight: and its own dust goes dark with it",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "branched: the run is powered just the same",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "branched: the torch stays lit",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "branched: and its own dust stays at full strength",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": [],
+      "never_transitioned": false
     }
   ]
 }

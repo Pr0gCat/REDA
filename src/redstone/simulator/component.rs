@@ -363,6 +363,14 @@ mod tests {
         named("minecraft:lever", BlockKind::Lever)
     }
 
+    fn dust() -> BlockState {
+        named("minecraft:redstone_wire", BlockKind::RedstoneWire)
+    }
+
+    fn redstone_block() -> BlockState {
+        named("minecraft:redstone_block", BlockKind::RedstoneBlock)
+    }
+
     fn repeater(facing: Facing, delay: u8, lit: bool) -> BlockState {
         let mut state = named("minecraft:repeater", BlockKind::Repeater);
         state.facing = Some(facing);
@@ -420,6 +428,56 @@ mod tests {
         world.set(1, 0, 0, on_lever);
 
         assert!(!torch_should_be_lit(&world, Position::new(0, 1, 0)));
+    }
+
+    /// A powered straight dust run at y=1 ending against a stone block that
+    /// carries a standing torch. This is the shape the whole compiler is
+    /// built out of, read the other way round: the torch inverts what the
+    /// run delivers to its support.
+    fn run_into_a_torchs_support(bent: bool) -> World {
+        use crate::redstone::simulator::propagate::recompute_dust_strengths;
+        let mut world = World::new(12, 5, 8);
+        for x in 1..=3 {
+            world.set(x, 0, 2, stone());
+            world.set(x, 1, 2, dust());
+        }
+        if bent {
+            world.set(3, 0, 3, stone());
+            world.set(3, 1, 3, dust());
+        }
+        world.set(4, 1, 2, stone()); // the support the run points into
+        let mut lit_torch = torch();
+        lit_torch.lit = true;
+        world.set(4, 2, 2, lit_torch);
+        world.set(0, 1, 2, redstone_block());
+        recompute_dust_strengths(&mut world);
+        world
+    }
+
+    #[test]
+    fn a_dust_run_pointing_into_a_torchs_support_puts_the_torch_out() {
+        // Measured against a real 1.20.1 server, conformance probe
+        // `dust_weak_power_turns_off_a_torch_on_the_block_its_line_points_into`.
+        // This is the case that decides whether the missing directionality
+        // rule was a cosmetic gap or a real one: a torch reading its support
+        // is how every gate in this compiler works.
+        let world = run_into_a_torchs_support(false);
+        assert_eq!(world.get(3, 1, 2).power, 13, "the run is powered");
+        assert!(
+            !torch_should_be_lit(&world, Position::new(4, 2, 2)),
+            "weak power from the run's far end must invert the torch"
+        );
+    }
+
+    #[test]
+    fn a_bent_run_leaves_the_same_torch_lit() {
+        let world = run_into_a_torchs_support(true);
+        assert_eq!(world.get(3, 1, 2).power, 13, "the run is powered just the same");
+        assert!(
+            torch_should_be_lit(&world, Position::new(4, 2, 2)),
+            "one perpendicular branch costs the run its direction, and the \
+             torch never learns the run is there"
+        );
     }
 
     #[test]

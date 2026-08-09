@@ -7,9 +7,9 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
-use crate::redstone::rules::taxonomy::{flags_of, power_emitted_toward, BlockPower};
+use crate::redstone::rules::taxonomy::{flags_of, power_emitted_by, power_emitted_toward, BlockPower, PowerOutput};
 use crate::redstone::world::block::Facing;
-use crate::redstone::simulator::connectivity::dust_connections;
+use crate::redstone::simulator::connectivity::{dust_connections, dust_powers_block_toward};
 use crate::redstone::simulator::position::{Position, ALL_SIX, HORIZONTAL};
 use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::storage::World;
@@ -190,6 +190,44 @@ fn active_dust_networks(world: &World, dirty: &[usize]) -> Vec<Position> {
     active
 }
 
+/// What the dust at `pos` puts into the block lying in `direction`.
+///
+/// This is the world-aware half of `taxonomy::power_emitted_toward`'s
+/// `RedstoneWire` arm -- the half a `BlockState` alone cannot answer, because
+/// it depends on the dust's connection shape, which is a fact about the
+/// surrounding world. Every caller that has a `World` must use this instead;
+/// `power_emitted_toward` reports the horizontal directions as `INERT`
+/// because it has no way to know, not because they are.
+///
+/// It is exactly the geometry of `connectivity::dust_powers_block_toward`
+/// (which carries the measured rule and its table), gated on the wire
+/// actually carrying a signal. Weak, always: a block powered this way still
+/// cannot re-drive
+/// dust, which is why `recompute_dust_strengths` is untouched by this and
+/// why no dust cell's strength can move because of it.
+///
+/// **This does not govern what a repeater or comparator reads from dust
+/// touching it.** Those read the wire's `power` field directly, whatever its
+/// shape (vanilla's `DiodeBlock::getInputSignal` has an explicit fallback for
+/// exactly this), which is what `signal_from`'s first path already does. A
+/// dust corner does drive a repeater it turns into; it just does not power
+/// the *block* beside it.
+pub fn dust_power_toward(world: &World, pos: Position, direction: Facing) -> PowerOutput {
+    let state = world.get(pos.x, pos.y, pos.z);
+    if state.kind != BlockKind::RedstoneWire {
+        return power_emitted_toward(state, direction);
+    }
+    let full = power_emitted_by(state);
+    if full == PowerOutput::INERT {
+        return PowerOutput::INERT;
+    }
+    if dust_powers_block_toward(world, pos, direction) {
+        full
+    } else {
+        PowerOutput::INERT
+    }
+}
+
 /// 這一格方塊被充能到什麼程度，以及**多強**。
 ///
 /// `block_power_at` 只回答種類，這個版本連強度一起回答。比較器透過方塊
@@ -208,8 +246,11 @@ pub fn block_signal_at(world: &World, pos: Position) -> (BlockPower, u8) {
 
     for facing in ALL_SIX {
         let neighbour = pos.offset(facing);
-        let neighbour_state = world.get(neighbour.x, neighbour.y, neighbour.z);
-        let output = power_emitted_toward(neighbour_state, facing.opposite());
+        // `dust_power_toward` defers to `power_emitted_toward` for
+        // everything that is not dust, and answers the horizontal case
+        // `power_emitted_toward` structurally cannot for the one kind that
+        // is. A block learning it is powered is the only thing this changes.
+        let output = dust_power_toward(world, neighbour, facing.opposite());
 
         match output.block_power {
             BlockPower::Strong => {
@@ -520,6 +561,77 @@ mod tests {
 
         let pos = Position::new(5, 1, 5);
         assert_eq!(block_power_at(&w, pos), block_signal_at(&w, pos).0);
+    }
+
+    /// A powered straight run of `len` dust cells at y=1 ending against a
+    /// stone block at `x = len + 1`, all on a stone floor at y=0.
+    fn run_into_a_block(len: i32) -> World {
+        let mut w = World::new(len + 6, 4, 6);
+        for x in 1..=len {
+            w.set(x, 0, 2, stone());
+            w.set(x, 1, 2, dust());
+        }
+        w.set(len + 1, 1, 2, stone()); // the block the run points into
+        w.set(0, 1, 2, redstone_block());
+        recompute_dust_strengths(&mut w);
+        w
+    }
+
+    #[test]
+    fn a_dust_run_weakly_powers_the_block_it_points_into() {
+        // Measured, conformance probe `dust_shape_decides_which_block_it_
+        // powers`. Before this rule existed the simulator reported this
+        // block as completely inert, and the comment on
+        // `power_emitted_toward`'s dust arm claimed this file handled it.
+        let w = run_into_a_block(3);
+        let (kind, strength) = block_signal_at(&w, Position::new(4, 1, 2));
+        assert_eq!(kind, BlockPower::Weak, "a run's far block is weakly powered");
+        assert_eq!(strength, 13, "and carries the run's own strength, not 15");
+    }
+
+    #[test]
+    fn a_bent_run_leaves_that_same_block_inert() {
+        let mut w = run_into_a_block(3);
+        // Join the last cell from the south. Nothing about the run's power
+        // changes; only its shape does.
+        w.set(3, 0, 3, stone());
+        w.set(3, 1, 3, dust());
+        recompute_dust_strengths(&mut w);
+        assert_eq!(w.get(3, 1, 2).power, 13, "the run is still powered");
+        assert_eq!(
+            block_signal_at(&w, Position::new(4, 1, 2)),
+            (BlockPower::None, 0),
+            "one perpendicular branch costs the run its direction"
+        );
+    }
+
+    #[test]
+    fn a_block_powered_by_a_dust_run_still_cannot_repower_dust() {
+        // The whole point of the power being *weak*. If this ever became
+        // strong, every routing channel in the compiler would leak through
+        // its own separator blocks.
+        let mut w = run_into_a_block(3);
+        w.set(5, 0, 2, stone());
+        w.set(5, 1, 2, dust()); // on the far side of the powered block
+        recompute_dust_strengths(&mut w);
+        assert_eq!(
+            w.get(5, 1, 2).power,
+            0,
+            "weak power must not cross the block into another wire"
+        );
+    }
+
+    #[test]
+    fn no_dust_strength_can_move_because_of_the_directionality_rule() {
+        // `recompute_dust_strengths` only ever consults *strong* block
+        // power, and this rule only ever adds weak power, so it cannot
+        // reach dust strengths at all. Checked rather than asserted in
+        // prose, because it is the reason no compiled circuit's settle time
+        // could move when the rule landed.
+        let w = run_into_a_block(5);
+        for x in 1..=5 {
+            assert_eq!(w.get(x, 1, 2).power, 16 - x as u8, "dust at x={x}");
+        }
     }
 
     #[test]

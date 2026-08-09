@@ -302,6 +302,49 @@ pub fn power_emitted_by(state: &BlockState) -> PowerOutput {
     }
 }
 
+/// Whether redstone dust forms a *connection* to this block, when the block
+/// lies in `direction` from the dust. `direction` is horizontal.
+///
+/// This is not "does the block drive the dust" and not "does the dust drive
+/// the block" -- it is the third, purely structural question of whether the
+/// dust's blockstate records that side as attached, which is what decides
+/// the dust's shape and hence which blocks it powers (see
+/// `connectivity::dust_sides`). An *unpowered* repeater lying along the
+/// dust's axis still connects, and still costs a perpendicular run its
+/// direction: measured, conformance probe
+/// `a_component_beside_a_line_can_cost_it_its_direction`.
+///
+/// The two components with a direction of their own are the reason this
+/// cannot be a flat "is it a redstone thing" predicate:
+///
+/// - a **repeater** connects only along its own axis, so a repeater lying
+///   across the dust's line is invisible to it;
+/// - an **observer** connects only on its output face, the side its
+///   `facing` points away from.
+///
+/// A comparator, unlike a repeater, connects on all four sides -- it has
+/// side inputs, and they are fed by dust.
+pub fn accepts_dust_connection(state: &BlockState, direction: Facing) -> bool {
+    match state.kind {
+        BlockKind::RedstoneWire => true,
+        BlockKind::Repeater => state
+            .facing
+            .is_some_and(|facing| facing == direction || facing == direction.opposite()),
+        BlockKind::Observer => state.facing == Some(direction),
+        BlockKind::Comparator
+        | BlockKind::Torch
+        | BlockKind::WallTorch
+        | BlockKind::Lever
+        | BlockKind::RedstoneBlock
+        | BlockKind::Button
+        | BlockKind::PressurePlate
+        | BlockKind::WeightedPressurePlate
+        | BlockKind::DaylightDetector
+        | BlockKind::Target => true,
+        _ => false,
+    }
+}
+
 /// 這個方塊往 `direction` 方向送出什麼訊號。
 ///
 /// **方向性是紅石的核心語意，不是細節。** 兩個決定性的例子：
@@ -356,8 +399,23 @@ pub fn power_emitted_toward(state: &BlockState, direction: Facing) -> PowerOutpu
             }
         }
 
-        // 紅石粉：**弱**充能腳下的方塊。水平方向的充能取決於粉的連接形狀，
-        // 由 `propagate` 依連接關係處理，這裡只回答垂直的部分。
+        // Redstone dust. The vertical half of the rule is all a `BlockState`
+        // on its own can answer, and it is all this arm answers: dust weakly
+        // powers the block directly beneath it, and never the block directly
+        // above it. Both halves are measured -- conformance probe
+        // `dust_powers_the_block_below_it_but_never_the_block_above`.
+        //
+        // **The horizontal half is not answered here, and returning INERT is
+        // not a claim that it is inert.** Dust does weakly power the block a
+        // straight run points into -- measured, `dust_shape_decides_which_
+        // block_it_powers` -- but whether it does depends on the dust's
+        // connection shape, which is a property of the surrounding world and
+        // is therefore unknowable from a `BlockState`. Callers that have a
+        // world must ask `propagate::dust_power_toward` instead of this
+        // function; `propagate::block_signal_at` and `compile`'s `net_reach`
+        // both do. An earlier version of this comment claimed `propagate`
+        // already handled the horizontal case "by connection shape". It did
+        // not, and nothing did.
         BlockKind::RedstoneWire => match direction {
             Facing::Down => full,
             _ => PowerOutput::INERT,
