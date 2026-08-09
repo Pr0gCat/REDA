@@ -265,25 +265,47 @@
     <div class="panel hidden" data-view="topo">
       <h2>Topology</h2>
       <div class="row">
-        <label for="topo-focus-select">Focus gate</label>
+        <label for="topo-level-select">Level</label>
+        <select id="topo-level-select">
+          <option value="gate" selected>Gate level -- what it is</option>
+          <option value="primitive">Primitive level -- what it lowers to</option>
+        </select>
+      </div>
+      <div class="row">
+        <label for="topo-focus-select">Focus</label>
         <select id="topo-focus-select">
-          <option value="">All gates</option>
+          <option value="">All</option>
         </select>
       </div>
       <div class="btn-row">
         <button id="topo-relayout-btn">Reset view</button>
       </div>
       <div class="status" id="topo-status"></div>
-      <h2 style="margin-top:10px;">Primitives</h2>
-      <div class="legend-list" id="topo-primitive-legend"></div>
-      <h2 style="margin-top:10px;">Gates</h2>
-      <div class="legend-list" id="topo-gate-legend">
-        <span><span class="legend-swatch" style="background:hsla(210,65%,55%,0.35);border-color:hsla(210,70%,65%,0.9)"></span>NOR<i>n</i> -- a torch on its support. One badge around the single node the gate expands into; each gate gets its own hue.</span>
-        <span><span class="legend-swatch" style="background:transparent;border:1px dashed #ff3b3b;border-radius:50%"></span>OR<i>n</i> wire merge -- no torch, no support, no body: a dust junction where several branches meet. Dashed spokes reach the nodes whose dust actually joins there.</span>
+      <div class="legend-list" id="topo-cell-histogram" data-level="gate"></div>
+
+      <div data-level="gate">
+        <h2 style="margin-top:10px;">Cells</h2>
+        <div class="legend-list">
+          <span><span class="legend-swatch" style="background:hsla(212,45%,52%,0.5);border-color:hsla(212,60%,70%,0.9)"></span>A gate-level cell -- <i>and</i>, <i>nand</i>, <i>mux</i>, <i>andnot</i>, ... Labelled with its kind, not drawn as a shape per kind: there are thirteen of them and thirteen invented outlines would be harder to read than the word. The corner count is how many torches and merges it lowers into.</span>
+          <span><span class="legend-swatch" style="background:rgba(255,140,0,0.45);border-color:#ff8c00"></span><i>nor</i> -- realisable directly: one torch on its support. Nothing to lower.</span>
+          <span><span class="legend-swatch" style="background:transparent;border:1px dashed #ff3b3b"></span><i>merge</i> -- a wire merge, also realisable directly, and not a gate body at all: no torch, no support, just the point where several branches' dust are allowed to touch. Drawn hollow because there is no block there to fill in.</span>
+          <span><span class="legend-swatch" style="background:#7a5230;border-radius:50%"></span>Primary input (a lever) &nbsp;<span class="legend-swatch" style="background:#ffd54a;border-radius:50%"></span>Primary output (a lamp)</span>
+          <span><span class="legend-swatch" style="background:#ff3b3b"></span>Signal flow, producer to consumer. Each edge lands on its own <b>pin</b>, stacked down the cell's left edge in the kind's declared pin order -- <i>andnot</i> and <i>mux</i> are not symmetric in their pins, so which edge lands where is part of what the circuit is.</span>
+        </div>
       </div>
-      <h2 style="margin-top:10px;">Edges</h2>
-      <div class="legend-list" id="topo-edge-legend">
-        <span><span class="legend-swatch" style="background:#ff3b3b"></span>Signal flow -- producer to consumer; realisation (a dust path, adjacency, or otherwise) is not decided at this layer</span>
+
+      <div data-level="primitive">
+        <h2 style="margin-top:10px;">Primitives</h2>
+        <div class="legend-list" id="topo-primitive-legend"></div>
+        <h2 style="margin-top:10px;">Gates</h2>
+        <div class="legend-list" id="topo-gate-legend">
+          <span><span class="legend-swatch" style="background:hsla(210,65%,55%,0.35);border-color:hsla(210,70%,65%,0.9)"></span>NOR<i>n</i> -- a torch on its support. One badge around the single node the gate expands into; each gate gets its own hue.</span>
+          <span><span class="legend-swatch" style="background:transparent;border:1px dashed #ff3b3b;border-radius:50%"></span>OR<i>n</i> wire merge -- no torch, no support, no body: a dust junction where several branches meet. Dashed spokes reach the nodes whose dust actually joins there.</span>
+        </div>
+        <h2 style="margin-top:10px;">Edges</h2>
+        <div class="legend-list" id="topo-edge-legend">
+          <span><span class="legend-swatch" style="background:#ff3b3b"></span>Signal flow -- producer to consumer; realisation (a dust path, adjacency, or otherwise) is not decided at this layer</span>
+        </div>
       </div>
     </div>
 
@@ -428,9 +450,12 @@ const topoCanvas = document.getElementById('topo-canvas');
 const topoCtx = topoCanvas.getContext('2d');
 const topoHoverReadout = document.getElementById('topo-hover-readout');
 const topoFocusSelect = document.getElementById('topo-focus-select');
+const topoLevelSelect = document.getElementById('topo-level-select');
 const topoRelayoutBtn = document.getElementById('topo-relayout-btn');
 const topoStatus = document.getElementById('topo-status');
 const topoPrimitiveLegend = document.getElementById('topo-primitive-legend');
+const topoCellHistogram = document.getElementById('topo-cell-histogram');
+const topoCaption = document.getElementById('topo-caption');
 
 // Offscreen 1px-per-cell canvas the visible canvas is scaled up from.
 const offscreen = document.createElement('canvas');
@@ -1551,13 +1576,49 @@ function onThreeHover(e) {
 // ---------------------------------------------------------------------
 // Topology view
 //
-// Renders `Session::topology()` -- the flat `compile::primitive_graph`
-// expansion of the circuit's netlist. Unlike the 2D/3D views, this graph
-// carries no positions at all (see that method's doc comment and
+// Renders `Session::topology()`. Unlike the 2D/3D views, neither graph it
+// returns carries positions at all (see that method's doc comment and
 // `docs/superpowers/specs/2026-08-08-primitive-level-flow.md`'s "Topology
 // carries no positions"), so this view's whole job, uniquely among the
 // three, is to invent a layout rather than just project one that already
 // exists.
+//
+// # Two levels, and which one is the default
+//
+// This tab exists to answer "what is this circuit". It spent two revisions
+// answering "what did it lower to" instead -- which is what the 2D and 3D
+// views already answer, in more detail. On `verilog:and4` it read
+//
+//     14 nodes, 13 edges, 9 gates (9 NOR, 0 wire merges)
+//
+// for a circuit that is three ANDs. Nine NOR badges is not a summary of
+// three ANDs; it is a different fact, about a later stage.
+//
+// So there are two levels here now, and `topoLevel` switches between them:
+//
+//   * **Gate level** (`'gate'`, the default) -- `Session::topology()`'s
+//     `gate_level.cells`: the netlist as loaded, one node per cell, labelled
+//     with its own kind (`and`, `nand`, `mux`, `andnot`, `merge`, `nor`),
+//     with signal-flow edges landing on numbered pins. `verilog:and4` is
+//     three boxes; `verilog:seven_segment` is thirty-one.
+//   * **Primitive level** (`'primitive'`) -- `primitive_level`, the flat
+//     `compile::primitive_graph` expansion, drawn exactly as this view drew
+//     it before. The lowering is real and worth being able to see; it is
+//     just not the answer to the tab's own question.
+//
+// The two are kept related rather than merely adjacent: every cell carries
+// `lowered` (which realisable gates its expansion produced) and `nodes`
+// (which primitives those instantiate), so the gate level can say *how many*
+// torches and merges a cell becomes without leaving the gate level, and
+// switching down to the primitive level is a change of resolution rather
+// than a change of subject.
+//
+// **The hand-written circuits are not dressed up.** `and4`, `full_adder`,
+// `segment_a` and `seven_segment` are built by `NetlistBuilder`, which emits
+// NOR gates and wire merges and nothing else, so their gate level *is* their
+// primitive netlist and both levels show the same NOR wall. That is the
+// truth about those circuits. The status line says so in as many words
+// rather than implying a second level was hidden.
 //
 // # There is one kind of edge now
 //
@@ -1583,8 +1644,9 @@ function onThreeHover(e) {
 // Every hand-written circuit in `reda::circuits` is pure NOR, so for a long
 // time "gate" and "one torch node" were the same thing here and this view
 // labelled every gate `NOR<n>` without ever being wrong. A synthesised
-// netlist is not pure NOR: Yosys `OR2`/`OR3` map onto **wire merges**
-// (`Gate::is_merge`), 11 of `verilog:seven_segment`'s 31 gates. A merge has
+// netlist is not pure NOR: an OR maps onto a **wire merge**
+// (`Gate::is_merge`), 6 of `verilog:seven_segment`'s 31 gate-level cells and
+// 17 of the 56 realisable gates they lower into. A merge has
 // no torch, no support and no gate body at all -- it is the point where
 // several producers' dust are allowed to physically touch. Drawing that as
 // one more NOR badge is not a simplification; it is the single thing this
@@ -1608,6 +1670,34 @@ function onThreeHover(e) {
 // per-gate-hue badge. The two read as different kinds of object at any zoom
 // level, before any label is legible. `computeMergeJunctions` places them;
 // `drawTopology` draws them.
+//
+// # Thirteen kinds, three shapes, and a word
+//
+// `GateKind` has thirteen gate-level members plus the two realisable ones,
+// and inventing fifteen outlines would produce a picture nobody can read
+// without a key -- the reader would be decoding shapes back into words
+// anyway. So the gate level draws the **word**: each cell is a box with its
+// kind spelled out in `GateKind::wire_name`'s own spelling, the same one the
+// baked netlist files and `mc_dump` use, so a name read off the picture can
+// be grepped for in `src/circuits/baked/*.netlist` directly.
+//
+// What the *shape* carries is the one distinction that is not a name -- what
+// a cell will cost to build, which is exactly what "realisable" means:
+//
+//   * a filled slate box: gate level, has to be lowered. Its bottom-right
+//     corner carries how many torches and merges it becomes.
+//   * a filled torch-orange box: `nor`, realisable directly -- one torch.
+//   * a hollow dashed box: `merge`, realisable directly and not a gate body
+//     at all. Hollow for the same reason the primitive level draws a merge
+//     hollow: there is no block there to fill in.
+//
+// Pins are drawn, not just edges. `andnot` (`A & !B`) and `mux`
+// (`S ? B : A`) are not symmetric in their inputs, so "which edge lands
+// where" is part of what the circuit is, and a picture that lets the two
+// edges into a `andnot` swap places is wrong in the way that matters.
+// `Session::topology()` reports each cell's inputs in the kind's own pin
+// order; `buildGateLevel` turns that order into ports stacked down the box's
+// left edge, and every edge lands on its own.
 //
 // Layout: a layered DAG (Sugiyama-style) layout -- the same family of
 // algorithm graphviz's `dot` uses for a schematic or dataflow diagram, not
@@ -1653,22 +1743,28 @@ function onThreeHover(e) {
 // re-fits the camera; a circuit's layout itself never changes between
 // loads or reloads.
 //
-// Scale: `and4` (12 nodes) lays out as one small, fully readable picture --
-// four layers, every edge traceable by eye, nothing left to a "Focus gate"
-// tool. `seven_segment` (84 gates, ~180 primitives) is a different story:
-// a layered layout removes the previous view's worst failure (edges cutting
-// through unrelated nodes, and flow direction being invisible) and keeps
-// flow visibly left-to-right at every zoom level, but 11 layers deep and up
-// to 16 nodes in its busiest layer is still more simultaneous edges than an
-// eye can trace node-by-node at full zoom -- an improvement in kind (readable
+// Scale, and what the gate level does for it: `verilog:and4` is 3 cells at
+// the gate level against 9 gates / 14 primitives below, and
+// `verilog:seven_segment` is 31 cells against 56 gates / 70 primitives.
+// Making the gate level the default is therefore not only the right *answer*
+// but the smaller picture -- a whole-circuit view of `seven_segment` at the
+// gate level fits on screen with every cell's kind legible, which the
+// primitive view of the same circuit does not.
+//
+// The primitive level keeps the caveat it always had. A layered layout
+// removed that view's worst failure (edges cutting through unrelated nodes,
+// and flow direction being invisible) and keeps flow visibly left to right
+// at every zoom level, but it is still more simultaneous edges than an eye
+// can trace node-by-node at full zoom -- an improvement in kind (readable
 // structure instead of a scattered web), not a claim that the full picture
-// is a "read off individual wires" tool. Gate badges (see `drawTopology`'s
-// translucent rounded squares, one per gate, labelled with that gate's own
-// output name) make "which node is which gate" checkable without reading
-// positions at all, and "Focus gate" isolates one gate plus its direct
-// neighbours (`computeEgoSet`) and fits the view to just that -- still the
-// tool this task's own hand cross-check uses, and still necessary at this
-// size even with the improved layout.
+// is a "read off individual wires" tool. Gate badges (see
+// `drawPrimitiveLevel`'s translucent rounded squares, one per gate, labelled
+// with that gate's own output name) make "which node is which gate"
+// checkable without reading positions at all, and "Focus" isolates one gate
+// plus its direct neighbours (`computeEgoSet`) and fits the view to just
+// that -- still the tool this task's own hand cross-check uses, and still
+// necessary at this size even with the improved layout. The gate level has
+// its own `computeCellEgoSet` doing the same job on its own graph.
 // ---------------------------------------------------------------------
 
 const PRIMITIVE_COLOR = {
@@ -1699,11 +1795,39 @@ const TOPO_BARYCENTRE_SWEEPS = 4; // same count `build_floorplan` uses, for the 
 const TOPO_MERGE_COLOR = '#ff3b3b';
 const TOPO_MERGE_RADIUS = 1.9;
 
-let topoGates = [];      // raw TopologyGate[] from session.topology()
+// Gate level. Boxes need more room than dots, on both axes: a cell is
+// `CELL_W` wide and at least `CELL_MIN_H` tall (taller with more pins, one
+// `CELL_PIN_PITCH` apart), so layers have to clear the width and slots the
+// height.
+const CELL_LAYER_SPACING = 200;
+const CELL_NODE_SPACING = 62;
+const CELL_W = 86;
+const CELL_MIN_H = 30;
+const CELL_PIN_PITCH = 13;
+// Slate for a gate-level cell, torch orange for a `nor`, dust red for a
+// `merge` -- the three families from this section's "Thirteen kinds, three
+// shapes, and a word". The two realisable colours are the same hex the 2D/3D
+// views give `RedstoneTorch` and `RedstoneWire`, so a colour means the same
+// thing in every view.
+const CELL_COLOR = { gate: '#4a7fc1', nor: '#ff8c00', merge: TOPO_MERGE_COLOR };
+const CELL_IO_COLOR = { input: '#7a5230', output: '#ffd54a' }; // lever, lamp
+
+let topoLevel = 'gate';  // 'gate' | 'primitive' -- see this section's doc comment
+
+let topoGates = [];      // raw TopologyGate[] from session.topology().primitive_level
 let topoNodes = [];      // { id, primitive, provenance, x, y }
-let topoEdges = [];      // raw { from, to } from session.topology()
+let topoEdges = [];      // raw { from, to } from primitive_level
 let topoEdgePaths = [];  // parallel to topoEdges: [{x,y}, ...] through any dummy chain
 let topoMerges = [];     // { gate, x, y } per wire-merge gate -- see computeMergeJunctions
+
+let topoCells = [];      // raw TopologyCell[] from session.topology().gate_level
+// One node per cell, per primary input and per primary output.
+// { id, role: 'cell'|'input'|'output', cell, label, kind, family, pins, x, y }
+let cellNodes = [];
+let cellEdges = [];      // { from, to, pin } -- `pin` is the index into the consumer's own input list
+let cellEdgePaths = [];  // parallel to cellEdges
+let cellOfIndex = [];    // TopologyCell.index -> cellNodes index
+
 let topoView = { scale: 1, offsetX: 0, offsetY: 0 };
 
 /** Whether one raw `TopologyGate` is a wire merge rather than a NOR. */
@@ -1748,30 +1872,121 @@ function buildPrimitiveLegend() {
   }
 }
 buildPrimitiveLegend(); // static -- independent of any circuit
+syncLevelPanels();      // ditto: match the panels to `topoLevel`'s initial value
 
-/** Rebuild `topoNodes`/`topoEdges`/`topoGates` from `session.topology()` and
- * lay out the fresh graph. Called once per circuit load/reset, same as
- * `build3DGeometry` -- topology is as static per-circuit as geometry is. */
+/** Which of the three visual families a cell belongs to -- see this
+ * section's "Thirteen kinds, three shapes, and a word". Read off
+ * `cell.realisable` and `cell.kind`, both of which come straight from
+ * `GateKind`, so this never invents a classification of its own. */
+function cellFamily(cell) {
+  if (!cell.realisable) return 'gate';
+  return cell.kind === 'merge' ? 'merge' : 'nor';
+}
+
+/** How tall a cell's box is: enough for its pins, and never below
+ * `CELL_MIN_H` so a 1-input cell still reads as a box. */
+function cellHeight(pinCount) {
+  return Math.max(CELL_MIN_H, (pinCount + 1) * CELL_PIN_PITCH);
+}
+
+/** Build `cellNodes`/`cellEdges` from `session.topology()`'s `gate_level`.
+ *
+ * The graph drawn is the netlist itself: one node per cell, plus one per
+ * primary input and one per primary output so a signal entering or leaving
+ * the circuit has somewhere to come from and go to. Nothing here derives
+ * connectivity from names -- `input.cell` is resolved on the Rust side
+ * (`CellInput` in `viewer/src/lib.rs`), precisely so that the picture and
+ * the netlist cannot disagree about who drives what. */
+function buildGateLevel(level) {
+  topoCells = level.cells || [];
+  cellNodes = [];
+  cellEdges = [];
+  cellOfIndex = [];
+
+  const inputNodeOf = new Map(); // primary input name -> cellNodes index
+  for (const name of level.inputs || []) {
+    inputNodeOf.set(name, cellNodes.length);
+    cellNodes.push({
+      id: cellNodes.length, role: 'input', cell: null,
+      label: name, kind: 'input', family: 'input', pins: 0, x: 0, y: 0,
+    });
+  }
+  for (const cell of topoCells) {
+    cellOfIndex[cell.index] = cellNodes.length;
+    cellNodes.push({
+      id: cellNodes.length, role: 'cell', cell,
+      label: cell.output, kind: cell.kind, family: cellFamily(cell),
+      pins: cell.inputs.length, x: 0, y: 0,
+    });
+  }
+  // Two circuits' primary outputs can name the same signal, and a signal can
+  // be both a primary output and another cell's input -- neither is a reason
+  // to merge nodes, so each declared output gets its own sink node.
+  for (const output of level.outputs || []) {
+    const id = cellNodes.length;
+    cellNodes.push({
+      id, role: 'output', cell: null,
+      label: output.name, kind: 'output', family: 'output', pins: 1, x: 0, y: 0,
+    });
+    if (output.cell !== null && output.cell !== undefined) {
+      cellEdges.push({ from: cellOfIndex[output.cell], to: id, pin: 0 });
+    }
+  }
+
+  for (const cell of topoCells) {
+    const to = cellOfIndex[cell.index];
+    cell.inputs.forEach((input, pin) => {
+      const from = input.cell !== null && input.cell !== undefined
+        ? cellOfIndex[input.cell]
+        : inputNodeOf.get(input.name);
+      // Every signal is either driven by a cell or is a primary input --
+      // `compile()` rejects a netlist where it is neither
+      // (`CompileError::UndrivenSignal`), so this branch is unreachable for
+      // any circuit a session exists for. Skipping rather than throwing keeps
+      // a hypothetical bad netlist a missing edge instead of a blank tab.
+      if (from === undefined) return;
+      cellEdges.push({ from, to, pin });
+    });
+  }
+}
+
+/** Rebuild both levels from `session.topology()` and lay out the fresh
+ * graphs. Called once per circuit load/reset, same as `build3DGeometry` --
+ * topology is as static per-circuit as geometry is. */
 function buildTopology() {
   const raw = session.topology();
-  topoGates = raw.gates || [];
-  topoEdges = raw.edges || [];
-  topoNodes = (raw.nodes || []).map((n) => ({
+  const primitive = raw.primitive_level || { nodes: [], edges: [], gates: [] };
+  topoGates = primitive.gates || [];
+  topoEdges = primitive.edges || [];
+  topoNodes = (primitive.nodes || []).map((n) => ({
     id: n.id,
     primitive: n.primitive,
     provenance: n.provenance,
     x: 0, y: 0,
   }));
+  buildGateLevel(raw.gate_level || { cells: [], inputs: [], outputs: [] });
 
-  topoFocusSelect.innerHTML = '<option value="">All gates</option>';
-  for (const gate of topoGates) {
+  topoHoverReadout.textContent = ' '; // it described the circuit just unloaded
+  refreshFocusOptions();
+  layoutAndRender();
+}
+
+/** Repopulate "Focus" with whichever level is showing. The two levels have
+ * different objects in them -- 31 cells against 84 torches and merges for
+ * `verilog:seven_segment` -- so one shared list would name things that are
+ * not on screen. */
+function refreshFocusOptions() {
+  const gateLevel = topoLevel === 'gate';
+  topoFocusSelect.innerHTML = `<option value="">All ${gateLevel ? 'cells' : 'gates'}</option>`;
+  const items = gateLevel
+    ? topoCells.map((cell) => [cell.index, `${cell.output} (${cell.kind})`])
+    : topoGates.map((gate) => [gate.index, `${gate.output} (${gateLabel(gate)})`]);
+  for (const [value, text] of items) {
     const opt = document.createElement('option');
-    opt.value = String(gate.index);
-    opt.textContent = `${gate.output} (${gateLabel(gate)})`;
+    opt.value = String(value);
+    opt.textContent = text;
     topoFocusSelect.appendChild(opt);
   }
-
-  layoutAndRender();
 }
 
 /** Longest-path layer for every node index `0..n`: 0 for a node with no
@@ -1806,31 +2021,38 @@ function computeTopoLayers(n, edges) {
   return layer;
 }
 
-/** Build the layered layout in place on `topoNodes`, and fill
- * `topoEdgePaths`: the four steps from this section's own doc comment
- * (layer assignment, dummy-chain insertion, barycentre ordering,
- * coordinate assignment), run fresh every call -- cheap enough at this
- * graph size that there is no reason to cache intermediate state between
- * calls the way the old force simulation cached node velocity. */
-function layoutTopology() {
-  const n = topoNodes.length;
-  topoEdgePaths = [];
-  if (n === 0) return;
+/** The layered layout: the four steps from this section's own doc comment
+ * (layer assignment, dummy-chain insertion, barycentre ordering, coordinate
+ * assignment) over an abstract graph of `n` nodes and `edges`, returning
+ * `{ xs, ys, paths }` -- one coordinate pair per node, and one polyline per
+ * edge through its own dummy chain.
+ *
+ * Abstract over the graph rather than hardwired to `topoNodes` because both
+ * levels need it and neither is a special case of the other: the gate level
+ * lays out 31 cells, the primitive level ~180 torches and repeaters, and the
+ * algorithm does not care which. `layerSpacing`/`nodeSpacing` differ because
+ * a labelled box needs more room than a dot.
+ *
+ * Run fresh every call -- cheap enough at these graph sizes that there is no
+ * reason to cache intermediate state between calls the way the old force
+ * simulation cached node velocity. */
+function layeredLayout(n, edges, layerSpacing, nodeSpacing) {
+  if (n === 0) return { xs: [], ys: [], paths: [] };
 
-  const layer = computeTopoLayers(n, topoEdges);
+  const layer = computeTopoLayers(n, edges);
   const maxLayer = layer.reduce((m, l) => Math.max(m, l), 0);
 
   // One descriptor per real node, plus (built below) one per dummy. `up`/
   // `down` collect the neighbours one layer earlier/later -- always exactly
   // one layer away, since a dummy chain never skips one -- for the
   // barycentre sweeps to read.
-  const real = topoNodes.map((_, i) => ({ real: true, nodeId: i, layer: layer[i], up: [], down: [] }));
+  const real = Array.from({ length: n }, (_, i) => ({ real: true, nodeId: i, layer: layer[i], up: [], down: [] }));
   const layers = Array.from({ length: maxLayer + 1 }, () => []);
   for (const d of real) layers[d.layer].push(d);
 
   // Dummy-chain insertion (step 2): a chain of descriptors from source to
   // destination, one dummy per layer the raw edge would otherwise skip.
-  const chains = topoEdges.map((edge) => {
+  const chains = edges.map((edge) => {
     const chain = [real[edge.from]];
     for (let l = layer[edge.from] + 1; l < layer[edge.to]; l++) {
       const dummy = { real: false, layer: l, up: [], down: [] };
@@ -1877,19 +2099,53 @@ function layoutTopology() {
   for (const row of layers) {
     const offset = (row.length - 1) / 2;
     for (const d of row) {
-      d.x = d.layer * TOPO_LAYER_SPACING;
-      d.y = (d.order - offset) * TOPO_NODE_SPACING;
+      d.x = d.layer * layerSpacing;
+      d.y = (d.order - offset) * nodeSpacing;
     }
   }
-  for (const d of real) { topoNodes[d.nodeId].x = d.x; topoNodes[d.nodeId].y = d.y; }
+  const xs = new Array(n), ys = new Array(n);
+  for (const d of real) { xs[d.nodeId] = d.x; ys[d.nodeId] = d.y; }
 
   // Edge paths for drawing: straight through the endpoints when an edge
   // spans one layer (the common case), or a polyline through its dummy
   // chain otherwise, so a long edge bends around whatever sits between its
   // endpoints instead of passing through it.
-  topoEdgePaths = chains.map((chain) => chain.map((d) => ({ x: d.x, y: d.y })));
+  const paths = chains.map((chain) => chain.map((d) => ({ x: d.x, y: d.y })));
+  return { xs, ys, paths };
+}
 
+/** Lay out both levels. Both, not just the visible one: switching levels
+ * then has nothing to recompute, and at these sizes (31 cells / ~180
+ * primitives at the largest) laying out the hidden one costs less than the
+ * branch to avoid it would cost to read. */
+function layoutTopology() {
+  const primitive = layeredLayout(topoNodes.length, topoEdges, TOPO_LAYER_SPACING, TOPO_NODE_SPACING);
+  topoNodes.forEach((node, i) => { node.x = primitive.xs[i]; node.y = primitive.ys[i]; });
+  topoEdgePaths = primitive.paths;
   topoMerges = computeMergeJunctions();
+
+  const gate = layeredLayout(cellNodes.length, cellEdges, CELL_LAYER_SPACING, CELL_NODE_SPACING);
+  cellNodes.forEach((node, i) => { node.x = gate.xs[i]; node.y = gate.ys[i]; });
+  cellEdgePaths = gate.paths;
+  // An edge lands on its consumer's own pin, not on the consumer's centre --
+  // see this section's "Thirteen kinds, three shapes, and a word". The layout
+  // above has no notion of a pin, so the last point of each path is nudged
+  // here, after coordinates exist. The first point is nudged to the
+  // producer's right edge for the same reason: a box has a width, and an edge
+  // leaving from its centre would be drawn under it.
+  cellEdges.forEach((edge, i) => {
+    const path = cellEdgePaths[i];
+    const to = cellNodes[edge.to], from = cellNodes[edge.from];
+    path[0] = { x: from.x + CELL_W / 2, y: from.y };
+    path[path.length - 1] = { x: to.x - CELL_W / 2, y: pinY(to, edge.pin) };
+  });
+}
+
+/** Where pin `pin` of `node` sits: pins are stacked down the box's left edge
+ * in the cell's own declared pin order, evenly spaced and centred. */
+function pinY(node, pin) {
+  const h = cellHeight(node.pins);
+  return node.y - h / 2 + ((pin + 1) * h) / (node.pins + 1);
 }
 
 /** Where each wire merge's junction glyph goes, given a laid-out graph:
@@ -1964,19 +2220,43 @@ function computeEgoSet(gateIndex) {
   return result;
 }
 
+/** The gate level's own ego set: one cell node plus everything one edge away
+ * from it, in `cellNodes` indices. Same one-hop rule as `computeEgoSet`, on
+ * the graph that is actually on screen at this level. */
+function computeCellEgoSet(cellIndex) {
+  const core = cellOfIndex[cellIndex];
+  const result = new Set([core]);
+  for (const edge of cellEdges) {
+    if (edge.from === core) result.add(edge.to);
+    if (edge.to === core) result.add(edge.from);
+  }
+  return result;
+}
+
+/** The nodes of whichever level is showing. */
+function activeNodes() {
+  return topoLevel === 'gate' ? cellNodes : topoNodes;
+}
+
 /** Fit `topoView` (scale + offset) so every node in `ids` is visible with
- * some padding. Used both for "show me everything" (all node ids) and for
- * "Focus gate" (one ego set). */
+ * some padding, `ids` indexing the active level's own node list. Used both
+ * for "show me everything" (all node ids) and for "Focus" (one ego set). */
 function fitViewToNodes(ids) {
   const w = topoWrap.clientWidth || 400, h = topoWrap.clientHeight || 400;
+  const nodes = activeNodes();
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
   for (const id of ids) {
-    const node = topoNodes[id];
+    const node = nodes[id];
+    if (!node) continue;
     minX = Math.min(minX, node.x); maxX = Math.max(maxX, node.x);
     minY = Math.min(minY, node.y); maxY = Math.max(maxY, node.y);
   }
   if (!Number.isFinite(minX)) { topoView = { scale: 1, offsetX: w / 2, offsetY: h / 2 }; return; }
-  const graphW = Math.max(maxX - minX, 1), graphH = Math.max(maxY - minY, 1);
+  // A gate-level node is a box, not a dot, so its label runs past its own
+  // coordinate; padding the extent by half a box keeps the outermost cells'
+  // borders inside the canvas rather than clipped at the edge.
+  const half = topoLevel === 'gate' ? CELL_W / 2 : 0;
+  const graphW = Math.max(maxX - minX + 2 * half, 1), graphH = Math.max(maxY - minY + CELL_MIN_H, 1);
   const pad = 60;
   const scale = Math.min((w - 2 * pad) / graphW, (h - 2 * pad) / graphH, 6);
   const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
@@ -1984,7 +2264,7 @@ function fitViewToNodes(ids) {
 }
 
 function resetTopoView() {
-  fitViewToNodes(topoNodes.map((n) => n.id));
+  fitViewToNodes(activeNodes().map((n) => n.id));
 }
 
 function resizeTopoCanvas() {
@@ -2010,24 +2290,81 @@ let topoViewNeedsFit = true;
 function layoutAndRender() {
   const t0 = performance.now();
   layoutTopology();
-  const elapsed = performance.now() - t0;
+  lastLayoutMs = performance.now() - t0;
   topoViewNeedsFit = true;
   if (currentView === 'topo') {
     resizeTopoCanvas();
     resetTopoView();
     topoViewNeedsFit = false;
   }
+  refreshTopoStatus();
   drawTopology();
+}
+
+let lastLayoutMs = 0;
+
+/** `{kind: count}` over the gate level, most common first -- the same
+ * histogram `lowering::cell_type_histogram` prints and the same one the
+ * `# cells:` line of `src/circuits/baked/*.netlist` carries, so what the tab
+ * claims a circuit is made of can be checked against the file it was loaded
+ * from without leaving the page. */
+function cellHistogram() {
+  const counts = new Map();
+  for (const cell of topoCells) counts.set(cell.kind, (counts.get(cell.kind) || 0) + 1);
+  return [...counts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
+/** The status line and the kind histogram beside it, for whichever level is
+ * showing. Both levels report the other's size too, so neither can read as
+ * if it were the whole story. */
+function refreshTopoStatus() {
+  const histogram = cellHistogram();
+  const lowered = topoGates.length;
   const merges = topoGates.filter(isMergeGate).length;
-  // Count the *distinct* gate-level cells these torches and merges were
-  // lowered from, so the status line reports both levels rather than
-  // implying the realisation is all there ever was.
-  const sources = new Set(topoGates.map(gateSource).filter(Boolean));
-  topoStatus.textContent =
-    `${topoNodes.length} nodes, ${topoEdges.length} edges, ${topoGates.length} gates `
-    + `(${topoGates.length - merges} NOR, ${merges} wire merge${merges === 1 ? '' : 's'}) -- `
-    + (sources.size ? `lowered from ${sources.size} gate-level cell${sources.size === 1 ? '' : 's'} -- ` : '')
-    + `layered layout computed in ${elapsed.toFixed(0)} ms.`;
+  // `lower` is the identity on a netlist that was already realisable, so
+  // this is exactly "was there a gate level to lower at all" -- true for the
+  // `verilog:` circuits, false for the hand-written ones, which really are
+  // all-NOR and are not dressed up as anything else.
+  const isRealisableAlready = topoCells.every((cell) => cell.realisable);
+
+  if (topoLevel === 'gate') {
+    topoCaption.textContent =
+      'Gate-level netlist -- the circuit as written; layered (Sugiyama-style) layout, no positions from the compiler';
+    topoStatus.textContent =
+      `${topoCells.length} cell${topoCells.length === 1 ? '' : 's'}, ${cellEdges.length} connections -- `
+      + (isRealisableAlready
+        ? 'already realisable, so the primitive level is this same netlist.'
+        : `lowering into ${lowered} torches and merges (${topoNodes.length} primitives).`)
+      + ` Layout in ${lastLayoutMs.toFixed(0)} ms.`;
+  } else {
+    topoCaption.textContent =
+      'Primitive topology -- what the gate level lowers into; layered (Sugiyama-style) layout, no positions from the compiler';
+    topoStatus.textContent =
+      `${topoNodes.length} nodes, ${topoEdges.length} edges, ${topoGates.length} gates `
+      + `(${lowered - merges} NOR, ${merges} wire merge${merges === 1 ? '' : 's'}) -- `
+      + (isRealisableAlready
+        ? `the same ${topoCells.length} cells as the gate level, which was already realisable.`
+        : `lowered from ${topoCells.length} gate-level cells.`)
+      + ` Layout in ${lastLayoutMs.toFixed(0)} ms.`;
+  }
+
+  topoCellHistogram.innerHTML = '';
+  for (const [kind, count] of histogram) {
+    const family = kind === 'merge' ? 'merge' : (kind === 'nor' ? 'nor' : 'gate');
+    const swatch = family === 'merge'
+      ? `background:transparent;border:1px dashed ${CELL_COLOR.merge}`
+      : `background:${CELL_COLOR[family]}`;
+    const span = document.createElement('span');
+    span.innerHTML = `<span class="legend-swatch" style="${swatch}"></span><b>${kind}</b> &times;${count}`;
+    topoCellHistogram.appendChild(span);
+  }
+}
+
+/** Show only the legend panels belonging to the level on screen. */
+function syncLevelPanels() {
+  for (const el of document.querySelectorAll('[data-level]')) {
+    el.classList.toggle('hidden', el.dataset.level !== topoLevel);
+  }
 }
 
 function gateHue(index) {
@@ -2107,6 +2444,134 @@ function drawTopology() {
   topoCtx.clearRect(0, 0, w, h);
   topoCtx.fillStyle = '#101113';
   topoCtx.fillRect(0, 0, w, h);
+  if (topoLevel === 'gate') drawGateLevel();
+  else drawPrimitiveLevel();
+}
+
+/** The gate level: one box per cell, labelled with the cell's own kind, with
+ * signal-flow edges landing on numbered pins. See this section's "Two
+ * levels, and which one is the default" and "Thirteen kinds, three shapes,
+ * and a word". */
+function drawGateLevel() {
+  if (cellNodes.length === 0) return;
+  const toScreen = (x, y) => [topoView.offsetX + x * topoView.scale, topoView.offsetY + y * topoView.scale];
+  const s = topoView.scale;
+  const focusValue = topoFocusSelect.value;
+  const focusCell = focusValue === '' ? null : Number(focusValue);
+  const egoSet = focusCell === null ? null : computeCellEgoSet(focusCell);
+  const focusNode = focusCell === null ? null : cellOfIndex[focusCell];
+
+  // Edges first, so boxes sit on top of them and an edge never crosses a
+  // label. Each already ends on its consumer's own pin (see layoutTopology).
+  for (let i = 0; i < cellEdges.length; i++) {
+    const edge = cellEdges[i];
+    const inFocus = egoSet ? (egoSet.has(edge.from) && egoSet.has(edge.to)) : true;
+    const path = cellEdgePaths[i];
+    topoCtx.beginPath();
+    for (let j = 0; j < path.length; j++) {
+      const [sx, sy] = toScreen(path[j].x, path[j].y);
+      if (j === 0) topoCtx.moveTo(sx, sy); else topoCtx.lineTo(sx, sy);
+    }
+    topoCtx.strokeStyle = `rgba(255,59,59,${inFocus ? 0.55 : 0.05})`;
+    topoCtx.lineWidth = 1.6;
+    topoCtx.stroke();
+
+    // A pin tick at the landing point: a short stub perpendicular to the
+    // box's left edge. Only worth drawing once a pin is distinguishable from
+    // its neighbour on screen -- below that it is noise on top of the edge.
+    if (s * CELL_PIN_PITCH > 6 && cellNodes[edge.to].pins > 1) {
+      const end = path[path.length - 1];
+      const [ex, ey] = toScreen(end.x, end.y);
+      topoCtx.beginPath();
+      topoCtx.moveTo(ex - 4, ey);
+      topoCtx.lineTo(ex, ey);
+      topoCtx.strokeStyle = `rgba(255,200,200,${inFocus ? 0.8 : 0.06})`;
+      topoCtx.lineWidth = 2;
+      topoCtx.stroke();
+    }
+  }
+
+  for (const node of cellNodes) {
+    const inFocus = egoSet ? egoSet.has(node.id) : true;
+    const dim = focusNode !== null && node.id !== focusNode;
+    const alpha = inFocus ? 1 : 0.1;
+
+    if (node.role !== 'cell') {
+      // A primary input or output: a lever/lamp pill with its signal name,
+      // so a signal entering or leaving the circuit has a visible terminal
+      // rather than an edge trailing off into nothing.
+      const [sx, sy] = toScreen(node.x, node.y);
+      const r = 6;
+      topoCtx.save();
+      topoCtx.globalAlpha = alpha;
+      topoCtx.fillStyle = CELL_IO_COLOR[node.role];
+      topoCtx.beginPath();
+      topoCtx.arc(sx, sy, r, 0, Math.PI * 2);
+      topoCtx.fill();
+      if (s > 0.3) {
+        topoCtx.fillStyle = 'rgba(235,235,235,0.9)';
+        topoCtx.font = '11px ui-monospace, monospace';
+        topoCtx.textBaseline = 'middle';
+        topoCtx.textAlign = node.role === 'input' ? 'right' : 'left';
+        topoCtx.fillText(node.label, sx + (node.role === 'input' ? -r - 4 : r + 4), sy);
+      }
+      topoCtx.restore();
+      continue;
+    }
+
+    const cell = node.cell;
+    const bh = cellHeight(node.pins);
+    const [x0, y0] = toScreen(node.x - CELL_W / 2, node.y - bh / 2);
+    const [x1, y1] = toScreen(node.x + CELL_W / 2, node.y + bh / 2);
+    const colour = CELL_COLOR[node.family];
+
+    topoCtx.save();
+    topoCtx.globalAlpha = alpha;
+    roundRect(topoCtx, x0, y0, x1 - x0, y1 - y0, 4);
+    if (node.family === 'merge') {
+      // Hollow and dashed, for the same reason the primitive level draws a
+      // merge hollow: there is no block there to fill in.
+      topoCtx.setLineDash([4, 3]);
+    } else {
+      topoCtx.fillStyle = node.family === 'nor' ? 'rgba(255,140,0,0.28)' : 'rgba(74,127,193,0.35)';
+      topoCtx.fill();
+    }
+    topoCtx.strokeStyle = colour;
+    topoCtx.lineWidth = dim ? 1 : 1.6;
+    topoCtx.stroke();
+    topoCtx.setLineDash([]);
+
+    if (s > 0.25) {
+      // The kind, spelled out -- the whole point of this level. The output
+      // name goes above the box rather than inside it, so the kind keeps the
+      // larger type at every zoom and a long signal name cannot squeeze it.
+      topoCtx.fillStyle = colour;
+      topoCtx.font = `bold ${Math.min(15, Math.max(9, 13 * s))}px ui-monospace, monospace`;
+      topoCtx.textAlign = 'center';
+      topoCtx.textBaseline = 'middle';
+      topoCtx.fillText(cell.kind, (x0 + x1) / 2, (y0 + y1) / 2);
+
+      topoCtx.fillStyle = 'rgba(230,230,230,0.75)';
+      topoCtx.font = '10px ui-monospace, monospace';
+      topoCtx.textBaseline = 'bottom';
+      topoCtx.fillText(cell.output, (x0 + x1) / 2, y0 - 2);
+
+      // How many torches and merges this cell becomes. Only for a cell that
+      // really is lowered: writing "1" on every NOR of a hand-written circuit
+      // would be a column of ones saying nothing.
+      if (!cell.realisable && s > 0.45) {
+        topoCtx.fillStyle = 'rgba(200,220,255,0.55)';
+        topoCtx.font = '9px ui-monospace, monospace';
+        topoCtx.textAlign = 'right';
+        topoCtx.textBaseline = 'bottom';
+        topoCtx.fillText(`×${cell.lowered.length}`, x1 - 3, y1 - 2);
+      }
+    }
+    topoCtx.restore();
+  }
+}
+
+function drawPrimitiveLevel() {
   if (topoNodes.length === 0) return;
 
   const toScreen = (x, y) => [topoView.offsetX + x * topoView.scale, topoView.offsetY + y * topoView.scale];
@@ -2275,9 +2740,10 @@ topoCanvas.addEventListener('wheel', (e) => {
 // picture that is confidently wrong about which gates a junction joins is
 // worse than one that is merely unhelpful.
 topoCanvas.addEventListener('mousemove', (e) => {
-  if (topoNodes.length === 0) return;
   const rect = topoCanvas.getBoundingClientRect();
   const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+  if (topoLevel === 'gate') { gateLevelHover(mx, my); return; }
+  if (topoNodes.length === 0) return;
   let best = null, bestDist = 10; // px threshold
   for (const node of topoNodes) {
     const sx = topoView.offsetX + node.x * topoView.scale;
@@ -2311,13 +2777,69 @@ topoCanvas.addEventListener('mousemove', (e) => {
 });
 topoCanvas.addEventListener('mouseleave', () => { topoHoverReadout.textContent = ' '; });
 
+/** Hover at the gate level. Hit-testing is against the box, not a radius:
+ * a cell is a rectangle on screen and hovering its label should name it.
+ *
+ * The readout spells out the cell's inputs **in pin order, numbered**, which
+ * is the same claim the picture makes with its stacked ports -- so a reader
+ * who suspects the drawing can read the assertion in text and check it
+ * against `src/circuits/baked/<circuit>.netlist`, whose `gate <kind> <out>
+ * <- <inputs>` lines use this exact vocabulary. A picture that is
+ * confidently wrong about which signal reaches which pin is worse than one
+ * that is merely unhelpful, and this is how it stays checkable. */
+function gateLevelHover(mx, my) {
+  if (cellNodes.length === 0) return;
+  const s = topoView.scale;
+  let hit = null;
+  for (const node of cellNodes) {
+    const sx = topoView.offsetX + node.x * s, sy = topoView.offsetY + node.y * s;
+    if (node.role === 'cell') {
+      const hw = (CELL_W / 2) * s, hh = (cellHeight(node.pins) / 2) * s;
+      if (Math.abs(mx - sx) <= hw && Math.abs(my - sy) <= hh) { hit = node; break; }
+    } else if (Math.hypot(mx - sx, my - sy) <= 9) {
+      hit = node; break;
+    }
+  }
+  if (!hit) { topoHoverReadout.textContent = ' '; return; }
+  if (hit.role !== 'cell') {
+    topoHoverReadout.textContent = `primary ${hit.role} "${hit.label}"`;
+    return;
+  }
+  const cell = hit.cell;
+  const pins = cell.inputs
+    .map((input, i) => `${i}:${input.name}${input.cell === null || input.cell === undefined ? ' (input)' : ''}`)
+    .join(', ');
+  topoHoverReadout.textContent =
+    `${cell.output} = ${cell.kind}(${pins}) -- layer ${cell.layer} -- `
+    + (cell.realisable
+      ? `realisable directly (${cell.kind === 'merge' ? 'a dust junction: no torch, no support' : 'one torch on its support'})`
+      : `lowers into ${cell.lowered.length} torches and merges, ${cell.nodes.length} primitives`);
+}
+
 topoFocusSelect.addEventListener('change', () => {
   const val = topoFocusSelect.value;
   if (val !== '') {
-    fitViewToNodes(computeEgoSet(Number(val)));
+    fitViewToNodes(topoLevel === 'gate' ? computeCellEgoSet(Number(val)) : computeEgoSet(Number(val)));
   } else {
     resetTopoView();
   }
+  drawTopology();
+});
+
+// Switching level changes what the graph *is*, not just how it is drawn, so
+// the focus list, the legend panels, the status line and the camera all have
+// to follow. The layouts themselves are already computed for both levels
+// (see `layoutTopology`), so this never recomputes one.
+topoLevelSelect.addEventListener('change', () => {
+  topoLevel = topoLevelSelect.value;
+  syncLevelPanels();
+  refreshFocusOptions();
+  refreshTopoStatus();
+  resetTopoView();
+  // The readout describes an object on the level just left, which no longer
+  // exists on screen -- leaving it up would be a caption for the wrong
+  // picture.
+  topoHoverReadout.textContent = ' ';
   drawTopology();
 });
 

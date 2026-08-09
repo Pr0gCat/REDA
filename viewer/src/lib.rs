@@ -535,11 +535,110 @@ struct TopologyGate {
     outputs: Vec<usize>,
 }
 
+/// The primitive level of [`Session::topology`]: what the circuit lowers
+/// into, and the only level anything is ever placed at.
 #[derive(Serialize)]
-struct Topology {
+struct PrimitiveLevel {
     nodes: Vec<TopologyNode>,
     edges: Vec<TopologyEdge>,
     gates: Vec<TopologyGate>,
+}
+
+// ---------------------------------------------------------------------
+// Gate level
+//
+// The netlist the session *loaded*, before `lowering::lower` touched it --
+// `$_AND_`, `$_NAND_`, `$_MUX_` and the rest, in `GateKind`'s own vocabulary.
+//
+// This exists because "what is this circuit" and "what did it lower to" are
+// different questions, and only the second one had an answer here. The
+// primitive graph below is the realisation: correct, necessary for the
+// planner, and already what the 2D and 3D views show in more detail. It is
+// the wrong default for a view whose entire job is naming what a circuit is.
+// `verilog:and4` is three ANDs. Reporting it as nine NORs is not a summary of
+// that, it is a different fact about a later stage.
+//
+// The two levels are related by `lowering::lower_with_provenance`, whose map
+// this section inverts ([`CellMeta::lowered`]): every gate-level cell knows
+// which realisable gates its own expansion produced, and through them which
+// primitive nodes. Nothing is dropped -- the primitive level is still served,
+// in full, alongside this.
+// ---------------------------------------------------------------------
+
+/// One input pin of a gate-level cell: the signal name it reads, and which
+/// other cell drives that signal.
+///
+/// The driver is resolved here rather than in the page, because "which cell
+/// produces `g14`" is a fact about the netlist and a consumer re-deriving it
+/// from names is a second, drift-prone copy of it. `cell` is `None` for a
+/// primary input, which is the only other thing a signal name can be in a
+/// netlist `compile()` accepted (`CompileError::UndrivenSignal` is exactly
+/// the case where it is neither).
+#[derive(Serialize)]
+struct CellInput {
+    name: String,
+    cell: Option<usize>,
+}
+
+/// One gate-level cell -- one entry of the netlist the session loaded.
+#[derive(Serialize)]
+struct TopologyCell {
+    /// Index into the *source* netlist's gates, and this cell's own identity
+    /// everywhere in this structure (see [`CellInput::cell`]).
+    index: usize,
+    /// The signal this cell drives.
+    output: String,
+    /// [`GateKind::wire_name`] -- `"and"`, `"nand"`, `"mux"`, `"andnot"`,
+    /// `"merge"`, `"nor"`, ... The one spelling shared by this view, the
+    /// baked netlist files and `mc_dump`, so three readers cannot disagree
+    /// about what a gate is.
+    kind: &'static str,
+    /// This cell's inputs, in the kind's own pin order -- which matters:
+    /// `andnot` and `mux` are not symmetric in their pins, so a view that
+    /// reorders them is drawing a different circuit.
+    inputs: Vec<CellInput>,
+    /// Whether redstone builds this kind directly (`GateKind::is_realisable`
+    /// -- a NOR or a wire merge). False for every gate-level kind, which is
+    /// the same question as "did this cell have to be lowered".
+    realisable: bool,
+    /// Topological layer among cells, 0 for a cell driven only by primary
+    /// inputs. Display hint only, same as [`TopologyGate::layer`] -- but
+    /// computed over the *source* netlist, so it is this level's own
+    /// layering rather than a projection of the lowered one.
+    layer: i32,
+    /// Which gates of the lowered netlist this cell's expansion produced --
+    /// indices into [`PrimitiveLevel::gates`]. The inverse of
+    /// `lower_with_provenance`'s map.
+    ///
+    /// One entry for a cell that was already realisable. Several for a
+    /// gate-level one -- and occasionally fewer than its expansion has
+    /// steps, since a shared inverter is credited to whichever cell first
+    /// built it (see `lower_with_provenance`'s doc comment). That sharing is
+    /// why this is a list per cell rather than a count: the counts do not add
+    /// up to the expansion sizes, and pretending otherwise would be a
+    /// confidently wrong number.
+    lowered: Vec<usize>,
+    /// Every primitive node those lowered gates instantiate, in ascending id
+    /// order. Empty is possible in principle (a cell lowering to nothing but
+    /// all-bare merges); in practice every cell of every circuit here owns at
+    /// least one.
+    nodes: Vec<usize>,
+}
+
+/// The gate level of [`Session::topology`]: the circuit as it was written.
+#[derive(Serialize)]
+struct GateLevel {
+    cells: Vec<TopologyCell>,
+    /// Primary input names, in the netlist's own order.
+    inputs: Vec<String>,
+    /// Primary outputs: the signal name, and the cell driving it.
+    outputs: Vec<CellInput>,
+}
+
+#[derive(Serialize)]
+struct Topology {
+    gate_level: GateLevel,
+    primitive_level: PrimitiveLevel,
 }
 
 /// Topological layer of each gate in `netlist.gates`' own indexing: 0 for a
@@ -600,6 +699,27 @@ pub struct Session {
     /// remember, indexed exactly as `primitive_graph`'s own
     /// `Provenance::Gate::gate`, `gate_nodes` and `output_nodes` are.
     gate_meta: Vec<GateMeta>,
+    /// The **gate-level** netlist this session loaded, before
+    /// `lowering::lower` rewrote it -- kept whole rather than shadowed,
+    /// because it is the answer to "what is this circuit" and every field
+    /// [`Session::topology`] reports about a cell is read straight off it.
+    /// For a hand-written circuit this is already realisable and lowering is
+    /// the identity, so the two levels coincide; that is the truth for those
+    /// circuits, not something to dress up.
+    source_netlist: Netlist,
+    /// Per source-gate facts, indexed as `source_netlist.gates` is.
+    cell_meta: Vec<CellMeta>,
+}
+
+/// The per-cell facts [`Session::topology`]'s gate level reports that are not
+/// in `source_netlist` itself -- see [`TopologyCell`], whose fields these
+/// become.
+struct CellMeta {
+    /// See [`TopologyCell::layer`].
+    layer: i32,
+    /// See [`TopologyCell::lowered`] -- `lower_with_provenance`'s map,
+    /// inverted.
+    lowered: Vec<usize>,
 }
 
 /// The per-gate facts `Session::topology` reports that live in the `Netlist`
@@ -678,6 +798,27 @@ impl Session {
                 .collect()
         };
 
+        // The gate level, indexed as `source_netlist.gates` is.
+        //
+        // `compute_gate_layers` on the *source* netlist is sound for the same
+        // reason it is on the lowered one: lowering rewrites each gate into
+        // an expansion but never introduces a dependency between two source
+        // gates that was not already there, so the lowered netlist being
+        // acyclic (which `compile()` above checked) makes this one acyclic
+        // too.
+        let cell_meta: Vec<CellMeta> = {
+            let layers = compute_gate_layers(&source_netlist);
+            let mut lowered: Vec<Vec<usize>> = vec![Vec::new(); source_netlist.gates.len()];
+            for (lowered_index, &source) in provenance.iter().enumerate() {
+                lowered[source].push(lowered_index);
+            }
+            layers
+                .into_iter()
+                .zip(lowered)
+                .map(|(layer, lowered)| CellMeta { layer, lowered })
+                .collect()
+        };
+
         let output_positions = outputs
             .into_iter()
             .map(|(display_name, signal_name)| {
@@ -709,7 +850,69 @@ impl Session {
             output_positions,
             primitive_graph,
             gate_meta,
+            source_netlist,
+            cell_meta,
         })
+    }
+
+    /// The gate-level half of [`Session::topology`], as a plain Rust value.
+    ///
+    /// Split out of `topology()` rather than inlined there so it can be
+    /// tested under a native `cargo test`: `topology()` itself returns a
+    /// `JsValue` and so aborts off `wasm32` (see this module's doc comment,
+    /// "Testing a `JsValue`-returning method natively"). This is the half
+    /// that claims a cell is a `mux` reading these three signals in this pin
+    /// order, and a picture confidently wrong about that is worse than no
+    /// picture at all -- so it is the half that needs a test that runs
+    /// everywhere, not only in a browser. See
+    /// `gate_level_tests::seven_segments_gate_level_is_its_baked_netlist`.
+    fn gate_level(&self) -> GateLevel {
+        // Which cell drives each signal. Every gate's output is distinct --
+        // two gates driving one signal is a netlist `compile()` rejects --
+        // so this map never loses an entry to a collision.
+        let producer: HashMap<&str, usize> = self
+            .source_netlist
+            .gates
+            .iter()
+            .enumerate()
+            .map(|(index, gate)| (gate.output.as_str(), index))
+            .collect();
+        let cell_input = |name: &String| CellInput {
+            name: name.clone(),
+            cell: producer.get(name.as_str()).copied(),
+        };
+
+        let cells = self
+            .source_netlist
+            .gates
+            .iter()
+            .zip(self.cell_meta.iter())
+            .enumerate()
+            .map(|(index, (gate, meta))| {
+                let mut nodes: Vec<usize> = meta
+                    .lowered
+                    .iter()
+                    .flat_map(|&g| self.primitive_graph.gate_nodes[g].iter().copied())
+                    .collect();
+                nodes.sort_unstable();
+                nodes.dedup();
+                TopologyCell {
+                    index,
+                    output: gate.output.clone(),
+                    kind: gate.kind.wire_name(),
+                    inputs: gate.inputs.iter().map(&cell_input).collect(),
+                    realisable: gate.kind.is_realisable(),
+                    layer: meta.layer,
+                    lowered: meta.lowered.clone(),
+                    nodes,
+                }
+            })
+            .collect();
+        GateLevel {
+            cells,
+            inputs: self.source_netlist.inputs.clone(),
+            outputs: self.source_netlist.outputs.iter().map(&cell_input).collect(),
+        }
     }
 }
 
@@ -917,19 +1120,48 @@ impl Session {
         bytes
     }
 
-    /// `{ nodes: [{id, primitive, provenance}], edges: [{from, to}],
-    /// gates: [{index, output, kind, arity, layer, nodes, outputs}] }` --
-    /// the whole primitive-topology graph this circuit's netlist expands
-    /// into, per this module's "Primitive topology" section. No positions:
-    /// the graph itself carries none (see `compile::primitive_graph`'s doc
-    /// comment), so a page consuming this has to lay it out itself. Same
-    /// native-test caveat as `pinout`/`legend`.
+    /// **Both** levels of this circuit:
     ///
-    /// A gate's `kind` and `outputs` are what let a page draw a wire merge
-    /// as the junction it is rather than as one more NOR -- see those two
-    /// fields on [`TopologyGate`]. `nodes` alone cannot: a merge with only
-    /// bare branches owns no node at all.
+    /// ```text
+    /// { gate_level:      { cells: [{index, output, kind, inputs, realisable,
+    ///                               layer, lowered, nodes}],
+    ///                      inputs: [name], outputs: [{name, cell}] },
+    ///   primitive_level: { nodes: [{id, primitive, provenance}],
+    ///                      edges: [{from, to}],
+    ///                      gates: [{index, output, kind, source, arity,
+    ///                               layer, nodes, outputs}] } }
+    /// ```
+    ///
+    /// Neither level is derivable from the other, so this returns both rather
+    /// than picking one:
+    ///
+    /// - **`gate_level`** is the netlist as loaded -- `$_AND_`, `$_MUX_`,
+    ///   `$_ANDNOT_` -- which is what a circuit *is*. It cannot be recovered
+    ///   from the primitive graph: `lowering::lower` is not injective, a
+    ///   shared inverter belongs to whichever cell built it first, and
+    ///   nothing downstream remembers that five torches were one multiplexer.
+    /// - **`primitive_level`** is what the circuit lowers into, the flat
+    ///   `compile::primitive_graph` expansion -- what actually gets placed,
+    ///   and what a planner needs. It cannot be recovered from the gate level
+    ///   either, since it is the output of the lowering this crate does not
+    ///   reimplement.
+    ///
+    /// The primitive level exists for the planner's benefit; a viewer's
+    /// needs are not the same, so it is served alongside rather than instead.
+    /// `cells[i].lowered` and `cells[i].nodes` are the join between the two.
+    ///
+    /// No positions at either level: neither graph carries any (see
+    /// `compile::primitive_graph`'s doc comment), so a page consuming this
+    /// has to lay it out itself. Same native-test caveat as `pinout`/
+    /// `legend`.
+    ///
+    /// A primitive gate's `kind` and `outputs` are what let a page draw a
+    /// wire merge as the junction it is rather than as one more NOR -- see
+    /// those two fields on [`TopologyGate`]. `nodes` alone cannot: a merge
+    /// with only bare branches owns no node at all.
     pub fn topology(&self) -> JsValue {
+        let gate_level = self.gate_level();
+
         let nodes = self
             .primitive_graph
             .nodes
@@ -960,7 +1192,8 @@ impl Session {
                 outputs: outputs.clone(),
             })
             .collect();
-        serde_wasm_bindgen::to_value(&Topology { nodes, edges, gates })
+        let primitive_level = PrimitiveLevel { nodes, edges, gates };
+        serde_wasm_bindgen::to_value(&Topology { gate_level, primitive_level })
             .expect("Topology serializes without error -- it is plain strings and integers")
     }
 
@@ -977,6 +1210,184 @@ impl Session {
     pub fn strengths(&self) -> Vec<u8> {
         let world = self.simulator.world();
         non_air_coords(world).map(|(x, y, z)| signal_strength(world.get(x, y, z))).collect()
+    }
+}
+
+// ---------------------------------------------------------------------
+// The gate level says what the netlist says
+// ---------------------------------------------------------------------
+
+/// The topology tab has now twice shown a picture that was confidently wrong
+/// -- first labelling every wire merge `NOR`, then reporting `verilog:and4`
+/// as nine NORs when it is three ANDs. Both times the data behind the picture
+/// went unchecked because [`Session::topology`] returns a `JsValue` and so
+/// cannot be called under a native `cargo test` (this module's doc comment).
+///
+/// [`Session::gate_level`] exists to close that: it is the half of
+/// `topology()` that names what each cell *is*, it is a plain Rust value, and
+/// this module checks it against `src/circuits/baked/seven_segment.netlist`
+/// and `and4.netlist` transcribed by hand. Expected values are written out
+/// literally rather than re-derived from `Netlist`, so a change that rewrites
+/// both the netlist and the code reading it still has to face a third,
+/// independent statement of what the circuit is.
+#[cfg(test)]
+mod gate_level_tests {
+    use super::*;
+
+    fn gate_level_of(circuit: &str) -> GateLevel {
+        Session::build(circuit).expect("circuit builds").gate_level()
+    }
+
+    fn histogram(level: &GateLevel) -> BTreeMap<&'static str, usize> {
+        let mut counts = BTreeMap::new();
+        for cell in &level.cells {
+            *counts.entry(cell.kind).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    /// `and4` is the smallest possible statement of the whole point: three
+    /// `and` cells, which lower into nine NORs. The tab used to report the
+    /// nine.
+    #[test]
+    fn and4s_gate_level_is_three_ands_that_lower_into_nine_nors() {
+        let level = gate_level_of("verilog:and4");
+
+        assert_eq!(level.cells.len(), 3, "and4.netlist declares `# 3 gates`");
+        assert_eq!(histogram(&level), BTreeMap::from([("and", 3)]));
+        assert!(level.cells.iter().all(|cell| !cell.realisable), "an $_AND_ is not realisable");
+
+        // `gate and g0 <- d c` / `g1 <- a b` / `g2 <- g0 g1` -- pin order
+        // included, since it is what the picture draws.
+        let names = |cell: &TopologyCell| -> Vec<String> {
+            cell.inputs.iter().map(|input| input.name.clone()).collect()
+        };
+        assert_eq!(names(&level.cells[0]), ["d", "c"]);
+        assert_eq!(names(&level.cells[1]), ["a", "b"]);
+        assert_eq!(names(&level.cells[2]), ["g0", "g1"]);
+        assert_eq!(
+            level.cells[2].inputs.iter().map(|input| input.cell).collect::<Vec<_>>(),
+            [Some(0), Some(1)],
+            "g2 reads the two other cells; the earlier two read primary inputs only"
+        );
+        for cell in &level.cells[..2] {
+            assert!(cell.inputs.iter().all(|input| input.cell.is_none()));
+        }
+
+        assert_eq!(level.inputs, ["a", "b", "c", "d"]);
+        assert_eq!(level.outputs.len(), 1);
+        assert_eq!(level.outputs[0].name, "g2");
+        assert_eq!(level.outputs[0].cell, Some(2), "the sole output is driven by the last cell");
+
+        // The lowering is not lost: those three cells own nine realisable
+        // gates between them, which is the number the tab used to report as
+        // if it were the circuit.
+        let lowered: usize = level.cells.iter().map(|cell| cell.lowered.len()).sum();
+        assert_eq!(lowered, 9, "each $_AND_ expands into three NORs");
+    }
+
+    /// The mix from `seven_segment.netlist`'s own `# cells:` line, and the
+    /// single `mux` in full -- kind, output, and all three inputs in pin
+    /// order with their drivers resolved.
+    #[test]
+    fn seven_segments_gate_level_is_its_baked_netlist() {
+        let level = gate_level_of("verilog:seven_segment");
+
+        assert_eq!(level.cells.len(), 31, "seven_segment.netlist declares `# 31 gates`");
+        assert_eq!(
+            histogram(&level),
+            BTreeMap::from([
+                ("and", 5),
+                ("andnot", 6),
+                ("merge", 6),
+                ("mux", 1),
+                ("nand", 9),
+                ("nor", 3),
+                ("ornot", 1),
+            ]),
+            "the `# cells:` line of seven_segment.netlist, kind for kind"
+        );
+
+        // `gate mux g20 <- g14 g1 d0` -- the one cell the tab's own
+        // verification singles out, because a multiplexer is exactly the kind
+        // of thing that vanishes into a pile of torches when lowered.
+        let muxes: Vec<&TopologyCell> = level.cells.iter().filter(|cell| cell.kind == "mux").collect();
+        assert_eq!(muxes.len(), 1, "there is exactly one mux, and it must be findable");
+        let mux = muxes[0];
+        assert_eq!(mux.index, 20);
+        assert_eq!(mux.output, "g20");
+        assert!(!mux.realisable);
+        assert_eq!(
+            mux.inputs.iter().map(|input| (input.name.as_str(), input.cell)).collect::<Vec<_>>(),
+            [("g14", Some(14)), ("g1", Some(1)), ("d0", None)],
+            "A, B, S in Yosys's pin order -- a mux is not symmetric, so drawing \
+             these in any other order draws a different circuit"
+        );
+        // What its neighbours are, so "the picture draws the right inputs" is
+        // checked one hop out as well as at the cell itself.
+        assert_eq!(level.cells[14].kind, "merge");
+        assert_eq!(level.cells[14].output, "g14");
+        assert_eq!(level.cells[1].kind, "nand");
+        assert_eq!(level.cells[1].output, "g1");
+
+        assert_eq!(level.inputs, ["d0", "d1", "d2", "d3"]);
+        assert_eq!(
+            level.outputs.iter().map(|output| output.name.as_str()).collect::<Vec<_>>(),
+            ["g18", "g21", "g25", "g17", "g27", "g28", "g30"],
+            "the seven `output` lines, in the netlist's own order"
+        );
+        assert!(level.outputs.iter().all(|output| output.cell.is_some()));
+
+        // Every realisable cell is one lowered gate (`lower` adopts it
+        // verbatim); every gate-level one is more.
+        for cell in &level.cells {
+            assert!(!cell.lowered.is_empty(), "cell {} lowered into nothing", cell.output);
+            if cell.realisable {
+                assert_eq!(cell.lowered.len(), 1, "{} is adopted verbatim", cell.output);
+            }
+        }
+    }
+
+    /// The join between the two levels is a partition: every lowered gate
+    /// belongs to exactly one cell, and no cell claims one twice. Without
+    /// this, a badge reading "lowers into 5" could be counting the same torch
+    /// as its neighbour.
+    #[test]
+    fn every_lowered_gate_belongs_to_exactly_one_cell() {
+        for circuit in ["verilog:and4", "verilog:seven_segment", "seven_segment", "full_adder"] {
+            let session = Session::build(circuit).expect("circuit builds");
+            let total = session.gate_meta.len();
+            let level = session.gate_level();
+
+            let mut seen = vec![0usize; total];
+            for cell in &level.cells {
+                for &g in &cell.lowered {
+                    seen[g] += 1;
+                }
+            }
+            assert!(
+                seen.iter().all(|&count| count == 1),
+                "{circuit}: every one of the {total} lowered gates must be claimed by exactly \
+                 one cell, got {seen:?}"
+            );
+        }
+    }
+
+    /// A hand-written circuit is genuinely all-NOR -- `NetlistBuilder` emits
+    /// nothing else -- so its gate level and its primitive level are the same
+    /// netlist, and the tab showing a NOR wall for it is the truth rather
+    /// than a fallback.
+    #[test]
+    fn a_hand_written_circuits_gate_level_is_already_realisable() {
+        let session = Session::build("seven_segment").expect("circuit builds");
+        let lowered = session.gate_meta.len();
+        let level = session.gate_level();
+
+        assert_eq!(level.cells.len(), lowered, "lowering is the identity on a hand-written circuit");
+        assert!(
+            level.cells.iter().all(|cell| cell.realisable && cell.kind == "nor"),
+            "every hand-written gate is a NOR"
+        );
     }
 }
 
@@ -1036,6 +1447,8 @@ mod repeater_delay_geometry_tests {
             output_positions: Vec::new(),
             primitive_graph,
             gate_meta: Vec::new(),
+            source_netlist: empty_netlist,
+            cell_meta: Vec::new(),
         }
     }
 
