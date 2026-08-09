@@ -58,6 +58,7 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::circuits::netlist_builder::NetlistBuilder;
+use crate::compile::polarity::{assign_polarities, PolarityError};
 use crate::compile::topology::{self, GateKind, Operand, SignalPolarity, Step};
 use crate::compile::{Gate, Netlist};
 
@@ -71,6 +72,9 @@ pub enum LowerError {
     UnsupportedAssignedPolarity { gate: String, kind: GateKind },
     /// Rails can only be propagated through a directed acyclic netlist.
     CyclicNetlist,
+    /// `lower_optimised` cannot preserve a declared output that no source
+    /// gate or primary input produces.
+    OutputHasNoProducer { output: String },
     /// An input was neither a declared primary input nor the output rail of
     /// a source gate that could have been lowered before this gate.
     UnresolvedLogicalSignal { gate: String, signal: String },
@@ -91,6 +95,9 @@ impl std::fmt::Display for LowerError {
                 write!(f, "gate `{gate}` is a directly realisable {kind:?}, so its negative output rail is unsupported")
             }
             LowerError::CyclicNetlist => write!(f, "cannot lower a cyclic netlist with a polarity assignment"),
+            LowerError::OutputHasNoProducer { output } => {
+                write!(f, "declared output `{output}` has no gate or input producer")
+            }
             LowerError::UnresolvedLogicalSignal { gate, signal } => {
                 write!(f, "gate `{gate}` reads unresolved logical signal `{signal}`")
             }
@@ -112,6 +119,17 @@ impl std::error::Error for LowerError {}
 /// callers, and `topology::expansion_for` for the recipes it applies.
 pub fn lower(netlist: &Netlist) -> Result<Netlist, LowerError> {
     lower_with_assignment(netlist, &vec![SignalPolarity::Positive; netlist.gates.len()])
+}
+
+/// Assign physical gate-output rails with the deterministic whole-netlist
+/// search, then lower the selected representation into NOR gates and merges.
+pub fn lower_optimised(netlist: &Netlist) -> Result<Netlist, LowerError> {
+    let assignment = assign_polarities(netlist).map_err(|error| match error {
+        PolarityError::CyclicNetlist => LowerError::CyclicNetlist,
+        PolarityError::OutputHasNoProducer { output } => LowerError::OutputHasNoProducer { output },
+        PolarityError::Lowering(error) => error,
+    })?;
+    lower_with_assignment(netlist, &assignment)
 }
 
 /// The physical rails currently available for one logical signal. A source
