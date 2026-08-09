@@ -189,6 +189,51 @@ Yosys rather than what we do with it, that test says so.
 Each step lands with its own measurement against the table above. A step that
 does not pay for itself is reverted rather than carried.
 
+## Task 4 measured outcome: packing not retained
+
+Task 4 tested the smallest boolean-proven pack: flatten a private selected
+two-input wire-merge final stage into its only selected two-input OR or NOR
+final-stage consumer, producing `Or(3)` or `Nor(3)` only when the combined
+fan-in is exactly three. The selector rejected shared producers, declared
+outputs, non-final-stage uses, directly realisable boundaries, and nested NOR
+producers. Unit truth tables passed, but the complete routed decoder is the
+physical authority.
+
+At base commit `afb3a5f`, all eight subsets of the three deterministic decoder
+candidates were measured with the release `verilog_frontend` acceptance test:
+
+| candidate mask | gates | blocks | settle |
+|---:|---:|---:|---:|
+| 0 (Task 3, no pack) | 47 | 10,088 | 86 |
+| 1 | 46 | 10,796 | 92 |
+| 2 | 46 | 10,716 | 94 |
+| 3 | 45 | 10,736 | 92 |
+| 4 | 46 | 10,168 | 84 |
+| 5 | 45 | 10,734 | 76 |
+| 6 | 45 | 10,592 | 90 |
+| 7 (all three) | 44 | 10,398 | 88 |
+
+No non-zero subset is Pareto-better than Task 3: every one increases block
+count, and most also increase settle time. Static cell-footprint savings did
+not predict the routed result. Per the rule above, all packing code and tests
+were removed rather than carrying a physical regression. Task 4 therefore
+keeps the Task 3 decoder exactly at **47 gates / 10,088 blocks / 86 game
+ticks**, with histogram `nor1:14 nor2:16 merge2:17`, and makes no planner,
+router, viewer, or invariant change. A three-input pack can be reconsidered
+only together with a physical placement model that proves it pays.
+
+The retained 47-gate decoder was then verified against a newly started
+vanilla Minecraft 1.20.1 server, not a previous report. The server jar SHA-1
+was `84194A2F286EF7C14ED7CE0090DBA59902951553`; its new log identified version
+1.20.1. `circuit_conformance.py` used the fresh origin
+`170000,151,140000`, with its normal pre-build clear and
+`verify_region_is_air` check enabled, placed all **10,088** non-air blocks,
+and checked every output segment for all 16 input vectors. Result:
+**16/16 vectors passed, 0 mismatches**. The harness then cleared the region,
+released its forceload, and the server was stopped over RCON with both ports
+confirmed closed. The complete per-vector evidence is committed as
+`conformance/results/verilog_decoder_task4_afb3a5f.json`.
+
 ## Out of scope
 
 - **Reconstructing gate kinds by pattern-matching NOR clusters.** That is the

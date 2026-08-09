@@ -149,6 +149,7 @@ fn report_timing(
 /// why it will not do it for you), and `summarize_worst_case` has to be
 /// handed the same netlist the circuit was compiled from or its backward
 /// walk is correlating two different graphs.
+#[allow(clippy::too_many_arguments)]
 fn compile_simulate_and_check(
     label: &str,
     source_netlist: &Netlist,
