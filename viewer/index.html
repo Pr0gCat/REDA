@@ -267,8 +267,8 @@
       <div class="row">
         <label for="topo-level-select">Level</label>
         <select id="topo-level-select">
-          <option value="gate" selected>Gate level -- what it is</option>
-          <option value="primitive">Primitive level -- what it lowers to</option>
+          <option value="gate" selected>Nested -- cells, holding their primitives</option>
+          <option value="primitive">Flat -- the primitive graph, ungrouped</option>
         </select>
       </div>
       <div class="row">
@@ -286,11 +286,18 @@
       <div data-level="gate">
         <h2 style="margin-top:10px;">Cells</h2>
         <div class="legend-list">
-          <span><span class="legend-swatch" style="background:hsla(212,45%,52%,0.5);border-color:hsla(212,60%,70%,0.9)"></span>A gate-level cell -- <i>and</i>, <i>nand</i>, <i>mux</i>, <i>andnot</i>, ... Labelled with its kind, not drawn as a shape per kind: there are thirteen of them and thirteen invented outlines would be harder to read than the word. The corner count is how many torches and merges it lowers into.</span>
-          <span><span class="legend-swatch" style="background:rgba(255,140,0,0.45);border-color:#ff8c00"></span><i>nor</i> -- realisable directly: one torch on its support. Nothing to lower.</span>
-          <span><span class="legend-swatch" style="background:transparent;border:1px dashed #ff3b3b"></span><i>merge</i> -- a wire merge, also realisable directly, and not a gate body at all: no torch, no support, just the point where several branches' dust are allowed to touch. Drawn hollow because there is no block there to fill in.</span>
+          <span><span class="legend-swatch" style="background:hsla(212,45%,52%,0.35);border-color:hsla(212,60%,70%,0.9)"></span>A gate-level cell -- <i>and</i>, <i>nand</i>, <i>mux</i>, <i>andnot</i>, ... Labelled with its kind, not drawn as a shape per kind: there are thirteen of them and thirteen invented outlines would be harder to read than the word. <b>The box is a container:</b> what it holds is what it lowers into.</span>
+          <span><span class="legend-swatch" style="background:rgba(255,140,0,0.2);border-color:#ff8c00"></span><i>nor</i> -- realisable directly, so it holds the one torch it is. Nothing to lower.</span>
+          <span><span class="legend-swatch" style="background:transparent;border:1px dashed #ff3b3b"></span><i>merge</i> -- a wire merge, also realisable directly, and not a gate body at all: no torch, no support, just the point where several branches' dust are allowed to touch. A merge whose every branch is bare holds <i>no blocks</i>, and its spokes reach the dust it joins inside other cells.</span>
           <span><span class="legend-swatch" style="background:#7a5230;border-radius:50%"></span>Primary input (a lever) &nbsp;<span class="legend-swatch" style="background:#ffd54a;border-radius:50%"></span>Primary output (a lamp)</span>
           <span><span class="legend-swatch" style="background:#ff3b3b"></span>Signal flow, producer to consumer. Each edge lands on its own <b>pin</b>, stacked down the cell's left edge in the kind's declared pin order -- <i>andnot</i> and <i>mux</i> are not symmetric in their pins, so which edge lands where is part of what the circuit is.</span>
+        </div>
+        <h2 style="margin-top:10px;">Inside a cell</h2>
+        <div class="legend-list" id="topo-inner-legend"></div>
+        <div class="legend-list">
+          <span><span class="legend-swatch" style="background:transparent;border:1px dashed #ff3b3b;border-radius:50%"></span>A merge among the cell's own lowered gates, with dashed spokes to the nodes whose dust joins there.</span>
+          <span><span class="legend-swatch" style="background:transparent;border:1px solid #c792ea;border-radius:50%"></span><b>A shared torch</b> -- most expansions start by inverting an input, so <i>!x</i> is built once and reused. It is drawn inside the cell that built it, ringed in violet, with a dashed violet line to every other cell's expansion that reads it. Those cells therefore hold fewer primitives than their recipe has steps, and the missing one is on screen rather than implied.</span>
+          <span>Zoomed out, a box's contents stop being legible and it shows <b>&times;n</b> -- how many torches and merges it lowers into -- with <b>+k</b> for the shared torches it reads from elsewhere. Zoom in, or use Focus, to see them.</span>
         </div>
       </div>
 
@@ -454,6 +461,7 @@ const topoLevelSelect = document.getElementById('topo-level-select');
 const topoRelayoutBtn = document.getElementById('topo-relayout-btn');
 const topoStatus = document.getElementById('topo-status');
 const topoPrimitiveLegend = document.getElementById('topo-primitive-legend');
+const topoInnerLegend = document.getElementById('topo-inner-legend');
 const topoCellHistogram = document.getElementById('topo-cell-histogram');
 const topoCaption = document.getElementById('topo-caption');
 
@@ -1583,42 +1591,68 @@ function onThreeHover(e) {
 // three, is to invent a layout rather than just project one that already
 // exists.
 //
-// # Two levels, and which one is the default
+// # Containment is the point
 //
-// This tab exists to answer "what is this circuit". It spent two revisions
-// answering "what did it lower to" instead -- which is what the 2D and 3D
-// views already answer, in more detail. On `verilog:and4` it read
+// This tab exists to answer "what is this circuit". It spent three revisions
+// not answering it. First it drew the primitive graph as force-directed
+// spaghetti; then it drew the same graph legibly, so `verilog:and4` -- a
+// circuit that is three ANDs -- read
 //
 //     14 nodes, 13 edges, 9 gates (9 NOR, 0 wire merges)
 //
-// for a circuit that is three ANDs. Nine NOR badges is not a summary of
-// three ANDs; it is a different fact, about a later stage.
+// and then it gained a Level toggle, which showed the three ANDs *or* the
+// nine NORs and never the relationship between them. A reader had to hold
+// two pictures in their head and join them by memory.
 //
-// So there are two levels here now, and `topoLevel` switches between them:
+// A gate kind's entry in the topology library is a *recipe*, and what a
+// reader wants is the recipe applied: this cell, made of these primitives.
+// So the default level draws the two nested. A cell is a container, sized by
+// what it holds; inside it are the torches, repeaters and junctions its own
+// expansion produced, in the same shapes and colours the flat level gives
+// them. `verilog:and4` is three `and` boxes with three torches each, and the
+// nine NORs it used to report as the circuit are visibly nine thirds of it.
 //
-//   * **Gate level** (`'gate'`, the default) -- `Session::topology()`'s
-//     `gate_level.cells`: the netlist as loaded, one node per cell, labelled
-//     with its own kind (`and`, `nand`, `mux`, `andnot`, `merge`, `nor`),
-//     with signal-flow edges landing on numbered pins. `verilog:and4` is
-//     three boxes; `verilog:seven_segment` is thirty-one.
-//   * **Primitive level** (`'primitive'`) -- `primitive_level`, the flat
-//     `compile::primitive_graph` expansion, drawn exactly as this view drew
-//     it before. The lowering is real and worth being able to see; it is
-//     just not the answer to the tab's own question.
+// `topoLevel` still switches, but it no longer hides a level:
 //
-// The two are kept related rather than merely adjacent: every cell carries
-// `lowered` (which realisable gates its expansion produced) and `nodes`
-// (which primitives those instantiate), so the gate level can say *how many*
-// torches and merges a cell becomes without leaving the gate level, and
-// switching down to the primitive level is a change of resolution rather
-// than a change of subject.
+//   * **Nested** (`'gate'`, the default) -- `Session::topology()`'s
+//     `gate_level.cells` as containers, each holding the primitives named by
+//     its own `nodes`, with gate-level signal flow landing on numbered pins
+//     between the boxes.
+//   * **Flat** (`'primitive'`) -- `primitive_level`, every primitive in one
+//     layered graph with no grouping at all. Kept, because it is a genuinely
+//     different fact and not a subset: it lays the primitives out by their
+//     *own* depth, so a torch's real distance from a lever is a position on
+//     screen. Inside a container that depth is local to the box and the flat
+//     level is the only place the global one is visible.
 //
 // **The hand-written circuits are not dressed up.** `and4`, `full_adder`,
 // `segment_a` and `seven_segment` are built by `NetlistBuilder`, which emits
-// NOR gates and wire merges and nothing else, so their gate level *is* their
-// primitive netlist and both levels show the same NOR wall. That is the
-// truth about those circuits. The status line says so in as many words
-// rather than implying a second level was hidden.
+// NOR gates and wire merges and nothing else, so every one of their cells is
+// a container holding the single torch it already was. That is the truth
+// about those circuits; the status line says so in as many words.
+//
+// # Two things nesting has to be honest about
+//
+// **A `nor` lowers into exactly itself, and a `merge` into nothing at all.**
+// Nesting a box inside an identical box is noise, so there is no inner box
+// per lowered gate anywhere in this view -- a lowered gate is drawn as the
+// primitive it instantiates, and only the *cell* gets an outline. A `nor`
+// container holds one torch; a `merge` container holds its isolating
+// repeaters and a junction ring; an all-bare merge holds nothing, says "no
+// blocks", and sends its dashed spokes out to the torches in other cells
+// whose dust it joins. Each of those is a real and different fact about cost,
+// and each is legible without a key.
+//
+// **Inverters are shared.** `lowering::lower` routes every intermediate
+// one-input NOR through `NetlistBuilder::not`, so `!d1` is built once and
+// credited to whichever cell got there first. Three of
+// `verilog:seven_segment`'s cells read that torch without owning it, and a
+// picture that drew it inside one box and stopped would be claiming those
+// three cost less than they do. `Session::topology()` therefore hands this
+// view `gate_level.shared_edges` -- computed and tested on the Rust side --
+// and `drawSharedEdges` draws every one of them as a dashed violet line from
+// the torch that exists to the gate that reads it, with a violet ring on the
+// shared torch itself. See `SharedEdge` in `viewer/src/lib.rs`.
 //
 // # There is one kind of edge now
 //
@@ -1743,15 +1777,41 @@ function onThreeHover(e) {
 // re-fits the camera; a circuit's layout itself never changes between
 // loads or reloads.
 //
-// Scale, and what the gate level does for it: `verilog:and4` is 3 cells at
-// the gate level against 9 gates / 14 primitives below, and
-// `verilog:seven_segment` is 31 cells against 56 gates / 70 primitives.
-// Making the gate level the default is therefore not only the right *answer*
-// but the smaller picture -- a whole-circuit view of `seven_segment` at the
-// gate level fits on screen with every cell's kind legible, which the
-// primitive view of the same circuit does not.
+// # Scale
 //
-// The primitive level keeps the caveat it always had. A layered layout
+// `verilog:and4` is 3 cells holding 9 primitives; `verilog:seven_segment` is
+// 31 cells holding 59, with 11 more primary-I/O nodes. Nesting does not add
+// nodes to the picture -- those 59 are the same 59 the flat level already
+// drew at once -- it only groups them, so "everything nested at once" is not
+// the scale problem it sounds like. What does not survive is the *labels*:
+// at the zoom that fits 31 boxes on screen, a `#42` beside a 2-pixel dot is
+// a smear.
+//
+// So the geometry is always nested -- a box is always the size of its
+// contents, at every zoom, so nothing reflows as you pan -- and what is
+// *painted* is shed in two steps, both measured in screen pixels between two
+// nested layers rather than in zoom factor, since that is what legibility
+// actually depends on:
+//
+//   * below `INNER_DETAIL_PX` (8 px): no contents at all, just the box and
+//     the `×n` count this tab drew before it could nest -- plus `+k` for the
+//     shared torches it reads from elsewhere, so even the collapsed form
+//     does not hide the borrowing.
+//   * above `INNER_LABEL_PX` (25 px): each nested primitive is labelled with
+//     its own `#id`, which is what makes a box checkable against
+//     `Session::topology()`'s own JSON without hovering every dot.
+//
+// `verilog:and4` fits at 56 px per nested layer, well above both, so its
+// containment is legible with no interaction whatsoever.
+// `verilog:seven_segment` fits at 18 px: above the detail threshold and
+// below the label one, so the whole circuit shows every box's real contents
+// and the dashed violet lines between them, and reading individual node ids
+// needs a wheel-scroll or a Focus. Focusing its `mux` gives 26 px, which
+// crosses the label threshold -- and `computeCellEgoSet` pulls in shared
+// inverters as well as netlist neighbours, since a cell's lender is not
+// necessarily either.
+//
+// The flat level keeps the caveat it always had. A layered layout
 // removed that view's worst failure (edges cutting through unrelated nodes,
 // and flow direction being invisible) and keeps flow visibly left to right
 // at every zoom level, but it is still more simultaneous edges than an eye
@@ -1795,15 +1855,38 @@ const TOPO_BARYCENTRE_SWEEPS = 4; // same count `build_floorplan` uses, for the 
 const TOPO_MERGE_COLOR = '#ff3b3b';
 const TOPO_MERGE_RADIUS = 1.9;
 
-// Gate level. Boxes need more room than dots, on both axes: a cell is
-// `CELL_W` wide and at least `CELL_MIN_H` tall (taller with more pins, one
-// `CELL_PIN_PITCH` apart), so layers have to clear the width and slots the
-// height.
-const CELL_LAYER_SPACING = 200;
-const CELL_NODE_SPACING = 62;
-const CELL_W = 86;
-const CELL_MIN_H = 30;
+// Gate level. A cell is a **container**: its size is whatever it takes to
+// hold the primitives it lowers into, floored by the room its own pins and
+// label need. So there is no constant box size any more -- only the clear
+// gaps between boxes (`CELL_LAYER_GAP`, `CELL_ROW_GAP`), the floors, and the
+// padding between a box's edge and its contents.
+const CELL_LAYER_GAP = 96;
+const CELL_ROW_GAP = 26;
+const CELL_MIN_W = 88;
+const CELL_MIN_H = 34;
 const CELL_PIN_PITCH = 13;
+const CELL_PAD_X = 15;      // box edge to the nearest nested primitive
+const CELL_HEADER = 18;     // room at the top of a box for its kind
+const CELL_PAD_BOTTOM = 9;
+// The nested layout, in the same graph units as everything else -- the same
+// `layeredLayout` runs inside a box as outside it, on the subgraph of the
+// primitive graph whose nodes this cell owns.
+const INNER_LAYER_SPACING = 30;
+const INNER_ROW_SPACING = 20;
+const INNER_NODE_R = 4.2;
+const INNER_MERGE_R = 6;
+// Level of detail. Below `INNER_DETAIL_PX` screen pixels between two nested
+// layers there is nothing legible left inside a box, so it shows the count it
+// used to show instead of a smear; above `INNER_LABEL_PX` there is room to
+// name each primitive by its node id, which is what makes a box checkable
+// against `Session::topology()`'s own JSON without hovering every dot.
+const INNER_DETAIL_PX = 8;
+const INNER_LABEL_PX = 25;
+// A shared inverter's edge -- see `SharedEdge` in viewer/src/lib.rs. Violet,
+// because it is neither signal flow at the gate level (dust red) nor a cell
+// (slate): it is the one line in this picture that crosses a box boundary
+// without a gate-level edge to explain it.
+const SHARED_COLOR = '#c792ea';
 // Slate for a gate-level cell, torch orange for a `nor`, dust red for a
 // `merge` -- the three families from this section's "Thirteen kinds, three
 // shapes, and a word". The two realisable colours are the same hex the 2D/3D
@@ -1821,12 +1904,17 @@ let topoEdgePaths = [];  // parallel to topoEdges: [{x,y}, ...] through any dumm
 let topoMerges = [];     // { gate, x, y } per wire-merge gate -- see computeMergeJunctions
 
 let topoCells = [];      // raw TopologyCell[] from session.topology().gate_level
-// One node per cell, per primary input and per primary output.
-// { id, role: 'cell'|'input'|'output', cell, label, kind, family, pins, x, y }
+// One node per cell, per primary input and per primary output. A cell node
+// carries its own box size and its nested contents:
+// { id, role: 'cell'|'input'|'output', cell, label, kind, family, pins,
+//   x, y, w, h, contentY, interior }
 let cellNodes = [];
 let cellEdges = [];      // { from, to, pin } -- `pin` is the index into the consumer's own input list
 let cellEdgePaths = [];  // parallel to cellEdges
 let cellOfIndex = [];    // TopologyCell.index -> cellNodes index
+let sharedEdges = [];    // raw SharedEdge[] -- see viewer/src/lib.rs
+let sharedNodes = new Set(); // node ids some other cell's expansion reads
+let innerPos = new Map();    // primitive node id -> its nested { ax, ay } in graph space
 
 let topoView = { scale: 1, offsetX: 0, offsetY: 0 };
 
@@ -1863,12 +1951,18 @@ function gateSource(gate) {
   return gate.source || null;
 }
 
+/** The primitive vocabulary, listed for both levels: the same shapes and
+ * colours whether a torch is drawn on its own in the flat graph or inside the
+ * cell that built it in the nested one. One vocabulary is the whole reason
+ * nesting reads as nesting rather than as two unrelated pictures. */
 function buildPrimitiveLegend() {
-  topoPrimitiveLegend.innerHTML = '';
-  for (const [name, colour] of Object.entries(PRIMITIVE_COLOR)) {
-    const span = document.createElement('span');
-    span.innerHTML = `<span class="legend-swatch" style="background:${colour}"></span>${name}`;
-    topoPrimitiveLegend.appendChild(span);
+  for (const target of [topoPrimitiveLegend, topoInnerLegend]) {
+    target.innerHTML = '';
+    for (const [name, colour] of Object.entries(PRIMITIVE_COLOR)) {
+      const span = document.createElement('span');
+      span.innerHTML = `<span class="legend-swatch" style="background:${colour}"></span>${name}`;
+      target.appendChild(span);
+    }
   }
 }
 buildPrimitiveLegend(); // static -- independent of any circuit
@@ -1883,10 +1977,101 @@ function cellFamily(cell) {
   return cell.kind === 'merge' ? 'merge' : 'nor';
 }
 
-/** How tall a cell's box is: enough for its pins, and never below
- * `CELL_MIN_H` so a 1-input cell still reads as a box. */
-function cellHeight(pinCount) {
-  return Math.max(CELL_MIN_H, (pinCount + 1) * CELL_PIN_PITCH);
+/** What goes **inside** one cell's box: the primitives it lowers into, laid
+ * out among themselves, plus one junction ring per merge among its lowered
+ * gates. Coordinates are local to the box's content area and centred on
+ * (0, 0); `layoutTopology` translates them once the box itself has a place.
+ *
+ * The contents are `cell.nodes` and nothing else -- the union of
+ * `PrimitiveGraph::gate_nodes` over the gates this cell's expansion produced,
+ * computed on the Rust side (see `TopologyCell::nodes`), so the picture's
+ * claim about what is inside a box is the same value a native `cargo test`
+ * can assert against the netlist. `gate_level_tests::
+ * the_muxs_box_holds_exactly_the_four_primitives_its_five_gates_instantiate`
+ * is that assertion.
+ *
+ * Two things this deliberately does not draw:
+ *
+ *   * **No inner box per lowered gate.** A NOR is one torch and a merge is a
+ *     junction; a hull around each would be a third level of containment
+ *     wrapping, mostly, a single dot. The gate grouping is in the hover
+ *     readout and in the box's own `×n` count instead.
+ *   * **No box inside an identical box.** A `nor` cell lowers into exactly
+ *     itself and a `merge` into exactly itself, so their containers hold one
+ *     torch and (at most) a junction with its repeaters -- drawn as those
+ *     primitives directly, in the same vocabulary a `mux`'s four use. That a
+ *     `nor` box holds exactly one torch is a fact worth being able to see
+ *     beside a `mux` box holding four; duplicating its outline to say it
+ *     twice is not.
+ *
+ * A merge that owns no node at all is the extreme of the second point: its
+ * junction is `floating`, placed at the box's centre by `layoutTopology`, and
+ * its spokes reach the nodes whose dust really does join there -- which, for
+ * `verilog:seven_segment`'s `merge g8`, are inside two *other* cells. An
+ * empty container whose contents are its neighbours' dust is what an all-bare
+ * merge is. */
+function buildCellInterior(cell) {
+  const ids = cell.nodes || [];
+  const local = new Map(ids.map((id, i) => [id, i]));
+  const innerEdges = [];
+  for (const edge of topoEdges) {
+    if (local.has(edge.from) && local.has(edge.to)) {
+      innerEdges.push({ from: local.get(edge.from), to: local.get(edge.to) });
+    }
+  }
+  const { xs, ys } = layeredLayout(ids.length, innerEdges, INNER_LAYER_SPACING, INNER_ROW_SPACING);
+  const nodes = ids.map((id, i) => ({
+    id, primitive: topoNodes[id] ? topoNodes[id].primitive : 'Torch', x: xs[i], y: ys[i],
+  }));
+  const edges = innerEdges.map((edge) => [edge.from, edge.to]);
+
+  // One junction per merge this cell lowers into, placed by the same rule the
+  // flat level uses (`computeMergeJunctions`): half a layer past the deepest
+  // node whose dust joins there, at their mean height, so it sits in the gap
+  // where the converging dust already meets.
+  const junctions = [];
+  for (const g of cell.lowered || []) {
+    const gate = topoGates[g];
+    if (!gate || !isMergeGate(gate)) continue;
+    const inside = gate.outputs.filter((id) => local.has(id));
+    if (inside.length === 0) { junctions.push({ gate, x: 0, y: 0, floating: true }); continue; }
+    let maxX = -Infinity, sumY = 0;
+    for (const id of inside) {
+      const node = nodes[local.get(id)];
+      maxX = Math.max(maxX, node.x);
+      sumY += node.y;
+    }
+    junctions.push({ gate, x: maxX + INNER_LAYER_SPACING * 0.55, y: sumY / inside.length, floating: false });
+  }
+  // Two merges in one expansion can land on the same point; spread them the
+  // same way the flat level does rather than letting one hide the other.
+  const byPoint = new Map();
+  for (const junction of junctions) {
+    if (junction.floating) continue;
+    const key = `${Math.round(junction.x)},${Math.round(junction.y)}`;
+    if (!byPoint.has(key)) byPoint.set(key, []);
+    byPoint.get(key).push(junction);
+  }
+  for (const group of byPoint.values()) {
+    if (group.length < 2) continue;
+    const offset = (group.length - 1) / 2;
+    group.forEach((junction, i) => { junction.y += (i - offset) * INNER_ROW_SPACING * 0.6; });
+  }
+
+  const points = nodes.concat(junctions.filter((junction) => !junction.floating));
+  let contentW = 0, contentH = 0;
+  if (points.length > 0) {
+    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    for (const p of points) {
+      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
+      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
+    }
+    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
+    for (const p of points) { p.x -= cx; p.y -= cy; }
+    contentW = (maxX - minX) + 2 * INNER_MERGE_R;
+    contentH = (maxY - minY) + 2 * INNER_MERGE_R;
+  }
+  return { nodes, edges, junctions, contentW, contentH };
 }
 
 /** Build `cellNodes`/`cellEdges` from `session.topology()`'s `gate_level`.
@@ -1902,21 +2087,36 @@ function buildGateLevel(level) {
   cellNodes = [];
   cellEdges = [];
   cellOfIndex = [];
+  sharedEdges = level.shared_edges || [];
+  sharedNodes = new Set(sharedEdges.map((edge) => edge.from));
+  innerPos = new Map();
 
   const inputNodeOf = new Map(); // primary input name -> cellNodes index
   for (const name of level.inputs || []) {
     inputNodeOf.set(name, cellNodes.length);
     cellNodes.push({
       id: cellNodes.length, role: 'input', cell: null,
-      label: name, kind: 'input', family: 'input', pins: 0, x: 0, y: 0,
+      label: name, kind: 'input', family: 'input', pins: 0,
+      x: 0, y: 0, w: 14, h: 16, contentY: 0, interior: null,
     });
   }
   for (const cell of topoCells) {
     cellOfIndex[cell.index] = cellNodes.length;
+    // The box is sized by what it contains, floored by what its own pins and
+    // kind label need. The content area starts `CELL_HEADER` below the top
+    // edge and ends `CELL_PAD_BOTTOM` above the bottom one, so `contentY` is
+    // how far its centre sits below the box's own.
+    const interior = buildCellInterior(cell);
+    const pins = cell.inputs.length;
     cellNodes.push({
       id: cellNodes.length, role: 'cell', cell,
       label: cell.output, kind: cell.kind, family: cellFamily(cell),
-      pins: cell.inputs.length, x: 0, y: 0,
+      pins,
+      x: 0, y: 0,
+      w: Math.max(CELL_MIN_W, interior.contentW + 2 * CELL_PAD_X),
+      h: Math.max(CELL_MIN_H, (pins + 1) * CELL_PIN_PITCH, interior.contentH + CELL_HEADER + CELL_PAD_BOTTOM),
+      contentY: (CELL_HEADER - CELL_PAD_BOTTOM) / 2,
+      interior,
     });
   }
   // Two circuits' primary outputs can name the same signal, and a signal can
@@ -1926,7 +2126,8 @@ function buildGateLevel(level) {
     const id = cellNodes.length;
     cellNodes.push({
       id, role: 'output', cell: null,
-      label: output.name, kind: 'output', family: 'output', pins: 1, x: 0, y: 0,
+      label: output.name, kind: 'output', family: 'output', pins: 1,
+      x: 0, y: 0, w: 14, h: 16, contentY: 0, interior: null,
     });
     if (output.cell !== null && output.cell !== undefined) {
       cellEdges.push({ from: cellOfIndex[output.cell], to: id, pin: 0 });
@@ -2027,16 +2228,24 @@ function computeTopoLayers(n, edges) {
  * `{ xs, ys, paths }` -- one coordinate pair per node, and one polyline per
  * edge through its own dummy chain.
  *
- * Abstract over the graph rather than hardwired to `topoNodes` because both
- * levels need it and neither is a special case of the other: the gate level
- * lays out 31 cells, the primitive level ~180 torches and repeaters, and the
- * algorithm does not care which. `layerSpacing`/`nodeSpacing` differ because
- * a labelled box needs more room than a dot.
+ * Abstract over the graph rather than hardwired to `topoNodes` because three
+ * graphs need it and none is a special case of the others: the nested gate
+ * level lays out 31 containers, each container lays out the two-to-five
+ * primitives inside it, and the flat level lays out all 70 at once. The
+ * algorithm does not care which.
+ *
+ * `sizeOf` is what makes the first of those work. Without it every node is a
+ * point and the two spacings are centre-to-centre pitches (what the flat
+ * level and the nested interiors both want). With it -- `sizeOf(i)` returning
+ * `{w, h}` for real node `i` -- a node is a box of its own size, the spacings
+ * become the *clear gaps* between two boxes, and a layer's heights are
+ * stacked rather than pitched, so a cell containing five primitives cannot
+ * overlap the one-primitive cell beside it.
  *
  * Run fresh every call -- cheap enough at these graph sizes that there is no
  * reason to cache intermediate state between calls the way the old force
  * simulation cached node velocity. */
-function layeredLayout(n, edges, layerSpacing, nodeSpacing) {
+function layeredLayout(n, edges, layerSpacing, nodeSpacing, sizeOf) {
   if (n === 0) return { xs: [], ys: [], paths: [] };
 
   const layer = computeTopoLayers(n, edges);
@@ -2096,11 +2305,32 @@ function layeredLayout(n, edges, layerSpacing, nodeSpacing) {
   // Coordinates (step 4): layer -> x, final order -> y, each layer centred
   // on y = 0 independently so the picture doesn't drift toward one edge as
   // layer widths vary.
-  for (const row of layers) {
-    const offset = (row.length - 1) / 2;
-    for (const d of row) {
-      d.x = d.layer * layerSpacing;
-      d.y = (d.order - offset) * nodeSpacing;
+  if (sizeOf) {
+    // Sized nodes: a column's x is the running sum of the widest box in each
+    // column so far, and a column's ys stack real heights. A dummy is still a
+    // point (width and height 0) but keeps its own lane, so a long edge bends
+    // through the gap between two boxes rather than across one.
+    const colW = layers.map((row) => row.reduce((m, d) => Math.max(m, d.real ? sizeOf(d.nodeId).w : 0), 0));
+    let x = 0;
+    for (let l = 0; l < layers.length; l++) {
+      if (l > 0) x += colW[l - 1] / 2 + layerSpacing + colW[l] / 2;
+      const row = layers[l];
+      const hs = row.map((d) => (d.real ? sizeOf(d.nodeId).h : 0));
+      const total = hs.reduce((a, b) => a + b, 0) + nodeSpacing * Math.max(row.length - 1, 0);
+      let y = -total / 2;
+      for (let i = 0; i < row.length; i++) {
+        row[i].x = x;
+        row[i].y = y + hs[i] / 2;
+        y += hs[i] + nodeSpacing;
+      }
+    }
+  } else {
+    for (const row of layers) {
+      const offset = (row.length - 1) / 2;
+      for (const d of row) {
+        d.x = d.layer * layerSpacing;
+        d.y = (d.order - offset) * nodeSpacing;
+      }
     }
   }
   const xs = new Array(n), ys = new Array(n);
@@ -2124,7 +2354,13 @@ function layoutTopology() {
   topoEdgePaths = primitive.paths;
   topoMerges = computeMergeJunctions();
 
-  const gate = layeredLayout(cellNodes.length, cellEdges, CELL_LAYER_SPACING, CELL_NODE_SPACING);
+  // The nested level. Each cell is a box of its own size (see
+  // `buildCellInterior`), so this pass runs `layeredLayout` in its sized
+  // mode; `CELL_LAYER_GAP`/`CELL_ROW_GAP` are clearances between boxes rather
+  // than pitches between centres.
+  const gate = layeredLayout(
+    cellNodes.length, cellEdges, CELL_LAYER_GAP, CELL_ROW_GAP, (i) => cellNodes[i],
+  );
   cellNodes.forEach((node, i) => { node.x = gate.xs[i]; node.y = gate.ys[i]; });
   cellEdgePaths = gate.paths;
   // An edge lands on its consumer's own pin, not on the consumer's centre --
@@ -2132,20 +2368,40 @@ function layoutTopology() {
   // above has no notion of a pin, so the last point of each path is nudged
   // here, after coordinates exist. The first point is nudged to the
   // producer's right edge for the same reason: a box has a width, and an edge
-  // leaving from its centre would be drawn under it.
+  // leaving from its centre would be drawn under its contents.
   cellEdges.forEach((edge, i) => {
     const path = cellEdgePaths[i];
     const to = cellNodes[edge.to], from = cellNodes[edge.from];
-    path[0] = { x: from.x + CELL_W / 2, y: from.y };
-    path[path.length - 1] = { x: to.x - CELL_W / 2, y: pinY(to, edge.pin) };
+    path[0] = { x: from.x + from.w / 2, y: from.y };
+    path[path.length - 1] = { x: to.x - to.w / 2, y: pinY(to, edge.pin) };
   });
+
+  // Now that every box has a place, give every nested primitive an absolute
+  // one, and index it by node id. That index is what lets a shared inverter's
+  // edge and an all-bare merge's spokes be drawn between two *different*
+  // boxes' interiors: both are stated in terms of primitive node ids, and
+  // neither respects the containment the rest of this picture is built on --
+  // which is exactly why they have to be drawn rather than assumed away.
+  innerPos = new Map();
+  for (const node of cellNodes) {
+    if (node.role !== 'cell') continue;
+    const originY = node.y + node.contentY;
+    for (const inner of node.interior.nodes) {
+      inner.ax = node.x + inner.x;
+      inner.ay = originY + inner.y;
+      innerPos.set(inner.id, inner);
+    }
+    for (const junction of node.interior.junctions) {
+      junction.ax = junction.floating ? node.x : node.x + junction.x;
+      junction.ay = junction.floating ? originY : originY + junction.y;
+    }
+  }
 }
 
 /** Where pin `pin` of `node` sits: pins are stacked down the box's left edge
  * in the cell's own declared pin order, evenly spaced and centred. */
 function pinY(node, pin) {
-  const h = cellHeight(node.pins);
-  return node.y - h / 2 + ((pin + 1) * h) / (node.pins + 1);
+  return node.y - node.h / 2 + ((pin + 1) * node.h) / (node.pins + 1);
 }
 
 /** Where each wire merge's junction glyph goes, given a laid-out graph:
@@ -2220,15 +2476,25 @@ function computeEgoSet(gateIndex) {
   return result;
 }
 
-/** The gate level's own ego set: one cell node plus everything one edge away
- * from it, in `cellNodes` indices. Same one-hop rule as `computeEgoSet`, on
- * the graph that is actually on screen at this level. */
+/** The nested level's own ego set: one cell node plus everything one edge
+ * away from it, in `cellNodes` indices. Same one-hop rule as `computeEgoSet`,
+ * on the graph that is actually on screen at this level.
+ *
+ * Shared inverters count as edges here even though they are not gate-level
+ * ones. A cell that borrows a torch is not adjacent to its lender in the
+ * netlist -- `andnot g3` reads `d1` and `d0`, not `g1` -- but it is adjacent
+ * in what gets built, and focusing it while hiding the box its missing torch
+ * lives in would fit the view to a cell whose contents are off screen. */
 function computeCellEgoSet(cellIndex) {
   const core = cellOfIndex[cellIndex];
   const result = new Set([core]);
   for (const edge of cellEdges) {
     if (edge.from === core) result.add(edge.to);
     if (edge.to === core) result.add(edge.from);
+  }
+  for (const edge of sharedEdges) {
+    if (edge.owner === cellIndex) result.add(cellOfIndex[edge.reader]);
+    if (edge.reader === cellIndex) result.add(cellOfIndex[edge.owner]);
   }
   return result;
 }
@@ -2245,18 +2511,19 @@ function fitViewToNodes(ids) {
   const w = topoWrap.clientWidth || 400, h = topoWrap.clientHeight || 400;
   const nodes = activeNodes();
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  // A gate-level node is a box of its own size, not a dot, so the extent is
+  // over box corners rather than centres -- otherwise the outermost cells'
+  // borders (and their contents) are clipped at the canvas edge. A flat-level
+  // node has no size and this reduces to its coordinate.
   for (const id of ids) {
     const node = nodes[id];
     if (!node) continue;
-    minX = Math.min(minX, node.x); maxX = Math.max(maxX, node.x);
-    minY = Math.min(minY, node.y); maxY = Math.max(maxY, node.y);
+    const halfW = (node.w || 0) / 2, halfH = (node.h || 0) / 2;
+    minX = Math.min(minX, node.x - halfW); maxX = Math.max(maxX, node.x + halfW);
+    minY = Math.min(minY, node.y - halfH); maxY = Math.max(maxY, node.y + halfH);
   }
   if (!Number.isFinite(minX)) { topoView = { scale: 1, offsetX: w / 2, offsetY: h / 2 }; return; }
-  // A gate-level node is a box, not a dot, so its label runs past its own
-  // coordinate; padding the extent by half a box keeps the outermost cells'
-  // borders inside the canvas rather than clipped at the edge.
-  const half = topoLevel === 'gate' ? CELL_W / 2 : 0;
-  const graphW = Math.max(maxX - minX + 2 * half, 1), graphH = Math.max(maxY - minY + CELL_MIN_H, 1);
+  const graphW = Math.max(maxX - minX, 1), graphH = Math.max(maxY - minY, 1);
   const pad = 60;
   const scale = Math.min((w - 2 * pad) / graphW, (h - 2 * pad) / graphH, 6);
   const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
@@ -2328,22 +2595,29 @@ function refreshTopoStatus() {
   const isRealisableAlready = topoCells.every((cell) => cell.realisable);
 
   if (topoLevel === 'gate') {
+    const nested = topoCells.reduce((sum, cell) => sum + cell.nodes.length, 0);
+    const sharedTorches = new Set(sharedEdges.map((edge) => edge.from)).size;
     topoCaption.textContent =
-      'Gate-level netlist -- the circuit as written; layered (Sugiyama-style) layout, no positions from the compiler';
+      'Gate-level cells, each drawn around the primitives it lowers into -- layered (Sugiyama-style) layout, no positions from the compiler';
     topoStatus.textContent =
-      `${topoCells.length} cell${topoCells.length === 1 ? '' : 's'}, ${cellEdges.length} connections -- `
+      `${topoCells.length} cell${topoCells.length === 1 ? '' : 's'}, ${cellEdges.length} connections, `
+      + `${nested} primitive${nested === 1 ? '' : 's'} nested inside them`
       + (isRealisableAlready
-        ? 'already realisable, so the primitive level is this same netlist.'
-        : `lowering into ${lowered} torches and merges (${topoNodes.length} primitives).`)
+        ? ' -- already realisable, so each box holds the one torch or junction it is.'
+        : ` (from ${lowered} torches and merges).`)
+      + (sharedTorches > 0
+        ? ` ${sharedTorches} torch${sharedTorches === 1 ? '' : 'es'} shared between cells, `
+          + `read across ${sharedEdges.length} box boundar${sharedEdges.length === 1 ? 'y' : 'ies'}.`
+        : '')
       + ` Layout in ${lastLayoutMs.toFixed(0)} ms.`;
   } else {
     topoCaption.textContent =
-      'Primitive topology -- what the gate level lowers into; layered (Sugiyama-style) layout, no positions from the compiler';
+      'Primitive topology, flat -- every torch, repeater and junction in one layered graph, ungrouped';
     topoStatus.textContent =
       `${topoNodes.length} nodes, ${topoEdges.length} edges, ${topoGates.length} gates `
       + `(${lowered - merges} NOR, ${merges} wire merge${merges === 1 ? '' : 's'}) -- `
       + (isRealisableAlready
-        ? `the same ${topoCells.length} cells as the gate level, which was already realisable.`
+        ? `the same ${topoCells.length} cells as the nested level, which was already realisable.`
         : `lowered from ${topoCells.length} gate-level cells.`)
       + ` Layout in ${lastLayoutMs.toFixed(0)} ms.`;
   }
@@ -2448,14 +2722,18 @@ function drawTopology() {
   else drawPrimitiveLevel();
 }
 
-/** The gate level: one box per cell, labelled with the cell's own kind, with
- * signal-flow edges landing on numbered pins. See this section's "Two
- * levels, and which one is the default" and "Thirteen kinds, three shapes,
- * and a word". */
+/** The nested gate level: one **container** per cell, labelled with the
+ * cell's own kind, holding the primitives it lowers into, with signal-flow
+ * edges landing on numbered pins. See this section's "Containment is the
+ * point" and "Thirteen kinds, three shapes, and a word". */
 function drawGateLevel() {
   if (cellNodes.length === 0) return;
   const toScreen = (x, y) => [topoView.offsetX + x * topoView.scale, topoView.offsetY + y * topoView.scale];
   const s = topoView.scale;
+  // Level of detail (see `INNER_DETAIL_PX`): whether a box's contents are
+  // large enough on screen to be worth drawing at all.
+  const detail = s * INNER_LAYER_SPACING >= INNER_DETAIL_PX;
+  const labelled = s * INNER_LAYER_SPACING >= INNER_LABEL_PX;
   const focusValue = topoFocusSelect.value;
   const focusCell = focusValue === '' ? null : Number(focusValue);
   const egoSet = focusCell === null ? null : computeCellEgoSet(focusCell);
@@ -2479,7 +2757,7 @@ function drawGateLevel() {
     // A pin tick at the landing point: a short stub perpendicular to the
     // box's left edge. Only worth drawing once a pin is distinguishable from
     // its neighbour on screen -- below that it is noise on top of the edge.
-    if (s * CELL_PIN_PITCH > 6 && cellNodes[edge.to].pins > 1) {
+    if (s * CELL_PIN_PITCH > 6 && cellNodes[edge.to] && cellNodes[edge.to].pins > 1) {
       const end = path[path.length - 1];
       const [ex, ey] = toScreen(end.x, end.y);
       topoCtx.beginPath();
@@ -2520,20 +2798,19 @@ function drawGateLevel() {
     }
 
     const cell = node.cell;
-    const bh = cellHeight(node.pins);
-    const [x0, y0] = toScreen(node.x - CELL_W / 2, node.y - bh / 2);
-    const [x1, y1] = toScreen(node.x + CELL_W / 2, node.y + bh / 2);
+    const [x0, y0] = toScreen(node.x - node.w / 2, node.y - node.h / 2);
+    const [x1, y1] = toScreen(node.x + node.w / 2, node.y + node.h / 2);
     const colour = CELL_COLOR[node.family];
 
     topoCtx.save();
     topoCtx.globalAlpha = alpha;
     roundRect(topoCtx, x0, y0, x1 - x0, y1 - y0, 4);
     if (node.family === 'merge') {
-      // Hollow and dashed, for the same reason the primitive level draws a
-      // merge hollow: there is no block there to fill in.
+      // Hollow and dashed, for the same reason the flat level draws a merge
+      // hollow: there is no block there to fill in.
       topoCtx.setLineDash([4, 3]);
     } else {
-      topoCtx.fillStyle = node.family === 'nor' ? 'rgba(255,140,0,0.28)' : 'rgba(74,127,193,0.35)';
+      topoCtx.fillStyle = node.family === 'nor' ? 'rgba(255,140,0,0.16)' : 'rgba(74,127,193,0.20)';
       topoCtx.fill();
     }
     topoCtx.strokeStyle = colour;
@@ -2542,33 +2819,173 @@ function drawGateLevel() {
     topoCtx.setLineDash([]);
 
     if (s > 0.25) {
-      // The kind, spelled out -- the whole point of this level. The output
-      // name goes above the box rather than inside it, so the kind keeps the
-      // larger type at every zoom and a long signal name cannot squeeze it.
+      // The kind, spelled out -- still the first thing a box says. It sits in
+      // the box's header strip now rather than dead centre, because the
+      // centre belongs to the primitives. The output name stays above the
+      // box, so a long signal name cannot squeeze the kind.
       topoCtx.fillStyle = colour;
-      topoCtx.font = `bold ${Math.min(15, Math.max(9, 13 * s))}px ui-monospace, monospace`;
+      topoCtx.font = `bold ${Math.min(14, Math.max(9, 12 * s))}px ui-monospace, monospace`;
       topoCtx.textAlign = 'center';
       topoCtx.textBaseline = 'middle';
-      topoCtx.fillText(cell.kind, (x0 + x1) / 2, (y0 + y1) / 2);
+      topoCtx.fillText(cell.kind, (x0 + x1) / 2, y0 + (CELL_HEADER / 2) * s);
 
       topoCtx.fillStyle = 'rgba(230,230,230,0.75)';
       topoCtx.font = '10px ui-monospace, monospace';
       topoCtx.textBaseline = 'bottom';
       topoCtx.fillText(cell.output, (x0 + x1) / 2, y0 - 2);
-
-      // How many torches and merges this cell becomes. Only for a cell that
-      // really is lowered: writing "1" on every NOR of a hand-written circuit
-      // would be a column of ones saying nothing.
-      if (!cell.realisable && s > 0.45) {
-        topoCtx.fillStyle = 'rgba(200,220,255,0.55)';
-        topoCtx.font = '9px ui-monospace, monospace';
-        topoCtx.textAlign = 'right';
-        topoCtx.textBaseline = 'bottom';
-        topoCtx.fillText(`×${cell.lowered.length}`, x1 - 3, y1 - 2);
-      }
     }
     topoCtx.restore();
+
+    if (detail) drawCellInterior(node, alpha, labelled, toScreen, s);
+    else if (s > 0.45 && !cell.realisable) {
+      // Too small for the contents to mean anything, so the box says how many
+      // there are instead -- the number this tab drew before it could nest
+      // them. `+k` is what it additionally *borrows*: see `drawSharedEdges`.
+      const borrowed = sharedEdges.filter((edge) => edge.reader === cell.index).length;
+      topoCtx.save();
+      topoCtx.globalAlpha = alpha;
+      topoCtx.fillStyle = 'rgba(200,220,255,0.55)';
+      topoCtx.font = '9px ui-monospace, monospace';
+      topoCtx.textAlign = 'right';
+      topoCtx.textBaseline = 'bottom';
+      topoCtx.fillText(`×${cell.lowered.length}${borrowed > 0 ? `+${borrowed}` : ''}`, x1 - 3, y1 - 2);
+      topoCtx.restore();
+    }
   }
+
+  if (detail) drawSharedEdges(egoSet, toScreen);
+}
+
+/** What one cell lowers into, drawn inside that cell's own box: its
+ * primitives in the same shapes the flat level gives them, the signal edges
+ * between them, and a hollow ring for each merge with dashed spokes to the
+ * nodes whose dust joins there.
+ *
+ * The spokes are the one thing here that can leave the box, and they leave it
+ * only where the circuit really does: an all-bare merge instantiates nothing,
+ * so its ring floats in an empty container and its dust is other cells'
+ * torches. Drawing the spokes short and stopping them at the border would be
+ * a tidier picture of a circuit that does not exist. */
+function drawCellInterior(node, alpha, labelled, toScreen, s) {
+  const interior = node.interior;
+  if (!interior) return;
+  const r = Math.min(7, Math.max(1.2, INNER_NODE_R * s));
+
+  topoCtx.save();
+  topoCtx.globalAlpha = alpha;
+
+  // Signal flow between two primitives of the same cell.
+  topoCtx.strokeStyle = 'rgba(255,120,120,0.65)';
+  topoCtx.lineWidth = 1;
+  for (const [from, to] of interior.edges) {
+    const a = interior.nodes[from], b = interior.nodes[to];
+    const [ax, ay] = toScreen(a.ax, a.ay);
+    const [bx, by] = toScreen(b.ax, b.ay);
+    topoCtx.beginPath();
+    topoCtx.moveTo(ax, ay);
+    topoCtx.lineTo(bx, by);
+    topoCtx.stroke();
+  }
+
+  // Merges: a hollow dashed ring plus a dashed spoke to every node whose dust
+  // meets there, wherever that node lives.
+  for (const junction of interior.junctions) {
+    const [jx, jy] = toScreen(junction.ax, junction.ay);
+    topoCtx.save();
+    topoCtx.setLineDash([3, 2]);
+    topoCtx.strokeStyle = 'rgba(255,59,59,0.45)';
+    topoCtx.lineWidth = 1;
+    for (const id of junction.gate.outputs) {
+      const target = innerPos.get(id);
+      if (!target) continue;
+      const [tx, ty] = toScreen(target.ax, target.ay);
+      topoCtx.beginPath();
+      topoCtx.moveTo(tx, ty);
+      topoCtx.lineTo(jx, jy);
+      topoCtx.stroke();
+    }
+    topoCtx.strokeStyle = TOPO_MERGE_COLOR;
+    topoCtx.lineWidth = 1.4;
+    topoCtx.beginPath();
+    topoCtx.arc(jx, jy, Math.min(9, Math.max(2, INNER_MERGE_R * s)), 0, Math.PI * 2);
+    topoCtx.stroke();
+    topoCtx.restore();
+  }
+
+  // The primitives themselves, in the flat level's own shapes and colours.
+  for (const inner of interior.nodes) {
+    const [ix, iy] = toScreen(inner.ax, inner.ay);
+    const colour = PRIMITIVE_COLOR[inner.primitive] || '#ff00ff';
+    // `drawNodeShape` sets `globalAlpha` itself rather than multiplying into
+    // the one already in effect, so the cell's own alpha has to be handed to
+    // it -- otherwise a dimmed cell's contents stay at full brightness and
+    // Focus dims the boxes but not the dots inside them.
+    drawNodeShape(topoCtx, inner.primitive, ix, iy, r, colour, alpha);
+    // A torch this cell built and another cell reads gets a violet ring: it
+    // is inside this box, but it is not only this box's.
+    if (sharedNodes.has(inner.id)) {
+      topoCtx.strokeStyle = SHARED_COLOR;
+      topoCtx.lineWidth = 1.2;
+      topoCtx.beginPath();
+      topoCtx.arc(ix, iy, r + 2.5, 0, Math.PI * 2);
+      topoCtx.stroke();
+    }
+    if (labelled) {
+      topoCtx.fillStyle = 'rgba(210,210,210,0.6)';
+      topoCtx.font = '8px ui-monospace, monospace';
+      topoCtx.textAlign = 'center';
+      topoCtx.textBaseline = 'top';
+      topoCtx.fillText(`#${inner.id}`, ix, iy + r + 1);
+    }
+  }
+
+  // An empty container is a claim in its own right, so it says so in words
+  // rather than just being blank.
+  if (interior.nodes.length === 0 && labelled) {
+    const [cx, cy] = toScreen(node.x, node.y + node.contentY);
+    topoCtx.fillStyle = 'rgba(255,150,150,0.6)';
+    topoCtx.font = 'italic 9px ui-monospace, monospace';
+    topoCtx.textAlign = 'center';
+    topoCtx.textBaseline = 'middle';
+    topoCtx.fillText('no blocks', cx, cy + 11);
+  }
+  topoCtx.restore();
+}
+
+/** The shared inverters -- `Session::topology()`'s `gate_level.shared_edges`,
+ * drawn as the lines they are.
+ *
+ * These are the only edges in this picture that leave one container and enter
+ * another without a gate-level edge to explain them, and they are the reason
+ * a nested drawing cannot simply be "each cell's box holds its expansion".
+ * `verilog:seven_segment`'s `andnot g3` is drawn holding one torch when its
+ * recipe has two steps; the second torch is `!d1`, which `nand g1` built
+ * first and which three later cells read. Leaving that out would make three
+ * boxes look like they cost less than they do and one look like it feeds
+ * nobody -- confidently wrong in exactly the way this tab has been before.
+ *
+ * Violet and dashed so they never read as gate-level signal flow, and drawn
+ * last so a line entering a box is visible over its fill. */
+function drawSharedEdges(egoSet, toScreen) {
+  if (sharedEdges.length === 0) return;
+  topoCtx.save();
+  topoCtx.setLineDash([5, 4]);
+  topoCtx.lineWidth = 1.2;
+  for (const edge of sharedEdges) {
+    const from = innerPos.get(edge.from), to = innerPos.get(edge.to);
+    if (!from || !to) continue;
+    const inFocus = egoSet
+      ? (egoSet.has(cellOfIndex[edge.owner]) && egoSet.has(cellOfIndex[edge.reader]))
+      : true;
+    const [ax, ay] = toScreen(from.ax, from.ay);
+    const [bx, by] = toScreen(to.ax, to.ay);
+    topoCtx.strokeStyle = inFocus ? SHARED_COLOR : 'rgba(199,146,234,0.08)';
+    topoCtx.beginPath();
+    topoCtx.moveTo(ax, ay);
+    topoCtx.lineTo(bx, by);
+    topoCtx.stroke();
+  }
+  topoCtx.restore();
 }
 
 function drawPrimitiveLevel() {
@@ -2790,11 +3207,32 @@ topoCanvas.addEventListener('mouseleave', () => { topoHoverReadout.textContent =
 function gateLevelHover(mx, my) {
   if (cellNodes.length === 0) return;
   const s = topoView.scale;
+
+  // A nested primitive first: it is inside a box, so hit-testing the box
+  // first would make every dot in the picture unreachable. This is the
+  // readout that makes a box checkable node by node against
+  // `Session::topology()`'s `cells[i].nodes`.
+  for (const [id, inner] of innerPos) {
+    const sx = topoView.offsetX + inner.ax * s, sy = topoView.offsetY + inner.ay * s;
+    if (Math.hypot(mx - sx, my - sy) > 7) continue;
+    const owner = topoCells.find((cell) => cell.nodes.includes(id));
+    const readers = sharedEdges
+      .filter((edge) => edge.from === id)
+      .map((edge) => topoCells[edge.reader].output);
+    topoHoverReadout.textContent =
+      `#${id} -- ${inner.primitive}`
+      + (owner ? ` -- inside ${owner.output} (${owner.kind})` : '')
+      + (readers.length > 0
+        ? ` -- shared: also read by ${[...new Set(readers)].join(', ')}`
+        : '');
+    return;
+  }
+
   let hit = null;
   for (const node of cellNodes) {
     const sx = topoView.offsetX + node.x * s, sy = topoView.offsetY + node.y * s;
     if (node.role === 'cell') {
-      const hw = (CELL_W / 2) * s, hh = (cellHeight(node.pins) / 2) * s;
+      const hw = (node.w / 2) * s, hh = (node.h / 2) * s;
       if (Math.abs(mx - sx) <= hw && Math.abs(my - sy) <= hh) { hit = node; break; }
     } else if (Math.hypot(mx - sx, my - sy) <= 9) {
       hit = node; break;
@@ -2809,11 +3247,16 @@ function gateLevelHover(mx, my) {
   const pins = cell.inputs
     .map((input, i) => `${i}:${input.name}${input.cell === null || input.cell === undefined ? ' (input)' : ''}`)
     .join(', ');
+  const borrowed = [...new Set(
+    sharedEdges.filter((edge) => edge.reader === cell.index).map((edge) => topoCells[edge.owner].output),
+  )];
   topoHoverReadout.textContent =
     `${cell.output} = ${cell.kind}(${pins}) -- layer ${cell.layer} -- `
     + (cell.realisable
-      ? `realisable directly (${cell.kind === 'merge' ? 'a dust junction: no torch, no support' : 'one torch on its support'})`
-      : `lowers into ${cell.lowered.length} torches and merges, ${cell.nodes.length} primitives`);
+      ? `realisable directly (${cell.kind === 'merge' ? 'a dust junction: no torch, no support' : 'one torch on its support'}), `
+      : `lowers into ${cell.lowered.length} torches and merges, `)
+    + `${cell.nodes.length} primitive${cell.nodes.length === 1 ? '' : 's'} in this box`
+    + (borrowed.length > 0 ? ` -- plus a shared torch from ${borrowed.join(', ')}` : '');
 }
 
 topoFocusSelect.addEventListener('change', () => {
@@ -2842,6 +3285,25 @@ topoLevelSelect.addEventListener('change', () => {
   topoHoverReadout.textContent = ' ';
   drawTopology();
 });
+
+// This page is a module, so nothing in it is reachable from a console by
+// default. `window.reda` is the deliberate exception, and it exists for one
+// reason: this tab has shipped three pictures that were confidently wrong,
+// every time because the drawing was checked against its author's intent
+// rather than against the data. A reader who suspects a box is holding the
+// wrong primitives can now ask, without instrumenting anything:
+//
+//     reda.topology().gate_level.cells.find(c => c.kind === 'mux').nodes
+//     reda.cells().find(c => c.label === 'g20').interior.nodes.map(n => n.id)
+//
+// -- the first is what `Session::topology()` claims, the second is what is
+// actually on screen, and they have to be the same list.
+window.reda = {
+  topology: () => session.topology(),
+  cells: () => cellNodes,
+  shared: () => sharedEdges,
+  view: () => topoView,
+};
 
 // The layout itself is a deterministic function of the graph (see this
 // view's own doc comment) -- there is nothing left to reshuffle the way the

@@ -30,7 +30,7 @@
 //! `list_circuits`, `Session::new`, `set_lever`, `run_until_stable`, `size`,
 //! and `slice`.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use reda::circuits::{and4, full_adder, seven_segment, verilog};
 use reda::compile::primitive_graph::{self, PrimitiveGraph, Provenance};
@@ -625,6 +625,49 @@ struct TopologyCell {
     nodes: Vec<usize>,
 }
 
+/// One primitive edge that leaves a cell from somewhere other than that
+/// cell's own output -- a **shared inverter**, drawn from the torch that
+/// really exists to the gate that really reads it.
+///
+/// `lowering::lower` routes every intermediate one-input NOR through
+/// `NetlistBuilder::not`, whose cache makes one torch serve every expansion
+/// that wants the same `!x`; the torch is credited to whichever cell built it
+/// first, and every later reader gets no gate of its own for it (see
+/// `lower_with_provenance`'s doc comment, and
+/// `lowering::tests::inverters_are_shared_across_gates_and_with_existing_
+/// nor1_gates`).
+///
+/// A picture that nests primitives inside their cell therefore cannot be
+/// drawn from [`TopologyCell::nodes`] alone. `verilog:seven_segment`'s
+/// `andnot g3` owns exactly one torch and reads a second one -- `!d1` -- from
+/// inside `nand g1`'s box. Drawing that torch inside `g1` and saying nothing
+/// makes `g3` look like a one-torch cell that reads `d1` directly, which is
+/// not what gets built. So the crossing is a first-class thing the view is
+/// handed, rather than something a page has to notice on its own.
+///
+/// # What counts as one
+///
+/// Exactly: an edge whose two endpoint nodes belong to different cells, and
+/// whose source is **not** one of the nodes a consumer of the owning cell
+/// reads it from (`PrimitiveGraph::output_nodes` of the lowered gate carrying
+/// that cell's declared output). Every other cell-crossing edge is already
+/// explained by a gate-level edge the picture draws anyway -- cell A drives
+/// signal `A.output`, cell B reads it -- possibly through an all-bare merge
+/// that owns no node of its own, which is why the rule is stated on the
+/// terminal node set rather than on "is the source cell adjacent".
+#[derive(Serialize, Debug)]
+struct SharedEdge {
+    /// Node id inside `owner`, interior to it: a torch that is not what a
+    /// reader of `owner`'s own output signal would read.
+    from: usize,
+    /// Node id inside `reader`.
+    to: usize,
+    /// Index of the cell credited with building `from`.
+    owner: usize,
+    /// Index of the cell whose expansion reads it.
+    reader: usize,
+}
+
 /// The gate level of [`Session::topology`]: the circuit as it was written.
 #[derive(Serialize)]
 struct GateLevel {
@@ -633,6 +676,11 @@ struct GateLevel {
     inputs: Vec<String>,
     /// Primary outputs: the signal name, and the cell driving it.
     outputs: Vec<CellInput>,
+    /// Every shared inverter, as the edge it really is -- see [`SharedEdge`].
+    /// Empty for a circuit whose cells each built their own (`verilog:and4`),
+    /// and for every hand-written circuit, where lowering is the identity and
+    /// there are no expansions to share between.
+    shared_edges: Vec<SharedEdge>,
 }
 
 #[derive(Serialize)]
@@ -882,7 +930,7 @@ impl Session {
             cell: producer.get(name.as_str()).copied(),
         };
 
-        let cells = self
+        let cells: Vec<TopologyCell> = self
             .source_netlist
             .gates
             .iter()
@@ -908,11 +956,62 @@ impl Session {
                 }
             })
             .collect();
+
         GateLevel {
+            shared_edges: self.shared_edges(&cells),
             cells,
             inputs: self.source_netlist.inputs.clone(),
             outputs: self.source_netlist.outputs.iter().map(&cell_input).collect(),
         }
+    }
+
+    /// Every [`SharedEdge`] in this circuit -- see that type's doc comment for
+    /// what one is and why the nested picture cannot be drawn without them.
+    ///
+    /// Stated over primitive **nodes** rather than over lowered signal names,
+    /// because nodes are what a nested picture draws: the answer is exactly
+    /// the set of lines that leave one box from a point other than the point
+    /// its neighbours read it at. The two statements differ in one harmless
+    /// place -- a bare merge branch puts its producer's own torch into the
+    /// merge's output net, so reading that torch and reading the merge are
+    /// physically the same dust, and the node-level rule correctly declines to
+    /// call it a separate crossing.
+    fn shared_edges(&self, cells: &[TopologyCell]) -> Vec<SharedEdge> {
+        let mut owner_of_node: Vec<Option<usize>> = vec![None; self.primitive_graph.nodes.len()];
+        let mut terminals: Vec<HashSet<usize>> = Vec::with_capacity(cells.len());
+        for cell in cells {
+            for &node in &cell.nodes {
+                owner_of_node[node] = Some(cell.index);
+            }
+            // The one lowered gate carrying this cell's declared output name.
+            // `lower` guarantees it exists: an expansion's output step is
+            // named after the gate itself, and a realisable cell is adopted
+            // verbatim (see `lowering`'s "Names" section).
+            let driver = cell
+                .lowered
+                .iter()
+                .copied()
+                .find(|&g| self.gate_meta[g].output == cell.output)
+                .unwrap_or_else(|| {
+                    panic!("no lowered gate drives `{}`, which lowering promises", cell.output)
+                });
+            terminals.push(self.primitive_graph.output_nodes[driver].iter().copied().collect());
+        }
+
+        let mut shared = Vec::new();
+        for edge in &self.primitive_graph.edges {
+            // A lever or a lamp belongs to no cell; those edges are primary
+            // I/O, already drawn as such.
+            let (Some(owner), Some(reader)) = (owner_of_node[edge.from], owner_of_node[edge.to])
+            else {
+                continue;
+            };
+            if owner == reader || terminals[owner].contains(&edge.from) {
+                continue;
+            }
+            shared.push(SharedEdge { from: edge.from, to: edge.to, owner, reader });
+        }
+        shared
     }
 }
 
@@ -1125,7 +1224,8 @@ impl Session {
     /// ```text
     /// { gate_level:      { cells: [{index, output, kind, inputs, realisable,
     ///                               layer, lowered, nodes}],
-    ///                      inputs: [name], outputs: [{name, cell}] },
+    ///                      inputs: [name], outputs: [{name, cell}],
+    ///                      shared_edges: [{from, to, owner, reader}] },
     ///   primitive_level: { nodes: [{id, primitive, provenance}],
     ///                      edges: [{from, to}],
     ///                      gates: [{index, output, kind, source, arity,
@@ -1148,7 +1248,9 @@ impl Session {
     ///
     /// The primitive level exists for the planner's benefit; a viewer's
     /// needs are not the same, so it is served alongside rather than instead.
-    /// `cells[i].lowered` and `cells[i].nodes` are the join between the two.
+    /// `cells[i].lowered` and `cells[i].nodes` are the join between the two,
+    /// and `gate_level.shared_edges` is the one place that join is *not* a
+    /// clean containment -- the inverters one cell built and another reads.
     ///
     /// No positions at either level: neither graph carries any (see
     /// `compile::primitive_graph`'s doc comment), so a page consuming this
@@ -1371,6 +1473,192 @@ mod gate_level_tests {
                  one cell, got {seen:?}"
             );
         }
+    }
+
+    /// The nested picture draws each cell's primitives *inside* that cell's
+    /// box, so "every primitive is inside exactly one box, and no box claims
+    /// one that is somebody else's" is not a nicety -- it is the thing the
+    /// drawing asserts. A node claimed twice would appear in two boxes at
+    /// once; a node claimed by nobody would be drawn nowhere while its edges
+    /// still reached it.
+    ///
+    /// The exceptions are the primary I/O nodes -- one `Lever` per input, one
+    /// `Lamp` per output -- which belong to no cell by construction
+    /// (`Provenance::PrimaryInput`/`PrimaryOutput`) and are drawn as their own
+    /// terminals.
+    #[test]
+    fn every_primitive_node_is_inside_exactly_one_cell_or_is_a_port() {
+        for circuit in ["verilog:and4", "verilog:seven_segment", "seven_segment", "full_adder"] {
+            let session = Session::build(circuit).expect("circuit builds");
+            let ports = session
+                .primitive_graph
+                .nodes
+                .iter()
+                .filter(|node| !matches!(node.provenance, Provenance::Gate { .. }))
+                .count();
+            let total = session.primitive_graph.nodes.len();
+            let level = session.gate_level();
+
+            let mut claims = vec![0usize; total];
+            for cell in &level.cells {
+                for &node in &cell.nodes {
+                    claims[node] += 1;
+                }
+            }
+            for (id, &count) in claims.iter().enumerate() {
+                let is_port =
+                    !matches!(session.primitive_graph.nodes[id].provenance, Provenance::Gate { .. });
+                let expected = usize::from(!is_port);
+                assert_eq!(count, expected, "{circuit}: node #{id} is claimed by {count} cells");
+            }
+            let owned: usize = level.cells.iter().map(|cell| cell.nodes.len()).sum();
+            assert_eq!(owned + ports, total, "{circuit}: cells and ports must cover every node");
+        }
+    }
+
+    /// The shared inverters of `verilog:seven_segment`, named rather than
+    /// hidden -- see [`SharedEdge`].
+    ///
+    /// The one written out in full is `!d1`. `nand g1 <- d1 g0` inverts both
+    /// of its inputs on the way to `!(d1 & g0) == !d1 | !g0`, so it is the
+    /// cell credited with building `!d1`; three later cells want the same
+    /// torch and are given no gate of their own for it, which is exactly why
+    /// each of them has fewer lowered gates than its kind's recipe has steps:
+    ///
+    /// ```text
+    /// gate andnot g3  <- d1 d0     A & !B == NOR(!A, B): wants !d1
+    /// gate and    g6  <- d1 d3     NOR(!A, !B):          wants !d1
+    /// gate nand   g12 <- d1 g5     !A | !B:              wants !d1
+    /// ```
+    ///
+    /// Transcribed from `src/circuits/baked/seven_segment.netlist` by hand,
+    /// not re-derived from the netlist in code, for the same reason the
+    /// histogram above is.
+    #[test]
+    fn a_shared_inverter_is_reported_as_an_edge_out_of_the_cell_that_built_it() {
+        let session = Session::build("verilog:seven_segment").expect("circuit builds");
+        let level = session.gate_level();
+        assert!(!level.shared_edges.is_empty(), "this circuit really does share inverters");
+
+        // Every shared edge has to be a real edge of the primitive graph,
+        // leaving a node its owner really owns for a node its reader really
+        // owns -- otherwise the dashed line the picture draws points at
+        // nothing.
+        let edges: HashSet<(usize, usize)> =
+            session.primitive_graph.edges.iter().map(|edge| (edge.from, edge.to)).collect();
+        for shared in &level.shared_edges {
+            assert!(edges.contains(&(shared.from, shared.to)), "{shared:?} is not a real edge");
+            assert_ne!(shared.owner, shared.reader);
+            assert!(level.cells[shared.owner].nodes.contains(&shared.from));
+            assert!(level.cells[shared.reader].nodes.contains(&shared.to));
+        }
+
+        // `!d1`: the second torch of `nand g1`'s expansion, and the only
+        // node of that cell whose consumers sit in other cells.
+        let g1 = level.cells.iter().find(|cell| cell.output == "g1").expect("g1 exists");
+        assert_eq!(g1.kind, "nand");
+        let mut readers: Vec<&str> = level
+            .shared_edges
+            .iter()
+            .filter(|shared| shared.owner == g1.index)
+            .map(|shared| level.cells[shared.reader].output.as_str())
+            .collect();
+        readers.sort_unstable();
+        readers.dedup();
+        assert_eq!(
+            readers,
+            ["g12", "g3", "g6"],
+            "`nand g1` builds `!d1`; these three cells read it instead of building their own"
+        );
+        // One torch, not three: every one of those edges leaves the same node.
+        let sources: HashSet<usize> = level
+            .shared_edges
+            .iter()
+            .filter(|shared| shared.owner == g1.index)
+            .map(|shared| shared.from)
+            .collect();
+        assert_eq!(sources.len(), 1, "there is one `!d1` torch, shared -- not one per reader");
+
+        // And a cell that borrows really is short of gates: `andnot g3` has
+        // one of the two steps `A & !B` takes.
+        let g3 = level.cells.iter().find(|cell| cell.output == "g3").expect("g3 exists");
+        assert_eq!((g3.kind, g3.lowered.len(), g3.nodes.len()), ("andnot", 1, 1));
+        assert!(
+            level.shared_edges.iter().any(|shared| shared.reader == g3.index),
+            "so the torch it is missing has to be visible as an edge from elsewhere"
+        );
+    }
+
+    /// `verilog:and4`'s three ANDs read six distinct signals between them, so
+    /// nothing is shared and every cell's box holds its whole expansion. That
+    /// is what makes it the circuit to check the nested drawing against
+    /// first: containment there is exactly containment, with no dashed
+    /// borrowing to account for.
+    #[test]
+    fn and4_shares_nothing_so_each_cell_owns_its_whole_expansion() {
+        let level = gate_level_of("verilog:and4");
+        assert!(level.shared_edges.is_empty());
+        for cell in &level.cells {
+            assert_eq!(
+                (cell.lowered.len(), cell.nodes.len()),
+                (3, 3),
+                "`{}` is an $_AND_: !a, !b, and the NOR of the two",
+                cell.output
+            );
+        }
+    }
+
+    /// The one cell the tab's own verification singles out, drawn: `mux g20`
+    /// contains five lowered gates and four primitives, and the picture must
+    /// show those four and no others.
+    ///
+    /// Four, not five, because the mux's output stage is a merge -- and a
+    /// merge whose every branch is bare is not a block, it is the point where
+    /// two torches' dust is allowed to touch, so it instantiates nothing.
+    #[test]
+    fn the_muxs_box_holds_exactly_the_four_primitives_its_five_gates_instantiate() {
+        let session = Session::build("verilog:seven_segment").expect("circuit builds");
+        let level = session.gate_level();
+        let mux = level.cells.iter().find(|cell| cell.kind == "mux").expect("one mux");
+
+        assert_eq!(mux.lowered.len(), 5);
+        let union: Vec<usize> = {
+            let mut nodes: Vec<usize> = mux
+                .lowered
+                .iter()
+                .flat_map(|&g| session.primitive_graph.gate_nodes[g].iter().copied())
+                .collect();
+            nodes.sort_unstable();
+            nodes.dedup();
+            nodes
+        };
+        assert_eq!(mux.nodes, union, "the box holds its gates' nodes, all of them and nothing else");
+        assert_eq!(mux.nodes.len(), 4);
+        assert!(
+            mux.nodes.iter().all(|&id| matches!(
+                session.primitive_graph.nodes[id].provenance,
+                Provenance::Gate { gate, .. } if mux.lowered.contains(&gate)
+            )),
+            "and each of those nodes names one of this cell's own gates as its provenance"
+        );
+
+        // The gate that owns nothing is the merge, and its dust joins two
+        // nodes that are inside this same box -- so its junction glyph and
+        // both its spokes stay within the mux, rather than reaching out.
+        let empty: Vec<usize> = mux
+            .lowered
+            .iter()
+            .copied()
+            .filter(|&g| session.primitive_graph.gate_nodes[g].is_empty())
+            .collect();
+        assert_eq!(empty.len(), 1);
+        assert!(session.gate_meta[empty[0]].is_merge);
+        assert!(
+            session.primitive_graph.output_nodes[empty[0]]
+                .iter()
+                .all(|id| mux.nodes.contains(id)),
+            "the mux's output merge joins its own two torches"
+        );
     }
 
     /// A hand-written circuit is genuinely all-NOR -- `NetlistBuilder` emits
