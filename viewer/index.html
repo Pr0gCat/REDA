@@ -152,6 +152,15 @@
     vertical-align: middle;
     margin-right: 4px;
   }
+  /* A run of dust, in swatch form: segments rather than a bar, because that
+     is what the canvas draws and what the word "run" means here. */
+  .legend-swatch.legend-dust {
+    width: 22px;
+    height: 6px;
+    border: 1px solid #5c0e0e;
+    border-radius: 1px;
+    background: #ff3b3b;
+  }
   .view-toggle { display: flex; gap: 6px; }
   .view-toggle button[data-active="true"] { background: var(--accent); color: #06213a; border-color: var(--accent); }
   .hidden { display: none !important; }
@@ -267,8 +276,8 @@
       <div class="row">
         <label for="topo-level-select">Level</label>
         <select id="topo-level-select">
-          <option value="gate" selected>Nested -- cells, holding their primitives</option>
-          <option value="primitive">Flat -- the primitive graph, ungrouped</option>
+          <option value="gate" selected>Grouped -- primitives, hulled by cell</option>
+          <option value="primitive">Flat -- the same primitives, ungrouped</option>
         </select>
       </div>
       <div class="row">
@@ -284,20 +293,18 @@
       <div class="legend-list" id="topo-cell-histogram" data-level="gate"></div>
 
       <div data-level="gate">
-        <h2 style="margin-top:10px;">Cells</h2>
-        <div class="legend-list">
-          <span><span class="legend-swatch" style="background:hsla(212,45%,52%,0.35);border-color:hsla(212,60%,70%,0.9)"></span>A gate-level cell -- <i>and</i>, <i>nand</i>, <i>mux</i>, <i>andnot</i>, ... Labelled with its kind, not drawn as a shape per kind: there are thirteen of them and thirteen invented outlines would be harder to read than the word. <b>The box is a container:</b> what it holds is what it lowers into.</span>
-          <span><span class="legend-swatch" style="background:rgba(255,140,0,0.2);border-color:#ff8c00"></span><i>nor</i> -- realisable directly, so it holds the one torch it is. Nothing to lower.</span>
-          <span><span class="legend-swatch" style="background:transparent;border:1px dashed #ff3b3b"></span><i>merge</i> -- a wire merge, also realisable directly, and not a gate body at all: no torch, no support, just the point where several branches' dust are allowed to touch. A merge whose every branch is bare holds <i>no blocks</i>, and its spokes reach the dust it joins inside other cells.</span>
-          <span><span class="legend-swatch" style="background:#7a5230;border-radius:50%"></span>Primary input (a lever) &nbsp;<span class="legend-swatch" style="background:#ffd54a;border-radius:50%"></span>Primary output (a lamp)</span>
-          <span><span class="legend-swatch" style="background:#ff3b3b"></span>Signal flow, producer to consumer. Each edge lands on its own <b>pin</b>, stacked down the cell's left edge in the kind's declared pin order -- <i>andnot</i> and <i>mux</i> are not symmetric in their pins, so which edge lands where is part of what the circuit is.</span>
-        </div>
-        <h2 style="margin-top:10px;">Inside a cell</h2>
+        <h2 style="margin-top:10px;">Primitives</h2>
         <div class="legend-list" id="topo-inner-legend"></div>
         <div class="legend-list">
-          <span><span class="legend-swatch" style="background:transparent;border:1px dashed #ff3b3b;border-radius:50%"></span>A merge among the cell's own lowered gates, with dashed spokes to the nodes whose dust joins there.</span>
-          <span><span class="legend-swatch" style="background:transparent;border:1px solid #c792ea;border-radius:50%"></span><b>A shared torch</b> -- most expansions start by inverting an input, so <i>!x</i> is built once and reused. It is drawn inside the cell that built it, ringed in violet, with a dashed violet line to every other cell's expansion that reads it. Those cells therefore hold fewer primitives than their recipe has steps, and the missing one is on screen rather than implied.</span>
-          <span>Zoomed out, a box's contents stop being legible and it shows <b>&times;n</b> -- how many torches and merges it lowers into -- with <b>+k</b> for the shared torches it reads from elsewhere. Zoom in, or use Focus, to see them.</span>
+          <span><span class="legend-swatch legend-dust"></span><b>Redstone dust</b> -- a connection is a material, not an arrow, and it <b>ends on the block that reads it</b>: an unbroken run from one primitive to the next, never stopping at a boundary in between. Solid, because a broken line reads as a broken connection -- and because this graph has no positions, so a run has no length and no known signal loss, and a solid line offers nothing to count.</span>
+          <span><span class="legend-swatch" style="background:transparent;border:1px dashed #ff3b3b;border-radius:50%"></span>A <b>wire merge</b> -- no torch, no support, no gate body: the point where several branches' dust are allowed to touch. <b>Dotted</b> spokes reach the nodes whose dust joins there. A spoke is a hairline, not a run of dust: it says those runs are one net, it is not another run beside them.</span>
+          <span><span class="legend-swatch" style="background:transparent;border:1px solid #c792ea;border-radius:50%"></span><b>A shared torch</b> -- most expansions start by inverting an input, so <i>!x</i> is built once and reused. It sits in the hull of the cell that built it, ringed in violet, and the cells that read it without owning it hold fewer primitives than their recipe has steps. The edges to those cells are ordinary dust, because that is what they are; the ring is the credit.</span>
+        </div>
+        <h2 style="margin-top:10px;">Cells</h2>
+        <div class="legend-list">
+          <span><span class="legend-swatch" style="background:hsla(280,60%,55%,0.18);border-color:hsla(280,70%,68%,0.9)"></span><span class="legend-swatch" style="background:hsla(90,60%,55%,0.18);border-color:hsla(90,70%,68%,0.9)"></span><b>A hull is a label, not a container.</b> It wraps the primitives that <i>are</i> one gate-level cell -- <i>and</i>, <i>nand</i>, <i>mux</i>, <i>andnot</i>, ... -- and is named with its kind, in the same spelling <code>src/circuits/baked/*.netlist</code> uses. No signal enters or leaves it; edges cross its outline without noticing. Each cell gets its own hue so that two overlapping hulls read as two.</span>
+          <span>What a cell costs is something you <b>count</b> rather than decode: a <i>nor</i> is one torch, an <i>and</i> is three. A <i>merge</i> that lowers into no primitive at all is hulled around its own junction ring -- the one thing it does have.</span>
+          <span>Zoomed in, every primitive carries its <b>#id</b> and every incoming edge carries the <b>index of the cell input</b> that lands there, in the cell's own declared pin order -- <i>andnot</i> (<code>A &amp; !B</code>) and <i>mux</i> (<code>S ? B : A</code>) are not symmetric, so which signal reaches which torch is part of what the circuit is. Hover any primitive for the same thing in words.</span>
         </div>
       </div>
 
@@ -307,11 +314,11 @@
         <h2 style="margin-top:10px;">Gates</h2>
         <div class="legend-list" id="topo-gate-legend">
           <span><span class="legend-swatch" style="background:hsla(210,65%,55%,0.35);border-color:hsla(210,70%,65%,0.9)"></span>NOR<i>n</i> -- a torch on its support. One badge around the single node the gate expands into; each gate gets its own hue.</span>
-          <span><span class="legend-swatch" style="background:transparent;border:1px dashed #ff3b3b;border-radius:50%"></span>OR<i>n</i> wire merge -- no torch, no support, no body: a dust junction where several branches meet. Dashed spokes reach the nodes whose dust actually joins there.</span>
+          <span><span class="legend-swatch" style="background:transparent;border:1px dashed #ff3b3b;border-radius:50%"></span>OR<i>n</i> wire merge -- no torch, no support, no body: a dust junction where several branches meet. Dotted hairline spokes reach the nodes whose dust actually joins there.</span>
         </div>
         <h2 style="margin-top:10px;">Edges</h2>
         <div class="legend-list" id="topo-edge-legend">
-          <span><span class="legend-swatch" style="background:#ff3b3b"></span>Signal flow -- producer to consumer; realisation (a dust path, adjacency, or otherwise) is not decided at this layer</span>
+          <span><span class="legend-swatch legend-dust"></span><b>Redstone dust</b> -- producer to consumer, drawn as the material that carries it rather than as an arrow, and ending on the node that reads it. Solid and unbroken: the graph has no positions, so a run has no length and no known signal loss, and there is nothing here to count. How it is finally realised (a dust path, adjacency, or otherwise) is not decided at this layer.</span>
         </div>
       </div>
     </div>
@@ -1591,69 +1598,78 @@ function onThreeHover(e) {
 // three, is to invent a layout rather than just project one that already
 // exists.
 //
-// # Containment is the point
+// # The graph is the primitive graph
 //
-// This tab exists to answer "what is this circuit". It spent three revisions
-// not answering it. First it drew the primitive graph as force-directed
-// spaghetti; then it drew the same graph legibly, so `verilog:and4` -- a
-// circuit that is three ANDs -- read
+// This tab exists to answer "what is this circuit", and it has now spent
+// four revisions answering a slightly different question each time. It drew
+// the primitive graph as force-directed spaghetti; then it drew the same
+// graph legibly, so `verilog:and4` -- a circuit that is three ANDs -- read
+// `14 nodes, 13 edges, 9 gates` and nothing else; then it gained a Level
+// toggle that showed the three ANDs *or* the nine NORs and never the
+// relationship between them; then it drew each cell as a *container* holding
+// the primitives it lowers into, with gate-level signal landing on numbered
+// pins down the container's left edge.
 //
-//     14 nodes, 13 edges, 9 gates (9 NOR, 0 wire merges)
+// That last one had the question backwards, and the way it had it backwards
+// is worth writing down, because it is an old mistake in a new costume. A
+// container that an edge lands *on* is a routing boundary: the picture says
+// the signal arrives at "g1" and then something happens in there. Nothing in
+// redstone works that way. A torch powers a specific other torch's support.
+// There is no gate for a signal to arrive at and no boundary for it to
+// cross; `g1` is a name somebody gave to four torches.
 //
-// and then it gained a Level toggle, which showed the three ANDs *or* the
-// nine NORs and never the relationship between them. A reader had to hold
-// two pictures in their head and join them by memory.
+// So the graph drawn here is the **primitive graph**, and only that. Its
+// nodes are the torches, repeaters, levers and lamps that actually get
+// built, and every edge runs from the real producer to the real consumer and
+// terminates on it. A gate-level cell is drawn as a **hull**: an outline
+// around the primitives that belong to it, labelled with its kind. It
+// carries no signal. Nothing enters or leaves it. Edges cross its outline
+// without noticing it is there. It is an identification device -- "these
+// four torches are the `nand`" -- which is what was asked for in the first
+// place, with a pen, by drawing a box around four NORs on a screenshot and
+// writing `g0 (AND)` beside it.
 //
-// A gate kind's entry in the topology library is a *recipe*, and what a
-// reader wants is the recipe applied: this cell, made of these primitives.
-// So the default level draws the two nested. A cell is a container, sized by
-// what it holds; inside it are the torches, repeaters and junctions its own
-// expansion produced, in the same shapes and colours the flat level gives
-// them. `verilog:and4` is three `and` boxes with three torches each, and the
-// nine NORs it used to report as the circuit are visibly nine thirds of it.
+// `topoLevel` now chooses how that one graph is laid out, not what it is:
 //
-// `topoLevel` still switches, but it no longer hides a level:
-//
-//   * **Nested** (`'gate'`, the default) -- `Session::topology()`'s
-//     `gate_level.cells` as containers, each holding the primitives named by
-//     its own `nodes`, with gate-level signal flow landing on numbered pins
-//     between the boxes.
-//   * **Flat** (`'primitive'`) -- `primitive_level`, every primitive in one
-//     layered graph with no grouping at all. Kept, because it is a genuinely
-//     different fact and not a subset: it lays the primitives out by their
-//     *own* depth, so a torch's real distance from a lever is a position on
-//     screen. Inside a container that depth is local to the box and the flat
-//     level is the only place the global one is visible.
+//   * **Grouped** (`'gate'`, the default) -- laid out so that the members of
+//     a cell stay together, and hulled. Being able to read a cell off the
+//     picture is what that ordering buys, and it is paid for in depth: a
+//     node's x is still its own layer, but its y has been pulled toward the
+//     rest of its cell's.
+//   * **Flat** (`'primitive'`) -- the same nodes and the same edges with no
+//     grouping pressure at all, so the layout answers to the graph and to
+//     nothing else. Kept because it is the only place a torch's real
+//     distance from a lever is undistorted by which cell it happens to
+//     belong to. Switching between the two shows exactly what grouping cost.
 //
 // **The hand-written circuits are not dressed up.** `and4`, `full_adder`,
 // `segment_a` and `seven_segment` are built by `NetlistBuilder`, which emits
 // NOR gates and wire merges and nothing else, so every one of their cells is
-// a container holding the single torch it already was. That is the truth
-// about those circuits; the status line says so in as many words.
+// a hull around the single torch it already was. That is the truth about
+// those circuits; the status line says so in as many words.
 //
-// # Two things nesting has to be honest about
+// # What a hull must not be allowed to imply
 //
-// **A `nor` lowers into exactly itself, and a `merge` into nothing at all.**
-// Nesting a box inside an identical box is noise, so there is no inner box
-// per lowered gate anywhere in this view -- a lowered gate is drawn as the
-// primitive it instantiates, and only the *cell* gets an outline. A `nor`
-// container holds one torch; a `merge` container holds its isolating
-// repeaters and a junction ring; an all-bare merge holds nothing, says "no
-// blocks", and sends its dashed spokes out to the torches in other cells
-// whose dust it joins. Each of those is a real and different fact about cost,
-// and each is legible without a key.
+// **A hull is membership, not containment.** Two hulls may overlap and one
+// may pass through another, because the layout optimises the graph and the
+// hulls are drawn over whatever it produced rather than the other way round.
+// Each gets its own hue (the same `gateHue` the flat level gives its gate
+// badges) and its own label, so two crossing outlines read as two things and
+// not as one nested inside the other.
 //
-// **Inverters are shared.** `lowering::lower` routes every intermediate
-// one-input NOR through `NetlistBuilder::not`, so `!d1` is built once and
-// credited to whichever cell got there first. Three of
-// `verilog:seven_segment`'s cells read that torch without owning it, and a
-// picture that drew it inside one box and stopped would be claiming those
-// three cost less than they do. `Session::topology()` therefore hands this
-// view `gate_level.shared_edges` -- computed and tested on the Rust side --
-// and `drawSharedEdges` draws every one of them as a dashed violet line from
-// the torch that exists to the gate that reads it, with a violet ring on the
-// shared torch itself. See `SharedEdge` in `viewer/src/lib.rs`.
-//
+// **Inverters are shared, and the hull is what says whose it is.**
+// `lowering::lower` routes every intermediate one-input NOR through
+// `NetlistBuilder::not`, so `!d1` is built once and credited to whichever
+// cell got there first; three of `verilog:seven_segment`'s cells read that
+// torch without owning it. In this picture that is no longer a special kind
+// of line. The torch really does feed those three gates, and the edges
+// saying so are ordinary edges of the primitive graph, drawn as ordinary
+// dust. What still needs saying is the *credit*: the torch sits in one hull
+// and is read from three others, so those cells hold fewer primitives than
+// their recipe has steps. It keeps its violet ring, and the hover readout
+// names the cells that borrow it. Both come from `Session::topology()`'s
+// `gate_level.shared_edges` -- computed and tested on the Rust side, see
+// `SharedEdge` in `viewer/src/lib.rs`.
 // # There is one kind of edge now
 //
 // An earlier version of this view distinguished "rigid" edges (must become
@@ -1673,6 +1689,60 @@ function onThreeHover(e) {
 // correct state of this layer for such a circuit (see `topology.rs`'s own
 // doc comment), not a bug in this view.
 //
+// # That one edge is dust, and terminates on a block
+//
+// This tab draws torches, repeaters, levers and lamps as *things*: shaped,
+// filled, coloured the same hex the 2D and 3D views give the block. Until
+// recently it drew the connection between them as a hairline that stopped on
+// the edge of a box -- an abstract arrow, the only participant in the
+// picture that was neither made of anything nor attached to anything.
+//
+// Both halves of that were wrong, and the second is the important one. An
+// edge here ends on the primitive that actually reads the signal, because
+// that is what a redstone connection does. Terminating is the claim; the
+// dust is what makes it a claim about materials rather than about boxes. So
+// an edge is drawn as a **run of dust**: one unbroken line in the same
+// `#ff3b3b` the 2D/3D views give `RedstoneWire`, heavy enough to be a
+// material and cased in a darker red down its sides so it reads as
+// something laid rather than something drawn, leaving one primitive and
+// stopping under the next one's own glyph. `strokeDustRun` draws every one
+// of them, at both levels, and the nodes are drawn afterwards so a glyph
+// always caps its runs.
+//
+// **Unbroken, and that is load-bearing.** An intermediate version of this
+// broke each run into block-sized segments, on the theory that a line of
+// blocks says "material" louder than a line does. It says something else
+// too, and both halves of it are wrong here. A broken line reads as a broken
+// connection -- precisely the reading this level cannot afford, since its
+// whole subject is that the signal *arrives* somewhere specific -- and the
+// segments compete for the eye with the terminations that are the point.
+//
+// Solid also settles what would otherwise be the hardest thing about drawing
+// dust honestly. Dust's defining property is that it loses one signal
+// strength per block and dies after fifteen, so a picture offering a
+// countable number of blocks is telling you the loss. This graph has no
+// positions at all -- an edge here has no length, and the planner that would
+// give it one does not exist yet -- so any block count this view drew would
+// be invented, and every device for making an invented count look
+// uncountable is a device the reader has to be taught. A solid line needs no
+// such device. It says "connected" and offers nothing to count.
+//
+// **What is not dust.** One kind of line in this picture is an annotation
+// about the graph rather than a connection in the circuit: a merge's spokes,
+// which say "the dust at these nodes is one net" -- an identity claim about
+// runs already drawn, not an extra run beside them. Now that every signal
+// path is solid, those spokes are the only patterned line left, which turns
+// "not solid" into a rule worth one sentence: a broken line in this picture
+// is never a connection. They are also hairlines against dust's weight, so
+// the distinction survives being squinted at, and dotted rather than dashed
+// so that nothing about them suggests a run of anything.
+//
+// The violet lines that used to be a third family are gone, and their
+// absence is a fact about the picture rather than a simplification of it: a
+// shared inverter's edge is a real edge of the primitive graph, so now that
+// the graph on screen *is* the primitive graph it is drawn as the dust it
+// is, like every other edge. See "What a hull must not be allowed to imply"
+// for what is left to say about sharing, and where it is said.
 // # A wire merge is not a gate body, and is not drawn as one
 //
 // Every hand-written circuit in `reda::circuits` is pure NOR, so for a long
@@ -1699,47 +1769,76 @@ function onThreeHover(e) {
 //
 // So a merge is drawn as what it is: a hollow, dashed dust-red ring (hollow
 // and dashed because there is no block there to fill in), sitting in the gap
-// between the deepest branch it joins and whatever reads it, with a dashed
-// spoke out to every node whose dust meets there. A NOR keeps its filled,
-// per-gate-hue badge. The two read as different kinds of object at any zoom
-// level, before any label is legible. `computeMergeJunctions` places them;
-// `drawTopology` draws them.
+// between the deepest branch it joins and whatever reads it, with a dotted
+// spoke out to every node whose dust meets there. A torch is a filled glyph;
+// the two read as different kinds of object at any zoom level, before any
+// label is legible. `computeMergeJunctions` places them.
 //
-// # Thirteen kinds, three shapes, and a word
+// This is also the answer to what a merge *cell* is in a picture whose cells
+// are hulls around their members. `merge g8` and `merge g18` of
+// `verilog:seven_segment` own no primitive at all, and a hull around nothing
+// is not a shape. A merge's ring is therefore a member of its own hull: a
+// merge that owns isolating repeaters is hulled around them and its ring,
+// and a merge that owns nothing is hulled around its ring alone -- an
+// outline round the one thing an all-bare merge does have, which is a point
+// where other cells' dust meets.
+//
+// # Thirteen kinds, one outline, and a word
 //
 // `GateKind` has thirteen gate-level members plus the two realisable ones,
 // and inventing fifteen outlines would produce a picture nobody can read
 // without a key -- the reader would be decoding shapes back into words
-// anyway. So the gate level draws the **word**: each cell is a box with its
-// kind spelled out in `GateKind::wire_name`'s own spelling, the same one the
-// baked netlist files and `mc_dump` use, so a name read off the picture can
-// be grepped for in `src/circuits/baked/*.netlist` directly.
+// anyway. So a cell is drawn as the **word**: a hull round its members with
+// its kind spelled out in `GateKind::wire_name`'s own spelling, the same one
+// the baked netlist files and `mc_dump` use, so a name read off the picture
+// can be grepped for in `src/circuits/baked/*.netlist` directly.
 //
-// What the *shape* carries is the one distinction that is not a name -- what
-// a cell will cost to build, which is exactly what "realisable" means:
+// The hull's *hue* carries no kind. It is per cell, from `gateHue`, and it
+// exists so that two overlapping outlines are legibly two outlines. What a
+// cell costs is not in its colour either, because it no longer has to be:
+// the hull is drawn round the primitives themselves, so "this `and` is three
+// torches and that `nor` is one" is something a reader counts rather than
+// decodes.
 //
-//   * a filled slate box: gate level, has to be lowered. Its bottom-right
-//     corner carries how many torches and merges it becomes.
-//   * a filled torch-orange box: `nor`, realisable directly -- one torch.
-//   * a hollow dashed box: `merge`, realisable directly and not a gate body
-//     at all. Hollow for the same reason the primitive level draws a merge
-//     hollow: there is no block there to fill in.
+// # Which input landed where, without pins
 //
-// Pins are drawn, not just edges. `andnot` (`A & !B`) and `mux`
+// The container version stacked one landing per pin down a box's left edge,
+// and that carried something real: `andnot` (`A & !B`) and `mux`
 // (`S ? B : A`) are not symmetric in their inputs, so "which edge lands
 // where" is part of what the circuit is, and a picture that lets the two
-// edges into a `andnot` swap places is wrong in the way that matters.
-// `Session::topology()` reports each cell's inputs in the kind's own pin
-// order; `buildGateLevel` turns that order into ports stacked down the box's
-// left edge, and every edge lands on its own.
+// edges into an `andnot` swap places is wrong in the way that matters.
 //
-// Layout: a layered DAG (Sugiyama-style) layout -- the same family of
-// algorithm graphviz's `dot` uses for a schematic or dataflow diagram, not
-// the force-directed simulation an earlier pass of this view used. A spring
-// system optimises pairwise distance; it has no notion of "signal flows
-// this way", so it draws a DAG legibly only by luck. A circuit is a DAG a
-// person wants to read left to right, so this lays it out as one directly,
-// in four steps:
+// Terminating on primitives keeps that information and stops inventing a
+// place to put it. The two inputs of an `andnot` no longer land on the same
+// object at all: one lands on the torch that inverts it and one on the torch
+// that does not, which is the asymmetry itself rather than a number standing
+// in for it. Two things make it readable rather than merely true:
+//
+//   * every incoming edge of a cell is tagged, at the end where it lands,
+//     with its index in that cell's own `inputs` -- the same numbering
+//     `cellReadout` spells out, and the same order the
+//     `gate <kind> <out> <- <inputs>` lines of the baked netlists use. Drawn
+//     only where there is room for it (see "Scale"), because it is a check
+//     rather than the picture.
+//   * the hover readout on any primitive names the cell it belongs to and
+//     every cell input that lands on it, by index and by signal name.
+//
+// `computeCellLandings` builds that mapping, and builds it from the graph
+// rather than from names alone: an input's producer contributes a known set
+// of nodes (`gate.outputs` for a driving cell, the lever itself for a
+// primary input), and a landing is an edge from that set onto a node this
+// cell owns. A picture that is confidently wrong about which signal reaches
+// which torch is worse than one that is merely unhelpful, and this is how it
+// stays checkable.
+//
+// # Layout: one graph, laid out twice
+//
+// A layered DAG (Sugiyama-style) layout -- the same family of algorithm
+// graphviz's `dot` uses for a schematic or dataflow diagram, not the
+// force-directed simulation an earlier pass of this view used. A spring
+// system optimises pairwise distance; it has no notion of "signal flows this
+// way", so it draws a DAG legibly only by luck. A circuit is a DAG a person
+// wants to read left to right, so this lays it out as one directly:
 //
 //   1. `computeTopoLayers` gives every node a layer by longest path from a
 //      source (a node with no incoming edge -- exactly the primary inputs,
@@ -1750,81 +1849,114 @@ function onThreeHover(e) {
 //      shared across the crate boundary (wasm-bindgen's surface is
 //      deliberately thin, and the algorithm is a dozen lines); this comment
 //      is the pointer back to the original.
-//   2. `layoutTopology` gives every edge that would otherwise skip a layer
-//      a chain of dummy nodes, one per intermediate layer, so it spans
-//      exactly one layer at a time like every other edge. This is not an
-//      optimisation: without it, a long edge is one straight line from its
-//      source layer to its destination layer, cutting through whatever real
-//      nodes happen to sit in the layers between -- most of what made the
-//      previous force-directed picture unreadable past `and4`'s size.
-//   3. The same function then runs repeated barycentre sweeps (down, then
-//      up, several times) over every layer -- the ordering half of
-//      `build_floorplan`'s own pass in `src/compile/mod.rs`, reused as an
-//      idea rather than code for the same reason as step 1: reorder each
-//      layer by the average position of the neighbours pulling it from one
-//      side, alternating sides so a middle layer answers to both its
-//      producers and its consumers.
-//   4. Coordinates fall out of the result directly: a node's layer becomes
-//      its x (inputs at the left edge, outputs at the right, flow reading
-//      left to right), its final order within the layer becomes its y, and
-//      each layer is centred on y = 0 independently. Edges are drawn as
-//      polylines through their own dummy chain (`topoEdgePaths`), so a long
-//      edge visibly bends around the nodes in its way instead of passing
-//      through them.
+//   2. Every edge that would otherwise skip a layer gets a chain of dummy
+//      nodes, one per intermediate layer, so it spans exactly one layer at a
+//      time like every other edge. This is not an optimisation: without it a
+//      long edge is one straight line from its source layer to its
+//      destination layer, cutting through whatever real nodes happen to sit
+//      between -- most of what made the previous force-directed picture
+//      unreadable past `and4`'s size.
+//   3. Repeated barycentre sweeps (down, then up, several times) over every
+//      layer -- the ordering half of `build_floorplan`'s own pass in
+//      `src/compile/mod.rs`, reused as an idea rather than as code for the
+//      same reason as step 1: reorder each layer by the average position of
+//      the neighbours pulling it from one side, alternating sides so a
+//      middle layer answers to both its producers and its consumers.
+//   4. A node's layer becomes its x (inputs at the left edge, outputs at the
+//      right, flow reading left to right), its order within the layer
+//      becomes its y, and each layer is centred on y = 0. Edges are drawn as
+//      polylines through their own dummy chains, so a long edge visibly
+//      bends around the nodes in its way instead of passing through them.
+//
+// **Grouping is the hard part, and it is steps 3 and 4 that do it.** A
+// cell's members are not adjacent in the graph's own depth order -- `and
+// g0`'s three torches are three consecutive layers, and two branches of a
+// `mux` are two rows of the same layer -- so "keep them together" is a
+// constraint the plain algorithm knows nothing about and will happily
+// scatter across a picture. Nothing here reserves space for a cell or lays a
+// cell out separately, because that is the container idea again wearing a
+// layout hat: it would put a primitive's x where its *cell* sits rather than
+// where the primitive's own depth is, and the whole point of this level is
+// that the nodes are real. The graph is laid out once, and cohesion is
+// applied as pressure inside the same two steps:
+//
+//   * **Ordering (step 3).** After each barycentre sweep a layer is
+//     re-ordered so that the members of one cell present in it come out
+//     *contiguous*: cells are sorted by the mean barycentre of their own
+//     members in that layer, members within a cell by their individual
+//     barycentre, and a node belonging to no cell takes its own place in the
+//     same sort. A cell can then never be interleaved with another inside a
+//     layer, which is what stops a hull from swallowing a stranger.
+//   * **Coordinates (step 4).** y stops being the raw slot index. Each node
+//     is given a *desired* y blending where its own neighbours pull it with
+//     where the rest of its cell already sits (`GROUP_COHESION`), and the
+//     layer is then placed at the closest arrangement to those desires that
+//     still respects step 3's order and a minimum gap. That last part is
+//     pool-adjacent-violators (`isotonicPlacement`): the exact least-squares
+//     answer to "ordered points, as near where they want to be as the gaps
+//     allow", which is cheap, has nothing to tune, and cannot reorder a
+//     layer behind step 3's back. A few passes of the two settle it.
+//
+// The flat level runs exactly the same code with cohesion switched off,
+// which is what makes the pair honest: the difference between the two
+// pictures is precisely the distortion grouping costs, and it is visible by
+// switching the dropdown.
 //
 // The whole thing is a deterministic function of the graph -- no jitter, no
 // physics, nothing to settle -- so "Reset view" (`topoRelayoutBtn`) only
-// re-fits the camera; a circuit's layout itself never changes between
-// loads or reloads.
-//
+// re-fits the camera; a circuit's layout itself never changes between loads
+// or reloads.
 // # Scale
 //
-// `verilog:and4` is 3 cells holding 9 primitives; `verilog:seven_segment` is
-// 31 cells holding 59, with 11 more primary-I/O nodes. Nesting does not add
-// nodes to the picture -- those 59 are the same 59 the flat level already
-// drew at once -- it only groups them, so "everything nested at once" is not
-// the scale problem it sounds like. What does not survive is the *labels*:
-// at the zoom that fits 31 boxes on screen, a `#42` beside a 2-pixel dot is
-// a smear.
+// `verilog:and4` is 9 primitives in 3 hulls; `verilog:seven_segment` is 59
+// in 31, plus 11 primary-I/O nodes. Both levels draw the same nodes and the
+// same edges, so grouping costs nothing in node count -- what it costs is
+// text, and text is what gets shed as the picture shrinks. Both thresholds
+// below are measured in screen pixels between two adjacent layers rather
+// than in zoom factor, since that is what legibility actually depends on:
 //
-// So the geometry is always nested -- a box is always the size of its
-// contents, at every zoom, so nothing reflows as you pan -- and what is
-// *painted* is shed in two steps, both measured in screen pixels between two
-// nested layers rather than in zoom factor, since that is what legibility
-// actually depends on:
+//   * below `HULL_LABEL_PX` (110 px): hulls, nodes and dust only. An unnamed hull
+//     still says how many primitives a cell is and where they sit, which is
+//     most of what it is for, and the Focus dropdown names them.
+//   * above `HULL_LABEL_PX`: every hull is named `kind output`.
+//   * above `NODE_LABEL_PX` (140 px): every primitive carries its own `#id` and every
+//     cell input its index at the point where it lands -- which is what
+//     makes the picture checkable against `Session::topology()`'s own JSON
+//     without hovering every dot.
 //
-//   * below `INNER_DETAIL_PX` (8 px): no contents at all, just the box and
-//     the `×n` count this tab drew before it could nest -- plus `+k` for the
-//     shared torches it reads from elsewhere, so even the collapsed form
-//     does not hide the borrowing.
-//   * above `INNER_LABEL_PX` (25 px): each nested primitive is labelled with
-//     its own `#id`, which is what makes a box checkable against
-//     `Session::topology()`'s own JSON without hovering every dot.
+// `verilog:and4` fits above all of it, so its hulls, its node ids and its
+// input tags are legible with no interaction whatsoever -- and an edge
+// visibly ending on a particular torch inside an `and` is the whole picture
+// in one glance. `verilog:seven_segment` fits below both label thresholds:
+// the whole circuit shows its 31 hulls, its 59 primitives and every run of
+// dust between them, and reading a name needs a wheel-scroll or a Focus.
+// "Focus" isolates one cell plus everything one hop from its members
+// (`computeCellEgoSet`) and fits the view to just that, which is still the
+// tool this task's own hand cross-check uses; the flat level's
+// `computeEgoSet` does the same job per gate.
 //
-// `verilog:and4` fits at 56 px per nested layer, well above both, so its
-// containment is legible with no interaction whatsoever.
-// `verilog:seven_segment` fits at 18 px: above the detail threshold and
-// below the label one, so the whole circuit shows every box's real contents
-// and the dashed violet lines between them, and reading individual node ids
-// needs a wheel-scroll or a Focus. Focusing its `mux` gives 26 px, which
-// crosses the label threshold -- and `computeCellEgoSet` pulls in shared
-// inverters as well as netlist neighbours, since a cell's lender is not
-// necessarily either.
+// **And `verilog:seven_segment` at that zoom is dense, which is worth saying
+// rather than pretending.** 103 runs of dust over 70 primitives in a window
+// is more simultaneous connections than an eye can trace one at a time, and
+// no layout makes that untrue. What the picture does owe at that size is the
+// thing this level exists for -- which cells there are, how big each one is
+// and where it sits -- and two decisions are what keep that legible under
+// the wiring rather than beneath it. Dust thins as the picture crowds
+// (`dustWidthNow`), because weight is relative to how far apart the things
+// it connects are drawn. And a hull is painted in two passes: its tint goes
+// behind the graph, where a region belongs, but its **outline goes on top of
+// the dust**. An outline painted underneath 103 runs is a cell you cannot
+// see, which is the one failure this level cannot afford.
 //
-// The flat level keeps the caveat it always had. A layered layout
-// removed that view's worst failure (edges cutting through unrelated nodes,
-// and flow direction being invisible) and keeps flow visibly left to right
-// at every zoom level, but it is still more simultaneous edges than an eye
-// can trace node-by-node at full zoom -- an improvement in kind (readable
-// structure instead of a scattered web), not a claim that the full picture
-// is a "read off individual wires" tool. Gate badges (see
-// `drawPrimitiveLevel`'s translucent rounded squares, one per gate, labelled
+// The flat level keeps the caveat it always had. A layered layout removed
+// its worst failure (edges cutting through unrelated nodes, and flow
+// direction being invisible) and keeps flow reading left to right at every
+// zoom, but it is still more simultaneous edges than an eye can trace
+// node-by-node at full zoom -- an improvement in kind, not a claim that the
+// full picture is a "read off individual wires" tool. Gate badges (see
+// `drawGateBadges`'s translucent rounded squares, one per gate, labelled
 // with that gate's own output name) make "which node is which gate"
-// checkable without reading positions at all, and "Focus" isolates one gate
-// plus its direct neighbours (`computeEgoSet`) and fits the view to just
-// that -- still the tool this task's own hand cross-check uses, and still
-// necessary at this size even with the improved layout. The gate level has
-// its own `computeCellEgoSet` doing the same job on its own graph.
+// checkable without reading positions at all.
 // ---------------------------------------------------------------------
 
 const PRIMITIVE_COLOR = {
@@ -1848,75 +1980,117 @@ const TOPO_NODE_RADIUS = 5; // constant screen pixels, independent of zoom
 const TOPO_LAYER_SPACING = 150; // px between two adjacent layers (x axis)
 const TOPO_NODE_SPACING = 34;   // px between two adjacent slots in one layer (y axis)
 const TOPO_BARYCENTRE_SWEEPS = 4; // same count `build_floorplan` uses, for the same reason
-// A merge's junction glyph: dust red (the same `#ff3b3b` the 2D/3D views
-// give `RedstoneWire`, because a junction is dust and nothing else), drawn
-// hollow at this multiple of the node radius so it reads as an annotation on
-// the graph rather than as another primitive in it.
-const TOPO_MERGE_COLOR = '#ff3b3b';
+// The grouped level lays out the same graph more tightly -- a cell's members
+// have been pulled together, so the picture is denser than the flat one and
+// wants less air between layers to stay on screen at the same zoom.
+const GROUP_LAYER_SPACING = 110;
+const GROUP_NODE_SPACING = 30;
+// How hard a cell pulls its members together, against where each one's own
+// neighbours want it. `GROUP_BAND` acts on the *ordering* -- a cell's members
+// end up in one horizontal band across every layer they appear in -- and
+// `GROUP_COHESION` on the coordinates within that ordering. 0 for both is the
+// flat level exactly; 1 for both would collapse every cell to a point and
+// shred the graph. See "Grouping is the hard part".
+const GROUP_BAND = 0.7;
+const GROUP_COHESION = 0.35;
+const GROUP_PASSES = 6; // refinement passes of desired-y + `isotonicPlacement`
+// Dust. The same `#ff3b3b` the 2D/3D views give `RedstoneWire`, because the
+// thing an edge is, is dust -- see this section's "That one edge is dust".
+// `DUST_CASING` is the dark edge drawn under each segment so a segment has
+// sides like a block instead of being a length of stroke.
+const TOPO_DUST_COLOR = '#ff3b3b';
+const DUST_CASING = 'rgba(92,14,14,0.9)';
+// Dust is the only heavy line here (a merge's spokes are hairlines), and
+// heavy is the point -- it is the one line that is a material. But weight is
+// relative to how far apart the things it connects are drawn, not absolute:
+// a 3.4 px line between two nodes 150 px apart reads as a wire, and the same
+// line in a picture whose layers are 40 px apart reads as a flood. So dust is
+// drawn at `DUST_WIDTH` when a layer has its full `DUST_WIDTH_AT_PX` of room
+// on screen and thins in proportion below that, floored so it never
+// disappears. `dustWidthNow` is the one place this is decided.
+const DUST_WIDTH = 3.4;
+const DUST_WIDTH_MIN = 1.3;
+const DUST_WIDTH_AT_PX = 150;
+// Below this width a casing is more ink than the line it is casing, so the
+// run is drawn as a plain stroke.
+const DUST_CASING_MIN_WIDTH = 2.2;
+// A merge's spokes are an identity claim about dust already drawn, not
+// another run of it, so they are dotted rather than segmented -- see "What
+// is not dust".
+const MERGE_SPOKE_DASH = [0.8, 4];
+
+// A merge's junction glyph: dust red (because a junction is dust and nothing
+// else), drawn hollow at this multiple of the node radius so it reads as an
+// annotation on the graph rather than as another primitive in it.
+const TOPO_MERGE_COLOR = TOPO_DUST_COLOR;
 const TOPO_MERGE_RADIUS = 1.9;
 
-// Gate level. A cell is a **container**: its size is whatever it takes to
-// hold the primitives it lowers into, floored by the room its own pins and
-// label need. So there is no constant box size any more -- only the clear
-// gaps between boxes (`CELL_LAYER_GAP`, `CELL_ROW_GAP`), the floors, and the
-// padding between a box's edge and its contents.
-const CELL_LAYER_GAP = 96;
-const CELL_ROW_GAP = 26;
-const CELL_MIN_W = 88;
-const CELL_MIN_H = 34;
-const CELL_PIN_PITCH = 13;
-const CELL_PAD_X = 15;      // box edge to the nearest nested primitive
-const CELL_HEADER = 18;     // room at the top of a box for its kind
-const CELL_PAD_BOTTOM = 9;
-// The nested layout, in the same graph units as everything else -- the same
-// `layeredLayout` runs inside a box as outside it, on the subgraph of the
-// primitive graph whose nodes this cell owns.
-const INNER_LAYER_SPACING = 30;
-const INNER_ROW_SPACING = 20;
-const INNER_NODE_R = 4.2;
-const INNER_MERGE_R = 6;
-// Level of detail. Below `INNER_DETAIL_PX` screen pixels between two nested
-// layers there is nothing legible left inside a box, so it shows the count it
-// used to show instead of a smear; above `INNER_LABEL_PX` there is room to
-// name each primitive by its node id, which is what makes a box checkable
-// against `Session::topology()`'s own JSON without hovering every dot.
-const INNER_DETAIL_PX = 8;
-const INNER_LABEL_PX = 25;
-// A shared inverter's edge -- see `SharedEdge` in viewer/src/lib.rs. Violet,
-// because it is neither signal flow at the gate level (dust red) nor a cell
-// (slate): it is the one line in this picture that crosses a box boundary
-// without a gate-level edge to explain it.
+// A hull's outline sits this far out from the member it wraps -- far enough
+// clear of a node's own glyph that the outline is not mistaken for part of
+// it, close enough that a one-primitive cell is a small ring rather than a
+// balloon. Graph units, so a hull is a fixed shape around its members and
+// does not swell or shrink relative to them as the picture zooms.
+const HULL_PAD = 15;
+// Level of detail, in screen pixels between two adjacent layers -- see
+// "Scale". Below the first there is no room to name a hull; above the second
+// there is room for a node's own `#id` and for the input-index tag at each
+// landing.
+const HULL_LABEL_PX = 110;
+const NODE_LABEL_PX = 140;
+// A shared inverter's ring -- see `SharedEdge` in viewer/src/lib.rs. Violet,
+// because it is not part of the block vocabulary: it is the mark that says
+// "the cell whose hull this torch is in is not the only cell reading it".
 const SHARED_COLOR = '#c792ea';
 // Slate for a gate-level cell, torch orange for a `nor`, dust red for a
-// `merge` -- the three families from this section's "Thirteen kinds, three
-// shapes, and a word". The two realisable colours are the same hex the 2D/3D
-// views give `RedstoneTorch` and `RedstoneWire`, so a colour means the same
-// thing in every view.
+// `merge`. Only the kind histogram in the side panel still uses these -- a
+// hull on the canvas takes its hue from `gateHue` instead, so that two
+// overlapping outlines are legibly two.
 const CELL_COLOR = { gate: '#4a7fc1', nor: '#ff8c00', merge: TOPO_MERGE_COLOR };
-const CELL_IO_COLOR = { input: '#7a5230', output: '#ffd54a' }; // lever, lamp
 
 let topoLevel = 'gate';  // 'gate' | 'primitive' -- see this section's doc comment
 
 let topoGates = [];      // raw TopologyGate[] from session.topology().primitive_level
-let topoNodes = [];      // { id, primitive, provenance, x, y }
+// One entry per primitive. Two positions, because one graph is laid out
+// twice: `x`/`y` is the flat layout, `gx`/`gy` the cell-cohesive one.
+// `nodeXY` is how everything else reads whichever is on screen.
+let topoNodes = [];      // { id, primitive, provenance, x, y, gx, gy }
 let topoEdges = [];      // raw { from, to } from primitive_level
 let topoEdgePaths = [];  // parallel to topoEdges: [{x,y}, ...] through any dummy chain
+let groupEdgePaths = []; // ditto, in the grouped layout
 let topoMerges = [];     // { gate, x, y } per wire-merge gate -- see computeMergeJunctions
+let groupMerges = [];    // ditto, in the grouped layout
 
 let topoCells = [];      // raw TopologyCell[] from session.topology().gate_level
-// One node per cell, per primary input and per primary output. A cell node
-// carries its own box size and its nested contents:
-// { id, role: 'cell'|'input'|'output', cell, label, kind, family, pins,
-//   x, y, w, h, contentY, interior }
-let cellNodes = [];
-let cellEdges = [];      // { from, to, pin } -- `pin` is the index into the consumer's own input list
-let cellEdgePaths = [];  // parallel to cellEdges
-let cellOfIndex = [];    // TopologyCell.index -> cellNodes index
+let cellOfNode = new Map();   // primitive node id -> TopologyCell.index that owns it
+// One per cell, in `topoCells` order: what is drawn round its members.
+// { cell, hue, members, junctions, points } -- `points` is the rounded hull
+// outline in grouped-layout graph space, recomputed by `layoutTopology`.
+let cellHulls = [];
+// Primitive node id -> [{ cell, pin, name }]: which of a cell's own declared
+// inputs land on this node. See "Which input landed where, without pins".
+let cellLandings = new Map();
 let sharedEdges = [];    // raw SharedEdge[] -- see viewer/src/lib.rs
 let sharedNodes = new Set(); // node ids some other cell's expansion reads
-let innerPos = new Map();    // primitive node id -> its nested { ax, ay } in graph space
 
 let topoView = { scale: 1, offsetX: 0, offsetY: 0 };
+
+/** Where a node is in whichever layout is on screen. The grouped level and
+ * the flat level are the same nodes at different coordinates, so every
+ * consumer of a position -- hit-testing, fitting, drawing -- goes through
+ * this rather than knowing which fields exist. */
+function nodeXY(node) {
+  return topoLevel === 'gate' ? [node.gx, node.gy] : [node.x, node.y];
+}
+
+/** The merge junctions of whichever layout is on screen. */
+function activeMerges() {
+  return topoLevel === 'gate' ? groupMerges : topoMerges;
+}
+
+/** The edge polylines of whichever layout is on screen. */
+function activeEdgePaths() {
+  return topoLevel === 'gate' ? groupEdgePaths : topoEdgePaths;
+}
 
 /** Whether one raw `TopologyGate` is a wire merge rather than a NOR. */
 function isMergeGate(gate) {
@@ -1968,187 +2142,120 @@ function buildPrimitiveLegend() {
 buildPrimitiveLegend(); // static -- independent of any circuit
 syncLevelPanels();      // ditto: match the panels to `topoLevel`'s initial value
 
-/** Which of the three visual families a cell belongs to -- see this
- * section's "Thirteen kinds, three shapes, and a word". Read off
- * `cell.realisable` and `cell.kind`, both of which come straight from
- * `GateKind`, so this never invents a classification of its own. */
-function cellFamily(cell) {
-  if (!cell.realisable) return 'gate';
-  return cell.kind === 'merge' ? 'merge' : 'nor';
-}
-
-/** What goes **inside** one cell's box: the primitives it lowers into, laid
- * out among themselves, plus one junction ring per merge among its lowered
- * gates. Coordinates are local to the box's content area and centred on
- * (0, 0); `layoutTopology` translates them once the box itself has a place.
+/** Build the cell grouping from `session.topology()`'s `gate_level`: who
+ * owns which primitive, which of a cell's declared inputs land where, and
+ * which torches are lent to other cells.
  *
- * The contents are `cell.nodes` and nothing else -- the union of
+ * There is no second graph here any more. The picture is the primitive
+ * graph (see "The graph is the primitive graph"), so a cell contributes
+ * membership and labels to it rather than nodes and edges of its own.
+ *
+ * Membership is `cell.nodes` and nothing else -- the union of
  * `PrimitiveGraph::gate_nodes` over the gates this cell's expansion produced,
  * computed on the Rust side (see `TopologyCell::nodes`), so the picture's
- * claim about what is inside a box is the same value a native `cargo test`
- * can assert against the netlist. `gate_level_tests::
+ * claim about which torches are the `mux` is the same value a native
+ * `cargo test` can assert against the netlist. `gate_level_tests::
  * the_muxs_box_holds_exactly_the_four_primitives_its_five_gates_instantiate`
  * is that assertion.
  *
- * Two things this deliberately does not draw:
- *
- *   * **No inner box per lowered gate.** A NOR is one torch and a merge is a
- *     junction; a hull around each would be a third level of containment
- *     wrapping, mostly, a single dot. The gate grouping is in the hover
- *     readout and in the box's own `×n` count instead.
- *   * **No box inside an identical box.** A `nor` cell lowers into exactly
- *     itself and a `merge` into exactly itself, so their containers hold one
- *     torch and (at most) a junction with its repeaters -- drawn as those
- *     primitives directly, in the same vocabulary a `mux`'s four use. That a
- *     `nor` box holds exactly one torch is a fact worth being able to see
- *     beside a `mux` box holding four; duplicating its outline to say it
- *     twice is not.
- *
- * A merge that owns no node at all is the extreme of the second point: its
- * junction is `floating`, placed at the box's centre by `layoutTopology`, and
- * its spokes reach the nodes whose dust really does join there -- which, for
- * `verilog:seven_segment`'s `merge g8`, are inside two *other* cells. An
- * empty container whose contents are its neighbours' dust is what an all-bare
- * merge is. */
-function buildCellInterior(cell) {
-  const ids = cell.nodes || [];
-  const local = new Map(ids.map((id, i) => [id, i]));
-  const innerEdges = [];
-  for (const edge of topoEdges) {
-    if (local.has(edge.from) && local.has(edge.to)) {
-      innerEdges.push({ from: local.get(edge.from), to: local.get(edge.to) });
-    }
-  }
-  const { xs, ys } = layeredLayout(ids.length, innerEdges, INNER_LAYER_SPACING, INNER_ROW_SPACING);
-  const nodes = ids.map((id, i) => ({
-    id, primitive: topoNodes[id] ? topoNodes[id].primitive : 'Torch', x: xs[i], y: ys[i],
-  }));
-  const edges = innerEdges.map((edge) => [edge.from, edge.to]);
-
-  // One junction per merge this cell lowers into, placed by the same rule the
-  // flat level uses (`computeMergeJunctions`): half a layer past the deepest
-  // node whose dust joins there, at their mean height, so it sits in the gap
-  // where the converging dust already meets.
-  const junctions = [];
-  for (const g of cell.lowered || []) {
-    const gate = topoGates[g];
-    if (!gate || !isMergeGate(gate)) continue;
-    const inside = gate.outputs.filter((id) => local.has(id));
-    if (inside.length === 0) { junctions.push({ gate, x: 0, y: 0, floating: true }); continue; }
-    let maxX = -Infinity, sumY = 0;
-    for (const id of inside) {
-      const node = nodes[local.get(id)];
-      maxX = Math.max(maxX, node.x);
-      sumY += node.y;
-    }
-    junctions.push({ gate, x: maxX + INNER_LAYER_SPACING * 0.55, y: sumY / inside.length, floating: false });
-  }
-  // Two merges in one expansion can land on the same point; spread them the
-  // same way the flat level does rather than letting one hide the other.
-  const byPoint = new Map();
-  for (const junction of junctions) {
-    if (junction.floating) continue;
-    const key = `${Math.round(junction.x)},${Math.round(junction.y)}`;
-    if (!byPoint.has(key)) byPoint.set(key, []);
-    byPoint.get(key).push(junction);
-  }
-  for (const group of byPoint.values()) {
-    if (group.length < 2) continue;
-    const offset = (group.length - 1) / 2;
-    group.forEach((junction, i) => { junction.y += (i - offset) * INNER_ROW_SPACING * 0.6; });
-  }
-
-  const points = nodes.concat(junctions.filter((junction) => !junction.floating));
-  let contentW = 0, contentH = 0;
-  if (points.length > 0) {
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const p of points) {
-      minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x);
-      minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y);
-    }
-    const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2;
-    for (const p of points) { p.x -= cx; p.y -= cy; }
-    contentW = (maxX - minX) + 2 * INNER_MERGE_R;
-    contentH = (maxY - minY) + 2 * INNER_MERGE_R;
-  }
-  return { nodes, edges, junctions, contentW, contentH };
-}
-
-/** Build `cellNodes`/`cellEdges` from `session.topology()`'s `gate_level`.
- *
- * The graph drawn is the netlist itself: one node per cell, plus one per
- * primary input and one per primary output so a signal entering or leaving
- * the circuit has somewhere to come from and go to. Nothing here derives
- * connectivity from names -- `input.cell` is resolved on the Rust side
- * (`CellInput` in `viewer/src/lib.rs`), precisely so that the picture and
- * the netlist cannot disagree about who drives what. */
-function buildGateLevel(level) {
+ * A primitive belongs to at most one cell: a shared inverter is credited to
+ * whichever cell built it, and the cells that read it get a violet ring and
+ * a line in the hover readout rather than a second claim of ownership. */
+function buildCellGrouping(level) {
   topoCells = level.cells || [];
-  cellNodes = [];
-  cellEdges = [];
-  cellOfIndex = [];
   sharedEdges = level.shared_edges || [];
   sharedNodes = new Set(sharedEdges.map((edge) => edge.from));
-  innerPos = new Map();
 
-  const inputNodeOf = new Map(); // primary input name -> cellNodes index
-  for (const name of level.inputs || []) {
-    inputNodeOf.set(name, cellNodes.length);
-    cellNodes.push({
-      id: cellNodes.length, role: 'input', cell: null,
-      label: name, kind: 'input', family: 'input', pins: 0,
-      x: 0, y: 0, w: 14, h: 16, contentY: 0, interior: null,
-    });
-  }
+  cellOfNode = new Map();
   for (const cell of topoCells) {
-    cellOfIndex[cell.index] = cellNodes.length;
-    // The box is sized by what it contains, floored by what its own pins and
-    // kind label need. The content area starts `CELL_HEADER` below the top
-    // edge and ends `CELL_PAD_BOTTOM` above the bottom one, so `contentY` is
-    // how far its centre sits below the box's own.
-    const interior = buildCellInterior(cell);
-    const pins = cell.inputs.length;
-    cellNodes.push({
-      id: cellNodes.length, role: 'cell', cell,
-      label: cell.output, kind: cell.kind, family: cellFamily(cell),
-      pins,
-      x: 0, y: 0,
-      w: Math.max(CELL_MIN_W, interior.contentW + 2 * CELL_PAD_X),
-      h: Math.max(CELL_MIN_H, (pins + 1) * CELL_PIN_PITCH, interior.contentH + CELL_HEADER + CELL_PAD_BOTTOM),
-      contentY: (CELL_HEADER - CELL_PAD_BOTTOM) / 2,
-      interior,
-    });
+    for (const id of cell.nodes || []) if (!cellOfNode.has(id)) cellOfNode.set(id, cell.index);
   }
-  // Two circuits' primary outputs can name the same signal, and a signal can
-  // be both a primary output and another cell's input -- neither is a reason
-  // to merge nodes, so each declared output gets its own sink node.
-  for (const output of level.outputs || []) {
-    const id = cellNodes.length;
-    cellNodes.push({
-      id, role: 'output', cell: null,
-      label: output.name, kind: 'output', family: 'output', pins: 1,
-      x: 0, y: 0, w: 14, h: 16, contentY: 0, interior: null,
-    });
-    if (output.cell !== null && output.cell !== undefined) {
-      cellEdges.push({ from: cellOfIndex[output.cell], to: id, pin: 0 });
-    }
+  cellLandings = computeCellLandings();
+}
+
+/** Which of a cell's declared inputs land on which primitive -- the
+ * information the container version drew as numbered pins down a box's left
+ * edge, recovered from the graph now that edges terminate on real nodes.
+ * See "Which input landed where, without pins".
+ *
+ * For input `k` of cell `C`, the producer contributes a known set of nodes:
+ * the lever itself when the input is a primary input, and otherwise the
+ * driving gate's `outputs` -- the nodes a consumer really reads it from,
+ * which for a bare merge are its branches' own producers rather than
+ * anything the merge owns. A landing is then an edge from that set onto a
+ * node `C` owns, read off `topoEdges` directly. Nothing here matches names
+ * against names: `input.cell` is resolved on the Rust side (`CellInput` in
+ * `viewer/src/lib.rs`) precisely so that the picture and the netlist cannot
+ * disagree about who drives what.
+ *
+ * A single input can land on more than one primitive (a cell whose
+ * expansion reads the same signal twice) and a primitive can be the landing
+ * of more than one input, so this is a node-keyed list rather than a
+ * bijection.
+ *
+ * And an input can land on *no* node the cell owns, which is the one case
+ * worth reading the body for: a cell that reads a signal through a shared
+ * inverter never touches the producer at all. See the comment on the second
+ * pass below. Fourteen of `verilog:seven_segment`'s 66 cell inputs are like
+ * that, so treating it as "no landing" would leave a fifth of them silently
+ * untagged. */
+function computeCellLandings() {
+  const gateByOutput = new Map();
+  for (const gate of topoGates) gateByOutput.set(gate.output, gate);
+  const leverByName = new Map();
+  for (const node of topoNodes) {
+    if (node.provenance.kind === 'PrimaryInput') leverByName.set(node.provenance.name, node.id);
+  }
+  const consumersOf = new Map(); // producer node id -> Set of consumer node ids
+  for (const edge of topoEdges) {
+    if (!consumersOf.has(edge.from)) consumersOf.set(edge.from, new Set());
+    consumersOf.get(edge.from).add(edge.to);
   }
 
+  const landings = new Map();
+  const record = (node, cell, pin, name, via) => {
+    if (!landings.has(node)) landings.set(node, []);
+    const list = landings.get(node);
+    if (!list.some((l) => l.cell === cell && l.pin === pin)) list.push({ cell, pin, name, via });
+  };
+
   for (const cell of topoCells) {
-    const to = cellOfIndex[cell.index];
-    cell.inputs.forEach((input, pin) => {
-      const from = input.cell !== null && input.cell !== undefined
-        ? cellOfIndex[input.cell]
-        : inputNodeOf.get(input.name);
-      // Every signal is either driven by a cell or is a primary input --
-      // `compile()` rejects a netlist where it is neither
-      // (`CompileError::UndrivenSignal`), so this branch is unreachable for
-      // any circuit a session exists for. Skipping rather than throwing keeps
-      // a hypothetical bad netlist a missing edge instead of a blank tab.
-      if (from === undefined) return;
-      cellEdges.push({ from, to, pin });
+    const owned = new Set(cell.nodes || []);
+    if (owned.size === 0) continue; // an all-bare merge owns nothing to land on
+    (cell.inputs || []).forEach((input, pin) => {
+      const producers = input.cell === null || input.cell === undefined
+        ? (leverByName.has(input.name) ? [leverByName.get(input.name)] : [])
+        : ((gateByOutput.get(input.name) || {}).outputs || []);
+      let landed = false;
+      for (const producer of producers) {
+        for (const consumer of consumersOf.get(producer) || []) {
+          if (!owned.has(consumer)) continue;
+          record(consumer, cell.index, pin, input.name, null);
+          landed = true;
+        }
+      }
+      if (landed) return;
+      // Nothing this cell owns is fed by that producer -- which happens, and
+      // means something specific rather than nothing. `andnot g3 = d1 & !d2`
+      // begins by inverting `d1`, and `!d1` was built by `nand g1` and lent
+      // out (see "Inverters are shared"), so the lever for `d1` reaches no
+      // torch of `g3` at all: it reaches the borrowed one, and *that* reaches
+      // `g3`. The first primitive of this cell the signal actually arrives at
+      // is one hop further on, and that is where the tag belongs. Only a
+      // shared torch is stepped through, and only once: those are exactly the
+      // nodes a cell reads without owning, so the walk cannot wander off into
+      // an unrelated cell's expansion and invent a landing there.
+      for (const producer of producers) {
+        for (const middle of consumersOf.get(producer) || []) {
+          if (owned.has(middle) || !sharedNodes.has(middle)) continue;
+          for (const consumer of consumersOf.get(middle) || []) {
+            if (owned.has(consumer)) record(consumer, cell.index, pin, input.name, middle);
+          }
+        }
+      }
     });
   }
+  return landings;
 }
 
 /** Rebuild both levels from `session.topology()` and lay out the fresh
@@ -2163,9 +2270,9 @@ function buildTopology() {
     id: n.id,
     primitive: n.primitive,
     provenance: n.provenance,
-    x: 0, y: 0,
+    x: 0, y: 0, gx: 0, gy: 0,
   }));
-  buildGateLevel(raw.gate_level || { cells: [], inputs: [], outputs: [] });
+  buildCellGrouping(raw.gate_level || { cells: [], inputs: [], outputs: [] });
 
   topoHoverReadout.textContent = ' '; // it described the circuit just unloaded
   refreshFocusOptions();
@@ -2222,30 +2329,60 @@ function computeTopoLayers(n, edges) {
   return layer;
 }
 
-/** The layered layout: the four steps from this section's own doc comment
- * (layer assignment, dummy-chain insertion, barycentre ordering, coordinate
- * assignment) over an abstract graph of `n` nodes and `edges`, returning
- * `{ xs, ys, paths }` -- one coordinate pair per node, and one polyline per
- * edge through its own dummy chain.
+/** Place `values` -- one per slot, in slot order -- as near where each wants
+ * to be as an ordering and a minimum gap allow: the exact least-squares
+ * solution, by pool adjacent violators.
  *
- * Abstract over the graph rather than hardwired to `topoNodes` because three
- * graphs need it and none is a special case of the others: the nested gate
- * level lays out 31 containers, each container lays out the two-to-five
- * primitives inside it, and the flat level lays out all 70 at once. The
- * algorithm does not care which.
+ * This is the coordinate-assignment half of the layered layout (step 4). The
+ * ordering has already been decided by the barycentre sweeps and must not be
+ * disturbed, but every node also has a *desired* y -- from its neighbours,
+ * and from the rest of its cell -- that ignores its neighbours in the same
+ * layer entirely. Something has to reconcile the two, and "shove each one
+ * down until it fits" biases the whole layer one way.
  *
- * `sizeOf` is what makes the first of those work. Without it every node is a
- * point and the two spacings are centre-to-centre pitches (what the flat
- * level and the nested interiors both want). With it -- `sizeOf(i)` returning
- * `{w, h}` for real node `i` -- a node is a box of its own size, the spacings
- * become the *clear gaps* between two boxes, and a layer's heights are
- * stacked rather than pitched, so a cell containing five primitives cannot
- * overlap the one-primitive cell beside it.
+ * Requiring `y[i+1] >= y[i] + gap` is the same as requiring `y[i] - i*gap` to
+ * be non-decreasing, so subtracting the ramp turns the problem into plain
+ * isotonic regression, which PAVA solves exactly in one pass: walk left to
+ * right, and whenever a value would go backwards, merge it with the block
+ * behind it and replace both by their mean. Cheap, nothing to tune, and it
+ * cannot reorder anything -- the order is an input. */
+function isotonicPlacement(values, gap) {
+  const blockValue = [], blockCount = [];
+  for (let i = 0; i < values.length; i++) {
+    let v = values[i] - i * gap, count = 1;
+    while (blockValue.length > 0 && blockValue[blockValue.length - 1] > v) {
+      const pv = blockValue.pop(), pc = blockCount.pop();
+      v = (pv * pc + v * count) / (pc + count);
+      count += pc;
+    }
+    blockValue.push(v);
+    blockCount.push(count);
+  }
+  const out = [];
+  for (let b = 0; b < blockValue.length; b++) {
+    for (let k = 0; k < blockCount[b]; k++) out.push(blockValue[b] + out.length * gap);
+  }
+  return out;
+}
+
+/** The layered layout: the four steps from this section's "Layout: one
+ * graph, laid out twice", over an abstract graph of `n` nodes and `edges`,
+ * returning `{ xs, ys, paths }` -- one coordinate pair per node, and one
+ * polyline per edge through its own dummy chain.
+ *
+ * `groupOf(i)` is what makes the grouped level grouped, and passing it is
+ * the *only* difference between the two levels on screen: it returns the
+ * cell a node belongs to (or `-1`), and when it is given, cells are kept
+ * contiguous inside each layer and each node is pulled toward the rest of
+ * its own cell when y is assigned. Omit it and this is the flat level --
+ * the same nodes, the same edges, the same code, answering to the graph
+ * alone. See "Grouping is the hard part, and it is steps 3 and 4 that do
+ * it".
  *
  * Run fresh every call -- cheap enough at these graph sizes that there is no
  * reason to cache intermediate state between calls the way the old force
  * simulation cached node velocity. */
-function layeredLayout(n, edges, layerSpacing, nodeSpacing, sizeOf) {
+function layeredLayout(n, edges, layerSpacing, nodeSpacing, groupOf) {
   if (n === 0) return { xs: [], ys: [], paths: [] };
 
   const layer = computeTopoLayers(n, edges);
@@ -2255,16 +2392,23 @@ function layeredLayout(n, edges, layerSpacing, nodeSpacing, sizeOf) {
   // `down` collect the neighbours one layer earlier/later -- always exactly
   // one layer away, since a dummy chain never skips one -- for the
   // barycentre sweeps to read.
-  const real = Array.from({ length: n }, (_, i) => ({ real: true, nodeId: i, layer: layer[i], up: [], down: [] }));
+  const real = Array.from({ length: n }, (_, i) => ({
+    real: true, nodeId: i, layer: layer[i], up: [], down: [],
+    group: groupOf ? groupOf(i) : -1,
+  }));
   const layers = Array.from({ length: maxLayer + 1 }, () => []);
   for (const d of real) layers[d.layer].push(d);
 
   // Dummy-chain insertion (step 2): a chain of descriptors from source to
-  // destination, one dummy per layer the raw edge would otherwise skip.
+  // destination, one dummy per layer the raw edge would otherwise skip. A
+  // dummy inherits the cell only when both ends of its edge are in the same
+  // one, so an edge *within* a cell keeps its bends inside the hull and an
+  // edge between two cells does not drag a stranger's lane through either.
   const chains = edges.map((edge) => {
     const chain = [real[edge.from]];
+    const group = real[edge.from].group === real[edge.to].group ? real[edge.from].group : -1;
     for (let l = layer[edge.from] + 1; l < layer[edge.to]; l++) {
-      const dummy = { real: false, layer: l, up: [], down: [] };
+      const dummy = { real: false, layer: l, up: [], down: [], group };
       layers[l].push(dummy);
       chain.push(dummy);
     }
@@ -2286,53 +2430,59 @@ function layeredLayout(n, edges, layerSpacing, nodeSpacing, sizeOf) {
   // comparing raw indices against a much narrower neighbouring layer.
   const widest = Math.max(1, ...layers.map((row) => row.length));
   const spread = (order, len) => (order + 0.5) * (widest / Math.max(len, 1));
+  // Where each cell sits *overall*, on the same 0..widest scale, from where
+  // its members currently are across every layer they appear in. Blending
+  // this into a node's own barycentre is what gives a cell a horizontal band
+  // through the whole picture rather than merely a contiguous run inside each
+  // layer -- and a band is what a hull needs, since a cell's members are
+  // rarely in one layer. Recomputed once per sweep: cheap, and stable enough
+  // that two members of a cell converge instead of chasing each other.
+  const bandKeys = () => {
+    const sum = new Map(), count = new Map();
+    for (const row of layers) {
+      for (const d of row) {
+        if (d.group < 0) continue;
+        sum.set(d.group, (sum.get(d.group) || 0) + spread(d.order, row.length));
+        count.set(d.group, (count.get(d.group) || 0) + 1);
+      }
+    }
+    const keys = new Map();
+    for (const [group, total] of sum) keys.set(group, total / count.get(group));
+    return keys;
+  };
+  let bands = new Map();
   const reorder = (row, neighboursOf) => {
     const keyed = row.map((d, i) => {
       const neighbours = neighboursOf(d);
-      const key = neighbours.length === 0
+      let key = neighbours.length === 0
         ? spread(i, row.length)
         : neighbours.reduce((sum, u) => sum + spread(u.order, layers[u.layer].length), 0) / neighbours.length;
-      return [key, i, d];
+      if (bands.has(d.group)) key = key * (1 - GROUP_BAND) + bands.get(d.group) * GROUP_BAND;
+      return { key, seq: i, d };
     });
-    keyed.sort((a, b) => a[0] - b[0] || a[1] - b[1]);
-    keyed.forEach(([, , d], i) => { row[i] = d; d.order = i; });
+    if (groupOf) groupContiguously(keyed);
+    else keyed.sort((a, b) => a.key - b.key || a.seq - b.seq);
+    keyed.forEach(({ d }, i) => { row[i] = d; d.order = i; });
   };
   for (let sweep = 0; sweep < TOPO_BARYCENTRE_SWEEPS; sweep++) {
+    if (groupOf) bands = bandKeys();
     for (let l = 1; l <= maxLayer; l++) reorder(layers[l], (d) => d.up);
     for (let l = maxLayer - 1; l >= 0; l--) reorder(layers[l], (d) => d.down);
   }
 
-  // Coordinates (step 4): layer -> x, final order -> y, each layer centred
-  // on y = 0 independently so the picture doesn't drift toward one edge as
-  // layer widths vary.
-  if (sizeOf) {
-    // Sized nodes: a column's x is the running sum of the widest box in each
-    // column so far, and a column's ys stack real heights. A dummy is still a
-    // point (width and height 0) but keeps its own lane, so a long edge bends
-    // through the gap between two boxes rather than across one.
-    const colW = layers.map((row) => row.reduce((m, d) => Math.max(m, d.real ? sizeOf(d.nodeId).w : 0), 0));
-    let x = 0;
-    for (let l = 0; l < layers.length; l++) {
-      if (l > 0) x += colW[l - 1] / 2 + layerSpacing + colW[l] / 2;
-      const row = layers[l];
-      const hs = row.map((d) => (d.real ? sizeOf(d.nodeId).h : 0));
-      const total = hs.reduce((a, b) => a + b, 0) + nodeSpacing * Math.max(row.length - 1, 0);
-      let y = -total / 2;
-      for (let i = 0; i < row.length; i++) {
-        row[i].x = x;
-        row[i].y = y + hs[i] / 2;
-        y += hs[i] + nodeSpacing;
-      }
-    }
-  } else {
-    for (const row of layers) {
-      const offset = (row.length - 1) / 2;
-      for (const d of row) {
-        d.x = d.layer * layerSpacing;
-        d.y = (d.order - offset) * nodeSpacing;
-      }
+  // Coordinates (step 4). x is the layer either way. y is the slot index for
+  // an ungrouped layout, and for a grouped one is refined toward what each
+  // node's neighbours and its own cell want, subject to the order just
+  // fixed -- see `isotonicPlacement`.
+  for (const row of layers) {
+    const offset = (row.length - 1) / 2;
+    for (const d of row) {
+      d.x = d.layer * layerSpacing;
+      d.y = (d.order - offset) * nodeSpacing;
     }
   }
+  if (groupOf) cohere(layers, nodeSpacing);
+
   const xs = new Array(n), ys = new Array(n);
   for (const d of real) { xs[d.nodeId] = d.x; ys[d.nodeId] = d.y; }
 
@@ -2344,64 +2494,201 @@ function layeredLayout(n, edges, layerSpacing, nodeSpacing, sizeOf) {
   return { xs, ys, paths };
 }
 
-/** Lay out both levels. Both, not just the visible one: switching levels
- * then has nothing to recompute, and at these sizes (31 cells / ~180
- * primitives at the largest) laying out the hidden one costs less than the
- * branch to avoid it would cost to read. */
-function layoutTopology() {
-  const primitive = layeredLayout(topoNodes.length, topoEdges, TOPO_LAYER_SPACING, TOPO_NODE_SPACING);
-  topoNodes.forEach((node, i) => { node.x = primitive.xs[i]; node.y = primitive.ys[i]; });
-  topoEdgePaths = primitive.paths;
-  topoMerges = computeMergeJunctions();
-
-  // The nested level. Each cell is a box of its own size (see
-  // `buildCellInterior`), so this pass runs `layeredLayout` in its sized
-  // mode; `CELL_LAYER_GAP`/`CELL_ROW_GAP` are clearances between boxes rather
-  // than pitches between centres.
-  const gate = layeredLayout(
-    cellNodes.length, cellEdges, CELL_LAYER_GAP, CELL_ROW_GAP, (i) => cellNodes[i],
-  );
-  cellNodes.forEach((node, i) => { node.x = gate.xs[i]; node.y = gate.ys[i]; });
-  cellEdgePaths = gate.paths;
-  // An edge lands on its consumer's own pin, not on the consumer's centre --
-  // see this section's "Thirteen kinds, three shapes, and a word". The layout
-  // above has no notion of a pin, so the last point of each path is nudged
-  // here, after coordinates exist. The first point is nudged to the
-  // producer's right edge for the same reason: a box has a width, and an edge
-  // leaving from its centre would be drawn under its contents.
-  cellEdges.forEach((edge, i) => {
-    const path = cellEdgePaths[i];
-    const to = cellNodes[edge.to], from = cellNodes[edge.from];
-    path[0] = { x: from.x + from.w / 2, y: from.y };
-    path[path.length - 1] = { x: to.x - to.w / 2, y: pinY(to, edge.pin) };
+/** Sort one layer's `{ key, seq, d }` entries so that the members of a cell
+ * present in this layer come out contiguous: cells ordered by the mean
+ * barycentre of their own members here, members within a cell by their
+ * individual barycentre, and every ungrouped node its own group of one so it
+ * competes on equal terms rather than being swept to an end.
+ *
+ * Contiguity per layer is what stops a hull from swallowing a stranger: a
+ * cell can be beside another cell but never interleaved with one. */
+function groupContiguously(keyed) {
+  const groups = new Map();
+  for (const entry of keyed) {
+    const key = entry.d.group >= 0 ? `g${entry.d.group}` : `n${entry.seq}`;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(entry);
+  }
+  const ordered = [...groups.values()].map((members) => {
+    members.sort((a, b) => a.key - b.key || a.seq - b.seq);
+    return { members, key: members.reduce((s, m) => s + m.key, 0) / members.length, seq: members[0].seq };
   });
+  ordered.sort((a, b) => a.key - b.key || a.seq - b.seq);
+  let i = 0;
+  for (const group of ordered) for (const member of group.members) keyed[i++] = member;
+}
 
-  // Now that every box has a place, give every nested primitive an absolute
-  // one, and index it by node id. That index is what lets a shared inverter's
-  // edge and an all-bare merge's spokes be drawn between two *different*
-  // boxes' interiors: both are stated in terms of primitive node ids, and
-  // neither respects the containment the rest of this picture is built on --
-  // which is exactly why they have to be drawn rather than assumed away.
-  innerPos = new Map();
-  for (const node of cellNodes) {
-    if (node.role !== 'cell') continue;
-    const originY = node.y + node.contentY;
-    for (const inner of node.interior.nodes) {
-      inner.ax = node.x + inner.x;
-      inner.ay = originY + inner.y;
-      innerPos.set(inner.id, inner);
+/** Pull every node toward the rest of its own cell without letting go of the
+ * graph, then re-place each layer at the nearest arrangement that still
+ * respects the order the barycentre sweeps chose.
+ *
+ * A node's desired y is a blend (`GROUP_COHESION`) of where its own
+ * neighbours put it and where its cell's other members already are. Cohesion
+ * is what makes a hull a shape; the neighbour term is what stops it from
+ * being a shape in the wrong place. A node in no cell answers only to its
+ * neighbours, which is exactly what the flat level does with every node. */
+function cohere(layers, gap) {
+  for (let pass = 0; pass < GROUP_PASSES; pass++) {
+    const groupY = new Map(); // cell index -> mean y of its members so far
+    const groupN = new Map();
+    for (const row of layers) {
+      for (const d of row) {
+        if (d.group < 0) continue;
+        groupY.set(d.group, (groupY.get(d.group) || 0) + d.y);
+        groupN.set(d.group, (groupN.get(d.group) || 0) + 1);
+      }
     }
-    for (const junction of node.interior.junctions) {
-      junction.ax = junction.floating ? node.x : node.x + junction.x;
-      junction.ay = junction.floating ? originY : originY + junction.y;
+    for (const row of layers) {
+      const desired = row.map((d) => {
+        const neighbours = d.up.concat(d.down);
+        const own = neighbours.length === 0
+          ? d.y
+          : neighbours.reduce((sum, u) => sum + u.y, 0) / neighbours.length;
+        if (d.group < 0 || (groupN.get(d.group) || 0) < 2) return own;
+        const mean = groupY.get(d.group) / groupN.get(d.group);
+        return own * (1 - GROUP_COHESION) + mean * GROUP_COHESION;
+      });
+      const placed = isotonicPlacement(desired, gap);
+      const centre = placed.length === 0 ? 0 : (placed[0] + placed[placed.length - 1]) / 2;
+      row.forEach((d, i) => { d.y = placed[i] - centre; });
     }
   }
 }
 
-/** Where pin `pin` of `node` sits: pins are stacked down the box's left edge
- * in the cell's own declared pin order, evenly spaced and centred. */
-function pinY(node, pin) {
-  return node.y - node.h / 2 + ((pin + 1) * node.h) / (node.pins + 1);
+/** Lay out the one graph twice -- grouped and flat -- and place everything
+ * derived from a layout in both. Both, not just the visible one: switching
+ * levels then has nothing to recompute, and at these sizes (70 primitives at
+ * the largest) laying out the hidden one costs less than the branch to avoid
+ * it would cost to read. */
+function layoutTopology() {
+  const flat = layeredLayout(topoNodes.length, topoEdges, TOPO_LAYER_SPACING, TOPO_NODE_SPACING);
+  topoNodes.forEach((node, i) => { node.x = flat.xs[i]; node.y = flat.ys[i]; });
+  topoEdgePaths = flat.paths;
+  topoMerges = computeMergeJunctions((node) => [node.x, node.y], TOPO_LAYER_SPACING);
+
+  // The same call with cohesion switched on. `groupOf` is the whole of the
+  // difference: same nodes, same edges, same algorithm.
+  const grouped = layeredLayout(
+    topoNodes.length, topoEdges, GROUP_LAYER_SPACING, GROUP_NODE_SPACING,
+    (i) => (cellOfNode.has(topoNodes[i].id) ? cellOfNode.get(topoNodes[i].id) : -1),
+  );
+  topoNodes.forEach((node, i) => { node.gx = grouped.xs[i]; node.gy = grouped.ys[i]; });
+  groupEdgePaths = grouped.paths;
+  groupMerges = computeMergeJunctions((node) => [node.gx, node.gy], GROUP_LAYER_SPACING);
+
+  cellHulls = computeCellHulls();
+}
+
+/** One hull per cell, in the grouped layout's own coordinates.
+ *
+ * The points hulled are the cell's member primitives **plus the junction of
+ * every merge gate it lowered into**, which is what makes a merge drawable at
+ * all: `verilog:seven_segment`'s `merge g8` owns no primitive, so hulling
+ * `cell.nodes` alone would draw nothing for it, and hulling the nodes whose
+ * dust it joins would claim it owns two other cells' torches. Its ring is the
+ * one thing it does have, so its ring is what gets wrapped. See "A wire merge
+ * is not a gate body".
+ *
+ * A cell with nothing at all -- neither member nor junction -- gets no hull
+ * rather than a hull of nothing; no circuit here produces one, and drawing a
+ * dot for it would be inventing a shape. */
+function computeCellHulls() {
+  const byId = new Map(topoNodes.map((node) => [node.id, node]));
+  // Which cell lowered which gate. `TopologyCell::lowered` is the authority
+  // (its `source` string is for reading, not for joining on), so a junction
+  // is attributed to a cell by the same list the `×n` count came from.
+  const cellOfGate = new Map();
+  for (const cell of topoCells) {
+    for (const g of cell.lowered || []) if (!cellOfGate.has(g)) cellOfGate.set(g, cell.index);
+  }
+  const junctionsOf = new Map(); // cell index -> junctions of the merges it lowered
+  for (const junction of groupMerges) {
+    const owner = cellOfGate.get(junction.gate.index);
+    if (owner === undefined) continue;
+    if (!junctionsOf.has(owner)) junctionsOf.set(owner, []);
+    junctionsOf.get(owner).push(junction);
+  }
+
+  const hulls = [];
+  for (const cell of topoCells) {
+    const members = (cell.nodes || []).map((id) => byId.get(id)).filter(Boolean);
+    const junctions = junctionsOf.get(cell.index) || [];
+    const points = members.map((node) => ({ x: node.gx, y: node.gy }))
+      .concat(junctions.map((junction) => ({ x: junction.x, y: junction.y })));
+    if (points.length === 0) continue;
+    hulls.push({
+      cell,
+      hue: cellHue(cell.index),
+      members,
+      junctions,
+      points: roundedHull(points, HULL_PAD),
+    });
+  }
+  return hulls;
+}
+
+/** The outline to draw round a set of points: their convex hull, pushed
+ * `pad` outward, with the corners rounded off by arcs of radius `pad`.
+ * Returned as a flat list of `{ x, y }` samples, which is all the canvas
+ * needs and keeps the hull in graph space so it pans and zooms with
+ * everything else.
+ *
+ * One and two points are the cases that actually matter here -- a `nor` cell
+ * is one torch and an all-bare merge is one ring -- and they fall out of the
+ * same construction as a circle and a capsule, so nothing special-cases
+ * them beyond skipping the hull itself. */
+function roundedHull(points, pad) {
+  const hull = convexHull(points);
+  const SEGMENTS = 10;
+  const out = [];
+  if (hull.length === 1) {
+    for (let i = 0; i < SEGMENTS * 2; i++) {
+      const a = (i / (SEGMENTS * 2)) * Math.PI * 2;
+      out.push({ x: hull[0].x + pad * Math.cos(a), y: hull[0].y + pad * Math.sin(a) });
+    }
+    return out;
+  }
+  // Walk the hull anticlockwise-in-screen-space (`convexHull` returns
+  // counter-clockwise in maths axes, which is clockwise with y down); at each
+  // vertex sweep an arc between the outward normals of the two edges meeting
+  // there, which is exactly the offset outline of the polygon.
+  for (let i = 0; i < hull.length; i++) {
+    const prev = hull[(i - 1 + hull.length) % hull.length];
+    const cur = hull[i];
+    const next = hull[(i + 1) % hull.length];
+    const a0 = Math.atan2(cur.y - prev.y, cur.x - prev.x) - Math.PI / 2;
+    const a1 = Math.atan2(next.y - cur.y, next.x - cur.x) - Math.PI / 2;
+    let sweep = a1 - a0;
+    while (sweep < 0) sweep += Math.PI * 2;
+    while (sweep > Math.PI * 2) sweep -= Math.PI * 2;
+    for (let s = 0; s <= SEGMENTS; s++) {
+      const a = a0 + (sweep * s) / SEGMENTS;
+      out.push({ x: cur.x + pad * Math.cos(a), y: cur.y + pad * Math.sin(a) });
+    }
+  }
+  return out;
+}
+
+/** Convex hull by monotone chain, counter-clockwise, duplicates removed.
+ * Degenerate inputs (one point, or several collinear ones) come back as the
+ * one or two points they are, which `roundedHull` then wraps as a circle or
+ * a capsule. */
+function convexHull(points) {
+  const sorted = [...points].sort((a, b) => a.x - b.x || a.y - b.y)
+    .filter((p, i, all) => i === 0 || p.x !== all[i - 1].x || p.y !== all[i - 1].y);
+  if (sorted.length < 3) return sorted;
+  const cross = (o, a, b) => (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const build = (list) => {
+    const stack = [];
+    for (const p of list) {
+      while (stack.length >= 2 && cross(stack[stack.length - 2], stack[stack.length - 1], p) <= 0) stack.pop();
+      stack.push(p);
+    }
+    stack.pop();
+    return stack;
+  };
+  const hull = build(sorted).concat(build([...sorted].reverse()));
+  return hull.length >= 3 ? hull : sorted.slice(0, 2);
 }
 
 /** Where each wire merge's junction glyph goes, given a laid-out graph:
@@ -2425,18 +2712,19 @@ function pinY(node, pin) {
  * `m2`'s set, so two junctions can land on the same point. The last pass
  * spreads any group that shares a rounded coordinate along y, in gate-index
  * order, so one merge can never sit invisibly on top of another. */
-function computeMergeJunctions() {
+function computeMergeJunctions(posOf, layerSpacing) {
   const junctions = [];
   for (const gate of topoGates) {
     if (!isMergeGate(gate) || gate.outputs.length === 0) continue;
     let maxX = -Infinity, sumY = 0;
     for (const id of gate.outputs) {
-      maxX = Math.max(maxX, topoNodes[id].x);
-      sumY += topoNodes[id].y;
+      const [x, y] = posOf(topoNodes[id]);
+      maxX = Math.max(maxX, x);
+      sumY += y;
     }
     junctions.push({
       gate,
-      x: maxX + TOPO_LAYER_SPACING * 0.5,
+      x: maxX + layerSpacing * 0.5,
       y: sumY / gate.outputs.length,
     });
   }
@@ -2476,51 +2764,64 @@ function computeEgoSet(gateIndex) {
   return result;
 }
 
-/** The nested level's own ego set: one cell node plus everything one edge
- * away from it, in `cellNodes` indices. Same one-hop rule as `computeEgoSet`,
- * on the graph that is actually on screen at this level.
+/** The grouped level's own ego set: every primitive one cell owns, plus
+ * everything one edge away from any of them, as node ids.
  *
- * Shared inverters count as edges here even though they are not gate-level
- * ones. A cell that borrows a torch is not adjacent to its lender in the
- * netlist -- `andnot g3` reads `d1` and `d0`, not `g1` -- but it is adjacent
- * in what gets built, and focusing it while hiding the box its missing torch
- * lives in would fit the view to a cell whose contents are off screen. */
+ * Same one-hop rule as `computeEgoSet`, on the same graph -- because it now
+ * *is* the same graph, which is the whole point of this revision. Focusing a
+ * cell shows the torches it is made of and the torches immediately feeding
+ * or reading them, and a borrowed inverter comes along automatically: a cell
+ * that reads a torch it does not own has a real edge to it, so it is one hop
+ * away and there is nothing special left to handle. The merge case still
+ * needs care -- an all-bare merge owns nothing -- so a merge cell's core is
+ * the nodes whose dust its lowered merges join. */
 function computeCellEgoSet(cellIndex) {
-  const core = cellOfIndex[cellIndex];
-  const result = new Set([core]);
-  for (const edge of cellEdges) {
-    if (edge.from === core) result.add(edge.to);
-    if (edge.to === core) result.add(edge.from);
+  const cell = topoCells.find((c) => c.index === cellIndex);
+  if (!cell) return new Set();
+  const core = new Set(cell.nodes || []);
+  for (const g of cell.lowered || []) {
+    const gate = topoGates[g];
+    if (gate && isMergeGate(gate)) for (const id of gate.outputs) core.add(id);
   }
-  for (const edge of sharedEdges) {
-    if (edge.owner === cellIndex) result.add(cellOfIndex[edge.reader]);
-    if (edge.reader === cellIndex) result.add(cellOfIndex[edge.owner]);
+  const result = new Set(core);
+  for (const edge of topoEdges) {
+    if (core.has(edge.from)) result.add(edge.to);
+    if (core.has(edge.to)) result.add(edge.from);
   }
   return result;
 }
 
-/** The nodes of whichever level is showing. */
+/** The nodes of whichever level is showing -- the same list either way now,
+ * kept as a function because everything that fits or hit-tests calls it and
+ * the two levels differ only in where those nodes are (`nodeXY`). */
 function activeNodes() {
-  return topoLevel === 'gate' ? cellNodes : topoNodes;
+  return topoNodes;
 }
 
 /** Fit `topoView` (scale + offset) so every node in `ids` is visible with
- * some padding, `ids` indexing the active level's own node list. Used both
- * for "show me everything" (all node ids) and for "Focus" (one ego set). */
+ * some padding. Used both for "show me everything" (all node ids) and for
+ * "Focus" (one ego set).
+ *
+ * Hulls and merge rings are included in the extent rather than just the
+ * nodes: a hull is `HULL_PAD` outside its outermost member, and an all-bare
+ * merge's ring is not at any node at all, so fitting to node centres alone
+ * clips exactly the two things this level added. */
 function fitViewToNodes(ids) {
   const w = topoWrap.clientWidth || 400, h = topoWrap.clientHeight || 400;
-  const nodes = activeNodes();
+  const wanted = ids instanceof Set ? ids : new Set(ids);
   let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-  // A gate-level node is a box of its own size, not a dot, so the extent is
-  // over box corners rather than centres -- otherwise the outermost cells'
-  // borders (and their contents) are clipped at the canvas edge. A flat-level
-  // node has no size and this reduces to its coordinate.
-  for (const id of ids) {
-    const node = nodes[id];
+  const include = (x, y, pad) => {
+    minX = Math.min(minX, x - pad); maxX = Math.max(maxX, x + pad);
+    minY = Math.min(minY, y - pad); maxY = Math.max(maxY, y + pad);
+  };
+  for (const id of wanted) {
+    const node = topoNodes[id];
     if (!node) continue;
-    const halfW = (node.w || 0) / 2, halfH = (node.h || 0) / 2;
-    minX = Math.min(minX, node.x - halfW); maxX = Math.max(maxX, node.x + halfW);
-    minY = Math.min(minY, node.y - halfH); maxY = Math.max(maxY, node.y + halfH);
+    const [x, y] = nodeXY(node);
+    include(x, y, topoLevel === 'gate' && cellOfNode.has(node.id) ? HULL_PAD : 0);
+  }
+  for (const junction of activeMerges()) {
+    if (junction.gate.outputs.some((id) => wanted.has(id))) include(junction.x, junction.y, HULL_PAD);
   }
   if (!Number.isFinite(minX)) { topoView = { scale: 1, offsetX: w / 2, offsetY: h / 2 }; return; }
   const graphW = Math.max(maxX - minX, 1), graphH = Math.max(maxY - minY, 1);
@@ -2595,30 +2896,30 @@ function refreshTopoStatus() {
   const isRealisableAlready = topoCells.every((cell) => cell.realisable);
 
   if (topoLevel === 'gate') {
-    const nested = topoCells.reduce((sum, cell) => sum + cell.nodes.length, 0);
+    const grouped = topoCells.reduce((sum, cell) => sum + cell.nodes.length, 0);
     const sharedTorches = new Set(sharedEdges.map((edge) => edge.from)).size;
     topoCaption.textContent =
-      'Gate-level cells, each drawn around the primitives it lowers into -- layered (Sugiyama-style) layout, no positions from the compiler';
+      'The primitive graph -- every edge ends on the torch, repeater or lamp that reads it; a cell is a labelled hull around the primitives that are it';
     topoStatus.textContent =
-      `${topoCells.length} cell${topoCells.length === 1 ? '' : 's'}, ${cellEdges.length} connections, `
-      + `${nested} primitive${nested === 1 ? '' : 's'} nested inside them`
+      `${topoNodes.length} primitives, ${topoEdges.length} runs of dust, `
+      + `${topoCells.length} cell${topoCells.length === 1 ? '' : 's'} hulled around ${grouped} of them`
       + (isRealisableAlready
-        ? ' -- already realisable, so each box holds the one torch or junction it is.'
-        : ` (from ${lowered} torches and merges).`)
+        ? ' -- already realisable, so each hull wraps the one torch or junction it is.'
+        : ` (${lowered} torches and merges lowered from ${topoCells.length}).`)
       + (sharedTorches > 0
-        ? ` ${sharedTorches} torch${sharedTorches === 1 ? '' : 'es'} shared between cells, `
-          + `read across ${sharedEdges.length} box boundar${sharedEdges.length === 1 ? 'y' : 'ies'}.`
+        ? ` ${sharedTorches} torch${sharedTorches === 1 ? '' : 'es'} sit in one hull and are read from `
+          + `${sharedEdges.length} cell${sharedEdges.length === 1 ? '' : 's'} outside it.`
         : '')
       + ` Layout in ${lastLayoutMs.toFixed(0)} ms.`;
   } else {
     topoCaption.textContent =
-      'Primitive topology, flat -- every torch, repeater and junction in one layered graph, ungrouped';
+      'The same primitive graph, flat -- no grouping pressure on the layout at all, so depth is undistorted by which cell a node belongs to';
     topoStatus.textContent =
       `${topoNodes.length} nodes, ${topoEdges.length} edges, ${topoGates.length} gates `
       + `(${lowered - merges} NOR, ${merges} wire merge${merges === 1 ? '' : 's'}) -- `
       + (isRealisableAlready
-        ? `the same ${topoCells.length} cells as the nested level, which was already realisable.`
-        : `lowered from ${topoCells.length} gate-level cells.`)
+        ? `the same ${topoCells.length} cells the grouped level hulls, which were already realisable.`
+        : `lowered from the ${topoCells.length} gate-level cells the grouped level hulls.`)
       + ` Layout in ${lastLayoutMs.toFixed(0)} ms.`;
   }
 
@@ -2645,6 +2946,15 @@ function gateHue(index) {
   return (index * 47) % 360;
 }
 
+/** A hull's hue: the same stride as `gateHue`, rotated off red so that cell
+ * zero -- and every cell after it -- is a colour dust is not. A hull is a
+ * thin pale outline and dust is a heavy saturated run, so the two could not
+ * really be confused anyway; starting the sequence at red would just make
+ * the first cell of every circuit look like it was drawn in wire. */
+function cellHue(index) {
+  return (index * 47 + 150) % 360;
+}
+
 function roundRect(ctx, x, y, w, h, r) {
   const rr = Math.min(r, Math.abs(w) / 2, Math.abs(h) / 2);
   ctx.beginPath();
@@ -2654,6 +2964,69 @@ function roundRect(ctx, x, y, w, h, r) {
   ctx.arcTo(x, y + h, x, y, rr);
   ctx.arcTo(x, y, x + w, y, rr);
   ctx.closePath();
+}
+
+/** Draw one polyline of screen-space points as a **run of redstone dust**:
+ * one unbroken dust-red line, heavy, with a dark casing along its sides so
+ * it reads as a laid material rather than as a pen stroke. This is the one
+ * drawing routine every signal-carrying edge in this tab goes through, at
+ * both levels -- see this section's "That one edge is dust".
+ *
+ * Unbroken is load-bearing, not decoration. A run is a connection, and a
+ * connection that arrives at its consumer is the single thing this level
+ * exists to show; a broken line reads as a broken connection, and segments
+ * compete for attention with the terminations, which are the point. It is
+ * also the cleanest possible answer to the length question -- an edge here
+ * has no length, this graph having no positions at all, so the honest
+ * drawing is the one that offers nothing to count. A solid line says
+ * "connected" and stops. */
+function strokeDustRun(ctx, points, width, alpha) {
+  if (points.length < 2 || alpha <= 0) return;
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'round';
+  ctx.setLineDash([]);
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) ctx.lineTo(points[i].x, points[i].y);
+  if (width >= DUST_CASING_MIN_WIDTH) {
+    ctx.strokeStyle = DUST_CASING;
+    ctx.lineWidth = width + 1.6;
+    ctx.stroke();
+  }
+  ctx.strokeStyle = TOPO_DUST_COLOR;
+  ctx.lineWidth = width;
+  ctx.stroke();
+  ctx.restore();
+}
+
+/** How wide a run of dust is right now -- see `DUST_WIDTH`. Measured against
+ * the same screen-pixels-per-layer every level-of-detail threshold in this
+ * view uses, so dust thins as the picture crowds and a dense circuit does not
+ * disappear under its own wiring. */
+function dustWidthNow() {
+  const spacing = topoView.scale * activeLayerSpacing();
+  return Math.max(DUST_WIDTH_MIN, Math.min(DUST_WIDTH, DUST_WIDTH * (spacing / DUST_WIDTH_AT_PX)));
+}
+
+/** Draw one polyline of screen-space points as a merge's **spoke**: a dotted
+ * hairline. A spoke is not dust -- the dust it talks about is already drawn
+ * by the runs into and out of the nodes it touches -- it is the claim that
+ * those nodes are one net. Dotted, so that even at the zoom where a dust
+ * segment is small it cannot be mistaken for a run of them, and a hairline,
+ * because weight is the axis that separates annotation from material here. */
+function strokeMergeSpoke(ctx, ax, ay, bx, by, style) {
+  ctx.save();
+  ctx.setLineDash(MERGE_SPOKE_DASH);
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 1.3;
+  ctx.strokeStyle = style;
+  ctx.beginPath();
+  ctx.moveTo(ax, ay);
+  ctx.lineTo(bx, by);
+  ctx.stroke();
+  ctx.restore();
 }
 
 /** Draw one node, shaped by its `Primitive` kind so a glance (not just
@@ -2713,298 +3086,263 @@ function provenanceDescription(node) {
   return `primary output "${node.provenance.name}"`;
 }
 
+/** Both levels draw the same graph in the same order -- annotations behind,
+ * then dust, then merge rings, then the primitives themselves on top, so a
+ * glyph always caps the runs that end on it and a run never crosses a label.
+ * What differs is only the annotation layer: hulls for the grouped level,
+ * per-gate badges for the flat one. */
 function drawTopology() {
   const w = topoWrap.clientWidth || 1, h = topoWrap.clientHeight || 1;
   topoCtx.clearRect(0, 0, w, h);
   topoCtx.fillStyle = '#101113';
   topoCtx.fillRect(0, 0, w, h);
-  if (topoLevel === 'gate') drawGateLevel();
-  else drawPrimitiveLevel();
-}
-
-/** The nested gate level: one **container** per cell, labelled with the
- * cell's own kind, holding the primitives it lowers into, with signal-flow
- * edges landing on numbered pins. See this section's "Containment is the
- * point" and "Thirteen kinds, three shapes, and a word". */
-function drawGateLevel() {
-  if (cellNodes.length === 0) return;
-  const toScreen = (x, y) => [topoView.offsetX + x * topoView.scale, topoView.offsetY + y * topoView.scale];
-  const s = topoView.scale;
-  // Level of detail (see `INNER_DETAIL_PX`): whether a box's contents are
-  // large enough on screen to be worth drawing at all.
-  const detail = s * INNER_LAYER_SPACING >= INNER_DETAIL_PX;
-  const labelled = s * INNER_LAYER_SPACING >= INNER_LABEL_PX;
-  const focusValue = topoFocusSelect.value;
-  const focusCell = focusValue === '' ? null : Number(focusValue);
-  const egoSet = focusCell === null ? null : computeCellEgoSet(focusCell);
-  const focusNode = focusCell === null ? null : cellOfIndex[focusCell];
-
-  // Edges first, so boxes sit on top of them and an edge never crosses a
-  // label. Each already ends on its consumer's own pin (see layoutTopology).
-  for (let i = 0; i < cellEdges.length; i++) {
-    const edge = cellEdges[i];
-    const inFocus = egoSet ? (egoSet.has(edge.from) && egoSet.has(edge.to)) : true;
-    const path = cellEdgePaths[i];
-    topoCtx.beginPath();
-    for (let j = 0; j < path.length; j++) {
-      const [sx, sy] = toScreen(path[j].x, path[j].y);
-      if (j === 0) topoCtx.moveTo(sx, sy); else topoCtx.lineTo(sx, sy);
-    }
-    topoCtx.strokeStyle = `rgba(255,59,59,${inFocus ? 0.55 : 0.05})`;
-    topoCtx.lineWidth = 1.6;
-    topoCtx.stroke();
-
-    // A pin tick at the landing point: a short stub perpendicular to the
-    // box's left edge. Only worth drawing once a pin is distinguishable from
-    // its neighbour on screen -- below that it is noise on top of the edge.
-    if (s * CELL_PIN_PITCH > 6 && cellNodes[edge.to] && cellNodes[edge.to].pins > 1) {
-      const end = path[path.length - 1];
-      const [ex, ey] = toScreen(end.x, end.y);
-      topoCtx.beginPath();
-      topoCtx.moveTo(ex - 4, ey);
-      topoCtx.lineTo(ex, ey);
-      topoCtx.strokeStyle = `rgba(255,200,200,${inFocus ? 0.8 : 0.06})`;
-      topoCtx.lineWidth = 2;
-      topoCtx.stroke();
-    }
-  }
-
-  for (const node of cellNodes) {
-    const inFocus = egoSet ? egoSet.has(node.id) : true;
-    const dim = focusNode !== null && node.id !== focusNode;
-    const alpha = inFocus ? 1 : 0.1;
-
-    if (node.role !== 'cell') {
-      // A primary input or output: a lever/lamp pill with its signal name,
-      // so a signal entering or leaving the circuit has a visible terminal
-      // rather than an edge trailing off into nothing.
-      const [sx, sy] = toScreen(node.x, node.y);
-      const r = 6;
-      topoCtx.save();
-      topoCtx.globalAlpha = alpha;
-      topoCtx.fillStyle = CELL_IO_COLOR[node.role];
-      topoCtx.beginPath();
-      topoCtx.arc(sx, sy, r, 0, Math.PI * 2);
-      topoCtx.fill();
-      if (s > 0.3) {
-        topoCtx.fillStyle = 'rgba(235,235,235,0.9)';
-        topoCtx.font = '11px ui-monospace, monospace';
-        topoCtx.textBaseline = 'middle';
-        topoCtx.textAlign = node.role === 'input' ? 'right' : 'left';
-        topoCtx.fillText(node.label, sx + (node.role === 'input' ? -r - 4 : r + 4), sy);
-      }
-      topoCtx.restore();
-      continue;
-    }
-
-    const cell = node.cell;
-    const [x0, y0] = toScreen(node.x - node.w / 2, node.y - node.h / 2);
-    const [x1, y1] = toScreen(node.x + node.w / 2, node.y + node.h / 2);
-    const colour = CELL_COLOR[node.family];
-
-    topoCtx.save();
-    topoCtx.globalAlpha = alpha;
-    roundRect(topoCtx, x0, y0, x1 - x0, y1 - y0, 4);
-    if (node.family === 'merge') {
-      // Hollow and dashed, for the same reason the flat level draws a merge
-      // hollow: there is no block there to fill in.
-      topoCtx.setLineDash([4, 3]);
-    } else {
-      topoCtx.fillStyle = node.family === 'nor' ? 'rgba(255,140,0,0.16)' : 'rgba(74,127,193,0.20)';
-      topoCtx.fill();
-    }
-    topoCtx.strokeStyle = colour;
-    topoCtx.lineWidth = dim ? 1 : 1.6;
-    topoCtx.stroke();
-    topoCtx.setLineDash([]);
-
-    if (s > 0.25) {
-      // The kind, spelled out -- still the first thing a box says. It sits in
-      // the box's header strip now rather than dead centre, because the
-      // centre belongs to the primitives. The output name stays above the
-      // box, so a long signal name cannot squeeze the kind.
-      topoCtx.fillStyle = colour;
-      topoCtx.font = `bold ${Math.min(14, Math.max(9, 12 * s))}px ui-monospace, monospace`;
-      topoCtx.textAlign = 'center';
-      topoCtx.textBaseline = 'middle';
-      topoCtx.fillText(cell.kind, (x0 + x1) / 2, y0 + (CELL_HEADER / 2) * s);
-
-      topoCtx.fillStyle = 'rgba(230,230,230,0.75)';
-      topoCtx.font = '10px ui-monospace, monospace';
-      topoCtx.textBaseline = 'bottom';
-      topoCtx.fillText(cell.output, (x0 + x1) / 2, y0 - 2);
-    }
-    topoCtx.restore();
-
-    if (detail) drawCellInterior(node, alpha, labelled, toScreen, s);
-    else if (s > 0.45 && !cell.realisable) {
-      // Too small for the contents to mean anything, so the box says how many
-      // there are instead -- the number this tab drew before it could nest
-      // them. `+k` is what it additionally *borrows*: see `drawSharedEdges`.
-      const borrowed = sharedEdges.filter((edge) => edge.reader === cell.index).length;
-      topoCtx.save();
-      topoCtx.globalAlpha = alpha;
-      topoCtx.fillStyle = 'rgba(200,220,255,0.55)';
-      topoCtx.font = '9px ui-monospace, monospace';
-      topoCtx.textAlign = 'right';
-      topoCtx.textBaseline = 'bottom';
-      topoCtx.fillText(`×${cell.lowered.length}${borrowed > 0 ? `+${borrowed}` : ''}`, x1 - 3, y1 - 2);
-      topoCtx.restore();
-    }
-  }
-
-  if (detail) drawSharedEdges(egoSet, toScreen);
-}
-
-/** What one cell lowers into, drawn inside that cell's own box: its
- * primitives in the same shapes the flat level gives them, the signal edges
- * between them, and a hollow ring for each merge with dashed spokes to the
- * nodes whose dust joins there.
- *
- * The spokes are the one thing here that can leave the box, and they leave it
- * only where the circuit really does: an all-bare merge instantiates nothing,
- * so its ring floats in an empty container and its dust is other cells'
- * torches. Drawing the spokes short and stopping them at the border would be
- * a tidier picture of a circuit that does not exist. */
-function drawCellInterior(node, alpha, labelled, toScreen, s) {
-  const interior = node.interior;
-  if (!interior) return;
-  const r = Math.min(7, Math.max(1.2, INNER_NODE_R * s));
-
-  topoCtx.save();
-  topoCtx.globalAlpha = alpha;
-
-  // Signal flow between two primitives of the same cell.
-  topoCtx.strokeStyle = 'rgba(255,120,120,0.65)';
-  topoCtx.lineWidth = 1;
-  for (const [from, to] of interior.edges) {
-    const a = interior.nodes[from], b = interior.nodes[to];
-    const [ax, ay] = toScreen(a.ax, a.ay);
-    const [bx, by] = toScreen(b.ax, b.ay);
-    topoCtx.beginPath();
-    topoCtx.moveTo(ax, ay);
-    topoCtx.lineTo(bx, by);
-    topoCtx.stroke();
-  }
-
-  // Merges: a hollow dashed ring plus a dashed spoke to every node whose dust
-  // meets there, wherever that node lives.
-  for (const junction of interior.junctions) {
-    const [jx, jy] = toScreen(junction.ax, junction.ay);
-    topoCtx.save();
-    topoCtx.setLineDash([3, 2]);
-    topoCtx.strokeStyle = 'rgba(255,59,59,0.45)';
-    topoCtx.lineWidth = 1;
-    for (const id of junction.gate.outputs) {
-      const target = innerPos.get(id);
-      if (!target) continue;
-      const [tx, ty] = toScreen(target.ax, target.ay);
-      topoCtx.beginPath();
-      topoCtx.moveTo(tx, ty);
-      topoCtx.lineTo(jx, jy);
-      topoCtx.stroke();
-    }
-    topoCtx.strokeStyle = TOPO_MERGE_COLOR;
-    topoCtx.lineWidth = 1.4;
-    topoCtx.beginPath();
-    topoCtx.arc(jx, jy, Math.min(9, Math.max(2, INNER_MERGE_R * s)), 0, Math.PI * 2);
-    topoCtx.stroke();
-    topoCtx.restore();
-  }
-
-  // The primitives themselves, in the flat level's own shapes and colours.
-  for (const inner of interior.nodes) {
-    const [ix, iy] = toScreen(inner.ax, inner.ay);
-    const colour = PRIMITIVE_COLOR[inner.primitive] || '#ff00ff';
-    // `drawNodeShape` sets `globalAlpha` itself rather than multiplying into
-    // the one already in effect, so the cell's own alpha has to be handed to
-    // it -- otherwise a dimmed cell's contents stay at full brightness and
-    // Focus dims the boxes but not the dots inside them.
-    drawNodeShape(topoCtx, inner.primitive, ix, iy, r, colour, alpha);
-    // A torch this cell built and another cell reads gets a violet ring: it
-    // is inside this box, but it is not only this box's.
-    if (sharedNodes.has(inner.id)) {
-      topoCtx.strokeStyle = SHARED_COLOR;
-      topoCtx.lineWidth = 1.2;
-      topoCtx.beginPath();
-      topoCtx.arc(ix, iy, r + 2.5, 0, Math.PI * 2);
-      topoCtx.stroke();
-    }
-    if (labelled) {
-      topoCtx.fillStyle = 'rgba(210,210,210,0.6)';
-      topoCtx.font = '8px ui-monospace, monospace';
-      topoCtx.textAlign = 'center';
-      topoCtx.textBaseline = 'top';
-      topoCtx.fillText(`#${inner.id}`, ix, iy + r + 1);
-    }
-  }
-
-  // An empty container is a claim in its own right, so it says so in words
-  // rather than just being blank.
-  if (interior.nodes.length === 0 && labelled) {
-    const [cx, cy] = toScreen(node.x, node.y + node.contentY);
-    topoCtx.fillStyle = 'rgba(255,150,150,0.6)';
-    topoCtx.font = 'italic 9px ui-monospace, monospace';
-    topoCtx.textAlign = 'center';
-    topoCtx.textBaseline = 'middle';
-    topoCtx.fillText('no blocks', cx, cy + 11);
-  }
-  topoCtx.restore();
-}
-
-/** The shared inverters -- `Session::topology()`'s `gate_level.shared_edges`,
- * drawn as the lines they are.
- *
- * These are the only edges in this picture that leave one container and enter
- * another without a gate-level edge to explain them, and they are the reason
- * a nested drawing cannot simply be "each cell's box holds its expansion".
- * `verilog:seven_segment`'s `andnot g3` is drawn holding one torch when its
- * recipe has two steps; the second torch is `!d1`, which `nand g1` built
- * first and which three later cells read. Leaving that out would make three
- * boxes look like they cost less than they do and one look like it feeds
- * nobody -- confidently wrong in exactly the way this tab has been before.
- *
- * Violet and dashed so they never read as gate-level signal flow, and drawn
- * last so a line entering a box is visible over its fill. */
-function drawSharedEdges(egoSet, toScreen) {
-  if (sharedEdges.length === 0) return;
-  topoCtx.save();
-  topoCtx.setLineDash([5, 4]);
-  topoCtx.lineWidth = 1.2;
-  for (const edge of sharedEdges) {
-    const from = innerPos.get(edge.from), to = innerPos.get(edge.to);
-    if (!from || !to) continue;
-    const inFocus = egoSet
-      ? (egoSet.has(cellOfIndex[edge.owner]) && egoSet.has(cellOfIndex[edge.reader]))
-      : true;
-    const [ax, ay] = toScreen(from.ax, from.ay);
-    const [bx, by] = toScreen(to.ax, to.ay);
-    topoCtx.strokeStyle = inFocus ? SHARED_COLOR : 'rgba(199,146,234,0.08)';
-    topoCtx.beginPath();
-    topoCtx.moveTo(ax, ay);
-    topoCtx.lineTo(bx, by);
-    topoCtx.stroke();
-  }
-  topoCtx.restore();
-}
-
-function drawPrimitiveLevel() {
   if (topoNodes.length === 0) return;
 
   const toScreen = (x, y) => [topoView.offsetX + x * topoView.scale, topoView.offsetY + y * topoView.scale];
   const focusValue = topoFocusSelect.value;
-  const focusGate = focusValue === '' ? null : Number(focusValue);
-  const egoSet = focusGate === null ? null : computeEgoSet(focusGate);
+  const focus = focusValue === '' ? null : Number(focusValue);
+  const egoSet = focus === null
+    ? null
+    : (topoLevel === 'gate' ? computeCellEgoSet(focus) : computeEgoSet(focus));
 
-  // Gate badges -- a padded box around each gate's own node(s), labelled
-  // with its output name, so "which node is which gate" is checkable at a
-  // glance without reading positions. A NOR gate is one node, so this draws
-  // as a small square around a single point rather than a hull wrapping
-  // several.
-  //
-  // Merges are skipped here on purpose and drawn further down instead: a
-  // filled, hue-coded badge is exactly the "one more gate body" impression
-  // a wire merge must not give (see this section's doc comment).
+  if (topoLevel === 'gate') drawCellHulls(toScreen, focus, egoSet, 'fill');
+  else drawGateBadges(toScreen, focus);
+
+  drawDustEdges(toScreen, egoSet);
+  drawMergeGlyphs(toScreen, focus, egoSet);
+  drawGraphNodes(toScreen, egoSet);
+  // The hulls again, outline and name only, over the top. A hull's tint
+  // belongs behind the graph -- it is a region, not an object -- but its
+  // outline has to survive a circuit whose wiring covers the whole picture,
+  // and `verilog:seven_segment` at a fit-to-window zoom is exactly that: 103
+  // runs of dust over 31 hulls. An outline painted underneath them is a
+  // cell you cannot see, which is the one thing this level is for.
+  if (topoLevel === 'gate') drawCellHulls(toScreen, focus, egoSet, 'outline');
+}
+
+/** Every edge of the primitive graph, as a run of dust from the primitive
+ * that produces the signal to the primitive that reads it. See "That one
+ * edge is dust, and terminates on a block". */
+function drawDustEdges(toScreen, egoSet) {
+  const paths = activeEdgePaths();
+  const width = dustWidthNow();
+  for (let i = 0; i < topoEdges.length; i++) {
+    const edge = topoEdges[i];
+    const inFocus = egoSet ? (egoSet.has(edge.from) && egoSet.has(edge.to)) : true;
+    const path = (paths[i] || []).map(({ x, y }) => {
+      const [sx, sy] = toScreen(x, y);
+      return { x: sx, y: sy };
+    });
+    strokeDustRun(topoCtx, path, width, inFocus ? 0.85 : 0.05);
+  }
+}
+
+/** Wire merges -- a hollow, dashed dust-red ring where the branches meet,
+ * with a dotted spoke out to every node whose dust actually joins there.
+ *
+ * Everything about this is chosen against a torch: hollow rather than filled
+ * and dashed rather than solid, because there is no block at a junction to
+ * fill in; one shared dust colour rather than a per-gate hue, because a
+ * merge is not a member of the gate palette; a ring rather than a glyph,
+ * because it encloses nothing. The spokes are a dotted hairline for a second
+ * reason too -- they are not edges of the graph (no `Edge` in
+ * `PrimitiveGraph` corresponds to one), they are the annotation that says
+ * "these nodes are one net", so they must not read as signal flow, and now
+ * that signal flow is a heavy run of dust segments they must not read as a
+ * run of blocks either. */
+function drawMergeGlyphs(toScreen, focusGate, egoSet) {
+  const labelled = topoView.scale * activeLayerSpacing() >= NODE_LABEL_PX;
+  for (const junction of activeMerges()) {
+    const gate = junction.gate;
+    const inFocus = egoSet ? gate.outputs.some((id) => egoSet.has(id)) : true;
+    const dim = !inFocus;
+    const [jx, jy] = toScreen(junction.x, junction.y);
+
+    topoCtx.save();
+    for (const id of gate.outputs) {
+      const [sx, sy] = toScreen(...nodeXY(topoNodes[id]));
+      strokeMergeSpoke(topoCtx, sx, sy, jx, jy, `rgba(255,59,59,${dim ? 0.05 : 0.6})`);
+    }
+    topoCtx.globalAlpha = dim ? 0.10 : 0.9;
+    topoCtx.setLineDash([4, 3]); // the ring stays dashed: no block there to fill in
+    topoCtx.strokeStyle = TOPO_MERGE_COLOR;
+    topoCtx.lineWidth = 2;
+    topoCtx.beginPath();
+    topoCtx.arc(jx, jy, TOPO_NODE_RADIUS * TOPO_MERGE_RADIUS, 0, Math.PI * 2);
+    topoCtx.stroke();
+    topoCtx.restore();
+
+    if (topoLevel === 'primitive' && (topoView.scale > 0.35 || focusGate === gate.index)) {
+      topoCtx.fillStyle = dim ? 'rgba(255,150,150,0.12)' : 'rgba(255,180,180,0.9)';
+      topoCtx.font = '11px ui-monospace, monospace';
+      topoCtx.textAlign = 'center';
+      topoCtx.textBaseline = 'bottom';
+      topoCtx.fillText(
+        `${gate.output} (${gateLabel(gate)})`,
+        jx,
+        jy - TOPO_NODE_RADIUS * TOPO_MERGE_RADIUS - 3,
+      );
+      topoCtx.textAlign = 'left';
+    } else if (topoLevel === 'gate' && labelled) {
+      topoCtx.fillStyle = dim ? 'rgba(255,150,150,0.12)' : 'rgba(255,180,180,0.7)';
+      topoCtx.font = '8px ui-monospace, monospace';
+      topoCtx.textAlign = 'center';
+      topoCtx.textBaseline = 'bottom';
+      topoCtx.fillText(gate.output, jx, jy - TOPO_NODE_RADIUS * TOPO_MERGE_RADIUS - 2);
+      topoCtx.textAlign = 'left';
+    }
+  }
+}
+
+/** The primitives, on top of the dust that ends on them, plus the two marks
+ * that are about a node rather than about the graph: the violet ring of a
+ * torch some other cell borrows, and (where there is room) the node's own
+ * `#id` and the index of any cell input landing here. */
+function drawGraphNodes(toScreen, egoSet) {
+  const labelled = topoView.scale * activeLayerSpacing() >= NODE_LABEL_PX;
+  for (const node of topoNodes) {
+    const inFocus = egoSet ? egoSet.has(node.id) : true;
+    const alpha = inFocus ? 1 : 0.12;
+    const [sx, sy] = toScreen(...nodeXY(node));
+    const colour = PRIMITIVE_COLOR[node.primitive] || '#ff00ff';
+    drawNodeShape(topoCtx, node.primitive, sx, sy, TOPO_NODE_RADIUS, colour, alpha);
+
+    if (topoLevel !== 'gate') continue;
+    // A lever or a lamp is a signal entering or leaving the circuit, and its
+    // *name* is the only thing that distinguishes one from another. It is
+    // shown a threshold earlier than a node's `#id` because there are a
+    // handful of them against seventy nodes, and because "which input is
+    // this" is the question a reader arrives with.
+    if (node.provenance.kind !== 'Gate' && topoView.scale * activeLayerSpacing() >= HULL_LABEL_PX) {
+      const isInput = node.provenance.kind === 'PrimaryInput';
+      topoCtx.save();
+      topoCtx.globalAlpha = alpha;
+      topoCtx.fillStyle = 'rgba(235,235,235,0.9)';
+      topoCtx.font = '11px ui-monospace, monospace';
+      topoCtx.textBaseline = 'middle';
+      topoCtx.textAlign = isInput ? 'right' : 'left';
+      topoCtx.fillText(
+        node.provenance.name,
+        sx + (isInput ? -TOPO_NODE_RADIUS - 5 : TOPO_NODE_RADIUS + 5),
+        sy,
+      );
+      topoCtx.restore();
+    }
+    if (sharedNodes.has(node.id)) {
+      // This torch is inside one hull and read from others. The edges saying
+      // so are ordinary dust now; what the ring adds is the credit.
+      topoCtx.save();
+      topoCtx.globalAlpha = alpha;
+      topoCtx.strokeStyle = SHARED_COLOR;
+      topoCtx.lineWidth = 1.3;
+      topoCtx.beginPath();
+      topoCtx.arc(sx, sy, TOPO_NODE_RADIUS + 3, 0, Math.PI * 2);
+      topoCtx.stroke();
+      topoCtx.restore();
+    }
+    if (!labelled) continue;
+    topoCtx.save();
+    topoCtx.globalAlpha = alpha;
+    topoCtx.fillStyle = 'rgba(210,210,210,0.6)';
+    topoCtx.font = '9px ui-monospace, monospace';
+    topoCtx.textAlign = 'center';
+    topoCtx.textBaseline = 'top';
+    topoCtx.fillText(`#${node.id}`, sx, sy + TOPO_NODE_RADIUS + 2);
+    // The input tag: which of the consuming cell's own declared inputs
+    // terminates here. This is the pin number the container version stacked
+    // down a box's edge, put where the edge actually ends. See "Which input
+    // landed where, without pins".
+    const landings = cellLandings.get(node.id);
+    if (landings && landings.length > 0) {
+      topoCtx.fillStyle = 'rgba(255,190,190,0.85)';
+      topoCtx.font = 'bold 9px ui-monospace, monospace';
+      topoCtx.textAlign = 'right';
+      topoCtx.textBaseline = 'bottom';
+      topoCtx.fillText(landings.map((l) => l.pin).join(','), sx - TOPO_NODE_RADIUS - 2, sy - 1);
+    }
+    topoCtx.restore();
+  }
+}
+
+/** How many screen pixels lie between two adjacent layers right now -- the
+ * unit every level-of-detail threshold in this view is measured in, since
+ * legibility depends on how far apart things are drawn and not on the zoom
+ * number. See "Scale". */
+function activeLayerSpacing() {
+  return topoLevel === 'gate' ? GROUP_LAYER_SPACING : TOPO_LAYER_SPACING;
+}
+
+/** The cells, as hulls round the primitives that belong to them.
+ *
+ * Drawn first, behind everything, because a hull is a background: it is not
+ * a thing signal passes through, it is a region of the picture with a name.
+ * Translucent fill and a stroked outline in the cell's own hue, so where two
+ * hulls overlap both outlines survive and the overlap is visibly an overlap
+ * rather than a nesting. See "What a hull must not be allowed to imply". */
+function drawCellHulls(toScreen, focusCell, egoSet, pass) {
+  const labelled = topoView.scale * activeLayerSpacing() >= HULL_LABEL_PX;
+  for (const hull of cellHulls) {
+    const inFocus = focusCell === null ? true : hull.cell.index === focusCell
+      || (hull.cell.nodes || []).some((id) => egoSet && egoSet.has(id));
+    const alpha = inFocus ? 1 : 0.18;
+    topoCtx.save();
+    topoCtx.globalAlpha = alpha;
+    topoCtx.beginPath();
+    hull.points.forEach((p, i) => {
+      const [sx, sy] = toScreen(p.x, p.y);
+      if (i === 0) topoCtx.moveTo(sx, sy); else topoCtx.lineTo(sx, sy);
+    });
+    topoCtx.closePath();
+    if (pass === 'fill') {
+      topoCtx.fillStyle = `hsla(${hull.hue}, 60%, 55%, 0.12)`;
+      topoCtx.fill();
+      topoCtx.restore();
+      continue;
+    }
+    topoCtx.strokeStyle = `hsla(${hull.hue}, 75%, 70%, ${hull.cell.index === focusCell ? 0.95 : 0.8})`;
+    topoCtx.lineWidth = hull.cell.index === focusCell ? 2.2 : 1.4;
+    topoCtx.stroke();
+
+    if (labelled || hull.cell.index === focusCell) {
+      // Inside the shape, at the centroid of what it wraps, rather than
+      // floating above it: a hull is often a long thin wedge, and a label
+      // sitting over one end of one wedge is a label sitting over the
+      // neighbouring wedge too. A centroid belongs to exactly one hull, and
+      // for a wedge it is empty space. A one-member cell has no empty space,
+      // so its label goes above its single node instead.
+      const spread = hull.points.reduce((m, p) => Math.max(m, Math.hypot(p.x - hull.points[0].x, p.y - hull.points[0].y)), 0);
+      let cx = 0, cy = 0, minY = Infinity;
+      for (const p of hull.points) { cx += p.x; cy += p.y; minY = Math.min(minY, p.y); }
+      cx /= hull.points.length;
+      const [lx, ly] = spread > HULL_PAD * 3
+        ? toScreen(cx, cy / hull.points.length)
+        : toScreen(cx, minY - 3);
+      const text = `${hull.cell.kind} ${hull.cell.output}`;
+      topoCtx.font = 'bold 11px ui-monospace, monospace';
+      topoCtx.textAlign = 'center';
+      topoCtx.textBaseline = 'middle';
+      // A plate under the text: the centroid of a wedge is empty of nodes but
+      // not necessarily of the dust passing through it.
+      const half = topoCtx.measureText(text).width / 2 + 3;
+      topoCtx.fillStyle = 'rgba(16,17,19,0.82)';
+      topoCtx.fillRect(lx - half, ly - 7, half * 2, 14);
+      topoCtx.fillStyle = `hsl(${hull.hue}, 70%, 76%)`;
+      topoCtx.fillText(text, lx, ly);
+    }
+    topoCtx.restore();
+  }
+}
+
+/** The flat level's gate badges -- a padded box around each gate's own
+ * node(s), labelled with its output name, so "which node is which gate" is
+ * checkable at a glance without reading positions. A NOR gate is one node,
+ * so this draws as a small square around a single point rather than a hull
+ * wrapping several.
+ *
+ * Merges are skipped here on purpose and drawn as rings instead: a filled,
+ * hue-coded badge is exactly the "one more gate body" impression a wire
+ * merge must not give (see "A wire merge is not a gate body"). */
+function drawGateBadges(toScreen, focusGate) {
   for (const gate of topoGates) {
     if (gate.nodes.length === 0 || isMergeGate(gate)) continue;
     const dim = focusGate !== null && gate.index !== focusGate;
@@ -3031,87 +3369,6 @@ function drawPrimitiveLevel() {
       topoCtx.textBaseline = 'bottom';
       topoCtx.fillText(`${gate.output} (${gateLabel(gate)})`, sx0 + 2, sy0 - 2);
     }
-  }
-
-  // Edges -- one kind, one style: solid, coloured the same as dust used to
-  // be, since every edge here is exactly what a dust path once implied
-  // ("realisation is not decided at this layer" -- see the edge legend).
-  // Drawn as a polyline through `topoEdgePaths`, not a straight line
-  // between endpoints: a long edge's path already runs through its own
-  // dummy-chain coordinates (this section's doc comment, step 2), so this
-  // is where that chain actually turns into a bend on screen instead of a
-  // line cutting through whatever real node sits between the two layers.
-  for (let i = 0; i < topoEdges.length; i++) {
-    const edge = topoEdges[i];
-    const inFocus = egoSet ? (egoSet.has(edge.from) && egoSet.has(edge.to)) : true;
-    const path = topoEdgePaths[i];
-    topoCtx.beginPath();
-    for (let j = 0; j < path.length; j++) {
-      const [sx, sy] = toScreen(path[j].x, path[j].y);
-      if (j === 0) topoCtx.moveTo(sx, sy); else topoCtx.lineTo(sx, sy);
-    }
-    topoCtx.strokeStyle = `rgba(255,59,59,${inFocus ? 0.55 : 0.04})`;
-    topoCtx.lineWidth = 1.6;
-    topoCtx.stroke();
-  }
-
-  // Wire merges -- a hollow, dashed dust-red ring where the branches meet,
-  // with a dashed spoke out to every node whose dust actually joins there.
-  //
-  // Everything about this is chosen against the NOR badges above: hollow
-  // rather than filled and dashed rather than solid, because there is no
-  // block at a junction to fill in; one shared dust colour rather than a
-  // per-gate hue, because a merge is not a member of the gate palette; a
-  // ring rather than a rounded box, because it encloses nothing. The spokes
-  // are dashed for a second reason too -- they are not edges of the graph
-  // (no `Edge` in `PrimitiveGraph` corresponds to one), they are the
-  // annotation that says "these nodes are one net", so they must not read as
-  // signal flow.
-  for (const junction of topoMerges) {
-    const gate = junction.gate;
-    const dim = focusGate !== null && gate.index !== focusGate;
-    const alpha = dim ? 0.10 : 0.9;
-    const [jx, jy] = toScreen(junction.x, junction.y);
-
-    topoCtx.save();
-    topoCtx.setLineDash([4, 3]);
-    topoCtx.strokeStyle = `rgba(255,59,59,${dim ? 0.05 : 0.5})`;
-    topoCtx.lineWidth = 1.2;
-    for (const id of gate.outputs) {
-      const [sx, sy] = toScreen(topoNodes[id].x, topoNodes[id].y);
-      topoCtx.beginPath();
-      topoCtx.moveTo(sx, sy);
-      topoCtx.lineTo(jx, jy);
-      topoCtx.stroke();
-    }
-    topoCtx.globalAlpha = alpha;
-    topoCtx.strokeStyle = TOPO_MERGE_COLOR;
-    topoCtx.lineWidth = 2;
-    topoCtx.beginPath();
-    topoCtx.arc(jx, jy, TOPO_NODE_RADIUS * TOPO_MERGE_RADIUS, 0, Math.PI * 2);
-    topoCtx.stroke();
-    topoCtx.restore();
-
-    if (topoView.scale > 0.35 || focusGate === gate.index) {
-      topoCtx.fillStyle = dim ? 'rgba(255,150,150,0.12)' : 'rgba(255,180,180,0.9)';
-      topoCtx.font = '11px ui-monospace, monospace';
-      topoCtx.textAlign = 'center';
-      topoCtx.textBaseline = 'bottom';
-      topoCtx.fillText(
-        `${gate.output} (${gateLabel(gate)})`,
-        jx,
-        jy - TOPO_NODE_RADIUS * TOPO_MERGE_RADIUS - 3,
-      );
-      topoCtx.textAlign = 'left';
-    }
-  }
-
-  // Nodes, on top of edges.
-  for (const node of topoNodes) {
-    const inFocus = egoSet ? egoSet.has(node.id) : true;
-    const [sx, sy] = toScreen(node.x, node.y);
-    const colour = PRIMITIVE_COLOR[node.primitive] || '#ff00ff';
-    drawNodeShape(topoCtx, node.primitive, sx, sy, TOPO_NODE_RADIUS, colour, inFocus ? 1 : 0.12);
   }
 }
 
@@ -3156,19 +3413,24 @@ topoCanvas.addEventListener('wheel', (e) => {
 // edges that really land on this merge's consumers -- is the point: a
 // picture that is confidently wrong about which gates a junction joins is
 // worse than one that is merely unhelpful.
+//
+// Both levels hit-test the same objects, because both draw the same graph;
+// only the coordinates differ (`nodeXY`). What the grouped level adds to the
+// readout is what its annotations claim: which cell owns this primitive,
+// which of that cell's declared inputs terminate here, and who borrows it.
 topoCanvas.addEventListener('mousemove', (e) => {
   const rect = topoCanvas.getBoundingClientRect();
   const mx = e.clientX - rect.left, my = e.clientY - rect.top;
-  if (topoLevel === 'gate') { gateLevelHover(mx, my); return; }
   if (topoNodes.length === 0) return;
   let best = null, bestDist = 10; // px threshold
   for (const node of topoNodes) {
-    const sx = topoView.offsetX + node.x * topoView.scale;
-    const sy = topoView.offsetY + node.y * topoView.scale;
+    const [gx, gy] = nodeXY(node);
+    const sx = topoView.offsetX + gx * topoView.scale;
+    const sy = topoView.offsetY + gy * topoView.scale;
     const d = Math.hypot(sx - mx, sy - my);
     if (d < bestDist) { bestDist = d; best = { kind: 'node', node }; }
   }
-  for (const junction of topoMerges) {
+  for (const junction of activeMerges()) {
     const sx = topoView.offsetX + junction.x * topoView.scale;
     const sy = topoView.offsetY + junction.y * topoView.scale;
     const d = Math.hypot(sx - mx, sy - my);
@@ -3188,75 +3450,50 @@ topoCanvas.addEventListener('mousemove', (e) => {
     const node = best.node;
     const gate = node.provenance.kind === 'Gate' ? topoGates[node.provenance.gate] : null;
     const source = gate ? gateSource(gate) : null;
+    // `source` names the cell too, but only by name -- `cellReadout` says the
+    // same thing and more, so at the grouped level it would be the same fact
+    // twice in one line.
     topoHoverReadout.textContent = `#${node.id} -- ${node.primitive} -- ${provenanceDescription(node)}`
-      + (source ? ` -- part of ${source}` : '');
+      + (source && topoLevel !== 'gate' ? ` -- part of ${source}` : '')
+      + (topoLevel === 'gate' ? cellReadout(node) : '');
   }
 });
 topoCanvas.addEventListener('mouseleave', () => { topoHoverReadout.textContent = ' '; });
 
-/** Hover at the gate level. Hit-testing is against the box, not a radius:
- * a cell is a rectangle on screen and hovering its label should name it.
+/** What the grouped level adds to one primitive's hover readout: the cell
+ * whose hull it is in, which of that cell's declared inputs terminate on it,
+ * and which other cells read it without owning it.
  *
- * The readout spells out the cell's inputs **in pin order, numbered**, which
- * is the same claim the picture makes with its stacked ports -- so a reader
- * who suspects the drawing can read the assertion in text and check it
- * against `src/circuits/baked/<circuit>.netlist`, whose `gate <kind> <out>
- * <- <inputs>` lines use this exact vocabulary. A picture that is
- * confidently wrong about which signal reaches which pin is worse than one
- * that is merely unhelpful, and this is how it stays checkable. */
-function gateLevelHover(mx, my) {
-  if (cellNodes.length === 0) return;
-  const s = topoView.scale;
-
-  // A nested primitive first: it is inside a box, so hit-testing the box
-  // first would make every dot in the picture unreachable. This is the
-  // readout that makes a box checkable node by node against
-  // `Session::topology()`'s `cells[i].nodes`.
-  for (const [id, inner] of innerPos) {
-    const sx = topoView.offsetX + inner.ax * s, sy = topoView.offsetY + inner.ay * s;
-    if (Math.hypot(mx - sx, my - sy) > 7) continue;
-    const owner = topoCells.find((cell) => cell.nodes.includes(id));
-    const readers = sharedEdges
-      .filter((edge) => edge.from === id)
-      .map((edge) => topoCells[edge.reader].output);
-    topoHoverReadout.textContent =
-      `#${id} -- ${inner.primitive}`
-      + (owner ? ` -- inside ${owner.output} (${owner.kind})` : '')
-      + (readers.length > 0
-        ? ` -- shared: also read by ${[...new Set(readers)].join(', ')}`
-        : '');
-    return;
+ * The landings are spelled out **by index and by signal name**, which is the
+ * same claim the picture makes with the little tag beside the node -- so a
+ * reader who suspects the drawing can read the assertion in text and check
+ * it against `src/circuits/baked/<circuit>.netlist`, whose
+ * `gate <kind> <out> <- <inputs>` lines use this exact order. `andnot` and
+ * `mux` are not symmetric in their inputs, and this is where that stays
+ * checkable now that there are no pins to count. */
+function cellReadout(node) {
+  const parts = [];
+  const owner = cellOfNode.has(node.id)
+    ? topoCells.find((cell) => cell.index === cellOfNode.get(node.id))
+    : null;
+  if (owner) {
+    parts.push(`in ${owner.kind} ${owner.output}`
+      + ` (${owner.nodes.length} primitive${owner.nodes.length === 1 ? '' : 's'}`
+      + (owner.realisable
+        ? ', realisable directly)'
+        : `, from ${owner.lowered.length} torch${owner.lowered.length === 1 ? '' : 'es'} and merges)`));
   }
-
-  let hit = null;
-  for (const node of cellNodes) {
-    const sx = topoView.offsetX + node.x * s, sy = topoView.offsetY + node.y * s;
-    if (node.role === 'cell') {
-      const hw = (node.w / 2) * s, hh = (node.h / 2) * s;
-      if (Math.abs(mx - sx) <= hw && Math.abs(my - sy) <= hh) { hit = node; break; }
-    } else if (Math.hypot(mx - sx, my - sy) <= 9) {
-      hit = node; break;
-    }
+  for (const landing of cellLandings.get(node.id) || []) {
+    const cell = topoCells.find((c) => c.index === landing.cell);
+    parts.push(`input ${landing.pin} (${landing.name}) of ${cell ? cell.kind : '?'} `
+      + `${cell ? cell.output : ''} lands here`
+      + (landing.via === null || landing.via === undefined ? '' : `, via shared torch #${landing.via}`));
   }
-  if (!hit) { topoHoverReadout.textContent = ' '; return; }
-  if (hit.role !== 'cell') {
-    topoHoverReadout.textContent = `primary ${hit.role} "${hit.label}"`;
-    return;
-  }
-  const cell = hit.cell;
-  const pins = cell.inputs
-    .map((input, i) => `${i}:${input.name}${input.cell === null || input.cell === undefined ? ' (input)' : ''}`)
-    .join(', ');
-  const borrowed = [...new Set(
-    sharedEdges.filter((edge) => edge.reader === cell.index).map((edge) => topoCells[edge.owner].output),
-  )];
-  topoHoverReadout.textContent =
-    `${cell.output} = ${cell.kind}(${pins}) -- layer ${cell.layer} -- `
-    + (cell.realisable
-      ? `realisable directly (${cell.kind === 'merge' ? 'a dust junction: no torch, no support' : 'one torch on its support'}), `
-      : `lowers into ${cell.lowered.length} torches and merges, `)
-    + `${cell.nodes.length} primitive${cell.nodes.length === 1 ? '' : 's'} in this box`
-    + (borrowed.length > 0 ? ` -- plus a shared torch from ${borrowed.join(', ')}` : '');
+  const readers = [...new Set(sharedEdges
+    .filter((edge) => edge.from === node.id)
+    .map((edge) => topoCells[edge.reader].output))];
+  if (readers.length > 0) parts.push(`shared: also read by ${readers.join(', ')}`);
+  return parts.length === 0 ? '' : ` -- ${parts.join(' -- ')}`;
 }
 
 topoFocusSelect.addEventListener('change', () => {
@@ -3288,19 +3525,30 @@ topoLevelSelect.addEventListener('change', () => {
 
 // This page is a module, so nothing in it is reachable from a console by
 // default. `window.reda` is the deliberate exception, and it exists for one
-// reason: this tab has shipped three pictures that were confidently wrong,
+// reason: this tab has shipped four pictures that were confidently wrong,
 // every time because the drawing was checked against its author's intent
-// rather than against the data. A reader who suspects a box is holding the
-// wrong primitives can now ask, without instrumenting anything:
+// rather than against the data. A reader who suspects a hull is wrapping the
+// wrong primitives can ask, without instrumenting anything:
 //
 //     reda.topology().gate_level.cells.find(c => c.kind === 'mux').nodes
-//     reda.cells().find(c => c.label === 'g20').interior.nodes.map(n => n.id)
+//     reda.hulls().find(h => h.output === 'g20').members
 //
 // -- the first is what `Session::topology()` claims, the second is what is
-// actually on screen, and they have to be the same list.
+// actually on screen, and they have to be the same list. `landings()` is the
+// same check for the other claim this level makes: which of a cell's
+// declared inputs the picture says terminates on which primitive.
 window.reda = {
   topology: () => session.topology(),
-  cells: () => cellNodes,
+  hulls: () => cellHulls.map((hull) => ({
+    index: hull.cell.index,
+    kind: hull.cell.kind,
+    output: hull.cell.output,
+    members: hull.members.map((node) => node.id),
+    junctions: hull.junctions.map((junction) => junction.gate.output),
+    points: hull.points,
+  })),
+  landings: () => [...cellLandings].map(([node, list]) => ({ node, list })),
+  nodes: () => topoNodes,
   shared: () => sharedEdges,
   view: () => topoView,
 };
