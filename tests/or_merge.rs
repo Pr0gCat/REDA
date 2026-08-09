@@ -1,4 +1,4 @@
-//! `Gate::is_merge` end to end: `compile()` actually emitting a wire-merge OR,
+//! `Gate::is_merge()` end to end: `compile()` actually emitting a wire-merge OR,
 //! for both branches of the isolation rule, verified against the real
 //! `Simulator` -- not just against the invariants that permit the geometry.
 //!
@@ -58,7 +58,7 @@ impl GateNet {
         self.nor(&[x])
     }
 
-    /// A declared wire-merge OR: `Gate::is_merge = true`, realised (once
+    /// A declared wire-merge OR (`GateKind::Or`), realised (once
     /// `compile` sees it) as a bare join or a per-branch isolated one,
     /// never as a torch.
     fn merge(&mut self, inputs: &[&str]) -> String {
@@ -122,7 +122,7 @@ fn set_lever(simulator: &mut Simulator, position: (i32, i32, i32), on: bool) -> 
 
 #[derive(Debug, Clone, Copy)]
 struct CellCost {
-    /// Real, torch-based gates only -- `Gate::is_merge` entries are not
+    /// Real, torch-based gates only -- merge entries are not
     /// counted, because they place no gate body at all (see
     /// `compile::place_merge_gate`'s own doc comment). This is the number
     /// that should read 0 for a bare two-input OR, matching the referenced

@@ -24,7 +24,7 @@ use crate::compile::Gate;
 ///   serving every gate-level cell that wants one.
 /// - `nor`: the primitive operation -- one new NOR gate, at most 3 inputs,
 ///   matching `place_nor_gate`'s hardware limit.
-/// - `merge`: a free wire-merge OR (`Gate::is_merge`), 2 or 3 inputs.
+/// - `merge`: a free wire-merge OR (`GateKind::Or`), 2 or 3 inputs.
 /// - `and_reduce` / `or_reduce`: fold a signal list of any length into a
 ///   tree of fan-in <= 3 gates computing their AND / OR.
 ///
