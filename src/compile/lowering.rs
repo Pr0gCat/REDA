@@ -142,6 +142,17 @@ pub fn lower_with_provenance(netlist: &Netlist) -> Result<(Netlist, Vec<usize>),
         let output_step = expansion.output_step();
         let mut built: Vec<String> = Vec::with_capacity(expansion.steps.len());
 
+        // Most signed input rails are resolved at their first use. A recipe
+        // can explicitly preserve an earlier established inverter prefix,
+        // such as XOR/XNOR's `!a`, `!b` pair before either product term.
+        let before = builder.len();
+        for &pin in &expansion.pre_materialize_negative_inputs {
+            builder.not(&gate.inputs[pin]);
+        }
+        for _ in before..builder.len() {
+            provenance.push(source);
+        }
+
         for (index, step) in expansion.steps.iter().enumerate() {
             // Resolving a negative external rail can create its shared
             // inverter, so capture provenance before reading operands.
@@ -309,6 +320,25 @@ mod tests {
         let once = lower(&original).expect("lowers");
         let twice = lower(&once).expect("lowers again");
         assert_eq!(once, twice);
+    }
+
+    #[test]
+    fn lowering_xor_and_xnor_keep_the_baseline_inverter_sequence_and_names() {
+        for (kind, output_kind) in [(GateKind::Xor, GateKind::Or(2)), (GateKind::Xnor, GateKind::Nor(2))] {
+            let original = netlist(&["a", "b"], &["y"], vec![gate(kind, "y", &["a", "b"])]);
+            let expected = netlist(
+                &["a", "b"],
+                &["y"],
+                vec![
+                    gate(GateKind::Nor(1), "n0", &["a"]),
+                    gate(GateKind::Nor(1), "n1", &["b"]),
+                    gate(GateKind::Nor(2), "n2", &["n0", "b"]),
+                    gate(GateKind::Nor(2), "n3", &["n1", "a"]),
+                    gate(output_kind, "y", &["n2", "n3"]),
+                ],
+            );
+            assert_eq!(lower(&original).expect("lowers"), expected, "{kind:?}");
+        }
     }
 
     /// Every gate-level kind, lowered on its own, must compute its own

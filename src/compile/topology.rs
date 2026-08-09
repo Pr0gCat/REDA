@@ -41,7 +41,7 @@
 //! of input-landing nodes) is built to hold exactly those without changing
 //! again -- see its own doc comment.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 // ---------------------------------------------------------------------
 // The primitive vocabulary
@@ -143,13 +143,11 @@ pub enum Primitive {
 /// carries none.
 ///
 /// `Buf` is not logic at all -- it is what a Yosys `$_BUF_` cell, and a bare
-/// `assign out = in;` with no cell in between, realises as: two chained
-/// `Nor(1)` torches, `NOT(NOT(x)) == x`. It is a gate-level kind like the
-/// rest, with its own [`Expansion`]; it also still has a [`Template`], since
-/// two chained torches are exactly the sort of not-one-to-one entry
-/// [`Template`] exists to hold, and
-/// `expansion_for_buf_agrees_with_the_two_torch_template` keeps the two
-/// statements of that one fact from drifting.
+/// `assign out = in;` with no cell in between, realises as two chained
+/// `Nor(1)` torches, `NOT(NOT(x)) == x`. Its signed recipe asks for `!x` and
+/// applies the second torch; lowering an all-positive source materialises
+/// that requested input rail with the first torch. It is a gate-level kind
+/// like the rest, with its own [`Expansion`] and [`Template`].
 ///
 /// `Or(arity)` is the `GateKind` this library realises with **no
 /// primitive at all**: a wire-merge OR needs no torch, no support, no gate
@@ -782,6 +780,11 @@ pub enum Step {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Expansion {
     pub steps: Vec<Step>,
+    /// Negative external rails this recipe's lowering must materialise before
+    /// it builds any step. Most recipes resolve rails at their first use;
+    /// XOR/XNOR need both input inverters first to retain the established
+    /// lowered gate sequence and generated names.
+    pub(crate) pre_materialize_negative_inputs: Vec<usize>,
 }
 
 impl Expansion {
@@ -833,6 +836,23 @@ impl Expansion {
                     }
                 }
             }
+        }
+        for (index, &pin) in self.pre_materialize_negative_inputs.iter().enumerate() {
+            assert!(pin < kind.arity(), "{kind:?}: pre-materialized input {pin} is out of range");
+            assert!(
+                !self.pre_materialize_negative_inputs[..index].contains(&pin),
+                "{kind:?}: pre-materialized input {pin} appears more than once"
+            );
+            assert!(
+                self.steps.iter().flat_map(Self::operands).any(|operand| {
+                    matches!(
+                        operand,
+                        Operand::Input { pin: required_pin, polarity: SignalPolarity::Negative }
+                            if *required_pin == pin
+                    )
+                }),
+                "{kind:?}: pre-materialized input {pin} is not required as a negative rail"
+            );
         }
     }
 
@@ -969,7 +989,11 @@ fn positive_expansion_for(kind: GateKind) -> Expansion {
         ],
     };
 
-    Expansion { steps }
+    let pre_materialize_negative_inputs = match kind {
+        GateKind::Xor | GateKind::Xnor => vec![0, 1],
+        _ => Vec::new(),
+    };
+    Expansion { steps, pre_materialize_negative_inputs }
 }
 
 fn negative_expansion_for(kind: GateKind) -> Expansion {
@@ -1034,7 +1058,11 @@ fn negative_expansion_for(kind: GateKind) -> Expansion {
         ],
     };
 
-    Expansion { steps }
+    let pre_materialize_negative_inputs = match kind {
+        GateKind::Xor | GateKind::Xnor => vec![0, 1],
+        _ => Vec::new(),
+    };
+    Expansion { steps, pre_materialize_negative_inputs }
 }
 
 // ---------------------------------------------------------------------
@@ -1185,7 +1213,21 @@ pub fn expansion_cost(kind: GateKind) -> RealisationCost {
 pub fn expansion_cost_for_polarity(kind: GateKind, polarity: SignalPolarity) -> RealisationCost {
     let expansion = expansion_for_polarity(kind, polarity);
 
-    let mut area = 0u32;
+    // The source representation carries only positive physical rails today,
+    // so each distinct negative external operand requires the same cached
+    // NOR1 `lowering` materialises. Count it once per pin for this gate; a
+    // whole circuit can share that inverter across gates, as documented
+    // above.
+    let negative_inputs: BTreeSet<usize> = expansion
+        .steps
+        .iter()
+        .flat_map(Expansion::operands)
+        .filter_map(|operand| match *operand {
+            Operand::Input { pin, polarity: SignalPolarity::Negative } => Some(pin),
+            Operand::Input { .. } | Operand::Step(_) => None,
+        })
+        .collect();
+    let mut area = negative_inputs.len() as u32 * nor_footprint_area(1);
     // Torch depth of each step's result: how many torches stand on the
     // longest path from any input to it. A merge adds none.
     let mut depth: Vec<u32> = Vec::with_capacity(expansion.steps.len());
@@ -1195,7 +1237,8 @@ pub fn expansion_cost_for_polarity(kind: GateKind, polarity: SignalPolarity) -> 
         let upstream = operands
             .iter()
             .map(|operand| match *operand {
-                Operand::Input { .. } => 0,
+                Operand::Input { polarity: SignalPolarity::Positive, .. } => 0,
+                Operand::Input { polarity: SignalPolarity::Negative, .. } => 1,
                 Operand::Step(s) => depth[s],
             })
             .max()
@@ -1749,6 +1792,30 @@ mod tests {
         );
     }
 
+    #[test]
+    fn positive_buf_cost_includes_its_required_negative_input_rail() {
+        let torch = crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS;
+        assert_eq!(
+            expansion_cost(GateKind::Buf),
+            RealisationCost {
+                area: 2 * nor_footprint_area(1),
+                delay_game_ticks: 2 * torch,
+            }
+        );
+    }
+
+    #[test]
+    fn positive_and_cost_counts_each_required_negative_input_rail() {
+        let torch = crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS;
+        assert_eq!(
+            expansion_cost(GateKind::And),
+            RealisationCost {
+                area: 2 * nor_footprint_area(1) + nor_footprint_area(2),
+                delay_game_ticks: 2 * torch,
+            }
+        );
+    }
+
     /// Wherever both cost models apply -- the kinds with a `Library` entry
     /// *and* an expansion -- they must agree. This is the check that used to
     /// hold `redstone_nor.genlib`'s hand-written `GATE` numbers to
@@ -1777,20 +1844,20 @@ mod tests {
     fn finishing_in_a_merge_costs_no_gate_delay_and_finishing_in_a_torch_costs_one() {
         let torch = crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS;
 
-        // NAND and AND consume the same negative rails; NAND finishes in a
+        // NAND and AND share their two input inverters; NAND finishes in a
         // merge while AND finishes in a torch.
-        assert_eq!(expansion_cost(GateKind::Nand).delay_game_ticks, 0);
-        assert_eq!(expansion_cost(GateKind::And).delay_game_ticks, torch);
+        assert_eq!(expansion_cost(GateKind::Nand).delay_game_ticks, torch);
+        assert_eq!(expansion_cost(GateKind::And).delay_game_ticks, 2 * torch);
 
-        // XOR and XNOR are the same two product torches; XOR joins them with
-        // a merge, XNOR with a torch.
-        assert_eq!(expansion_cost(GateKind::Xor).delay_game_ticks, torch);
-        assert_eq!(expansion_cost(GateKind::Xnor).delay_game_ticks, 2 * torch);
+        // XOR and XNOR are the same four torches; XOR joins them with a
+        // merge, XNOR with a torch.
+        assert_eq!(expansion_cost(GateKind::Xor).delay_game_ticks, 2 * torch);
+        assert_eq!(expansion_cost(GateKind::Xnor).delay_game_ticks, 3 * torch);
 
         // OAI4 is four inputs for two torch levels, because De Morgan turns
         // its whole output stage into a merge.
         assert_eq!(expansion_cost(GateKind::Oai4).delay_game_ticks, torch);
-        assert_eq!(expansion_cost(GateKind::Aoi4).delay_game_ticks, 2 * torch);
+        assert_eq!(expansion_cost(GateKind::Aoi4).delay_game_ticks, 3 * torch);
     }
 
     #[test]
