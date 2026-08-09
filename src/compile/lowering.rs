@@ -532,11 +532,11 @@ mod tests {
         assert_eq!(once, twice);
     }
 
-    /// `lower` is the source-compatible entry point: selecting every gate's
-    /// positive rail must preserve its complete lowered representation, not
-    /// merely its truth table.
+    /// Both all-positive entry points must retain the established complete
+    /// lowering: every generated name, declared output and gate order is an
+    /// observable compatibility contract.
     #[test]
-    fn all_positive_assignment_is_identical_to_lower() {
+    fn all_positive_assignment_and_lower_match_the_nand_xor_snapshot() {
         let source = netlist(
             &["a", "b", "c"],
             &["y"],
@@ -546,10 +546,28 @@ mod tests {
             ],
         );
         let assignment: PolarityAssignment = vec![SignalPolarity::Positive; source.gates.len()];
+        let expected = netlist(
+            &["a", "b", "c"],
+            &["y"],
+            vec![
+                gate(GateKind::Nor(1), "n_0", &["a"]),
+                gate(GateKind::Nor(1), "n_1", &["b"]),
+                gate(GateKind::Or(2), "n0", &["n_0", "n_1"]),
+                gate(GateKind::Nor(1), "n_2", &["n0"]),
+                gate(GateKind::Nor(1), "n_3", &["c"]),
+                gate(GateKind::Nor(2), "n_4", &["n_2", "c"]),
+                gate(GateKind::Nor(2), "n_5", &["n_3", "n0"]),
+                gate(GateKind::Or(2), "y", &["n_4", "n_5"]),
+            ],
+        );
 
         assert_eq!(
             lower_with_assignment(&source, &assignment).expect("all-positive assignment lowers"),
+            expected,
+        );
+        assert_eq!(
             lower(&source).expect("compatibility wrapper lowers"),
+            expected,
         );
     }
 
@@ -561,7 +579,18 @@ mod tests {
         let source = netlist(&["a", "b"], &["y"], vec![gate(GateKind::And, "y", &["a", "b"])]);
         let lowered = lower_with_assignment(&source, &[SignalPolarity::Negative]).expect("lowers");
 
-        assert!(evaluate(&lowered, &[("a", true), ("b", true)])["y"]);
+        for (a, b, expected) in [
+            (false, false, false),
+            (false, true, false),
+            (true, false, false),
+            (true, true, true),
+        ] {
+            assert_eq!(
+                evaluate(&lowered, &[("a", a), ("b", b)])["y"],
+                expected,
+                "a={a}, b={b}"
+            );
+        }
         assert!(
             lowered.gates.iter().any(|gate| gate.output == "y" && gate.kind == GateKind::Nor(1)),
             "the output port is materialised as the positive rail"
@@ -572,9 +601,9 @@ mod tests {
         );
     }
 
-    /// Two consumers requesting the same absent inverse of an interior
-    /// logical signal must share the existing builder cache, just as primary
-    /// input inversions already do.
+    /// Two negatively assigned consumers request `!x` through the physical
+    /// rail map. Their common missing rail must be materialised once through
+    /// the existing builder cache, not once per consumer.
     #[test]
     fn shared_requested_inverse_of_an_interior_signal_materializes_only_once() {
         let source = netlist(
@@ -586,7 +615,15 @@ mod tests {
                 gate(GateKind::And, "z", &["x", "c"]),
             ],
         );
-        let lowered = lower_with_assignment(&source, &[SignalPolarity::Positive; 3]).expect("lowers");
+        let lowered = lower_with_assignment(
+            &source,
+            &[
+                SignalPolarity::Positive,
+                SignalPolarity::Negative,
+                SignalPolarity::Negative,
+            ],
+        )
+        .expect("mixed assignment lowers");
 
         assert_eq!(
             lowered
@@ -610,16 +647,22 @@ mod tests {
     }
 
     #[test]
-    fn negative_assignment_is_rejected_for_realisable_source_gates() {
-        let source = netlist(&["a"], &["y"], vec![gate(GateKind::Nor(1), "y", &["a"])]);
+    fn negative_assignment_is_rejected_for_every_realisable_source_kind() {
+        for (kind, inputs) in [
+            (GateKind::Nor(1), vec!["a"]),
+            (GateKind::Or(2), vec!["a", "b"]),
+        ] {
+            let source = netlist(&["a", "b"], &["y"], vec![gate(kind, "y", &inputs)]);
 
-        assert_eq!(
-            lower_with_assignment(&source, &[SignalPolarity::Negative]),
-            Err(LowerError::UnsupportedAssignedPolarity {
-                gate: "y".to_string(),
-                kind: GateKind::Nor(1),
-            })
-        );
+            assert_eq!(
+                lower_with_assignment(&source, &[SignalPolarity::Negative]),
+                Err(LowerError::UnsupportedAssignedPolarity {
+                    gate: "y".to_string(),
+                    kind,
+                }),
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]
