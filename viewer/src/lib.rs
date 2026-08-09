@@ -6,10 +6,15 @@
 //! `reda::redstone::simulator::Simulator` -- if the page shows a signal, it is
 //! reading the same simulator state the project's 193 tests run against.
 //!
-//! **No filesystem.** Circuits come only from `reda::circuits`, which are
-//! pure Rust netlist generators. Nothing here calls `reda::formats` (the
-//! `.litematic` reader/writer needs `std::fs`, which compiles for
-//! `wasm32-unknown-unknown` and then fails at runtime).
+//! **No filesystem, and no subprocess.** Circuits come only from
+//! `reda::circuits`: the hand-written generators, which are pure Rust, plus
+//! the Verilog-derived ones, which reach this crate as `reda::circuits::
+//! verilog`'s *baked* netlists rather than by running Yosys (see
+//! [`CIRCUITS`] below, and `VerilogCircuit::baked_netlist` for why a baked
+//! copy exists and what keeps it honest). Nothing here calls `reda::formats`
+//! (the `.litematic` reader/writer needs `std::fs`, which compiles for
+//! `wasm32-unknown-unknown` and then fails at runtime), and nothing here
+//! spawns a process.
 //!
 //! # Testing a `JsValue`-returning method natively
 //!
@@ -27,7 +32,7 @@
 
 use std::collections::{BTreeMap, HashMap};
 
-use reda::circuits::{and4, full_adder, seven_segment};
+use reda::circuits::{and4, full_adder, seven_segment, verilog};
 use reda::compile::primitive_graph::{self, PrimitiveGraph, Provenance};
 use reda::compile::topology::{Library, Primitive as TopoPrimitive, TemplateNode};
 use reda::compile::{compile, Netlist};
@@ -89,8 +94,8 @@ fn seven_segment_adapter() -> (Netlist, Vec<(String, String)>) {
     (netlist, outputs)
 }
 
-/// Every circuit `Session::new` accepts, in the order `list_circuits` reports
-/// them.
+/// The hand-written circuits `Session::new` accepts, in the order
+/// `list_circuits` reports them (`reda::circuits`' own size ladder).
 const CIRCUITS: &[(&str, CircuitBuilder)] = &[
     ("and4", and4_adapter),
     ("full_adder", full_adder_adapter),
@@ -98,14 +103,47 @@ const CIRCUITS: &[(&str, CircuitBuilder)] = &[
     ("seven_segment", seven_segment_adapter),
 ];
 
-fn find_builder(name: &str) -> Option<CircuitBuilder> {
-    CIRCUITS.iter().find(|&&(n, _)| n == name).map(|&(_, build)| build)
+/// Build the netlist for one of `list_circuits()`'s names, from whichever of
+/// the two catalogs it belongs to.
+///
+/// # Two catalogs, one list
+///
+/// `reda::circuits::verilog` deliberately keeps the Verilog-derived circuits
+/// out of the binaries' `available_circuits()`, because synthesizing one is
+/// fallible (Yosys may be absent) and slow (a Python + WASM-Yosys run) in a
+/// way no hand-written circuit is. Neither reason survives the trip into
+/// this crate: nothing here synthesizes anything. A wasm build cannot run
+/// Yosys at all, so it loads the netlist Yosys already produced -- embedded,
+/// checked in, and re-derived from source by a test on every machine that
+/// *can* run Yosys (see `VerilogCircuit::baked_netlist`). Parsing that is as
+/// fast and as infallible as calling `build_and4_netlist()`.
+///
+/// What does survive is the naming: `verilog:seven_segment` and
+/// `seven_segment` compute the same function out of entirely different
+/// gates, so the `verilog:` prefix is carried through verbatim rather than
+/// flattened -- a viewer showing one of the two must be unambiguous about
+/// which, for exactly the reason a conformance report must be.
+///
+/// Resolving straight out of `verilog::CIRCUITS` rather than restating its
+/// entries here means a circuit added to that catalog shows up in this
+/// viewer with no change to this crate at all.
+fn build_named_circuit(name: &str) -> Option<(Netlist, Vec<(String, String)>)> {
+    if let Some(&(_, build)) = CIRCUITS.iter().find(|&&(n, _)| n == name) {
+        return Some(build());
+    }
+    verilog::find(name).map(|circuit| circuit.baked_netlist())
 }
 
-/// Every circuit name `Session::new` accepts.
+/// Every circuit name `Session::new` accepts: the hand-written size ladder
+/// first, then the Verilog-derived circuits under their own `verilog:`
+/// prefixed names.
 #[wasm_bindgen]
 pub fn list_circuits() -> Vec<String> {
-    CIRCUITS.iter().map(|&(name, _)| name.to_string()).collect()
+    CIRCUITS
+        .iter()
+        .map(|&(name, _)| name.to_string())
+        .chain(verilog::CIRCUITS.iter().map(|circuit| circuit.name.to_string()))
+        .collect()
 }
 
 // ---------------------------------------------------------------------
@@ -437,6 +475,19 @@ struct TopologyGate {
     /// carried through separately from `PrimitiveGraph`, which only ever
     /// remembers a gate by its index (see `Provenance::Gate`'s doc comment).
     output: String,
+    /// `"nor"` or `"merge"` -- `Gate::is_merge`, and the one field that lets
+    /// this view stop calling everything a NOR.
+    ///
+    /// Every hand-written circuit in [`CIRCUITS`] is pure NOR, so until the
+    /// Verilog-derived circuits reached this crate there was nothing else
+    /// for a gate to be and nothing lost by assuming it. A synthesised
+    /// netlist is not pure NOR: Yosys `OR2`/`OR3` map onto wire merges, 11
+    /// of `verilog:seven_segment`'s 31 gates. A merge is a fundamentally
+    /// different object -- no torch, no support, no gate body at all, just
+    /// the point where several producers' dust are allowed to touch -- and
+    /// a view that draws it as one more NOR is not simplifying, it is
+    /// wrong.
+    kind: &'static str,
     arity: usize,
     /// Topological layer: 0 for a gate driven only by primary inputs, one
     /// more than the greatest layer among any gate that drives it otherwise.
@@ -447,7 +498,28 @@ struct TopologyGate {
     /// Every node id instantiated for this gate -- `PrimitiveGraph::gate_nodes[index]`
     /// verbatim -- so a page can group and hull them without recomputing the
     /// grouping from `nodes`' own provenance.
+    ///
+    /// **Empty for a merge whose every branch is bare**: such a merge
+    /// instantiates no primitive whatsoever. A page that draws gates by
+    /// hulling this field draws nothing at all for one -- which is what
+    /// [`TopologyGate::outputs`] is for. (Every merge in
+    /// `verilog:seven_segment` happens to have at least one isolated branch,
+    /// and so at least one repeater here; the all-bare case is nonetheless
+    /// one the compiler really produces, and
+    /// `primitive_graph::tests::an_all_bare_merge_owns_no_nodes_but_still_
+    /// names_the_ones_its_dust_joins` is where it is pinned down.)
     nodes: Vec<usize>,
+    /// The nodes a consumer of this gate actually reads its value from --
+    /// `PrimitiveGraph::output_nodes[index]` verbatim.
+    ///
+    /// For a NOR this is the same single torch already in `nodes`. For a
+    /// merge it is the set of nodes whose dust physically joins to form the
+    /// merge's net: each bare branch's own producer (recursively, through
+    /// chained bare merges), each isolated branch's own repeater. That set
+    /// is the only honest answer to "where is this gate" for a gate that is
+    /// a junction rather than a body, and it is what a view needs in order
+    /// to draw the junction at all.
+    outputs: Vec<usize>,
 }
 
 #[derive(Serialize)]
@@ -511,11 +583,20 @@ pub struct Session {
     /// the world, nothing about a circuit's topology changes as the
     /// simulation runs.
     primitive_graph: PrimitiveGraph,
-    /// `(output signal name, arity, topological layer)` for every gate,
-    /// indexed exactly as `primitive_graph`'s own `Provenance::Gate::gate`
-    /// and `gate_nodes` are -- see [`compute_gate_layers`] for what "layer"
-    /// means.
-    gate_meta: Vec<(String, usize, i32)>,
+    /// Everything about each gate that `PrimitiveGraph` does not itself
+    /// remember, indexed exactly as `primitive_graph`'s own
+    /// `Provenance::Gate::gate`, `gate_nodes` and `output_nodes` are.
+    gate_meta: Vec<GateMeta>,
+}
+
+/// The per-gate facts `Session::topology` reports that live in the `Netlist`
+/// rather than in the expanded graph -- see [`TopologyGate`], whose fields
+/// these become.
+struct GateMeta {
+    output: String,
+    arity: usize,
+    is_merge: bool,
+    layer: i32,
 }
 
 impl Session {
@@ -523,35 +604,42 @@ impl Session {
     /// circuit's generator, compile it, and settle the simulator once so a
     /// caller sees a self-consistent world before ever calling `step`.
     fn build(circuit_name: &str) -> Result<Session, String> {
-        let build_netlist = find_builder(circuit_name).ok_or_else(|| {
+        let (netlist, outputs) = build_named_circuit(circuit_name).ok_or_else(|| {
             format!(
                 "unknown circuit `{circuit_name}` -- see list_circuits() for the valid names"
             )
         })?;
-        let (netlist, outputs) = build_netlist();
         let compiled =
             compile(&netlist).map_err(|error| format!("compile() failed: {error:?}"))?;
 
-        // Every circuit in `CIRCUITS` is built through `NetlistBuilder::nor`
-        // (or the Yosys genlib frontend), both of which already enforce
-        // fan-in 1..=3 before a `Gate` ever exists -- the same range
-        // `Library::default_library` covers -- and `compile()` above just
-        // succeeded, which means every input and output name it checks
-        // (`CompileError::UndrivenSignal`) already resolves. So `expand` has
-        // no way to fail here that `compile` would not already have caught;
-        // see `topology::Library`'s doc comment and `primitive_graph::expand`'s
-        // `ExpandError` for the two things it does check.
+        // Every circuit `build_named_circuit` can return went through
+        // `NetlistBuilder` -- the hand-written ones directly, the Verilog
+        // ones via the genlib frontend -- which enforces fan-in 1..=3 before
+        // a `Gate` ever exists, the same range `Library::default_library`
+        // covers. `compile()` above just succeeded, which means every input
+        // and output name it checks (`CompileError::UndrivenSignal`) already
+        // resolves, and that it found no combinational cycle either -- the
+        // third thing `expand` re-checks now that a merge forces it to walk
+        // gates in topological order. So `expand` has no way to fail here
+        // that `compile` would not already have caught; see
+        // `topology::Library`'s doc comment and `primitive_graph::expand`'s
+        // `ExpandError` for what it does check.
         let primitive_graph = primitive_graph::expand(&netlist, &Library::default_library())
             .unwrap_or_else(|error| {
                 panic!("expand() failed on a netlist compile() already accepted: {error}")
             });
-        let gate_meta: Vec<(String, usize, i32)> = {
+        let gate_meta: Vec<GateMeta> = {
             let layers = compute_gate_layers(&netlist);
             netlist
                 .gates
                 .iter()
                 .zip(layers)
-                .map(|(gate, layer)| (gate.output.clone(), gate.inputs.len(), layer))
+                .map(|(gate, layer)| GateMeta {
+                    output: gate.output.clone(),
+                    arity: gate.inputs.len(),
+                    is_merge: gate.is_merge,
+                    layer,
+                })
                 .collect()
         };
 
@@ -795,12 +883,17 @@ impl Session {
     }
 
     /// `{ nodes: [{id, primitive, provenance}], edges: [{from, to}],
-    /// gates: [{index, output, arity, layer, nodes}] }` -- the whole
-    /// primitive-topology graph this circuit's netlist expands into, per
-    /// this module's "Primitive topology" section. No positions: the graph
-    /// itself carries none (see `compile::primitive_graph`'s doc comment),
-    /// so a page consuming this has to lay it out itself. Same native-test
-    /// caveat as `pinout`/`legend`.
+    /// gates: [{index, output, kind, arity, layer, nodes, outputs}] }` --
+    /// the whole primitive-topology graph this circuit's netlist expands
+    /// into, per this module's "Primitive topology" section. No positions:
+    /// the graph itself carries none (see `compile::primitive_graph`'s doc
+    /// comment), so a page consuming this has to lay it out itself. Same
+    /// native-test caveat as `pinout`/`legend`.
+    ///
+    /// A gate's `kind` and `outputs` are what let a page draw a wire merge
+    /// as the junction it is rather than as one more NOR -- see those two
+    /// fields on [`TopologyGate`]. `nodes` alone cannot: a merge with only
+    /// bare branches owns no node at all.
     pub fn topology(&self) -> JsValue {
         let nodes = self
             .primitive_graph
@@ -819,13 +912,16 @@ impl Session {
             .gate_meta
             .iter()
             .zip(self.primitive_graph.gate_nodes.iter())
+            .zip(self.primitive_graph.output_nodes.iter())
             .enumerate()
-            .map(|(index, ((output, arity, layer), nodes))| TopologyGate {
+            .map(|(index, ((meta, nodes), outputs))| TopologyGate {
                 index,
-                output: output.clone(),
-                arity: *arity,
-                layer: *layer,
+                output: meta.output.clone(),
+                kind: if meta.is_merge { "merge" } else { "nor" },
+                arity: meta.arity,
+                layer: meta.layer,
                 nodes: nodes.clone(),
+                outputs: outputs.clone(),
             })
             .collect();
         serde_wasm_bindgen::to_value(&Topology { nodes, edges, gates })

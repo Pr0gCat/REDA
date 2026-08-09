@@ -276,6 +276,11 @@
       <div class="status" id="topo-status"></div>
       <h2 style="margin-top:10px;">Primitives</h2>
       <div class="legend-list" id="topo-primitive-legend"></div>
+      <h2 style="margin-top:10px;">Gates</h2>
+      <div class="legend-list" id="topo-gate-legend">
+        <span><span class="legend-swatch" style="background:hsla(210,65%,55%,0.35);border-color:hsla(210,70%,65%,0.9)"></span>NOR<i>n</i> -- a torch on its support. One badge around the single node the gate expands into; each gate gets its own hue.</span>
+        <span><span class="legend-swatch" style="background:transparent;border:1px dashed #ff3b3b;border-radius:50%"></span>OR<i>n</i> wire merge -- no torch, no support, no body: a dust junction where several branches meet. Dashed spokes reach the nodes whose dust actually joins there.</span>
+      </div>
       <h2 style="margin-top:10px;">Edges</h2>
       <div class="legend-list" id="topo-edge-legend">
         <span><span class="legend-swatch" style="background:#ff3b3b"></span>Signal flow -- producer to consumer; realisation (a dust path, adjacency, or otherwise) is not decided at this layer</span>
@@ -1567,13 +1572,42 @@ function onThreeHover(e) {
 // differently. Every edge here means the same thing: a signal goes from one
 // node to another, however it eventually gets realised.
 //
-// One consequence worth seeing rather than hiding: for the NOR-only
-// circuits this compiler builds today, this view now draws something
-// isomorphic to the netlist's own gate graph -- one node per gate/input/
-// output, one edge per net endpoint. That is the correct, current state of
-// this layer (see `topology.rs`'s own doc comment), not a bug in this view.
-// It stops being true the day a library entry is not one-to-one with its
-// gate.
+// One consequence worth seeing rather than hiding: for a NOR-only circuit,
+// this view draws something isomorphic to the netlist's own gate graph --
+// one node per gate/input/output, one edge per net endpoint. That is the
+// correct state of this layer for such a circuit (see `topology.rs`'s own
+// doc comment), not a bug in this view.
+//
+// # A wire merge is not a gate body, and is not drawn as one
+//
+// Every hand-written circuit in `reda::circuits` is pure NOR, so for a long
+// time "gate" and "one torch node" were the same thing here and this view
+// labelled every gate `NOR<n>` without ever being wrong. A synthesised
+// netlist is not pure NOR: Yosys `OR2`/`OR3` map onto **wire merges**
+// (`Gate::is_merge`), 11 of `verilog:seven_segment`'s 31 gates. A merge has
+// no torch, no support and no gate body at all -- it is the point where
+// several producers' dust are allowed to physically touch. Drawing that as
+// one more NOR badge is not a simplification; it is the single thing this
+// view exists to make impossible to miss, quietly got wrong.
+//
+// Two facts from `Session::topology()` are what make it drawable:
+//
+//   * `gate.kind` -- `"nor"` or `"merge"`.
+//   * `gate.outputs` -- the nodes a consumer actually reads the gate from.
+//     For a NOR that is its own single torch. For a merge it is the set of
+//     nodes whose dust joins to form its net: each bare branch's producer
+//     (recursively, through chained bare merges), each isolated branch's own
+//     repeater. `gate.nodes` cannot serve here -- a merge whose every branch
+//     is bare instantiates no primitive at all, so its `nodes` is empty and
+//     a view hulling that field would draw literally nothing for it.
+//
+// So a merge is drawn as what it is: a hollow, dashed dust-red ring (hollow
+// and dashed because there is no block there to fill in), sitting in the gap
+// between the deepest branch it joins and whatever reads it, with a dashed
+// spoke out to every node whose dust meets there. A NOR keeps its filled,
+// per-gate-hue badge. The two read as different kinds of object at any zoom
+// level, before any label is legible. `computeMergeJunctions` places them;
+// `drawTopology` draws them.
 //
 // Layout: a layered DAG (Sugiyama-style) layout -- the same family of
 // algorithm graphviz's `dot` uses for a schematic or dataflow diagram, not
@@ -1640,12 +1674,14 @@ function onThreeHover(e) {
 const PRIMITIVE_COLOR = {
   // Same hex values as `block_kind_colour` in viewer/src/lib.rs for the
   // closest matching `BlockKind`, so a primitive's colour here means the
-  // same thing it would in the 2D/3D views. `Repeater` and `Comparator`
-  // never appear as a node in today's library (see `topology::Primitive`'s
-  // doc comment: both are real signal-carrying elements reserved for a
-  // future, not-one-to-one entry), but are listed here anyway, same as
-  // `Dust` used to be, so the legend documents the whole vocabulary rather
-  // than only what happens to be in use today.
+  // same thing it would in the 2D/3D views. `Repeater` appears as a real
+  // node now -- a merge branch whose producer fans out anywhere else gets an
+  // isolating repeater (`TemplateNode::IsolatingRepeater`), so every
+  // `verilog:` circuit has some. `Comparator` still never does (see
+  // `topology::Primitive`'s doc comment: a real signal-carrying element
+  // reserved for a future, not-one-to-one entry), but is listed here anyway,
+  // same as `Dust` used to be, so the legend documents the whole vocabulary
+  // rather than only what happens to be in use today.
   Torch: '#ff8c00',
   Repeater: '#c9a227',
   Comparator: '#d9a441',
@@ -1656,12 +1692,32 @@ const TOPO_NODE_RADIUS = 5; // constant screen pixels, independent of zoom
 const TOPO_LAYER_SPACING = 150; // px between two adjacent layers (x axis)
 const TOPO_NODE_SPACING = 34;   // px between two adjacent slots in one layer (y axis)
 const TOPO_BARYCENTRE_SWEEPS = 4; // same count `build_floorplan` uses, for the same reason
+// A merge's junction glyph: dust red (the same `#ff3b3b` the 2D/3D views
+// give `RedstoneWire`, because a junction is dust and nothing else), drawn
+// hollow at this multiple of the node radius so it reads as an annotation on
+// the graph rather than as another primitive in it.
+const TOPO_MERGE_COLOR = '#ff3b3b';
+const TOPO_MERGE_RADIUS = 1.9;
 
 let topoGates = [];      // raw TopologyGate[] from session.topology()
 let topoNodes = [];      // { id, primitive, provenance, x, y }
 let topoEdges = [];      // raw { from, to } from session.topology()
 let topoEdgePaths = [];  // parallel to topoEdges: [{x,y}, ...] through any dummy chain
+let topoMerges = [];     // { gate, x, y } per wire-merge gate -- see computeMergeJunctions
 let topoView = { scale: 1, offsetX: 0, offsetY: 0 };
+
+/** Whether one raw `TopologyGate` is a wire merge rather than a NOR. */
+function isMergeGate(gate) {
+  return gate.kind === 'merge';
+}
+
+/** How a gate is named everywhere in this view: the focus dropdown, the
+ * badge label, the hover readout. `NOR3` for a three-input NOR; `OR3 merge`
+ * for a three-branch wire merge, which is an OR of its branches and, being a
+ * merge, is not a gate body at all. */
+function gateLabel(gate) {
+  return isMergeGate(gate) ? `OR${gate.arity} merge` : `NOR${gate.arity}`;
+}
 
 function buildPrimitiveLegend() {
   topoPrimitiveLegend.innerHTML = '';
@@ -1691,7 +1747,7 @@ function buildTopology() {
   for (const gate of topoGates) {
     const opt = document.createElement('option');
     opt.value = String(gate.index);
-    opt.textContent = `${gate.output} (NOR${gate.arity})`;
+    opt.textContent = `${gate.output} (${gateLabel(gate)})`;
     topoFocusSelect.appendChild(opt);
   }
 
@@ -1812,15 +1868,74 @@ function layoutTopology() {
   // chain otherwise, so a long edge bends around whatever sits between its
   // endpoints instead of passing through it.
   topoEdgePaths = chains.map((chain) => chain.map((d) => ({ x: d.x, y: d.y })));
+
+  topoMerges = computeMergeJunctions();
+}
+
+/** Where each wire merge's junction glyph goes, given a laid-out graph:
+ * one `{ gate, x, y }` per gate whose `kind` is `"merge"`.
+ *
+ * A merge has no node of its own to borrow a position from (see this
+ * section's doc comment), so its position is derived from the nodes whose
+ * dust it joins -- `gate.outputs`:
+ *
+ *   * x sits half a layer past the **deepest** of them. Every consumer of a
+ *     merge has an edge from every one of its contributions, so a consumer's
+ *     own layer is always at least one past that deepest contribution --
+ *     which puts the junction in the gap between the two, exactly where the
+ *     converging edges already cross, and never on top of a layer of real
+ *     nodes.
+ *   * y is their mean, so the glyph sits inside the fan of edges it explains
+ *     rather than off to one side of it.
+ *
+ * Chained merges (`m2 = merge(x, m1)`, which `verilog:seven_segment` really
+ * contains as `g19 = merge(g4, g18)`) inherit `m1`'s contributions into
+ * `m2`'s set, so two junctions can land on the same point. The last pass
+ * spreads any group that shares a rounded coordinate along y, in gate-index
+ * order, so one merge can never sit invisibly on top of another. */
+function computeMergeJunctions() {
+  const junctions = [];
+  for (const gate of topoGates) {
+    if (!isMergeGate(gate) || gate.outputs.length === 0) continue;
+    let maxX = -Infinity, sumY = 0;
+    for (const id of gate.outputs) {
+      maxX = Math.max(maxX, topoNodes[id].x);
+      sumY += topoNodes[id].y;
+    }
+    junctions.push({
+      gate,
+      x: maxX + TOPO_LAYER_SPACING * 0.5,
+      y: sumY / gate.outputs.length,
+    });
+  }
+
+  const byPoint = new Map();
+  for (const junction of junctions) {
+    const key = `${Math.round(junction.x)},${Math.round(junction.y)}`;
+    if (!byPoint.has(key)) byPoint.set(key, []);
+    byPoint.get(key).push(junction);
+  }
+  for (const group of byPoint.values()) {
+    if (group.length < 2) continue;
+    const offset = (group.length - 1) / 2;
+    group.forEach((junction, i) => { junction.y += (i - offset) * TOPO_NODE_SPACING * 0.5; });
+  }
+  return junctions;
 }
 
 /** Every node id in `gate`'s own cluster plus every node directly connected
  * to it by an edge (either direction, either kind) -- exactly one hop, not
  * a transitive closure, so "Focus gate" shows a gate's immediate producers
- * and consumers without pulling in the whole graph. */
+ * and consumers without pulling in the whole graph.
+ *
+ * The core is `nodes` **and** `outputs`, not `nodes` alone: for a NOR those
+ * are the same single torch, but a merge whose every branch is bare owns no
+ * node at all, so focusing one would otherwise fit the view to an empty set
+ * and show nothing. `outputs` is the set of nodes whose dust the merge
+ * joins -- exactly what a person focusing a merge wants to see. */
 function computeEgoSet(gateIndex) {
   const gate = topoGates[gateIndex];
-  const core = new Set(gate.nodes);
+  const core = new Set([...gate.nodes, ...gate.outputs]);
   const result = new Set(core);
   for (const edge of topoEdges) {
     if (core.has(edge.from)) result.add(edge.to);
@@ -1883,8 +1998,10 @@ function layoutAndRender() {
     topoViewNeedsFit = false;
   }
   drawTopology();
+  const merges = topoGates.filter(isMergeGate).length;
   topoStatus.textContent =
-    `${topoNodes.length} nodes, ${topoEdges.length} edges, ${topoGates.length} gates -- `
+    `${topoNodes.length} nodes, ${topoEdges.length} edges, ${topoGates.length} gates `
+    + `(${topoGates.length - merges} NOR, ${merges} wire merge${merges === 1 ? '' : 's'}) -- `
     + `layered layout computed in ${elapsed.toFixed(0)} ms.`;
 }
 
@@ -1904,11 +2021,12 @@ function roundRect(ctx, x, y, w, h, r) {
 }
 
 /** Draw one node, shaped by its `Primitive` kind so a glance (not just
- * colour) distinguishes them: a diamond repeater, a hexagon comparator (both
- * reserved shapes -- see `PRIMITIVE_COLOR`'s doc comment, neither appears in
- * today's library), a triangular lever, a circular torch or lamp. No more
- * square support block: `Block` is not a `Primitive` any more (a support is
- * realisation, not signal -- see `topology.rs`'s doc comment). */
+ * colour) distinguishes them: a diamond repeater (a merge branch's isolating
+ * repeater), a hexagon comparator (a reserved shape -- see
+ * `PRIMITIVE_COLOR`'s doc comment, it appears in no library entry today), a
+ * triangular lever, a circular torch or lamp. No more square support block:
+ * `Block` is not a `Primitive` any more (a support is realisation, not
+ * signal -- see `topology.rs`'s doc comment). */
 function drawNodeShape(ctx, primitive, x, y, r, colour, alpha) {
   ctx.save();
   ctx.globalAlpha = alpha;
@@ -1953,7 +2071,7 @@ function drawNodeShape(ctx, primitive, x, y, r, colour, alpha) {
 function provenanceDescription(node) {
   if (node.provenance.kind === 'Gate') {
     const gate = topoGates[node.provenance.gate];
-    return `gate ${gate.output} (NOR${gate.arity}, layer ${gate.layer}), role ${node.provenance.role}`;
+    return `gate ${gate.output} (${gateLabel(gate)}, layer ${gate.layer}), role ${node.provenance.role}`;
   }
   if (node.provenance.kind === 'PrimaryInput') return `primary input "${node.provenance.name}"`;
   return `primary output "${node.provenance.name}"`;
@@ -1973,11 +2091,15 @@ function drawTopology() {
 
   // Gate badges -- a padded box around each gate's own node(s), labelled
   // with its output name, so "which node is which gate" is checkable at a
-  // glance without reading positions. A NOR gate is one node today, so this
-  // draws as a small square around a single point rather than a hull
-  // wrapping several -- still legible, just smaller than it used to be.
+  // glance without reading positions. A NOR gate is one node, so this draws
+  // as a small square around a single point rather than a hull wrapping
+  // several.
+  //
+  // Merges are skipped here on purpose and drawn further down instead: a
+  // filled, hue-coded badge is exactly the "one more gate body" impression
+  // a wire merge must not give (see this section's doc comment).
   for (const gate of topoGates) {
-    if (gate.nodes.length === 0) continue;
+    if (gate.nodes.length === 0 || isMergeGate(gate)) continue;
     const dim = focusGate !== null && gate.index !== focusGate;
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const id of gate.nodes) {
@@ -2000,7 +2122,7 @@ function drawTopology() {
       topoCtx.font = '11px ui-monospace, monospace';
       topoCtx.textAlign = 'left';
       topoCtx.textBaseline = 'bottom';
-      topoCtx.fillText(`${gate.output} (NOR${gate.arity})`, sx0 + 2, sy0 - 2);
+      topoCtx.fillText(`${gate.output} (${gateLabel(gate)})`, sx0 + 2, sy0 - 2);
     }
   }
 
@@ -2024,6 +2146,57 @@ function drawTopology() {
     topoCtx.strokeStyle = `rgba(255,59,59,${inFocus ? 0.55 : 0.04})`;
     topoCtx.lineWidth = 1.6;
     topoCtx.stroke();
+  }
+
+  // Wire merges -- a hollow, dashed dust-red ring where the branches meet,
+  // with a dashed spoke out to every node whose dust actually joins there.
+  //
+  // Everything about this is chosen against the NOR badges above: hollow
+  // rather than filled and dashed rather than solid, because there is no
+  // block at a junction to fill in; one shared dust colour rather than a
+  // per-gate hue, because a merge is not a member of the gate palette; a
+  // ring rather than a rounded box, because it encloses nothing. The spokes
+  // are dashed for a second reason too -- they are not edges of the graph
+  // (no `Edge` in `PrimitiveGraph` corresponds to one), they are the
+  // annotation that says "these nodes are one net", so they must not read as
+  // signal flow.
+  for (const junction of topoMerges) {
+    const gate = junction.gate;
+    const dim = focusGate !== null && gate.index !== focusGate;
+    const alpha = dim ? 0.10 : 0.9;
+    const [jx, jy] = toScreen(junction.x, junction.y);
+
+    topoCtx.save();
+    topoCtx.setLineDash([4, 3]);
+    topoCtx.strokeStyle = `rgba(255,59,59,${dim ? 0.05 : 0.5})`;
+    topoCtx.lineWidth = 1.2;
+    for (const id of gate.outputs) {
+      const [sx, sy] = toScreen(topoNodes[id].x, topoNodes[id].y);
+      topoCtx.beginPath();
+      topoCtx.moveTo(sx, sy);
+      topoCtx.lineTo(jx, jy);
+      topoCtx.stroke();
+    }
+    topoCtx.globalAlpha = alpha;
+    topoCtx.strokeStyle = TOPO_MERGE_COLOR;
+    topoCtx.lineWidth = 2;
+    topoCtx.beginPath();
+    topoCtx.arc(jx, jy, TOPO_NODE_RADIUS * TOPO_MERGE_RADIUS, 0, Math.PI * 2);
+    topoCtx.stroke();
+    topoCtx.restore();
+
+    if (topoView.scale > 0.35 || focusGate === gate.index) {
+      topoCtx.fillStyle = dim ? 'rgba(255,150,150,0.12)' : 'rgba(255,180,180,0.9)';
+      topoCtx.font = '11px ui-monospace, monospace';
+      topoCtx.textAlign = 'center';
+      topoCtx.textBaseline = 'bottom';
+      topoCtx.fillText(
+        `${gate.output} (${gateLabel(gate)})`,
+        jx,
+        jy - TOPO_NODE_RADIUS * TOPO_MERGE_RADIUS - 3,
+      );
+      topoCtx.textAlign = 'left';
+    }
   }
 
   // Nodes, on top of edges.
@@ -2069,6 +2242,13 @@ topoCanvas.addEventListener('wheel', (e) => {
   drawTopology();
 }, { passive: false });
 
+// Hover hit-testing covers merge junctions as well as nodes, and reports a
+// junction by listing the node ids whose dust meets there. That list is the
+// whole claim the glyph is making, so being able to read it off and check it
+// against `Session::topology()`'s own JSON -- gate `outputs` against the
+// edges that really land on this merge's consumers -- is the point: a
+// picture that is confidently wrong about which gates a junction joins is
+// worse than one that is merely unhelpful.
 topoCanvas.addEventListener('mousemove', (e) => {
   if (topoNodes.length === 0) return;
   const rect = topoCanvas.getBoundingClientRect();
@@ -2078,11 +2258,26 @@ topoCanvas.addEventListener('mousemove', (e) => {
     const sx = topoView.offsetX + node.x * topoView.scale;
     const sy = topoView.offsetY + node.y * topoView.scale;
     const d = Math.hypot(sx - mx, sy - my);
-    if (d < bestDist) { bestDist = d; best = node; }
+    if (d < bestDist) { bestDist = d; best = { kind: 'node', node }; }
   }
-  topoHoverReadout.textContent = best
-    ? `#${best.id} -- ${best.primitive} -- ${provenanceDescription(best)}`
-    : ' ';
+  for (const junction of topoMerges) {
+    const sx = topoView.offsetX + junction.x * topoView.scale;
+    const sy = topoView.offsetY + junction.y * topoView.scale;
+    const d = Math.hypot(sx - mx, sy - my);
+    if (d < bestDist) { bestDist = d; best = { kind: 'merge', junction }; }
+  }
+  if (!best) {
+    topoHoverReadout.textContent = ' ';
+  } else if (best.kind === 'merge') {
+    const gate = best.junction.gate;
+    const joined = gate.outputs.map((id) => `#${id}`).join(', ');
+    topoHoverReadout.textContent =
+      `${gate.output} -- ${gateLabel(gate)}, layer ${gate.layer} -- no torch, no support: `
+      + `a dust junction joining ${joined}`;
+  } else {
+    const node = best.node;
+    topoHoverReadout.textContent = `#${node.id} -- ${node.primitive} -- ${provenanceDescription(node)}`;
+  }
 });
 topoCanvas.addEventListener('mouseleave', () => { topoHoverReadout.textContent = ' '; });
 

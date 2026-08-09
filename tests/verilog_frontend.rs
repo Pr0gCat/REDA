@@ -27,6 +27,7 @@ use std::collections::HashMap;
 
 use reda::circuits::and4::build_and4_netlist;
 use reda::circuits::seven_segment::{build_seven_segment_netlist, TRUTH_TABLE};
+use reda::circuits::verilog;
 use reda::compile::{compile, CompiledCircuit, Netlist};
 use reda::frontend::synthesize_verilog;
 use reda::redstone::simulator::Simulator;
@@ -267,6 +268,72 @@ fn the_verilog_seven_segment_matches_its_truth_table() {
         "seven_segment comparison: verilog {}g/{}b/{}t vs hand-written {}g/{}b/{}t",
         verilog_stats.0, verilog_stats.1, verilog_stats.2, hand_stats.0, hand_stats.1, hand_stats.2
     );
+}
+
+/// The checked-in baked netlists (`src/circuits/baked/*.netlist`) still say
+/// what Yosys actually produces.
+///
+/// A baked netlist exists because the browser viewer's `wasm32` build cannot
+/// run Yosys and yet needs a synthesised circuit -- see
+/// `VerilogCircuit::baked_netlist` for the whole argument. That makes each
+/// one a standing claim about this project's own compiler, published in a
+/// view whose entire purpose is showing what a circuit really is. A stale
+/// one does not go quietly out of date; it misrepresents the compiler to
+/// the one audience looking specifically for the truth about it.
+///
+/// So this re-runs synthesis on the very same embedded source and requires
+/// the result to render **byte-for-byte** identically to the checked-in
+/// file. Comparing rendered text rather than `Netlist` values is not a
+/// weaker check: `render_and_parse_round_trip_every_catalog_entry` (in
+/// `reda::circuits::verilog`) pins the two together, and comparing text is
+/// what makes the failure message a diff a person can act on. The fix is
+/// always the same, and the assertion says so: run `bake_verilog` and commit
+/// the result.
+///
+/// This lives here, alongside the other tests that need Python and
+/// `yowasp-yosys`, because it needs them for exactly the same reason.
+#[test]
+fn the_baked_netlists_match_fresh_synthesis() {
+    for circuit in verilog::CIRCUITS {
+        let (netlist, output_labels) =
+            circuit.synthesize().unwrap_or_else(|error| panic!("{} must synthesize: {error}", circuit.name));
+        let fresh = verilog::baked::render(circuit, &netlist, &output_labels)
+            .unwrap_or_else(|error| panic!("{}'s fresh netlist {error}", circuit.name));
+
+        if fresh != circuit.baked {
+            let first_difference = fresh
+                .lines()
+                .zip(circuit.baked.lines())
+                .position(|(a, b)| a != b)
+                .map(|index| {
+                    format!(
+                        "first differing line is {}:\n  fresh: {}\n  baked: {}",
+                        index + 1,
+                        fresh.lines().nth(index).unwrap_or(""),
+                        circuit.baked.lines().nth(index).unwrap_or("")
+                    )
+                })
+                .unwrap_or_else(|| {
+                    format!(
+                        "one is a prefix of the other: fresh has {} lines, baked has {}",
+                        fresh.lines().count(),
+                        circuit.baked.lines().count()
+                    )
+                });
+            panic!(
+                "{} is stale: {} no longer matches a fresh synthesis of {}.\n{first_difference}\n\
+                 Re-run `cargo run --release --bin bake_verilog` and commit the result.",
+                circuit.name, circuit.baked_path, circuit.source_path
+            );
+        }
+
+        // ...and the netlist a caller with no Yosys gets back really is the
+        // one Yosys just produced, not merely a file that happens to render
+        // the same way.
+        let (baked_netlist, baked_labels) = circuit.baked_netlist();
+        assert_eq!(baked_netlist, netlist, "{}: baked netlist differs from the fresh one", circuit.name);
+        assert_eq!(baked_labels, output_labels, "{}: baked output labels differ", circuit.name);
+    }
 }
 
 /// The frontend's whole point is to fail loudly, not silently or with a

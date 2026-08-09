@@ -45,6 +45,12 @@ pub mod world_partition;
 // ---------------------------------------------------------------------
 
 /// 一個 NOR 閘：任一輸入為高則輸出為低。
+///
+/// Plain data, and derives nothing but the plain-data traits: two netlists
+/// being comparable is what lets a test say "this is the same netlist" (see
+/// `circuits::verilog::baked`, whose whole job is round-tripping one), and
+/// `Clone` is what lets a caller keep one while handing another away.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Gate {
     pub name: String,
     pub inputs: Vec<String>,
@@ -69,9 +75,11 @@ pub struct Gate {
     /// `kind == GateKind::Merge` and everything else, so nothing here has
     /// to be undone -- only renamed.
     ///
-    /// Nothing in this compiler sets this to `true` yet: `NetlistBuilder`
-    /// and the Yosys frontend both still only ever emit ordinary NOR gates.
-    /// Consulting it only changes two things, both narrow: a declared
+    /// The Yosys frontend is what sets this: `redstone_nor.genlib`'s
+    /// `OR2`/`OR3` cells map onto `NetlistBuilder::merge`, so a synthesised
+    /// netlist really does contain merges (11 of `verilog:seven_segment`'s
+    /// 31 gates). Every circuit this project writes by hand is still pure
+    /// NOR. Consulting it only changes two things, both narrow: a declared
     /// merge's branches joining is no longer the bug `verify_connectivity`
     /// otherwise exists to catch, and `verify_torch_merge` no longer
     /// requires a merge gate to have a torch it was never going to have.
@@ -82,6 +90,7 @@ pub struct Gate {
 ///
 /// 只有 NOR 一種閘 —— 紅石的天然閘基底就是 NOR（多條紅石粉匯入一個方塊，
 /// 旁邊插一支火把），而 NOR 是通用閘，任何布林函數都能用它組出來。
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Netlist {
     pub inputs: Vec<String>,
     pub outputs: Vec<String>,

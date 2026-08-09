@@ -84,12 +84,40 @@ pub struct PrimitiveGraph {
     /// Every node instantiated for gate `g`'s own library-entry instance,
     /// indexed by `g` (an index into the `Netlist::gates` `expand` was
     /// given). See [`Provenance::Gate`]'s doc comment for what this is for.
+    ///
+    /// **A merge's row can be empty**: a merge whose every branch is bare
+    /// instantiates no primitive at all (see [`expand`]'s own doc comment),
+    /// so it owns no nodes. That is not a missing entry -- it is the whole
+    /// point of a wire merge -- which is exactly why
+    /// [`PrimitiveGraph::output_nodes`] exists alongside this.
     pub gate_nodes: Vec<Vec<NodeId>>,
+    /// The set of nodes a consumer of gate `g`'s declared output actually
+    /// reads it from, indexed by `g` -- [`expand`]'s own `output_of`, kept
+    /// rather than dropped on the floor.
+    ///
+    /// For a `Nor`/`Buf` gate this is the singleton `[its torch]`, the same
+    /// node `gate_nodes[g]` holds. For a merge it is the set its branches
+    /// resolve to: each bare branch's own producer's set spliced straight
+    /// through, each isolated branch's own repeater. So a merge's row is
+    /// *never* empty even when `gate_nodes[g]` is -- it names the nodes
+    /// whose dust physically joins to form that merge's net, which is the
+    /// only honest answer to "where is this gate" for a gate that is a
+    /// junction rather than a body.
+    ///
+    /// [`expand`] fills this in for every gate it processes; the invariant a
+    /// consumer may rely on is that every element indexes a real node, and
+    /// that a gate driving a declared output has at least one.
+    pub output_nodes: Vec<Vec<NodeId>>,
 }
 
 impl PrimitiveGraph {
     fn empty(gate_count: usize) -> Self {
-        PrimitiveGraph { nodes: Vec::new(), edges: Vec::new(), gate_nodes: vec![Vec::new(); gate_count] }
+        PrimitiveGraph {
+            nodes: Vec::new(),
+            edges: Vec::new(),
+            gate_nodes: vec![Vec::new(); gate_count],
+            output_nodes: vec![Vec::new(); gate_count],
+        }
     }
 
     fn push_node(&mut self, primitive: Primitive, provenance: Provenance) -> NodeId {
@@ -300,7 +328,10 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
 
     // Every gate's own contribution set -- see this function's own doc
     // comment for why this is `Vec<NodeId>` per gate rather than one
-    // `NodeId`.
+    // `NodeId`. Built locally rather than straight into
+    // `graph.output_nodes` only because `resolve_producer` reads it while
+    // `graph` is being mutated; it is moved into the graph verbatim once the
+    // loop is done (see `PrimitiveGraph::output_nodes`).
     let mut output_of: Vec<Vec<NodeId>> = vec![Vec::new(); netlist.gates.len()];
 
     for g in order {
@@ -349,6 +380,8 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
         }
     }
 
+    graph.output_nodes = output_of.clone();
+
     // One edge per declared output, from *every* one of its driving gate's
     // own contributions to a fresh Lamp node.
     for output_name in &netlist.outputs {
@@ -392,6 +425,72 @@ mod tests {
             output: output.to_string(),
             is_merge: false,
         }
+    }
+
+    fn merge(output: &str, inputs: &[&str]) -> Gate {
+        Gate { is_merge: true, ..gate(output, inputs) }
+    }
+
+    /// For a NOR gate, "which nodes does this gate own" and "which nodes
+    /// does a consumer read it from" are the same single torch -- so
+    /// `output_nodes` adds nothing for a NOR-only netlist, and says so.
+    #[test]
+    fn a_nor_gates_output_nodes_row_is_exactly_its_own_torch() {
+        let netlist =
+            Netlist { inputs: vec!["a".to_string()], outputs: vec!["g0".to_string()], gates: vec![gate("g0", &["a"])] };
+        let graph = expand(&netlist, &Library::default_library()).expect("valid netlist");
+        assert_eq!(graph.output_nodes, graph.gate_nodes);
+        assert_eq!(graph.output_nodes[0].len(), 1);
+        assert_eq!(graph.nodes[graph.output_nodes[0][0]].primitive, Primitive::Torch);
+    }
+
+    /// A merge whose every branch is bare owns no primitive at all, so
+    /// `gate_nodes` is empty for it -- and `output_nodes` is what still
+    /// answers "where is this gate": the set of producer nodes whose dust
+    /// joins to form its net. A viewer with only `gate_nodes` would have
+    /// nothing whatsoever to draw for such a gate.
+    #[test]
+    fn an_all_bare_merge_owns_no_nodes_but_still_names_the_ones_its_dust_joins() {
+        // g0 = NOR(a); g1 = NOR(b); m = g0 | g1 -- neither g0 nor g1 drives
+        // anything besides `m`, so both branches are bare.
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec!["m".to_string()],
+            gates: vec![gate("g0", &["a"]), gate("g1", &["b"]), merge("m", &["g0", "g1"])],
+        };
+        let graph = expand(&netlist, &Library::default_library()).expect("valid netlist");
+
+        assert!(graph.gate_nodes[2].is_empty(), "an all-bare merge instantiates no primitive");
+        assert_eq!(
+            graph.output_nodes[2],
+            vec![graph.gate_nodes[0][0], graph.gate_nodes[1][0]],
+            "the merge's net is exactly its two branches' own torches, in branch order"
+        );
+    }
+
+    /// An isolated branch's repeater *is* owned by the merge, and is also
+    /// the node that branch contributes -- so the two lists agree there
+    /// while still disagreeing about the bare branch beside it.
+    #[test]
+    fn an_isolated_branch_contributes_the_repeater_the_merge_owns() {
+        // g0 fans out to both `m` and `g2`, so `m`'s first branch is not
+        // bare and gets an isolating repeater; g1 feeds only `m`, so its
+        // branch is bare.
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec!["m".to_string(), "g2".to_string()],
+            gates: vec![gate("g0", &["a"]), gate("g1", &["b"]), merge("m", &["g0", "g1"]), gate("g2", &["g0"])],
+        };
+        let graph = expand(&netlist, &Library::default_library()).expect("valid netlist");
+
+        assert_eq!(graph.gate_nodes[2].len(), 1, "only the isolated branch's repeater belongs to the merge");
+        let repeater = graph.gate_nodes[2][0];
+        assert_eq!(graph.nodes[repeater].primitive, Primitive::Repeater);
+        assert_eq!(
+            graph.output_nodes[2],
+            vec![repeater, graph.gate_nodes[1][0]],
+            "the isolated branch contributes its repeater, the bare one its producer's torch"
+        );
     }
 
     #[test]

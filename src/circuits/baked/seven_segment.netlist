@@ -1,0 +1,68 @@
+# reda baked netlist -- generated, do not edit by hand.
+# Regenerate with: cargo run --release --bin bake_verilog
+#
+# The netlist Yosys produced for the source named below, technology-mapped
+# onto redstone_nor.genlib and read back by `reda::frontend`. It is checked
+# in so a build that cannot run Yosys -- the browser viewer's wasm32 build
+# above all -- can still load a synthesised circuit. A stale copy would
+# misrepresent this project's own compiler, so
+# `the_baked_netlists_match_fresh_synthesis` re-synthesizes and fails
+# unless a fresh run renders byte-for-byte identically to this file.
+#
+# `gate nor y <- a b` is NOR(a, b) driving signal `y`. `gate merge y <- a b`
+# is a wire merge (`Gate::is_merge`): no torch and no gate body at all, just
+# the point where `a`'s and `b`'s dust are allowed to physically touch.
+#
+# 31 gates (11 wire merges), 4 inputs, 7 outputs.
+circuit verilog:seven_segment
+source tests/fixtures/seven_segment.v
+top bcd_seven_segment
+input d0
+input d1
+input d2
+input d3
+gate nor g0 <- d0
+gate nor g1 <- d2
+gate nor g2 <- d1
+gate merge g3 <- g1 g2 d3
+gate nor g4 <- g0 g3
+gate merge g5 <- d2 d3
+gate nor g6 <- g2 g5
+gate nor g7 <- g5
+gate nor g8 <- g2 d0
+gate nor g9 <- g1 g8
+gate nor g10 <- d3
+gate nor g11 <- g2 g10
+gate nor g12 <- g7 g9 g11
+gate nor g13 <- d1 d0 g5
+gate merge g14 <- g12 g13
+gate merge g15 <- g1 d1
+gate merge g16 <- d3 g15
+gate nor g17 <- g0 g16
+gate merge g18 <- g6 g14 g17
+gate merge g19 <- g4 g18
+gate nor g20 <- d0 g16
+gate nor g21 <- d2 g11
+gate merge g22 <- g4 g20 g21
+gate nor g23 <- d3 g15
+gate nor g24 <- g7 g23
+gate nor g25 <- g8 g24
+gate merge g26 <- g4 g12 g25
+gate nor g27 <- g15
+gate nor g28 <- d0 g11 g27
+gate merge g29 <- g23 g14
+gate merge g30 <- g12 g23 g6
+output g19
+output g22
+output g26
+output g18
+output g28
+output g29
+output g30
+label a g19
+label b g22
+label c g26
+label d g18
+label e g28
+label f g29
+label g g30
