@@ -58,7 +58,7 @@
 use std::collections::HashSet;
 
 use crate::circuits::netlist_builder::NetlistBuilder;
-use crate::compile::topology::{self, GateKind, Operand, Step};
+use crate::compile::topology::{self, GateKind, Operand, SignalPolarity, Step};
 use crate::compile::Netlist;
 
 /// Why a netlist could not be lowered.
@@ -143,16 +143,19 @@ pub fn lower_with_provenance(netlist: &Netlist) -> Result<(Netlist, Vec<usize>),
         let mut built: Vec<String> = Vec::with_capacity(expansion.steps.len());
 
         for (index, step) in expansion.steps.iter().enumerate() {
+            // Resolving a negative external rail can create its shared
+            // inverter, so capture provenance before reading operands.
+            let before = builder.len();
             let operands: Vec<String> = step_operands(step)
                 .iter()
                 .map(|operand| match *operand {
-                    Operand::Input(i) => gate.inputs[i].clone(),
+                    Operand::Input { pin, polarity: SignalPolarity::Positive } => gate.inputs[pin].clone(),
+                    Operand::Input { pin, polarity: SignalPolarity::Negative } => builder.not(&gate.inputs[pin]),
                     Operand::Step(s) => built[s].clone(),
                 })
                 .collect();
 
             let last = index == output_step;
-            let before = builder.len();
             built.push(match step {
                 // A one-input NOR is an inverter, and inverters are shared
                 // circuit-wide -- except when this step *is* the gate's

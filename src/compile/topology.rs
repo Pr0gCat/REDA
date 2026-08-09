@@ -715,11 +715,22 @@ fn or_isolated_entry(arity: usize) -> LibraryEntry {
 // Expansions: how a gate-level gate becomes redstone
 // ---------------------------------------------------------------------
 
+/// Which logical rail of a declared gate input an [`Operand::Input`] reads.
+///
+/// Recipes describe logical topology and can therefore ask for either the
+/// declared signal or its complement. `lowering` decides how the latter rail
+/// is materialised and shared in a concrete netlist.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum SignalPolarity {
+    Positive,
+    Negative,
+}
+
 /// One input of an [`Expansion`] step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operand {
-    /// The gate's `i`-th declared input, in pin order.
-    Input(usize),
+    /// One logical rail of the gate's declared input `pin`, in pin order.
+    Input { pin: usize, polarity: SignalPolarity },
     /// The result of the recipe's `i`-th earlier step. Always refers
     /// backwards, so a recipe is a DAG by construction and needs no cycle
     /// check ([`Expansion::validate`] enforces it).
@@ -814,7 +825,9 @@ impl Expansion {
             }
             for &operand in operands {
                 match operand {
-                    Operand::Input(i) => assert!(i < kind.arity(), "{kind:?} step {index}: no input {i}"),
+                    Operand::Input { pin, .. } => {
+                        assert!(pin < kind.arity(), "{kind:?} step {index}: no input {pin}")
+                    }
                     Operand::Step(s) => {
                         assert!(s < index, "{kind:?} step {index}: operand step {s} is not strictly earlier")
                     }
@@ -833,7 +846,8 @@ impl Expansion {
         let mut values: Vec<bool> = Vec::with_capacity(self.steps.len());
         for step in &self.steps {
             let read = |operand: &Operand| match *operand {
-                Operand::Input(i) => inputs[i],
+                Operand::Input { pin, polarity: SignalPolarity::Positive } => inputs[pin],
+                Operand::Input { pin, polarity: SignalPolarity::Negative } => !inputs[pin],
                 Operand::Step(s) => values[s],
             };
             values.push(match step {
@@ -845,95 +859,97 @@ impl Expansion {
     }
 }
 
-/// How `kind` becomes redstone. The library's central decision, and the one
-/// `abc -genlib` used to make on our behalf.
-///
-/// Each recipe below is stated with the boolean identity that justifies it,
-/// because "is this actually the same function" is the only thing that makes
-/// a recipe right, and it is checked exhaustively rather than trusted (see
-/// [`Expansion::evaluate`]).
+/// The positive-polarity compatibility wrapper for
+/// [`expansion_for_polarity`].
 pub fn expansion_for(kind: GateKind) -> Expansion {
-    use Operand::{Input as I, Step as S};
+    expansion_for_polarity(kind, SignalPolarity::Positive)
+}
+
+/// How `kind` becomes redstone when its declared output is required on the
+/// selected logical rail.
+///
+/// A recipe can require either rail of each external input. It does not add a
+/// generic final inverter: each branch names the NOR/merge topology that
+/// actually computes the selected output polarity.
+pub fn expansion_for_polarity(kind: GateKind, polarity: SignalPolarity) -> Expansion {
+    match polarity {
+        SignalPolarity::Positive => positive_expansion_for(kind),
+        SignalPolarity::Negative => negative_expansion_for(kind),
+    }
+}
+
+fn positive_expansion_for(kind: GateKind) -> Expansion {
+    use Operand::Step as S;
+    use SignalPolarity::{Negative, Positive};
+
+    let positive = |pin| Operand::Input { pin, polarity: Positive };
+    let negative = |pin| Operand::Input { pin, polarity: Negative };
 
     let steps = match kind {
         // The two kinds redstone builds directly: one step, itself.
-        GateKind::Nor(arity) => vec![Step::Nor((0..arity).map(I).collect())],
-        GateKind::Or(arity) => vec![Step::Merge((0..arity).map(I).collect())],
+        GateKind::Nor(arity) => vec![Step::Nor((0..arity).map(positive).collect())],
+        GateKind::Or(arity) => vec![Step::Merge((0..arity).map(positive).collect())],
 
-        // BUF: `NOT(NOT(a)) == a`. There is no wire-only primitive in
-        // redstone -- every real signal path here ends at a torch -- so a
-        // pass-through costs two of them. Same shape as `buf_entry`'s
-        // template, and a test holds the two to it.
-        GateKind::Buf => vec![Step::Nor(vec![I(0)]), Step::Nor(vec![S(0)])],
+        // BUF: `NOT(!a) == a`.
+        GateKind::Buf => vec![Step::Nor(vec![negative(0)])],
 
         // AND: `a & b == !(!a | !b)`. One torch over the two inverted
         // inputs -- the cheap, AND-shaped case.
-        GateKind::And => vec![Step::Nor(vec![I(0)]), Step::Nor(vec![I(1)]), Step::Nor(vec![S(0), S(1)])],
+        GateKind::And => vec![Step::Nor(vec![negative(0), negative(1)])],
 
         // NAND: `!(a & b) == !a | !b`. Same two inverters, but the output is
         // OR-shaped, so it finishes in a merge instead of a torch -- and
         // therefore costs no more torch delay than the AND does.
-        GateKind::Nand => vec![Step::Nor(vec![I(0)]), Step::Nor(vec![I(1)]), Step::Merge(vec![S(0), S(1)])],
+        GateKind::Nand => vec![Step::Merge(vec![negative(0), negative(1)])],
 
         // ANDNOT: `a & !b == !(!a | b)`. One inverter, one torch -- `b`
         // arrives already in the polarity the torch wants.
-        GateKind::AndNot => vec![Step::Nor(vec![I(0)]), Step::Nor(vec![S(0), I(1)])],
+        GateKind::AndNot => vec![Step::Nor(vec![negative(0), positive(1)])],
 
         // ORNOT: `a | !b`. One inverter and a merge: no torch stands on the
         // path from `a` at all.
-        GateKind::OrNot => vec![Step::Nor(vec![I(1)]), Step::Merge(vec![I(0), S(0)])],
+        GateKind::OrNot => vec![Step::Merge(vec![positive(0), negative(1)])],
 
         // XOR: `(a & !b) | (!a & b)` -- two ANDNOTs joined by a merge. Each
         // ANDNOT reuses the inverter the other one needs, so the whole thing
-        // is 4 torches and a merge.
+        // is two product torches and a merge.
         GateKind::Xor => vec![
-            Step::Nor(vec![I(0)]),         // !a
-            Step::Nor(vec![I(1)]),         // !b
-            Step::Nor(vec![S(0), I(1)]),   // a & !b
-            Step::Nor(vec![S(1), I(0)]),   // b & !a
-            Step::Merge(vec![S(2), S(3)]), // their OR
+            Step::Nor(vec![negative(0), positive(1)]), // a & !b
+            Step::Nor(vec![negative(1), positive(0)]), // b & !a
+            Step::Merge(vec![S(0), S(1)]),              // their OR
         ],
         // XNOR: the same two products, joined by a torch instead of a merge,
         // which inverts as it joins.
         GateKind::Xnor => vec![
-            Step::Nor(vec![I(0)]),
-            Step::Nor(vec![I(1)]),
-            Step::Nor(vec![S(0), I(1)]),
-            Step::Nor(vec![S(1), I(0)]),
-            Step::Nor(vec![S(2), S(3)]),
+            Step::Nor(vec![negative(0), positive(1)]),
+            Step::Nor(vec![negative(1), positive(0)]),
+            Step::Nor(vec![S(0), S(1)]),
         ],
 
         // AOI3: `!((a & b) | c)`. Build `a & b` as an AND, then NOR it with
         // `c` -- the OR and the inversion are the same torch.
         GateKind::Aoi3 => vec![
-            Step::Nor(vec![I(0)]),       // !a
-            Step::Nor(vec![I(1)]),       // !b
-            Step::Nor(vec![S(0), S(1)]), // a & b
-            Step::Nor(vec![S(2), I(2)]), // !((a & b) | c)
+            Step::Nor(vec![negative(0), negative(1)]), // a & b
+            Step::Nor(vec![S(0), positive(2)]),         // !((a & b) | c)
         ],
         // OAI3: `!((a | b) & c) == !(a | b) | !c`. De Morgan turns it into a
         // merge of two torches -- no product term is ever built.
         GateKind::Oai3 => vec![
-            Step::Nor(vec![I(0), I(1)]),   // !(a | b)
-            Step::Nor(vec![I(2)]),         // !c
-            Step::Merge(vec![S(0), S(1)]), // their OR
+            Step::Nor(vec![positive(0), positive(1)]), // !(a | b)
+            Step::Merge(vec![S(0), negative(2)]),       // their OR
         ],
         // AOI4: `!((a & b) | (c & d))` -- two ANDs, then one torch that ORs
         // and inverts them together.
         GateKind::Aoi4 => vec![
-            Step::Nor(vec![I(0)]),
-            Step::Nor(vec![I(1)]),
-            Step::Nor(vec![S(0), S(1)]), // a & b
-            Step::Nor(vec![I(2)]),
-            Step::Nor(vec![I(3)]),
-            Step::Nor(vec![S(3), S(4)]), // c & d
-            Step::Nor(vec![S(2), S(5)]),
+            Step::Nor(vec![negative(0), negative(1)]), // a & b
+            Step::Nor(vec![negative(2), negative(3)]), // c & d
+            Step::Nor(vec![S(0), S(1)]),
         ],
         // OAI4: `!((a | b) & (c | d)) == !(a | b) | !(c | d)`. Two torches
         // and a merge -- the cheapest four-input cell in this library.
         GateKind::Oai4 => vec![
-            Step::Nor(vec![I(0), I(1)]),
-            Step::Nor(vec![I(2), I(3)]),
+            Step::Nor(vec![positive(0), positive(1)]),
+            Step::Nor(vec![positive(2), positive(3)]),
             Step::Merge(vec![S(0), S(1)]),
         ],
 
@@ -941,21 +957,80 @@ pub fn expansion_for(kind: GateKind) -> Expansion {
         // products joined by a merge. `b & s == !(!b | !s)` and
         // `a & !s == !(!a | s)`, so three inverters and two product torches.
         GateKind::Mux => vec![
-            Step::Nor(vec![I(1)]),         // !b
-            Step::Nor(vec![I(2)]),         // !s
-            Step::Nor(vec![S(0), S(1)]),   // b & s
-            Step::Nor(vec![I(0)]),         // !a
-            Step::Nor(vec![S(3), I(2)]),   // a & !s
-            Step::Merge(vec![S(2), S(4)]), // their OR
+            Step::Nor(vec![negative(1), negative(2)]), // b & s
+            Step::Nor(vec![negative(0), positive(2)]), // a & !s
+            Step::Merge(vec![S(0), S(1)]),              // their OR
         ],
         // NMUX: the same two products joined by a torch, which inverts.
         GateKind::Nmux => vec![
-            Step::Nor(vec![I(1)]),
-            Step::Nor(vec![I(2)]),
+            Step::Nor(vec![negative(1), negative(2)]),
+            Step::Nor(vec![negative(0), positive(2)]),
             Step::Nor(vec![S(0), S(1)]),
-            Step::Nor(vec![I(0)]),
-            Step::Nor(vec![S(3), I(2)]),
-            Step::Nor(vec![S(2), S(4)]),
+        ],
+    };
+
+    Expansion { steps }
+}
+
+fn negative_expansion_for(kind: GateKind) -> Expansion {
+    use Operand::Step as S;
+    use SignalPolarity::{Negative, Positive};
+
+    let positive = |pin| Operand::Input { pin, polarity: Positive };
+    let negative = |pin| Operand::Input { pin, polarity: Negative };
+
+    let steps = match kind {
+        // The complement of a one-input NOR is a buffer, which still needs a
+        // valid hardware step because a merge has at least two inputs.
+        GateKind::Nor(1) => vec![Step::Nor(vec![negative(0)])],
+        GateKind::Nor(arity) => vec![Step::Merge((0..arity).map(positive).collect())],
+        GateKind::Or(arity) => vec![Step::Nor((0..arity).map(positive).collect())],
+        GateKind::Buf => vec![Step::Nor(vec![positive(0)])],
+
+        GateKind::And => vec![Step::Merge(vec![negative(0), negative(1)])],
+        GateKind::Nand => vec![Step::Nor(vec![negative(0), negative(1)])],
+        GateKind::AndNot => vec![Step::Merge(vec![negative(0), positive(1)])],
+        GateKind::OrNot => vec![Step::Nor(vec![positive(0), negative(1)])],
+
+        GateKind::Xor => vec![
+            Step::Nor(vec![negative(0), positive(1)]),
+            Step::Nor(vec![negative(1), positive(0)]),
+            Step::Nor(vec![S(0), S(1)]),
+        ],
+        GateKind::Xnor => vec![
+            Step::Nor(vec![negative(0), positive(1)]),
+            Step::Nor(vec![negative(1), positive(0)]),
+            Step::Merge(vec![S(0), S(1)]),
+        ],
+
+        GateKind::Aoi3 => vec![
+            Step::Nor(vec![negative(0), negative(1)]),
+            Step::Merge(vec![S(0), positive(2)]),
+        ],
+        GateKind::Oai3 => vec![
+            Step::Nor(vec![positive(0), positive(1)]),
+            Step::Nor(vec![S(0), negative(2)]),
+        ],
+        GateKind::Aoi4 => vec![
+            Step::Nor(vec![negative(0), negative(1)]),
+            Step::Nor(vec![negative(2), negative(3)]),
+            Step::Merge(vec![S(0), S(1)]),
+        ],
+        GateKind::Oai4 => vec![
+            Step::Nor(vec![positive(0), positive(1)]),
+            Step::Nor(vec![positive(2), positive(3)]),
+            Step::Nor(vec![S(0), S(1)]),
+        ],
+
+        GateKind::Mux => vec![
+            Step::Nor(vec![negative(1), negative(2)]),
+            Step::Nor(vec![negative(0), positive(2)]),
+            Step::Nor(vec![S(0), S(1)]),
+        ],
+        GateKind::Nmux => vec![
+            Step::Nor(vec![negative(1), negative(2)]),
+            Step::Nor(vec![negative(0), positive(2)]),
+            Step::Merge(vec![S(0), S(1)]),
         ],
     };
 
@@ -1099,8 +1174,16 @@ pub struct RealisationCost {
 ///   library cannot see it. The measured whole-circuit numbers in
 ///   `tests/verilog_frontend.rs` are the honest total; this is the part a
 ///   library can know on its own.
+/// The positive-polarity compatibility wrapper for
+/// [`expansion_cost_for_polarity`].
 pub fn expansion_cost(kind: GateKind) -> RealisationCost {
-    let expansion = expansion_for(kind);
+    expansion_cost_for_polarity(kind, SignalPolarity::Positive)
+}
+
+/// What `kind` costs when its selected output polarity is realised through
+/// its own signed [`Expansion`].
+pub fn expansion_cost_for_polarity(kind: GateKind, polarity: SignalPolarity) -> RealisationCost {
+    let expansion = expansion_for_polarity(kind, polarity);
 
     let mut area = 0u32;
     // Torch depth of each step's result: how many torches stand on the
@@ -1112,7 +1195,7 @@ pub fn expansion_cost(kind: GateKind) -> RealisationCost {
         let upstream = operands
             .iter()
             .map(|operand| match *operand {
-                Operand::Input(_) => 0,
+                Operand::Input { .. } => 0,
                 Operand::Step(s) => depth[s],
             })
             .max()
@@ -1555,7 +1638,9 @@ mod tests {
     #[test]
     fn every_expansion_is_well_formed() {
         for kind in every_gate_kind() {
-            expansion_for(kind).validate(kind);
+            for polarity in [SignalPolarity::Positive, SignalPolarity::Negative] {
+                expansion_for_polarity(kind, polarity).validate(kind);
+            }
         }
     }
 
@@ -1565,10 +1650,10 @@ mod tests {
     /// statement of each gate's boolean function, not a second copy of the
     /// recipe.
     #[test]
-    fn every_expansion_computes_its_own_gates_truth_table() {
+    fn every_positive_expansion_computes_its_own_gates_truth_table() {
         for kind in every_gate_kind() {
             let arity = kind.arity();
-            let expansion = expansion_for(kind);
+            let expansion = expansion_for_polarity(kind, SignalPolarity::Positive);
             for bits in 0..(1u32 << arity) {
                 let inputs: Vec<bool> = (0..arity).map(|i| (bits >> i) & 1 == 1).collect();
                 assert_eq!(
@@ -1578,6 +1663,47 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// Negative recipes are first-class topologies, not a positive recipe
+    /// with a final inverter appended by a caller.
+    #[test]
+    fn every_negative_expansion_computes_the_complement_of_its_gate() {
+        for kind in every_gate_kind() {
+            let arity = kind.arity();
+            for bits in 0..(1u32 << arity) {
+                let inputs: Vec<bool> = (0..arity).map(|i| (bits >> i) & 1 == 1).collect();
+                assert_eq!(
+                    expansion_for_polarity(kind, SignalPolarity::Negative).evaluate(&inputs),
+                    !kind.evaluate(&inputs),
+                    "{kind:?} on {inputs:?}: the negative expansion does not compute the complement"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nand_is_the_negative_realisation_of_and() {
+        assert_eq!(
+            expansion_cost_for_polarity(GateKind::And, SignalPolarity::Negative),
+            expansion_cost(GateKind::Nand),
+        );
+    }
+
+    #[test]
+    fn and_selects_signed_torch_and_merge_topologies() {
+        let negative_inputs = vec![
+            Operand::Input { pin: 0, polarity: SignalPolarity::Negative },
+            Operand::Input { pin: 1, polarity: SignalPolarity::Negative },
+        ];
+        assert_eq!(
+            expansion_for_polarity(GateKind::And, SignalPolarity::Positive).steps,
+            vec![Step::Nor(negative_inputs.clone())],
+        );
+        assert_eq!(
+            expansion_for_polarity(GateKind::And, SignalPolarity::Negative).steps,
+            vec![Step::Merge(negative_inputs)],
+        );
     }
 
     /// The two kinds redstone builds directly expand to exactly themselves,
@@ -1590,32 +1716,36 @@ mod tests {
         for arity in 1..=3 {
             assert_eq!(
                 expansion_for(GateKind::Nor(arity)).steps,
-                vec![Step::Nor((0..arity).map(Operand::Input).collect())]
+                vec![Step::Nor(
+                    (0..arity)
+                        .map(|pin| Operand::Input { pin, polarity: SignalPolarity::Positive })
+                        .collect()
+                )]
             );
         }
         for arity in 2..=3 {
             assert_eq!(
                 expansion_for(GateKind::Or(arity)).steps,
-                vec![Step::Merge((0..arity).map(Operand::Input).collect())]
+                vec![Step::Merge(
+                    (0..arity)
+                        .map(|pin| Operand::Input { pin, polarity: SignalPolarity::Positive })
+                        .collect()
+                )]
             );
         }
     }
 
-    /// `Buf` is stated twice -- as a `Template` (two chained torches) and as
-    /// an `Expansion` (two chained `Nor` steps) -- because the two serve
-    /// different consumers. This holds them to the same shape so they cannot
-    /// drift.
+    /// A signed recipe can consume the opposite rail directly; lowering
+    /// materialises that rail through its shared inverter cache.
     #[test]
-    fn expansion_for_buf_agrees_with_the_two_torch_template() {
+    fn positive_buf_reads_the_negative_input_rail() {
         let expansion = expansion_for(GateKind::Buf);
-        assert_eq!(expansion.steps, vec![Step::Nor(vec![Operand::Input(0)]), Step::Nor(vec![Operand::Step(0)])]);
-
-        let template = &buf_entry().template;
-        assert_eq!(template.nodes.len(), expansion.steps.len(), "one torch node per Nor step");
         assert_eq!(
-            entry_cost(GateKind::Buf, &buf_entry()),
-            expansion_cost(GateKind::Buf),
-            "the two statements of Buf's realisation must cost the same"
+            expansion.steps,
+            vec![Step::Nor(vec![Operand::Input {
+                pin: 0,
+                polarity: SignalPolarity::Negative,
+            }])]
         );
     }
 
@@ -1647,21 +1777,20 @@ mod tests {
     fn finishing_in_a_merge_costs_no_gate_delay_and_finishing_in_a_torch_costs_one() {
         let torch = crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS;
 
-        // NAND and AND share their two inverters; NAND finishes in a merge,
-        // AND in a torch, so NAND is the *cheaper* of the two here -- the
-        // exact opposite of the CMOS instinct.
-        assert_eq!(expansion_cost(GateKind::Nand).delay_game_ticks, torch);
-        assert_eq!(expansion_cost(GateKind::And).delay_game_ticks, 2 * torch);
+        // NAND and AND consume the same negative rails; NAND finishes in a
+        // merge while AND finishes in a torch.
+        assert_eq!(expansion_cost(GateKind::Nand).delay_game_ticks, 0);
+        assert_eq!(expansion_cost(GateKind::And).delay_game_ticks, torch);
 
-        // XOR and XNOR are the same four torches; XOR joins them with a
-        // merge, XNOR with a torch.
-        assert_eq!(expansion_cost(GateKind::Xor).delay_game_ticks, 2 * torch);
-        assert_eq!(expansion_cost(GateKind::Xnor).delay_game_ticks, 3 * torch);
+        // XOR and XNOR are the same two product torches; XOR joins them with
+        // a merge, XNOR with a torch.
+        assert_eq!(expansion_cost(GateKind::Xor).delay_game_ticks, torch);
+        assert_eq!(expansion_cost(GateKind::Xnor).delay_game_ticks, 2 * torch);
 
         // OAI4 is four inputs for two torch levels, because De Morgan turns
         // its whole output stage into a merge.
         assert_eq!(expansion_cost(GateKind::Oai4).delay_game_ticks, torch);
-        assert_eq!(expansion_cost(GateKind::Aoi4).delay_game_ticks, 3 * torch);
+        assert_eq!(expansion_cost(GateKind::Aoi4).delay_game_ticks, 2 * torch);
     }
 
     #[test]
