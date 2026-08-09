@@ -1202,6 +1202,7 @@ pub struct RealisationCost {
 ///   library cannot see it. The measured whole-circuit numbers in
 ///   `tests/verilog_frontend.rs` are the honest total; this is the part a
 ///   library can know on its own.
+///
 /// The positive-polarity compatibility wrapper for
 /// [`expansion_cost_for_polarity`].
 pub fn expansion_cost(kind: GateKind) -> RealisationCost {
