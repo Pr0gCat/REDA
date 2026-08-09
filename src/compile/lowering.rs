@@ -26,13 +26,14 @@
 //!   hand-written circuit under `circuits/` is NOR-only, so `lower` returns
 //!   them gate-for-gate, name-for-name, in the same order -- which is what
 //!   keeps `and4`/`full_adder`/`segment_a`/`seven_segment` at exactly the
-//!   block and tick counts they have always had, with `compile` calling
-//!   this unconditionally. `lowering_is_the_identity_on_a_realisable_netlist`
+//!   block and tick counts they have always had even though every caller now
+//!   runs this pass over them. `lowering_is_the_identity_on_a_realisable_netlist`
 //!   holds it to that.
 //! - **It is idempotent.** `lower(lower(n)) == lower(n)`, which follows
-//!   from the first property and is what lets `compile` call it even when
-//!   the caller already has (`mc_dump` and the viewer both do, because they
-//!   need to name the same gates `compile` places).
+//!   from the first property. `compile` does not lower for its caller (see
+//!   its own doc comment for why), so a caller that needs to name the gates
+//!   `compile` places -- `mc_dump` and the viewer both do -- lowers once and
+//!   passes the same netlist to both, and nothing breaks if it lowers twice.
 //!
 //! # Names
 //!

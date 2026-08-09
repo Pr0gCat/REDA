@@ -1,5 +1,26 @@
 # Gate types the netlist can actually use, and the free OR
 
+> **Status, 2026-08-09.** This landed, and then went further than it asked for.
+> `Gate` gained its `kind` field and OR became a declared wire merge, as specced
+> — but the genlib was not broadened, it was **deleted** (`7bb3155`). ABC is
+> handed no library at all now; it optimises logic and stops at Yosys's default
+> gate set, and `src/compile/lowering.rs` applies this project's own topology
+> library to what comes out. So the code this document quotes below is gone:
+> `src/frontend/redstone_nor.genlib`, the three-field `Gate` struct, its Chinese
+> doc comment, and `realize_template`. Read the argument, not the snippets.
+>
+> The argument is preserved as written, including the parts the implementation
+> overtook, because the reasoning is why the change happened. What is *not*
+> preserved as-is: see `2026-08-09-polarity-assignment.md`, which measures what
+> deleting the genlib cost — the synthesised decoder went from **0%** of the
+> `NOR(n) -> NOT` pattern counted below to **50%** of it, because absorbing
+> inversions across gate boundaries was ABC's other job and nothing took it
+> over.
+>
+> The table below re-measures exactly today (`cargo run --release --bin mc_dump
+> -- <circuit>`, counting a `NOR(n)` whose sole consumer is a 1-input NOR,
+> together with that consumer): 8/22, 28/46, 66/84.
+
 ## The measurement that started this
 
 Counting what the compiled decoder's gates are for:

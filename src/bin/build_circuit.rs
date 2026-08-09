@@ -8,7 +8,7 @@
 //! working directory, so running it from anywhere else writes `output/`
 //! there instead.
 //!
-//! The full seven-segment decoder is 232x5x298 -- slow to render in
+//! The full seven-segment decoder is 232x7x257 -- slow to render in
 //! browser-based litematic viewers, which have to build a mesh over that
 //! whole grid. The smaller circuits listed here are a size ladder meant to
 //! open quickly in the same kind of viewer.

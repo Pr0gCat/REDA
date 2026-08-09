@@ -1,13 +1,24 @@
-//! 把一個 NOR 邏輯閘網表編譯成一個能在 Minecraft 裡運作的紅石世界。
+//! Compile a netlist of realisable gates into a redstone world that works in
+//! Minecraft.
 //!
-//! 這是第一條端到端的編譯路徑：網表進去，`.litematic` 出來，模擬器驗證
-//! 它跟真值表一致。
+//! This is the end-to-end path: a netlist goes in, a `.litematic` comes out,
+//! and the simulator checks it against the truth table.
 //!
-//! # 只有一種閘：NOR
+//! # Two realisable gates: NOR, and the wire merge
 //!
-//! 紅石的天然閘基底就是 NOR —— 多條紅石粉匯入一個方塊，旁邊插一支火把：
-//! 任一輸入充能那個方塊，火把就熄滅。NOR 是通用閘，任何布林函數都能只用
-//! NOR 組出來，所以這是唯一需要的 cell。
+//! Redstone's native gate is NOR -- several dust runs feed one block with a
+//! torch on its side: power any input and the torch goes dark. NOR is
+//! universal, so it alone would do. But an OR needs no gate at all: two dust
+//! runs joining take the maximum of their strengths, which *is* the
+//! operation, for no torch and no tick. So [`compile`] accepts exactly two
+//! kinds, [`topology::GateKind::Nor`] and [`topology::GateKind::Or`] (a
+//! declared wire merge), and nothing else.
+//!
+//! Everything richer -- `$_AND_`, `$_NAND_`, `$_XOR_`, `$_MUX_`, the whole
+//! gate level a Verilog frontend produces -- is a [`topology::GateKind`] too,
+//! and [`lowering::lower`] rewrites it into those two before it gets here.
+//! `compile` will not run that pass for you; see its own doc comment for why
+//! that is deliberate.
 //!
 //! # Placement and routing
 //!
@@ -82,8 +93,10 @@ pub struct Gate {
     ///   the predicate the placer and both invariants ask.
     ///
     /// Every other kind is gate level and has no realisation of its own;
-    /// [`lowering::lower`] rewrites it into the two that do, and [`compile`]
-    /// runs that pass before it places anything.
+    /// [`lowering::lower`] rewrites it into the two that do, and the caller
+    /// has to run that pass before [`compile`] will place anything -- see
+    /// [`compile`]'s own doc comment for why it will not do it implicitly,
+    /// and [`CompileError::NotRealisable`] for what happens if it is skipped.
     pub kind: topology::GateKind,
 }
 

@@ -24,9 +24,14 @@ cnt   synth   {NOT:1, AND:1, NAND:1, XOR:2, XNOR:1, $_DFF_P_: 4}
 cnt   +abc    {NOT:6, NOR:9, $_DFF_P_: 4}
 ```
 
+(The `+abc` rows were taken when `synth.py` still ran `abc -genlib
+redstone_nor.genlib`, which is why `cnt` comes out as NOT/NOR. Plain `abc`, what
+runs since `7bb3155`, leaves Yosys's default gate set instead. The finding these
+lines are here for is unaffected: the four `$_DFF_P_` pass through either way.)
+
 A flip-flop is a **primitive cell** in Yosys, not a composition of gates. abc is
-combinational and maps only the logic *between* flip-flops; the flip-flops pass
-through untouched.
+combinational and optimises only the logic *between* flip-flops; the flip-flops
+pass through untouched.
 
 This mirrors real flows, where a flip-flop comes from the standard cell library
 as a designed cell — nobody synthesises one from gates, because the result is
@@ -134,13 +139,24 @@ again.
 
 ## What must not regress
 
+Re-measured 2026-08-09 at `f70ef0e`, with
+`cargo test --release --test reference_circuits -- --nocapture` and
+`cargo test --release --test verilog_frontend -- --nocapture`:
+
 | circuit | gates | blocks | settle |
 |---|---|---|---|
 | and4 | 7 | 472 | 24 |
 | full_adder | 22 | 1784 | 62 |
 | segment_a | 46 | 6416 | 82 |
 | seven_segment | 84 | 16244 | 112 |
-| seven_segment (Verilog) | 37 | 8130 | 70 |
+| seven_segment (Verilog) | 56 | 12348 | 88 |
+
+The four hand-written rows are unchanged from when this was written. The Verilog
+row is not: it read `37 | 8130 | 70` here, which was the ABC-technology-mapped
+decoder. ABC no longer maps (`7bb3155`), and the gate-level netlist that
+replaced it lowers to a larger circuit. That is a known open regression, not a
+new floor to defend — see `2026-08-09-polarity-assignment.md`, whose bar is
+`99107f4`'s measured 31 gates / 7888 blocks / 82 ticks.
 
 Four invariants stay: spacing, connectivity, torch merge, signal strength. None
 may be weakened to admit a register — and if one fires, it is naming what is

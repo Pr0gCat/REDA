@@ -4,8 +4,10 @@
 //! Everything else in [`crate::circuits`] is a netlist this project builds
 //! itself, gate by gate. These are not: they are HDL sources handed to
 //! [`crate::frontend::synthesize_verilog`], which shells out to Yosys and
-//! technology-maps the result onto the same NOR cell library. Same target
-//! functions, entirely different provenance -- which is exactly why they are
+//! reads back the gate-level netlist ABC's logic optimisation leaves behind
+//! (`compile::lowering` turns that into redstone, not ABC -- see
+//! `crate::frontend`'s own doc comment). Same target functions, entirely
+//! different provenance -- which is exactly why they are
 //! kept in their own catalog with their own `verilog:`-prefixed names rather
 //! than being added to `available_circuits()` alongside `and4` and
 //! `seven_segment` in `mc_dump`/`build_circuit`:

@@ -156,11 +156,16 @@ valid, non-cyclic, fully-driven input. Minimal reproduction:
 
 ```rust
 let gates = vec![
-    Gate { name: "g0".into(), inputs: vec!["in0", "in3", "in2"], output: "g0".into(), is_merge: false },
-    Gate { name: "g1".into(), inputs: vec!["in1", "in3", "in4"], output: "g1".into(), is_merge: false },
+    Gate::nor("g0", &["in0", "in3", "in2"]),
+    Gate::nor("g1", &["in1", "in3", "in4"]),
 ];
 // inputs: in0, in1, in2, in3, in4; outputs: g0, g1
 ```
+
+(Transcribed 2026-08-09 into the constructor that exists today. `Gate`'s
+`is_merge: bool` field became `kind: topology::GateKind` in `ac98e35`, so the
+struct literal this was originally written as no longer compiles; `is_merge`
+survives as a method. Same two gates, same reproduction.)
 
 `compile()` returns
 `ConnectivityViolation { cell: (28, 1, 19), found_net: "in1", expected_cell: (28, 1, 17), expected_net: "in2" }`
@@ -210,6 +215,18 @@ identical mechanism, not a proxy for it), and is reported here rather than
 fixed, per this task's scope. It does not affect any of this project's five
 reference circuits (none of their nets land at this exact distance-12
 coincidence), which is why 314 tests have stayed green through it.
+
+**Fixed in `067f7e1`.** `probe_reservation` is no longer a snapshot: it is
+mutated in place as each candidate is promoted, folding in every cell that
+candidate's `bent_path_cells` really occupies rather than only its fixed
+columns. So a later candidate's check sees an earlier sibling's jog and refuses
+to overlap it, which is what makes "no candidate's promotion can invalidate
+another's answer" true — not because jogs cannot collide, but because the check
+can now see them. The diagnosis above stands as written; only "reported here
+rather than fixed" has expired. `resolve_bypass_and_geometry`'s own doc comment
+carries the argument, and `2026-08-08-cell-type-costs.md`'s bare-NOR3 test went
+from `..._hits_a_router_edge_case` to `..._now_compiles_and_matches_its_truth_table`
+in the same change.
 
 ## Writing the rule down
 

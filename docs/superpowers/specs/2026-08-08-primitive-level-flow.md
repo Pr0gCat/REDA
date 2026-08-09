@@ -32,6 +32,11 @@ those are inefficiencies in the router — they are what the model is.
 netlist                gate-level graph: gates and the signals between them
    |                   (Yosys/ABC output, or a hand-built Netlist)
    |
+   |  lowering         since 7bb3155, an explicit pass of its own:
+   |                   `compile::lowering::lower` rewrites $_AND_/$_MUX_/...
+   |                   into the two kinds redstone builds (NOR and merge).
+   |                   `compile()` refuses to do this implicitly.
+   |
    |  gate topology    how one gate is realised in primitives.
    |                   Not a fixed template -- a choice, and an
    |                   optimisation point.
@@ -68,7 +73,9 @@ them, there is no such thing as "inside a gate".
 
 Gate topology is a **library**: gate type to primitive graph. `NOT` maps to
 `input — torch — output`; each NOR arity maps to its own graph. It is written
-once and consulted, not derived per gate.
+once and consulted, not derived per gate. (Since `7bb3155` the library covers
+the whole `GateKind` set Yosys emits — `And`, `Nand`, `Xor`, `Mux`, the AOI/OAI
+family — not just the NOR arities it had when this was written.)
 
 This is a standard cell library that stops at connectivity instead of going all
 the way to layout. Substituting each gate in the netlist for its library entry
@@ -235,8 +242,10 @@ find immediately. They explain a result; they are not what is asked for.
 
 Four invariants run unconditionally in `compile()`: spacing (keep-out derived
 from `connectivity::dust_reach`), connectivity (actual equals intended), torch
-merge (each gate's geometry really implements a NOR), and signal strength (every
-net arrives above zero).
+merge (each gate's geometry really implements the gate it declares -- a NOR's a
+torch, a declared wire merge's a junction with no torch at all, which
+`MergeGroups` is what tells them apart), and signal strength (every net arrives
+above zero).
 
 They are **constraints, not cost terms**. A layout that violates one is not
 expensive, it is illegal. Folding correctness into a penalty weight produces a
@@ -263,6 +272,15 @@ diagnose. The same collision now reports its own coordinates.
 
 The truth tables and the RCON conformance run are the floor. A faster, smaller
 circuit that fails either is not a result.
+
+**Re-measured 2026-08-09 at `f70ef0e`.** The four hand-written rows are still
+exactly right, to the block and the tick. The Verilog row is not: it is now
+56 gates / 12348 blocks / 88 ticks, because ABC stopped technology-mapping
+(`7bb3155`) and nothing replaced the inversion-absorbing it was doing inside
+the mapping. That is an open regression with a spec of its own
+(`2026-08-09-polarity-assignment.md`), not a new floor — anyone measuring a
+planner against this table should defend the four hand-written rows and treat
+the Verilog one as moving ground.
 
 ## Order
 

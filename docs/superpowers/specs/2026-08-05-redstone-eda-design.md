@@ -3,6 +3,28 @@
 日期：2026-08-05
 狀態：架構定案，待實作計畫
 
+> **Note, 2026-08-09.** This is the founding design document. It is kept as
+> written, and large parts of it describe roads not taken. Three things a reader
+> should not act on as current:
+>
+> - **§3's two-mapper split (`abc` + liberty, and an e-graph extraction) never
+>   happened.** There is exactly one technology mapper, and it is neither:
+>   `src/compile/topology.rs`'s library, applied by `src/compile/lowering.rs`.
+>   The liberty/genlib file §11 plans for was written, used, and deleted
+>   (`7bb3155`); ABC is handed no library and does no mapping at all, only logic
+>   optimisation. §5.3's e-graph does not exist.
+> - **The `gate` level is not "NOR 為主"** (§4's IR table). It carries Yosys's
+>   full simple-cell vocabulary now — `$_AND_`, `$_NAND_`, `$_XOR_`, `$_MUX_`,
+>   the AOI/OAI family — and `Gate::kind` records which.
+> - **§16's directory tree is not this repo's.** Compare `src/` before assuming
+>   any path in it exists.
+>
+> The thesis in §2 — that delay in redstone is a placement problem, not a logic
+> problem — is the one part of this document the implementation has confirmed
+> rather than overtaken. The current state of the pipeline is in the dated specs
+> from 2026-08-07 onward, and the open front is
+> `2026-08-09-polarity-assignment.md`.
+
 ---
 
 ## 1. 目標

@@ -1,5 +1,28 @@
 # Pricing the cell types honestly
 
+> **Status, 2026-08-09.** The cost measurements below stand — they are
+> NOR-network constructions run through the real placer and the real simulator,
+> and nothing about redstone has changed. What has changed is who reads them.
+> `src/frontend/redstone_nor.genlib` was deleted in `7bb3155`; ABC is handed no
+> library and does no mapping. The price list lives in `src/compile/topology.rs`
+> now (`expansion_cost` / `entry_cost`), which `compile::lowering::lower`
+> consults directly. So read "the genlib" throughout this document — and the
+> whole "What this implies for the genlib" section — as "the topology library",
+> and read every recommendation about what to offer ABC as moot: ABC is not
+> being offered anything. `genlib_cost` survives as a function name only; its
+> doc comment says so.
+>
+> Two other claims here have expired the same way. `Gate` is no longer "the
+> NOR-only `Gate` type" with "no kind field at all" -- it has carried
+> `kind: topology::GateKind` since `ac98e35`, which is what the referenced spec
+> asked for. The gap this document identified around a comparator is still real;
+> the reason given for it is not.
+>
+> The reference-circuit spot check under "Status" was true at the commit it was
+> taken at. It is not current: `verilog seven_segment` is now 12348 blocks / 88
+> ticks, measured, and `2026-08-09-polarity-assignment.md` explains why it grew.
+> The four hand-written rows are unchanged.
+
 ## Status
 
 Done: every cell type asked for is measured, two of the spec's non-NOR claims

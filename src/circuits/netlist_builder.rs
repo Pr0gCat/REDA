@@ -1,5 +1,7 @@
-//! Netlist construction, in the two things redstone actually builds: NOR
-//! gates (fan-in 1..=3) and wire merges (fan-in 2..=3).
+//! Netlist construction, mostly in the two things redstone actually builds:
+//! NOR gates (fan-in 1..=3) and wire merges (fan-in 2..=3). `cell` also
+//! builds a gate-level `GateKind` for the Verilog frontend, which is the one
+//! caller that has a kind before it has a realisation.
 //!
 //! Shared by every reference circuit under `circuits/` -- the seven-segment
 //! decoder, and the smaller circuits alongside it -- so the NOR-tree
