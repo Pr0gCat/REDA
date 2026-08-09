@@ -234,6 +234,47 @@ released its forceload, and the server was stopped over RCON with both ports
 confirmed closed. The complete per-vector evidence is committed as
 `conformance/results/verilog_decoder_task4_afb3a5f.json`.
 
+## Task 4 P1: official dump lowering and fresh re-confirmation
+
+The retained 47-gate design was correctly measured by the direct lowering
+acceptance test, but `mc_dump` still called ordinary `lower` for every selected
+circuit. Consequently the public `mc_dump verilog:seven_segment` artifact
+regressed to the all-positive 56 gates / 12,348 blocks representation even
+though the Verilog-specific lowering result was 47 / 10,088. This was an
+integration boundary bug, not a new optimisation target.
+
+Integration commit `976898406b25c4329642caa3c1d3e5f4a57c5377` makes both
+Verilog entry points (`verilog:...` and `verilog <file.v> <top>`) call
+`lower_optimised`, while all hand-written catalog circuits explicitly retain
+ordinary `lower`. No fan-in-packing code was restored. The public-command
+regression test invokes the compiled `mc_dump` binary and requires exactly 47
+`GATE`, 47 `GATEOUT`, and 10,088 `BLOCK` records for
+`verilog:seven_segment`.
+
+From that exact integration commit, the official dump command was:
+
+```powershell
+cargo run --release --bin mc_dump -- verilog:seven_segment > C:\Users\LTY\AppData\Local\Temp\reda-task4-9768984-verilog-seven-segment.txt
+```
+
+It produced 47 `GATE`, 47 `GATEOUT`, and 10,088 `BLOCK` lines; its SHA-256 was
+`CA50ED0E7D13169AD0EA0264F4AB23F89088352C31D3A37EF2C4834E269DBB2D`.
+
+A new local Minecraft 1.20.1 server process (jar SHA-1
+`84194A2F286EF7C14ED7CE0090DBA59902951553`) then ran the full default
+four-input vector space:
+
+```powershell
+python conformance/circuit_conformance.py --dump "C:\Users\LTY\AppData\Local\Temp\reda-task4-9768984-verilog-seven-segment.txt" --properties "C:\Users\LTY\Desktop\REDA\minecraft-server\server\server.properties" --out "conformance/results/verilog_decoder_task4_9768984.json" --label "task4-mc-dump-9768984-20260810" --origin "170000,151,140000"
+```
+
+The result file records 10,088 non-air blocks, **16/16 vectors passed**, and
+**0 mismatches**. The command used neither `--no-clear` nor `--keep`; its
+cleanup released forceload, which RCON confirmed at the origin before the
+server was stopped normally. The complete command transcript and automated
+scope evidence are in
+`docs/superpowers/reports/2026-08-10-task4-mc-dump-conformance.md`.
+
 ## Out of scope
 
 - **Reconstructing gate kinds by pattern-matching NOR clusters.** That is the
