@@ -94,7 +94,7 @@
 use std::path::Path;
 
 use reda::circuits::{and4, full_adder, seven_segment, verilog};
-use reda::compile::lowering::lower;
+use reda::compile::lowering::{lower, lower_optimised};
 use reda::compile::{compile, Netlist};
 use reda::redstone::world::block::{BlockKind, Face, Facing};
 use reda::redstone::world::storage::World;
@@ -164,6 +164,16 @@ struct SelectedCircuit {
     name: String,
     netlist: Netlist,
     output_labels: Vec<(String, String)>,
+    lowering_path: LoweringPath,
+}
+
+/// The lowering contract chosen by the circuit's source: hand-written
+/// reference netlists retain the long-standing compatibility path, while a
+/// synthesized netlist can use the whole-netlist polarity assignment.
+#[derive(Clone, Copy)]
+enum LoweringPath {
+    Ordinary,
+    Optimised,
 }
 
 fn usage(circuits: &[NamedCircuit]) -> String {
@@ -199,7 +209,12 @@ fn select(args: &[String], circuits: &[NamedCircuit]) -> Result<SelectedCircuit,
         };
         let (netlist, output_labels) = verilog::synthesize_file(Path::new(path), top_module)
             .map_err(|err| format!("could not synthesize {path} ({top_module}): {err}"))?;
-        return Ok(SelectedCircuit { name: format!("verilog {path}:{top_module}"), netlist, output_labels });
+        return Ok(SelectedCircuit {
+            name: format!("verilog {path}:{top_module}"),
+            netlist,
+            output_labels,
+            lowering_path: LoweringPath::Optimised,
+        });
     }
 
     let requested = args.first().expect("select is only called with at least one argument");
@@ -208,7 +223,12 @@ fn select(args: &[String], circuits: &[NamedCircuit]) -> Result<SelectedCircuit,
         let (netlist, output_labels) = circuit
             .synthesize()
             .map_err(|err| format!("could not synthesize '{}': {err}", circuit.name))?;
-        return Ok(SelectedCircuit { name: circuit.name.to_string(), netlist, output_labels });
+        return Ok(SelectedCircuit {
+            name: circuit.name.to_string(),
+            netlist,
+            output_labels,
+            lowering_path: LoweringPath::Optimised,
+        });
     }
 
     if let Some(circuit) = circuits.iter().find(|c| c.name == requested.as_str()) {
@@ -216,6 +236,7 @@ fn select(args: &[String], circuits: &[NamedCircuit]) -> Result<SelectedCircuit,
             name: circuit.name.to_string(),
             netlist: (circuit.build)(),
             output_labels: (circuit.output_labels)(),
+            lowering_path: LoweringPath::Ordinary,
         });
     }
 
@@ -301,7 +322,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let SelectedCircuit { name, netlist, output_labels } = match select(&args, &circuits) {
+    let SelectedCircuit { name, netlist, output_labels, lowering_path } = match select(&args, &circuits) {
         Ok(selected) => selected,
         Err(message) => {
             eprintln!("{message}");
@@ -312,7 +333,10 @@ fn main() {
     // Lower before compiling -- `compile` requires it, and every `GATE` line
     // below has to name a gate that was really placed (see this module's own
     // doc comment).
-    let netlist = match lower(&netlist) {
+    let netlist = match match lowering_path {
+        LoweringPath::Ordinary => lower(&netlist),
+        LoweringPath::Optimised => lower_optimised(&netlist),
+    } {
         Ok(lowered) => lowered,
         Err(err) => {
             eprintln!("circuit '{name}' could not be lowered into redstone: {err}");
