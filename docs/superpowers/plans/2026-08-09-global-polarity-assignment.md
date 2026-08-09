@@ -32,6 +32,7 @@
 
 **Files:**
 - Modify: `src/compile/topology.rs:730-1125`
+- Modify: `src/compile/lowering.rs:145-151` (mechanical exhaustive-match migration only)
 - Test: `src/compile/topology.rs` test module
 
 **Interfaces:**
@@ -86,7 +87,7 @@ pub fn expansion_for_polarity(kind: GateKind, polarity: SignalPolarity) -> Expan
 }
 ```
 
-Normalise the existing recipes so their external operands state what they actually require. For example, positive AND becomes `Nor([Input{pin: 0, polarity: Negative}, Input{pin: 1, polarity: Negative}])`; negative AND is the same inputs finished by `Merge`. Do the same for every supported kind, including asymmetric pin order for `AndNot` and `Mux`. Do not append a generic final inverter: the selected recipe itself must represent the other polarity. Make `expansion_for` call the positive branch and derive cost by walking the selected expansion exactly as today's `expansion_cost` does.
+Normalise the existing recipes so their external operands state what they actually require. For example, positive AND becomes `Nor([Input{pin: 0, polarity: Negative}, Input{pin: 1, polarity: Negative}])`; negative AND is the same inputs finished by `Merge`. Do the same for every supported kind, including asymmetric pin order for `AndNot` and `Mux`. Do not append a generic final inverter: the selected recipe itself must represent the other polarity. Make `expansion_for` call the positive branch and derive cost by walking the selected expansion exactly as today's `expansion_cost` does. Update `lowering.rs` only enough to compile against the new enum shape; resolving a negative requested input rail remains Task 2.
 
 - [ ] **Step 4: Run topology unit tests and the full root test suite**
 
