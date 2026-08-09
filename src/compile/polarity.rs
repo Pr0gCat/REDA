@@ -19,6 +19,9 @@ pub enum PolarityError {
     /// A declared output must resolve to a source-gate rail or to a primary
     /// input rail before lowering can preserve it.
     OutputHasNoProducer { output: String },
+    /// A directly realisable gate reached scoring, but the default physical
+    /// library has no footprint for its declared kind.
+    MissingDefaultLibraryEntry { kind: GateKind },
     /// Validation performed by the assigned lowering itself, such as a bad
     /// gate arity or an unresolved gate input.
     Lowering(LowerError),
@@ -31,6 +34,9 @@ impl std::fmt::Display for PolarityError {
             PolarityError::OutputHasNoProducer { output } => {
                 write!(f, "declared output `{output}` has no gate or input producer")
             }
+            PolarityError::MissingDefaultLibraryEntry { kind } => {
+                write!(f, "the default library has no entry for {kind:?}")
+            }
             PolarityError::Lowering(error) => write!(f, "cannot score a polarity assignment: {error}"),
         }
     }
@@ -40,7 +46,9 @@ impl std::error::Error for PolarityError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {
             PolarityError::Lowering(error) => Some(error),
-            PolarityError::CyclicNetlist | PolarityError::OutputHasNoProducer { .. } => None,
+            PolarityError::CyclicNetlist
+            | PolarityError::OutputHasNoProducer { .. }
+            | PolarityError::MissingDefaultLibraryEntry { .. } => None,
         }
     }
 }
@@ -74,7 +82,7 @@ pub fn assign_polarities(netlist: &Netlist) -> Result<PolarityAssignment, Polari
         .enumerate()
         .filter_map(|(index, gate)| (!gate.kind.is_realisable()).then_some(index))
         .collect();
-    let mut current = score(netlist, &assignment).map_err(PolarityError::Lowering)?;
+    let mut current = score(netlist, &assignment)?;
 
     single_gate_descent(netlist, &eligible, &mut assignment, &mut current)?;
 
@@ -85,7 +93,7 @@ pub fn assign_polarities(netlist: &Netlist) -> Result<PolarityAssignment, Polari
             let mut candidate = assignment.clone();
             flip(&mut candidate[first]);
             flip(&mut candidate[second]);
-            let candidate_score = score(netlist, &candidate).map_err(PolarityError::Lowering)?;
+            let candidate_score = score(netlist, &candidate)?;
             if candidate_score < pair_score {
                 pair_best = candidate;
                 pair_score = candidate_score;
@@ -124,7 +132,7 @@ fn single_gate_descent(
         for &index in eligible {
             let mut candidate = assignment.clone();
             flip(&mut candidate[index]);
-            let candidate_score = score(netlist, &candidate).map_err(PolarityError::Lowering)?;
+            let candidate_score = score(netlist, &candidate)?;
             if candidate_score < best_score {
                 best_assignment = candidate;
                 best_score = candidate_score;
@@ -145,12 +153,12 @@ fn flip(polarity: &mut SignalPolarity) {
     };
 }
 
-fn score(netlist: &Netlist, assignment: &[SignalPolarity]) -> Result<LoweredScore, LowerError> {
-    let lowered = lower_with_assignment(netlist, assignment)?;
-    Ok(score_realisable_netlist(&lowered))
+fn score(netlist: &Netlist, assignment: &[SignalPolarity]) -> Result<LoweredScore, PolarityError> {
+    let lowered = lower_with_assignment(netlist, assignment).map_err(PolarityError::Lowering)?;
+    score_realisable_netlist(&lowered)
 }
 
-fn score_realisable_netlist(netlist: &Netlist) -> LoweredScore {
+fn score_realisable_netlist(netlist: &Netlist) -> Result<LoweredScore, PolarityError> {
     let library = Library::default_library();
     let producer_of: HashMap<&str, usize> =
         netlist.gates.iter().enumerate().map(|(index, gate)| (gate.output.as_str(), index)).collect();
@@ -166,7 +174,7 @@ fn score_realisable_netlist(netlist: &Netlist) -> LoweredScore {
         debug_assert!(gate.kind.is_realisable());
         let entry = library
             .choose(gate.kind)
-            .expect("every realisable lowered gate has a default-library entry");
+            .ok_or(PolarityError::MissingDefaultLibraryEntry { kind: gate.kind })?;
         area += entry_cost(gate.kind, entry).area;
 
         let upstream_depth = gate
@@ -184,7 +192,7 @@ fn score_realisable_netlist(netlist: &Netlist) -> LoweredScore {
         torch_depth = torch_depth.max(depth);
     }
 
-    LoweredScore { area, gates: netlist.gates.len(), torch_depth }
+    Ok(LoweredScore { area, gates: netlist.gates.len(), torch_depth })
 }
 
 #[cfg(test)]
@@ -261,5 +269,167 @@ mod tests {
             assign_polarities(&source),
             Err(PolarityError::OutputHasNoProducer { output: "missing".to_string() })
         );
+    }
+
+    /// A malformed directly realisable gate can pass assigned lowering but
+    /// cannot be priced without a default-library entry. Assignment must
+    /// report that validation failure instead of panicking while scoring.
+    #[test]
+    fn assignment_rejects_realisable_kinds_missing_from_the_default_library() {
+        for kind in [GateKind::Nor(4), GateKind::Or(1)] {
+            let source = netlist(&["a", "b", "c", "d"], &["y"], vec![gate(kind, "y", &["a", "b", "c", "d"][..kind.arity()])]);
+
+            assert_eq!(
+                assign_polarities(&source),
+                Err(PolarityError::MissingDefaultLibraryEntry { kind }),
+                "{kind:?}"
+            );
+        }
+    }
+
+    /// This `p` rail fans out into two gates that reconverge at `y`.  The
+    /// selected negative rail saves one shared inverse exactly once; scoring
+    /// a gate in isolation would charge that inverse to each consumer.
+    #[test]
+    fn assignment_scores_shared_inverters_across_reconvergent_fanout() {
+        let source = netlist(
+            &["a", "b", "c"],
+            &["y"],
+            vec![
+                gate(GateKind::Buf, "p", &["a"]),
+                gate(GateKind::And, "left", &["p", "b"]),
+                gate(GateKind::And, "right", &["p", "c"]),
+                gate(GateKind::Or(2), "y", &["left", "right"]),
+            ],
+        );
+
+        let assignment = assign_polarities(&source).unwrap();
+        assert_eq!(
+            assignment,
+            vec![
+                SignalPolarity::Negative,
+                SignalPolarity::Positive,
+                SignalPolarity::Positive,
+                SignalPolarity::Positive,
+            ]
+        );
+        assert_eq!(
+            score(&source, &assignment),
+            Ok(LoweredScore { area: 42, gates: 6, torch_depth: 2 })
+        );
+
+        let lowered = lower_with_assignment(&source, &assignment).unwrap();
+        assert_eq!(lowered.gates.len(), 6);
+        assert_eq!(
+            lowered
+                .gates
+                .iter()
+                .filter(|gate| gate.kind == GateKind::Nor(1) && gate.inputs == ["a"])
+                .count(),
+            1,
+            "the shared inverse of `a` is lowered once"
+        );
+    }
+
+    /// These are real lowered netlists, so the comparison covers the scorer
+    /// that reads default-library area, lowered gate count, and DAG depth.
+    #[test]
+    fn lowered_score_orders_area_then_gates_then_torch_depth() {
+        let lower_area = netlist(
+            &["a", "b"],
+            &["m0", "m1", "m2", "m3", "m4", "m5"],
+            vec![
+                gate(GateKind::Or(2), "m0", &["a", "b"]),
+                gate(GateKind::Or(2), "m1", &["a", "b"]),
+                gate(GateKind::Or(2), "m2", &["a", "b"]),
+                gate(GateKind::Or(2), "m3", &["a", "b"]),
+                gate(GateKind::Or(2), "m4", &["a", "b"]),
+                gate(GateKind::Or(2), "m5", &["a", "b"]),
+            ],
+        );
+        let higher_area = netlist(
+            &["a", "b", "c"],
+            &["n0", "n1", "n2", "n3"],
+            vec![
+                gate(GateKind::Nor(3), "n0", &["a", "b", "c"]),
+                gate(GateKind::Nor(3), "n1", &["a", "b", "c"]),
+                gate(GateKind::Nor(3), "n2", &["a", "b", "c"]),
+                gate(GateKind::Nor(3), "n3", &["a", "b", "c"]),
+            ],
+        );
+        let fewer_gates = netlist(
+            &["a", "b", "c"],
+            &["n"],
+            vec![gate(GateKind::Nor(3), "n", &["a", "b", "c"])],
+        );
+        let more_gates = netlist(
+            &["a", "b"],
+            &["m0", "m1"],
+            vec![gate(GateKind::Or(2), "m0", &["a", "b"]), gate(GateKind::Or(2), "m1", &["a", "b"])],
+        );
+        let shallow = netlist(
+            &["a", "b"],
+            &["p", "q"],
+            vec![gate(GateKind::Nor(1), "p", &["a"]), gate(GateKind::Nor(1), "q", &["b"])],
+        );
+        let deep = netlist(
+            &["a"],
+            &["p", "q"],
+            vec![gate(GateKind::Nor(1), "p", &["a"]), gate(GateKind::Nor(1), "q", &["p"])],
+        );
+
+        assert_eq!(score_realisable_netlist(&lower_area), Ok(LoweredScore { area: 36, gates: 6, torch_depth: 0 }));
+        assert_eq!(score_realisable_netlist(&higher_area), Ok(LoweredScore { area: 48, gates: 4, torch_depth: 1 }));
+        assert!(score_realisable_netlist(&lower_area).unwrap() < score_realisable_netlist(&higher_area).unwrap());
+
+        assert_eq!(score_realisable_netlist(&fewer_gates), Ok(LoweredScore { area: 12, gates: 1, torch_depth: 1 }));
+        assert_eq!(score_realisable_netlist(&more_gates), Ok(LoweredScore { area: 12, gates: 2, torch_depth: 0 }));
+        assert!(score_realisable_netlist(&fewer_gates).unwrap() < score_realisable_netlist(&more_gates).unwrap());
+
+        assert_eq!(score_realisable_netlist(&shallow), Ok(LoweredScore { area: 12, gates: 2, torch_depth: 1 }));
+        assert_eq!(score_realisable_netlist(&deep), Ok(LoweredScore { area: 12, gates: 2, torch_depth: 2 }));
+        assert!(score_realisable_netlist(&shallow).unwrap() < score_realisable_netlist(&deep).unwrap());
+    }
+
+    /// Directly realisable gates have no alternate output rail. They must be
+    /// included in the returned vector but excluded from every candidate flip.
+    #[test]
+    fn assignment_never_flips_direct_nor_or_gates() {
+        let source = netlist(
+            &["a", "b"],
+            &["y"],
+            vec![gate(GateKind::Nor(1), "not_a", &["a"]), gate(GateKind::Or(2), "y", &["not_a", "b"])],
+        );
+
+        assert_eq!(
+            assign_polarities(&source),
+            Ok(vec![SignalPolarity::Positive, SignalPolarity::Positive])
+        );
+    }
+
+    /// Each negative buffer can donate one cached primary-input inverse to
+    /// the NAND. Flipping only one buffer leaves the same lexicographic
+    /// score, but flipping both together removes one torch level.
+    #[test]
+    fn assignment_escapes_a_single_flip_local_minimum_with_a_pair_flip() {
+        let source = netlist(
+            &["b", "c"],
+            &["y"],
+            vec![
+                gate(GateKind::Buf, "b_cache", &["b"]),
+                gate(GateKind::Buf, "c_cache", &["c"]),
+                gate(GateKind::Nand, "y", &["b", "c"]),
+            ],
+        );
+        let all_positive = vec![SignalPolarity::Positive; 3];
+        let only_b = vec![SignalPolarity::Negative, SignalPolarity::Positive, SignalPolarity::Positive];
+        let only_c = vec![SignalPolarity::Positive, SignalPolarity::Negative, SignalPolarity::Positive];
+        let pair = vec![SignalPolarity::Negative, SignalPolarity::Negative, SignalPolarity::Positive];
+
+        assert_eq!(score(&source, &all_positive), Ok(LoweredScore { area: 30, gates: 5, torch_depth: 2 }));
+        assert_eq!(score(&source, &only_b), score(&source, &all_positive));
+        assert_eq!(score(&source, &only_c), score(&source, &all_positive));
+        assert_eq!(score(&source, &pair), Ok(LoweredScore { area: 30, gates: 5, torch_depth: 1 }));
+        assert_eq!(assign_polarities(&source), Ok(pair));
     }
 }

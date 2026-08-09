@@ -75,6 +75,9 @@ pub enum LowerError {
     /// `lower_optimised` cannot preserve a declared output that no source
     /// gate or primary input produces.
     OutputHasNoProducer { output: String },
+    /// `lower_optimised` reached a gate that lowering can copy but the
+    /// default physical library cannot score or place.
+    MissingDefaultLibraryEntry { kind: GateKind },
     /// An input was neither a declared primary input nor the output rail of
     /// a source gate that could have been lowered before this gate.
     UnresolvedLogicalSignal { gate: String, signal: String },
@@ -97,6 +100,9 @@ impl std::fmt::Display for LowerError {
             LowerError::CyclicNetlist => write!(f, "cannot lower a cyclic netlist with a polarity assignment"),
             LowerError::OutputHasNoProducer { output } => {
                 write!(f, "declared output `{output}` has no gate or input producer")
+            }
+            LowerError::MissingDefaultLibraryEntry { kind } => {
+                write!(f, "the default library has no entry for {kind:?}")
             }
             LowerError::UnresolvedLogicalSignal { gate, signal } => {
                 write!(f, "gate `{gate}` reads unresolved logical signal `{signal}`")
@@ -127,6 +133,7 @@ pub fn lower_optimised(netlist: &Netlist) -> Result<Netlist, LowerError> {
     let assignment = assign_polarities(netlist).map_err(|error| match error {
         PolarityError::CyclicNetlist => LowerError::CyclicNetlist,
         PolarityError::OutputHasNoProducer { output } => LowerError::OutputHasNoProducer { output },
+        PolarityError::MissingDefaultLibraryEntry { kind } => LowerError::MissingDefaultLibraryEntry { kind },
         PolarityError::Lowering(error) => error,
     })?;
     lower_with_assignment(netlist, &assignment)
@@ -662,6 +669,23 @@ mod tests {
             lower_with_assignment(&source, &[]),
             Err(LowerError::AssignmentLengthMismatch { expected: 1, actual: 0 })
         );
+    }
+
+    #[test]
+    fn optimised_lowering_propagates_a_missing_default_library_entry() {
+        for kind in [GateKind::Nor(4), GateKind::Or(1)] {
+            let source = netlist(
+                &["a", "b", "c", "d"],
+                &["y"],
+                vec![gate(kind, "y", &["a", "b", "c", "d"][..kind.arity()])],
+            );
+
+            assert_eq!(
+                lower_optimised(&source),
+                Err(LowerError::MissingDefaultLibraryEntry { kind }),
+                "{kind:?}"
+            );
+        }
     }
 
     #[test]
