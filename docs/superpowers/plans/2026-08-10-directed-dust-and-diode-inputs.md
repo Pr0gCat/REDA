@@ -267,3 +267,20 @@ theoretical upper bounds as measured results.
 git add conformance/results docs/superpowers/specs/2026-08-10-directed-dust-termination.md
 git commit -m "test(router): verify directed dust in Minecraft"
 ```
+
+### Task 5: Keep the downloadable Verilog litematic on the verified lowering path
+
+**Files:**
+- Modify: `src/bin/build_circuit.rs`
+- Test: the narrowest existing binary/integration test location for circuit
+  selection and litematic generation
+
+`mc_dump verilog:*` and the real-game conformance path compile a Verilog
+source through `lower_optimised()`, but `build_circuit` historically used
+plain `lower()`. That would make the downloadable `.litematic` physically
+different from the one tested in Minecraft. Make Verilog circuit selection in
+`build_circuit` choose the same optimised lowering; hand-authored circuits
+remain on their existing path. Add a regression that compares the selected
+lowered netlist or its compiled dimensions/gate count with the `mc_dump`
+production path. Regenerate the Verilog seven-segment `.litematic` and verify
+it carries the optimised circuit. Do not merely update a reported number.
