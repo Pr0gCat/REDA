@@ -637,6 +637,28 @@ mod tests {
     }
 
     #[test]
+    fn ordinary_signal_from_rejects_a_weakly_powered_block_as_a_dust_source() {
+        let mut w = run_into_a_block(3);
+        let weak_block = Position::new(4, 1, 2);
+        let other_face = Position::new(4, 1, 3);
+
+        w.set(4, 0, 3, stone());
+        w.set(4, 1, 3, dust());
+        recompute_dust_strengths(&mut w);
+
+        assert_eq!(
+            signal_from(&w, weak_block, other_face),
+            0,
+            "ordinary block-to-dust propagation must remain strong-only"
+        );
+        assert_eq!(
+            w.get(other_face.x, other_face.y, other_face.z).power,
+            0,
+            "weak power on one face must not re-drive dust on another face"
+        );
+    }
+
+    #[test]
     fn no_dust_strength_can_move_because_of_the_directionality_rule() {
         // `recompute_dust_strengths` only ever consults *strong* block
         // power, and this rule only ever adds weak power, so it cannot

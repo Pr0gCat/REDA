@@ -170,8 +170,9 @@ pub fn repeater_is_locked(world: &World, pos: Position) -> bool {
 /// 中繼器的輸入現在有訊號嗎。
 ///
 /// 跟紅石粉一樣，中繼器可以被兩種東西驅動：正後方的元件直接送出的訊號，
-/// 或是正後方那格方塊本身被（其他來源）強充能、再把訊號轉送過來。方向
-/// 只看正後方一格 —— 這正是它不會把訊號往回傳的原因。
+/// 或是正後方那格導電方塊本身被（其他來源）弱充能或強充能。方向只看正
+/// 後方一格 —— 這正是它不會把訊號往回傳的原因。弱充能只在二極體後方
+/// 輸入成立；普通方塊再驅動紅石粉仍然只接受強充能。
 pub fn repeater_input_is_powered(world: &World, pos: Position) -> bool {
     let state = world.get(pos.x, pos.y, pos.z);
     let Some(input_pos) = repeater_input_position(state, pos) else {
@@ -255,8 +256,8 @@ pub fn comparator_is_subtract_mode(state: &BlockState) -> bool {
 /// 比較器後方讀進來的主訊號強度。
 ///
 /// 跟中繼器的輸入一樣可以被兩種東西驅動：正後方元件直接送出的訊號，或是
-/// 正後方那格方塊本身被（其他來源）強充能。兩者都回傳實際的類比強度，
-/// 不是布林值 —— 硬編成「有訊號就 15」等於把比較器變成中繼器。
+/// 正後方那格導電方塊本身被（其他來源）弱充能或強充能。兩者都回傳實際
+/// 的類比強度，不是布林值 —— 硬編成「有訊號就 15」等於把比較器變成中繼器。
 fn comparator_rear_input(world: &World, pos: Position) -> u8 {
     let state = world.get(pos.x, pos.y, pos.z);
     let Some(rear_pos) = comparator_rear_position(state, pos) else {
