@@ -89,7 +89,7 @@ carries no positions at all, so this view invents its own layout rather than
 projecting the world's.
 
 **What is drawn is the primitive graph, and only that** -- the torches,
-repeaters, junctions, levers and lamps that really get built. Every edge runs
+repeaters, levers and lamps that really get built. Every edge runs
 from the real producer to the real consumer and terminates on it. A gate-level
 cell (a `nand`, a `mux`) is drawn as a labelled **hull**: an outline around the
 primitives that *are* it. A hull carries no signal, nothing enters or leaves it,
@@ -101,8 +101,8 @@ and edges cross its outline without noticing. It is an identification device --
   nodes and edges with no grouping pressure, so switching between the two shows
   exactly what grouping cost in layout quality.
 - **Focus** isolates one cell plus everything one hop from it.
-- Solid lines are dust. The only patterned line in the tab is a wire merge's
-  dotted spokes, so "not solid means not a connection" is the whole key.
+- Solid lines are dust. There are no synthetic merge glyphs or patterned
+  signal lines: a bare wire merge has no primitive of its own to draw.
 - A shared inverter gets a violet ring: `lower` builds `!d1` once and credits it
   to whichever cell got there first, and the ring is what says the other readers
   are borrowing rather than owning.

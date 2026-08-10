@@ -297,13 +297,12 @@
         <div class="legend-list" id="topo-inner-legend"></div>
         <div class="legend-list">
           <span><span class="legend-swatch legend-dust"></span><b>Redstone dust</b> -- a connection is a material, not an arrow, and it <b>ends on the block that reads it</b>: an unbroken run from one primitive to the next, never stopping at a boundary in between. Solid, because a broken line reads as a broken connection -- and because this graph has no positions, so a run has no length and no known signal loss, and a solid line offers nothing to count.</span>
-          <span><span class="legend-swatch" style="background:transparent;border:1px dashed #ff3b3b;border-radius:50%"></span>A <b>wire merge</b> -- no torch, no support, no gate body: the point where several branches' dust are allowed to touch. <b>Dotted</b> spokes reach the nodes whose dust joins there. A spoke is a hairline, not a run of dust: it says those runs are one net, it is not another run beside them.</span>
           <span><span class="legend-swatch" style="background:transparent;border:1px solid #c792ea;border-radius:50%"></span><b>A shared torch</b> -- most expansions start by inverting an input, so <i>!x</i> is built once and reused. It sits in the hull of the cell that built it, ringed in violet, and the cells that read it without owning it hold fewer primitives than their recipe has steps. The edges to those cells are ordinary dust, because that is what they are; the ring is the credit.</span>
         </div>
         <h2 style="margin-top:10px;">Cells</h2>
         <div class="legend-list">
           <span><span class="legend-swatch" style="background:hsla(280,60%,55%,0.18);border-color:hsla(280,70%,68%,0.9)"></span><span class="legend-swatch" style="background:hsla(90,60%,55%,0.18);border-color:hsla(90,70%,68%,0.9)"></span><b>A hull is a label, not a container.</b> It wraps the primitives that <i>are</i> one gate-level cell -- <i>and</i>, <i>nand</i>, <i>mux</i>, <i>andnot</i>, ... -- and is named with its kind, in the same spelling <code>src/circuits/baked/*.netlist</code> uses. No signal enters or leaves it; edges cross its outline without noticing. Each cell gets its own hue so that two overlapping hulls read as two.</span>
-          <span>What a cell costs is something you <b>count</b> rather than decode: a <i>nor</i> is one torch, an <i>and</i> is three. A <i>merge</i> that lowers into no primitive at all is hulled around its own junction ring -- the one thing it does have.</span>
+          <span>What a cell costs is something you <b>count</b> rather than decode: a <i>nor</i> is one torch, an <i>and</i> is three. A cell that lowers into no primitive has no hull or glyph.</span>
           <span>Zoomed in, every primitive carries its <b>#id</b> and every incoming edge carries the <b>index of the cell input</b> that lands there, in the cell's own declared pin order -- <i>andnot</i> (<code>A &amp; !B</code>) and <i>mux</i> (<code>S ? B : A</code>) are not symmetric, so which signal reaches which torch is part of what the circuit is. Hover any primitive for the same thing in words.</span>
         </div>
       </div>
@@ -314,7 +313,7 @@
         <h2 style="margin-top:10px;">Gates</h2>
         <div class="legend-list" id="topo-gate-legend">
           <span><span class="legend-swatch" style="background:hsla(210,65%,55%,0.35);border-color:hsla(210,70%,65%,0.9)"></span>NOR<i>n</i> -- a torch on its support. One badge around the single node the gate expands into; each gate gets its own hue.</span>
-          <span><span class="legend-swatch" style="background:transparent;border:1px dashed #ff3b3b;border-radius:50%"></span>OR<i>n</i> wire merge -- no torch, no support, no body: a dust junction where several branches meet. Dotted hairline spokes reach the nodes whose dust actually joins there.</span>
+          <span>OR<i>n</i> merge -- no torch, no support, no body. It has no synthetic glyph; the red runs only connect real primitives.</span>
         </div>
         <h2 style="margin-top:10px;">Edges</h2>
         <div class="legend-list" id="topo-edge-legend">
@@ -1727,15 +1726,9 @@ function onThreeHover(e) {
 // uncountable is a device the reader has to be taught. A solid line needs no
 // such device. It says "connected" and offers nothing to count.
 //
-// **What is not dust.** One kind of line in this picture is an annotation
-// about the graph rather than a connection in the circuit: a merge's spokes,
-// which say "the dust at these nodes is one net" -- an identity claim about
-// runs already drawn, not an extra run beside them. Now that every signal
-// path is solid, those spokes are the only patterned line left, which turns
-// "not solid" into a rule worth one sentence: a broken line in this picture
-// is never a connection. They are also hairlines against dust's weight, so
-// the distinction survives being squinted at, and dotted rather than dashed
-// so that nothing about them suggests a run of anything.
+// There is no second family of wire in this picture. A wire merge has no
+// primitive node, so it does not gain a synthetic dotted line or glyph; the
+// solid runs already state every connection the primitive graph contains.
 //
 // The violet lines that used to be a third family are gone, and their
 // absence is a fact about the picture rather than a simplification of it: a
@@ -1755,32 +1748,16 @@ function onThreeHover(e) {
 // one more NOR badge is not a simplification; it is the single thing this
 // view exists to make impossible to miss, quietly got wrong.
 //
-// Two facts from `Session::topology()` are what make it drawable:
+// A wire merge is a logical permission for dust runs to meet, not a real
+// primitive. The view therefore does not invent a ring or a dotted spoke for
+// it. Its existing red dust runs already reach the real torches or repeaters
+// that read the net; that is the only signal-flow geometry the graph owns.
 //
-//   * `gate.kind` -- `"nor"` or `"merge"`.
-//   * `gate.outputs` -- the nodes a consumer actually reads the gate from.
-//     For a NOR that is its own single torch. For a merge it is the set of
-//     nodes whose dust joins to form its net: each bare branch's producer
-//     (recursively, through chained bare merges), each isolated branch's own
-//     repeater. `gate.nodes` cannot serve here -- a merge whose every branch
-//     is bare instantiates no primitive at all, so its `nodes` is empty and
-//     a view hulling that field would draw literally nothing for it.
-//
-// So a merge is drawn as what it is: a hollow, dashed dust-red ring (hollow
-// and dashed because there is no block there to fill in), sitting in the gap
-// between the deepest branch it joins and whatever reads it, with a dotted
-// spoke out to every node whose dust meets there. A torch is a filled glyph;
-// the two read as different kinds of object at any zoom level, before any
-// label is legible. `computeMergeJunctions` places them.
-//
-// This is also the answer to what a merge *cell* is in a picture whose cells
-// are hulls around their members. `merge g8` and `merge g18` of
-// `verilog:seven_segment` own no primitive at all, and a hull around nothing
-// is not a shape. A merge's ring is therefore a member of its own hull: a
-// merge that owns isolating repeaters is hulled around them and its ring,
-// and a merge that owns nothing is hulled around its ring alone -- an
-// outline round the one thing an all-bare merge does have, which is a point
-// where other cells' dust meets.
+// This also decides what a merge cell means in the grouped view. A merge with
+// isolating repeaters gets a hull around those repeaters; an all-bare merge
+// owns no primitive and gets no hull or glyph. Its name remains in the focus
+// list and the gate-level data, but the canvas never pretends that the merge
+// is a block placed between its real neighbours.
 //
 // # Thirteen kinds, one outline, and a word
 //
@@ -1998,8 +1975,8 @@ const GROUP_PASSES = 6; // refinement passes of desired-y + `isotonicPlacement`
 // sides like a block instead of being a length of stroke.
 const TOPO_DUST_COLOR = '#ff3b3b';
 const DUST_CASING = 'rgba(92,14,14,0.9)';
-// Dust is the only heavy line here (a merge's spokes are hairlines), and
-// heavy is the point -- it is the one line that is a material. But weight is
+// Dust is the only heavy line here, and heavy is the point -- it is the one
+// line that is a material. But weight is
 // relative to how far apart the things it connects are drawn, not absolute:
 // a 3.4 px line between two nodes 150 px apart reads as a wire, and the same
 // line in a picture whose layers are 40 px apart reads as a flood. So dust is
@@ -2012,17 +1989,6 @@ const DUST_WIDTH_AT_PX = 150;
 // Below this width a casing is more ink than the line it is casing, so the
 // run is drawn as a plain stroke.
 const DUST_CASING_MIN_WIDTH = 2.2;
-// A merge's spokes are an identity claim about dust already drawn, not
-// another run of it, so they are dotted rather than segmented -- see "What
-// is not dust".
-const MERGE_SPOKE_DASH = [0.8, 4];
-
-// A merge's junction glyph: dust red (because a junction is dust and nothing
-// else), drawn hollow at this multiple of the node radius so it reads as an
-// annotation on the graph rather than as another primitive in it.
-const TOPO_MERGE_COLOR = TOPO_DUST_COLOR;
-const TOPO_MERGE_RADIUS = 1.9;
-
 // A hull's outline sits this far out from the member it wraps -- far enough
 // clear of a node's own glyph that the outline is not mistaken for part of
 // it, close enough that a one-primitive cell is a small ring rather than a
@@ -2043,7 +2009,7 @@ const SHARED_COLOR = '#c792ea';
 // `merge`. Only the kind histogram in the side panel still uses these -- a
 // hull on the canvas takes its hue from `gateHue` instead, so that two
 // overlapping outlines are legibly two.
-const CELL_COLOR = { gate: '#4a7fc1', nor: '#ff8c00', merge: TOPO_MERGE_COLOR };
+const CELL_COLOR = { gate: '#4a7fc1', nor: '#ff8c00', merge: TOPO_DUST_COLOR };
 
 let topoLevel = 'gate';  // 'gate' | 'primitive' -- see this section's doc comment
 
@@ -2055,13 +2021,10 @@ let topoNodes = [];      // { id, primitive, provenance, x, y, gx, gy }
 let topoEdges = [];      // raw { from, to } from primitive_level
 let topoEdgePaths = [];  // parallel to topoEdges: [{x,y}, ...] through any dummy chain
 let groupEdgePaths = []; // ditto, in the grouped layout
-let topoMerges = [];     // { gate, x, y } per wire-merge gate -- see computeMergeJunctions
-let groupMerges = [];    // ditto, in the grouped layout
-
 let topoCells = [];      // raw TopologyCell[] from session.topology().gate_level
 let cellOfNode = new Map();   // primitive node id -> TopologyCell.index that owns it
 // One per cell, in `topoCells` order: what is drawn round its members.
-// { cell, hue, members, junctions, points } -- `points` is the rounded hull
+// { cell, hue, members, points } -- `points` is the rounded hull
 // outline in grouped-layout graph space, recomputed by `layoutTopology`.
 let cellHulls = [];
 // Primitive node id -> [{ cell, pin, name }]: which of a cell's own declared
@@ -2078,11 +2041,6 @@ let topoView = { scale: 1, offsetX: 0, offsetY: 0 };
  * this rather than knowing which fields exist. */
 function nodeXY(node) {
   return topoLevel === 'gate' ? [node.gx, node.gy] : [node.x, node.y];
-}
-
-/** The merge junctions of whichever layout is on screen. */
-function activeMerges() {
-  return topoLevel === 'gate' ? groupMerges : topoMerges;
 }
 
 /** The edge polylines of whichever layout is on screen. */
@@ -2562,7 +2520,6 @@ function layoutTopology() {
   const flat = layeredLayout(topoNodes.length, topoEdges, TOPO_LAYER_SPACING, TOPO_NODE_SPACING);
   topoNodes.forEach((node, i) => { node.x = flat.xs[i]; node.y = flat.ys[i]; });
   topoEdgePaths = flat.paths;
-  topoMerges = computeMergeJunctions((node) => [node.x, node.y], TOPO_LAYER_SPACING);
 
   // The same call with cohesion switched on. `groupOf` is the whole of the
   // difference: same nodes, same edges, same algorithm.
@@ -2572,53 +2529,25 @@ function layoutTopology() {
   );
   topoNodes.forEach((node, i) => { node.gx = grouped.xs[i]; node.gy = grouped.ys[i]; });
   groupEdgePaths = grouped.paths;
-  groupMerges = computeMergeJunctions((node) => [node.gx, node.gy], GROUP_LAYER_SPACING);
 
   cellHulls = computeCellHulls();
 }
 
-/** One hull per cell, in the grouped layout's own coordinates.
+/** One hull per cell with real member primitives, in grouped-layout space.
  *
- * The points hulled are the cell's member primitives **plus the junction of
- * every merge gate it lowered into**, which is what makes a merge drawable at
- * all: `verilog:seven_segment`'s `merge g8` owns no primitive, so hulling
- * `cell.nodes` alone would draw nothing for it, and hulling the nodes whose
- * dust it joins would claim it owns two other cells' torches. Its ring is the
- * one thing it does have, so its ring is what gets wrapped. See "A wire merge
- * is not a gate body".
- *
- * A cell with nothing at all -- neither member nor junction -- gets no hull
- * rather than a hull of nothing; no circuit here produces one, and drawing a
- * dot for it would be inventing a shape. */
+ * An all-bare merge owns no primitive. It gets no hull: drawing one would
+ * invent a visual object that the primitive graph does not contain. */
 function computeCellHulls() {
   const byId = new Map(topoNodes.map((node) => [node.id, node]));
-  // Which cell lowered which gate. `TopologyCell::lowered` is the authority
-  // (its `source` string is for reading, not for joining on), so a junction
-  // is attributed to a cell by the same list the `×n` count came from.
-  const cellOfGate = new Map();
-  for (const cell of topoCells) {
-    for (const g of cell.lowered || []) if (!cellOfGate.has(g)) cellOfGate.set(g, cell.index);
-  }
-  const junctionsOf = new Map(); // cell index -> junctions of the merges it lowered
-  for (const junction of groupMerges) {
-    const owner = cellOfGate.get(junction.gate.index);
-    if (owner === undefined) continue;
-    if (!junctionsOf.has(owner)) junctionsOf.set(owner, []);
-    junctionsOf.get(owner).push(junction);
-  }
-
   const hulls = [];
   for (const cell of topoCells) {
     const members = (cell.nodes || []).map((id) => byId.get(id)).filter(Boolean);
-    const junctions = junctionsOf.get(cell.index) || [];
-    const points = members.map((node) => ({ x: node.gx, y: node.gy }))
-      .concat(junctions.map((junction) => ({ x: junction.x, y: junction.y })));
+    const points = members.map((node) => ({ x: node.gx, y: node.gy }));
     if (points.length === 0) continue;
     hulls.push({
       cell,
       hue: cellHue(cell.index),
       members,
-      junctions,
       points: roundedHull(points, HULL_PAD),
     });
   }
@@ -2632,7 +2561,7 @@ function computeCellHulls() {
  * everything else.
  *
  * One and two points are the cases that actually matter here -- a `nor` cell
- * is one torch and an all-bare merge is one ring -- and they fall out of the
+ * is one torch -- and they fall out of the
  * same construction as a circle and a capsule, so nothing special-cases
  * them beyond skipping the hull itself. */
 function roundedHull(points, pad) {
@@ -2689,58 +2618,6 @@ function convexHull(points) {
   return hull.length >= 3 ? hull : sorted.slice(0, 2);
 }
 
-/** Where each wire merge's junction glyph goes, given a laid-out graph:
- * one `{ gate, x, y }` per gate whose `kind` is `"merge"`.
- *
- * A merge has no node of its own to borrow a position from (see this
- * section's doc comment), so its position is derived from the nodes whose
- * dust it joins -- `gate.outputs`:
- *
- *   * x sits half a layer past the **deepest** of them. Every consumer of a
- *     merge has an edge from every one of its contributions, so a consumer's
- *     own layer is always at least one past that deepest contribution --
- *     which puts the junction in the gap between the two, exactly where the
- *     converging edges already cross, and never on top of a layer of real
- *     nodes.
- *   * y is their mean, so the glyph sits inside the fan of edges it explains
- *     rather than off to one side of it.
- *
- * Chained merges (`m2 = merge(x, m1)`, which `verilog:seven_segment` really
- * contains as `g19 = merge(g4, g18)`) inherit `m1`'s contributions into
- * `m2`'s set, so two junctions can land on the same point. The last pass
- * spreads any group that shares a rounded coordinate along y, in gate-index
- * order, so one merge can never sit invisibly on top of another. */
-function computeMergeJunctions(posOf, layerSpacing) {
-  const junctions = [];
-  for (const gate of topoGates) {
-    if (!isMergeGate(gate) || gate.outputs.length === 0) continue;
-    let maxX = -Infinity, sumY = 0;
-    for (const id of gate.outputs) {
-      const [x, y] = posOf(topoNodes[id]);
-      maxX = Math.max(maxX, x);
-      sumY += y;
-    }
-    junctions.push({
-      gate,
-      x: maxX + layerSpacing * 0.5,
-      y: sumY / gate.outputs.length,
-    });
-  }
-
-  const byPoint = new Map();
-  for (const junction of junctions) {
-    const key = `${Math.round(junction.x)},${Math.round(junction.y)}`;
-    if (!byPoint.has(key)) byPoint.set(key, []);
-    byPoint.get(key).push(junction);
-  }
-  for (const group of byPoint.values()) {
-    if (group.length < 2) continue;
-    const offset = (group.length - 1) / 2;
-    group.forEach((junction, i) => { junction.y += (i - offset) * TOPO_NODE_SPACING * 0.5; });
-  }
-  return junctions;
-}
-
 /** Every node id in `gate`'s own cluster plus every node directly connected
  * to it by an edge (either direction, either kind) -- exactly one hop, not
  * a transitive closure, so "Focus gate" shows a gate's immediate producers
@@ -2770,17 +2647,12 @@ function computeEgoSet(gateIndex) {
  * cell shows the torches it is made of and the torches immediately feeding
  * or reading them, and a borrowed inverter comes along automatically: a cell
  * that reads a torch it does not own has a real edge to it, so it is one hop
- * away and there is nothing special left to handle. The merge case still
- * needs care -- an all-bare merge owns nothing -- so a merge cell's core is
- * the nodes whose dust its lowered merges join. */
+ * away and there is nothing special left to handle. An all-bare merge owns
+ * no primitive, so it has no visual core or hull. */
 function computeCellEgoSet(cellIndex) {
   const cell = topoCells.find((c) => c.index === cellIndex);
   if (!cell) return new Set();
   const core = new Set(cell.nodes || []);
-  for (const g of cell.lowered || []) {
-    const gate = topoGates[g];
-    if (gate && isMergeGate(gate)) for (const id of gate.outputs) core.add(id);
-  }
   const result = new Set(core);
   for (const edge of topoEdges) {
     if (core.has(edge.from)) result.add(edge.to);
@@ -2800,10 +2672,8 @@ function activeNodes() {
  * some padding. Used both for "show me everything" (all node ids) and for
  * "Focus" (one ego set).
  *
- * Hulls and merge rings are included in the extent rather than just the
- * nodes: a hull is `HULL_PAD` outside its outermost member, and an all-bare
- * merge's ring is not at any node at all, so fitting to node centres alone
- * clips exactly the two things this level added. */
+ * Hulls are included in the extent rather than just the nodes: a hull is
+ * `HULL_PAD` outside its outermost member. */
 function fitViewToNodes(ids) {
   const w = topoWrap.clientWidth || 400, h = topoWrap.clientHeight || 400;
   const wanted = ids instanceof Set ? ids : new Set(ids);
@@ -2817,9 +2687,6 @@ function fitViewToNodes(ids) {
     if (!node) continue;
     const [x, y] = nodeXY(node);
     include(x, y, topoLevel === 'gate' && cellOfNode.has(node.id) ? HULL_PAD : 0);
-  }
-  for (const junction of activeMerges()) {
-    if (junction.gate.outputs.some((id) => wanted.has(id))) include(junction.x, junction.y, HULL_PAD);
   }
   if (!Number.isFinite(minX)) { topoView = { scale: 1, offsetX: w / 2, offsetY: h / 2 }; return; }
   const graphW = Math.max(maxX - minX, 1), graphH = Math.max(maxY - minY, 1);
@@ -2902,7 +2769,7 @@ function refreshTopoStatus() {
       `${topoNodes.length} primitives, ${topoEdges.length} runs of dust, `
       + `${topoCells.length} cell${topoCells.length === 1 ? '' : 's'} hulled around ${grouped} of them`
       + (isRealisableAlready
-        ? ' -- already realisable, so each hull wraps the one torch or junction it is.'
+        ? ' -- already realisable, so each hull wraps the primitives that exist.'
         : ` (${lowered} torches and merges lowered from ${topoCells.length}).`)
       + (sharedTorches > 0
         ? ` ${sharedTorches} torch${sharedTorches === 1 ? '' : 'es'} sit in one hull and are read from `
@@ -2925,7 +2792,7 @@ function refreshTopoStatus() {
   for (const [kind, count] of histogram) {
     const family = kind === 'merge' ? 'merge' : (kind === 'nor' ? 'nor' : 'gate');
     const swatch = family === 'merge'
-      ? `background:transparent;border:1px dashed ${CELL_COLOR.merge}`
+      ? `background:${CELL_COLOR.merge}`
       : `background:${CELL_COLOR[family]}`;
     const span = document.createElement('span');
     span.innerHTML = `<span class="legend-swatch" style="${swatch}"></span><b>${kind}</b> &times;${count}`;
@@ -3008,25 +2875,6 @@ function dustWidthNow() {
   return Math.max(DUST_WIDTH_MIN, Math.min(DUST_WIDTH, DUST_WIDTH * (spacing / DUST_WIDTH_AT_PX)));
 }
 
-/** Draw one polyline of screen-space points as a merge's **spoke**: a dotted
- * hairline. A spoke is not dust -- the dust it talks about is already drawn
- * by the runs into and out of the nodes it touches -- it is the claim that
- * those nodes are one net. Dotted, so that even at the zoom where a dust
- * segment is small it cannot be mistaken for a run of them, and a hairline,
- * because weight is the axis that separates annotation from material here. */
-function strokeMergeSpoke(ctx, ax, ay, bx, by, style) {
-  ctx.save();
-  ctx.setLineDash(MERGE_SPOKE_DASH);
-  ctx.lineCap = 'round';
-  ctx.lineWidth = 1.3;
-  ctx.strokeStyle = style;
-  ctx.beginPath();
-  ctx.moveTo(ax, ay);
-  ctx.lineTo(bx, by);
-  ctx.stroke();
-  ctx.restore();
-}
-
 /** Draw one node, shaped by its `Primitive` kind so a glance (not just
  * colour) distinguishes them: a diamond repeater (a merge branch's isolating
  * repeater), a hexagon comparator (a reserved shape -- see
@@ -3085,7 +2933,7 @@ function provenanceDescription(node) {
 }
 
 /** Both levels draw the same graph in the same order -- annotations behind,
- * then dust, then merge rings, then the primitives themselves on top, so a
+ * then dust, then the primitives themselves on top, so a
  * glyph always caps the runs that end on it and a run never crosses a label.
  * What differs is only the annotation layer: hulls for the grouped level,
  * per-gate badges for the flat one. */
@@ -3107,7 +2955,6 @@ function drawTopology() {
   else drawGateBadges(toScreen, focus);
 
   drawDustEdges(toScreen, egoSet);
-  drawMergeGlyphs(toScreen, focus, egoSet);
   drawGraphNodes(toScreen, egoSet);
   // The hulls again, outline and name only, over the top. A hull's tint
   // belongs behind the graph -- it is a region, not an object -- but its
@@ -3132,63 +2979,6 @@ function drawDustEdges(toScreen, egoSet) {
       return { x: sx, y: sy };
     });
     strokeDustRun(topoCtx, path, width, inFocus ? 0.85 : 0.05);
-  }
-}
-
-/** Wire merges -- a hollow, dashed dust-red ring where the branches meet,
- * with a dotted spoke out to every node whose dust actually joins there.
- *
- * Everything about this is chosen against a torch: hollow rather than filled
- * and dashed rather than solid, because there is no block at a junction to
- * fill in; one shared dust colour rather than a per-gate hue, because a
- * merge is not a member of the gate palette; a ring rather than a glyph,
- * because it encloses nothing. The spokes are a dotted hairline for a second
- * reason too -- they are not edges of the graph (no `Edge` in
- * `PrimitiveGraph` corresponds to one), they are the annotation that says
- * "these nodes are one net", so they must not read as signal flow, and now
- * that signal flow is a heavy run of dust segments they must not read as a
- * run of blocks either. */
-function drawMergeGlyphs(toScreen, focusGate, egoSet) {
-  const labelled = topoView.scale * activeLayerSpacing() >= NODE_LABEL_PX;
-  for (const junction of activeMerges()) {
-    const gate = junction.gate;
-    const inFocus = egoSet ? gate.outputs.some((id) => egoSet.has(id)) : true;
-    const dim = !inFocus;
-    const [jx, jy] = toScreen(junction.x, junction.y);
-
-    topoCtx.save();
-    for (const id of gate.outputs) {
-      const [sx, sy] = toScreen(...nodeXY(topoNodes[id]));
-      strokeMergeSpoke(topoCtx, sx, sy, jx, jy, `rgba(255,59,59,${dim ? 0.05 : 0.6})`);
-    }
-    topoCtx.globalAlpha = dim ? 0.10 : 0.9;
-    topoCtx.setLineDash([4, 3]); // the ring stays dashed: no block there to fill in
-    topoCtx.strokeStyle = TOPO_MERGE_COLOR;
-    topoCtx.lineWidth = 2;
-    topoCtx.beginPath();
-    topoCtx.arc(jx, jy, TOPO_NODE_RADIUS * TOPO_MERGE_RADIUS, 0, Math.PI * 2);
-    topoCtx.stroke();
-    topoCtx.restore();
-
-    if (topoLevel === 'primitive' && (topoView.scale > 0.35 || focusGate === gate.index)) {
-      topoCtx.fillStyle = dim ? 'rgba(255,150,150,0.12)' : 'rgba(255,180,180,0.9)';
-      topoCtx.font = '11px ui-monospace, monospace';
-      topoCtx.textAlign = 'center';
-      topoCtx.textBaseline = 'bottom';
-      topoCtx.fillText(
-        `${gate.output} (${gateLabel(gate)})`,
-        jx,
-        jy - TOPO_NODE_RADIUS * TOPO_MERGE_RADIUS - 3,
-      );
-      topoCtx.textAlign = 'left';
-    } else if (topoLevel === 'gate' && labelled) {
-      topoCtx.fillStyle = dim ? 'rgba(255,150,150,0.12)' : 'rgba(255,180,180,0.7)';
-      topoCtx.font = '8px ui-monospace, monospace';
-      topoCtx.textAlign = 'center';
-      topoCtx.textBaseline = 'bottom';
-      topoCtx.fillText(gate.output, jx, jy - TOPO_NODE_RADIUS * TOPO_MERGE_RADIUS - 2);
-      topoCtx.textAlign = 'left';
-    }
   }
 }
 
@@ -3337,9 +3127,9 @@ function drawCellHulls(toScreen, focusCell, egoSet, pass) {
  * so this draws as a small square around a single point rather than a hull
  * wrapping several.
  *
- * Merges are skipped here on purpose and drawn as rings instead: a filled,
- * hue-coded badge is exactly the "one more gate body" impression a wire
- * merge must not give (see "A wire merge is not a gate body"). */
+ * Merges with no primitive are skipped here on purpose: a filled, hue-coded
+ * badge is exactly the "one more gate body" impression a wire merge must not
+ * give (see "A wire merge is not a gate body"). */
 function drawGateBadges(toScreen, focusGate) {
   for (const gate of topoGates) {
     if (gate.nodes.length === 0 || isMergeGate(gate)) continue;
@@ -3404,15 +3194,7 @@ topoCanvas.addEventListener('wheel', (e) => {
   drawTopology();
 }, { passive: false });
 
-// Hover hit-testing covers merge junctions as well as nodes, and reports a
-// junction by listing the node ids whose dust meets there. That list is the
-// whole claim the glyph is making, so being able to read it off and check it
-// against `Session::topology()`'s own JSON -- gate `outputs` against the
-// edges that really land on this merge's consumers -- is the point: a
-// picture that is confidently wrong about which gates a junction joins is
-// worse than one that is merely unhelpful.
-//
-// Both levels hit-test the same objects, because both draw the same graph;
+// Both levels hit-test the same real primitives, because both draw the same graph;
 // only the coordinates differ (`nodeXY`). What the grouped level adds to the
 // readout is what its annotations claim: which cell owns this primitive,
 // which of that cell's declared inputs terminate here, and who borrows it.
@@ -3428,22 +3210,8 @@ topoCanvas.addEventListener('mousemove', (e) => {
     const d = Math.hypot(sx - mx, sy - my);
     if (d < bestDist) { bestDist = d; best = { kind: 'node', node }; }
   }
-  for (const junction of activeMerges()) {
-    const sx = topoView.offsetX + junction.x * topoView.scale;
-    const sy = topoView.offsetY + junction.y * topoView.scale;
-    const d = Math.hypot(sx - mx, sy - my);
-    if (d < bestDist) { bestDist = d; best = { kind: 'merge', junction }; }
-  }
   if (!best) {
     topoHoverReadout.textContent = ' ';
-  } else if (best.kind === 'merge') {
-    const gate = best.junction.gate;
-    const joined = gate.outputs.map((id) => `#${id}`).join(', ');
-    const source = gateSource(gate);
-    topoHoverReadout.textContent =
-      `${gate.output} -- ${gateLabel(gate)}, layer ${gate.layer} -- no torch, no support: `
-      + `a dust junction joining ${joined}`
-      + (source ? ` -- part of ${source}` : '');
   } else {
     const node = best.node;
     const gate = node.provenance.kind === 'Gate' ? topoGates[node.provenance.gate] : null;
@@ -3542,7 +3310,6 @@ window.reda = {
     kind: hull.cell.kind,
     output: hull.cell.output,
     members: hull.members.map((node) => node.id),
-    junctions: hull.junctions.map((junction) => junction.gate.output),
     points: hull.points,
   })),
   landings: () => [...cellLandings].map(([node, list]) => ({ node, list })),
