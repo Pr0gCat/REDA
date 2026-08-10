@@ -2,15 +2,15 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make REDA model weakly powered diode rear inputs and let the router replace legal terminal repeaters with directed redstone dust, validated in the simulator and a real Minecraft 1.20.1 server.
+**Goal:** Make REDA model weakly powered diode rear inputs and let the router replace legal terminal repeaters with directed redstone dust, validated in the simulator and a real Minecraft 26.2 server.
 
 **Architecture:** Keep ordinary block propagation unchanged: weak power never re-drives dust and comparator side inputs remain strong-only. Add a dedicated diode-rear read path for repeaters and comparators. Then add an explicit route-terminal choice, planned before emission and shared by reservation construction and block placement, so `DirectedDustIntoSupport` is selected only for a legal, live dust endpoint; all other routes retain `RepeaterIntoSupport`.
 
-**Tech Stack:** Rust 2021, existing redstone simulator, `conformance/` Python Source-RCON harness, vanilla Minecraft 1.20.1, existing `./check.sh`.
+**Tech Stack:** Rust 2021, existing redstone simulator, `conformance/` Python Source-RCON harness, vanilla Minecraft 26.2, existing `./check.sh`.
 
 ## Global Constraints
 
-- Minecraft behaviour is a hard constraint: test it with a live 1.20.1 RCON probe before relying on it in routing.
+- Minecraft behaviour is a hard constraint: test it with a live 26.2 RCON probe before relying on it in routing.
 - Keep weak block propagation separate from strong block-to-dust propagation.
 - Comparator rear input and repeater rear input accept a non-zero weak or strong block; comparator side input remains strong-only.
 - `verify_connectivity`, `verify_torch_merge`, and `verify_signal_strength` stay unconditional constraints.
@@ -91,7 +91,7 @@ git commit -m "fix(simulator): let diodes read weak rear blocks"
 
 **Files:**
 - Modify: `conformance/probes.py`
-- Test: `conformance/run.py` against `minecraft-server/server/server.properties`
+- Test: `conformance/run.py` against `minecraft-server-26.2/server/server.properties`
 
 **Interfaces:**
 - Consumes: `Slot`, `dust_power`, `slot.check`, and `settle` from the existing
@@ -114,13 +114,13 @@ dust cell on another face of the same stone and assert it stays at power 0.
 
 - [ ] **Step 2: Run the single live probe**
 
-Run the 1.20.1 server, then:
+Run the 26.2 server, then:
 
 ```bash
 cd conformance
-python run.py --properties ../minecraft-server/server/server.properties \
+python run.py --properties ../minecraft-server-26.2/server/server.properties \
   --only diode_rear_reads_a_weakly_powered_block \
-  --out results/1.20.1-diode-rear.json --label 1.20.1-diode-rear
+  --out results/26.2-diode-rear.json --label 26.2-diode-rear
 ```
 
 Expected: every check is `OK`. Stop the server via RCON after the run.
@@ -128,7 +128,7 @@ Expected: every check is `OK`. Stop the server via RCON after the run.
 - [ ] **Step 3: Commit the probe and result**
 
 ```bash
-git add conformance/probes.py conformance/results/1.20.1-diode-rear.json
+git add conformance/probes.py conformance/results/26.2-diode-rear.json
 git commit -m "test(conformance): pin weak block diode inputs"
 ```
 
@@ -237,12 +237,12 @@ directed orientation; no terminal dust has a perpendicular attachment.
 
 - [ ] **Step 2: Run real-game conformance**
 
-Start the local 1.20.1 server and run:
+Start the local 26.2 server and run:
 
 ```bash
 python conformance/circuit_conformance.py \
   --dump /tmp/verilog-and4.txt \
-  --properties minecraft-server/server/server.properties \
+  --properties minecraft-server-26.2/server/server.properties \
   --out conformance/results/verilog-and4-directed-dust.json \
   --label verilog-and4-directed-dust
 ```
