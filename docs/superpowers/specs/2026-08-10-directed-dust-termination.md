@@ -22,6 +22,32 @@ server and the simulator now implements it:
 Weak power is sufficient to turn off a torch attached to the powered support,
 so it implements a NOR input correctly. It cannot re-drive dust.
 
+## Second measured mechanism: weak block into a diode rear port
+
+The same weakly powered conductor is nevertheless a valid **rear input** to a
+repeater and to a comparator. This is not the normal rule that a strongly
+powered block re-drives nearby dust; it is a special rule of a diode reading
+the block immediately behind it.
+
+This was re-measured on a live 1.20.1 server on 2026-08-10, using the minimal
+shape below. The source redstone block is placed last, so every observed state
+is a real transition rather than a forced blockstate.
+
+```
+redstone block -> dust -> [B] -> repeater/comparator -> lamp
+                              ^ weakly powered by dust
+```
+
+For both diode kinds: dust reached power 15, a torch on top of `B` turned off
+(proving weak block power), the diode's `powered` state became true, and its
+output lamp lit. The server was stopped cleanly after each probe.
+
+This adds a missing simulator rule: `signal_from` currently permits a diode to
+read its rear block only when `block_signal_at` reports `Strong`. It must
+instead distinguish the **rear input of a repeater/comparator**, which accepts
+any non-zero powered conductive block, from ordinary block-to-dust propagation
+and comparator side inputs, which remain strong-only.
+
 ## Current gap
 
 `lay_bent_path` always overwrites the final route cell with a repeater. That
@@ -58,6 +84,13 @@ This is deliberately a local router optimisation. It has no placement
 reordering or gate-topology change, so its benefit and safety can be measured
 without mixing in a larger 3D-planning experiment.
 
+The diode rule above is not a third way to power a NOR support: a torch's
+support can already read weak power directly. It is a distinct **repeater /
+comparator input topology** that the planner must preserve for future typed
+ports. It can keep a dust run straight while inserting a diode boundary one
+block later, and therefore matters to routing even when it does not remove a
+repeater.
+
 ### C. Placement-aware directed-dust optimisation
 
 The eventual architecture: include terminal mode in the placement/routing
@@ -84,6 +117,10 @@ ability the emitter cannot build.
 5. Emit dust for approved candidates and preserve repeaters otherwise.
    `verify_connectivity`, `verify_torch_merge` and `verify_signal_strength`
    remain unconditional. They are constraints, not cost terms.
+6. Correct the simulator before changing the router: split `signal_from` into
+   ordinary propagation (strong blocks only) and diode-rear reading (weak or
+   strong block). Route repeater and comparator rear inputs through the latter;
+   keep comparator side inputs strong-only.
 
 ## Tests and acceptance
 
@@ -97,6 +134,9 @@ ability the emitter cannot build.
   repeater.
 - A conflicting pair is resolved by the live reservation; it must never
   introduce a connectivity violation.
+- Repeater and comparator each accept a weakly powered rear block in the
+  simulator, matching the live-server probe; a weak block still cannot
+  re-drive ordinary adjacent dust or a comparator side input.
 - All existing reference circuits and Verilog circuits retain truth-table
   correctness. At least `verilog:and4` removes the observed redundant
   terminal repeater. Re-measure blocks, terminal-repeaters, and settle ticks
