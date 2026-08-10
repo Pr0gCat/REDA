@@ -103,11 +103,13 @@ git commit -m "fix(simulator): let diodes read weak rear blocks"
 Build two lanes from this exact shape, with the redstone block placed last:
 
 ```text
-redstone block -> dust -> stone -> repeater/comparator -> lamp
+redstone block -> dust -> stone -> repeater/comparator -> output dust
 ```
 
-Assert dust power 15, a torch on the stone is off (proves weak power), the
-diode has `powered=true`, and its output lamp is lit. Add a third lane with a
+Assert input dust power 15, a torch on the stone is off (proves weak power), the
+diode has `powered=true`, and its output dust has the expected non-zero power.
+Read output dust rather than a lamp: the probe is pinning a diode's rear-input
+rule, while a lamp adds its own weak-power and delayed-off semantics. Add a third lane with a
 dust cell on another face of the same stone and assert it stays at power 0.
 
 - [ ] **Step 2: Run the single live probe**
