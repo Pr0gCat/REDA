@@ -681,6 +681,70 @@ def comparator_subtract_mode(slot: Slot) -> ProbeResult:
 
 
 # --------------------------------------------------------------------------
+# Diode rear input from weakly powered conductive blocks
+# --------------------------------------------------------------------------
+
+
+@probe(
+    "diode_rear_reads_a_weakly_powered_block",
+    "diode-rear-input",
+    "A repeater or comparator reads a conductive rear block even when that "
+    "block is only weakly powered by a dust line. The same weak block does "
+    "not generically re-drive dust on another face.",
+    "src/redstone/simulator/component.rs: repeater_input_is_powered and "
+    "comparator_rear_input, via propagate::diode_rear_signal",
+)
+def diode_rear_reads_weak_block(slot: Slot) -> ProbeResult:
+    r = ProbeResult()
+
+    # Both diode lanes are built with their rear input initially dark. The
+    # redstone block is deliberately placed only after every diode and dust
+    # reader exists, so the test observes a real input transition.
+    for dz, diode in [
+        (0, "minecraft:repeater[facing=west,delay=1,locked=false,powered=false]"),
+        (4, "minecraft:comparator[facing=west,mode=compare,powered=false]"),
+    ]:
+        slot.floor(-1, dz)
+        slot.set(-1, 0, dz, DUST)
+        slot.set(0, 0, dz, STONE)
+        slot.set(0, 1, dz, "minecraft:redstone_torch[lit=true]")
+        slot.floor(1, dz)
+        slot.set(1, 0, dz, diode)
+        slot.floor(2, dz)
+        slot.set(2, 0, dz, DUST)
+
+    # Negative-control lane: the source dust weakly powers stone at (0,0,8),
+    # but dust resting on a different horizontal face of that same stone must
+    # remain dark. A weak block is readable by a diode rear port, not a new
+    # generic dust source.
+    slot.floor(-1, 8)
+    slot.set(-1, 0, 8, DUST)
+    slot.set(0, 0, 8, STONE)
+    slot.set(0, 1, 8, "minecraft:redstone_torch[lit=true]")
+    slot.floor(0, 9)
+    slot.set(0, 0, 9, DUST)
+
+    settle(1.0)
+    for dz in [0, 4, 8]:
+        slot.set(-2, 0, dz, "minecraft:redstone_block")
+    settle(2.5)
+
+    for name, dz, state in [
+        ("repeater", 0, "minecraft:repeater[powered=true]"),
+        ("comparator", 4, "minecraft:comparator[powered=true]"),
+    ]:
+        r.add(f"{name}: input dust reads power=15", True, dust_power(slot, -1, 0, dz, 15))
+        r.add(f"{name}: torch on the rear stone is off (the block is weakly powered)", True, slot.check(0, 1, dz, "minecraft:redstone_torch[lit=false]"))
+        r.add(f"{name}: diode reports powered=true from that weak rear block", True, slot.check(1, 0, dz, state))
+        r.add(f"{name}: output dust reads power=15", True, dust_power(slot, 2, 0, dz, 15))
+
+    r.add("negative control: source dust still reads power=15", True, dust_power(slot, -1, 0, 8, 15))
+    r.add("negative control: the stone is genuinely weakly powered", True, slot.check(0, 1, 8, "minecraft:redstone_torch[lit=false]"))
+    r.add("negative control: dust on another stone face remains power=0", True, dust_power(slot, 0, 0, 9, 0))
+    return r
+
+
+# --------------------------------------------------------------------------
 # Lamp
 # --------------------------------------------------------------------------
 

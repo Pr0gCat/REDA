@@ -1,0 +1,92 @@
+{
+  "label": "26.2",
+  "probes": [
+    {
+      "name": "diode_rear_reads_a_weakly_powered_block",
+      "category": "diode-rear-input",
+      "assumption": "A repeater or comparator reads a conductive rear block even when that block is only weakly powered by a dust line. The same weak block does not generically re-drive dust on another face.",
+      "source": "src/redstone/simulator/component.rs: repeater_input_is_powered and comparator_rear_input, via propagate::diode_rear_signal",
+      "checks": [
+        {
+          "question": "repeater: input dust reads power=15",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "repeater: torch on the rear stone is off (the block is weakly powered)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "repeater: diode reports powered=true from that weak rear block",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "repeater: output dust reads power=15",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "comparator: input dust reads power=15",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "comparator: torch on the rear stone is off (the block is weakly powered)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "comparator: diode reports powered=true from that weak rear block",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "comparator: output dust reads power=15",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "negative control: source dust still reads power=15",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "negative control: the stone is genuinely weakly powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "negative control: dust on another stone face remains power=0",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": [],
+      "never_transitioned": false
+    }
+  ]
+}
