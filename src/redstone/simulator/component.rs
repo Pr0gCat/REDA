@@ -12,7 +12,9 @@
 
 use crate::redstone::rules::taxonomy::BlockPower;
 use crate::redstone::simulator::position::Position;
-use crate::redstone::simulator::propagate::{block_power_at, block_signal_at, signal_from};
+use crate::redstone::simulator::propagate::{
+    block_power_at, block_signal_at, diode_rear_signal, signal_from,
+};
 use crate::redstone::simulator::schedule::TickPriority;
 use crate::redstone::world::block::{BlockKind, BlockState, Facing};
 use crate::redstone::world::storage::World;
@@ -176,7 +178,7 @@ pub fn repeater_input_is_powered(world: &World, pos: Position) -> bool {
         return false;
     };
 
-    signal_from(world, input_pos, pos) > 0
+    signal_from(world, input_pos, pos).max(diode_rear_signal(world, input_pos)) > 0
 }
 
 /// 這個中繼器該用哪個優先權排程。
@@ -261,7 +263,7 @@ fn comparator_rear_input(world: &World, pos: Position) -> u8 {
         return 0;
     };
 
-    signal_from(world, rear_pos, pos)
+    signal_from(world, rear_pos, pos).max(diode_rear_signal(world, rear_pos))
 }
 
 /// 從某個位置讀進來的訊號強度，給比較器的側面輸入用。
@@ -477,6 +479,68 @@ mod tests {
             torch_should_be_lit(&world, Position::new(4, 2, 2)),
             "one perpendicular branch costs the run its direction, and the \
              torch never learns the run is there"
+        );
+    }
+
+    fn run_into_a_weakly_powered_diode_rear() -> World {
+        use crate::redstone::simulator::propagate::recompute_dust_strengths;
+
+        let mut world = World::new(8, 4, 6);
+        world.set(1, 0, 2, stone());
+        world.set(1, 1, 2, {
+            let mut wire = dust();
+            wire.power = 0;
+            wire
+        });
+        world.set(0, 1, 2, redstone_block());
+        world.set(2, 1, 2, stone());
+        world.set(3, 0, 2, stone());
+        recompute_dust_strengths(&mut world);
+        world
+    }
+
+    #[test]
+    fn a_repeater_reads_a_weakly_powered_rear_block() {
+        let mut world = run_into_a_weakly_powered_diode_rear();
+        let repeater_pos = Position::new(3, 1, 2);
+        world.set(
+            repeater_pos.x,
+            repeater_pos.y,
+            repeater_pos.z,
+            repeater(Facing::West, 1, false),
+        );
+
+        assert_eq!(
+            block_signal_at(&world, Position::new(2, 1, 2)),
+            (BlockPower::Weak, 15),
+            "the straight dust run must weakly power the repeater's rear block"
+        );
+        assert_eq!(
+            diode_rear_signal(&world, Position::new(2, 1, 2)),
+            15,
+            "the diode rear helper must expose the weak analog strength"
+        );
+        assert!(
+            repeater_input_is_powered(&world, repeater_pos),
+            "a repeater must accept weak power from its rear block"
+        );
+    }
+
+    #[test]
+    fn a_comparator_reads_analog_strength_from_a_weakly_powered_rear_block() {
+        let mut world = run_into_a_weakly_powered_diode_rear();
+        let comparator_pos = Position::new(3, 1, 2);
+        world.set(
+            comparator_pos.x,
+            comparator_pos.y,
+            comparator_pos.z,
+            comparator(Facing::West, None, 0, false),
+        );
+
+        assert_eq!(
+            comparator_output(&world, comparator_pos),
+            15,
+            "a comparator must read the weak rear-block power as analog strength"
         );
     }
 

@@ -319,6 +319,21 @@ pub fn signal_from(world: &World, source: Position, target: Position) -> u8 {
     0
 }
 
+/// 從中繼器或比較器後方的方塊讀取其可被二極體看見的充能。
+///
+/// 直接相鄰的粉／元件仍由呼叫端透過 `signal_from` 讀取；這個函式補上
+/// 二極體獨有的後方導電方塊讀取，包含弱充能。弱充能方塊不能把訊號重新
+/// 灌回另一格粉，但二極體會直接讀它。普通 `signal_from` 保持 strong only，
+/// 避免把這個特例擴散到其他元件。
+pub fn diode_rear_signal(world: &World, rear: Position) -> u8 {
+    let (kind, strength) = block_signal_at(world, rear);
+    if kind != BlockPower::None {
+        strength
+    } else {
+        0
+    }
+}
+
 /// 從 `from` 看向 `to` 是哪個方向。兩者不相鄰時回傳 `None`。
 fn direction_from(from: Position, to: Position) -> Option<Facing> {
     ALL_SIX.into_iter().find(|&facing| from.offset(facing) == to)
