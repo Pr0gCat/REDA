@@ -1749,8 +1749,7 @@ function onThreeHover(e) {
 // time "gate" and "one torch node" were the same thing here and this view
 // labelled every gate `NOR<n>` without ever being wrong. A synthesised
 // netlist is not pure NOR: an OR maps onto a **wire merge**
-// (`Gate::is_merge`), 6 of `verilog:seven_segment`'s 31 gate-level cells and
-// 17 of the 56 realisable gates they lower into. A merge has
+// (`Gate::is_merge`). A merge has
 // no torch, no support and no gate body at all -- it is the point where
 // several producers' dust are allowed to physically touch. Drawing that as
 // one more NOR badge is not a simplification; it is the single thing this
@@ -1908,8 +1907,7 @@ function onThreeHover(e) {
 // or reloads.
 // # Scale
 //
-// `verilog:and4` is 9 primitives in 3 hulls; `verilog:seven_segment` is 59
-// in 31, plus 11 primary-I/O nodes. Both levels draw the same nodes and the
+// Both levels draw the same nodes and the
 // same edges, so grouping costs nothing in node count -- what it costs is
 // text, and text is what gets shed as the picture shrinks. Both thresholds
 // below are measured in screen pixels between two adjacent layers rather
@@ -1928,7 +1926,7 @@ function onThreeHover(e) {
 // input tags are legible with no interaction whatsoever -- and an edge
 // visibly ending on a particular torch inside an `and` is the whole picture
 // in one glance. `verilog:seven_segment` fits below both label thresholds:
-// the whole circuit shows its 31 hulls, its 59 primitives and every run of
+// the whole circuit shows every hull, primitive and run of
 // dust between them, and reading a name needs a wheel-scroll or a Focus.
 // "Focus" isolates one cell plus everything one hop from its members
 // (`computeCellEgoSet`) and fits the view to just that, which is still the
@@ -1936,7 +1934,7 @@ function onThreeHover(e) {
 // `computeEgoSet` does the same job per gate.
 //
 // **And `verilog:seven_segment` at that zoom is dense, which is worth saying
-// rather than pretending.** 103 runs of dust over 70 primitives in a window
+// rather than pretending.** A dense set of dust runs over many primitives in a window
 // is more simultaneous connections than an eye can trace one at a time, and
 // no layout makes that untrue. What the picture does owe at that size is the
 // thing this level exists for -- which cells there are, how big each one is
@@ -1945,7 +1943,7 @@ function onThreeHover(e) {
 // (`dustWidthNow`), because weight is relative to how far apart the things
 // it connects are drawn. And a hull is painted in two passes: its tint goes
 // behind the graph, where a region belongs, but its **outline goes on top of
-// the dust**. An outline painted underneath 103 runs is a cell you cannot
+// the dust**. An outline painted underneath every run is a cell you cannot
 // see, which is the one failure this level cannot afford.
 //
 // The flat level keeps the caveat it always had. A layered layout removed

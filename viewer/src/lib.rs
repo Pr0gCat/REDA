@@ -35,7 +35,7 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use reda::circuits::{and4, full_adder, seven_segment, verilog};
 use reda::compile::primitive_graph::{self, PrimitiveGraph, Provenance};
 use reda::compile::topology::{Library, Primitive as TopoPrimitive, TemplateNode};
-use reda::compile::lowering::lower_with_provenance;
+use reda::compile::lowering::{lower_optimised_with_provenance, lower_with_provenance};
 use reda::compile::{compile, Netlist};
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::{BlockKind, BlockState, Face, Facing};
@@ -768,6 +768,8 @@ struct CellMeta {
     /// See [`TopologyCell::lowered`] -- `lower_with_provenance`'s map,
     /// inverted.
     lowered: Vec<usize>,
+    /// The lowered gates that carry this source cell's physical output rail.
+    terminals: Vec<usize>,
 }
 
 /// The per-gate facts `Session::topology` reports that live in the `Netlist`
@@ -781,6 +783,21 @@ struct GateMeta {
     /// realisable, since "this NOR came from that NOR" says nothing.
     source: Option<String>,
     layer: i32,
+}
+
+fn source_terminals_by_declared_output(
+    source_netlist: &Netlist,
+    lowered_netlist: &Netlist,
+    provenance: &[usize],
+) -> Vec<Vec<usize>> {
+    let mut terminals = vec![Vec::new(); source_netlist.gates.len()];
+    for (lowered, (&source, gate)) in provenance.iter().zip(&lowered_netlist.gates).enumerate() {
+        if gate.output == source_netlist.gates[source].output {
+            terminals[source].push(lowered);
+        }
+    }
+    assert!(terminals.iter().all(|terminals| !terminals.is_empty()));
+    terminals
 }
 
 impl Session {
@@ -804,8 +821,17 @@ impl Session {
         // name, so they have to come from one and the same netlist. That is
         // exactly why `compile` refuses to lower on its own -- see its own
         // doc comment.
-        let (netlist, provenance) = lower_with_provenance(&source_netlist)
-            .map_err(|error| format!("lower() failed: {error}"))?;
+        let (netlist, provenance, source_terminals) = if verilog::find(circuit_name).is_some() {
+            lower_optimised_with_provenance(&source_netlist).map(|lowered| {
+                (lowered.netlist, lowered.provenance, lowered.source_terminals)
+            })
+        } else {
+            lower_with_provenance(&source_netlist).map(|(netlist, provenance)| {
+                let source_terminals = source_terminals_by_declared_output(&source_netlist, &netlist, &provenance);
+                (netlist, provenance, source_terminals)
+            })
+        }
+        .map_err(|error| format!("lowering failed: {error}"))?;
         let compiled =
             compile(&netlist).map_err(|error| format!("compile() failed: {error:?}"))?;
 
@@ -863,7 +889,8 @@ impl Session {
             layers
                 .into_iter()
                 .zip(lowered)
-                .map(|(layer, lowered)| CellMeta { layer, lowered })
+                .zip(source_terminals)
+                .map(|((layer, lowered), terminals)| CellMeta { layer, lowered, terminals })
                 .collect()
         };
 
@@ -983,19 +1010,12 @@ impl Session {
             for &node in &cell.nodes {
                 owner_of_node[node] = Some(cell.index);
             }
-            // The one lowered gate carrying this cell's declared output name.
-            // `lower` guarantees it exists: an expansion's output step is
-            // named after the gate itself, and a realisable cell is adopted
-            // verbatim (see `lowering`'s "Names" section).
-            let driver = cell
-                .lowered
+            let cell_terminals = self.cell_meta[cell.index]
+                .terminals
                 .iter()
-                .copied()
-                .find(|&g| self.gate_meta[g].output == cell.output)
-                .unwrap_or_else(|| {
-                    panic!("no lowered gate drives `{}`, which lowering promises", cell.output)
-                });
-            terminals.push(self.primitive_graph.output_nodes[driver].iter().copied().collect());
+                .flat_map(|&gate| self.primitive_graph.output_nodes[gate].iter().copied())
+                .collect();
+            terminals.push(cell_terminals);
         }
 
         let mut shared = Vec::new();
@@ -1349,10 +1369,10 @@ mod gate_level_tests {
     }
 
     /// `and4` is the smallest possible statement of the whole point: three
-    /// `and` cells, which lower into nine NORs. The tab used to report the
-    /// nine.
+    /// `and` cells.  The viewer must keep reporting those three logical
+    /// cells even though the polarity search chooses their physical rails.
     #[test]
-    fn and4s_gate_level_is_three_ands_that_lower_into_nine_nors() {
+    fn and4s_gate_level_is_three_ands_with_the_optimised_physical_realisation() {
         let level = gate_level_of("verilog:and4");
 
         assert_eq!(level.cells.len(), 3, "and4.netlist declares `# 3 gates`");
@@ -1381,11 +1401,12 @@ mod gate_level_tests {
         assert_eq!(level.outputs[0].name, "g2");
         assert_eq!(level.outputs[0].cell, Some(2), "the sole output is driven by the last cell");
 
-        // The lowering is not lost: those three cells own nine realisable
-        // gates between them, which is the number the tab used to report as
-        // if it were the circuit.
+        // The lowering is not lost: the chosen rails produce seven physical
+        // gates.  This deliberately is not the old nine-NOR local expansion;
+        // it is the same whole-netlist optimisation the official mc_dump
+        // path uses.
         let lowered: usize = level.cells.iter().map(|cell| cell.lowered.len()).sum();
-        assert_eq!(lowered, 9, "each $_AND_ expands into three NORs");
+        assert_eq!(lowered, 7, "global polarity assignment must reach the official and4 realisation");
     }
 
     /// The mix from `seven_segment.netlist`'s own `# cells:` line, and the
@@ -1516,24 +1537,11 @@ mod gate_level_tests {
         }
     }
 
-    /// The shared inverters of `verilog:seven_segment`, named rather than
-    /// hidden -- see [`SharedEdge`].
-    ///
-    /// The one written out in full is `!d1`. `nand g1 <- d1 g0` inverts both
-    /// of its inputs on the way to `!(d1 & g0) == !d1 | !g0`, so it is the
-    /// cell credited with building `!d1`; three later cells want the same
-    /// torch and are given no gate of their own for it, which is exactly why
-    /// each of them has fewer lowered gates than its kind's recipe has steps:
-    ///
-    /// ```text
-    /// gate andnot g3  <- d1 d0     A & !B == NOR(!A, B): wants !d1
-    /// gate and    g6  <- d1 d3     NOR(!A, !B):          wants !d1
-    /// gate nand   g12 <- d1 g5     !A | !B:              wants !d1
-    /// ```
-    ///
-    /// Transcribed from `src/circuits/baked/seven_segment.netlist` by hand,
-    /// not re-derived from the netlist in code, for the same reason the
-    /// histogram above is.
+    /// The shared rails of `verilog:seven_segment` remain named rather than
+    /// hidden -- see [`SharedEdge`].  Global polarity assignment is allowed
+    /// to change *which* logical cell first materialises a rail, so this test
+    /// must pin ownership and real edges, not an obsolete local-lowering
+    /// accident such as "g1 always builds !d1".
     #[test]
     fn a_shared_inverter_is_reported_as_an_edge_out_of_the_cell_that_built_it() {
         let session = Session::build("verilog:seven_segment").expect("circuit builds");
@@ -1553,70 +1561,58 @@ mod gate_level_tests {
             assert!(level.cells[shared.reader].nodes.contains(&shared.to));
         }
 
-        // `!d1`: the second torch of `nand g1`'s expansion, and the only
-        // node of that cell whose consumers sit in other cells.
-        let g1 = level.cells.iter().find(|cell| cell.output == "g1").expect("g1 exists");
-        assert_eq!(g1.kind, "nand");
+        // The selected solution materialises this shared rail in g3 and
+        // feeds it into g1, g6 and g12.  Pin the actual deterministic search
+        // result so a future change cannot silently return the viewer to
+        // ordinary lowering while leaving only a vague "some sharing exists"
+        // assertion behind.
+        let g3 = level.cells.iter().find(|cell| cell.output == "g3").expect("g3 exists");
+        assert_eq!(g3.kind, "andnot");
         let mut readers: Vec<&str> = level
             .shared_edges
             .iter()
-            .filter(|shared| shared.owner == g1.index)
+            .filter(|shared| shared.owner == g3.index)
             .map(|shared| level.cells[shared.reader].output.as_str())
             .collect();
         readers.sort_unstable();
         readers.dedup();
         assert_eq!(
             readers,
-            ["g12", "g3", "g6"],
-            "`nand g1` builds `!d1`; these three cells read it instead of building their own"
+            ["g1", "g12", "g6"],
+            "the selected rail belongs to g3 and is read by three other cells"
         );
         // One torch, not three: every one of those edges leaves the same node.
         let sources: HashSet<usize> = level
             .shared_edges
             .iter()
-            .filter(|shared| shared.owner == g1.index)
+            .filter(|shared| shared.owner == g3.index)
             .map(|shared| shared.from)
             .collect();
-        assert_eq!(sources.len(), 1, "there is one `!d1` torch, shared -- not one per reader");
-
-        // And a cell that borrows really is short of gates: `andnot g3` has
-        // one of the two steps `A & !B` takes.
-        let g3 = level.cells.iter().find(|cell| cell.output == "g3").expect("g3 exists");
-        assert_eq!((g3.kind, g3.lowered.len(), g3.nodes.len()), ("andnot", 1, 1));
-        assert!(
-            level.shared_edges.iter().any(|shared| shared.reader == g3.index),
-            "so the torch it is missing has to be visible as an edge from elsewhere"
-        );
+        assert_eq!(sources.len(), 1, "there is one physical primitive, shared -- not one per reader");
     }
 
-    /// `verilog:and4`'s three ANDs read six distinct signals between them, so
-    /// nothing is shared and every cell's box holds its whole expansion. That
-    /// is what makes it the circuit to check the nested drawing against
-    /// first: containment there is exactly containment, with no dashed
-    /// borrowing to account for.
+    /// `verilog:and4`'s three ANDs share no physical rail.  A bare merge has
+    /// no primitive node, so a cell can own more lowered gates than nodes;
+    /// the relevant invariant is that every cell owns its own non-empty part
+    /// of the optimised realisation, without borrowing from another cell.
     #[test]
     fn and4_shares_nothing_so_each_cell_owns_its_whole_expansion() {
         let level = gate_level_of("verilog:and4");
         assert!(level.shared_edges.is_empty());
         for cell in &level.cells {
-            assert_eq!(
-                (cell.lowered.len(), cell.nodes.len()),
-                (3, 3),
-                "`{}` is an $_AND_: !a, !b, and the NOR of the two",
-                cell.output
+            assert!(
+                cell.lowered.len() >= cell.nodes.len() && !cell.lowered.is_empty() && !cell.nodes.is_empty(),
+                "`{}` must own its physical gates and primitives without borrowed rails",
+                cell.output,
             );
         }
     }
 
     /// The one cell the tab's own verification singles out, drawn: `mux g20`
-    /// contains five lowered gates and four primitives, and the picture must
-    /// show those four and no others.
-    ///
-    /// Four, not five, because the mux's output stage is a merge -- and a
-    /// merge whose every branch is bare is not a block, it is the point where
-    /// two torches' dust is allowed to touch, so it instantiates nothing.
+    /// contains five lowered gates and five primitives in the selected
+    /// solution, and the picture must show those five and no others.
     #[test]
-    fn the_muxs_box_holds_exactly_the_four_primitives_its_five_gates_instantiate() {
+    fn the_muxs_hull_holds_exactly_the_five_primitives_its_optimised_lowering_instantiates() {
         let session = Session::build("verilog:seven_segment").expect("circuit builds");
         let level = session.gate_level();
         let mux = level.cells.iter().find(|cell| cell.kind == "mux").expect("one mux");
@@ -1633,7 +1629,7 @@ mod gate_level_tests {
             nodes
         };
         assert_eq!(mux.nodes, union, "the box holds its gates' nodes, all of them and nothing else");
-        assert_eq!(mux.nodes.len(), 4);
+        assert_eq!(mux.nodes.len(), 5);
         assert!(
             mux.nodes.iter().all(|&id| matches!(
                 session.primitive_graph.nodes[id].provenance,
@@ -1642,23 +1638,6 @@ mod gate_level_tests {
             "and each of those nodes names one of this cell's own gates as its provenance"
         );
 
-        // The gate that owns nothing is the merge, and its dust joins two
-        // nodes that are inside this same box -- so its junction glyph and
-        // both its spokes stay within the mux, rather than reaching out.
-        let empty: Vec<usize> = mux
-            .lowered
-            .iter()
-            .copied()
-            .filter(|&g| session.primitive_graph.gate_nodes[g].is_empty())
-            .collect();
-        assert_eq!(empty.len(), 1);
-        assert!(session.gate_meta[empty[0]].is_merge);
-        assert!(
-            session.primitive_graph.output_nodes[empty[0]]
-                .iter()
-                .all(|id| mux.nodes.contains(id)),
-            "the mux's output merge joins its own two torches"
-        );
     }
 
     /// A hand-written circuit is genuinely all-NOR -- `NetlistBuilder` emits

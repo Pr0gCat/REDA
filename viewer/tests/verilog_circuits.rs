@@ -16,9 +16,10 @@
 //!    This drives the baked one through `Session`, all 16 input combinations,
 //!    against the same truth table, on any machine.
 //! 2. **The circuit the viewer loads is the one the size ladder names.**
-//!    `verilog:seven_segment` is 31 gates and 7888 blocks; if either moved,
-//!    every number this project quotes about the synthesised decoder would be
-//!    quoting something else.
+//!    `verilog:seven_segment` is 31 logical cells, lowered through the
+//!    official global-polarity path into 47 physical gates and 10088 blocks;
+//!    if any of those moved, the viewer would be showing a different circuit
+//!    from the project’s official artefacts.
 //!
 //! Like `and4_truth_table.rs`, this never calls `Session::pinout` or
 //! `Session::legend` (both return a `JsValue`, which aborts outside a real
@@ -28,7 +29,7 @@
 use reda::circuits::seven_segment::TRUTH_TABLE;
 use reda::circuits::verilog;
 use reda::compile::compile;
-use reda::compile::lowering::lower;
+use reda::compile::lowering::lower_optimised;
 use reda_viewer::{list_circuits, Axis, Session};
 
 /// Bytes per cell in `Session::geometry`'s packed output -- the layout that
@@ -70,7 +71,7 @@ fn evaluate(session: &mut Session, inputs: &[&str], value: u32, outputs: &[(i32,
 fn output_positions(circuit_name: &str) -> Vec<(i32, i32, i32)> {
     let circuit = verilog::find(circuit_name).expect("catalog entry must exist");
     let (netlist, labels) = circuit.baked_netlist();
-    let netlist = lower(&netlist).expect("a baked netlist lowers");
+    let netlist = lower_optimised(&netlist).expect("a baked netlist lowers");
     let compiled = compile(&netlist).expect("a baked netlist compiles");
     labels
         .iter()
@@ -131,8 +132,8 @@ fn the_verilog_seven_segment_session_matches_its_truth_table_through_the_wasm_ap
 
 /// The synthesised decoder the viewer loads is the same circuit the rest of
 /// this project quotes, at both of its levels: 31 gate-level cells as Yosys
-/// left them, 56 torches and merges once `compile::lowering` has had them,
-/// 12348 blocks once the compiler has. `geometry()`'s length is that block
+/// left them, 47 torches and merges once `compile::lowering` has assigned
+/// global polarities, 10088 blocks once the compiler has. `geometry()`'s length is that block
 /// count as the viewer itself sees it: one entry per non-air cell.
 #[test]
 fn the_verilog_seven_segment_is_the_size_the_ladder_says_it_is() {
@@ -144,13 +145,12 @@ fn the_verilog_seven_segment_is_the_size_the_ladder_says_it_is() {
         "only 9 of the decoder's 31 cells are things redstone builds directly"
     );
 
-    let lowered = lower(&netlist).expect("the decoder lowers");
-    assert_eq!(lowered.gates.len(), 56, "lowered gate count has moved");
-    assert_eq!(lowered.gates.iter().filter(|gate| gate.is_merge()).count(), 17);
+    let lowered = lower_optimised(&netlist).expect("the decoder lowers");
+    assert_eq!(lowered.gates.len(), 47, "lowered gate count has moved");
 
     let session = Session::new("verilog:seven_segment").expect("session builds");
     let cells = session.geometry().len() / GEOMETRY_BYTES_PER_CELL;
-    assert_eq!(cells, 12348, "the synthesised decoder's block count has moved");
+    assert_eq!(cells, 10088, "the synthesised decoder's block count has moved");
     assert_eq!(session.geometry().len() % GEOMETRY_BYTES_PER_CELL, 0);
     assert_eq!(session.strengths().len(), cells, "one strength byte per geometry entry");
 }

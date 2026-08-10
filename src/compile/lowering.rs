@@ -117,6 +117,20 @@ impl std::fmt::Display for LowerError {
 
 impl std::error::Error for LowerError {}
 
+/// A lowered physical netlist plus the source-cell ownership information a
+/// topology consumer needs to relate it back to the gate-level netlist.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredWithProvenance {
+    /// The NOR-and-merge netlist handed to `compile()`.
+    pub netlist: Netlist,
+    /// For every physical gate, the source gate-level cell that created it.
+    pub provenance: Vec<usize>,
+    /// For every source cell, its physical output gate or gates. A negative
+    /// rail exported as a declared output has both its selected rail and its
+    /// final positive inverter here.
+    pub source_terminals: Vec<Vec<usize>>,
+}
+
 /// Rewrite every gate of `netlist` into NOR gates and wire merges, leaving
 /// the circuit's inputs, outputs and every declared output *name* exactly
 /// where they were.
@@ -139,6 +153,23 @@ pub fn lower_optimised(netlist: &Netlist) -> Result<Netlist, LowerError> {
     lower_with_assignment(netlist, &assignment)
 }
 
+/// [`lower_optimised`], plus the source gate that created each physical gate.
+///
+/// The optimisation selects the physical polarity of every gate output, but
+/// does not change the ownership rule [`lower_with_provenance`] already uses:
+/// a shared inverter belongs to the first gate that needs it.  Consumers such
+/// as the viewer need that map to keep their gate-level hulls tied to the
+/// exact physical graph they display.
+pub fn lower_optimised_with_provenance(netlist: &Netlist) -> Result<LoweredWithProvenance, LowerError> {
+    let assignment = assign_polarities(netlist).map_err(|error| match error {
+        PolarityError::CyclicNetlist => LowerError::CyclicNetlist,
+        PolarityError::OutputHasNoProducer { output } => LowerError::OutputHasNoProducer { output },
+        PolarityError::MissingDefaultLibraryEntry { kind } => LowerError::MissingDefaultLibraryEntry { kind },
+        PolarityError::Lowering(error) => error,
+    })?;
+    lower_with_assignment_and_provenance(netlist, &assignment)
+}
+
 /// The physical rails currently available for one logical signal. A source
 /// gate contributes exactly the rail selected for it; the opposite rail is
 /// materialised lazily through [`NetlistBuilder::not`] when a recipe needs
@@ -156,6 +187,13 @@ pub fn lower_with_assignment(
     netlist: &Netlist,
     assignment: &[SignalPolarity],
 ) -> Result<Netlist, LowerError> {
+    lower_with_assignment_and_provenance(netlist, assignment).map(|lowered| lowered.netlist)
+}
+
+fn lower_with_assignment_and_provenance(
+    netlist: &Netlist,
+    assignment: &[SignalPolarity],
+) -> Result<LoweredWithProvenance, LowerError> {
     if assignment.len() != netlist.gates.len() {
         return Err(LowerError::AssignmentLengthMismatch { expected: netlist.gates.len(), actual: assignment.len() });
     }
@@ -179,10 +217,15 @@ pub fn lower_with_assignment(
     // every logical input above, while its direct-name representation means
     // every positive rail is already the declared signal name.
     if assignment.iter().all(|&polarity| polarity == SignalPolarity::Positive) {
-        return Ok(lower_with_provenance(netlist)?.0);
+        let (lowered_netlist, provenance) = lower_with_provenance(netlist)?;
+        let source_terminals =
+            source_terminals_by_declared_output(&netlist.gates, &provenance, &lowered_netlist.gates);
+        return Ok(LoweredWithProvenance { netlist: lowered_netlist, provenance, source_terminals });
     }
 
     let mut builder = NetlistBuilder::with_prefix(fresh_prefix(netlist));
+    let mut provenance = Vec::new();
+    let mut source_terminals = vec![Vec::new(); netlist.gates.len()];
     let mut rails: HashMap<String, PhysicalRails> = netlist
         .inputs
         .iter()
@@ -205,9 +248,22 @@ pub fn lower_with_assignment(
             let inputs = gate
                 .inputs
                 .iter()
-                .map(|input| resolve_rail(&mut builder, &mut rails, input, SignalPolarity::Positive, &gate.output))
+                .map(|input| {
+                    resolve_rail(
+                        &mut builder,
+                        &mut rails,
+                        input,
+                        SignalPolarity::Positive,
+                        &gate.output,
+                        source,
+                        &mut provenance,
+                    )
+                })
                 .collect::<Result<Vec<_>, _>>()?;
+            let before = builder.len();
             builder.adopt(Gate { inputs, ..gate.clone() });
+            record_new_gates(&builder, before, source, &mut provenance);
+            source_terminals[source].push(before);
             rails.insert(
                 gate.output.clone(),
                 PhysicalRails { positive: Some(gate.output.clone()), negative: None },
@@ -223,6 +279,8 @@ pub fn lower_with_assignment(
                 &gate.inputs[pin],
                 SignalPolarity::Negative,
                 &gate.output,
+                source,
+                &mut provenance,
             )?;
         }
 
@@ -233,13 +291,22 @@ pub fn lower_with_assignment(
                 .iter()
                 .map(|operand| match *operand {
                     Operand::Input { pin, polarity } => {
-                        resolve_rail(&mut builder, &mut rails, &gate.inputs[pin], polarity, &gate.output)
+                        resolve_rail(
+                            &mut builder,
+                            &mut rails,
+                            &gate.inputs[pin],
+                            polarity,
+                            &gate.output,
+                            source,
+                            &mut provenance,
+                        )
                     }
                     Operand::Step(step) => Ok(built[step].clone()),
                 })
                 .collect::<Result<Vec<_>, _>>()?;
 
             let last = index == output_step;
+            let before = builder.len();
             let output = match step {
                 Step::Nor(_) if !last && operands.len() == 1 => builder.not(&operands[0]),
                 Step::Nor(_) if last && polarity == SignalPolarity::Positive => {
@@ -251,6 +318,10 @@ pub fn lower_with_assignment(
                 }
                 Step::Merge(_) => builder.merge(&operands),
             };
+            record_new_gates(&builder, before, source, &mut provenance);
+            if last {
+                source_terminals[source].extend(before..builder.len());
+            }
             built.push(output);
         }
 
@@ -260,13 +331,41 @@ pub fn lower_with_assignment(
             SignalPolarity::Negative => PhysicalRails { positive: None, negative: Some(selected.clone()) },
         };
         if polarity == SignalPolarity::Negative && netlist.outputs.iter().any(|output| output == &gate.output) {
+            let before = builder.len();
             let positive = builder.nor_named(&gate.name, &gate.output, &[selected]);
+            record_new_gates(&builder, before, source, &mut provenance);
+            source_terminals[source].extend(before..builder.len());
             physical.positive = Some(positive);
         }
         rails.insert(gate.output.clone(), physical);
     }
 
-    Ok(Netlist { inputs: netlist.inputs.clone(), outputs: netlist.outputs.clone(), gates: builder.into_gates() })
+    let gates = builder.into_gates();
+    debug_assert_eq!(gates.len(), provenance.len(), "one provenance entry per lowered gate");
+    Ok(LoweredWithProvenance {
+        netlist: Netlist { inputs: netlist.inputs.clone(), outputs: netlist.outputs.clone(), gates },
+        provenance,
+        source_terminals,
+    })
+}
+
+fn source_terminals_by_declared_output(
+    source_gates: &[Gate],
+    provenance: &[usize],
+    lowered_gates: &[Gate],
+) -> Vec<Vec<usize>> {
+    let mut terminals = vec![Vec::new(); source_gates.len()];
+    for (lowered, (&source, gate)) in provenance.iter().zip(lowered_gates).enumerate() {
+        if gate.output == source_gates[source].output {
+            terminals[source].push(lowered);
+        }
+    }
+    debug_assert!(terminals.iter().all(|terminals| !terminals.is_empty()));
+    terminals
+}
+
+fn record_new_gates(builder: &NetlistBuilder, before: usize, source: usize, provenance: &mut Vec<usize>) {
+    provenance.extend(std::iter::repeat_n(source, builder.len() - before));
 }
 
 fn validate_logical_inputs(netlist: &Netlist) -> Result<(), LowerError> {
@@ -295,6 +394,8 @@ fn resolve_rail(
     logical: &str,
     polarity: SignalPolarity,
     consuming_gate: &str,
+    source: usize,
+    provenance: &mut Vec<usize>,
 ) -> Result<String, LowerError> {
     let existing = rails.get(logical).ok_or_else(|| LowerError::UnresolvedLogicalSignal {
         gate: consuming_gate.to_string(),
@@ -316,7 +417,9 @@ fn resolve_rail(
         gate: consuming_gate.to_string(),
         signal: logical.to_string(),
     })?;
+    let before = builder.len();
     let materialised = builder.not(&opposite);
+    record_new_gates(builder, before, source, provenance);
     let rails = rails.get_mut(logical).ok_or_else(|| LowerError::UnresolvedLogicalSignal {
         gate: consuming_gate.to_string(),
         signal: logical.to_string(),
