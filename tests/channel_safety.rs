@@ -29,10 +29,10 @@
 //!   two-gate case was.
 
 use reda::compile::planner::{
-    terminal_style, try_move, Anchor, PlanCandidate, PrimitiveNode, Route, TerminalApproach,
-    TerminalStyle,
+    terminal_style, try_move, Anchor, NodeRealisation, PlanCandidate, PrimitiveNode, Route,
+    TerminalApproach, TerminalStyle,
 };
-use reda::compile::topology::GateKind;
+use reda::compile::topology::{GateKind, Primitive};
 use reda::compile::{compile, CompileError, Gate, Netlist};
 use reda::redstone::simulator::Simulator;
 
@@ -54,6 +54,7 @@ fn local_move_keeps_nonincident_routes_byte_identical() {
             .map(|(id, &anchor)| PrimitiveNode {
                 id: format!("node:{id}"),
                 anchor,
+                realisation: NodeRealisation::Primitive(Primitive::Torch),
             })
             .collect(),
         vec![

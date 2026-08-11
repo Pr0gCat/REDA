@@ -7,9 +7,12 @@ use reda::compile::topology::GateKind;
 use std::path::PathBuf;
 
 use reda::circuits::and4::build_and4_netlist;
+use reda::compile::physical;
 use reda::compile::planner::{
-    seed_from_legacy, verify_candidate, Anchor, NormalisedScore, PlannerWeights, RouteTerminalKind,
+    seed_from_legacy, verify_candidate, Anchor, NodeRealisation, NormalisedScore, PlannerWeights,
+    RouteTerminalKind,
 };
+use reda::compile::topology::Primitive;
 use reda::compile::{compile, CompileError, CompiledCircuit, Gate, Netlist};
 use reda::formats::litematic;
 use reda::redstone::simulator::Simulator;
@@ -103,6 +106,46 @@ fn compiled_and4() -> (Netlist, CompiledCircuit) {
     let (netlist, _) = build_and4_netlist();
     let compiled = compile(&netlist).expect("and4 is acyclic and fully driven");
     (netlist, compiled)
+}
+
+/// A candidate carries anchors, but an anchor alone cannot be turned back
+/// into blocks: emission needs to know whether the thing standing there is a
+/// torch, a lever, or nothing at all because the gate is a wire merge. Until
+/// the seed names that, `physical::variants` has no caller and no candidate
+/// can be realised.
+#[test]
+fn a_seed_names_the_physical_realisation_behind_every_placed_node() {
+    let (netlist, compiled) = compiled_and4();
+
+    let seed = seed_from_legacy(&netlist, &compiled).expect("legacy output must be extractable");
+
+    for (gate, node) in netlist.gates.iter().zip(seed.primitive_nodes()) {
+        let expected = match gate.kind {
+            GateKind::Nor(_) => NodeRealisation::Primitive(Primitive::Torch),
+            GateKind::Or(_) => NodeRealisation::WireMerge,
+            other => panic!("a compiled netlist cannot contain {other:?}"),
+        };
+        assert_eq!(node.realisation, expected, "gate {}", gate.output);
+    }
+
+    for node in seed.primitive_nodes().iter().skip(netlist.gates.len()) {
+        assert_eq!(
+            node.realisation,
+            NodeRealisation::Primitive(Primitive::Lever),
+            "primary input {}",
+            node.id
+        );
+    }
+
+    for node in seed.primitive_nodes() {
+        if let NodeRealisation::Primitive(primitive) = node.realisation {
+            assert!(
+                !physical::variants(primitive).is_empty(),
+                "{} realises as {primitive:?}, which has no physical variant to emit",
+                node.id
+            );
+        }
+    }
 }
 
 #[test]

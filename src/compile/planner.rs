@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::compile::primitive_graph::{reexpand_gate, EntrySelection, NodeId};
-use crate::compile::topology::Library;
+use crate::compile::topology::{Library, Primitive};
 use crate::compile::{self, CompiledCircuit, LegacyEmission, Netlist};
 
 /// A fixed coordinate selected by the planner without referring to a world.
@@ -13,6 +13,18 @@ pub struct Anchor {
     pub z: i32,
 }
 
+/// What a node becomes when a candidate is turned back into blocks.
+///
+/// A declared wire merge is the one node with no component of its own: it is
+/// dust where two nets join, so it owns an anchor for spacing and routing
+/// purposes while emitting no primitive.  Every other node names exactly one,
+/// and that name is what selects a [`crate::compile::physical`] variant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NodeRealisation {
+    Primitive(Primitive),
+    WireMerge,
+}
+
 /// The node whose primitive is placed at an anchor.  Candidate coordinates
 /// alone are ambiguous once two same-shaped primitives exist, so the node
 /// identity travels with the candidate and is checked during realisation.
@@ -20,6 +32,9 @@ pub struct Anchor {
 pub struct PrimitiveNode {
     pub id: String,
     pub anchor: Anchor,
+    /// The component to emit here.  Recorded by whoever chose the anchor;
+    /// never re-derived from the node's name or from surrounding blocks.
+    pub realisation: NodeRealisation,
 }
 
 /// One declared sink of a route, recorded directly instead of inferred from
@@ -1539,6 +1554,11 @@ mod tests {
                         format!("node:{id}")
                     },
                     anchor,
+                    realisation: if id == 0 {
+                        NodeRealisation::Primitive(Primitive::Lever)
+                    } else {
+                        NodeRealisation::Primitive(Primitive::Torch)
+                    },
                 })
                 .collect(),
             vec![
@@ -1605,14 +1625,17 @@ mod tests {
                 PrimitiveNode {
                     id: "input:source".to_string(),
                     anchor: source,
+                    realisation: NodeRealisation::Primitive(Primitive::Lever),
                 },
                 PrimitiveNode {
                     id: "gate:moved".to_string(),
                     anchor: old_moved_sink,
+                    realisation: NodeRealisation::Primitive(Primitive::Torch),
                 },
                 PrimitiveNode {
                     id: "gate:other".to_string(),
                     anchor: other_sink,
+                    realisation: NodeRealisation::Primitive(Primitive::Torch),
                 },
             ],
             vec![Route::from_legacy(
@@ -1687,10 +1710,12 @@ mod tests {
                 PrimitiveNode {
                     id: "input:a".to_string(),
                     anchor: source,
+                    realisation: NodeRealisation::Primitive(Primitive::Lever),
                 },
                 PrimitiveNode {
                     id: "gate:merge".to_string(),
                     anchor: merge,
+                    realisation: NodeRealisation::WireMerge,
                 },
             ],
             vec![Route::from_legacy(
@@ -1741,6 +1766,7 @@ mod tests {
             vec![PrimitiveNode {
                 id: "input:a".to_string(),
                 anchor: old_anchor,
+                realisation: NodeRealisation::Primitive(Primitive::Lever),
             }],
             vec![stale_route.clone()],
         );
@@ -1828,10 +1854,12 @@ mod tests {
                 PrimitiveNode {
                     id: "input:a".to_string(),
                     anchor: source,
+                    realisation: NodeRealisation::Primitive(Primitive::Lever),
                 },
                 PrimitiveNode {
                     id: "gate:y".to_string(),
                     anchor: sink,
+                    realisation: NodeRealisation::Primitive(Primitive::Torch),
                 },
             ],
             vec![Route::from_legacy(
@@ -1866,14 +1894,17 @@ mod tests {
                     PrimitiveNode {
                         id: "input:a".to_string(),
                         anchor: source,
+                        realisation: NodeRealisation::Primitive(Primitive::Lever),
                     },
                     PrimitiveNode {
                         id: "gate:merge".to_string(),
                         anchor: merge,
+                        realisation: NodeRealisation::WireMerge,
                     },
                     PrimitiveNode {
                         id: "gate:other".to_string(),
                         anchor: shared_consumer,
+                        realisation: NodeRealisation::Primitive(Primitive::Torch),
                     },
                 ],
                 vec![
@@ -1957,9 +1988,21 @@ mod tests {
                 Anchor { x: 5, y: 0, z: 0 },
             ],
             vec![
-                PrimitiveNode { id: "input:a".to_string(), anchor: Anchor { x: 0, y: 0, z: 0 } },
-                PrimitiveNode { id: "gate:blocked".to_string(), anchor: Anchor { x: 2, y: 0, z: 0 } },
-                PrimitiveNode { id: "gate:y".to_string(), anchor: Anchor { x: 5, y: 0, z: 0 } },
+                PrimitiveNode {
+                    id: "input:a".to_string(),
+                    anchor: Anchor { x: 0, y: 0, z: 0 },
+                    realisation: NodeRealisation::Primitive(Primitive::Lever),
+                },
+                PrimitiveNode {
+                    id: "gate:blocked".to_string(),
+                    anchor: Anchor { x: 2, y: 0, z: 0 },
+                    realisation: NodeRealisation::Primitive(Primitive::Torch),
+                },
+                PrimitiveNode {
+                    id: "gate:y".to_string(),
+                    anchor: Anchor { x: 5, y: 0, z: 0 },
+                    realisation: NodeRealisation::Primitive(Primitive::Torch),
+                },
             ],
             vec![Route::from_legacy(
                 "a".to_string(),

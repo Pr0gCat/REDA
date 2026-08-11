@@ -48,9 +48,10 @@ use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use crate::redstone::world::storage::World;
 
 use self::planner::{
-    terminal_style, Anchor, PrimitiveNode, RouteSink, RouteTerminal, RouteTerminalKind,
-    TerminalApproach, TerminalStyle,
+    terminal_style, Anchor, NodeRealisation, PrimitiveNode, RouteSink, RouteTerminal,
+    RouteTerminalKind, TerminalApproach, TerminalStyle,
 };
+use self::topology::Primitive;
 
 pub mod equivalence;
 pub mod lowering;
@@ -6270,9 +6271,18 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
 fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<PrimitiveNode> {
     let mut nodes = Vec::with_capacity(anchors.len());
     for (gate, anchor) in netlist.gates.iter().zip(anchors.iter().copied()) {
+        // A merge is dust where nets join, so it reserves an anchor without
+        // ever becoming a component; every other realisable gate is one NOR
+        // cell, whose component is its output torch.
+        let realisation = if gate.is_merge() {
+            NodeRealisation::WireMerge
+        } else {
+            NodeRealisation::Primitive(Primitive::Torch)
+        };
         nodes.push(PrimitiveNode {
             id: format!("gate:{}", gate.output),
             anchor,
+            realisation,
         });
     }
     for (input, anchor) in netlist
@@ -6283,6 +6293,7 @@ fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<Primitiv
         nodes.push(PrimitiveNode {
             id: format!("input:{input}"),
             anchor,
+            realisation: NodeRealisation::Primitive(Primitive::Lever),
         });
     }
     nodes
