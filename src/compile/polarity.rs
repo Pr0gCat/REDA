@@ -53,9 +53,11 @@ impl std::error::Error for PolarityError {
     }
 }
 
-/// The static cost of a fully lowered candidate.  This intentionally omits
-/// routing: physical placement measures that separately after lowering has
-/// found a Pareto candidate.
+/// The static cost of a lowered candidate. This intentionally omits routing:
+/// physical placement measures that separately after lowering has found a
+/// Pareto candidate. A stateful gate is a fixed boundary here; its macro cost
+/// belongs to sequential physical planning, not to a combinational polarity
+/// flip.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct LoweredScore {
     area: u32,
@@ -80,7 +82,7 @@ pub fn assign_polarities(netlist: &Netlist) -> Result<PolarityAssignment, Polari
         .gates
         .iter()
         .enumerate()
-        .filter_map(|(index, gate)| (!gate.kind.is_realisable()).then_some(index))
+        .filter_map(|(index, gate)| (!gate.kind.is_realisable() && !gate.kind.is_sequential()).then_some(index))
         .collect();
     let mut current = score(netlist, &assignment)?;
 
@@ -171,6 +173,12 @@ fn score_realisable_netlist(netlist: &Netlist) -> Result<LoweredScore, PolarityE
 
     for index in order {
         let gate = &netlist.gates[index];
+        if gate.kind.is_sequential() {
+            // Q starts a new combinational timing arc. D/C are sampled at
+            // the edge, so neither contributes to the arc being scored.
+            torch_depth_of_gate[index] = 0;
+            continue;
+        }
         debug_assert!(gate.kind.is_realisable());
         let entry = library
             .choose(gate.kind)

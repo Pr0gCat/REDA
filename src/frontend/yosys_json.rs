@@ -32,9 +32,9 @@ use crate::compile::Netlist;
 
 use super::FrontendError;
 
-/// Yosys's own pin names for each simple cell type this frontend accepts,
-/// in declaration order (see Yosys's `techlibs/common/simcells.v`). The
-/// output pin is always `Y` and is not listed.
+/// Yosys's own input pin names for each simple cell type this frontend
+/// accepts, in declaration order (see Yosys's `techlibs/common/simcells.v`).
+/// Most cells write `Y`; the positive-edge DFF is stateful and writes `Q`.
 ///
 /// This is a JSON-reading fact -- which key names to look up in a cell's
 /// `connections` object -- not a redstone one, so it lives here rather than
@@ -61,10 +61,21 @@ const CELL_PINS: &[(&str, &[&str])] = &[
     ("$_OAI4_", &["A", "B", "C", "D"]),
     ("$_MUX_", &["A", "B", "S"]),
     ("$_NMUX_", &["A", "B", "S"]),
+    ("$_DFF_P_", &["D", "C"]),
 ];
 
 fn pins_for(cell_type: &str) -> Option<&'static [&'static str]> {
     CELL_PINS.iter().find(|&&(name, _)| name == cell_type).map(|&(_, pins)| pins)
+}
+
+/// Yosys calls the output of its combinational simple cells `Y`, but a
+/// positive-edge DFF exposes its state output as `Q`. Keep this JSON fact at
+/// the parser boundary rather than teaching the topology library about pins.
+fn output_pin_for(cell_type: &str) -> &'static str {
+    match cell_type {
+        "$_DFF_P_" => "Q",
+        _ => "Y",
+    }
 }
 
 fn unsupported(message: impl Into<String>) -> FrontendError {
@@ -143,8 +154,8 @@ struct CellInfo<'a> {
 }
 
 struct Context<'a> {
-    /// net id -> the cell whose `Y` output drives it. Built once, up front,
-    /// from every cell in the module -- this is the reverse index that lets
+    /// net id -> the cell whose output drives it. Built once, up front, from
+    /// every cell in the module -- this is the reverse index that lets
     /// `resolve` find a net's driver regardless of which order Yosys listed
     /// cells in.
     driver_of: HashMap<i64, CellInfo<'a>>,
@@ -383,7 +394,7 @@ pub(super) fn netlist_from_json(json: &Value, top_module: &str) -> Result<(Netli
     for (cell_name, cell) in cells {
         let cell_type = as_str(cell.get("type").ok_or_else(|| unsupported(format!("cell `{cell_name}` has no `type`")))?, "cell type")?;
         let connections = as_object(cell.get("connections").ok_or_else(|| unsupported(format!("cell `{cell_name}` has no `connections`")))?, "cell connections")?;
-        let out_bit = single_bit(connections, "Y", cell_name)?;
+        let out_bit = single_bit(connections, output_pin_for(cell_type), cell_name)?;
         match parse_bit(out_bit)? {
             Bit::Net(id) => {
                 driver_of.insert(id, CellInfo { name: cell_name.clone(), cell_type, connections });
@@ -540,6 +551,35 @@ mod tests {
         assert!(lowered.gates.iter().all(|g| g.kind == GateKind::Nor(1)));
     }
 
+    #[test]
+    fn a_positive_edge_dff_keeps_its_d_c_q_interface_through_lowering() {
+        let json = json!({
+            "modules": {
+                "top": {
+                    "ports": {
+                        "d": { "direction": "input", "bits": [2] },
+                        "clk": { "direction": "input", "bits": [3] },
+                        "q": { "direction": "output", "bits": [4] }
+                    },
+                    "cells": {
+                        "ff0": {
+                            "type": "$_DFF_P_",
+                            "connections": { "D": [2], "C": [3], "Q": [4] }
+                        }
+                    }
+                }
+            }
+        });
+
+        let (netlist, output_labels) = netlist_from_json(&json, "top").expect("a $_DFF_P_ must be a supported gate-level cell");
+
+        assert_eq!(netlist.gates.len(), 1);
+        assert_eq!(netlist.gates[0].kind, GateKind::DffPosedge);
+        assert_eq!(netlist.gates[0].inputs, vec!["d".to_string(), "clk".to_string()]);
+        assert_eq!(output_labels["q"], netlist.gates[0].output);
+        assert_eq!(crate::compile::lowering::lower(&netlist).unwrap(), netlist);
+    }
+
     /// A gate-level cell keeps its kind and its pin order verbatim.
     #[test]
     fn a_mux_cell_keeps_its_kind_and_its_a_b_s_pin_order() {
@@ -646,9 +686,9 @@ mod tests {
                         "y": { "direction": "output", "bits": [3] }
                     },
                     "cells": {
-                        "dff0": {
-                            "type": "$_DFF_P_",
-                            "connections": { "D": [2], "Y": [3] }
+                        "tbuf0": {
+                            "type": "$_TBUF_",
+                            "connections": { "A": [2], "Y": [3] }
                         }
                     }
                 }
@@ -659,7 +699,7 @@ mod tests {
             Ok(_) => panic!("an unmapped cell type must not silently synthesize"),
             Err(error) => error.to_string(),
         };
-        assert!(message.contains("dff0"), "error must name the cell: {message}");
-        assert!(message.contains("$_DFF_P_"), "error must name the cell's type: {message}");
+        assert!(message.contains("tbuf0"), "error must name the cell: {message}");
+        assert!(message.contains("$_TBUF_"), "error must name the cell's type: {message}");
     }
 }

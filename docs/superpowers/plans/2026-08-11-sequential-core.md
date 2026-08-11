@@ -104,21 +104,21 @@ git commit -m "feat(netlist): cut dependency order at DFF boundaries"
 - `CELL_PINS` maps `$_DFF_P_` to `["D", "C"]` in that order.
 - `lower()` copies a DFF gate unchanged while recursively lowering its combinational input cones.
 
-- [ ] **Step 1: Write failing frontend and lowering tests**
+- [x] **Step 1: Write failing frontend and lowering tests**
 
 Parse a minimal JSON module with one `$_DFF_P_`, a `D` input, a `C` input, and a `Q` output. Assert the netlist has exactly one `DffPosedge` gate whose `inputs == ["d", "clk"]`. Then call `lower()` and assert the DFF remains one gate with the same output, while an `$_AND_` feeding `D` is lowered to realisable gates.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test dff_frontend -- --nocapture`
 
 Expected: the frontend reports `$_DFF_P_` as unsupported.
 
-- [ ] **Step 3: Implement the boundary mapping**
+- [x] **Step 3: Implement the boundary mapping**
 
 Add only `$_DFF_P_` to the topology/Yosys tables. Add a `DffPosedge` arm in assigned and ordinary lowering that copies the gate after checking exact arity; no polarity assignment is attempted across this state boundary. Ensure `GateKind::evaluate` is not used for DFF, because its result depends on previous state and a clock transition rather than just its two current boolean pins.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run: `cargo test dff_frontend -- --nocapture; cargo test lowering --lib -- --nocapture`
 

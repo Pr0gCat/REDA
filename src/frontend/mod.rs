@@ -232,12 +232,18 @@ mod tests {
     /// between the two cost models that remain.
     ///
     /// What is still this module's business is the boundary it owns: every
-    /// Yosys cell type the frontend accepts has to be something the rest of
-    /// the pipeline can actually build.
+    /// combinational Yosys cell type the frontend accepts has to be something
+    /// the rest of the pipeline can actually build. Stateful cells are named
+    /// boundaries: they are retained for the sequential compiler phase, not
+    /// expanded through the combinational primitive library.
     #[test]
     fn every_accepted_yosys_cell_type_lowers_to_something_the_library_can_place() {
         let library = Library::default_library();
         for (cell_type, kind) in topology::known_yosys_cell_types() {
+            if kind.is_sequential() {
+                assert_eq!(kind, GateKind::DffPosedge, "only the named DFF is stateful today");
+                continue;
+            }
             let expansion = topology::expansion_for(kind);
             assert!(!expansion.steps.is_empty(), "{cell_type} ({kind:?}) has no expansion");
 
@@ -258,14 +264,17 @@ mod tests {
         }
     }
 
-    /// A cell type the frontend never accepts has no `GateKind` at all, so
-    /// the "unsupported construct" error path is reached by data rather than
-    /// by falling through every known name.
+    /// A cell type the frontend never accepts has no `GateKind` at all. The
+    /// positive-edge DFF is deliberately the exception: it has a named
+    /// sequential boundary, while other state, tri-state and constant cells
+    /// still take the "unsupported construct" path.
     #[test]
     fn an_unmapped_cell_type_has_no_gate_kind() {
         assert!(topology::gate_kind_for_yosys_cell("$__ZERO").is_none());
         assert!(topology::gate_kind_for_yosys_cell("$__ONE").is_none());
-        assert!(topology::gate_kind_for_yosys_cell("$_DFF_P_").is_none());
+        assert_eq!(topology::gate_kind_for_yosys_cell("$_DFF_P_"), Some(GateKind::DffPosedge));
+        assert!(topology::gate_kind_for_yosys_cell("$_DLATCH_P_").is_none());
+        assert!(topology::gate_kind_for_yosys_cell("$_TBUF_").is_none());
         assert!(topology::gate_kind_for_yosys_cell("").is_none());
     }
 }

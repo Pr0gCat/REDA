@@ -419,9 +419,11 @@ impl GateKind {
 /// exactly the set its `abc` pass's default `-g` gate list can produce.
 /// Deliberately absent, and staying absent:
 ///
-/// - `$_DLATCH_*_`, `$_SR_*_` and every sequential cell other than the
-///   positive-edge DFF planned below. A cell with state must have a named
-///   topology entry; it must never silently enter the combinational library.
+/// - `$_DLATCH_*_`, `$_SR_*_` and every sequential cell other than
+///   `$_DFF_P_`. A cell with state must have a named topology entry; it must
+///   never silently enter the combinational library. `$_DFF_P_` is retained
+///   as a state boundary and receives its physical topology in the sequential
+///   compiler phase; it is not a combinational expansion.
 /// - `$_TBUF_`, and Yosys's `$__ZERO`/`$__ONE` constant drivers. There is
 ///   no tri-state and no "always on" cell in real redstone, so an entry for
 ///   either would be a lie.
@@ -448,6 +450,7 @@ const YOSYS_CELL_KINDS: &[(&str, GateKind)] = &[
     ("$_OAI4_", GateKind::Oai4),
     ("$_MUX_", GateKind::Mux),
     ("$_NMUX_", GateKind::Nmux),
+    ("$_DFF_P_", GateKind::DffPosedge),
 ];
 
 /// The [`GateKind`] this library realises Yosys cell type `cell_type` as, or
@@ -1477,14 +1480,19 @@ mod tests {
         assert_eq!(gate_kind_for_yosys_cell("$_ORNOT_"), Some(GateKind::OrNot));
         assert_eq!(gate_kind_for_yosys_cell("$_MUX_"), Some(GateKind::Mux));
         assert_eq!(gate_kind_for_yosys_cell("$_BUF_"), Some(GateKind::Buf));
+        assert_eq!(gate_kind_for_yosys_cell("$_DFF_P_"), Some(GateKind::DffPosedge));
     }
 
-    /// Every cell type this table names must have an [`Expansion`] whose
-    /// arity matches, or the frontend would map a cell to a kind and then
-    /// find nothing to build it from.
+    /// Every combinational cell type this table names must have an
+    /// [`Expansion`] whose arity matches. Stateful entries are represented
+    /// as named boundaries, not passed to a combinational recipe.
     #[test]
     fn every_known_yosys_cell_expands_and_its_arity_is_the_kinds_own() {
         for (cell_type, kind) in known_yosys_cell_types() {
+            if kind.is_sequential() {
+                assert_eq!(kind, GateKind::DffPosedge, "only the named DFF is stateful today");
+                continue;
+            }
             let expansion = expansion_for(kind);
             expansion.validate(kind);
             assert!(!expansion.steps.is_empty(), "{cell_type} ({kind:?}) expands to nothing");
@@ -1498,7 +1506,6 @@ mod tests {
         // purpose -- see YOSYS_CELL_KINDS's own doc comment.
         assert_eq!(gate_kind_for_yosys_cell("$__ZERO"), None);
         assert_eq!(gate_kind_for_yosys_cell("$__ONE"), None);
-        assert_eq!(gate_kind_for_yosys_cell("$_DFF_P_"), None, "sequential logic is a later task, not this one");
         assert_eq!(gate_kind_for_yosys_cell("$_DLATCH_P_"), None);
         assert_eq!(gate_kind_for_yosys_cell("$_TBUF_"), None, "there is no tri-state in redstone");
         assert_eq!(gate_kind_for_yosys_cell("$_and_"), None, "the table is exact-match, not case-insensitive");

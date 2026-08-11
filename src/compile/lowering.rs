@@ -236,9 +236,32 @@ fn lower_with_assignment_and_provenance(
         })
         .collect();
 
+    // Q is a source for the current combinational cycle even when the DFF's
+    // D input is produced by that same cycle's feedback cone. Seed every Q
+    // rail before lowering any combinational gate; the DFF bodies themselves
+    // are adopted only after those cones have had a chance to materialise the
+    // positive D rail they need to sample.
+    let sequential_sources: Vec<usize> = netlist
+        .gates
+        .iter()
+        .enumerate()
+        .filter_map(|(source, gate)| gate.kind.is_sequential().then_some(source))
+        .collect();
+    for &source in &sequential_sources {
+        let gate = &netlist.gates[source];
+        rails.insert(
+            gate.output.clone(),
+            PhysicalRails { positive: Some(gate.output.clone()), negative: None },
+        );
+    }
+
     for source in order {
         let gate = &netlist.gates[source];
         let polarity = assignment[source];
+
+        if gate.kind.is_sequential() {
+            continue;
+        }
 
         if gate.kind.is_realisable() {
             if polarity == SignalPolarity::Negative {
@@ -338,6 +361,32 @@ fn lower_with_assignment_and_provenance(
             physical.positive = Some(positive);
         }
         rails.insert(gate.output.clone(), physical);
+    }
+
+    for source in sequential_sources {
+        let gate = &netlist.gates[source];
+        if assignment[source] == SignalPolarity::Negative {
+            return Err(LowerError::UnsupportedAssignedPolarity { gate: gate.output.clone(), kind: gate.kind });
+        }
+        let inputs = gate
+            .inputs
+            .iter()
+            .map(|input| {
+                resolve_rail(
+                    &mut builder,
+                    &mut rails,
+                    input,
+                    SignalPolarity::Positive,
+                    &gate.output,
+                    source,
+                    &mut provenance,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let before = builder.len();
+        builder.adopt(Gate { inputs, ..gate.clone() });
+        record_new_gates(&builder, before, source, &mut provenance);
+        source_terminals[source].push(before);
     }
 
     let gates = builder.into_gates();
@@ -461,6 +510,11 @@ pub fn lower_with_provenance(netlist: &Netlist) -> Result<(Netlist, Vec<usize>),
     let mut provenance: Vec<usize> = Vec::with_capacity(netlist.gates.len());
 
     for (source, gate) in netlist.gates.iter().enumerate() {
+        if gate.kind.is_sequential() {
+            builder.adopt(gate.clone());
+            provenance.push(source);
+            continue;
+        }
         let expansion = topology::expansion_for(gate.kind);
 
         // A realisable gate is its own expansion -- one step, over its own
@@ -697,6 +751,27 @@ mod tests {
             lower(&source).expect("compatibility wrapper lowers"),
             expected,
         );
+    }
+
+    #[test]
+    fn assigned_lowering_resolves_a_dff_input_after_its_feedback_cone() {
+        let source = netlist(
+            &["a", "clk"],
+            &["q"],
+            vec![
+                gate(GateKind::DffPosedge, "q", &["d", "clk"]),
+                gate(GateKind::And, "d", &["q", "a"]),
+            ],
+        );
+        let assignment = vec![SignalPolarity::Positive, SignalPolarity::Negative];
+
+        let lowered = lower_with_assignment(&source, &assignment)
+            .expect("a DFF input may be produced by the same cycle's combinational feedback cone");
+        let dff = lowered.gates.iter().find(|gate| gate.kind == GateKind::DffPosedge).expect("DFF survives lowering");
+
+        assert_eq!(dff.output, "q");
+        assert_eq!(dff.inputs[1], "clk");
+        assert_ne!(dff.inputs[0], "d", "the selected negative d rail must be inverted back before D is sampled");
     }
 
     /// A negative physical rail is the complement of its logical signal;
