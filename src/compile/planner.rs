@@ -916,7 +916,20 @@ fn realise_branch_from(previous_cell: Anchor, incoming: u8, cells: &[Anchor]) ->
         previous = *cell;
     }
 
-    let (is_repeater, _) = compile::plan_bent_path(cells.len(), &bends, incoming, 0);
+    // Reserve for the stairs. Every cell of a climb spends strength and none
+    // of them can hold a repeater, so the refreshes have to be far enough
+    // ahead to carry the run through them -- which is exactly what `reserve`
+    // means to `plan_bent_path`. Pricing climbs in the search instead was
+    // tried and moved them to where the signal could no longer afford them.
+    let stairs = bends
+        .iter()
+        .filter(|&&index| {
+            let before = if index == 0 { source } else { cells[index - 1] };
+            cells[index].y != before.y
+        })
+        .count();
+    let reserve = (stairs as i32).min(compile::MAX_DUST_RUN - 2);
+    let (is_repeater, _) = compile::plan_bent_path(cells.len(), &bends, incoming, reserve);
 
     let mut blocks = Vec::with_capacity(cells.len());
     let mut previous = source;
@@ -1500,6 +1513,33 @@ impl Reservation {
         })
     }
 
+    /// Every other route with a cell inside the box spanned by `from` and
+    /// `to`, in a deterministic order.
+    fn owners_within(&self, from: Anchor, to: Anchor, mine: &str) -> Vec<String> {
+        let (lo, hi) = (
+            Anchor {
+                x: from.x.min(to.x),
+                y: from.y.min(to.y),
+                z: from.z.min(to.z),
+            },
+            Anchor {
+                x: from.x.max(to.x),
+                y: from.y.max(to.y),
+                z: from.z.max(to.z),
+            },
+        );
+        let mut owners: BTreeSet<&str> = BTreeSet::new();
+        for (cell, (owner, _)) in &self.cells {
+            if cell.x < lo.x || cell.x > hi.x || cell.z < lo.z || cell.z > hi.z {
+                continue;
+            }
+            if owner != mine && !owner.starts_with("primitive:") && !owner.starts_with("stair:") {
+                owners.insert(owner.as_str());
+            }
+        }
+        owners.into_iter().map(str::to_string).collect()
+    }
+
     fn is_taken(&self, anchor: &Anchor) -> bool {
         self.cells.contains_key(anchor)
     }
@@ -1783,18 +1823,56 @@ fn gate_depths(netlist: &Netlist) -> Result<Vec<usize>, PlannerError> {
 }
 
 /// Route every net of a placed candidate, in a deterministic order.
+/// How many times a net may tear up its blockers and try again before the
+/// planner gives up on the whole layout.
+///
+/// Each round removes every route that sits where a failed net needs to go and
+/// re-lays them afterwards, so a round is expensive; the point is to escape a
+/// corner an earlier net walked this one into, not to search.
+const RIP_UP_ROUNDS: usize = 8;
+
 fn route_every_net(
-    mut candidate: PlanCandidate,
+    candidate: PlanCandidate,
     netlist: &Netlist,
 ) -> Result<PlanCandidate, PlannerError> {
-    let mut reservation = Reservation::new();
-    for (index, node) in candidate.primitive_nodes.iter().enumerate() {
-        let owner = format!("primitive:{index}");
-        for &cell in node.occupied() {
-            reservation.insert(cell, &owner, node.occupancy_of(cell));
+    // Nets are routed in a deterministic order, and an early one can take the
+    // only corridor a later one had. Rather than order them cleverly -- which
+    // is a guess -- a net that cannot be routed says which nets are in its
+    // way, and they go to the back of the queue.
+    let mut order: Vec<String> = net_sinks(netlist).into_keys().collect();
+    let mut last: Option<PlannerError> = None;
+
+    for _ in 0..RIP_UP_ROUNDS {
+        match route_in_order(candidate.clone(), netlist, &order) {
+            Ok(routed) => return Ok(routed),
+            Err(failure) => {
+                let RoutingFailure { blocked, blockers, error } = *failure;
+                last = Some(error);
+                if blockers.is_empty() {
+                    break;
+                }
+                // The blocked net moves ahead of everything that blocked it.
+                let mut reordered: Vec<String> = Vec::with_capacity(order.len());
+                reordered.push(blocked.clone());
+                reordered.extend(
+                    order
+                        .iter()
+                        .filter(|name| **name != blocked)
+                        .cloned(),
+                );
+                if reordered == order {
+                    break;
+                }
+                order = reordered;
+            }
         }
     }
 
+    Err(last.expect("a failed round always records why"))
+}
+
+/// Which sinks every signal drives, in a deterministic order.
+fn net_sinks(netlist: &Netlist) -> BTreeMap<String, Vec<(usize, usize)>> {
     let mut sinks: BTreeMap<String, Vec<(usize, usize)>> = BTreeMap::new();
     for (gate, definition) in netlist.gates.iter().enumerate() {
         for (input_index, input) in definition.inputs.iter().enumerate() {
@@ -1804,6 +1882,30 @@ fn route_every_net(
                 .push((gate, input_index));
         }
     }
+    sinks
+}
+
+/// A net that could not be routed, and who was standing in its way.
+struct RoutingFailure {
+    blocked: String,
+    blockers: Vec<String>,
+    error: PlannerError,
+}
+
+fn route_in_order(
+    mut candidate: PlanCandidate,
+    netlist: &Netlist,
+    order: &[String],
+) -> Result<PlanCandidate, Box<RoutingFailure>> {
+    let mut reservation = Reservation::new();
+    for (index, node) in candidate.primitive_nodes.iter().enumerate() {
+        let owner = format!("primitive:{index}");
+        for &cell in node.occupied() {
+            reservation.insert(cell, &owner, node.occupancy_of(cell));
+        }
+    }
+
+    let sinks = net_sinks(netlist);
 
     // Every socket has exactly one cell a signal can enter it from -- the one
     // collinear with socket and support, because a terminal only reads from
@@ -1826,7 +1928,12 @@ fn route_every_net(
     }
 
     let mut routes = Vec::with_capacity(sinks.len());
-    for (signal, consumers) in sinks {
+    for signal in order {
+        let signal = signal.clone();
+        let consumers = sinks
+            .get(&signal)
+            .cloned()
+            .expect("the order is built from these very keys");
         let source = candidate
             .primitive_nodes
             .iter()
@@ -1834,9 +1941,15 @@ fn route_every_net(
                 node.id == format!("gate:{signal}") || node.id == format!("input:{signal}")
             })
             .map(|node| node.source())
-            .ok_or_else(|| PlannerError::UnrealisableNode {
-                id: signal.clone(),
-                reason: "no gate or primary input drives this signal".to_string(),
+            .ok_or_else(|| {
+                Box::new(RoutingFailure {
+                    blocked: signal.clone(),
+                    blockers: Vec::new(),
+                    error: PlannerError::UnrealisableNode {
+                        id: signal.clone(),
+                        reason: "no gate or primary input drives this signal".to_string(),
+                    },
+                })
             })?;
 
         let mut route = Route::new(signal.clone(), Vec::new());
@@ -1855,11 +1968,27 @@ fn route_every_net(
                 y: socket.y + (socket.y - support.y),
                 z: socket.z + (socket.z - support.z),
             };
-            let mut path = deterministic_astar(source, approach, socket, &signal, &reservation)
-                .ok_or(PlannerError::NoLocalRoute {
-                    from: source,
-                    to: approach,
-                })?;
+            let mut path = match deterministic_astar(
+                source, approach, socket, &signal, &reservation,
+            ) {
+                Some(path) => path,
+                None => {
+                    // Who is standing between this net and its sink. Anything
+                    // reserved inside the box the search gave up on, that is
+                    // another net's, is a candidate to be moved out of the
+                    // way -- not by rerouting it here, but by letting this net
+                    // go first next time round.
+                    let blockers = reservation.owners_within(source, approach, &signal);
+                    return Err(Box::new(RoutingFailure {
+                        blocked: signal.clone(),
+                        blockers,
+                        error: PlannerError::NoLocalRoute {
+                            from: source,
+                            to: approach,
+                        },
+                    }));
+                }
+            };
             path.push(socket);
             reserve_path(&mut reservation, &signal, &path);
 
@@ -3821,23 +3950,17 @@ mod tests {
     /// How far the planner's own placement carries, measured rather than
     /// assumed.
     ///
-    /// and4 places, routes, verifies and computes and4. Nothing larger does,
-    /// and what stops them is now the search rather than the model: three
-    /// things a route depends on used to be free for anything to overwrite,
-    /// and all three are stated now.
+    /// and4 places, routes, verifies and computes and4. full_adder now routes
+    /// completely -- every net reaches every sink, which nothing above and4
+    /// managed before rip-up -- and fails afterwards, on signal strength: net
+    /// `g3` arrives at `g5` dead.
     ///
-    /// A route owns the floor it stands on. A staircase owns the riser it
-    /// climbs and the gap it drops through, under a name not even its own
-    /// other branches may take. And a path may not dig under its own floor:
-    /// climbing, stepping aside and dropping back down puts the drop beneath
-    /// a floor the same path laid, which is as blocked in Minecraft as it
-    /// sounds.
-    ///
-    /// Each of those made the routes that do get laid correct and made fewer
-    /// of them exist. The search has no rip-up and no cost for changing
-    /// height, so it walks into corners it then cannot leave.
+    /// So the search is no longer what limits this. What does is refresh
+    /// planning on the routes it now finds: they are longer and they climb,
+    /// a staircase cell can hold no repeater, and reserving strength for the
+    /// stairs in advance was tried here and did not close the gap.
     #[test]
-    #[ignore = "known: the constraints are right and the search is too weak to satisfy them"]
+    #[ignore = "known: full_adder routes completely and arrives dead"]
     fn how_far_the_planners_own_placement_carries() {
         use crate::circuits::full_adder::build_full_adder_netlist;
         use crate::circuits::seven_segment::{

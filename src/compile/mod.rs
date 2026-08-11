@@ -1012,7 +1012,7 @@ const ORIGIN_X: i32 = 8;
 /// `reserve` parameter. Every dust run in this router either starts or ends
 /// at a ramp (frequently both), so this reservation, not the bare constant,
 /// is what most calls actually use.
-const MAX_DUST_RUN: i32 = 14;
+pub(crate) const MAX_DUST_RUN: i32 = 14;
 
 /// The `reserve` **one hop** of a **bare**-terminated branch's own final
 /// approach (`plan_bent_path`, via `lay_bent_path_bare`/`bare_branch_
