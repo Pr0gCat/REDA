@@ -55,6 +55,7 @@ fn local_move_keeps_nonincident_routes_byte_identical() {
                 id: format!("node:{id}"),
                 anchor,
                 realisation: NodeRealisation::Primitive(Primitive::Torch),
+                footprint: Vec::new(),
             })
             .collect(),
         vec![

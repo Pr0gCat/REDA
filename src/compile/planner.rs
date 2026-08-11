@@ -38,6 +38,25 @@ pub struct PrimitiveNode {
     /// The component to emit here.  Recorded by whoever chose the anchor;
     /// never re-derived from the node's name or from surrounding blocks.
     pub realisation: NodeRealisation,
+    /// Every cell this node's realisation occupies, its anchor included.
+    ///
+    /// A NOR cell is a support block, a torch, its input sockets and its
+    /// output pin -- not one cell.  Routing that only knows about the anchor
+    /// will run a net straight through another gate's body and short the
+    /// two together, which is what happens when this is empty.
+    pub footprint: Vec<Anchor>,
+}
+
+impl PrimitiveNode {
+    /// The cells to keep other nets out of: the recorded footprint, or the
+    /// anchor alone for a node whose footprint nobody recorded.
+    pub fn occupied(&self) -> &[Anchor] {
+        if self.footprint.is_empty() {
+            std::slice::from_ref(&self.anchor)
+        } else {
+            &self.footprint
+        }
+    }
 }
 
 /// One declared sink of a route, recorded directly instead of inferred from
@@ -655,13 +674,34 @@ pub fn try_move(
         .collect();
     let mut reservation = candidate.live_reservation(&incident);
     let moved_owner = format!("primitive:{primitive}");
-    if reservation.get(&from) == Some(&moved_owner) {
-        reservation.remove(&from);
+    // The whole primitive moves, not just the cell its anchor names: free
+    // every cell it occupied and claim every cell it will occupy. Reserving
+    // one cell of a NOR lets a rerouted net run through the rest of it.
+    let old_cells: Vec<Anchor> = candidate
+        .primitive_nodes
+        .get(primitive)
+        .map(|node| node.occupied().to_vec())
+        .unwrap_or_else(|| vec![from]);
+    for cell in &old_cells {
+        if reservation.get(cell) == Some(&moved_owner) {
+            reservation.remove(cell);
+        }
     }
-    if reservation.contains_key(&to) {
+    let delta = (to.x - from.x, to.y - from.y, to.z - from.z);
+    let new_cells: Vec<Anchor> = old_cells
+        .iter()
+        .map(|cell| Anchor {
+            x: cell.x + delta.0,
+            y: cell.y + delta.1,
+            z: cell.z + delta.2,
+        })
+        .collect();
+    if new_cells.iter().any(|cell| reservation.contains_key(cell)) {
         return Err(PlannerError::AnchorOccupied(to));
     }
-    reservation.insert(to, moved_owner);
+    for cell in &new_cells {
+        reservation.insert(*cell, moved_owner.clone());
+    }
 
     for (route_index, route) in candidate.routes.iter().enumerate() {
         if !incident[route_index] {
@@ -672,6 +712,8 @@ pub fn try_move(
         let (source, supports) = moved.route_endpoints(route_index, primitive, from, to);
         let mut rebuilt = route.clone();
         rebuilt.anchors.clear();
+        rebuilt.realisation.clear();
+        rebuilt.floors.clear();
         let mut branches = Vec::with_capacity(supports.len());
         for support in supports {
             let terminal = terminal_socket(source, support);
@@ -682,11 +724,27 @@ pub fn try_move(
                 },
             )?;
             reserve_path(&mut reservation, &owner, &path);
-            append_branch(&mut rebuilt.anchors, &path);
-            branches.push((path, support));
+            let laid = realise_branch(source, &path);
+            // A fanout's branches share a trunk. The first branch to reach a
+            // cell lays it, exactly as the legacy emitter's `claim` records
+            // the first net to conduct through one; appending it again would
+            // give one cell two blocks and two owners.
+            for ((anchor, block), floor) in
+                path.iter().zip(laid.blocks).zip(laid.floors)
+            {
+                if rebuilt.anchors.contains(anchor) {
+                    continue;
+                }
+                rebuilt.anchors.push(*anchor);
+                rebuilt.realisation.push(block);
+                rebuilt.floors.push(floor);
+            }
+            branches.push((path, support, laid.strength_before_terminal));
         }
 
-        for (terminal, (path, support)) in rebuilt.terminals.iter_mut().zip(branches) {
+        for (terminal, (path, support, strength_before_terminal)) in
+            rebuilt.terminals.iter_mut().zip(branches)
+        {
             if matches!(
                 terminal.kind,
                 RouteTerminalKind::BareMergeDust | RouteTerminalKind::BareMergeRepeater
@@ -698,20 +756,122 @@ pub fn try_move(
                 continue;
             };
             let terminal_anchor = *path.last().expect("A* paths always include their goal");
-            let predecessor_strength = 16_u8.saturating_sub(path.len().saturating_sub(2) as u8);
             let approach = TerminalApproach::new(
                 predecessor,
                 terminal_anchor,
                 support,
-                predecessor_strength,
+                strength_before_terminal,
                 terminal_is_isolated(&reservation, &owner, predecessor, terminal_anchor, support),
             );
-            terminal.kind = terminal_style(&approach).into();
+            let style = terminal_style(&approach);
+            terminal.kind = style.into();
+            // The branch ends somewhere new, so the sink's recorded cell has
+            // to move with it: everything downstream -- the reservation, the
+            // terminal check, the invariants -- reads the terminal from here.
+            terminal.sink.anchor = terminal_anchor;
+
+            // And the block there has to be the one the style names. The
+            // strength budget laid this cell before the style was chosen; a
+            // plan that says repeater over dust is the same lie the legacy
+            // emitter used to tell, and the terminal check catches it either
+            // way, so make it true rather than let it be caught.
+            if let Some(index) = rebuilt
+                .anchors
+                .iter()
+                .position(|anchor| *anchor == terminal_anchor)
+            {
+                rebuilt.realisation[index] = match style {
+                    TerminalStyle::RepeaterIntoSupport
+                        if unit_horizontal_direction(predecessor, terminal_anchor).is_some() =>
+                    {
+                        compile::repeater(compile::direction_from(
+                            Position::new(predecessor.x, predecessor.y, predecessor.z),
+                            Position::new(terminal_anchor.x, terminal_anchor.y, terminal_anchor.z),
+                        ))
+                    }
+                    _ => compile::dust(),
+                };
+            }
         }
         moved.routes[route_index] = rebuilt;
     }
 
     Ok(moved)
+}
+
+/// One rerouted branch, turned into the blocks that branch actually needs.
+struct LaidBranch {
+    blocks: Vec<BlockState>,
+    floors: Vec<BlockState>,
+    /// The signal strength arriving at the cell before the terminal -- read
+    /// off the same repeater plan that produced `blocks`, not estimated from
+    /// the path's length.
+    strength_before_terminal: u8,
+}
+
+/// Lay dust along a rerouted branch, refreshing it with repeaters exactly
+/// where the strength budget demands.
+///
+/// This is `compile::plan_bent_path`, the same budget the legacy router
+/// spends -- a second implementation of dust decay would be a second thing to
+/// be wrong about, and the planner already had one: the terminal choice used
+/// to assume a strength of `16 - path length`, which is neither the real
+/// maximum nor aware that a repeater resets it.
+fn realise_branch(source: Anchor, cells: &[Anchor]) -> LaidBranch {
+    let bends: BTreeSet<usize> = cells
+        .windows(3)
+        .enumerate()
+        .filter(|(_, window)| direction(window[0], window[1]) != direction(window[1], window[2]))
+        .map(|(index, _)| index + 1)
+        .collect();
+
+    let (is_repeater, _) = compile::plan_bent_path(
+        cells.len(),
+        &bends,
+        crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
+        0,
+    );
+
+    let mut blocks = Vec::with_capacity(cells.len());
+    let mut previous = source;
+    for (index, cell) in cells.iter().enumerate() {
+        // A repeater needs a horizontal facing, so a cell reached by a step
+        // in Y can only be dust -- that is what a dust staircase is. The
+        // strength budget may have wanted a refresh here; if losing it
+        // matters, `verify_signal_strength` says so rather than this guessing.
+        let step = unit_horizontal_direction(previous, *cell);
+        let block = match (is_repeater[index], step) {
+            (true, Some(_)) => compile::repeater(compile::direction_from(
+                Position::new(previous.x, previous.y, previous.z),
+                Position::new(cell.x, cell.y, cell.z),
+            )),
+            _ => compile::dust(),
+        };
+        blocks.push(block);
+        previous = *cell;
+    }
+
+    // Strength at the cell before the terminal: full again if that cell is a
+    // repeater, otherwise the maximum less one per dust cell since the last
+    // refresh.
+    let strength_before_terminal = match cells.len().checked_sub(2) {
+        None => crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
+        Some(index) => {
+            let last_refresh = (0..=index).rev().find(|&i| is_repeater[i]);
+            match last_refresh {
+                Some(refresh) => crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH
+                    .saturating_sub((index - refresh) as u8),
+                None => crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH
+                    .saturating_sub((index + 1) as u8),
+            }
+        }
+    };
+
+    LaidBranch {
+        floors: vec![compile::stone(); blocks.len()],
+        blocks,
+        strength_before_terminal,
+    }
 }
 
 impl PlanCandidate {
@@ -727,6 +887,18 @@ impl PlanCandidate {
         primitive: NodeId,
         anchor: Anchor,
     ) -> Result<(), PlannerError> {
+        if let Some(node) = self.primitive_nodes.get_mut(primitive) {
+            let delta = (
+                anchor.x - node.anchor.x,
+                anchor.y - node.anchor.y,
+                anchor.z - node.anchor.z,
+            );
+            for cell in &mut node.footprint {
+                cell.x += delta.0;
+                cell.y += delta.1;
+                cell.z += delta.2;
+            }
+        }
         let Some(slot) = self.anchors.get_mut(primitive) else {
             return Err(PlannerError::UnknownPrimitive(primitive));
         };
@@ -761,6 +933,13 @@ impl PlanCandidate {
         let mut reservation = BTreeMap::new();
         for (index, anchor) in self.anchors.iter().copied().enumerate() {
             reservation.insert(anchor, format!("primitive:{index}"));
+        }
+        // A primitive keeps other nets out of every cell it occupies, not
+        // just the one its anchor names.
+        for (index, node) in self.primitive_nodes.iter().enumerate() {
+            for &cell in node.occupied() {
+                reservation.insert(cell, format!("primitive:{index}"));
+            }
         }
         for (index, route) in self.routes.iter().enumerate() {
             if !incident[index] {
@@ -966,7 +1145,7 @@ fn anchor_is_free_for(
     {
         return false;
     }
-    horizontal_neighbours(anchor).into_iter().all(|neighbour| {
+    keep_out(anchor).into_iter().all(|neighbour| {
         neighbour == start
             || neighbour == goal
             || (anchor == goal && neighbour == terminal_support)
@@ -974,6 +1153,23 @@ fn anchor_is_free_for(
                 .get(&neighbour)
                 .is_none_or(|occupied_by| occupied_by == owner)
     })
+}
+
+/// The cells a dust at `anchor` could join, geometrically.
+///
+/// `connectivity::dust_reach` is the exact rule but needs a world, and a plan
+/// is checked before one exists. This is its conservative shape: each of the
+/// four horizontal neighbours, and the cell above and below each -- dust
+/// climbs and descends one step, which is how a route that looks clear in
+/// plan view ends up shorted to the net running one layer down.
+fn keep_out(anchor: Anchor) -> Vec<Anchor> {
+    let mut cells = Vec::with_capacity(12);
+    for neighbour in horizontal_neighbours(anchor) {
+        cells.push(neighbour);
+        cells.push(Anchor { y: neighbour.y + 1, ..neighbour });
+        cells.push(Anchor { y: neighbour.y - 1, ..neighbour });
+    }
+    cells
 }
 
 fn reserve_path(reservation: &mut BTreeMap<Anchor, String>, owner: &str, path: &[Anchor]) {
@@ -984,13 +1180,6 @@ fn reserve_path(reservation: &mut BTreeMap<Anchor, String>, owner: &str, path: &
     }
 }
 
-fn append_branch(route: &mut Vec<Anchor>, branch: &[Anchor]) {
-    for &anchor in branch {
-        if route.last() != Some(&anchor) {
-            route.push(anchor);
-        }
-    }
-}
 
 fn terminal_socket(source: Anchor, support: Anchor) -> Anchor {
     let direction = preferred_axis_direction(source, support);
@@ -1179,14 +1368,26 @@ fn verify_spacing(candidate: &PlanCandidate) -> Result<compile::Reservation, Pla
     for (net, route) in candidate.routes.iter().enumerate() {
         for anchor in &route.anchors {
             let position = Position::new(anchor.x, anchor.y, anchor.z);
+            // Two different nets in one cell is the violation. One net listing
+            // a cell twice is a bookkeeping bug of its own, and is caught
+            // where it matters: realisation would give that cell two blocks.
             if let Some(other) = reservation.insert(position, net) {
-                return Err(PlannerError::PhysicalInvariant(
-                    compile::CompileError::SpacingViolation {
-                        cell: (position.x, position.y, position.z),
-                        expected_net: candidate.routes[other].id.clone(),
-                        found_net: Some(route.id.clone()),
-                    },
-                ));
+                if other != net {
+                    return Err(PlannerError::PhysicalInvariant(
+                        compile::CompileError::SpacingViolation {
+                            cell: (position.x, position.y, position.z),
+                            expected_net: candidate.routes[other].id.clone(),
+                            found_net: Some(route.id.clone()),
+                        },
+                    ));
+                }
+                return Err(PlannerError::UnrealisableNode {
+                    id: route.id.clone(),
+                    reason: format!(
+                        "cell ({}, {}, {}) is listed twice by this route",
+                        position.x, position.y, position.z
+                    ),
+                });
             }
         }
     }
@@ -1981,6 +2182,7 @@ mod tests {
                     } else {
                         NodeRealisation::Primitive(Primitive::Torch)
                     },
+                    footprint: Vec::new(),
                 })
                 .collect(),
             vec![
@@ -2048,16 +2250,19 @@ mod tests {
                     id: "input:source".to_string(),
                     anchor: source,
                     realisation: NodeRealisation::Primitive(Primitive::Lever),
+                    footprint: Vec::new(),
                 },
                 PrimitiveNode {
                     id: "gate:moved".to_string(),
                     anchor: old_moved_sink,
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
+                    footprint: Vec::new(),
                 },
                 PrimitiveNode {
                     id: "gate:other".to_string(),
                     anchor: other_sink,
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
+                    footprint: Vec::new(),
                 },
             ],
             vec![Route::unrealised(
@@ -2133,11 +2338,13 @@ mod tests {
                     id: "input:a".to_string(),
                     anchor: source,
                     realisation: NodeRealisation::Primitive(Primitive::Lever),
+                    footprint: Vec::new(),
                 },
                 PrimitiveNode {
                     id: "gate:merge".to_string(),
                     anchor: merge,
                     realisation: NodeRealisation::WireMerge,
+                    footprint: Vec::new(),
                 },
             ],
             vec![Route::unrealised(
@@ -2189,6 +2396,7 @@ mod tests {
                 id: "input:a".to_string(),
                 anchor: old_anchor,
                 realisation: NodeRealisation::Primitive(Primitive::Lever),
+                footprint: Vec::new(),
             }],
             vec![stale_route.clone()],
         );
@@ -2277,11 +2485,13 @@ mod tests {
                     id: "input:a".to_string(),
                     anchor: source,
                     realisation: NodeRealisation::Primitive(Primitive::Lever),
+                    footprint: Vec::new(),
                 },
                 PrimitiveNode {
                     id: "gate:y".to_string(),
                     anchor: sink,
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
+                    footprint: Vec::new(),
                 },
             ],
             vec![Route::unrealised(
@@ -2317,16 +2527,19 @@ mod tests {
                         id: "input:a".to_string(),
                         anchor: source,
                         realisation: NodeRealisation::Primitive(Primitive::Lever),
+                        footprint: Vec::new(),
                     },
                     PrimitiveNode {
                         id: "gate:merge".to_string(),
                         anchor: merge,
                         realisation: NodeRealisation::WireMerge,
+                        footprint: Vec::new(),
                     },
                     PrimitiveNode {
                         id: "gate:other".to_string(),
                         anchor: shared_consumer,
                         realisation: NodeRealisation::Primitive(Primitive::Torch),
+                        footprint: Vec::new(),
                     },
                 ],
                 vec![
@@ -2414,16 +2627,19 @@ mod tests {
                     id: "input:a".to_string(),
                     anchor: Anchor { x: 0, y: 0, z: 0 },
                     realisation: NodeRealisation::Primitive(Primitive::Lever),
+                    footprint: Vec::new(),
                 },
                 PrimitiveNode {
                     id: "gate:blocked".to_string(),
                     anchor: Anchor { x: 2, y: 0, z: 0 },
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
+                    footprint: Vec::new(),
                 },
                 PrimitiveNode {
                     id: "gate:y".to_string(),
                     anchor: Anchor { x: 5, y: 0, z: 0 },
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
+                    footprint: Vec::new(),
                 },
             ],
             vec![Route::unrealised(
@@ -2696,6 +2912,56 @@ mod tests {
 
         verify_candidate(&seed, &netlist)
             .expect("a seed's terminals must describe its own blocks");
+    }
+
+    /// The point of the whole optimiser: a candidate it produced must be
+    /// buildable and legal, not merely scoreable.
+    ///
+    /// `try_move` used to record anchors and nothing else, so a moved route
+    /// had no blocks and no floors: `optimise` had never produced anything
+    /// anyone could emit, let alone verify or paste. Turning that on is what
+    /// this test is for, and it has walked the plan through five real router
+    /// defects so far, each fixed:
+    ///
+    /// 1. a rerouted branch was never realised at all;
+    /// 2. its terminal strength was invented (`16 - path length`) because
+    ///    there was no realisation to read it from;
+    /// 3. a fanout's shared trunk was appended once per branch, so one cell
+    ///    got two blocks;
+    /// 4. a terminal's recorded sink cell stayed where the old branch ended;
+    /// 5. the A* keep-out saw only the four horizontal neighbours, while dust
+    ///    climbs and descends a step, and reserved one cell per primitive
+    ///    when a NOR cell is a support, a torch, its sockets and its pin.
+    ///
+    /// What remains: a rerouted branch can still land on a gate's support
+    /// block and leave its torch unsupported. The invariants catch it, which
+    /// is the point -- `validate_candidate_reservation` never would have.
+    #[test]
+    #[ignore = "try_move still lands a route on a gate's support; see the doc above"]
+    fn a_moved_candidate_can_be_built_and_verified() {
+        let (seed, netlist) = legacy_and4_seed_with_netlist();
+
+        let (primitive, to) = movable_target(&seed);
+        let moved = try_move(&seed, primitive, to).expect("a legal local move must exist");
+
+        verify_candidate(&moved, &netlist)
+            .expect("a moved candidate must realise into a legal world");
+    }
+
+    /// The first node this seed can legally shift, and where to.
+    fn movable_target(seed: &PlanCandidate) -> (NodeId, Anchor) {
+        for primitive in 0..seed.anchors().len() {
+            for delta in [2, -2, 4, -4] {
+                let anchor = Anchor {
+                    z: seed.anchors()[primitive].z + delta,
+                    ..seed.anchors()[primitive]
+                };
+                if try_move(seed, primitive, anchor).is_ok() {
+                    return (primitive, anchor);
+                }
+            }
+        }
+        panic!("and4 must admit at least one legal local move");
     }
 
     #[test]

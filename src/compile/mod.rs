@@ -286,7 +286,7 @@ pub struct NorCell {
     pub output_offset: (i32, i32, i32),
 }
 
-fn stone() -> BlockState {
+pub(crate) fn stone() -> BlockState {
     let mut state = BlockState::air();
     state.kind = BlockKind::Solid;
     state.name = "minecraft:stone".to_string();
@@ -351,7 +351,7 @@ fn lever(on: bool) -> BlockState {
 /// `direction` itself. Every call site below only ever cares about the
 /// direction the signal is travelling, so that is what this helper takes --
 /// the Minecraft-facing conversion happens once, here.
-fn repeater(direction: Facing) -> BlockState {
+pub(crate) fn repeater(direction: Facing) -> BlockState {
     let mut state = BlockState::air();
     state.kind = BlockKind::Repeater;
     state.name = "minecraft:repeater".to_string();
@@ -1492,7 +1492,7 @@ pub(crate) fn ensure_floor(world: &mut World, pos: Position) {
 }
 
 /// 從 `start` 走到 `end`（兩者必須沿同一軸對齊）是哪個方向。
-fn direction_from(start: Position, end: Position) -> Facing {
+pub(crate) fn direction_from(start: Position, end: Position) -> Facing {
     if end.x != start.x {
         if end.x > start.x {
             Facing::East
@@ -1828,7 +1828,7 @@ fn bare_ending_bend_indices(cells: &[Position], waypoints: &[Position]) -> BTree
 /// mandatory final repeater on top); the ending strength is what
 /// `bare_branch_landing_strength` needs, to learn what a **bare** ending
 /// actually delivers before any block for it exists.
-fn plan_bent_path(
+pub(crate) fn plan_bent_path(
     len: usize,
     bend_indices: &BTreeSet<usize>,
     incoming_strength: u8,
@@ -6317,6 +6317,40 @@ pub enum PlannerKind {
 }
 
 
+/// Every cell a gate's own realisation occupies, found by realising it into a
+/// scratch world rather than by re-deriving the cell geometry a second time.
+fn gate_footprint(origin: (i32, i32, i32), gate: &Gate) -> Vec<Anchor> {
+    let mut scratch = World::new(64, 8, 64);
+    let shifted = (32, 1, 32);
+    let cell = if gate.is_merge() {
+        place_merge_gate(&mut scratch, shifted, gate.inputs.len())
+    } else {
+        place_nor_gate(&mut scratch, shifted, gate.inputs.len())
+    };
+    // The output pin belongs to the gate too: it is written outside the cell
+    // and no route may pass through it.
+    let torch = Position::new(
+        shifted.0 + cell.output_offset.0,
+        shifted.1 + cell.output_offset.1,
+        shifted.2 + cell.output_offset.2,
+    );
+    let pin = torch.offset(OUTPUT_DIRECTION);
+    scratch.set(pin.x, pin.y, pin.z, dust());
+
+    let mut cells = Vec::new();
+    for flat in 0..scratch.cells().len() {
+        let (x, y, z) = scratch.decode(flat);
+        if scratch.get(x, y, z).kind != BlockKind::Air {
+            cells.push(Anchor {
+                x: origin.0 + (x - shifted.0),
+                y: origin.1 + (y - shifted.1),
+                z: origin.2 + (z - shifted.2),
+            });
+        }
+    }
+    cells
+}
+
 fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<PrimitiveNode> {
     let mut nodes = Vec::with_capacity(anchors.len());
     for (gate, anchor) in netlist.gates.iter().zip(anchors.iter().copied()) {
@@ -6332,6 +6366,7 @@ fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<Primitiv
             id: format!("gate:{}", gate.output),
             anchor,
             realisation,
+            footprint: gate_footprint((anchor.x, anchor.y, anchor.z), gate),
         });
     }
     for (input, anchor) in netlist
@@ -6343,6 +6378,8 @@ fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<Primitiv
             id: format!("input:{input}"),
             anchor,
             realisation: NodeRealisation::Primitive(Primitive::Lever),
+            // A lever is its own cell plus the pin dust one step north.
+            footprint: vec![anchor, Anchor { z: anchor.z - 1, ..anchor }],
         });
     }
     nodes
