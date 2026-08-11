@@ -16,9 +16,9 @@
 //! - [`WorldPartition::graph_explained`]: a block that is exactly one
 //!   `PrimitiveGraph` node's own realisation -- a gate's own torch, a
 //!   primary input's lever, or a declared output's lamp. A gate's support
-//!   block and its per-input repeaters are **not** graph nodes any more
+//!   block and its per-input route terminals are **not** graph nodes any more
 //!   (see `topology::TemplateNode`'s doc comment: a NOR is one torch node,
-//!   and the block it is mounted on plus the repeaters that feed it are how
+//!   and the block it is mounted on plus the route components that feed it are how
 //!   an input physically reaches that torch, not part of the signal graph
 //!   itself), so both fall into the fill buckets below instead of this one.
 //! - [`WorldPartition::routing_fill_dust`]: any non-air `RedstoneWire`
@@ -38,8 +38,8 @@
 //!   is only safe to bucket unconditionally because
 //!   [`check_gate_input_arity_agrees`] independently confirms, *before* a
 //!   single block is bucketed, that `Netlist`'s declared arity, the graph's
-//!   own edge count into each gate, and the world's own count of
-//!   repeaters-facing-the-support all agree for every gate -- see that
+//!   own edge count into each gate, and the world's own count of terminals
+//!   actively feeding the support all agree for every gate -- see that
 //!   function's doc comment for why a graph that silently dropped one of a
 //!   gate's inputs still cannot pass this check unnoticed.
 //! - [`WorldPartition::routing_fill_support`]: two things, both narrowly
@@ -71,7 +71,7 @@ use std::collections::HashSet;
 use super::equivalence::{resolve_contributors, NetlistResolution};
 use super::primitive_graph::{NodeId, PrimitiveGraph, Provenance};
 use super::topology::TemplateNode;
-use super::{CompiledCircuit, Netlist, INPUT_DIRECTIONS};
+use super::{input_socket_feeds_support, CompiledCircuit, Netlist, INPUT_DIRECTIONS};
 use crate::redstone::simulator::component::torch_support_position;
 use crate::redstone::simulator::position::Position;
 use crate::redstone::world::block::BlockKind;
@@ -240,8 +240,8 @@ pub fn partition_world(
 /// Cross-check, for every gate, that the graph's own edge count into that
 /// gate's node cluster matches what [`NetlistResolution`] independently
 /// derives from `Netlist` alone, and that the world's own independently
-/// counted repeater-holding sockets match how many of this gate's own
-/// declared inputs actually need one.
+/// counted active input terminals match how many of this gate's own declared
+/// inputs actually need one.
 ///
 /// This is what stops [`WorldPartition::routing_fill_repeater`] from being
 /// the "shrug" a bare `BlockKind::Repeater => fill` rule would otherwise be:
@@ -271,12 +271,11 @@ pub fn partition_world(
 ///   only the *non-bare* declared inputs for a merge (a bare branch owns no
 ///   node at all, so it can never receive an edge in the graph -- see
 ///   `resolve_contributors`'s own doc comment).
-/// - **Sockets**: the world's own count of repeater-holding sockets (a
-///   physical position, always exactly one repeater regardless of how many
-///   logical contributors feed it, since they have already all joined into
-///   one wire before reaching it) must equal `Netlist`'s own declared arity
-///   for a `Nor`/`Buf` gate (found the ordinary way, via `torch_support_
-///   position`), or the number of *non-bare* declared inputs for a merge
+/// - **Terminals**: the world's own count of sockets that actively feed the
+///   support (either a repeater or a directed dust endpoint) must equal
+///   `Netlist`'s own declared arity for a `Nor`/`Buf` gate (found the
+///   ordinary way, via `torch_support_position`), or the number of
+///   *non-bare* declared inputs for a merge
 ///   (found from the merge's own junction -- `gate_output_positions`,
 ///   `place_merge_gate`'s `output_offset` being `(0, 0, 0)` -- directly,
 ///   since a merge has no torch and so no support to resolve one from).
@@ -333,8 +332,7 @@ fn check_gate_input_arity_agrees(
                     .iter()
                     .filter(|&&direction| {
                         let socket = support.offset(direction);
-                        let socket_state = compiled.world.get(socket.x, socket.y, socket.z);
-                        socket_state.kind == BlockKind::Repeater && socket_state.facing == Some(direction)
+                        input_socket_feeds_support(&compiled.world, socket, support)
                     })
                     .count(),
                 // No resolvable support at all: as far as the world is

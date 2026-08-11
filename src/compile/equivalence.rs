@@ -44,8 +44,8 @@
 //! - **A `Nor`/`Buf` gate's own torch and its support** are checked directly
 //!   against the compiled `World`'s own bytes -- the torch resolves to a
 //!   real, resolvable, conductive support, and exactly `arity` of
-//!   `INPUT_DIRECTIONS`'s sockets (no more, no fewer) hold a repeater facing
-//!   it.
+//!   `INPUT_DIRECTIONS`'s sockets (no more, no fewer) actively feed it -- by
+//!   either a repeater or a directed dust terminal.
 //! - **A merge gate's own junction** is checked the same way, in its own
 //!   shape: no torch, no support (`place_merge_gate` writes dust, not a
 //!   support block) -- a bare branch's own socket must be plain dust
@@ -76,7 +76,7 @@ use std::collections::HashSet;
 
 use super::primitive_graph::{NodeId, PrimitiveGraph, Provenance};
 use super::topology::TemplateNode;
-use super::{CompiledCircuit, Netlist, INPUT_DIRECTIONS, OUTPUT_DIRECTION};
+use super::{input_socket_feeds_support, CompiledCircuit, Netlist, INPUT_DIRECTIONS, OUTPUT_DIRECTION};
 use crate::redstone::rules::taxonomy::flags_of;
 use crate::redstone::simulator::component::torch_support_position;
 use crate::redstone::simulator::position::Position;
@@ -113,11 +113,11 @@ pub enum EquivalenceError {
     /// checks it directly rather than only trusting that invariant ran.
     SupportNotConductive { gate: String, support: (i32, i32, i32) },
     /// One of this gate's declared input sockets (by `INPUT_DIRECTIONS`
-    /// index, `< arity`) has no repeater facing into the support.
-    InputSocketNotARepeaterFacingSupport { gate: String, input_index: usize, socket: (i32, i32, i32) },
-    /// A socket direction beyond this gate's declared arity is nonetheless
-    /// occupied by a repeater facing into the support -- more inputs than
-    /// the netlist declares.
+    /// index, `< arity`) does not actively feed the support. The terminal
+    /// may be a repeater or straight, directed dust.
+    InputSocketDoesNotFeedSupport { gate: String, input_index: usize, socket: (i32, i32, i32) },
+    /// A socket direction beyond this gate's declared arity nonetheless
+    /// actively feeds the support -- more inputs than the netlist declares.
     UndeclaredInputFeedsSupport { gate: String, direction_index: usize, socket: (i32, i32, i32) },
     /// A merge gate's own junction (`CompiledCircuit::gate_output_positions`)
     /// is not plain dust -- `place_merge_gate` never writes anything else
@@ -455,16 +455,15 @@ fn verify_gate_structure(
     }
 
     // Every direction `place_nor_gate` could ever use for an input: the
-    // declared ones must hold a repeater facing into the support; the rest
-    // must not (or the world has more inputs than the netlist declares).
+    // declared ones must actively feed the support; the rest must not (or
+    // the world has more inputs than the netlist declares).
     for (index, &direction) in INPUT_DIRECTIONS.iter().enumerate() {
         let socket = support.offset(direction);
-        let socket_state = compiled.world.get(socket.x, socket.y, socket.z);
-        let feeds_support = socket_state.kind == BlockKind::Repeater && socket_state.facing == Some(direction);
+        let feeds_support = input_socket_feeds_support(&compiled.world, socket, support);
 
         if index < arity {
             if !feeds_support {
-                return Err(EquivalenceError::InputSocketNotARepeaterFacingSupport {
+                return Err(EquivalenceError::InputSocketDoesNotFeedSupport {
                     gate: gate_name.clone(),
                     input_index: index,
                     socket: (socket.x, socket.y, socket.z),

@@ -622,10 +622,11 @@ mod tests {
     }
 
     #[test]
-    fn every_edge_has_a_positive_total_length_and_at_least_one_repeater() {
-        // Every socket termination is a mandatory repeater (redstone dust
-        // cannot charge a block sideways), so no real edge can ever have
-        // zero repeaters, whatever else its route looks like.
+    fn every_edge_has_a_positive_total_length_even_when_dust_terminates_it() {
+        // A legal straight dust endpoint can now weakly power a gate's
+        // support directly, so a short routed edge can contain zero
+        // repeaters. Length remains the topology-independent sanity check:
+        // every declared edge must still occupy a real route.
         let (and4, _) = build_and4_netlist();
         let compiled = compile(&and4).expect("and4 must compile");
         let report = analyze(&and4, &compiled).expect("and4 must analyze");
@@ -633,7 +634,6 @@ mod tests {
         for edge in &report.edges {
             let total = edge.total();
             assert!(total.length > 0, "{} -> {}: length must be positive", edge.source, edge.sink);
-            assert!(total.repeaters >= 1, "{} -> {}: every socket needs at least one repeater", edge.source, edge.sink);
         }
     }
 

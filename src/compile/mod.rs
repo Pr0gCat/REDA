@@ -1439,11 +1439,36 @@ fn bent_path_cells(start: Position, waypoints: &[Position]) -> Vec<Position> {
     cells
 }
 
+/// What actively terminates an ordinary route at a NOR support.
+///
+/// This is fixed before the final record/enforce emissions.  A directed-dust
+/// endpoint changes neither the path nor its occupied cell; it changes only
+/// the component in that already-reserved final cell.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TerminalKind {
+    RepeaterIntoSupport,
+    DirectedDustIntoSupport,
+}
+
+/// One terminal decision for every `nets[net][channel][sink]` socket.
+type TerminalKinds = Vec<Vec<Vec<TerminalKind>>>;
+
+fn default_terminal_kinds(nets: &[Net]) -> TerminalKinds {
+    nets.iter()
+        .map(|net| {
+            net.sinks
+                .iter()
+                .map(|sinks| vec![TerminalKind::RepeaterIntoSupport; sinks.len()])
+                .collect()
+        })
+        .collect()
+}
+
 /// Lay a multi-segment axis-aligned dust path from `start` (exclusive,
 /// already lit at `incoming_strength`) through every point of `waypoints` in
-/// order, ending in a mandatory repeater facing into `waypoints`'s last
-/// element -- the one active component every route this router ever lays
-/// ends in, because redstone dust cannot charge a block sideways.
+/// order. `terminal` was selected from the fully-recorded baseline geometry:
+/// it either preserves the old repeater endpoint or leaves this final cell as
+/// a straight dust run that powers the support itself.
 ///
 /// This is the one path-laying primitive every socket termination in this
 /// module uses, whatever kind of route it ends: `compute_bypass`'s direct
@@ -1475,17 +1500,34 @@ fn bent_path_cells(start: Position, waypoints: &[Position]) -> Vec<Position> {
 ///
 /// This path always ends in its own mandatory repeater, so nothing after it
 /// needs preserved strength -- `reserve` is 0.
-fn lay_bent_path(world: &mut World, start: Position, waypoints: &[Position], incoming_strength: u8, route: &mut Route) {
+fn lay_bent_path(
+    world: &mut World,
+    start: Position,
+    waypoints: &[Position],
+    incoming_strength: u8,
+    terminal: TerminalKind,
+    route: &mut Route,
+) {
     debug_assert!(!waypoints.is_empty(), "a bent path must have somewhere to end");
     debug_assert!(incoming_strength > 0, "a run cannot start from an already-dead signal");
 
     let cells = bent_path_cells(start, waypoints);
     let bend_indices = bent_path_bends(&cells, waypoints);
     let (mut is_repeater, _ending_strength) = plan_bent_path(cells.len(), &bend_indices, incoming_strength, 0);
-    // The final cell is a mandatory repeater regardless of the budget --
-    // `waypoints`'s last element is never a bend, so this can never collide
-    // with `bend_indices`.
-    is_repeater[cells.len() - 1] = true;
+    match terminal {
+        TerminalKind::RepeaterIntoSupport => {
+            // The final cell is a mandatory repeater regardless of the budget
+            // -- `waypoints`'s last element is never a bend, so this can
+            // never collide with `bend_indices`.
+            is_repeater[cells.len() - 1] = true;
+        }
+        TerminalKind::DirectedDustIntoSupport => {
+            debug_assert!(
+                !is_repeater[cells.len() - 1],
+                "a directed dust terminal must not be the path's refresh repeater"
+            );
+        }
+    }
 
     let mut prev = start;
     for (index, &pos) in cells.iter().enumerate() {
@@ -3172,6 +3214,8 @@ struct RoutingGeometry<'a> {
     /// Per-net: whether `compute_bypass` found this net's one sink close
     /// enough to connect directly at `GATE_Y` instead of via ramp and track.
     bypass: &'a [bool],
+    /// Per routed socket: whether its final cell is dust or a repeater.
+    terminals: &'a TerminalKinds,
 }
 
 /// Whether a route terminating at `gate`'s `input_index`-th socket should
@@ -3216,7 +3260,7 @@ fn merge_branch_is_bare(netlist: &Netlist, net: &Net, gate: usize) -> bool {
 /// worlds can never disagree about where anything is -- only about whether
 /// the orphaned keep-out cells around a ramp landing got sealed.
 fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footprint: &mut Footprint) -> EmitResult {
-    let RoutingGeometry { plan, row_z, nets, track_z, track_count, bypass } = *geometry;
+    let RoutingGeometry { plan, row_z, nets, track_z, track_count, bypass, terminals } = *geometry;
     let mut gate_cell: Vec<NorCell> = Vec::with_capacity(netlist.gates.len());
     for _ in 0..netlist.gates.len() {
         gate_cell.push(NorCell { size: (0, 0, 0), input_offsets: Vec::new(), output_offset: (0, 0, 0) });
@@ -3406,7 +3450,7 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
                 let reserve = bare_reserve_for_merge(netlist, nets, gate);
                 let _ = lay_bent_path_bare(world, start, &waypoints, strength_at_start, reserve, &mut route);
             } else {
-                lay_bent_path(world, start, &waypoints, strength_at_start, &mut route);
+                lay_bent_path(world, start, &waypoints, strength_at_start, terminals[n][0][0], &mut route);
             }
             continue;
         }
@@ -3459,7 +3503,18 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
                             let reserve = bare_reserve_for_merge(netlist, nets, gate);
                             let _ = lay_bent_path_bare(world, landing, &waypoints, landing_strength, reserve, &mut route);
                         } else {
-                            lay_bent_path(world, landing, &waypoints, landing_strength, &mut route);
+                            let sink = net.sinks[slot]
+                                .iter()
+                                .position(|&sink| sink == (gate, input_index))
+                                .expect("every socket exit came from this channel's sinks");
+                            lay_bent_path(
+                                world,
+                                landing,
+                                &waypoints,
+                                landing_strength,
+                                terminals[n][slot][sink],
+                                &mut route,
+                            );
                         }
                     }
                     Exit::Feedthrough { x, next_slot } => {
@@ -3557,6 +3612,168 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
     }
 
     EmitResult { input_positions, output_positions, gate_output_positions }
+}
+
+/// Whether an already-reserved terminal repeater can safely become dust.
+///
+/// This checks the physical conditions only. Its caller owns the netlist
+/// condition that the sink is an ordinary NOR support; merge *sources* are
+/// safe here because their group strength is computed before this predicate.
+/// Keeping that policy separate makes the physical proof useful in small
+/// adversarial worlds below.
+fn directed_dust_terminal_is_legal(
+    world: &mut World,
+    reservation: &Reservation,
+    net: usize,
+    socket: Position,
+    support: Position,
+    predecessor_strength: u8,
+) -> bool {
+    let toward_support = direction_from(socket, support);
+    let predecessor = socket.offset(toward_support.opposite());
+
+    // The predecessor must be this route's own live dust.  This excludes a
+    // terminal refresh repeater and proves the new dust retains a positive
+    // strength after its one final decay hop.
+    if reservation.get(&predecessor) != Some(&net)
+        || world.get(predecessor.x, predecessor.y, predecessor.z).kind != BlockKind::RedstoneWire
+        || predecessor_strength <= 1
+    {
+        return false;
+    }
+
+    // No foreign route may occupy the terminal or a horizontal neighbour.
+    // Besides preventing an electrical merge, the lateral part preserves a
+    // one-axis dust shape, which is what gives this terminal direction.
+    if !cell_is_free_for(reservation, socket, net) {
+        return false;
+    }
+
+    // Substitute the exact dust state just long enough to ask the
+    // simulator's measured directionality predicate.  This catches an own
+    // perpendicular attachment that the reservation deliberately permits.
+    let old = world.get(socket.x, socket.y, socket.z).clone();
+    if old.kind != BlockKind::Repeater {
+        return false;
+    }
+    world.set(socket.x, socket.y, socket.z, dust());
+    let points_into_support = dust_powers_block_toward(world, socket, toward_support);
+    world.set(socket.x, socket.y, socket.z, old);
+    points_into_support
+}
+
+/// Whether the component at `socket` really drives its adjacent `support`.
+///
+/// A terminal can be either the traditional repeater or a straight dust cell
+/// whose weak directional power enters the support.  The graph has the same
+/// signal-flow edge in both cases, so readers that audit a compiled world
+/// must ask this semantic question rather than treating a repeater's block
+/// kind as the topology itself.
+pub(crate) fn input_socket_feeds_support(world: &World, socket: Position, support: Position) -> bool {
+    let toward_support = direction_from(socket, support);
+    let socket_state = world.get(socket.x, socket.y, socket.z);
+    (socket_state.kind == BlockKind::Repeater && socket_state.facing == Some(toward_support.opposite()))
+        || (socket_state.kind == BlockKind::RedstoneWire && dust_powers_block_toward(world, socket, toward_support))
+}
+
+/// Promote only the terminal repeaters which can become real directed dust.
+///
+/// The input `world` and `reservation` are a completed *all-repeater*
+/// baseline.  That removes the usual circularity: every terminal candidate
+/// sees every other route and its lateral keep-out before any candidate is
+/// promoted.  A promotion changes the kind at its already-claimed socket, not
+/// the path or its footprint, so the following record and real emissions use
+/// one fixed decision without needing a fixed-point iteration.
+fn resolve_directed_dust_terminals(
+    world: &mut World,
+    reservation: &Reservation,
+    netlist: &Netlist,
+    nets: &[Net],
+    input_positions: &BTreeMap<String, (i32, i32, i32)>,
+    gate_output_positions: &BTreeMap<String, (i32, i32, i32)>,
+) -> TerminalKinds {
+    let mut terminals = default_terminal_kinds(nets);
+    let groups = MergeGroups::build(netlist, nets);
+
+    // A merge's junction and outbound pin are gate body rather than route
+    // cells, so they have no Reservation entry.  Include them exactly as the
+    // signal-strength invariant does: a direct terminal driven by a merge
+    // must reason about the actual joined dust network, not pretend the
+    // merge's named output is a fresh full-strength source.
+    let mut group_cells: HashMap<usize, HashSet<Position>> = HashMap::new();
+    for (&position, &owner) in reservation {
+        group_cells.entry(groups.root(owner)).or_default().insert(position);
+    }
+    for (&position, &owner) in &merge_gate_body_owners(netlist, nets, gate_output_positions) {
+        group_cells.entry(groups.root(owner)).or_default().insert(position);
+    }
+
+    // Every real source in a declared merge group feeds the same dust.  The
+    // decay walk keeps the strongest arrival at each cell, the same physical
+    // behaviour and the same proof used by `verify_signal_strength`.
+    let mut group_sources: HashMap<usize, Vec<(Position, &BlockState)>> = HashMap::new();
+    for (n, net) in nets.iter().enumerate() {
+        if matches!(net.source, Source::Gate(g) if netlist.gates[g].is_merge()) {
+            continue;
+        }
+        let (source, source_state) = match net.source {
+            Source::Lever(input) => {
+                let &(x, y, z) = input_positions
+                    .get(&netlist.inputs[input])
+                    .expect("emit records every primary input");
+                (Position::new(x, y, z), world.get(x, y, z))
+            }
+            Source::Gate(gate) => {
+                let &(x, y, z) = gate_output_positions
+                    .get(&netlist.gates[gate].output)
+                    .expect("emit records every gate output");
+                (Position::new(x, y, z), world.get(x, y, z))
+            }
+        };
+        group_sources.entry(groups.root(n)).or_default().push((source, source_state));
+    }
+    let empty_sources: Vec<(Position, &BlockState)> = Vec::new();
+    let group_strength: HashMap<usize, HashMap<Position, u8>> = group_cells
+        .iter()
+        .map(|(&root, cells)| {
+            let sources = group_sources.get(&root).unwrap_or(&empty_sources);
+            (root, net_signal_strength(world, cells, sources))
+        })
+        .collect();
+
+    for (n, net) in nets.iter().enumerate() {
+        let strength = &group_strength[&groups.root(n)];
+
+        for (slot, sinks) in net.sinks.iter().enumerate() {
+            for (sink, &(gate, input_index)) in sinks.iter().enumerate() {
+                if netlist.gates[gate].is_merge() {
+                    continue;
+                }
+
+                let &(torch_x, torch_y, torch_z) = gate_output_positions
+                    .get(&netlist.gates[gate].output)
+                    .expect("emit records every gate output");
+                let torch = Position::new(torch_x, torch_y, torch_z);
+                let Some(support) = torch_support_position(world.get(torch.x, torch.y, torch.z), torch) else {
+                    continue;
+                };
+                let socket = support.offset(INPUT_DIRECTIONS[input_index]);
+                let predecessor = socket.offset(direction_from(socket, support).opposite());
+                if directed_dust_terminal_is_legal(
+                    world,
+                    reservation,
+                    n,
+                    socket,
+                    support,
+                    strength.get(&predecessor).copied().unwrap_or(0),
+                ) {
+                    terminals[n][slot][sink] = TerminalKind::DirectedDustIntoSupport;
+                }
+            }
+        }
+    }
+
+    terminals
 }
 
 /// The X/Z footprint the world needs to hold `plan`/`nets` laid out with
@@ -3802,6 +4019,7 @@ fn resolve_bypass_and_geometry(
     query_limit: i32,
 ) -> (Vec<bool>, Vec<i32>, Vec<Vec<i32>>) {
     let bypass_proven = compute_bypass(nets, plan);
+    let baseline_terminals = default_terminal_kinds(nets);
     let baseline_track_count = assign_tracks(plan, nets, channel_count, &bypass_proven);
     let (baseline_row_z, baseline_track_z) = layout_z(row_count, channel_count, &baseline_track_count);
 
@@ -3816,6 +4034,7 @@ fn resolve_bypass_and_geometry(
             track_z: &baseline_track_z,
             track_count: &baseline_track_count,
             bypass: &bypass_proven,
+            terminals: &baseline_terminals,
         };
         emit(&mut scratch, netlist, &geometry, &mut footprint);
     }
@@ -4756,6 +4975,22 @@ fn net_signal_strength(
                     deliver(world, own_cells, &mut strength, &mut queue, neighbour, direction, MAX_SIGNAL_STRENGTH);
                 }
             }
+            // A straight dust run also weakly powers the conductive block it
+            // points into.  This is deliberately only a sink outside this
+            // route's own cells: weak block power must not be enqueued and
+            // radiated back into dust as if it were the strong repeater-to-
+            // block case below.  Gate supports are exactly such unclaimed
+            // sinks, so recording their arrival is enough for the invariant
+            // to prove a directed terminal live.
+            for direction in HORIZONTAL {
+                let neighbour = pos.offset(direction);
+                if !own_cells.contains(&neighbour)
+                    && flags_of(world.get(neighbour.x, neighbour.y, neighbour.z)).is_conductive()
+                    && dust_powers_block_toward(world, pos, direction)
+                {
+                    deliver(world, own_cells, &mut strength, &mut queue, neighbour, direction, here);
+                }
+            }
         } else if flags_of(state).is_conductive() {
             // `pos` is a plain conductive block (never dust, never a
             // repeater) that this walk has already found strongly powered --
@@ -5096,6 +5331,33 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     let track_count: Vec<usize> = track_z.iter().map(Vec::len).collect();
     let size_y = world_height(&track_count);
 
+    // First build the conservative all-repeater geometry once.  This is not
+    // an emitted result: it is the complete, live reservation and world shape
+    // against which every candidate directed-dust terminal is judged.
+    let baseline_terminals = default_terminal_kinds(&nets);
+    let baseline_geometry = RoutingGeometry {
+        plan: &plan,
+        row_z: &row_z,
+        nets: &nets,
+        track_z: &track_z,
+        track_count: &track_count,
+        bypass: &bypass,
+        terminals: &baseline_terminals,
+    };
+    let mut baseline_world = World::new(size_x.max(8), size_y, size_z.max(8));
+    let mut baseline_footprint = Footprint::record();
+    let baseline_result = emit(&mut baseline_world, netlist, &baseline_geometry, &mut baseline_footprint);
+    let terminals = resolve_directed_dust_terminals(
+        &mut baseline_world,
+        &baseline_footprint.reservation,
+        netlist,
+        &nets,
+        &baseline_result.input_positions,
+        &baseline_result.gate_output_positions,
+    );
+    drop(baseline_world);
+    drop(baseline_footprint);
+
     // ---------------------------------------------------------------
     // Emission
     // ---------------------------------------------------------------
@@ -5117,6 +5379,7 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         track_z: &track_z,
         track_count: &track_count,
         bypass: &bypass,
+        terminals: &terminals,
     };
 
     let mut scratch = World::new(size_x.max(8), size_y, size_z.max(8));
@@ -5165,6 +5428,7 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
 mod tests {
     use super::topology::GateKind;
     use super::*;
+    use crate::redstone::simulator::Simulator;
 
     /// A minimal `Net` for tests that only care about `net_name` / ownership
     /// lookups, not real routing geometry -- `verify_connectivity` never
@@ -5509,6 +5773,140 @@ mod tests {
             sinks: vec![vec![(0, 0)]],
             hops: Vec::new(),
         }
+    }
+
+    /// A short gate-to-gate edge that can exercise a gate-input terminal.
+    /// `y = !!a`; the second gate's west socket must be driven from the west
+    /// and can therefore weakly power its support eastward without a terminal
+    /// repeater.
+    fn directed_dust_terminal_netlist() -> Netlist {
+        Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["y".to_string()],
+            gates: vec![Gate::nor("not_a", &["a"]), Gate::nor("y", &["not_a"])],
+        }
+    }
+
+    /// A world in the exact local shape a direct-dust terminal needs:
+    /// west-running dust, the proposed terminal repeater, then the NOR's
+    /// conductive support.  The router normally provides the floor blocks;
+    /// these tests state them explicitly so `dust_sides` sees real Minecraft
+    /// geometry rather than an abstract edge.
+    fn direct_terminal_world() -> (World, Reservation, Position, Position) {
+        let mut world = World::new(7, 4, 7);
+        let predecessor = Position::new(1, 1, 3);
+        let socket = Position::new(2, 1, 3);
+        let support = Position::new(3, 1, 3);
+        world.set(1, 0, 3, stone());
+        world.set(2, 0, 3, stone());
+        world.set(predecessor.x, predecessor.y, predecessor.z, dust());
+        world.set(socket.x, socket.y, socket.z, repeater(Facing::East));
+        world.set(support.x, support.y, support.z, stone());
+
+        let mut reservation = Reservation::new();
+        reservation.insert(predecessor, 0);
+        reservation.insert(socket, 0);
+        (world, reservation, socket, support)
+    }
+
+    #[test]
+    fn directed_dust_terminal_rejects_a_corner() {
+        let (mut world, mut reservation, socket, support) = direct_terminal_world();
+        let north = socket.offset(Facing::North);
+        world.set(north.x, 0, north.z, stone());
+        world.set(north.x, north.y, north.z, dust());
+        reservation.insert(north, 0);
+
+        assert!(
+            !directed_dust_terminal_is_legal(&mut world, &reservation, 0, socket, support, 2),
+            "a perpendicular attachment makes terminal dust a corner, which cannot weakly power east"
+        );
+        assert_eq!(world.get(socket.x, socket.y, socket.z).kind, BlockKind::Repeater, "the probe must restore the baseline world");
+    }
+
+    #[test]
+    fn directed_dust_terminal_rejects_a_dead_final_hop() {
+        let (mut world, reservation, socket, support) = direct_terminal_world();
+
+        assert!(
+            !directed_dust_terminal_is_legal(&mut world, &reservation, 0, socket, support, 1),
+            "one-strength predecessor would decay to zero at the proposed dust terminal"
+        );
+    }
+
+    #[test]
+    fn directed_dust_terminal_rejects_a_foreign_adjacent_route() {
+        let (mut world, mut reservation, socket, support) = direct_terminal_world();
+        let south = socket.offset(Facing::South);
+        world.set(south.x, 0, south.z, stone());
+        world.set(south.x, south.y, south.z, dust());
+        reservation.insert(south, 1);
+
+        assert!(
+            !directed_dust_terminal_is_legal(&mut world, &reservation, 0, socket, support, 2),
+            "a foreign lateral wire must preserve the isolating repeater and its keep-out"
+        );
+    }
+
+    #[test]
+    fn directed_dust_terminal_is_live_and_powers_a_nor_support() {
+        let netlist = directed_dust_terminal_netlist();
+        let compiled = compile(&netlist).expect("a one-input NOR must compile");
+
+        let (torch_x, torch_y, torch_z) = *compiled.gate_output_positions.get("y").expect("gate output must be recorded");
+        let torch = Position::new(torch_x, torch_y, torch_z);
+        let support = torch_support_position(compiled.world.get(torch.x, torch.y, torch.z), torch)
+            .expect("the NOR output must be a supported torch");
+        let socket = support.offset(Facing::West);
+
+        assert_eq!(
+            compiled.world.get(socket.x, socket.y, socket.z).kind,
+            BlockKind::RedstoneWire,
+            "a legal straight terminal must be dust, not the old mandatory repeater"
+        );
+        assert!(
+            dust_powers_block_toward(&compiled.world, socket, Facing::East),
+            "the terminal dust must be a straight live run pointing into the NOR support"
+        );
+
+        let input = *compiled.input_positions.get("a").expect("input lever must be recorded");
+        let output = *compiled.output_positions.get("y").expect("output lamp must be recorded");
+        let mut simulator = Simulator::new(compiled.world);
+        simulator.run_until_stable(200).expect("the compiled NOT must settle");
+        for (on, expected) in [(false, false), (true, true)] {
+            let mut lever_state = simulator.world().get(input.0, input.1, input.2).clone();
+            lever_state.lit = on;
+            simulator.world_mut().set(input.0, input.1, input.2, lever_state);
+            simulator.run_until_stable(200).expect("the compiled NOT must settle after an input change");
+            assert_eq!(simulator.world().get(output.0, output.1, output.2).lit, expected, "NOT(NOT({on}))");
+        }
+    }
+
+    #[test]
+    fn directed_dust_terminals_cover_a_real_verilog_and4_merge_output() {
+        let circuit = crate::circuits::verilog::find("verilog:and4").expect("the shipped circuit must exist");
+        let (gate_level, _) = circuit.baked_netlist();
+        let netlist = crate::compile::lowering::lower_optimised(&gate_level).expect("the shipped netlist must lower");
+        let compiled = compile(&netlist).expect("the lowered circuit must compile");
+
+        let direct_terminal_count = netlist
+            .gates
+            .iter()
+            .enumerate()
+            .filter(|(_, gate)| !gate.is_merge())
+            .flat_map(|(_, gate)| {
+                let &(x, y, z) = compiled.gate_output_positions.get(&gate.output).expect("every gate has a recorded output");
+                let torch = Position::new(x, y, z);
+                let support = torch_support_position(compiled.world.get(x, y, z), torch).expect("NOR has a support");
+                (0..gate.inputs.len()).map(move |input| support.offset(INPUT_DIRECTIONS[input]))
+            })
+            .filter(|socket| compiled.world.get(socket.x, socket.y, socket.z).kind == BlockKind::RedstoneWire)
+            .count();
+
+        assert!(
+            direct_terminal_count > 0,
+            "verilog:and4 has merge-derived signals whose legal straight dust endpoints should replace at least one terminal repeater"
+        );
     }
 
     #[test]
