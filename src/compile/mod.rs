@@ -6319,7 +6319,7 @@ pub enum PlannerKind {
 
 /// Every cell a gate's own realisation occupies, found by realising it into a
 /// scratch world rather than by re-deriving the cell geometry a second time.
-fn gate_footprint(origin: (i32, i32, i32), gate: &Gate) -> Vec<Anchor> {
+fn gate_footprint(origin: (i32, i32, i32), gate: &Gate) -> (Vec<Anchor>, Anchor) {
     let mut scratch = World::new(64, 8, 64);
     let shifted = (32, 1, 32);
     let cell = if gate.is_merge() {
@@ -6348,7 +6348,12 @@ fn gate_footprint(origin: (i32, i32, i32), gate: &Gate) -> Vec<Anchor> {
             });
         }
     }
-    cells
+    let output_pin = Anchor {
+        x: origin.0 + (pin.x - shifted.0),
+        y: origin.1 + (pin.y - shifted.1),
+        z: origin.2 + (pin.z - shifted.2),
+    };
+    (cells, output_pin)
 }
 
 fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<PrimitiveNode> {
@@ -6362,11 +6367,13 @@ fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<Primitiv
         } else {
             NodeRealisation::Primitive(Primitive::Torch)
         };
+        let (footprint, output_pin) = gate_footprint((anchor.x, anchor.y, anchor.z), gate);
         nodes.push(PrimitiveNode {
             id: format!("gate:{}", gate.output),
             anchor,
             realisation,
-            footprint: gate_footprint((anchor.x, anchor.y, anchor.z), gate),
+            footprint,
+            output_pin: Some(output_pin),
         });
     }
     for (input, anchor) in netlist
@@ -6380,6 +6387,7 @@ fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<Primitiv
             realisation: NodeRealisation::Primitive(Primitive::Lever),
             // A lever is its own cell plus the pin dust one step north.
             footprint: vec![anchor, Anchor { z: anchor.z - 1, ..anchor }],
+            output_pin: Some(Anchor { z: anchor.z - 1, ..anchor }),
         });
     }
     nodes

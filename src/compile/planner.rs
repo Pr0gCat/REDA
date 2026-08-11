@@ -45,11 +45,23 @@ pub struct PrimitiveNode {
     /// will run a net straight through another gate's body and short the
     /// two together, which is what happens when this is empty.
     pub footprint: Vec<Anchor>,
+    /// The cell this node's outgoing net starts from.
+    ///
+    /// Not the anchor: a gate's anchor is its support block, and its signal
+    /// leaves from the pin one hop out from its torch. Routing from the
+    /// anchor lays dust on the support and unsupports the torch.
+    pub output_pin: Option<Anchor>,
 }
 
 impl PrimitiveNode {
     /// The cells to keep other nets out of: the recorded footprint, or the
     /// anchor alone for a node whose footprint nobody recorded.
+    /// Where this node's outgoing net begins: its recorded pin, or its
+    /// anchor for a node whose pin nobody recorded.
+    pub fn source(&self) -> Anchor {
+        self.output_pin.unwrap_or(self.anchor)
+    }
+
     pub fn occupied(&self) -> &[Anchor] {
         if self.footprint.is_empty() {
             std::slice::from_ref(&self.anchor)
@@ -898,6 +910,11 @@ impl PlanCandidate {
                 cell.y += delta.1;
                 cell.z += delta.2;
             }
+            if let Some(pin) = node.output_pin.as_mut() {
+                pin.x += delta.0;
+                pin.y += delta.1;
+                pin.z += delta.2;
+            }
         }
         let Some(slot) = self.anchors.get_mut(primitive) else {
             return Err(PlannerError::UnknownPrimitive(primitive));
@@ -957,17 +974,28 @@ impl PlanCandidate {
         new_anchor: Anchor,
     ) -> (Anchor, Vec<Anchor>) {
         let route = &self.routes[route_index];
-        let source = self
-            .node_for_route_owner(route)
-            .or_else(|| route.anchors.first().copied())
-            .map(|anchor| {
-                if anchor == old_anchor {
-                    new_anchor
-                } else {
-                    anchor
-                }
-            })
-            .unwrap_or(new_anchor);
+        // A net leaves its producer's output pin, never its support block.
+        //
+        // `self` is the already-moved candidate, so a node-derived endpoint is
+        // at its new position and must not be remapped again: the moved
+        // primitive's new pin can land exactly on its own old anchor, and a
+        // second remap would drag the route's source onto the support block --
+        // laying dust on it and unsupporting the torch.
+        let source = match self.node_index_for_route_owner(route) {
+            Some(index) => self.primitive_nodes[index].source(),
+            None => route
+                .anchors
+                .first()
+                .copied()
+                .map(|anchor| {
+                    if anchor == old_anchor {
+                        new_anchor
+                    } else {
+                        anchor
+                    }
+                })
+                .unwrap_or(new_anchor),
+        };
         let supports = if route.terminals.is_empty() {
             vec![route
                 .anchors
@@ -985,27 +1013,25 @@ impl PlanCandidate {
             route
                 .terminals
                 .iter()
-                .map(|terminal| {
-                    self.node_for_gate(&terminal.sink.gate)
-                        .unwrap_or(terminal.sink.anchor)
-                })
-                .map(|anchor| {
-                    if moved_primitive < self.anchors.len() && anchor == old_anchor {
+                .map(|terminal| match self.node_for_gate(&terminal.sink.gate) {
+                    // Already moved with its node, as above.
+                    Some(anchor) => anchor,
+                    None if moved_primitive < self.anchors.len()
+                        && terminal.sink.anchor == old_anchor =>
+                    {
                         new_anchor
-                    } else {
-                        anchor
                     }
+                    None => terminal.sink.anchor,
                 })
                 .collect()
         };
         (source, supports)
     }
 
-    fn node_for_route_owner(&self, route: &Route) -> Option<Anchor> {
+    fn node_index_for_route_owner(&self, route: &Route) -> Option<usize> {
         let owner = route.owner.as_deref()?;
-        self.primitive_nodes.iter().find_map(|node| {
-            (node.id == format!("input:{owner}") || node.id == format!("gate:{owner}"))
-                .then_some(node.anchor)
+        self.primitive_nodes.iter().position(|node| {
+            node.id == format!("input:{owner}") || node.id == format!("gate:{owner}")
         })
     }
 
@@ -1979,7 +2005,9 @@ fn validate_candidate_reservation(
         if route.anchors.is_empty() {
             return Err(CandidateConstraintError::EmptyRoute(route.id.clone()));
         }
-        let route_source = candidate.node_for_route_owner(route);
+        let route_source = candidate
+            .node_index_for_route_owner(route)
+            .map(|index| candidate.primitive_nodes[index].anchor);
         for &anchor in &route.anchors {
             if primitives.contains(&anchor) && route_source != Some(anchor) {
                 return Err(CandidateConstraintError::RouteHitsForeignPrimitive {
@@ -2183,6 +2211,7 @@ mod tests {
                         NodeRealisation::Primitive(Primitive::Torch)
                     },
                     footprint: Vec::new(),
+                    output_pin: None,
                 })
                 .collect(),
             vec![
@@ -2251,18 +2280,21 @@ mod tests {
                     anchor: source,
                     realisation: NodeRealisation::Primitive(Primitive::Lever),
                     footprint: Vec::new(),
+                    output_pin: None,
                 },
                 PrimitiveNode {
                     id: "gate:moved".to_string(),
                     anchor: old_moved_sink,
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
                     footprint: Vec::new(),
+                    output_pin: None,
                 },
                 PrimitiveNode {
                     id: "gate:other".to_string(),
                     anchor: other_sink,
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
                     footprint: Vec::new(),
+                    output_pin: None,
                 },
             ],
             vec![Route::unrealised(
@@ -2339,12 +2371,14 @@ mod tests {
                     anchor: source,
                     realisation: NodeRealisation::Primitive(Primitive::Lever),
                     footprint: Vec::new(),
+                    output_pin: None,
                 },
                 PrimitiveNode {
                     id: "gate:merge".to_string(),
                     anchor: merge,
                     realisation: NodeRealisation::WireMerge,
                     footprint: Vec::new(),
+                    output_pin: None,
                 },
             ],
             vec![Route::unrealised(
@@ -2397,6 +2431,7 @@ mod tests {
                 anchor: old_anchor,
                 realisation: NodeRealisation::Primitive(Primitive::Lever),
                 footprint: Vec::new(),
+                output_pin: None,
             }],
             vec![stale_route.clone()],
         );
@@ -2486,12 +2521,14 @@ mod tests {
                     anchor: source,
                     realisation: NodeRealisation::Primitive(Primitive::Lever),
                     footprint: Vec::new(),
+                    output_pin: None,
                 },
                 PrimitiveNode {
                     id: "gate:y".to_string(),
                     anchor: sink,
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
                     footprint: Vec::new(),
+                    output_pin: None,
                 },
             ],
             vec![Route::unrealised(
@@ -2528,18 +2565,21 @@ mod tests {
                         anchor: source,
                         realisation: NodeRealisation::Primitive(Primitive::Lever),
                         footprint: Vec::new(),
+                        output_pin: None,
                     },
                     PrimitiveNode {
                         id: "gate:merge".to_string(),
                         anchor: merge,
                         realisation: NodeRealisation::WireMerge,
                         footprint: Vec::new(),
+                        output_pin: None,
                     },
                     PrimitiveNode {
                         id: "gate:other".to_string(),
                         anchor: shared_consumer,
                         realisation: NodeRealisation::Primitive(Primitive::Torch),
                         footprint: Vec::new(),
+                        output_pin: None,
                     },
                 ],
                 vec![
@@ -2628,18 +2668,21 @@ mod tests {
                     anchor: Anchor { x: 0, y: 0, z: 0 },
                     realisation: NodeRealisation::Primitive(Primitive::Lever),
                     footprint: Vec::new(),
+                    output_pin: None,
                 },
                 PrimitiveNode {
                     id: "gate:blocked".to_string(),
                     anchor: Anchor { x: 2, y: 0, z: 0 },
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
                     footprint: Vec::new(),
+                    output_pin: None,
                 },
                 PrimitiveNode {
                     id: "gate:y".to_string(),
                     anchor: Anchor { x: 5, y: 0, z: 0 },
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
                     footprint: Vec::new(),
+                    output_pin: None,
                 },
             ],
             vec![Route::unrealised(
@@ -2920,8 +2963,10 @@ mod tests {
     /// `try_move` used to record anchors and nothing else, so a moved route
     /// had no blocks and no floors: `optimise` had never produced anything
     /// anyone could emit, let alone verify or paste. Turning that on is what
-    /// this test is for, and it has walked the plan through five real router
-    /// defects so far, each fixed:
+    /// this test is for, and getting here took eight real router defects,
+    /// each of which the invariants caught and
+    /// `validate_candidate_reservation` -- no spacing, no strength, no
+    /// torch-merge, `isolation_proven` hardcoded true -- never would have:
     ///
     /// 1. a rerouted branch was never realised at all;
     /// 2. its terminal strength was invented (`16 - path length`) because
@@ -2930,14 +2975,14 @@ mod tests {
     ///    got two blocks;
     /// 4. a terminal's recorded sink cell stayed where the old branch ended;
     /// 5. the A* keep-out saw only the four horizontal neighbours, while dust
-    ///    climbs and descends a step, and reserved one cell per primitive
-    ///    when a NOR cell is a support, a torch, its sockets and its pin.
-    ///
-    /// What remains: a rerouted branch can still land on a gate's support
-    /// block and leave its torch unsupported. The invariants catch it, which
-    /// is the point -- `validate_candidate_reservation` never would have.
+    ///    climbs and descends a step;
+    /// 6. it reserved one cell per primitive, when a NOR cell is a support, a
+    ///    torch, its sockets and its pin;
+    /// 7. a repeater needs a horizontal facing, so a cell reached by a step in
+    ///    Y can only be dust -- this used to panic;
+    /// 8. a net was routed from its producer's support block instead of its
+    ///    output pin, laying dust on the support and unsupporting the torch.
     #[test]
-    #[ignore = "try_move still lands a route on a gate's support; see the doc above"]
     fn a_moved_candidate_can_be_built_and_verified() {
         let (seed, netlist) = legacy_and4_seed_with_netlist();
 
