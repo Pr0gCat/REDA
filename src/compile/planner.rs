@@ -1068,14 +1068,19 @@ fn deterministic_astar(
     reservation: &BTreeMap<Anchor, String>,
 ) -> Option<Vec<Anchor>> {
     let margin = manhattan_distance(start, goal).saturating_add(2) as i32;
+    // Y is not widened. A step in Y is a dust staircase, and a repeater cannot
+    // stand on one -- so a search free to climb produces runs whose strength
+    // refreshes get silently downgraded to dust, and 41 cells of it reach
+    // nothing. Staircases need rules this planner does not have yet; until it
+    // does, a route stays in the plane its endpoints share.
     let min = Anchor {
         x: start.x.min(goal.x).saturating_sub(margin),
-        y: start.y.min(goal.y).saturating_sub(margin),
+        y: start.y.min(goal.y),
         z: start.z.min(goal.z).saturating_sub(margin),
     };
     let max = Anchor {
         x: start.x.max(goal.x).saturating_add(margin),
-        y: start.y.max(goal.y).saturating_add(margin),
+        y: start.y.max(goal.y),
         z: start.z.max(goal.z).saturating_add(margin),
     };
     let mut frontier = BTreeSet::from([SearchState {
@@ -1283,6 +1288,255 @@ fn unit_horizontal_direction(from: Anchor, to: Anchor) -> Option<(i32, i32, i32)
     let direction = (to.x - from.x, to.y - from.y, to.z - from.z);
     (direction.1 == 0 && direction.0.unsigned_abs() + direction.2.unsigned_abs() == 1)
         .then_some(direction)
+}
+
+/// Deliberately sparse. A single routing plane with no reserved corridors --
+/// which is what this is, and what channels and tracks exist to avoid -- needs
+/// slack between rows or the searches block each other and a net simply has
+/// nowhere to go. Compaction is `optimise`'s job, and it can only compact a
+/// layout that exists.
+const ROW_PITCH: i32 = 16;
+const COLUMN_PITCH: i32 = 20;
+const GROUND_ROW_Z: i32 = 5;
+const GATE_COLUMN_X: i32 = 14;
+const INPUT_COLUMN_X: i32 = 12;
+const PLANNER_Y: i32 = 1;
+
+/// Place and route a netlist without the legacy emitter.
+///
+/// Everything until now has come from `seed_from_legacy`, which bounds the
+/// planner to what the row/channel/track router could lay down first: it can
+/// improve that layout, but never propose a shape the old emitter has no way
+/// of expressing, and never place a primitive the old emitter cannot place.
+///
+/// The layout here is deliberately plain -- gates in rows by depth, one signal
+/// per column, routed in netlist order -- because its job is to be legal and
+/// reproducible, not good. `optimise` is what makes a layout good, and it can
+/// only do that to a layout that exists.
+pub fn plan_from_netlist(netlist: &Netlist) -> Result<PlanCandidate, PlannerError> {
+    let depths = gate_depths(netlist)?;
+    let deepest = depths.iter().copied().max().unwrap_or(0);
+
+    let mut row_width: BTreeMap<usize, i32> = BTreeMap::new();
+    let mut anchors = Vec::with_capacity(netlist.gates.len() + netlist.inputs.len());
+    let mut primitive_nodes = Vec::with_capacity(netlist.gates.len() + netlist.inputs.len());
+
+    for (index, gate) in netlist.gates.iter().enumerate() {
+        let row = deepest - depths[index];
+        let column = row_width.entry(row).or_insert(0);
+        let anchor = Anchor {
+            x: GATE_COLUMN_X + *column * COLUMN_PITCH,
+            y: PLANNER_Y,
+            z: GROUND_ROW_Z + row as i32 * ROW_PITCH,
+        };
+        *column += 1;
+        anchors.push(anchor);
+
+        let (footprint, output_pin) = compile::gate_footprint((anchor.x, anchor.y, anchor.z), gate);
+        primitive_nodes.push(PrimitiveNode {
+            id: format!("gate:{}", gate.output),
+            anchor,
+            realisation: if gate.is_merge() {
+                NodeRealisation::WireMerge
+            } else {
+                NodeRealisation::Primitive(Primitive::Torch)
+            },
+            footprint,
+            output_pin: Some(output_pin),
+        });
+    }
+
+    for (index, input) in netlist.inputs.iter().enumerate() {
+        let anchor = Anchor {
+            x: INPUT_COLUMN_X + index as i32 * COLUMN_PITCH,
+            y: PLANNER_Y,
+            z: GROUND_ROW_Z + (deepest as i32 + 1) * ROW_PITCH,
+        };
+        anchors.push(anchor);
+        let pin = Anchor { z: anchor.z - 1, ..anchor };
+        primitive_nodes.push(PrimitiveNode {
+            id: format!("input:{input}"),
+            anchor,
+            realisation: NodeRealisation::Primitive(Primitive::Lever),
+            footprint: vec![anchor, pin],
+            output_pin: Some(pin),
+        });
+    }
+
+    let candidate = PlanCandidate::with_primitive_nodes(anchors, primitive_nodes, Vec::new());
+    route_every_net(candidate, netlist)
+}
+
+/// How far each gate stands from the primary inputs, counted in gates.
+fn gate_depths(netlist: &Netlist) -> Result<Vec<usize>, PlannerError> {
+    let order = netlist
+        .combinational_order()
+        .ok_or(PlannerError::PhysicalInvariant(
+            compile::CompileError::CyclicNetlist,
+        ))?;
+    let producer: BTreeMap<&str, usize> = netlist
+        .gates
+        .iter()
+        .enumerate()
+        .map(|(index, gate)| (gate.output.as_str(), index))
+        .collect();
+
+    let mut depths = vec![0usize; netlist.gates.len()];
+    for &gate in &order {
+        depths[gate] = netlist.gates[gate]
+            .inputs
+            .iter()
+            .filter_map(|input| producer.get(input.as_str()))
+            .map(|&source| depths[source] + 1)
+            .max()
+            .unwrap_or(0);
+    }
+    Ok(depths)
+}
+
+/// Route every net of a placed candidate, in a deterministic order.
+fn route_every_net(
+    mut candidate: PlanCandidate,
+    netlist: &Netlist,
+) -> Result<PlanCandidate, PlannerError> {
+    let mut reservation: BTreeMap<Anchor, String> = BTreeMap::new();
+    for (index, node) in candidate.primitive_nodes.iter().enumerate() {
+        for &cell in node.occupied() {
+            reservation.insert(cell, format!("primitive:{index}"));
+        }
+    }
+
+    let mut sinks: BTreeMap<String, Vec<(usize, usize)>> = BTreeMap::new();
+    for (gate, definition) in netlist.gates.iter().enumerate() {
+        for (input_index, input) in definition.inputs.iter().enumerate() {
+            sinks
+                .entry(input.clone())
+                .or_default()
+                .push((gate, input_index));
+        }
+    }
+
+    let mut routes = Vec::with_capacity(sinks.len());
+    for (signal, consumers) in sinks {
+        let source = candidate
+            .primitive_nodes
+            .iter()
+            .find(|node| {
+                node.id == format!("gate:{signal}") || node.id == format!("input:{signal}")
+            })
+            .map(|node| node.source())
+            .ok_or_else(|| PlannerError::UnrealisableNode {
+                id: signal.clone(),
+                reason: "no gate or primary input drives this signal".to_string(),
+            })?;
+
+        let mut route = Route::new(signal.clone(), Vec::new());
+        route.owner = Some(signal.clone());
+        for &(gate, input_index) in &consumers {
+            let support = candidate.anchors[gate];
+            let socket = step(support, compile::INPUT_DIRECTIONS[input_index]);
+            // A terminal component only drives the support it faces, and only
+            // reads from directly behind itself, so the last step into the
+            // socket has to be collinear with socket -> support. The legacy
+            // router guarantees that with a dedicated approach column; here
+            // the search is aimed one cell further out and the socket is
+            // appended, which is the same guarantee stated as geometry.
+            let approach = Anchor {
+                x: socket.x + (socket.x - support.x),
+                y: socket.y + (socket.y - support.y),
+                z: socket.z + (socket.z - support.z),
+            };
+            let mut path = deterministic_astar(source, approach, socket, &signal, &reservation)
+                .ok_or(PlannerError::NoLocalRoute {
+                    from: source,
+                    to: approach,
+                })?;
+            path.push(socket);
+            reserve_path(&mut reservation, &signal, &path);
+
+            let laid = realise_branch(source, &path);
+            // Whether the strength budget already needs the socket cell to be
+            // a refresh. If it does, no terminal-style preference may take it
+            // away: dust that cannot reach is not a cheaper terminal, it is a
+            // dead one.
+            let budget_needs_repeater = laid
+                .blocks
+                .last()
+                .is_some_and(|block| block.kind == crate::redstone::world::block::BlockKind::Repeater);
+            for ((anchor, block), floor) in path.iter().zip(laid.blocks).zip(laid.floors) {
+                if route.anchors.contains(anchor) {
+                    continue;
+                }
+                route.anchors.push(*anchor);
+                route.realisation.push(block);
+                route.floors.push(floor);
+            }
+
+            let predecessor = path
+                .get(path.len().saturating_sub(2))
+                .copied()
+                .unwrap_or(source);
+
+            // A branch whose every sink is the same wire merge joins that
+            // merge's own dust, not a gate's support block: dust meets dust
+            // and nothing has to drive anything. The same condition
+            // `merge_branch_is_bare` states, read off the netlist.
+            let bare_merge = netlist.gates[gate].is_merge()
+                && consumers.iter().all(|&(sink, _)| sink == gate);
+
+            let kind = if bare_merge {
+                RouteTerminalKind::BareMergeDust
+            } else {
+                let style = if budget_needs_repeater {
+                    TerminalStyle::RepeaterIntoSupport
+                } else {
+                    terminal_style(&TerminalApproach::new(
+                        predecessor,
+                        socket,
+                        support,
+                        laid.strength_before_terminal,
+                        terminal_is_isolated(&reservation, &signal, predecessor, socket, support),
+                    ))
+                };
+                if let Some(index) = route.anchors.iter().position(|anchor| *anchor == socket) {
+                    route.realisation[index] = match style {
+                        TerminalStyle::RepeaterIntoSupport => compile::repeater(
+                            compile::direction_from(
+                                Position::new(predecessor.x, predecessor.y, predecessor.z),
+                                Position::new(socket.x, socket.y, socket.z),
+                            ),
+                        ),
+                        TerminalStyle::DirectedDustIntoSupport => compile::dust(),
+                    };
+                }
+                style.into()
+            };
+
+            route.terminals.push(RouteTerminal {
+                sink: RouteSink {
+                    gate: netlist.gates[gate].output.clone(),
+                    input_index,
+                    anchor: socket,
+                },
+                kind,
+                repeaters: laid.repeaters,
+            });
+        }
+        routes.push(route);
+    }
+
+    candidate.routes = routes;
+    Ok(candidate)
+}
+
+/// One step from `anchor` towards `facing`.
+fn step(anchor: Anchor, facing: crate::redstone::world::block::Facing) -> Anchor {
+    let position = Position::new(anchor.x, anchor.y, anchor.z).offset(facing);
+    Anchor {
+        x: position.x,
+        y: position.y,
+        z: position.z,
+    }
 }
 
 /// Extract a planner seed from the legacy emitter's explicit metadata.
@@ -3055,6 +3309,122 @@ mod tests {
             best.cost().delay <= seed.cost().delay,
             "the delay term must follow the circuit it prices"
         );
+    }
+
+    /// The planner has to be able to place a circuit itself, not only improve
+    /// one the legacy router already placed.
+    ///
+    /// Every candidate before this came from `seed_from_legacy`, which bounds
+    /// the planner to what the row/channel/track emitter could lay down first.
+    /// These four shapes are the ones that broke the legacy round-trip when it
+    /// was written: a lone NOR, a two-level cone, a fanout, and a bare merge.
+    #[test]
+    fn a_netlist_places_and_routes_without_the_legacy_emitter() {
+        let circuits: [(&str, Netlist); 4] = [
+            (
+                "lone nor",
+                Netlist {
+                    inputs: vec!["a".to_string()],
+                    outputs: vec!["y".to_string()],
+                    gates: vec![Gate::nor("y", &["a"])],
+                },
+            ),
+            (
+                "two level",
+                Netlist {
+                    inputs: vec!["a".to_string(), "b".to_string()],
+                    outputs: vec!["y".to_string()],
+                    gates: vec![
+                        Gate::nor("na", &["a"]),
+                        Gate::nor("nb", &["b"]),
+                        Gate::nor("y", &["na", "nb"]),
+                    ],
+                },
+            ),
+            (
+                "fanout",
+                Netlist {
+                    inputs: vec!["a".to_string()],
+                    outputs: vec!["left".to_string(), "right".to_string()],
+                    gates: vec![Gate::nor("left", &["a"]), Gate::nor("right", &["a"])],
+                },
+            ),
+            (
+                "bare merge",
+                Netlist {
+                    inputs: vec!["a".to_string(), "b".to_string()],
+                    outputs: vec!["y".to_string()],
+                    gates: vec![Gate::merge("y", &["a", "b"])],
+                },
+            ),
+        ];
+
+        for (name, netlist) in circuits {
+            let candidate = plan_from_netlist(&netlist)
+                .unwrap_or_else(|error| panic!("{name} must be placeable: {error}"));
+            verify_candidate(&candidate, &netlist)
+                .unwrap_or_else(|error| panic!("{name} must be legal: {error}"));
+        }
+    }
+
+    /// Legal is not enough: a circuit the planner placed itself has to compute
+    /// what it was asked to.
+    ///
+    /// and4 is the first circuit this cannot place, and the reason is the
+    /// routing model rather than the placement. Every net is searched for in
+    /// one plane, because a step in Y is a dust staircase and a repeater
+    /// cannot stand on one -- routing in 3D without those rules produced a
+    /// 41-cell run of unbroken dust that reached nothing. In one plane, with
+    /// no reserved corridors, the searches block each other: this is what
+    /// channels and tracks exist to solve, and this planner has neither.
+    ///
+    /// Widening the spacing does not fix it, because the keep-out is also
+    /// wrong near a gate: a cell's horizontal neighbours are checked one level
+    /// up and down, and a gate's own floor stone sits exactly there, so the
+    /// approach to a gate reads as occupied when it is not.
+    ///
+    /// Two things are needed and neither is a tweak: keep-out that
+    /// distinguishes a solid floor from a conductor, and either reserved
+    /// routing corridors or the staircase rules that would let a route leave
+    /// the plane.
+    #[test]
+    #[ignore = "known: single-plane routing with no corridors cannot place and4"]
+    fn a_self_placed_and4_computes_and4() {
+        use crate::redstone::simulator::Simulator;
+        use crate::redstone::world::block::BlockKind;
+
+        let (netlist, _) = build_and4_netlist();
+        let candidate = plan_from_netlist(&netlist).expect("and4 must be placeable");
+        let realised = realise_and_verify(&candidate, &netlist, candidate_world_size(&candidate))
+            .expect("and4 must be legal");
+
+        let blocks = (0..realised.world.cells().len())
+            .filter(|&flat| {
+                let (x, y, z) = realised.world.decode(flat);
+                realised.world.get(x, y, z).kind != BlockKind::Air
+            })
+            .count();
+
+        let mut simulator = Simulator::new(realised.world.clone());
+        simulator.run_until_stable(2000).expect("settles");
+        let mut worst = 0u64;
+        for mask in 0u8..16 {
+            for (bit, name) in ["a", "b", "c", "d"].iter().enumerate() {
+                let at = realised.ports.input_positions[*name];
+                let mut state = simulator.world().get(at.0, at.1, at.2).clone();
+                state.lit = (mask >> bit) & 1 == 1;
+                simulator.world_mut().set(at.0, at.1, at.2, state);
+            }
+            worst = worst.max(simulator.run_until_stable(2000).expect("settles"));
+            let out = realised.ports.output_positions[&netlist.outputs[0]];
+            assert_eq!(
+                simulator.world().get(out.0, out.1, out.2).lit,
+                mask == 0b1111,
+                "self-placed and4 is wrong for inputs {mask:04b}"
+            );
+        }
+
+        eprintln!("self-placed and4: {blocks} blocks, worst settle {worst} game ticks");
     }
 
     /// The point of the whole optimiser: a candidate it produced must be

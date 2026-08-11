@@ -259,7 +259,7 @@ impl Netlist {
 /// maximum fan-in this gives every NOR gate this compiler ever places (see
 /// `place_nor_gate`'s own `assert!`), not a placeholder for something larger
 /// later -- a fourth input would need a face a repeater cannot stand on.
-const INPUT_DIRECTIONS: [Facing; 3] = [Facing::West, Facing::East, Facing::South];
+pub(crate) const INPUT_DIRECTIONS: [Facing; 3] = [Facing::West, Facing::East, Facing::South];
 
 /// 輸出固定朝北。
 pub(crate) const OUTPUT_DIRECTION: Facing = Facing::North;
@@ -6348,7 +6348,7 @@ pub enum PlannerKind {
 
 /// Every cell a gate's own realisation occupies, found by realising it into a
 /// scratch world rather than by re-deriving the cell geometry a second time.
-fn gate_footprint(origin: (i32, i32, i32), gate: &Gate) -> (Vec<Anchor>, Anchor) {
+pub(crate) fn gate_footprint(origin: (i32, i32, i32), gate: &Gate) -> (Vec<Anchor>, Anchor) {
     let mut scratch = World::new(64, 8, 64);
     let shifted = (32, 1, 32);
     let cell = if gate.is_merge() {
