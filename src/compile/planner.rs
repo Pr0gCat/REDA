@@ -1267,6 +1267,21 @@ fn anchor_is_free_for(
     {
         return false;
     }
+    // Every cell stands on a floor, and realisation writes that floor as
+    // stone. Laying one over another net's conductor deletes it -- which is
+    // exactly what a route climbing to the storey above did to the trunk
+    // running underneath it, replacing live dust with the floor it stood on.
+    let below = Anchor {
+        y: anchor.y - 1,
+        ..anchor
+    };
+    // Any conductor, including this net's own: a net may run beside itself,
+    // but burying its own trunk under the floor of a branch climbing over it
+    // deletes the trunk just as thoroughly as burying a stranger's.
+    if reservation.conductor_owner(&below).is_some() {
+        return false;
+    }
+
     keep_out(anchor).into_iter().all(|neighbour| {
         neighbour == start
             || neighbour == goal
@@ -1305,6 +1320,16 @@ fn reserve_path(reservation: &mut Reservation, owner: &str, path: &[Anchor]) {
     }
     for &anchor in path {
         reservation.insert(anchor, owner, Occupancy::Conductor);
+        // The floor this cell stands on is this route's too. Solid, because a
+        // floor is inert: another net may run beside it, just not through it.
+        reservation.insert(
+            Anchor {
+                y: anchor.y - 1,
+                ..anchor
+            },
+            owner,
+            Occupancy::Solid,
+        );
     }
 }
 
@@ -3745,19 +3770,17 @@ mod tests {
     /// How far the planner's own placement carries, measured rather than
     /// assumed.
     ///
-    /// and4 places, routes and verifies. full_adder does not, and neither do
-    /// the two above it -- every failure is an input reaching a socket in the
-    /// row directly above it, over twenty-odd cells, which is congestion
-    /// rather than distance. Each net is routed once, in order, and never
-    /// gives a cell back: the standard answer is to rip up what blocks a
-    /// failed net and route it again, and there is none of that here.
+    /// and4 places, routes and verifies. Everything above it now routes too --
+    /// the blockage was routes burying each other under their own floors --
+    /// and fails later, on signal strength: full_adder's net `b` reaches g1
+    /// structurally and arrives dead.
     ///
-    /// Two things already found this way are fixed and stay fixed: a gate now
-    /// sits above whatever feeds it rather than wherever netlist order put it,
-    /// and the one cell a socket can be entered from belongs to the net that
-    /// will enter it.
+    /// That is a refresh-planning problem, not a routing one. A branch plans
+    /// its repeaters over the cells it adds, and a long fanout adds its cells
+    /// in an order that leaves some sink further from the last refresh than
+    /// the plan for that branch ever saw.
     #[test]
-    #[ignore = "known: routing has no rip-up, so nothing past and4 places"]
+    #[ignore = "known: long fanouts arrive dead; routing reaches every sink now"]
     fn how_far_the_planners_own_placement_carries() {
         use crate::circuits::full_adder::build_full_adder_netlist;
         use crate::circuits::seven_segment::{
@@ -3867,27 +3890,9 @@ mod tests {
     /// circuit's footprint was whatever its widest level of logic happened to
     /// need. Stacking is the thing redstone has that a circuit board does not.
     ///
-    /// The placement half works: six gates that `Wide` puts in one row of six
-    /// become two storeys of three, at the same coordinates in X and Z, five
-    /// levels apart. `Wide` is legal. `Tall` is not yet: its six-way fanout
-    /// loses signal strength on the way to a ground-floor gate.
-    ///
-    /// The obvious suspect was wrong, and is now fixed anyway: a branch used
-    /// to plan its refreshes across its whole path while the shared trunk kept
-    /// the first branch's blocks, so its trunk repeaters were discarded. A
-    /// branch now continues from the strength the trunk actually leaves it.
-    /// This test still fails, and `g0` is the *first* branch routed, so it has
-    /// no shared trunk to have got wrong.
-    ///
-    /// What is actually around `g0` when it fails: later branches of the same
-    /// net run at (14,1,6) and (15,1,5), against the south and east faces of
-    /// its support block. The terminal itself is still a clean straight line
-    /// -- the guard cells hold -- so what needs understanding is what a net
-    /// touching its own sink's support from three sides does to the strength
-    /// the verifier computes there. Routing keeps other nets away from a
-    /// support and lets a net crowd its own.
+    /// Six gates that `Wide` puts in one row of six become two storeys of
+    /// three, at the same coordinates in X and Z, five levels apart.
     #[test]
-    #[ignore = "known: a tall layout's fanout loses strength; the placement half is what this pins"]
     fn a_tall_preference_uses_height_where_a_wide_one_uses_floor() {
         let netlist = six_independent_gates();
 
