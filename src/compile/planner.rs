@@ -1071,6 +1071,16 @@ pub fn seed_from_legacy(
     let emission = compiled
         .legacy_emission()
         .ok_or(PlannerError::LegacyMetadataUnavailable)?;
+    seed_from_legacy_parts(netlist, emission)
+}
+
+/// Extract a seed straight from emission metadata, before any
+/// `CompiledCircuit` exists to hold it -- which is the situation `compile`
+/// itself is in, since the circuit it returns is built *from* this seed.
+pub(crate) fn seed_from_legacy_parts(
+    netlist: &Netlist,
+    emission: &LegacyEmission,
+) -> Result<PlanCandidate, PlannerError> {
     if emission.netlist() != netlist {
         return Err(PlannerError::NetlistDoesNotMatchCompiledOutput);
     }
@@ -1109,10 +1119,23 @@ pub fn seed_from_legacy(
 /// Spacing is checked on the plan, before a block exists; the other three
 /// scan the realised world.
 pub fn verify_candidate(candidate: &PlanCandidate, netlist: &Netlist) -> Result<(), PlannerError> {
+    realise_and_verify(candidate, netlist, candidate_world_size(candidate)).map(|_| ())
+}
+
+/// Realise a candidate at a chosen world size and verify what came out,
+/// returning it.
+///
+/// `compile` uses this so the circuit it ships is the one the invariants
+/// passed, rather than a second world built separately from the same plan.
+pub fn realise_and_verify(
+    candidate: &PlanCandidate,
+    netlist: &Netlist,
+    size: (i32, i32, i32),
+) -> Result<RealisedCandidate, PlannerError> {
     let reservation = verify_spacing(candidate)?;
     let nets = verification_nets(candidate, netlist)?;
 
-    let realised = emit_candidate(candidate, netlist, candidate_world_size(candidate))?;
+    let realised = emit_candidate(candidate, netlist, size)?;
 
     // Terminal style is a planning decision, so it is checked against what
     // realisation actually put at each sink -- a plan claiming directed dust
@@ -1141,7 +1164,9 @@ pub fn verify_candidate(candidate: &PlanCandidate, netlist: &Netlist) -> Result<
         &realised.ports.input_positions,
         &realised.ports.output_positions,
     )
-    .map_err(PlannerError::PhysicalInvariant)
+    .map_err(PlannerError::PhysicalInvariant)?;
+
+    Ok(realised)
 }
 
 /// The spacing invariant, stated over the plan rather than over blocks: every
@@ -2613,6 +2638,70 @@ mod tests {
             Ok(()) => panic!("a corrupted candidate must not verify"),
             Err(error) => error.to_string(),
         }
+    }
+
+    /// Realisation must reproduce the legacy world for the big circuits too,
+    /// not only the small fixtures the integration test covers. Separates
+    /// "the planner built the wrong thing" from "a check is wrong about a
+    /// thing the legacy emitter itself produced".
+    #[test]
+    fn realisation_reproduces_the_legacy_world_for_every_reference_circuit() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{build_seven_segment_netlist, build_single_segment_netlist};
+
+        let circuits = [
+            ("and4", build_and4_netlist().0),
+            ("full_adder", build_full_adder_netlist().0),
+            ("segment_a", build_single_segment_netlist(0).0),
+            ("seven_segment", build_seven_segment_netlist().0),
+        ];
+
+        for (name, netlist) in circuits {
+            let compiled = compile::compile(&netlist).expect("reference circuits compile");
+            let seed = seed_from_legacy_parts(&netlist, compiled.legacy_emission().unwrap())
+                .expect("compiled output must seed");
+            let realised = emit_candidate(&seed, &netlist, compiled.world.size())
+                .expect("a seed must be realisable");
+
+            let mut differences = 0usize;
+            for flat in 0..realised.world.cells().len() {
+                let (x, y, z) = realised.world.decode(flat);
+                if realised.world.get(x, y, z) != compiled.world.get(x, y, z) {
+                    differences += 1;
+                }
+            }
+            assert_eq!(differences, 0, "{name}: realisation differs from the legacy world");
+        }
+    }
+
+    /// The last thing standing between `compile` and the planner path.
+    ///
+    /// A route records the terminal style it planned -- `terminals[n][0][0]`,
+    /// chosen by `resolve_directed_dust_terminals` -- and then asks
+    /// `lay_bent_path` to build it. For full_adder's `cin` those two disagree:
+    /// the plan says `DirectedDustIntoSupport`, the world holds a repeater.
+    ///
+    /// This is old, not new. `verify_route_terminal` existed already but only
+    /// ever ran on and4-sized seeds, so nothing had asked a reference circuit
+    /// whether its plan matched its blocks. A plan that misreports its own
+    /// terminals misprices them, which is exactly what the planner is meant
+    /// to stop doing.
+    ///
+    /// Either `lay_bent_path` must honour the style it is given (or refuse
+    /// it), or the style must be recorded from what was built. That is a
+    /// router decision, so this test states the fact rather than picking.
+    #[test]
+    #[ignore = "known: full_adder cin plans directed dust and gets a repeater"]
+    fn a_planned_terminal_style_is_what_the_world_holds() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+
+        let (netlist, _) = build_full_adder_netlist();
+        let compiled = compile::compile(&netlist).expect("full_adder compiles");
+        let seed = seed_from_legacy_parts(&netlist, compiled.legacy_emission().unwrap())
+            .expect("compiled output must seed");
+
+        verify_candidate(&seed, &netlist)
+            .expect("a legacy seed's terminals must describe its own blocks");
     }
 
     #[test]

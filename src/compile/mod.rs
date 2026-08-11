@@ -1410,11 +1410,17 @@ pub struct CompiledCircuit {
     /// Explicit ownership data recorded while the legacy emitter places the
     /// world.  This is intentionally not reconstructed from block kinds.
     legacy_emission: LegacyEmission,
+    planner_kind: PlannerKind,
 }
 
 impl CompiledCircuit {
     pub(crate) fn legacy_emission(&self) -> Option<&LegacyEmission> {
         Some(&self.legacy_emission)
+    }
+
+    /// Which stage built `world`.
+    pub fn planner_kind(&self) -> PlannerKind {
+        self.planner_kind
     }
 }
 
@@ -6029,7 +6035,16 @@ pub(crate) fn verify_route_terminal(
     if !matches {
         return Err(CompileError::CandidateMetadataViolation {
             item: route.to_string(),
-            reason: "terminal style does not match its realised sink block".to_string(),
+            reason: format!(
+                "terminal style {:?} does not match its realised sink block {actual:?} at                  ({}, {}, {}) into {} input {} (merge: {})",
+                terminal.kind,
+                position.x,
+                position.y,
+                position.z,
+                terminal.sink.gate,
+                terminal.sink.input_index,
+                netlist.gates[gate].is_merge(),
+            ),
         });
     }
     Ok(())
@@ -6256,14 +6271,35 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         routes: legacy_routes,
     };
 
+    // Routing `compile` through the planner is one line away -- realisation
+    // is byte-exact for every reference circuit -- and is deliberately not
+    // taken yet. `realise_and_verify` also checks that each route's recorded
+    // terminal style matches the block realisation put at its sink, and
+    // full_adder's `cin` fails it: the plan says DirectedDustIntoSupport
+    // while the world holds a repeater. That check had never run on anything
+    // bigger than and4, so the disagreement is old, not new. Deciding which
+    // side is wrong is a router question, not a plumbing one; see
+    // `planner::tests::a_planned_terminal_style_is_what_the_world_holds`.
+
     Ok(CompiledCircuit {
         world,
         input_positions,
         output_positions,
         gate_output_positions,
+        planner_kind: PlannerKind::Legacy,
         legacy_emission,
     })
 }
+
+/// Which stage produced the world a `CompiledCircuit` carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlannerKind {
+    /// Emitted by the row/channel/track router.
+    Legacy,
+    /// Realised from a `PlanCandidate` by `compile::planner`.
+    Unified3d,
+}
+
 
 fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<PrimitiveNode> {
     let mut nodes = Vec::with_capacity(anchors.len());
