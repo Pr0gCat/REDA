@@ -48,6 +48,9 @@ pub struct PrimitiveNode {
     /// will run a net straight through another gate's body and short the
     /// two together, which is what happens when this is empty.
     pub footprint: Vec<Anchor>,
+    /// Whether somebody fixed this node's position, in which case no move may
+    /// change it.
+    pub pinned: bool,
     /// The cell this node's outgoing net starts from.
     ///
     /// Not the anchor: a gate's anchor is its support block, and its signal
@@ -363,6 +366,14 @@ impl PlanCandidate {
         &self.anchors
     }
 
+    /// Where a named primary input or declared output ended up.
+    pub fn port_anchor(&self, port: &str) -> Option<Anchor> {
+        self.primitive_nodes
+            .iter()
+            .find(|node| node.id == format!("input:{port}") || node.id == format!("gate:{port}"))
+            .map(|node| node.anchor)
+    }
+
     /// The explicit node identity associated with every primitive anchor.
     pub fn primitive_nodes(&self) -> &[PrimitiveNode] {
         &self.primitive_nodes
@@ -441,6 +452,8 @@ pub enum PlannerError {
     UnknownPrimitive(NodeId),
     AnchorOccupied(Anchor),
     NoLocalRoute { from: Anchor, to: Anchor },
+    /// Somebody fixed this port's position, so no move may change it.
+    PortIsPinned(String),
     /// A node's recorded realisation cannot be turned into blocks -- either
     /// the primitive has no emitter yet, or it contradicts the gate it is
     /// supposed to be realising.
@@ -468,6 +481,7 @@ impl std::fmt::Display for PlannerError {
                 "no safe local route from ({}, {}, {}) to ({}, {}, {})",
                 from.x, from.y, from.z, to.x, to.y, to.z
             ),
+            Self::PortIsPinned(port) => write!(f, "port {port} is pinned and cannot move"),
             Self::UnrealisableNode { id, reason } => {
                 write!(f, "cannot realise node {id}: {reason}")
             }
@@ -695,6 +709,15 @@ pub fn try_move(
     let from = candidate
         .primitive_anchor(primitive)
         .ok_or(PlannerError::UnknownPrimitive(primitive))?;
+    if candidate
+        .primitive_nodes
+        .get(primitive)
+        .is_some_and(|node| node.pinned)
+    {
+        return Err(PlannerError::PortIsPinned(
+            candidate.primitive_nodes[primitive].id.clone(),
+        ));
+    }
     let mut moved = candidate.clone();
     moved.legacy_emission = None;
     moved.set_primitive_anchor(primitive, to)?;
@@ -1397,6 +1420,34 @@ impl Reservation {
     }
 }
 
+/// Where the ports somebody has decided about must go.
+///
+/// A port has no position by default. Fixing every lever and lamp before
+/// planning starts is what stops a layout ever being as small as it could be:
+/// the planner can compact everything between the ports and nothing about the
+/// ports themselves. So this is an input, it defaults to empty, and whatever
+/// nobody pins the planner places and `optimise` is free to move.
+#[derive(Debug, Default, Clone)]
+pub struct PortPlacements {
+    fixed: BTreeMap<String, Anchor>,
+}
+
+impl PortPlacements {
+    /// Require `port` to sit at `anchor`. Nothing may move it afterwards.
+    pub fn pin(&mut self, port: impl Into<String>, anchor: Anchor) -> &mut Self {
+        self.fixed.insert(port.into(), anchor);
+        self
+    }
+
+    pub fn get(&self, port: &str) -> Option<Anchor> {
+        self.fixed.get(port).copied()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.fixed.is_empty()
+    }
+}
+
 /// Deliberately sparse. A single routing plane with no reserved corridors --
 /// which is what this is, and what channels and tracks exist to avoid -- needs
 /// slack between rows or the searches block each other and a net simply has
@@ -1420,7 +1471,10 @@ const PLANNER_Y: i32 = 1;
 /// per column, routed in netlist order -- because its job is to be legal and
 /// reproducible, not good. `optimise` is what makes a layout good, and it can
 /// only do that to a layout that exists.
-pub fn plan_from_netlist(netlist: &Netlist) -> Result<PlanCandidate, PlannerError> {
+pub fn plan_from_netlist(
+    netlist: &Netlist,
+    placements: &PortPlacements,
+) -> Result<PlanCandidate, PlannerError> {
     let depths = gate_depths(netlist)?;
     let deepest = depths.iter().copied().max().unwrap_or(0);
     let producer: BTreeMap<&str, usize> = netlist
@@ -1434,7 +1488,11 @@ pub fn plan_from_netlist(netlist: &Netlist) -> Result<PlanCandidate, PlannerErro
     // to sit near, so they set the width everything else is measured against.
     let mut input_x: BTreeMap<&str, i32> = BTreeMap::new();
     for (index, input) in netlist.inputs.iter().enumerate() {
-        input_x.insert(input.as_str(), INPUT_COLUMN_X + index as i32 * COLUMN_PITCH);
+        let x = placements
+            .get(input)
+            .map(|anchor| anchor.x)
+            .unwrap_or(INPUT_COLUMN_X + index as i32 * COLUMN_PITCH);
+        input_x.insert(input.as_str(), x);
     }
 
     // Then each gate above whatever feeds it. Filling rows left to right in
@@ -1452,6 +1510,11 @@ pub fn plan_from_netlist(netlist: &Netlist) -> Result<PlanCandidate, PlannerErro
     for (depth, row_gates) in by_depth.iter().enumerate() {
         let row = deepest - depth;
         for &gate in row_gates {
+            if let Some(anchor) = placements.get(&netlist.gates[gate].output) {
+                gate_x[gate] = anchor.x;
+                taken.entry(row).or_default().insert(anchor.x);
+                continue;
+            }
             let sources: Vec<i32> = netlist.gates[gate]
                 .inputs
                 .iter()
@@ -1476,11 +1539,12 @@ pub fn plan_from_netlist(netlist: &Netlist) -> Result<PlanCandidate, PlannerErro
 
     for (index, gate) in netlist.gates.iter().enumerate() {
         let row = deepest - depths[index];
-        let anchor = Anchor {
+        let pinned = placements.get(&gate.output);
+        let anchor = pinned.unwrap_or(Anchor {
             x: gate_x[index],
             y: PLANNER_Y,
             z: GROUND_ROW_Z + row as i32 * ROW_PITCH,
-        };
+        });
         anchors.push(anchor);
 
         let (footprint, conductors, output_pin) =
@@ -1495,16 +1559,18 @@ pub fn plan_from_netlist(netlist: &Netlist) -> Result<PlanCandidate, PlannerErro
             },
             footprint,
             conductors,
+            pinned: pinned.is_some(),
             output_pin: Some(output_pin),
         });
     }
 
     for input in &netlist.inputs {
-        let anchor = Anchor {
+        let pinned = placements.get(input);
+        let anchor = pinned.unwrap_or(Anchor {
             x: input_x[input.as_str()],
             y: PLANNER_Y,
             z: GROUND_ROW_Z + (deepest as i32 + 1) * ROW_PITCH,
-        };
+        });
         anchors.push(anchor);
         let pin = Anchor { z: anchor.z - 1, ..anchor };
         primitive_nodes.push(PrimitiveNode {
@@ -1513,6 +1579,7 @@ pub fn plan_from_netlist(netlist: &Netlist) -> Result<PlanCandidate, PlannerErro
             realisation: NodeRealisation::Primitive(Primitive::Lever),
             footprint: vec![anchor, pin],
             conductors: vec![anchor, pin],
+            pinned: pinned.is_some(),
             output_pin: Some(pin),
         });
     }
@@ -2662,6 +2729,7 @@ mod tests {
                     },
                     footprint: Vec::new(),
                     conductors: Vec::new(),
+                    pinned: false,
                     output_pin: None,
                 })
                 .collect(),
@@ -2732,6 +2800,7 @@ mod tests {
                     realisation: NodeRealisation::Primitive(Primitive::Lever),
                     footprint: Vec::new(),
                     conductors: Vec::new(),
+                    pinned: false,
                     output_pin: None,
                 },
                 PrimitiveNode {
@@ -2740,6 +2809,7 @@ mod tests {
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
                     footprint: Vec::new(),
                     conductors: Vec::new(),
+                    pinned: false,
                     output_pin: None,
                 },
                 PrimitiveNode {
@@ -2748,6 +2818,7 @@ mod tests {
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
                     footprint: Vec::new(),
                     conductors: Vec::new(),
+                    pinned: false,
                     output_pin: None,
                 },
             ],
@@ -2828,6 +2899,7 @@ mod tests {
                     realisation: NodeRealisation::Primitive(Primitive::Lever),
                     footprint: Vec::new(),
                     conductors: Vec::new(),
+                    pinned: false,
                     output_pin: None,
                 },
                 PrimitiveNode {
@@ -2836,6 +2908,7 @@ mod tests {
                     realisation: NodeRealisation::WireMerge,
                     footprint: Vec::new(),
                     conductors: Vec::new(),
+                    pinned: false,
                     output_pin: None,
                 },
             ],
@@ -2891,6 +2964,7 @@ mod tests {
                 realisation: NodeRealisation::Primitive(Primitive::Lever),
                 footprint: Vec::new(),
                 conductors: Vec::new(),
+                pinned: false,
                 output_pin: None,
             }],
             vec![stale_route.clone()],
@@ -2982,6 +3056,7 @@ mod tests {
                     realisation: NodeRealisation::Primitive(Primitive::Lever),
                     footprint: Vec::new(),
                     conductors: Vec::new(),
+                    pinned: false,
                     output_pin: None,
                 },
                 PrimitiveNode {
@@ -2990,6 +3065,7 @@ mod tests {
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
                     footprint: Vec::new(),
                     conductors: Vec::new(),
+                    pinned: false,
                     output_pin: None,
                 },
             ],
@@ -3029,6 +3105,7 @@ mod tests {
                         realisation: NodeRealisation::Primitive(Primitive::Lever),
                         footprint: Vec::new(),
                         conductors: Vec::new(),
+                        pinned: false,
                         output_pin: None,
                     },
                     PrimitiveNode {
@@ -3037,6 +3114,7 @@ mod tests {
                         realisation: NodeRealisation::WireMerge,
                         footprint: Vec::new(),
                         conductors: Vec::new(),
+                        pinned: false,
                         output_pin: None,
                     },
                     PrimitiveNode {
@@ -3045,6 +3123,7 @@ mod tests {
                         realisation: NodeRealisation::Primitive(Primitive::Torch),
                         footprint: Vec::new(),
                         conductors: Vec::new(),
+                        pinned: false,
                         output_pin: None,
                     },
                 ],
@@ -3586,11 +3665,72 @@ mod tests {
             ("segment_a", build_single_segment_netlist(0).0),
             ("seven_segment", build_seven_segment_netlist().0),
         ] {
-            let candidate = plan_from_netlist(&netlist)
+            let candidate = plan_from_netlist(&netlist, &PortPlacements::default())
                 .unwrap_or_else(|error| panic!("{name} must be placeable: {error}"));
             verify_candidate(&candidate, &netlist)
                 .unwrap_or_else(|error| panic!("{name} must be legal: {error}"));
         }
+    }
+
+    /// A port has no position until somebody gives it one.
+    ///
+    /// Fixing where the levers and lamps go before planning starts is what
+    /// stops a layout ever being as small as it could be: the planner can
+    /// compact everything between the ports and nothing about the ports
+    /// themselves. So a placement is an input, it defaults to empty, and what
+    /// nobody pinned the planner decides.
+    #[test]
+    fn an_unpinned_port_is_placed_by_the_planner_and_a_pinned_one_is_not() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["y".to_string()],
+            gates: vec![Gate::nor("y", &["a"])],
+        };
+
+        let free = plan_from_netlist(&netlist, &PortPlacements::default())
+            .expect("an unpinned circuit must place");
+        verify_candidate(&free, &netlist).expect("and be legal");
+
+        let elsewhere = Anchor {
+            x: free.port_anchor("a").expect("the lever is a port").x + COLUMN_PITCH,
+            ..free.port_anchor("a").expect("the lever is a port")
+        };
+        let mut placements = PortPlacements::default();
+        placements.pin("a", elsewhere);
+
+        let pinned = plan_from_netlist(&netlist, &placements)
+            .expect("a pinned circuit must place too");
+        assert_eq!(
+            pinned.port_anchor("a"),
+            Some(elsewhere),
+            "a pinned port goes exactly where it was pinned"
+        );
+        verify_candidate(&pinned, &netlist).expect("and be legal");
+    }
+
+    /// What was pinned stays pinned: optimisation may move anything else.
+    #[test]
+    fn optimisation_never_moves_a_pinned_port() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["y".to_string()],
+            gates: vec![Gate::nor("y", &["a"])],
+        };
+        let free = plan_from_netlist(&netlist, &PortPlacements::default()).expect("places");
+        let where_it_went = free.port_anchor("a").expect("the lever is a port");
+
+        let mut placements = PortPlacements::default();
+        placements.pin("a", where_it_went);
+        let pinned = plan_from_netlist(&netlist, &placements).expect("places");
+
+        let best = optimise(
+            pinned,
+            &netlist,
+            PlannerWeights::default(),
+            PlannerEffort { evaluations: 64, seed: 3 },
+        );
+
+        assert_eq!(best.port_anchor("a"), Some(where_it_went));
     }
 
     /// Keep-out is about conductors, not about everything a primitive owns.
@@ -3669,7 +3809,7 @@ mod tests {
         ];
 
         for (name, netlist) in circuits {
-            let candidate = plan_from_netlist(&netlist)
+            let candidate = plan_from_netlist(&netlist, &PortPlacements::default())
                 .unwrap_or_else(|error| panic!("{name} must be placeable: {error}"));
             verify_candidate(&candidate, &netlist)
                 .unwrap_or_else(|error| panic!("{name} must be legal: {error}"));
@@ -3701,7 +3841,7 @@ mod tests {
         use crate::redstone::world::block::BlockKind;
 
         let (netlist, _) = build_and4_netlist();
-        let candidate = plan_from_netlist(&netlist).expect("and4 must be placeable");
+        let candidate = plan_from_netlist(&netlist, &PortPlacements::default()).expect("and4 must be placeable");
         let realised = realise_and_verify(&candidate, &netlist, candidate_world_size(&candidate))
             .expect("and4 must be legal");
 

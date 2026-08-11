@@ -57,6 +57,7 @@ fn local_move_keeps_nonincident_routes_byte_identical() {
                 realisation: NodeRealisation::Primitive(Primitive::Torch),
                 footprint: Vec::new(),
                 conductors: Vec::new(),
+                pinned: false,
                 output_pin: None,
             })
             .collect(),

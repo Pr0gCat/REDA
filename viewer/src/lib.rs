@@ -36,6 +36,7 @@ use reda::circuits::{and4, full_adder, seven_segment, verilog};
 use reda::compile::primitive_graph::{self, PrimitiveGraph, Provenance};
 use reda::compile::topology::{Library, Primitive as TopoPrimitive, TemplateNode};
 use reda::compile::lowering::{lower_optimised_with_provenance, lower_with_provenance};
+use reda::compile::planner::PortPlacements;
 use reda::compile::{compile, compile_planned, Netlist};
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::{BlockKind, BlockState, Face, Facing};
@@ -850,7 +851,9 @@ impl Session {
         // checks. They are different circuits computing the same function,
         // which is the whole point of being able to look at both.
         let compiled = if circuit_name.starts_with(PLANNED_PREFIX) {
-            compile_planned(&netlist)
+            // Nothing is pinned here: the viewer's job is to show what the
+            // planner does when it is left to decide.
+            compile_planned(&netlist, &PortPlacements::default())
                 .map_err(|error| format!("compile_planned() failed: {error:?}"))?
         } else {
             compile(&netlist).map_err(|error| format!("compile() failed: {error:?}"))?

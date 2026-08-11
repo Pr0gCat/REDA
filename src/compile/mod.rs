@@ -6335,8 +6335,11 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
 /// the old emitter has no way to express.
 ///
 /// The result carries no `LegacyEmission`, because there was none.
-pub fn compile_planned(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
-    let candidate = planner::plan_from_netlist(netlist).map_err(planner_error)?;
+pub fn compile_planned(
+    netlist: &Netlist,
+    placements: &planner::PortPlacements,
+) -> Result<CompiledCircuit, CompileError> {
+    let candidate = planner::plan_from_netlist(netlist, placements).map_err(planner_error)?;
     let size = planner::candidate_world_size(&candidate);
     let realised = planner::realise_and_verify(&candidate, netlist, size).map_err(planner_error)?;
 
@@ -6453,6 +6456,8 @@ fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<Primitiv
             realisation,
             footprint,
             conductors,
+            // The legacy emitter chose these, and nobody asked it to.
+            pinned: false,
             output_pin: Some(output_pin),
         });
     }
@@ -6469,6 +6474,7 @@ fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<Primitiv
             // both of them conduct.
             footprint: vec![anchor, Anchor { z: anchor.z - 1, ..anchor }],
             conductors: vec![anchor, Anchor { z: anchor.z - 1, ..anchor }],
+            pinned: false,
             output_pin: Some(Anchor { z: anchor.z - 1, ..anchor }),
         });
     }
