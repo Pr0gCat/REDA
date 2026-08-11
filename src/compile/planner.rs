@@ -1226,19 +1226,86 @@ mod tests {
         );
     }
 
+    fn fanout_move_fixture() -> PlanCandidate {
+        let source = Anchor { x: 0, y: 0, z: 0 };
+        let old_moved_sink = Anchor { x: 0, y: 0, z: 4 };
+        let other_sink = Anchor { x: 4, y: 0, z: 0 };
+        PlanCandidate::with_primitive_nodes(
+            vec![source, old_moved_sink, other_sink],
+            vec![
+                PrimitiveNode {
+                    id: "input:source".to_string(),
+                    anchor: source,
+                },
+                PrimitiveNode {
+                    id: "gate:moved".to_string(),
+                    anchor: old_moved_sink,
+                },
+                PrimitiveNode {
+                    id: "gate:other".to_string(),
+                    anchor: other_sink,
+                },
+            ],
+            vec![Route::from_legacy(
+                "source".to_string(),
+                vec![source, other_sink, old_moved_sink],
+                vec![
+                    RouteTerminal {
+                        sink: RouteSink {
+                            gate: "other".to_string(),
+                            input_index: 0,
+                            anchor: other_sink,
+                        },
+                        kind: RouteTerminalKind::RepeaterIntoSupport,
+                    },
+                    RouteTerminal {
+                        sink: RouteSink {
+                            gate: "moved".to_string(),
+                            input_index: 0,
+                            anchor: old_moved_sink,
+                        },
+                        kind: RouteTerminalKind::RepeaterIntoSupport,
+                    },
+                ],
+            )],
+        )
+    }
+
     #[test]
-    fn moving_a_primitive_keeps_its_destination_reserved_during_rerouting() {
-        let seed = local_move_fixture();
-        let destination = Anchor { x: 0, y: 1, z: 0 };
+    fn moving_a_primitive_reserves_its_destination_before_rerouting_fanout() {
+        let seed = fanout_move_fixture();
+        let destination = Anchor { x: 1, y: 0, z: 0 };
+        let source = seed.primitive_nodes()[0].anchor;
+        let other_sink = seed.primitive_nodes()[2].anchor;
+        let other_terminal = terminal_socket(source, other_sink);
+        let mut without_destination_reservation = seed.live_reservation(&[true]);
+        without_destination_reservation.remove(&seed.primitive_nodes()[1].anchor);
 
-        let moved =
-            try_move(&seed, 0, destination).expect("the isolated route can be locally rerouted");
-        let reservation = moved.live_reservation(&[true, false]);
-
+        let unreserved_path = deterministic_astar(
+            source,
+            other_terminal,
+            other_sink,
+            "source",
+            &without_destination_reservation,
+        )
+        .expect("the direct fanout branch is routable without the destination reservation");
         assert_eq!(
-            reservation.get(&destination),
-            Some(&"primitive:0".to_string()),
-            "the rerouted edge must not claim the primitive's new anchor"
+            unreserved_path,
+            vec![
+                source,
+                destination,
+                Anchor { x: 2, y: 0, z: 0 },
+                other_terminal,
+            ],
+            "without reserving the move destination before A*, the deterministic shortest path collides with it"
+        );
+
+        let moved = try_move(&seed, 1, destination)
+            .expect("the fanout can detour around the moved primitive");
+
+        assert!(
+            !moved.routes()[0].anchors().contains(&destination),
+            "the rebuilt fanout must avoid the moved primitive's destination during A*"
         );
     }
 
