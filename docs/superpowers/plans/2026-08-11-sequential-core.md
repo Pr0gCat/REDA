@@ -124,7 +124,7 @@ Run: `cargo test dff_frontend -- --nocapture; cargo test lowering --lib -- --noc
 
 Expected: the DFF survives, adjacent combinational gates lower, all combinational frontend tests stay green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit** (`9d1d390`)
 
 ```bash
 git add src/compile/topology.rs src/frontend/yosys_json.rs src/compile/lowering.rs tests/sequential_frontend.rs
