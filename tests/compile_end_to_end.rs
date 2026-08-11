@@ -208,7 +208,7 @@ fn a_legacy_seed_re_emits_the_exact_world_the_legacy_compiler_built() {
         let realised = emit_candidate(&seed, &netlist, compiled.world.size())
             .expect("a legacy seed must be fully realisable");
 
-        assert_worlds_identical(&realised, &compiled.world, name);
+        assert_worlds_identical(&realised.world, &compiled.world, name);
     }
 }
 
@@ -225,7 +225,8 @@ fn a_seed_re_emits_every_primitive_exactly_where_the_legacy_emitter_put_it() {
 
     let seed = seed_from_legacy(&netlist, &compiled).expect("legacy output must be extractable");
     let realised = emit_primitives(&seed, &netlist, compiled.world.size())
-        .expect("a legacy seed must be realisable");
+        .expect("a legacy seed must be realisable")
+        .world;
 
     let mut written = 0usize;
     for flat in 0..realised.cells().len() {
@@ -254,7 +255,7 @@ fn legacy_and4_extracts_to_a_legal_candidate_with_unit_seed_score() {
 
     let seed = seed_from_legacy(&netlist, &compiled).expect("legacy output must be extractable");
 
-    verify_candidate(&seed).expect("the extracted candidate must retain legacy legality");
+    verify_candidate(&seed, &netlist).expect("the extracted candidate must retain legacy legality");
     assert_eq!(
         seed.score(&PlannerWeights::default())
             .expect("and4 seed score must fit the exact representation"),

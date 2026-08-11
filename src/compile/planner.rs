@@ -425,6 +425,25 @@ impl std::fmt::Display for PlannerError {
     }
 }
 
+/// Where a realised candidate's externally visible points ended up.
+///
+/// The invariants are written against these, and so is anything that later
+/// reads the circuit: they are produced by realisation rather than copied
+/// from the legacy emitter's own bookkeeping.
+#[derive(Debug, Default, Clone)]
+pub struct CandidatePorts {
+    pub input_positions: BTreeMap<String, (i32, i32, i32)>,
+    pub output_positions: BTreeMap<String, (i32, i32, i32)>,
+    pub gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
+}
+
+/// A candidate turned into blocks, with the ports that realisation chose.
+#[derive(Debug, Clone)]
+pub struct RealisedCandidate {
+    pub world: World,
+    pub ports: CandidatePorts,
+}
+
 /// Realise a whole candidate: its primitives, then its routes.
 ///
 /// The result is a world built from nothing but the plan.  For a seed this
@@ -434,10 +453,10 @@ pub fn emit_candidate(
     candidate: &PlanCandidate,
     netlist: &Netlist,
     size: (i32, i32, i32),
-) -> Result<World, PlannerError> {
-    let mut world = emit_primitives(candidate, netlist, size)?;
-    emit_routes(&mut world, candidate)?;
-    Ok(world)
+) -> Result<RealisedCandidate, PlannerError> {
+    let mut realised = emit_primitives(candidate, netlist, size)?;
+    emit_routes(&mut realised.world, candidate)?;
+    Ok(realised)
 }
 
 /// Write every route's own cells, and the floor each one stands on.
@@ -491,7 +510,7 @@ pub fn emit_primitives(
     candidate: &PlanCandidate,
     netlist: &Netlist,
     size: (i32, i32, i32),
-) -> Result<World, PlannerError> {
+) -> Result<RealisedCandidate, PlannerError> {
     let expected_nodes = netlist.gates.len() + netlist.inputs.len();
     if candidate.primitive_nodes.len() != expected_nodes {
         return Err(PlannerError::NetlistDoesNotMatchCompiledOutput);
@@ -499,19 +518,47 @@ pub fn emit_primitives(
 
     let mut world = World::new(size.0, size.1, size.2);
     let mut gate_pin: Vec<Position> = Vec::with_capacity(netlist.gates.len());
+    let mut ports = CandidatePorts::default();
     for (index, node) in candidate.primitive_nodes.iter().enumerate() {
-        let anchor = node.anchor;
+        // `anchors` is the store `try_move` and the cost model operate on;
+        // `primitive_nodes` carries the same coordinate alongside identity.
+        // Realising from one while the other disagrees would build a circuit
+        // nobody scored, so a disagreement is an error rather than a choice.
+        let anchor = *candidate
+            .anchors
+            .get(index)
+            .ok_or_else(|| PlannerError::UnrealisableNode {
+                id: node.id.clone(),
+                reason: "no anchor for this node".to_string(),
+            })?;
+        if anchor != node.anchor {
+            return Err(PlannerError::UnrealisableNode {
+                id: node.id.clone(),
+                reason: format!(
+                    "anchor ({}, {}, {}) disagrees with node anchor ({}, {}, {})",
+                    anchor.x, anchor.y, anchor.z, node.anchor.x, node.anchor.y, node.anchor.z
+                ),
+            });
+        }
         let origin = (anchor.x, anchor.y, anchor.z);
 
         match netlist.gates.get(index) {
             Some(gate) => match (node.realisation, gate.is_merge()) {
                 (NodeRealisation::WireMerge, true) => {
                     let cell = compile::place_merge_gate(&mut world, origin, gate.inputs.len());
-                    gate_pin.push(output_pin(&mut world, anchor, &cell));
+                    let (torch, pin) = output_pin(&mut world, anchor, &cell);
+                    ports
+                        .gate_output_positions
+                        .insert(gate.output.clone(), (torch.x, torch.y, torch.z));
+                    gate_pin.push(pin);
                 }
                 (NodeRealisation::Primitive(Primitive::Torch), false) => {
                     let cell = compile::place_nor_gate(&mut world, origin, gate.inputs.len());
-                    gate_pin.push(output_pin(&mut world, anchor, &cell));
+                    let (torch, pin) = output_pin(&mut world, anchor, &cell);
+                    ports
+                        .gate_output_positions
+                        .insert(gate.output.clone(), (torch.x, torch.y, torch.z));
+                    gate_pin.push(pin);
                 }
                 (realisation, _) => {
                     return Err(PlannerError::UnrealisableNode {
@@ -525,10 +572,12 @@ pub fn emit_primitives(
             },
             None => match node.realisation {
                 NodeRealisation::Primitive(Primitive::Lever) => {
-                    compile::place_primary_input(
-                        &mut world,
-                        Position::new(anchor.x, anchor.y, anchor.z),
-                    );
+                    let home = Position::new(anchor.x, anchor.y, anchor.z);
+                    let (lever, _) = compile::place_primary_input(&mut world, home);
+                    let name = &netlist.inputs[index - netlist.gates.len()];
+                    ports
+                        .input_positions
+                        .insert(name.clone(), (lever.x, lever.y, lever.z));
                 }
                 realisation => {
                     return Err(PlannerError::UnrealisableNode {
@@ -554,9 +603,12 @@ pub fn emit_primitives(
             })?;
         let lamp = gate_pin[gate].down();
         world.set(lamp.x, lamp.y, lamp.z, compile::lamp());
+        ports
+            .output_positions
+            .insert(output.clone(), (lamp.x, lamp.y, lamp.z));
     }
 
-    Ok(world)
+    Ok(RealisedCandidate { world, ports })
 }
 
 /// Write a gate's own output pin -- the dust one hop out from its torch --
@@ -564,7 +616,7 @@ pub fn emit_primitives(
 ///
 /// The pin belongs to the gate, not to any route: a gate with no sinks still
 /// has one, and a declared output's lamp hangs beneath it.
-fn output_pin(world: &mut World, anchor: Anchor, cell: &compile::NorCell) -> Position {
+fn output_pin(world: &mut World, anchor: Anchor, cell: &compile::NorCell) -> (Position, Position) {
     let torch = Position::new(
         anchor.x + cell.output_offset.0,
         anchor.y + cell.output_offset.1,
@@ -573,7 +625,7 @@ fn output_pin(world: &mut World, anchor: Anchor, cell: &compile::NorCell) -> Pos
     let pin = torch.offset(compile::OUTPUT_DIRECTION);
     compile::ensure_floor(world, pin);
     world.set(pin.x, pin.y, pin.z, compile::dust());
-    pin
+    (torch, pin)
 }
 
 impl std::error::Error for PlannerError {}
@@ -1045,34 +1097,179 @@ pub fn seed_from_legacy(
     ))
 }
 
-/// Check a candidate against a fresh legacy emission, then run the full
-/// physical invariant suite against that newly emitted world.
+/// Realise a candidate and run the four physical invariants against what it
+/// actually built.
 ///
-/// The retained legacy metadata supplies only the immutable netlist.  A
-/// candidate must match every newly extracted seed field before an invariant
-/// runs, so verification can never reuse the old emission's world as reality.
-pub fn verify_candidate(candidate: &PlanCandidate) -> Result<(), PlannerError> {
-    let netlist = candidate
-        .legacy_emission
-        .as_ref()
-        .ok_or(PlannerError::LegacyMetadataUnavailable)?
-        .netlist();
-    let compiled = compile::compile(netlist).map_err(PlannerError::PhysicalInvariant)?;
-    let expected = seed_from_legacy(netlist, &compiled)?;
-    if candidate != &expected {
-        return Err(PlannerError::PhysicalInvariant(
-            compile::CompileError::CandidateMetadataViolation {
-                item: "candidate".to_string(),
-                reason: "candidate metadata does not match the freshly emitted legacy seed"
-                    .to_string(),
-            },
-        ));
+/// The candidate is the only input: no legacy compile is re-run, nothing is
+/// compared against a freshly extracted seed, and no retained emission is
+/// consulted.  That is the whole point -- a candidate the planner moved has
+/// no legacy counterpart to be equal to, so equality was never a verification
+/// strategy, only a way of checking that a seed had survived extraction.
+///
+/// Spacing is checked on the plan, before a block exists; the other three
+/// scan the realised world.
+pub fn verify_candidate(candidate: &PlanCandidate, netlist: &Netlist) -> Result<(), PlannerError> {
+    let reservation = verify_spacing(candidate)?;
+    let nets = verification_nets(candidate, netlist)?;
+
+    let realised = emit_candidate(candidate, netlist, candidate_world_size(candidate))?;
+
+    // Terminal style is a planning decision, so it is checked against what
+    // realisation actually put at each sink -- a plan claiming directed dust
+    // over a repeater is priced wrongly even when the circuit works.
+    for (net, route) in candidate.routes.iter().enumerate() {
+        for terminal in &route.terminals {
+            compile::verify_route_terminal(
+                &realised.world,
+                &reservation,
+                netlist,
+                &nets,
+                net,
+                &route.id,
+                terminal,
+            )
+            .map_err(PlannerError::PhysicalInvariant)?;
+        }
     }
 
-    let fresh_emission = compiled
-        .legacy_emission()
-        .expect("legacy compilation always records its emission metadata");
-    compile::verify_legacy_emission(fresh_emission).map_err(PlannerError::PhysicalInvariant)
+    compile::verify_realised_world(
+        &realised.world,
+        &reservation,
+        netlist,
+        &nets,
+        &realised.ports.gate_output_positions,
+        &realised.ports.input_positions,
+        &realised.ports.output_positions,
+    )
+    .map_err(PlannerError::PhysicalInvariant)
+}
+
+/// The spacing invariant, stated over the plan rather than over blocks: every
+/// routed cell belongs to exactly one route.
+///
+/// Returns the reservation it proved, so the world-scanning invariants read
+/// the same ownership this check established rather than a second opinion.
+fn verify_spacing(candidate: &PlanCandidate) -> Result<compile::Reservation, PlannerError> {
+    let mut reservation = compile::Reservation::new();
+    for (net, route) in candidate.routes.iter().enumerate() {
+        for anchor in &route.anchors {
+            let position = Position::new(anchor.x, anchor.y, anchor.z);
+            if let Some(other) = reservation.insert(position, net) {
+                return Err(PlannerError::PhysicalInvariant(
+                    compile::CompileError::SpacingViolation {
+                        cell: (position.x, position.y, position.z),
+                        expected_net: candidate.routes[other].id.clone(),
+                        found_net: Some(route.id.clone()),
+                    },
+                ));
+            }
+        }
+    }
+
+    Ok(reservation)
+}
+
+/// Rebuild the nets the invariants read from the candidate's own routes.
+///
+/// A route already records what a net is: which source drives it, and which
+/// gate input each of its terminals lands on.  Nothing here consults the
+/// legacy floorplan, which is what made the old net list impossible to
+/// produce for a moved candidate.
+fn verification_nets(
+    candidate: &PlanCandidate,
+    netlist: &Netlist,
+) -> Result<Vec<compile::Net>, PlannerError> {
+    let mut nets = Vec::with_capacity(candidate.routes.len());
+    for route in &candidate.routes {
+        let owner = route.owner.as_deref().unwrap_or(&route.id);
+        let source = if let Some(gate) = netlist.gates.iter().position(|g| g.output == owner) {
+            compile::Source::Gate(gate)
+        } else if let Some(input) = netlist.inputs.iter().position(|name| name == owner) {
+            compile::Source::Lever(input)
+        } else {
+            return Err(PlannerError::UnrealisableNode {
+                id: route.id.clone(),
+                reason: format!("no gate or primary input named {owner} drives this route"),
+            });
+        };
+
+        let mut sinks = Vec::with_capacity(route.terminals.len());
+        for terminal in &route.terminals {
+            let gate = netlist
+                .gates
+                .iter()
+                .position(|g| g.output == terminal.sink.gate)
+                .ok_or_else(|| PlannerError::UnrealisableNode {
+                    id: route.id.clone(),
+                    reason: format!("terminal names unknown gate {}", terminal.sink.gate),
+                })?;
+            sinks.push((gate, terminal.sink.input_index));
+        }
+
+        nets.push(compile::Net::for_verification(source, sinks));
+    }
+
+    // `verify_connectivity` and friends were written downstream of
+    // `build_nets`, which assigns every gate input exactly one net; they
+    // assert that rather than handle its absence. A candidate is free to be
+    // missing a terminal, so the precondition is re-established here instead
+    // of letting an invariant panic on a plan it was never given.
+    let mut covered: BTreeMap<(usize, usize), usize> = BTreeMap::new();
+    for (net, route) in candidate.routes.iter().enumerate() {
+        for terminal in &route.terminals {
+            let gate = netlist
+                .gates
+                .iter()
+                .position(|g| g.output == terminal.sink.gate)
+                .expect("terminal gates were resolved above");
+            if let Some(other) = covered.insert((gate, terminal.sink.input_index), net) {
+                return Err(PlannerError::UnrealisableNode {
+                    id: candidate.routes[net].id.clone(),
+                    reason: format!(
+                        "input {} of {} is already driven by {}",
+                        terminal.sink.input_index,
+                        terminal.sink.gate,
+                        candidate.routes[other].id
+                    ),
+                });
+            }
+        }
+    }
+    for (gate, definition) in netlist.gates.iter().enumerate() {
+        for input_index in 0..definition.inputs.len() {
+            if !covered.contains_key(&(gate, input_index)) {
+                return Err(PlannerError::UnrealisableNode {
+                    id: definition.output.clone(),
+                    reason: format!("input {input_index} is driven by no route"),
+                });
+            }
+        }
+    }
+
+    Ok(nets)
+}
+
+/// A world big enough to hold everything the candidate places.
+fn candidate_world_size(candidate: &PlanCandidate) -> (i32, i32, i32) {
+    // One cell of margin on every side: a primitive writes its support, its
+    // torch and its output pin outside its own anchor, and a route's floor
+    // sits one below.
+    let mut max = (0, 0, 0);
+    let mut extend = |anchor: &Anchor| {
+        max.0 = max.0.max(anchor.x);
+        max.1 = max.1.max(anchor.y);
+        max.2 = max.2.max(anchor.z);
+    };
+    for node in &candidate.primitive_nodes {
+        extend(&node.anchor);
+    }
+    for route in &candidate.routes {
+        for anchor in &route.anchors {
+            extend(anchor);
+        }
+    }
+
+    ((max.0 + 3).max(8), (max.1 + 3).max(5), (max.2 + 3).max(8))
 }
 
 /// Integer weights for the candidate cost terms.
@@ -2378,9 +2575,14 @@ mod tests {
     }
 
     fn legacy_and4_seed() -> PlanCandidate {
+        legacy_and4_seed_with_netlist().0
+    }
+
+    fn legacy_and4_seed_with_netlist() -> (PlanCandidate, Netlist) {
         let (netlist, _) = build_and4_netlist();
         let compiled = compile::compile(&netlist).expect("and4 fixture must compile");
-        seed_from_legacy(&netlist, &compiled).expect("compiled fixture must seed")
+        let seed = seed_from_legacy(&netlist, &compiled).expect("compiled fixture must seed");
+        (seed, netlist)
     }
 
     fn legacy_fanout_seed() -> PlanCandidate {
@@ -2402,44 +2604,48 @@ mod tests {
         assert_ne!(candidate, expected);
     }
 
-    #[test]
-    fn verify_candidate_rejects_a_corrupted_primitive_anchor() {
-        let mut candidate = legacy_and4_seed();
-        candidate.anchors[0].x += 1;
-
-        assert!(
-            matches!(
-                verify_candidate(&candidate),
-                Err(PlannerError::PhysicalInvariant(_))
-            ),
-            "verification must realise candidate primitive anchors, not use the retained seed"
-        );
+    /// Each of these breaks the plan in one specific way. The point is not
+    /// which error comes back but that realising the plan and scanning the
+    /// result catches it -- the old check compared the candidate against a
+    /// freshly recompiled seed, which can only ever validate a seed.
+    fn rejection(candidate: &PlanCandidate, netlist: &Netlist) -> String {
+        match verify_candidate(candidate, netlist) {
+            Ok(()) => panic!("a corrupted candidate must not verify"),
+            Err(error) => error.to_string(),
+        }
     }
 
     #[test]
-    fn verify_candidate_rejects_a_corrupted_route_cell_or_owner() {
-        let mut candidate = legacy_and4_seed();
-        candidate.routes[0].anchors[0] = Anchor { x: 25, y: 1, z: 49 };
-        assert!(matches!(
-            verify_candidate(&candidate),
-            Err(PlannerError::PhysicalInvariant(
-                compile::CompileError::CandidateMetadataViolation { .. }
-            ))
-        ));
+    fn verify_candidate_rejects_a_corrupted_primitive_anchor() {
+        let (mut candidate, netlist) = legacy_and4_seed_with_netlist();
+        candidate.anchors[0].x += 1;
+        candidate.primitive_nodes[0].anchor.x += 1;
 
-        let mut candidate = legacy_and4_seed();
-        candidate.routes[0].owner = Some("not-a".to_string());
+        rejection(&candidate, &netlist);
+    }
+
+    #[test]
+    fn verify_candidate_rejects_disagreeing_anchor_stores() {
+        let (mut candidate, netlist) = legacy_and4_seed_with_netlist();
+        candidate.anchors[0].x += 1;
+
         assert!(matches!(
-            verify_candidate(&candidate),
-            Err(PlannerError::PhysicalInvariant(
-                compile::CompileError::CandidateMetadataViolation { .. }
-            ))
+            verify_candidate(&candidate, &netlist),
+            Err(PlannerError::UnrealisableNode { .. })
         ));
+    }
+
+    #[test]
+    fn verify_candidate_rejects_a_corrupted_route_cell() {
+        let (mut candidate, netlist) = legacy_and4_seed_with_netlist();
+        candidate.routes[0].anchors[0] = Anchor { x: 25, y: 1, z: 49 };
+
+        rejection(&candidate, &netlist);
     }
 
     #[test]
     fn verify_candidate_rejects_a_corrupted_directed_dust_terminal_choice() {
-        let mut candidate = legacy_and4_seed();
+        let (mut candidate, netlist) = legacy_and4_seed_with_netlist();
         let route = candidate
             .routes
             .iter_mut()
@@ -2452,45 +2658,7 @@ mod tests {
             .expect("and4 includes a directed-dust terminal");
         route.terminals[0].kind = RouteTerminalKind::RepeaterIntoSupport;
 
-        assert!(
-            matches!(
-                verify_candidate(&candidate),
-                Err(PlannerError::PhysicalInvariant(_))
-            ),
-            "terminal metadata must describe the realised terminal block"
-        );
-    }
-
-    #[test]
-    fn verify_candidate_rejects_a_terminal_attached_to_the_wrong_sink_identity() {
-        let mut candidate = legacy_and4_seed();
-        candidate.routes[0].terminals[0].sink.input_index = 99;
-
-        assert!(matches!(
-            verify_candidate(&candidate),
-            Err(PlannerError::PhysicalInvariant(
-                compile::CompileError::CandidateMetadataViolation { .. }
-            ))
-        ));
-    }
-
-    #[test]
-    fn verify_candidate_rejects_a_fanout_with_a_missing_sink_terminal() {
-        let mut candidate = legacy_fanout_seed();
-        let route = candidate
-            .routes
-            .iter_mut()
-            .find(|route| route.id == "a")
-            .expect("fanout source route must be present");
-        assert_eq!(route.terminals.len(), 2, "fixture must expose both sinks");
-        route.terminals.pop();
-
-        assert!(matches!(
-            verify_candidate(&candidate),
-            Err(PlannerError::PhysicalInvariant(
-                compile::CompileError::CandidateMetadataViolation { .. }
-            ))
-        ));
+        rejection(&candidate, &netlist);
     }
 
     #[test]
@@ -2504,11 +2672,44 @@ mod tests {
         let mut candidate = seed_from_legacy(&netlist, &compiled).expect("merge fixture must seed");
         candidate.routes[0].terminals[0].kind = RouteTerminalKind::RepeaterIntoSupport;
 
+        rejection(&candidate, &netlist);
+    }
+
+    #[test]
+    fn verify_candidate_rejects_a_corrupted_route_owner() {
+        let (mut candidate, netlist) = legacy_and4_seed_with_netlist();
+        candidate.routes[0].owner = Some("not-a".to_string());
+
         assert!(matches!(
-            verify_candidate(&candidate),
-            Err(PlannerError::PhysicalInvariant(
-                compile::CompileError::CandidateMetadataViolation { .. }
-            ))
+            verify_candidate(&candidate, &netlist),
+            Err(PlannerError::UnrealisableNode { .. })
         ));
+    }
+
+    #[test]
+    fn verify_candidate_rejects_a_terminal_attached_to_the_wrong_sink_identity() {
+        let (mut candidate, netlist) = legacy_and4_seed_with_netlist();
+        candidate.routes[0].terminals[0].sink.input_index = 99;
+
+        rejection(&candidate, &netlist);
+    }
+
+    #[test]
+    fn verify_candidate_rejects_a_fanout_with_a_missing_sink_terminal() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["left".to_string(), "right".to_string()],
+            gates: vec![Gate::nor("left", &["a"]), Gate::nor("right", &["a"])],
+        };
+        let mut candidate = legacy_fanout_seed();
+        let route = candidate
+            .routes
+            .iter_mut()
+            .find(|route| route.id == "a")
+            .expect("fanout source route must be present");
+        assert_eq!(route.terminals.len(), 2, "fixture must expose both sinks");
+        route.terminals.pop();
+
+        rejection(&candidate, &netlist);
     }
 }

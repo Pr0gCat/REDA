@@ -1422,12 +1422,6 @@ impl CompiledCircuit {
 #[derive(Debug, Clone)]
 pub(crate) struct LegacyEmission {
     netlist: Netlist,
-    world: World,
-    reservation: Reservation,
-    nets: Vec<Net>,
-    input_positions: BTreeMap<String, (i32, i32, i32)>,
-    output_positions: BTreeMap<String, (i32, i32, i32)>,
-    gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
     primitive_anchors: Vec<Anchor>,
     primitive_nodes: Vec<PrimitiveNode>,
     routes: Vec<LegacyRoute>,
@@ -2481,7 +2475,7 @@ fn approach_column(centre_x: i32, input_index: usize) -> i32 {
 
 /// Where a net's signal comes from.
 #[derive(Debug, Clone, Copy)]
-enum Source {
+pub(crate) enum Source {
     Lever(usize),
     Gate(usize),
 }
@@ -2513,7 +2507,7 @@ impl Exit {
 /// net's presence in channel `channels[i]`. `hops[i]` is the feed-through
 /// column that carries it from `channels[i]` to `channels[i + 1]`.
 #[derive(Debug, Clone)]
-struct Net {
+pub(crate) struct Net {
     source: Source,
     source_column: i32,
     channels: Vec<usize>,
@@ -2523,6 +2517,24 @@ struct Net {
 }
 
 impl Net {
+    /// A net carrying only what the four invariants actually read: its source
+    /// and its sinks.
+    ///
+    /// `source_column`, `channels`, `tracks` and `hops` are the row/channel
+    /// router's own scratch, and no verifier touches them -- leaving them
+    /// empty is what makes a candidate's verification independent of the
+    /// legacy floorplan that invented them.
+    pub(crate) fn for_verification(source: Source, sinks: Vec<(usize, usize)>) -> Self {
+        Net {
+            source,
+            source_column: 0,
+            channels: Vec::new(),
+            tracks: Vec::new(),
+            sinks: vec![sinks],
+            hops: Vec::new(),
+        }
+    }
+
     fn entry_column(&self, slot: usize) -> i32 {
         if slot == 0 {
             self.source_column
@@ -5922,107 +5934,57 @@ fn verify_signal_strength(
 /// Re-run the physical invariant suite against a fresh legacy emission.
 /// Its world and ownership reservation come from the new compilation;
 /// ownership is never guessed by scanning blocks.
-pub(crate) fn verify_legacy_emission(emission: &LegacyEmission) -> Result<(), CompileError> {
-    verify_spacing(emission)?;
-    verify_connectivity(
-        &emission.world,
-        &emission.reservation,
-        &emission.netlist,
-        &emission.nets,
-        &emission.gate_output_positions,
-    )?;
-    verify_torch_merge(
-        &emission.world,
-        &emission.reservation,
-        &emission.netlist,
-        &emission.nets,
-        &emission.gate_output_positions,
-    )?;
+/// Run the three world-scanning invariants against a world the planner
+/// realised itself, rather than against the legacy emitter's own output.
+///
+/// Spacing is not here: it is a property of the plan's reservation, which the
+/// caller owns and checks before anything is written.
+pub(crate) fn verify_realised_world(
+    world: &World,
+    reservation: &Reservation,
+    netlist: &Netlist,
+    nets: &[Net],
+    gate_output_positions: &BTreeMap<String, (i32, i32, i32)>,
+    input_positions: &BTreeMap<String, (i32, i32, i32)>,
+    output_positions: &BTreeMap<String, (i32, i32, i32)>,
+) -> Result<(), CompileError> {
+    verify_connectivity(world, reservation, netlist, nets, gate_output_positions)?;
+    verify_torch_merge(world, reservation, netlist, nets, gate_output_positions)?;
     verify_signal_strength(
-        &emission.world,
-        &emission.reservation,
-        &emission.netlist,
-        &emission.nets,
-        &emission.gate_output_positions,
-        &emission.input_positions,
-        &emission.output_positions,
+        world,
+        reservation,
+        netlist,
+        nets,
+        gate_output_positions,
+        input_positions,
+        output_positions,
     )
 }
 
-/// The reservation is the legacy router's spacing contract: every conductor
-/// and support cell is explicitly assigned to one net before any world scan.
-fn verify_spacing(emission: &LegacyEmission) -> Result<(), CompileError> {
-    let mut seen: HashMap<Position, String> = HashMap::new();
-    let groups = MergeGroups::build(&emission.netlist, &emission.nets);
-    for (net, route) in emission.routes.iter().enumerate() {
-        for anchor in &route.anchors {
-            let position = Position::new(anchor.x, anchor.y, anchor.z);
-            let found_net = emission
-                .reservation
-                .get(&position)
-                .and_then(|owner| emission.nets.get(*owner))
-                .map(|owner| net_source_name(&emission.netlist, owner).to_string());
-            if seen.insert(position, route.owner.clone()).is_some()
-                || emission.reservation.get(&position) != Some(&net)
-            {
-                return Err(CompileError::SpacingViolation {
-                    cell: (position.x, position.y, position.z),
-                    expected_net: route.owner.clone(),
-                    found_net,
-                });
-            }
-        }
-
-        for terminal in &route.terminals {
-            verify_route_terminal(emission, net, route, terminal)?;
-        }
-    }
-
-    // This is deliberately stricter than checking the reservation table:
-    // `dust_reach` sees the same same-level/climb/descend cells a newly laid
-    // dust wire would reach. A different net may not occupy any of them,
-    // unless both are the declared members of one wire merge group.
-    for (&position, &owner) in &emission.reservation {
-        if emission.world.get(position.x, position.y, position.z).kind != BlockKind::RedstoneWire {
-            continue;
-        }
-        for direction in HORIZONTAL {
-            for neighbour in dust_reach(&emission.world, position, direction).iter() {
-                let Some(&other) = emission.reservation.get(&neighbour) else {
-                    continue;
-                };
-                if owner != other && groups.root(owner) != groups.root(other) {
-                    return Err(CompileError::SpacingViolation {
-                        cell: (neighbour.x, neighbour.y, neighbour.z),
-                        expected_net: net_source_name(&emission.netlist, &emission.nets[owner])
-                            .to_string(),
-                        found_net: Some(
-                            net_source_name(&emission.netlist, &emission.nets[other]).to_string(),
-                        ),
-                    });
-                }
-            }
-        }
-    }
-    Ok(())
-}
-
-fn verify_route_terminal(
-    emission: &LegacyEmission,
+/// Check that a route's recorded terminal describes the block realisation
+/// actually put at its sink.
+///
+/// Terminal style is a planning decision -- dust or repeater into a support
+/// -- and a plan that says one thing while its world holds the other is a
+/// plan nobody can trust the cost of.
+pub(crate) fn verify_route_terminal(
+    world: &World,
+    reservation: &Reservation,
+    netlist: &Netlist,
+    nets: &[Net],
     net: usize,
-    route: &LegacyRoute,
+    route: &str,
     terminal: &RouteTerminal,
 ) -> Result<(), CompileError> {
-    let gate = emission
-        .netlist
+    let gate = netlist
         .gates
         .iter()
         .position(|gate| gate.output == terminal.sink.gate)
         .ok_or_else(|| CompileError::CandidateMetadataViolation {
-            item: route.owner.clone(),
+            item: route.to_string(),
             reason: format!("terminal names unknown gate `{}`", terminal.sink.gate),
         })?;
-    if !emission.nets[net]
+    if !nets[net]
         .sinks
         .iter()
         .flatten()
@@ -6031,43 +5993,42 @@ fn verify_route_terminal(
         })
     {
         return Err(CompileError::CandidateMetadataViolation {
-            item: route.owner.clone(),
+            item: route.to_string(),
             reason: "terminal sink is not an edge endpoint of this route".to_string(),
         });
     }
     let anchor = terminal.sink.anchor;
     let position = Position::new(anchor.x, anchor.y, anchor.z);
-    if emission.reservation.get(&position) != Some(&net) {
+    if reservation.get(&position) != Some(&net) {
         return Err(CompileError::SpacingViolation {
             cell: (position.x, position.y, position.z),
-            expected_net: route.owner.clone(),
-            found_net: emission
-                .reservation
+            expected_net: route.to_string(),
+            found_net: reservation
                 .get(&position)
-                .and_then(|owner| emission.nets.get(*owner))
-                .map(|owner| net_source_name(&emission.netlist, owner).to_string()),
+                .and_then(|owner| nets.get(*owner))
+                .map(|owner| net_source_name(netlist, owner).to_string()),
         });
     }
-    let actual = emission.world.get(position.x, position.y, position.z).kind;
+    let actual = world.get(position.x, position.y, position.z).kind;
     let matches = match terminal.kind {
         RouteTerminalKind::RepeaterIntoSupport => {
-            actual == BlockKind::Repeater && !emission.netlist.gates[gate].is_merge()
+            actual == BlockKind::Repeater && !netlist.gates[gate].is_merge()
         }
         RouteTerminalKind::DirectedDustIntoSupport => {
-            actual == BlockKind::RedstoneWire && !emission.netlist.gates[gate].is_merge()
+            actual == BlockKind::RedstoneWire && !netlist.gates[gate].is_merge()
         }
         RouteTerminalKind::BareMergeDust => {
             actual == BlockKind::RedstoneWire
-                && merge_branch_is_bare(&emission.netlist, &emission.nets[net], gate)
+                && merge_branch_is_bare(netlist, &nets[net], gate)
         }
         RouteTerminalKind::BareMergeRepeater => {
             actual == BlockKind::Repeater
-                && merge_branch_is_bare(&emission.netlist, &emission.nets[net], gate)
+                && merge_branch_is_bare(netlist, &nets[net], gate)
         }
     };
     if !matches {
         return Err(CompileError::CandidateMetadataViolation {
-            item: route.owner.clone(),
+            item: route.to_string(),
             reason: "terminal style does not match its realised sink block".to_string(),
         });
     }
@@ -6290,12 +6251,6 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     let primitive_nodes = legacy_primitive_nodes(netlist, &primitive_anchors);
     let legacy_emission = LegacyEmission {
         netlist: netlist.clone(),
-        world: world.clone(),
-        reservation: footprint.reservation.clone(),
-        nets: nets.clone(),
-        input_positions: input_positions.clone(),
-        output_positions: output_positions.clone(),
-        gate_output_positions: gate_output_positions.clone(),
         primitive_anchors,
         primitive_nodes,
         routes: legacy_routes,
