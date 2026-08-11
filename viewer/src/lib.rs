@@ -36,7 +36,7 @@ use reda::circuits::{and4, full_adder, seven_segment, verilog};
 use reda::compile::primitive_graph::{self, PrimitiveGraph, Provenance};
 use reda::compile::topology::{Library, Primitive as TopoPrimitive, TemplateNode};
 use reda::compile::lowering::{lower_optimised_with_provenance, lower_with_provenance};
-use reda::compile::{compile, Netlist};
+use reda::compile::{compile, compile_planned, Netlist};
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use reda::redstone::world::storage::World;
@@ -128,7 +128,12 @@ const CIRCUITS: &[(&str, CircuitBuilder)] = &[
 /// Resolving straight out of `verilog::CIRCUITS` rather than restating its
 /// entries here means a circuit added to that catalog shows up in this
 /// viewer with no change to this crate at all.
+/// Names carrying this prefix are built by `compile_planned` -- the planner
+/// choosing its own anchors -- rather than by `compile`.
+const PLANNED_PREFIX: &str = "planned:";
+
 fn build_named_circuit(name: &str) -> Option<(Netlist, Vec<(String, String)>)> {
+    let name = name.strip_prefix(PLANNED_PREFIX).unwrap_or(name);
     if let Some(&(_, build)) = CIRCUITS.iter().find(|&&(n, _)| n == name) {
         return Some(build());
     }
@@ -144,6 +149,14 @@ pub fn list_circuits() -> Vec<String> {
         .iter()
         .map(|&(name, _)| name.to_string())
         .chain(verilog::CIRCUITS.iter().map(|circuit| circuit.name.to_string()))
+        // The same circuits again, laid out by the planner itself rather than
+        // by the row/channel/track emitter. Listed last so the familiar names
+        // stay where they were.
+        .chain(
+            CIRCUITS
+                .iter()
+                .map(|&(name, _)| format!("{PLANNED_PREFIX}{name}")),
+        )
         .collect()
 }
 
@@ -832,8 +845,16 @@ impl Session {
             })
         }
         .map_err(|error| format!("lowering failed: {error}"))?;
-        let compiled =
-            compile(&netlist).map_err(|error| format!("compile() failed: {error:?}"))?;
+        // A `planned:` name asks for the layout the planner produced on its
+        // own, rather than the row/channel/track one it merely realises and
+        // checks. They are different circuits computing the same function,
+        // which is the whole point of being able to look at both.
+        let compiled = if circuit_name.starts_with(PLANNED_PREFIX) {
+            compile_planned(&netlist)
+                .map_err(|error| format!("compile_planned() failed: {error:?}"))?
+        } else {
+            compile(&netlist).map_err(|error| format!("compile() failed: {error:?}"))?
+        };
 
         // Every gate in `netlist` is a NOR or a merge of fan-in 1..=3 --
         // `lower` produces nothing else, and `compile()` above rejects

@@ -1890,7 +1890,7 @@ fn verification_nets(
 }
 
 /// A world big enough to hold everything the candidate places.
-fn candidate_world_size(candidate: &PlanCandidate) -> (i32, i32, i32) {
+pub(crate) fn candidate_world_size(candidate: &PlanCandidate) -> (i32, i32, i32) {
     // One cell of margin on every side: a primitive writes its support, its
     // torch and its output pin outside its own anchor, and a route's floor
     // sits one below.
@@ -3564,9 +3564,16 @@ mod tests {
     /// what it was asked to.
     ///
     /// and4 is the first real circuit this places end to end without the
-    /// legacy emitter: 656 blocks against that emitter's 472, settling in the
-    /// same 18 game ticks. Bigger, because the layout here is deliberately
-    /// plain and sparse -- compaction is `optimise`'s job.
+    /// legacy emitter: 656 blocks against that emitter's 472. Bigger, because
+    /// the layout here is deliberately plain and sparse -- compaction is
+    /// `optimise`'s job.
+    ///
+    /// The settle figure printed here is the worst over the two sweeps below,
+    /// which is **not** the circuit's worst case: driving the levers by hand
+    /// in the viewer found a slower transition than either sweep visits. The
+    /// comparable number is what `timing::summarize_worst_case` reports, the
+    /// way `reference_circuits` measures the emitter's own layouts, and this
+    /// circuit has not been through it.
     ///
     /// It took the routing to become three-dimensional. Everything before this
     /// searched one plane, where the nets simply block each other; a staircase
@@ -3592,7 +3599,12 @@ mod tests {
         let mut simulator = Simulator::new(realised.world.clone());
         simulator.run_until_stable(2000).expect("settles");
         let mut worst = 0u64;
-        for mask in 0u8..16 {
+        // Both orders. Counting up flips several inputs at once; Gray code
+        // flips exactly one. They settle differently, and taking only the
+        // first understates the worst case -- which is how this circuit came
+        // to be reported at 18 ticks when a single-input change costs more.
+        let sweep = (0u8..16).chain((0u8..16).map(|step| step ^ (step >> 1)));
+        for mask in sweep {
             for (bit, name) in ["a", "b", "c", "d"].iter().enumerate() {
                 let at = realised.ports.input_positions[*name];
                 let mut state = simulator.world().get(at.0, at.1, at.2).clone();

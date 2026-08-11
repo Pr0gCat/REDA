@@ -1409,13 +1409,16 @@ pub struct CompiledCircuit {
     pub gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
     /// Explicit ownership data recorded while the legacy emitter places the
     /// world.  This is intentionally not reconstructed from block kinds.
-    legacy_emission: LegacyEmission,
+    ///
+    /// `None` for a circuit the planner placed itself: there was no legacy
+    /// emitter involved, and nothing downstream may pretend otherwise.
+    legacy_emission: Option<LegacyEmission>,
     planner_kind: PlannerKind,
 }
 
 impl CompiledCircuit {
     pub(crate) fn legacy_emission(&self) -> Option<&LegacyEmission> {
-        Some(&self.legacy_emission)
+        self.legacy_emission.as_ref()
     }
 
     /// Which stage built `world`.
@@ -6320,7 +6323,30 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         output_positions: realised.ports.output_positions,
         gate_output_positions: realised.ports.gate_output_positions,
         planner_kind: PlannerKind::Unified3d,
-        legacy_emission,
+        legacy_emission: Some(legacy_emission),
+    })
+}
+
+/// Compile without the legacy emitter at all: the planner places and routes.
+///
+/// `compile` still uses the row/channel/track path to produce its seed, so
+/// what it ships is that layout, realised and checked by the planner. This
+/// places from the netlist alone, which is the only way to lay out something
+/// the old emitter has no way to express.
+///
+/// The result carries no `LegacyEmission`, because there was none.
+pub fn compile_planned(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
+    let candidate = planner::plan_from_netlist(netlist).map_err(planner_error)?;
+    let size = planner::candidate_world_size(&candidate);
+    let realised = planner::realise_and_verify(&candidate, netlist, size).map_err(planner_error)?;
+
+    Ok(CompiledCircuit {
+        world: realised.world,
+        input_positions: realised.ports.input_positions,
+        output_positions: realised.ports.output_positions,
+        gate_output_positions: realised.ports.gate_output_positions,
+        planner_kind: PlannerKind::Unified3d,
+        legacy_emission: None,
     })
 }
 

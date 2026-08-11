@@ -82,15 +82,27 @@ fn output_positions(circuit_name: &str) -> Vec<(i32, i32, i32)> {
 /// The hand-written size ladder first, then the Verilog catalog verbatim --
 /// `verilog:` prefix included, because `verilog:seven_segment` and
 /// `seven_segment` compute the same function out of entirely different gates
-/// and a viewer showing one of them has to say which.
+/// and a viewer showing one of them has to say which. The same reasoning
+/// carries the `planned:` entries at the end: `planned:and4` and `and4` are
+/// the same function laid out by two different placers.
 #[test]
 fn list_circuits_reports_both_catalogs_with_the_verilog_prefix_intact() {
     let names = list_circuits();
-    let expected_tail: Vec<String> = verilog::CIRCUITS.iter().map(|c| c.name.to_string()).collect();
+    let verilog_names: Vec<String> = verilog::CIRCUITS.iter().map(|c| c.name.to_string()).collect();
+    let planned_start = names
+        .iter()
+        .position(|name| name.starts_with("planned:"))
+        .expect("the planner-placed circuits must be listed");
     assert_eq!(
-        names[names.len() - expected_tail.len()..],
-        expected_tail[..],
-        "the Verilog catalog must appear, in its own order, after the hand-written circuits; got {names:?}"
+        names[planned_start - verilog_names.len()..planned_start],
+        verilog_names[..],
+        "the Verilog catalog must appear, in its own order, before the planned ones; got {names:?}"
+    );
+    assert!(
+        names[planned_start..]
+            .iter()
+            .all(|name| name.starts_with("planned:")),
+        "the planned entries come last, in one block; got {names:?}"
     );
     assert!(names.iter().any(|n| n == "seven_segment"), "the hand-written decoder must still be listed");
     assert!(names.iter().any(|n| n == "verilog:seven_segment"), "the synthesised decoder must be listed");
