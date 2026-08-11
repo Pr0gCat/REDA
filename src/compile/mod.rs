@@ -1685,6 +1685,12 @@ fn default_terminal_kinds(nets: &[Net]) -> TerminalKinds {
 ///
 /// This path always ends in its own mandatory repeater, so nothing after it
 /// needs preserved strength -- `reserve` is 0.
+/// Returns the terminal style actually built, which is not always the one
+/// asked for: `DirectedDustIntoSupport` is a preference, and `plan_bent_path`
+/// overrides it whenever the run cannot reach the last cell without a
+/// refresh. `lay_bent_path_bare` has always reported its realised kind; this
+/// one used to let its caller record the request instead, so a plan could
+/// claim a dust terminal the world did not have.
 fn lay_bent_path(
     world: &mut World,
     start: Position,
@@ -1692,7 +1698,7 @@ fn lay_bent_path(
     incoming_strength: u8,
     terminal: TerminalKind,
     route: &mut Route,
-) {
+) -> RouteTerminalKind {
     debug_assert!(
         !waypoints.is_empty(),
         "a bent path must have somewhere to end"
@@ -1736,6 +1742,12 @@ fn lay_bent_path(
         }
         route.claim(pos);
         prev = pos;
+    }
+
+    if is_repeater[cells.len() - 1] {
+        RouteTerminalKind::RepeaterIntoSupport
+    } else {
+        RouteTerminalKind::DirectedDustIntoSupport
     }
 }
 
@@ -3916,16 +3928,15 @@ fn emit(
                 );
                 route.terminal(&netlist.gates[gate], input_index, socket, terminal);
             } else {
-                let terminal = terminals[n][0][0];
-                lay_bent_path(
+                let built = lay_bent_path(
                     world,
                     start,
                     &waypoints,
                     strength_at_start,
-                    terminal,
+                    terminals[n][0][0],
                     &mut route,
                 );
-                route.terminal(&netlist.gates[gate], input_index, socket, terminal.into());
+                route.terminal(&netlist.gates[gate], input_index, socket, built);
             }
             continue;
         }
@@ -3997,21 +4008,15 @@ fn emit(
                                 .iter()
                                 .position(|&sink| sink == (gate, input_index))
                                 .expect("every socket exit came from this channel's sinks");
-                            let terminal = terminals[n][slot][sink];
-                            lay_bent_path(
+                            let built = lay_bent_path(
                                 world,
                                 landing,
                                 &waypoints,
                                 landing_strength,
-                                terminal,
+                                terminals[n][slot][sink],
                                 &mut route,
                             );
-                            route.terminal(
-                                &netlist.gates[gate],
-                                input_index,
-                                socket,
-                                terminal.into(),
-                            );
+                            route.terminal(&netlist.gates[gate], input_index, socket, built);
                         }
                     }
                     Exit::Feedthrough { x, next_slot } => {
@@ -6016,21 +6021,16 @@ pub(crate) fn verify_route_terminal(
         });
     }
     let actual = world.get(position.x, position.y, position.z).kind;
+    // The four styles partition by two independent facts: which block landed,
+    // and whether this is a bare merge branch. Not by whether the sink gate
+    // is a merge -- a merge branch that is *not* bare lands through
+    // `lay_bent_path` like any other, with an ordinary repeater.
+    let bare = merge_branch_is_bare(netlist, &nets[net], gate);
     let matches = match terminal.kind {
-        RouteTerminalKind::RepeaterIntoSupport => {
-            actual == BlockKind::Repeater && !netlist.gates[gate].is_merge()
-        }
-        RouteTerminalKind::DirectedDustIntoSupport => {
-            actual == BlockKind::RedstoneWire && !netlist.gates[gate].is_merge()
-        }
-        RouteTerminalKind::BareMergeDust => {
-            actual == BlockKind::RedstoneWire
-                && merge_branch_is_bare(netlist, &nets[net], gate)
-        }
-        RouteTerminalKind::BareMergeRepeater => {
-            actual == BlockKind::Repeater
-                && merge_branch_is_bare(netlist, &nets[net], gate)
-        }
+        RouteTerminalKind::RepeaterIntoSupport => actual == BlockKind::Repeater && !bare,
+        RouteTerminalKind::DirectedDustIntoSupport => actual == BlockKind::RedstoneWire && !bare,
+        RouteTerminalKind::BareMergeDust => actual == BlockKind::RedstoneWire && bare,
+        RouteTerminalKind::BareMergeRepeater => actual == BlockKind::Repeater && bare,
     };
     if !matches {
         return Err(CompileError::CandidateMetadataViolation {
@@ -6271,24 +6271,40 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         routes: legacy_routes,
     };
 
-    // Routing `compile` through the planner is one line away -- realisation
-    // is byte-exact for every reference circuit -- and is deliberately not
-    // taken yet. `realise_and_verify` also checks that each route's recorded
-    // terminal style matches the block realisation put at its sink, and
-    // full_adder's `cin` fails it: the plan says DirectedDustIntoSupport
-    // while the world holds a repeater. That check had never run on anything
-    // bigger than and4, so the disagreement is old, not new. Deciding which
-    // side is wrong is a router question, not a plumbing one; see
-    // `planner::tests::a_planned_terminal_style_is_what_the_world_holds`.
+    // The legacy path stops here. Everything above exists to produce one
+    // candidate; from here the circuit that ships is the one the planner
+    // realises from it and the invariants pass on that. A plan the planner
+    // cannot build, or builds into something illegal, is a compile error --
+    // not a discrepancy between two worlds nobody compares.
+    //
+    // `world` is kept only to size the realisation identically, so nothing
+    // downstream sees a different bounding box for the same circuit.
+    let size = world.size();
+    drop(world);
+
+    let seed = planner::seed_from_legacy_parts(netlist, &legacy_emission).map_err(planner_error)?;
+    let realised = planner::realise_and_verify(&seed, netlist, size).map_err(planner_error)?;
 
     Ok(CompiledCircuit {
-        world,
-        input_positions,
-        output_positions,
-        gate_output_positions,
-        planner_kind: PlannerKind::Legacy,
+        world: realised.world,
+        input_positions: realised.ports.input_positions,
+        output_positions: realised.ports.output_positions,
+        gate_output_positions: realised.ports.gate_output_positions,
+        planner_kind: PlannerKind::Unified3d,
         legacy_emission,
     })
+}
+
+/// A planner failure that is not already an invariant violation is still a
+/// compile failure: the plan was unbuildable.
+fn planner_error(error: planner::PlannerError) -> CompileError {
+    match error {
+        planner::PlannerError::PhysicalInvariant(inner) => inner,
+        other => CompileError::CandidateMetadataViolation {
+            item: "candidate".to_string(),
+            reason: other.to_string(),
+        },
+    }
 }
 
 /// Which stage produced the world a `CompiledCircuit` carries.

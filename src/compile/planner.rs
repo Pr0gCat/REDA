@@ -2674,24 +2674,18 @@ mod tests {
         }
     }
 
-    /// The last thing standing between `compile` and the planner path.
+    /// A route's recorded terminal style has to be the one the world holds.
     ///
-    /// A route records the terminal style it planned -- `terminals[n][0][0]`,
-    /// chosen by `resolve_directed_dust_terminals` -- and then asks
-    /// `lay_bent_path` to build it. For full_adder's `cin` those two disagree:
-    /// the plan says `DirectedDustIntoSupport`, the world holds a repeater.
+    /// `DirectedDustIntoSupport` is a preference, not a decision:
+    /// `plan_bent_path` overrides it whenever the run cannot reach the last
+    /// cell without a refresh, and a repeater goes in instead. The emitter
+    /// used to record what `resolve_directed_dust_terminals` asked for, so
+    /// full_adder's `cin` claimed a dust terminal it never got -- a plan
+    /// mispricing the very component the terminal choice exists to save.
     ///
-    /// This is old, not new. `verify_route_terminal` existed already but only
-    /// ever ran on and4-sized seeds, so nothing had asked a reference circuit
-    /// whether its plan matched its blocks. A plan that misreports its own
-    /// terminals misprices them, which is exactly what the planner is meant
-    /// to stop doing.
-    ///
-    /// Either `lay_bent_path` must honour the style it is given (or refuse
-    /// it), or the style must be recorded from what was built. That is a
-    /// router decision, so this test states the fact rather than picking.
+    /// full_adder is the smallest circuit that shows it; and4 never does,
+    /// which is why this went unnoticed.
     #[test]
-    #[ignore = "known: full_adder cin plans directed dust and gets a repeater"]
     fn a_planned_terminal_style_is_what_the_world_holds() {
         use crate::circuits::full_adder::build_full_adder_netlist;
 
@@ -2701,7 +2695,15 @@ mod tests {
             .expect("compiled output must seed");
 
         verify_candidate(&seed, &netlist)
-            .expect("a legacy seed's terminals must describe its own blocks");
+            .expect("a seed's terminals must describe its own blocks");
+    }
+
+    #[test]
+    fn compile_ships_the_world_the_planner_realised() {
+        let (netlist, _) = build_and4_netlist();
+        let compiled = compile::compile(&netlist).expect("and4 compiles");
+
+        assert_eq!(compiled.planner_kind(), compile::PlannerKind::Unified3d);
     }
 
     #[test]
