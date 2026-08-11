@@ -18,9 +18,16 @@ pub struct Route {
 impl Route {
     /// Construct immutable route metadata for a candidate or unit test.
     pub fn new(id: impl Into<String>, anchors: Vec<Anchor>) -> Self {
+        let mut distinct_anchors = Vec::with_capacity(anchors.len());
+        for anchor in anchors {
+            if distinct_anchors.last() != Some(&anchor) {
+                distinct_anchors.push(anchor);
+            }
+        }
+
         Self {
             id: id.into(),
-            anchors,
+            anchors: distinct_anchors,
         }
     }
 
@@ -60,7 +67,7 @@ impl PlanCandidate {
     }
 
     /// Score this candidate against itself, which is the normalised seed score.
-    pub fn score(&self, weights: &PlannerWeights) -> NormalisedScore {
+    pub fn score(&self, weights: &PlannerWeights) -> Result<NormalisedScore, ScoreError> {
         let cost = self.cost();
         cost.normalised_against(&cost, weights)
     }
@@ -71,7 +78,7 @@ impl PlanCandidate {
         seed: &PlanCandidate,
         weights: &PlannerWeights,
         effort: PlannerEffort,
-    ) -> CandidateScore {
+    ) -> Result<CandidateScore, ScoreError> {
         self.score_against_at(seed, weights, effort, 0)
     }
 
@@ -81,11 +88,11 @@ impl PlanCandidate {
         weights: &PlannerWeights,
         effort: PlannerEffort,
         original_index: usize,
-    ) -> CandidateScore {
+    ) -> Result<CandidateScore, ScoreError> {
         let cost = self.cost();
-        let normalised = cost.normalised_against(&seed.cost(), weights);
+        let normalised = cost.normalised_against(&seed.cost(), weights)?;
 
-        CandidateScore {
+        Ok(CandidateScore {
             cost,
             normalised,
             effort,
@@ -93,7 +100,7 @@ impl PlanCandidate {
                 normalised,
                 original_index,
             },
-        }
+        })
     }
 }
 
@@ -133,6 +140,14 @@ pub struct CostBreakdown {
     pub turns: u64,
 }
 
+/// Exact normalised scoring could not be represented in the fixed-width score.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScoreError {
+    NormalisedNumeratorOverflow,
+    NormalisedDenominatorOverflow,
+    NormalisedWeightOverflow,
+}
+
 impl CostBreakdown {
     fn from_candidate(candidate: &PlanCandidate) -> Self {
         let mut cost = Self {
@@ -155,7 +170,11 @@ impl CostBreakdown {
 
     /// Return the weighted average of this cost's nonzero seed-normalised
     /// terms.  The pair is reduced and ordered entirely with integers.
-    pub fn normalised_against(&self, seed: &Self, weights: &PlannerWeights) -> NormalisedScore {
+    pub fn normalised_against(
+        &self,
+        seed: &Self,
+        weights: &PlannerWeights,
+    ) -> Result<NormalisedScore, ScoreError> {
         let terms = [
             (self.delay, seed.delay, weights.delay),
             (self.wire, seed.wire, weights.wire),
@@ -172,23 +191,37 @@ impl CostBreakdown {
             }
 
             let baseline = u128::from(baseline);
-            numerator = numerator.saturating_mul(baseline).saturating_add(
-                u128::from(weight)
-                    .saturating_mul(u128::from(value))
-                    .saturating_mul(denominator),
-            );
-            denominator = denominator.saturating_mul(baseline);
+            let weighted_value = u128::from(weight)
+                .checked_mul(u128::from(value))
+                .ok_or(ScoreError::NormalisedNumeratorOverflow)?;
+            let scaled_numerator = numerator
+                .checked_mul(baseline)
+                .ok_or(ScoreError::NormalisedNumeratorOverflow)?;
+            let scaled_value = weighted_value
+                .checked_mul(denominator)
+                .ok_or(ScoreError::NormalisedNumeratorOverflow)?;
+            numerator = scaled_numerator
+                .checked_add(scaled_value)
+                .ok_or(ScoreError::NormalisedNumeratorOverflow)?;
+            denominator = denominator
+                .checked_mul(baseline)
+                .ok_or(ScoreError::NormalisedDenominatorOverflow)?;
             let (reduced_numerator, reduced_denominator) = reduce(numerator, denominator);
             numerator = reduced_numerator;
             denominator = reduced_denominator;
-            total_weight = total_weight.saturating_add(u128::from(weight));
+            total_weight = total_weight
+                .checked_add(u128::from(weight))
+                .ok_or(ScoreError::NormalisedWeightOverflow)?;
         }
 
         if total_weight == 0 {
-            return NormalisedScore::ZERO;
+            return Ok(NormalisedScore::ZERO);
         }
 
-        NormalisedScore::new(numerator, denominator.saturating_mul(total_weight))
+        let denominator = denominator
+            .checked_mul(total_weight)
+            .ok_or(ScoreError::NormalisedDenominatorOverflow)?;
+        Ok(NormalisedScore::new(numerator, denominator))
     }
 }
 
@@ -258,14 +291,14 @@ pub fn rank_candidates(
     seed: &PlanCandidate,
     weights: &PlannerWeights,
     effort: PlannerEffort,
-) -> Vec<CandidateScore> {
+) -> Result<Vec<CandidateScore>, ScoreError> {
     let mut scores = candidates
         .iter()
         .enumerate()
         .map(|(index, candidate)| candidate.score_against_at(seed, weights, effort, index))
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, _>>()?;
     scores.sort_by_key(|score| score.order);
-    scores
+    Ok(scores)
 }
 
 fn bounding_volume(candidate: &PlanCandidate) -> u64 {
@@ -438,20 +471,26 @@ mod tests {
     }
 
     fn run_fixture(seed: u64) -> CandidateScore {
-        fixture_candidate().score_against(
-            &fixture_seed(),
-            &PlannerWeights::default(),
-            PlannerEffort {
-                evaluations: 4,
-                seed,
-            },
-        )
+        fixture_candidate()
+            .score_against(
+                &fixture_seed(),
+                &PlannerWeights::default(),
+                PlannerEffort {
+                    evaluations: 4,
+                    seed,
+                },
+            )
+            .expect("fixture costs fit the exact score representation")
     }
 
     #[test]
     fn a_seed_scores_one_for_every_nonzero_normalised_term() {
         let seed = fixture_seed();
-        assert_eq!(seed.score(&PlannerWeights::default()), NormalisedScore::ONE);
+        assert_eq!(
+            seed.score(&PlannerWeights::default())
+                .expect("fixture costs fit the exact score representation"),
+            NormalisedScore::ONE
+        );
     }
 
     #[test]
@@ -484,7 +523,8 @@ mod tests {
                 evaluations: 4,
                 seed: 17,
             },
-        );
+        )
+        .expect("fixture costs fit the exact score representation");
 
         assert_eq!(
             ranked
@@ -507,5 +547,65 @@ mod tests {
         };
 
         assert!(just_above_one > just_below_one);
+    }
+
+    #[test]
+    fn normalisation_rejects_two_large_terms_that_cannot_be_averaged_exactly() {
+        let cost = CostBreakdown {
+            delay: 1,
+            wire: 1,
+            space: 0,
+            turns: 0,
+        };
+        let seed = CostBreakdown {
+            delay: u64::MAX,
+            wire: u64::MAX - 1,
+            space: 0,
+            turns: 0,
+        };
+
+        assert_eq!(
+            cost.normalised_against(&seed, &PlannerWeights::default()),
+            Err(ScoreError::NormalisedDenominatorOverflow)
+        );
+    }
+
+    #[test]
+    fn normalisation_rejects_three_large_terms_that_cannot_be_accumulated_exactly() {
+        let cost = CostBreakdown {
+            delay: 1,
+            wire: 1,
+            space: 1,
+            turns: 0,
+        };
+        let seed = CostBreakdown {
+            delay: u64::MAX,
+            wire: u64::MAX - 1,
+            space: u64::MAX - 2,
+            turns: 0,
+        };
+
+        assert_eq!(
+            cost.normalised_against(&seed, &PlannerWeights::default()),
+            Err(ScoreError::NormalisedNumeratorOverflow)
+        );
+    }
+
+    #[test]
+    fn repeated_adjacent_anchors_do_not_add_delay_or_turns() {
+        let a = Anchor { x: 0, y: 0, z: 0 };
+        let b = Anchor { x: 1, y: 0, z: 0 };
+        let candidate = PlanCandidate::new(vec![], vec![Route::new("degenerate", vec![a, a, b])]);
+
+        assert_eq!(candidate.routes()[0].anchors(), &[a, b]);
+        assert_eq!(
+            candidate.cost(),
+            CostBreakdown {
+                delay: 1,
+                wire: 1,
+                space: 2,
+                turns: 0,
+            }
+        );
     }
 }
