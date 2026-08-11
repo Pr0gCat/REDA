@@ -94,7 +94,8 @@ git commit -m "feat(planner): add deterministic candidate cost model"
 
 **Interfaces:**
 - Produces `pub enum PortKind { TorchInput, TorchOutput, RepeaterRear, RepeaterSide, RepeaterFront, ComparatorRear, ComparatorSide, ComparatorFront, LeverOutput, LampInput }`.
-- Produces `pub struct PhysicalVariant` with local blocks and typed local ports.
+- Produces `pub enum RelativeSide { Left, Right }` and `PhysicalPort { kind, side: Option<RelativeSide>, .. }`, so the public electrical kind remains `RepeaterSide`/`ComparatorSide` while the two physical side locations remain unambiguous.
+- Produces `pub struct PhysicalVariant` with every local block required for placement (including support) and typed local ports.
 - Produces `pub fn variants(primitive: Primitive) -> &'static [PhysicalVariant]`.
 
 - [ ] **Step 1: Write failing orientation/port tests**
@@ -111,7 +112,9 @@ fn a_torch_variant_exposes_input_on_its_support_and_output_at_its_torch() {
 fn repeater_rear_and_front_ports_are_opposite_and_side_ports_are_orthogonal() {
     let variant = variants(Primitive::Repeater)[0];
     assert_eq!(variant.port(PortKind::RepeaterRear).direction.opposite(), variant.port(PortKind::RepeaterFront).direction);
-    assert!(variant.port(PortKind::RepeaterRear).direction.is_orthogonal_to(variant.port(PortKind::RepeaterSide).direction));
+    let sides = variant.ports_of(PortKind::RepeaterSide);
+    assert_eq!([sides[0].side, sides[1].side], [Some(RelativeSide::Left), Some(RelativeSide::Right)]);
+    assert!(variant.port(PortKind::RepeaterRear).direction.is_orthogonal_to(sides[0].direction));
 }
 ```
 
