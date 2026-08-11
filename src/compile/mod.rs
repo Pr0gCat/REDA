@@ -1583,6 +1583,7 @@ fn lay_dust_run(
         route.claim(pos.down());
         if place_repeater {
             world.set(pos.x, pos.y, pos.z, repeater(direction));
+            route.note_repeater();
         } else {
             world.set(pos.x, pos.y, pos.z, dust());
         }
@@ -1737,6 +1738,7 @@ fn lay_bent_path(
         route.claim(pos.down());
         if is_repeater[index] {
             world.set(pos.x, pos.y, pos.z, repeater(direction));
+            route.note_repeater();
         } else {
             world.set(pos.x, pos.y, pos.z, dust());
         }
@@ -1918,6 +1920,7 @@ fn lay_bent_path_bare(
         route.claim(pos.down());
         if is_repeater[index] {
             world.set(pos.x, pos.y, pos.z, repeater(direction));
+            route.note_repeater();
         } else {
             world.set(pos.x, pos.y, pos.z, dust());
         }
@@ -2018,6 +2021,7 @@ impl Footprint {
         }
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn terminal(
         &mut self,
         net: usize,
@@ -2025,6 +2029,7 @@ impl Footprint {
         input_index: usize,
         pos: Position,
         kind: RouteTerminalKind,
+        repeaters: u64,
     ) {
         if self.recording {
             if self.route_terminals.len() <= net {
@@ -2041,6 +2046,7 @@ impl Footprint {
                     },
                 },
                 kind,
+                repeaters,
             });
         }
     }
@@ -2089,11 +2095,24 @@ impl Footprint {
 struct Route<'a> {
     net: usize,
     footprint: &'a mut Footprint,
+    /// Repeaters laid so far along the path currently being written.
+    ///
+    /// A fanout's branches share a trunk, so this is snapshotted where they
+    /// diverge and restored before each one -- what a sink needs is the count
+    /// between it and the source, not every repeater the net owns. Recorded
+    /// here because this is where the decision to place one is made; a
+    /// finished world cannot say which repeaters a given sink's signal passed
+    /// through.
+    repeaters: u64,
 }
 
 impl Route<'_> {
     fn claim(&mut self, pos: Position) {
         self.footprint.claim(pos, self.net);
+    }
+
+    fn note_repeater(&mut self) {
+        self.repeaters = self.repeaters.saturating_add(1);
     }
 
     fn terminal(
@@ -2104,7 +2123,7 @@ impl Route<'_> {
         kind: RouteTerminalKind,
     ) {
         self.footprint
-            .terminal(self.net, gate, input_index, pos, kind);
+            .terminal(self.net, gate, input_index, pos, kind, self.repeaters);
     }
 }
 
@@ -2236,6 +2255,7 @@ fn move_between_layers(
             ensure_floor(world, rest);
             route.claim(rest.down());
             world.set(rest.x, rest.y, rest.z, repeater(direction));
+            route.note_repeater();
             route.claim(rest);
             if !route.footprint.recording {
                 seal_cross_talk(world, rest, direction, route);
@@ -2419,6 +2439,7 @@ fn lay_track(
             route.claim(pos.down());
             if is_repeater[k] {
                 world.set(pos.x, pos.y, pos.z, repeater(direction));
+            route.note_repeater();
             } else {
                 world.set(pos.x, pos.y, pos.z, dust());
             }
@@ -3830,6 +3851,7 @@ fn emit(
         let mut route = Route {
             net: n,
             footprint: &mut *footprint,
+            repeaters: 0,
         };
         for slot in 0..net.channels.len() {
             let channel = net.channels[slot];
@@ -3855,6 +3877,7 @@ fn emit(
         let mut route = Route {
             net: n,
             footprint: &mut *footprint,
+            repeaters: 0,
         };
 
         if bypass[n] {
@@ -3970,7 +3993,12 @@ fn emit(
                     &mut route,
                 );
             }
+            // Every exit leaves the same landing, so each branch starts from
+            // the trunk's count rather than from whatever the previous branch
+            // added to it.
+            let repeaters_to_landing = route.repeaters;
             for exit in net.exits(slot, &plan.centre_x) {
+                route.repeaters = repeaters_to_landing;
                 let landing = Position::new(exit.x(), GATE_Y, z - band_ramp_length(eff_band));
                 let landing_strength =
                     ramp_ending_strength(band_levels(eff_band), exit_strength[n][slot][&exit.x()]);
@@ -4051,6 +4079,7 @@ fn emit(
         let mut route = Route {
             net: n,
             footprint: &mut *footprint,
+            repeaters: 0,
         };
         // Same multi-container indexing as the Columns pass above -- see its
         // own `#[allow]` comment.
