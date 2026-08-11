@@ -42,7 +42,7 @@
 - Produces `pub fn expansion_cost_for_polarity(kind: GateKind, polarity: SignalPolarity) -> RealisationCost`.
 - Keeps `expansion_for(kind)` and `expansion_cost(kind)` as `Positive` compatibility wrappers.
 
-- [ ] **Step 1: Write failing truth-table and cost tests**
+- [x] **Step 1: Write failing truth-table and cost tests**
 
 ```rust
 #[test]
@@ -67,13 +67,13 @@ fn nand_is_the_negative_realisation_of_and() {
 }
 ```
 
-- [ ] **Step 2: Run the two tests and verify they fail because the API does not exist**
+- [x] **Step 2: Run the two tests and verify they fail because the API does not exist**
 
 Run: `cargo test --lib negative_expansion nand_is_the_negative_realisation_of_and`
 
 Expected: compilation failure naming `SignalPolarity` and `expansion_for_polarity`.
 
-- [ ] **Step 3: Implement the polarity-aware recipe API**
+- [x] **Step 3: Implement the polarity-aware recipe API**
 
 ```rust
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -89,13 +89,13 @@ pub fn expansion_for_polarity(kind: GateKind, polarity: SignalPolarity) -> Expan
 
 Normalise the existing recipes so their external operands state what they actually require. For example, positive AND becomes `Nor([Input{pin: 0, polarity: Negative}, Input{pin: 1, polarity: Negative}])`; negative AND is the same inputs finished by `Merge`. Do the same for every supported kind, including asymmetric pin order for `AndNot` and `Mux`. Do not append a generic final inverter: the selected recipe itself must represent the other polarity. Make `expansion_for` call the positive branch and derive cost by walking the selected expansion exactly as today's `expansion_cost` does. Update `lowering.rs` to resolve a positive input as its declared signal and a negative input through the existing cached `NetlistBuilder::not`; with the all-positive source representation this is exactly the inverter sharing current recipes already intended, so the observable lowered circuit remains unchanged. Selecting a gate's *output* polarity remains Task 2.
 
-- [ ] **Step 4: Run topology unit tests and the full root test suite**
+- [x] **Step 4: Run topology unit tests and the full root test suite**
 
 Run: `cargo test --lib topology::tests` and `cargo test --release`
 
 Expected: all tests pass; positive recipes and all reference-circuit measurements are unchanged.
 
-- [ ] **Step 5: Commit the isolated topology capability**
+- [x] **Step 5: Commit the isolated topology capability**
 
 ```bash
 git add src/compile/topology.rs
@@ -114,7 +114,7 @@ git commit -m "feat(topology): add complemented gate expansions"
 - Produces `pub fn lower_with_assignment(netlist: &Netlist, assignment: &[SignalPolarity]) -> Result<Netlist, LowerError>`.
 - Keeps `lower(netlist)` exactly equivalent to passing `Positive` for every gate.
 
-- [ ] **Step 1: Write failing lowering tests**
+- [x] **Step 1: Write failing lowering tests**
 
 ```rust
 #[test]
@@ -134,13 +134,13 @@ fn all_positive_assignment_is_identical_to_lower() {
 }
 ```
 
-- [ ] **Step 2: Run these tests and verify the new lowering API is absent**
+- [x] **Step 2: Run these tests and verify the new lowering API is absent**
 
 Run: `cargo test --lib assigned_negative_and all_positive_assignment`
 
 Expected: compilation failure naming `lower_with_assignment`.
 
-- [ ] **Step 3: Add `polarity.rs` and implement mechanical assigned lowering**
+- [x] **Step 3: Add `polarity.rs` and implement mechanical assigned lowering**
 
 ```rust
 pub type PolarityAssignment = Vec<SignalPolarity>;
@@ -157,13 +157,13 @@ pub fn lower_with_assignment(
 
 Maintain a `LogicalSignal -> PhysicalRail { positive, negative }` map while walking the topological order. A primary input starts with only its positive rail. For a requested missing rail, call the existing cached `NetlistBuilder::not` once and register its result. For a gate selected negative, give its physical result a fresh generated signal name; if its original output is a declared circuit output, emit the one required final inverter under the original output name. This preserves the observable boolean function while allowing interior consumers to use either rail. Reuse the existing cache for every requested inverse. Do not allow a negative polarity for already-realisable source gates in this task; return `LowerError::UnsupportedAssignedPolarity` so the hand-written control group cannot move accidentally.
 
-- [ ] **Step 4: Run lowering, reference-circuit, and Verilog frontend tests**
+- [x] **Step 4: Run lowering, reference-circuit, and Verilog frontend tests**
 
 Run: `cargo test --lib lowering::tests`; `cargo test --release --test reference_circuits`; `cargo test --release --test verilog_frontend`
 
 Expected: all pass; calling `lower()` retains current 56 / 12,348 / 88 output.
 
-- [ ] **Step 5: Commit assignment-aware lowering**
+- [x] **Step 5: Commit assignment-aware lowering**
 
 ```bash
 git add src/compile/mod.rs src/compile/polarity.rs src/compile/lowering.rs
@@ -182,7 +182,7 @@ git commit -m "feat(lowering): accept explicit gate output polarities"
 - Produces `pub fn assign_polarities(netlist: &Netlist) -> Result<PolarityAssignment, PolarityError>`.
 - Produces `pub fn lower_optimised(netlist: &Netlist) -> Result<Netlist, LowerError>` that calls assignment then assigned lowering.
 
-- [ ] **Step 1: Write failing assignment tests against a two-gate dependency**
+- [x] **Step 1: Write failing assignment tests against a two-gate dependency**
 
 ```rust
 #[test]
@@ -202,14 +202,14 @@ fn assignment_is_deterministic_for_the_baked_decoder() {
 }
 ```
 
-- [ ] **Step 2: Run the tests and verify they fail because assignment is absent**
+- [x] **Step 2: Run the tests and verify they fail because assignment is absent**
 
 Run: `cargo test --lib assignment_prefers assignment_is_deterministic`
 
 Expected: compilation failure naming `assign_polarities`.
 
 
-- [ ] **Step 3: Implement deterministic whole-netlist local search**
+- [x] **Step 3: Implement deterministic whole-netlist local search**
 
 The graph has reconvergent fan-out, so per-row dynamic programming is wrong: one producer's one cached inverse can serve many consumers, and a local score would charge it more than once. Start all eligible gate-level cells at `Positive`. Score a *complete candidate* by calling `lower_with_assignment`, then counting the actual lowered netlist after `NetlistBuilder` has shared every inverter:
 
@@ -229,7 +229,7 @@ Visit eligible gates in stable index order. For each, flip one polarity, score t
 
 Return `PolarityError::CyclicNetlist` if `topological_order()` is `None`, and `PolarityError::OutputHasNoProducer { output }` when a declared output cannot be traced to a gate or input.
 
-- [ ] **Step 4: Add end-to-end truth-table and no-regression measurements**
+- [x] **Step 4: Add end-to-end truth-table and no-regression measurements**
 
 ```rust
 #[test]
@@ -244,7 +244,7 @@ Run: `cargo test --release --test verilog_frontend -- --nocapture`
 
 Expected: Verilog decoder truth table passes and the output reports no more than 56 lowered gates, 12,348 blocks, and 88 ticks. Record the actual numbers in the assertion/doc comment; only retain the pass if it improves at least one measured quantity without worsening another.
 
-- [ ] **Step 5: Commit the optimiser only with a measured win**
+- [x] **Step 5: Commit the optimiser only with a measured win**
 
 ```bash
 git add src/compile/polarity.rs src/compile/lowering.rs tests/verilog_frontend.rs
@@ -265,7 +265,7 @@ If the measured result is not Pareto-better than the 56 / 12,348 / 88 baseline, 
 - Keeps `assign_polarities` deterministic.
 - Allows selected expansions to use `Nor(3)` and `Or(3)` where a boolean-equivalent fan-in packing lowers measured cost.
 
-- [ ] **Step 1: Write a failing test that shows a three-input pack is selected only when it lowers expansion cost**
+- [x] **Step 1: Write a failing test that shows a three-input pack is selected only when it lowers expansion cost**
 
 ```rust
 #[test]
@@ -276,23 +276,23 @@ fn assignment_can_select_a_three_input_final_merge() {
 }
 ```
 
-- [ ] **Step 2: Run the test and verify it fails before packing exists**
+- [x] **Step 2: Run the test and verify it fails before packing exists**
 
 Run: `cargo test --lib assignment_can_select_a_three_input_final_merge`
 
 Expected: assertion failure because the selected lowering only contains two-input merges.
 
-- [ ] **Step 3: Implement only the proven 2-to-3 fan-in pack**
+- [x] **Step 3: Implement only the proven 2-to-3 fan-in pack**
 
 Select `Nor(3)`/`Or(3)` only where all three operands already occur at the same final recipe stage and the packed step is boolean-equivalent. Do not introduce associative rewriting across arbitrary gate boundaries in this task.
 
-- [ ] **Step 4: Verify all layers and measure**
+- [x] **Step 4: Verify all layers and measure**
 
 Run: `./check.sh`; `cargo test --release --test verilog_frontend -- --nocapture`; `cargo run --release --bin mc_dump -- verilog:seven_segment > $env:TEMP\reda-verilog-seven-segment.txt`; then run `conformance/circuit_conformance.py` against a fresh real Minecraft 1.20.1 world.
 
 Expected: all automated checks pass, 16/16 vectors pass in the real game, and the docs state the exact gate/block/tick result and commit.
 
-- [ ] **Step 5: Commit measured result and documentation**
+- [x] **Step 5: Commit measured result and documentation**
 
 ```bash
 git add src/compile/topology.rs src/compile/polarity.rs tests/verilog_frontend.rs docs/superpowers/specs/2026-08-09-polarity-assignment.md
@@ -304,3 +304,14 @@ git commit -m "feat(topology): pack polarity-optimised fan-in"
 - Spec coverage: Tasks 1–3 implement the polarity spec's stated order; Task 4 implements the separately measured fan-in packing. The new 3D planner and sequential logic are explicitly outside this plan.
 - No placeholders: each task states exact files, interfaces, failing behaviour, command, and expected result.
 - Type consistency: `SignalPolarity` is declared in Task 1, `PolarityAssignment` in Task 2, and `assign_polarities`/`lower_optimised` in Task 3 before Task 4 consumes them.
+
+## Status (2026-08-12)
+
+Every task above is implemented and committed. The checkboxes were left
+unticked at the time and are ticked here from the commits, not from memory.
+
+The plan's own target -- 31 gates, 7,888 blocks, 82 ticks -- was not reached:
+the decoder is 47 / 10,088 / 80. `2026-08-09-polarity-assignment.md` closes on
+what that means. The control circuits did stay byte-for-byte at 472 / 1,784 /
+6,416 / 16,244, which nothing asserted until
+`the_hand_written_circuits_keep_their_measured_size`.

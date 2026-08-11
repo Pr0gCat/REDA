@@ -43,7 +43,7 @@ invariants, simulator timing model and `./check.sh`.
 - Produces `pub struct PlannerEffort { pub evaluations: usize, pub seed: u64 }`.
 - Produces `pub struct CostBreakdown { pub delay: u64, pub wire: u64, pub space: u64, pub turns: u64 }` and a total normalised score.
 
-- [ ] **Step 1: Write failing cost tests**
+- [x] **Step 1: Write failing cost tests**
 
 ```rust
 #[test]
@@ -58,13 +58,13 @@ fn same_candidate_weights_effort_and_seed_score_identically() {
 }
 ```
 
-- [ ] **Step 2: Run the focused tests**
+- [x] **Step 2: Run the focused tests**
 
 Run: `cargo test --lib planner::tests`
 
 Expected: compile failure because `planner` and its public types do not exist.
 
-- [ ] **Step 3: Implement immutable candidate metadata and scoring**
+- [x] **Step 3: Implement immutable candidate metadata and scoring**
 
 `PlanCandidate` initially contains anchors and route identifiers only; it may
 not call `World` mutation while scoring.  Use rational numerator/denominator
@@ -72,13 +72,13 @@ pairs or integer cross multiplication for normalisation, never floating-point
 ordering.  Derive `space` from occupied bounding volume and `turns` from
 nonterminal route turns.  Return an ordered score tuple so a tie is stable.
 
-- [ ] **Step 4: Run the planner and full compiler tests**
+- [x] **Step 4: Run the planner and full compiler tests**
 
 Run: `cargo test --lib planner::tests`; `cargo test --release`
 
 Expected: all pass; no current output changes.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/compile/planner.rs src/compile/mod.rs
@@ -98,7 +98,7 @@ git commit -m "feat(planner): add deterministic candidate cost model"
 - Produces `pub struct PhysicalVariant` with every local block required for placement (including support) and typed local ports.
 - Produces `pub fn variants(primitive: Primitive) -> &'static [PhysicalVariant]`.
 
-- [ ] **Step 1: Write failing orientation/port tests**
+- [x] **Step 1: Write failing orientation/port tests**
 
 ```rust
 #[test]
@@ -118,25 +118,25 @@ fn repeater_rear_and_front_ports_are_opposite_and_side_ports_are_orthogonal() {
 }
 ```
 
-- [ ] **Step 2: Run the focused tests**
+- [x] **Step 2: Run the focused tests**
 
 Run: `cargo test --lib physical::tests`
 
 Expected: compile failure because `physical` does not exist.
 
-- [ ] **Step 3: Implement only the variants current circuits need**
+- [x] **Step 3: Implement only the variants current circuits need**
 
 Implement oriented Torch, Repeater, Lever and Lamp variants using the same
 Minecraft facing convention already verified by component tests.  Do not add
 coordinates to `topology::Template` or `PrimitiveGraph`.
 
-- [ ] **Step 4: Run physical, simulator and full tests**
+- [x] **Step 4: Run physical, simulator and full tests**
 
 Run: `cargo test --lib physical::tests`; `cargo test --release`
 
 Expected: all pass.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/compile/physical.rs src/compile/planner.rs
@@ -154,7 +154,7 @@ git commit -m "feat(planner): describe physical primitive ports"
 - Produces `pub fn seed_from_legacy(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<PlanCandidate, PlannerError>`.
 - Produces `pub fn verify_candidate(candidate: &PlanCandidate) -> Result<(), PlannerError>`.
 
-- [ ] **Step 1: Write failing seed equivalence tests**
+- [x] **Step 1: Write failing seed equivalence tests**
 
 ```rust
 #[test]
@@ -174,27 +174,27 @@ fn extracted_candidate_preserves_each_primitive_anchor_and_route_owner() {
 }
 ```
 
-- [ ] **Step 2: Run the focused tests**
+- [x] **Step 2: Run the focused tests**
 
 Run: `cargo test --test compile_end_to_end legacy_and4_extracts`
 
 Expected: compile failure because extraction does not exist.
 
-- [ ] **Step 3: Emit enough ownership metadata for extraction**
+- [x] **Step 3: Emit enough ownership metadata for extraction**
 
 Record primitive anchors, route ownership and terminal kind while the legacy
 emitter already knows them.  Do not reconstruct ownership by scanning block
 colours.  Have the seed verifier invoke the same four existing physical
 invariants against its realised world.
 
-- [ ] **Step 4: Verify all reference circuits**
+- [x] **Step 4: Verify all reference circuits**
 
 Run: `cargo test --release --test reference_circuits`; `cargo test --release --test verilog_frontend`; `./check.sh`
 
 Expected: each legacy output extracts, verifies and retains its existing
 truth-table result.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/compile/mod.rs src/compile/planner.rs tests/compile_end_to_end.rs
@@ -213,7 +213,7 @@ git commit -m "feat(planner): seed legal candidates from legacy routing"
 - Produces `pub fn try_move(candidate: &PlanCandidate, primitive: NodeId, to: Anchor) -> Result<PlanCandidate, PlannerError>`.
 - Produces `pub enum TerminalStyle { DirectedDustIntoSupport, RepeaterIntoSupport }`.
 
-- [ ] **Step 1: Write failing local-change tests**
+- [x] **Step 1: Write failing local-change tests**
 
 ```rust
 #[test]
@@ -232,13 +232,13 @@ fn a_straight_directed_terminal_uses_dust_but_cornered_terminal_uses_repeater() 
 }
 ```
 
-- [ ] **Step 2: Run the focused tests**
+- [x] **Step 2: Run the focused tests**
 
 Run: `cargo test --lib moving_one_anchor straight_directed_terminal`
 
 Expected: failure because no joint move or terminal selector exists.
 
-- [ ] **Step 3: Implement rip-up/reconnect against the candidate reservation**
+- [x] **Step 3: Implement rip-up/reconnect against the candidate reservation**
 
 Remove the moved primitive's local realisation and only routes incident to it.
 Reserve the new variant, then route each incident edge with a deterministic
@@ -246,14 +246,14 @@ Manhattan/A* search that checks the live candidate reservation.  Test terminal
 shape with the existing directed-dust predicate; use a repeater if direction,
 strength or isolation is not proven.
 
-- [ ] **Step 4: Run safety and full tests**
+- [x] **Step 4: Run safety and full tests**
 
 Run: `cargo test --test channel_safety`; `cargo test --release`; `./check.sh`
 
 Expected: all constraints continue to reject collisions; no false directed
 dust terminal is emitted.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/compile/planner.rs src/compile/mod.rs tests/channel_safety.rs
@@ -273,7 +273,7 @@ git commit -m "feat(planner): jointly move primitives and reroute signals"
 - Produces `pub fn optimise(seed: PlanCandidate, weights: PlannerWeights, effort: PlannerEffort) -> PlanCandidate`.
 - Produces `pub struct GateEffort` reporting each cell's local route/variant cost.
 
-- [ ] **Step 1: Write failing deterministic and feedback tests**
+- [x] **Step 1: Write failing deterministic and feedback tests**
 
 ```rust
 #[test]
@@ -291,13 +291,13 @@ fn a_rejected_topology_alternative_leaves_the_best_candidate_unchanged() {
 }
 ```
 
-- [ ] **Step 2: Run the focused tests**
+- [x] **Step 2: Run the focused tests**
 
 Run: `cargo test --lib fixed_seed_weights rejected_topology`
 
 Expected: failure because optimisation is absent.
 
-- [ ] **Step 3: Implement stable best-first local search**
+- [x] **Step 3: Implement stable best-first local search**
 
 Enumerate node moves, orientation changes and terminal styles in stable id
 order, evaluate no more than `effort.evaluations` legal candidates, and retain
@@ -305,7 +305,7 @@ the best lexicographic score.  At each epoch produce `GateEffort`; re-expand a
 gate only when a library alternative is predicted to lower its measured local
 cost, and accept it only if the whole candidate is legal and better.
 
-- [ ] **Step 4: Measure reference circuits**
+- [x] **Step 4: Measure reference circuits**
 
 Run: `cargo test --release --test reference_circuits -- --nocapture`; `cargo test --release --test verilog_frontend -- --nocapture`; `./check.sh`
 
@@ -313,7 +313,7 @@ Expected: truth tables pass.  Record exact blocks/ticks and retain the default
 weights only when no reference circuit regresses on every measured primary
 metric.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/compile/planner.rs src/compile/primitive_graph.rs src/compile/topology.rs tests/verilog_frontend.rs
@@ -329,7 +329,7 @@ git commit -m "feat(planner): optimise joint 3d layouts by effort budget"
 - Test: `tests/reference_circuits.rs`
 - Test: `tests/verilog_frontend.rs`
 
-- [ ] **Step 1: Write a failing compiler-path assertion**
+- [x] **Step 1: Write a failing compiler-path assertion**
 
 ```rust
 #[test]
@@ -340,19 +340,19 @@ fn compile_uses_the_planner_path_for_an_optimised_verilog_circuit() {
 }
 ```
 
-- [ ] **Step 2: Run the test**
+- [x] **Step 2: Run the test**
 
 Run: `cargo test --test verilog_frontend compile_uses_the_planner_path`
 
 Expected: failure because `compile` still calls the row/channel/track emitter.
 
-- [ ] **Step 3: Switch `compile` to the planner and retain legacy only as a seed adapter**
+- [x] **Step 3: Switch `compile` to the planner and retain legacy only as a seed adapter**
 
 The result must emit a `World` from `PlanCandidate`, run all invariants, and
 expose planner diagnostics.  Remove the legacy path from ordinary compilation
 only after its seed extraction is covered by tests.
 
-- [ ] **Step 4: Verify format and target runtime boundary**
+- [x] **Step 4: Verify format and target runtime boundary**
 
 Run: `./check.sh`; `cargo test --release --test verilog_litematic`; `cargo run --release --bin build_circuit -- verilog:seven_segment`; start the 26.2 server and perform component probes/readback as documented.
 
@@ -360,7 +360,7 @@ Expected: Litematic declares 26.2 schema/data version and static 26.2
 component probes pass.  Dynamic diode/sequential proof remains a real-client
 action and is recorded separately.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/compile/mod.rs docs/superpowers/specs/2026-08-11-unified-3d-planner.md README.md tests/reference_circuits.rs tests/verilog_frontend.rs
@@ -377,3 +377,24 @@ git commit -m "feat(compile): use the unified 3d planner"
 - Directed dust is a selectable, validated terminal style rather than an
   emitter exception.
 - The tasks defer UI/editor work and require 26.2 artefacts and evidence.
+
+## Status (2026-08-12)
+
+All six tasks are implemented. `compile()` ships the world the planner
+realises, `CompiledCircuit::planner_kind()` reports `Unified3d`, and every
+reference circuit is byte-identical to what the legacy emitter produced --
+which is the point: the switch changed nothing observable.
+
+Two things this plan did not anticipate, both now done:
+
+- `compile_planned` places from the netlist alone, with no legacy seed. The
+  plan treated legacy seeding as permanent scaffolding; it is now one of two
+  entry points.
+- Port positions are an input that defaults to empty (`PortPlacements`). The
+  plan assumed the emitter's port placement throughout.
+
+What the plan promised and did not get: `optimise` improves and4 (472 blocks
+and 18 ticks become 405 and 16) and effectively nothing larger, because its
+move set is six one-cell translations against a layout the row/channel router
+already packed. And placement from the netlist alone carries as far as and4;
+`how_far_the_planners_own_placement_carries` records why.

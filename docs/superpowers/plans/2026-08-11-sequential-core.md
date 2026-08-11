@@ -144,27 +144,27 @@ git commit -m "feat(frontend): preserve positive-edge DFF cells"
 - `expand()` uses `Netlist::combinational_order()` for inter-cell edges. Design H stores state in locked repeaters; it has no invented combinational feedback cycle.
 - `ExpandError::CyclicNetlist` remains the result for a graph whose cycle contains no sequential cell.
 
-- [ ] **Step 1: Write failing graph tests**
+- [x] **Step 1: Write failing graph tests**
 
 Expand the `through_dff` circuit from Task 1 with a library that contains the DFF entry. Assert its region has `M_DATA`, `S_DATA`, `M_LOCK`, `INV_C`, and `S_LOCK`; assert the two lock edges are `RepeaterLockSide`, and an edge from the DFF `Q` contributor reaches the `d` NOR. In a separate test, expand `pure_loop` and assert `Err(ExpandError::CyclicNetlist)`.
 
-- [ ] **Step 2: Verify RED**
+- [x] **Step 2: Verify RED**
 
 Run: `cargo test primitive_graph_accepts_design_h_dff --lib -- --nocapture`
 
 Expected: DFF has no library entry or Design H region expansion is absent.
 
-- [ ] **Step 3: Implement the Design H DFF entry**
+- [x] **Step 3: Implement the Design H DFF entry**
 
 Represent `DffPosedge` as four `Primitive::Repeater` nodes (`M_DATA`, `S_DATA`, `M_LOCK`, `S_LOCK`) plus one `Primitive::Torch` node (`INV_C`). Define ordinary edges `D → M_DATA → S_DATA → Q`, `C → M_LOCK`, `C → INV_C → S_LOCK`; define typed lock-side relations `M_LOCK ⇒ M_DATA` and `S_LOCK ⇒ S_DATA`. `M_LOCK` receives `C`; `S_LOCK` receives `!C`. Expose only `D`, `C`, and `Q` as inter-cell ports. Do not create a cross-coupled torch feedback edge. See `2026-08-11-dff-design-h.md`.
 
-- [ ] **Step 4: Verify GREEN**
+- [x] **Step 4: Verify GREEN**
 
 Run: `cargo test primitive_graph_accepts_design_h_dff --lib -- --nocapture; cargo test primitive_graph_rejects_combinational_cycle --lib -- --nocapture`
 
 Expected: a DFF Design H region and typed lock-side relations are represented; a bare NOR loop is still rejected.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/compile/topology.rs src/compile/primitive_graph.rs
@@ -297,3 +297,18 @@ git commit -m "test(conformance): verify reg4 in Minecraft 26.2"
 - **No fake verification:** no task sets a repeater or latch output to powered in order to claim a clock transition; all dynamic proof comes from a client click.
 - **Representation boundary:** DFF feedback is internal to one stateful topology region; inter-cell graph ordering stays a DAG after sequential cuts.
 - **Compatibility:** direct combinational netlists retain their current lowering and compile path, and every task requires existing tests to remain green.
+
+## Status (2026-08-12)
+
+Tasks 1-3 are implemented; Task 3's checkboxes were left unticked and are
+ticked here from `f9d8ea7` and `f29cbfa`.
+
+Tasks 4-6 are not started. `compile()` still rejects `GateKind::DffPosedge`
+before placement -- `is_realisable()` is `Nor | Or` -- so a DFF has a topology
+and a graph and nowhere to be built.
+
+One thing has changed under this plan since it was written: placement no
+longer has to happen in the legacy emitter. `compile_planned` places from the
+netlist alone, so Design H can be a `NodeRealisation` the planner puts down
+rather than a macro the row/channel router has to be taught. Task 4 should be
+read with that in mind.

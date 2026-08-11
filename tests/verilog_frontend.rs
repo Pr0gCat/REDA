@@ -208,6 +208,28 @@ fn compile_simulate_and_check(
         mismatches.join("\n")
     );
 
+    // The occupied extent, which is what README's table reports -- not the
+    // world's allocated size, which is larger and arbitrary.
+    let (size_x, size_y, size_z) = compiled.world.size();
+    let (mut min, mut max) = ((i32::MAX, i32::MAX, i32::MAX), (0, 0, 0));
+    for x in 0..size_x {
+        for y in 0..size_y {
+            for z in 0..size_z {
+                if compiled.world.get(x, y, z).kind != reda::redstone::world::block::BlockKind::Air
+                {
+                    min = (min.0.min(x), min.1.min(y), min.2.min(z));
+                    max = (max.0.max(x), max.1.max(y), max.2.max(z));
+                }
+            }
+        }
+    }
+    eprintln!(
+        "{label} bounding box: {}x{}x{}",
+        max.0 - min.0 + 1,
+        max.1 - min.1 + 1,
+        max.2 - min.2 + 1
+    );
+
     let outputs: Vec<String> = netlist.outputs.clone();
     let settle = report_timing(label, netlist, &compiled, &outputs, &transitions, require_exact_path_model);
 

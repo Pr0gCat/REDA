@@ -292,3 +292,30 @@ scope evidence are in
   first.
 - **Sequential logic.** `2026-08-08-sequential-logic.md` is a separate front;
   polarity across a flip-flop boundary is a question for whoever lands that.
+
+## Where it landed (2026-08-12)
+
+The target above -- 31 placed gates, 7,888 blocks, 82 ticks, the old
+ABC-mapped baseline -- was **not reached**. The decoder is 47 gates, 10,088
+blocks and 80 game ticks.
+
+It is better than the all-positive lowering it replaced on every axis (56 /
+12,348 / 88), and that is what `optimised_lowering_preserves_every_verilog_
+decoder_vector` actually enforces: no worse on any of the three, better on at
+least one. It is not what this document asked for, and the gap is real: 52%
+more gates and 28% more blocks than a tool that was allowed to do technology
+mapping.
+
+Two things are worth separating, because this spec did not:
+
+**The settle time did arrive.** 80 ticks against a target of 82, and against
+98 for the hand-written decoder. Delay was the thing the founding thesis said
+placement dominates, and the polarity work moved it.
+
+**The gate and block counts did not.** Whatever ABC's mapper was doing to get
+to 31 gates, choosing output polarities globally is not a substitute for it.
+That is the open question this closes on, not a promise it kept.
+
+The sentence above saying "matching it is the minimum" is left as it was
+written. It was the standard at the time and it is how the result should be
+read.

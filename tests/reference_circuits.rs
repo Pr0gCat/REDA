@@ -274,6 +274,56 @@ fn the_compiled_segment_a_matches_its_truth_table() {
 
 /// Where the neighbour a lever with this `face` × `facing` must attach to
 /// lives, in world coordinates.
+/// The size of every hand-written circuit, pinned.
+///
+/// `2026-08-09-global-polarity-assignment.md` made these a hard constraint --
+/// "the control circuits remain byte-for-byte at their measured values" -- and
+/// nothing asserted them, so the one thing the polarity work was not allowed
+/// to disturb was also the one thing nothing would have noticed it disturbing.
+/// These four are pure NOR and no lowering touches them, which is exactly why
+/// a change here means something moved that should not have.
+///
+/// The numbers printed alongside are what `README.md`'s table reports.
+#[test]
+fn the_hand_written_circuits_keep_their_measured_size() {
+    let circuits: [(&str, Netlist, usize, usize); 4] = [
+        ("and4", build_and4_netlist().0, 7, 472),
+        ("full_adder", build_full_adder_netlist().0, 22, 1784),
+        ("segment_a", build_single_segment_netlist(0).0, 46, 6416),
+        ("seven_segment", build_seven_segment_netlist().0, 84, 16244),
+    ];
+
+    for (name, netlist, gates, blocks) in circuits {
+        let compiled = compile(&netlist).expect("every reference circuit compiles");
+        let (size_x, size_y, size_z) = compiled.world.size();
+
+        let mut placed = 0usize;
+        let (mut min, mut max) = ((i32::MAX, i32::MAX, i32::MAX), (0, 0, 0));
+        for x in 0..size_x {
+            for y in 0..size_y {
+                for z in 0..size_z {
+                    if compiled.world.get(x, y, z).kind == BlockKind::Air {
+                        continue;
+                    }
+                    placed += 1;
+                    min = (min.0.min(x), min.1.min(y), min.2.min(z));
+                    max = (max.0.max(x), max.1.max(y), max.2.max(z));
+                }
+            }
+        }
+
+        eprintln!(
+            "{name}: {} gates, {placed} blocks, bounding box {}x{}x{}",
+            netlist.gates.len(),
+            max.0 - min.0 + 1,
+            max.1 - min.1 + 1,
+            max.2 - min.2 + 1,
+        );
+        assert_eq!(netlist.gates.len(), gates, "{name} gate count");
+        assert_eq!(placed, blocks, "{name} block count");
+    }
+}
+
 fn lever_support_position(pos: (i32, i32, i32), face: Face, facing: Facing) -> (i32, i32, i32) {
     let (x, y, z) = pos;
     match face {
