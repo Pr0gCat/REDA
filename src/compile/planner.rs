@@ -1104,7 +1104,7 @@ fn deterministic_astar(
     // gate plane already sits on the lowest floor there is -- a route that
     // descends from it is digging through the ground, which is why one did,
     // and why its blocks were written outside the world and carried nothing.
-    const CLIMB: i32 = 2;
+    const CLIMB: i32 = 6;
     let min = Anchor {
         x: start.x.min(goal.x).saturating_sub(margin),
         y: start.y.min(goal.y),
@@ -1423,20 +1423,64 @@ const PLANNER_Y: i32 = 1;
 pub fn plan_from_netlist(netlist: &Netlist) -> Result<PlanCandidate, PlannerError> {
     let depths = gate_depths(netlist)?;
     let deepest = depths.iter().copied().max().unwrap_or(0);
+    let producer: BTreeMap<&str, usize> = netlist
+        .gates
+        .iter()
+        .enumerate()
+        .map(|(index, gate)| (gate.output.as_str(), index))
+        .collect();
 
-    let mut row_width: BTreeMap<usize, i32> = BTreeMap::new();
+    // Primary inputs first: they are the only things with nothing behind them
+    // to sit near, so they set the width everything else is measured against.
+    let mut input_x: BTreeMap<&str, i32> = BTreeMap::new();
+    for (index, input) in netlist.inputs.iter().enumerate() {
+        input_x.insert(input.as_str(), INPUT_COLUMN_X + index as i32 * COLUMN_PITCH);
+    }
+
+    // Then each gate above whatever feeds it. Filling rows left to right in
+    // netlist order instead puts a gate as far from its own inputs as the
+    // circuit is wide, and a route that long crosses every row between them
+    // -- which is what made seven_segment unroutable rather than merely
+    // large.
+    let mut gate_x: Vec<i32> = vec![0; netlist.gates.len()];
+    let mut taken: BTreeMap<usize, BTreeSet<i32>> = BTreeMap::new();
+    let mut by_depth: Vec<Vec<usize>> = vec![Vec::new(); deepest + 1];
+    for (index, &depth) in depths.iter().enumerate() {
+        by_depth[depth].push(index);
+    }
+
+    for (depth, row_gates) in by_depth.iter().enumerate() {
+        let row = deepest - depth;
+        for &gate in row_gates {
+            let sources: Vec<i32> = netlist.gates[gate]
+                .inputs
+                .iter()
+                .filter_map(|signal| {
+                    producer
+                        .get(signal.as_str())
+                        .map(|&source| gate_x[source])
+                        .or_else(|| input_x.get(signal.as_str()).copied())
+                })
+                .collect();
+            let wanted = if sources.is_empty() {
+                GATE_COLUMN_X
+            } else {
+                sources.iter().sum::<i32>() / sources.len() as i32
+            };
+            gate_x[gate] = claim_column(taken.entry(row).or_default(), wanted);
+        }
+    }
+
     let mut anchors = Vec::with_capacity(netlist.gates.len() + netlist.inputs.len());
     let mut primitive_nodes = Vec::with_capacity(netlist.gates.len() + netlist.inputs.len());
 
     for (index, gate) in netlist.gates.iter().enumerate() {
         let row = deepest - depths[index];
-        let column = row_width.entry(row).or_insert(0);
         let anchor = Anchor {
-            x: GATE_COLUMN_X + *column * COLUMN_PITCH,
+            x: gate_x[index],
             y: PLANNER_Y,
             z: GROUND_ROW_Z + row as i32 * ROW_PITCH,
         };
-        *column += 1;
         anchors.push(anchor);
 
         let (footprint, conductors, output_pin) =
@@ -1455,9 +1499,9 @@ pub fn plan_from_netlist(netlist: &Netlist) -> Result<PlanCandidate, PlannerErro
         });
     }
 
-    for (index, input) in netlist.inputs.iter().enumerate() {
+    for input in &netlist.inputs {
         let anchor = Anchor {
-            x: INPUT_COLUMN_X + index as i32 * COLUMN_PITCH,
+            x: input_x[input.as_str()],
             y: PLANNER_Y,
             z: GROUND_ROW_Z + (deepest as i32 + 1) * ROW_PITCH,
         };
@@ -1475,6 +1519,23 @@ pub fn plan_from_netlist(netlist: &Netlist) -> Result<PlanCandidate, PlannerErro
 
     let candidate = PlanCandidate::with_primitive_nodes(anchors, primitive_nodes, Vec::new());
     route_every_net(candidate, netlist)
+}
+
+/// The free column of a row nearest `wanted`, claimed.
+///
+/// Rows are a grid of `COLUMN_PITCH` slots; this snaps a barycentre onto one
+/// and walks outwards until it finds a slot nobody has taken.
+fn claim_column(taken: &mut BTreeSet<i32>, wanted: i32) -> i32 {
+    let slot = ((wanted - GATE_COLUMN_X) as f64 / COLUMN_PITCH as f64).round() as i32;
+    for step in 0.. {
+        for candidate in [slot + step, slot - step] {
+            let x = GATE_COLUMN_X + candidate * COLUMN_PITCH;
+            if taken.insert(x) {
+                return x;
+            }
+        }
+    }
+    unreachable!("a row has unboundedly many columns")
 }
 
 /// How far each gate stands from the primary inputs, counted in gates.
@@ -1524,6 +1585,26 @@ fn route_every_net(
                 .entry(input.clone())
                 .or_default()
                 .push((gate, input_index));
+        }
+    }
+
+    // Every socket has exactly one cell a signal can enter it from -- the one
+    // collinear with socket and support, because a terminal only reads from
+    // directly behind itself. Which net will use it is on the netlist, so it
+    // is claimed for that net now. Left free, it goes to whichever route is
+    // laid first, and the net that actually needs it can never reach its own
+    // gate: that is what made seven_segment unroutable, and no amount of
+    // spare room above the plane fixes it, because there is no second way in.
+    for (gate, definition) in netlist.gates.iter().enumerate() {
+        let support = candidate.anchors[gate];
+        for (input_index, driver) in definition.inputs.iter().enumerate() {
+            let socket = step(support, compile::INPUT_DIRECTIONS[input_index]);
+            let approach = Anchor {
+                x: socket.x + (socket.x - support.x),
+                y: socket.y + (socket.y - support.y),
+                z: socket.z + (socket.z - support.z),
+            };
+            reservation.insert(approach, driver, Occupancy::Conductor);
         }
     }
 
@@ -3475,6 +3556,41 @@ mod tests {
             12,
             "four directions, each level with the source or one step either way"
         );
+    }
+
+    /// How far the planner's own placement carries, measured rather than
+    /// assumed.
+    ///
+    /// and4 places, routes and verifies. full_adder does not, and neither do
+    /// the two above it -- every failure is an input reaching a socket in the
+    /// row directly above it, over twenty-odd cells, which is congestion
+    /// rather than distance. Each net is routed once, in order, and never
+    /// gives a cell back: the standard answer is to rip up what blocks a
+    /// failed net and route it again, and there is none of that here.
+    ///
+    /// Two things already found this way are fixed and stay fixed: a gate now
+    /// sits above whatever feeds it rather than wherever netlist order put it,
+    /// and the one cell a socket can be entered from belongs to the net that
+    /// will enter it.
+    #[test]
+    #[ignore = "known: routing has no rip-up, so nothing past and4 places"]
+    fn how_far_the_planners_own_placement_carries() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+
+        for (name, netlist) in [
+            ("and4", build_and4_netlist().0),
+            ("full_adder", build_full_adder_netlist().0),
+            ("segment_a", build_single_segment_netlist(0).0),
+            ("seven_segment", build_seven_segment_netlist().0),
+        ] {
+            let candidate = plan_from_netlist(&netlist)
+                .unwrap_or_else(|error| panic!("{name} must be placeable: {error}"));
+            verify_candidate(&candidate, &netlist)
+                .unwrap_or_else(|error| panic!("{name} must be legal: {error}"));
+        }
     }
 
     /// Keep-out is about conductors, not about everything a primitive owns.
