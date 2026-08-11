@@ -881,6 +881,22 @@ struct LaidBranch {
 /// to assume a strength of `16 - path length`, which is neither the real
 /// maximum nor aware that a repeater resets it.
 fn realise_branch(source: Anchor, cells: &[Anchor]) -> LaidBranch {
+    realise_branch_from(
+        source,
+        crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
+        cells,
+    )
+}
+
+/// [`realise_branch`], continuing from a signal that has already travelled.
+///
+/// A fanout's branches share a trunk, and the trunk keeps the blocks the first
+/// branch laid. A later branch that plans its refreshes from full strength
+/// across its whole path is therefore planning refreshes it will not get: the
+/// ones it wanted on the trunk are discarded, and its tail runs from wherever
+/// the trunk actually left the signal. So it is told.
+fn realise_branch_from(previous_cell: Anchor, incoming: u8, cells: &[Anchor]) -> LaidBranch {
+    let source = previous_cell;
     let mut bends: BTreeSet<usize> = cells
         .windows(3)
         .enumerate()
@@ -900,12 +916,7 @@ fn realise_branch(source: Anchor, cells: &[Anchor]) -> LaidBranch {
         previous = *cell;
     }
 
-    let (is_repeater, _) = compile::plan_bent_path(
-        cells.len(),
-        &bends,
-        crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
-        0,
-    );
+    let (is_repeater, _) = compile::plan_bent_path(cells.len(), &bends, incoming, 0);
 
     let mut blocks = Vec::with_capacity(cells.len());
     let mut previous = source;
@@ -930,14 +941,13 @@ fn realise_branch(source: Anchor, cells: &[Anchor]) -> LaidBranch {
     // repeater, otherwise the maximum less one per dust cell since the last
     // refresh.
     let strength_before_terminal = match cells.len().checked_sub(2) {
-        None => crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
+        None => incoming,
         Some(index) => {
             let last_refresh = (0..=index).rev().find(|&i| is_repeater[i]);
             match last_refresh {
                 Some(refresh) => crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH
                     .saturating_sub((index - refresh) as u8),
-                None => crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH
-                    .saturating_sub((index + 1) as u8),
+                None => incoming.saturating_sub((index + 1) as u8),
             }
         }
     };
@@ -1778,7 +1788,36 @@ fn route_every_net(
             path.push(socket);
             reserve_path(&mut reservation, &signal, &path);
 
-            let laid = realise_branch(source, &path);
+            // How much of this branch the trunk already laid, and what the
+            // signal is worth by the time it gets there. Planning the whole
+            // path from full strength would put refreshes on trunk cells that
+            // keep the first branch's blocks, so they would be planned and
+            // never built.
+            let shared = path
+                .iter()
+                .take_while(|anchor| route.anchors.contains(anchor))
+                .count();
+            let mut carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+            let mut previous_cell = source;
+            let mut trunk_repeaters = 0u64;
+            for anchor in &path[..shared] {
+                let index = route
+                    .anchors
+                    .iter()
+                    .position(|laid| laid == anchor)
+                    .expect("the shared prefix is by definition already laid");
+                if route.realisation[index].kind
+                    == crate::redstone::world::block::BlockKind::Repeater
+                {
+                    carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+                    trunk_repeaters += 1;
+                } else {
+                    carried = carried.saturating_sub(1);
+                }
+                previous_cell = *anchor;
+            }
+
+            let laid = realise_branch_from(previous_cell, carried, &path[shared..]);
             // Whether the strength budget already needs the socket cell to be
             // a refresh. If it does, no terminal-style preference may take it
             // away: dust that cannot reach is not a cheaper terminal, it is a
@@ -1787,7 +1826,8 @@ fn route_every_net(
                 .blocks
                 .last()
                 .is_some_and(|block| block.kind == crate::redstone::world::block::BlockKind::Repeater);
-            for ((anchor, block), floor) in path.iter().zip(laid.blocks).zip(laid.floors) {
+            for ((anchor, block), floor) in path[shared..].iter().zip(laid.blocks).zip(laid.floors)
+            {
                 if route.anchors.contains(anchor) {
                     continue;
                 }
@@ -1855,7 +1895,7 @@ fn route_every_net(
                     anchor: socket,
                 },
                 kind,
-                repeaters: laid.repeaters,
+                repeaters: trunk_repeaters + laid.repeaters,
             });
         }
         routes.push(route);
@@ -3832,13 +3872,20 @@ mod tests {
     /// levels apart. `Wide` is legal. `Tall` is not yet: its six-way fanout
     /// loses signal strength on the way to a ground-floor gate.
     ///
-    /// A structural defect that would explain it, found while looking and not
-    /// confirmed to be this failure: each branch of a fanout plans its
-    /// refreshes across its whole path, but the shared trunk keeps the blocks
-    /// the *first* branch laid, so a later branch's repeaters on that trunk
-    /// are silently discarded and its tail starts weaker than it was planned
-    /// to. That is worth fixing whether or not it is what this test is
-    /// hitting.
+    /// The obvious suspect was wrong, and is now fixed anyway: a branch used
+    /// to plan its refreshes across its whole path while the shared trunk kept
+    /// the first branch's blocks, so its trunk repeaters were discarded. A
+    /// branch now continues from the strength the trunk actually leaves it.
+    /// This test still fails, and `g0` is the *first* branch routed, so it has
+    /// no shared trunk to have got wrong.
+    ///
+    /// What is actually around `g0` when it fails: later branches of the same
+    /// net run at (14,1,6) and (15,1,5), against the south and east faces of
+    /// its support block. The terminal itself is still a clean straight line
+    /// -- the guard cells hold -- so what needs understanding is what a net
+    /// touching its own sink's support from three sides does to the strength
+    /// the verifier computes there. Routing keeps other nets away from a
+    /// support and lets a net crowd its own.
     #[test]
     #[ignore = "known: a tall layout's fanout loses strength; the placement half is what this pins"]
     fn a_tall_preference_uses_height_where_a_wide_one_uses_floor() {
