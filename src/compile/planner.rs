@@ -1165,14 +1165,45 @@ fn deterministic_astar(
             continue;
         }
         for next in neighbours(state.anchor) {
+            // A descent needs the cell it drops past to stay air, and every
+            // cell of this same path lays a floor one below itself. A path
+            // that climbs, steps aside and drops back down goes under its own
+            // floor and the drop is blocked -- a conflict inside one path,
+            // which the reservation cannot see because none of it is written
+            // yet.
+            if next.y < state.anchor.y {
+                let above_riser = Anchor {
+                    x: next.x,
+                    y: state.anchor.y + 1,
+                    z: next.z,
+                };
+                let mut walk = Some(state.anchor);
+                let mut blocked = false;
+                while let Some(cell) = walk {
+                    if cell == above_riser {
+                        blocked = true;
+                        break;
+                    }
+                    walk = previous.get(&cell).copied();
+                }
+                if blocked {
+                    continue;
+                }
+            }
+
             if !within_bounds(next, min, max)
                 || !anchor_is_free_for(next, start, goal, terminal_support, owner, reservation)
                 || staircase_clearance(state.anchor, next)
                     .into_iter()
                     .any(|cell| {
-                        reservation
-                            .owner(&cell)
-                            .is_some_and(|occupied_by| occupied_by != owner)
+                        // A conductor there breaks the step whoever laid it.
+                        // Otherwise the cell may be ours, or a staircase this
+                        // same route already built -- two branches climbing
+                        // the same stair is reuse, not a collision.
+                        reservation.conductor_owner(&cell).is_some()
+                            || reservation.owner(&cell).is_some_and(|occupied_by| {
+                                occupied_by != owner && occupied_by != stair_guard(owner)
+                            })
                     })
             {
                 continue;
@@ -1219,6 +1250,13 @@ fn neighbours(anchor: Anchor) -> Vec<Anchor> {
         steps.push(Anchor { y: sideways.y - 1, ..sideways });
     }
     steps
+}
+
+/// The owner a route's staircase structure is claimed under: its own name
+/// would let its other branches through, which is exactly what has to be
+/// stopped.
+fn stair_guard(owner: &str) -> String {
+    format!("stair:{owner}")
 }
 
 /// The cells a staircase step needs, beyond the one it lands on.
@@ -1310,12 +1348,15 @@ fn keep_out(anchor: Anchor) -> Vec<Anchor> {
 }
 
 fn reserve_path(reservation: &mut Reservation, owner: &str, path: &[Anchor]) {
+    let guard = stair_guard(owner);
     for window in path.windows(2) {
         for cell in staircase_clearance(window[0], window[1]) {
-            // Solid: a riser is a block and a descent needs air, and neither
-            // joins a net running past it. Both simply have to stay this
-            // route's to decide.
-            reservation.insert(cell, owner, Occupancy::Solid);
+            // Claimed under a name nobody routes as, so not even another
+            // branch of this same net may take it. A riser has to stay a solid
+            // block and a descent has to stay air; a branch that runs through
+            // either one destroys the staircase that depends on it, and a net
+            // is otherwise free to run through its own cells.
+            reservation.insert(cell, &guard, Occupancy::Solid);
         }
     }
     for &anchor in path {
@@ -1912,6 +1953,7 @@ fn route_every_net(
                     reservation.insert(neighbour, &guard, Occupancy::Solid);
                 }
             }
+
 
             route.terminals.push(RouteTerminal {
                 sink: RouteSink {
@@ -3770,17 +3812,23 @@ mod tests {
     /// How far the planner's own placement carries, measured rather than
     /// assumed.
     ///
-    /// and4 places, routes and verifies. Everything above it now routes too --
-    /// the blockage was routes burying each other under their own floors --
-    /// and fails later, on signal strength: full_adder's net `b` reaches g1
-    /// structurally and arrives dead.
+    /// and4 places, routes, verifies and computes and4. Nothing larger does,
+    /// and what stops them is now the search rather than the model: three
+    /// things a route depends on used to be free for anything to overwrite,
+    /// and all three are stated now.
     ///
-    /// That is a refresh-planning problem, not a routing one. A branch plans
-    /// its repeaters over the cells it adds, and a long fanout adds its cells
-    /// in an order that leaves some sink further from the last refresh than
-    /// the plan for that branch ever saw.
+    /// A route owns the floor it stands on. A staircase owns the riser it
+    /// climbs and the gap it drops through, under a name not even its own
+    /// other branches may take. And a path may not dig under its own floor:
+    /// climbing, stepping aside and dropping back down puts the drop beneath
+    /// a floor the same path laid, which is as blocked in Minecraft as it
+    /// sounds.
+    ///
+    /// Each of those made the routes that do get laid correct and made fewer
+    /// of them exist. The search has no rip-up and no cost for changing
+    /// height, so it walks into corners it then cannot leave.
     #[test]
-    #[ignore = "known: long fanouts arrive dead; routing reaches every sink now"]
+    #[ignore = "known: the constraints are right and the search is too weak to satisfy them"]
     fn how_far_the_planners_own_placement_carries() {
         use crate::circuits::full_adder::build_full_adder_netlist;
         use crate::circuits::seven_segment::{
