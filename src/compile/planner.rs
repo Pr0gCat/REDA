@@ -759,12 +759,16 @@ pub fn try_move(
                 rebuilt.realisation.push(block);
                 rebuilt.floors.push(floor);
             }
-            branches.push((path, support, laid.strength_before_terminal));
+            branches.push((path, support, laid.strength_before_terminal, laid.repeaters));
         }
 
-        for (terminal, (path, support, strength_before_terminal)) in
+        for (terminal, (path, support, strength_before_terminal, branch_repeaters)) in
             rebuilt.terminals.iter_mut().zip(branches)
         {
+            // The branch was just re-laid, so its repeater count is a fact
+            // again. Keeping the seed's would leave the primary cost term
+            // blind to exactly the changes the optimiser makes.
+            terminal.repeaters = branch_repeaters;
             if matches!(
                 terminal.kind,
                 RouteTerminalKind::BareMergeDust | RouteTerminalKind::BareMergeRepeater
@@ -827,6 +831,8 @@ struct LaidBranch {
     /// off the same repeater plan that produced `blocks`, not estimated from
     /// the path's length.
     strength_before_terminal: u8,
+    /// Repeaters this branch lays between the source and its terminal.
+    repeaters: u64,
 }
 
 /// Lay dust along a rerouted branch, refreshing it with repeaters exactly
@@ -889,6 +895,10 @@ fn realise_branch(source: Anchor, cells: &[Anchor]) -> LaidBranch {
 
     LaidBranch {
         floors: vec![compile::stone(); blocks.len()],
+        repeaters: blocks
+            .iter()
+            .filter(|block| block.kind == crate::redstone::world::block::BlockKind::Repeater)
+            .count() as u64,
         blocks,
         strength_before_terminal,
     }
@@ -2964,6 +2974,87 @@ mod tests {
             .expect("compiled output must seed");
 
         assert_eq!(seed.cost().delay, TORCH_DELAY_GAME_TICKS * (10 + 9));
+    }
+
+    /// The optimiser has to produce a circuit that is smaller, no slower, and
+    /// still computes what it was asked to.
+    ///
+    /// Cost-model numbers are internal bookkeeping; blocks and settle ticks
+    /// are what this project reports, and a truth table is what makes either
+    /// worth reporting. Measured at 16 evaluations: 472 blocks and 18 game
+    /// ticks become 405 and 16, with all sixteen rows correct. The tick saved
+    /// is one repeater, and the cost model's delay term moves 14 -> 12 with
+    /// it -- it did not, until a rerouted branch started refreshing the
+    /// repeater count it reports.
+    ///
+    /// and4 is where this works. 30 of its 42 single-cell moves are legal;
+    /// full_adder, one circuit up, has 5 of 80, and gains 4% of its wire and
+    /// nothing else. The move set is what limits this, not the cost model.
+    #[test]
+    fn optimisation_makes_and4_smaller_without_breaking_it() {
+        use crate::redstone::simulator::Simulator;
+        use crate::redstone::world::block::BlockKind;
+
+        let (netlist, _) = build_and4_netlist();
+        let compiled = compile::compile(&netlist).expect("and4 compiles");
+        let seed = seed_from_legacy_parts(&netlist, compiled.legacy_emission().unwrap())
+            .expect("compiled output must seed");
+        let best = optimise(
+            seed.clone(),
+            &netlist,
+            PlannerWeights::default(),
+            PlannerEffort {
+                evaluations: 16,
+                seed: 0x26_02,
+            },
+        );
+
+        let measure = |candidate: &PlanCandidate| -> (usize, u64, usize) {
+            let realised = realise_and_verify(candidate, &netlist, compiled.world.size())
+                .expect("both candidates must be legal");
+            let blocks = (0..realised.world.cells().len())
+                .filter(|&flat| {
+                    let (x, y, z) = realised.world.decode(flat);
+                    realised.world.get(x, y, z).kind != BlockKind::Air
+                })
+                .count();
+
+            let mut simulator = Simulator::new(realised.world.clone());
+            simulator.run_until_stable(2000).expect("settles");
+            let (mut worst, mut wrong) = (0u64, 0usize);
+            for mask in 0u8..16 {
+                for (bit, name) in ["a", "b", "c", "d"].iter().enumerate() {
+                    let at = realised.ports.input_positions[*name];
+                    let mut state = simulator.world().get(at.0, at.1, at.2).clone();
+                    state.lit = (mask >> bit) & 1 == 1;
+                    simulator.world_mut().set(at.0, at.1, at.2, state);
+                }
+                worst = worst.max(simulator.run_until_stable(2000).expect("settles"));
+                let out = realised.ports.output_positions[&netlist.outputs[0]];
+                if simulator.world().get(out.0, out.1, out.2).lit != (mask == 0b1111) {
+                    wrong += 1;
+                }
+            }
+            (blocks, worst, wrong)
+        };
+
+        let (seed_blocks, seed_settle, seed_wrong) = measure(&seed);
+        let (best_blocks, best_settle, best_wrong) = measure(&best);
+
+        assert_eq!(seed_wrong, 0, "the seed must compute and4");
+        assert_eq!(best_wrong, 0, "optimisation must not change what the circuit computes");
+        assert!(
+            best_blocks < seed_blocks,
+            "optimisation must save blocks: {seed_blocks} -> {best_blocks}"
+        );
+        assert!(
+            best_settle <= seed_settle,
+            "optimisation must not cost settle time: {seed_settle} -> {best_settle}"
+        );
+        assert!(
+            best.cost().delay <= seed.cost().delay,
+            "the delay term must follow the circuit it prices"
+        );
     }
 
     /// The point of the whole optimiser: a candidate it produced must be
