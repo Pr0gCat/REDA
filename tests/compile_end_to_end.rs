@@ -7,7 +7,9 @@ use reda::compile::topology::GateKind;
 use std::path::PathBuf;
 
 use reda::circuits::and4::build_and4_netlist;
-use reda::compile::planner::{seed_from_legacy, verify_candidate, NormalisedScore, PlannerWeights};
+use reda::compile::planner::{
+    seed_from_legacy, verify_candidate, Anchor, NormalisedScore, PlannerWeights, RouteTerminalKind,
+};
 use reda::compile::{compile, CompileError, CompiledCircuit, Gate, Netlist};
 use reda::formats::litematic;
 use reda::redstone::simulator::Simulator;
@@ -29,7 +31,10 @@ fn set_lever(simulator: &mut Simulator, position: (i32, i32, i32), on: bool) {
 }
 
 fn read_output(simulator: &Simulator, position: (i32, i32, i32)) -> bool {
-    simulator.world().get(position.0, position.1, position.2).lit
+    simulator
+        .world()
+        .get(position.0, position.1, position.2)
+        .lit
 }
 
 fn not_netlist() -> Netlist {
@@ -51,8 +56,18 @@ fn and_netlist() -> Netlist {
         inputs: vec!["a".to_string(), "b".to_string()],
         outputs: vec!["y".to_string()],
         gates: vec![
-            Gate { name: "not_a".to_string(), inputs: vec!["a".to_string()], output: "na".to_string(), kind: GateKind::Nor(1) },
-            Gate { name: "not_b".to_string(), inputs: vec!["b".to_string()], output: "nb".to_string(), kind: GateKind::Nor(1) },
+            Gate {
+                name: "not_a".to_string(),
+                inputs: vec!["a".to_string()],
+                output: "na".to_string(),
+                kind: GateKind::Nor(1),
+            },
+            Gate {
+                name: "not_b".to_string(),
+                inputs: vec!["b".to_string()],
+                output: "nb".to_string(),
+                kind: GateKind::Nor(1),
+            },
             Gate {
                 name: "final_nor".to_string(),
                 inputs: vec!["na".to_string(), "nb".to_string()],
@@ -60,6 +75,27 @@ fn and_netlist() -> Netlist {
                 kind: GateKind::Nor(2),
             },
         ],
+    }
+}
+
+fn bare_merge_netlist() -> Netlist {
+    Netlist {
+        inputs: vec!["a".to_string(), "b".to_string()],
+        outputs: vec!["y".to_string()],
+        gates: vec![Gate {
+            name: "merge".to_string(),
+            inputs: vec!["a".to_string(), "b".to_string()],
+            output: "y".to_string(),
+            kind: GateKind::Or(2),
+        }],
+    }
+}
+
+fn fanout_netlist() -> Netlist {
+    Netlist {
+        inputs: vec!["a".to_string()],
+        outputs: vec!["left".to_string(), "right".to_string()],
+        gates: vec![Gate::nor("left", &["a"]), Gate::nor("right", &["a"])],
     }
 }
 
@@ -89,10 +125,167 @@ fn extracted_candidate_preserves_each_primitive_anchor_and_route_owner() {
 
     let seed = seed_from_legacy(&netlist, &compiled).expect("legacy output must be extractable");
 
-    assert_eq!(seed.anchors().len(), netlist.gates.len() + netlist.inputs.len());
+    assert_eq!(
+        seed.anchors(),
+        &[
+            Anchor { x: 14, y: 1, z: 38 },
+            Anchor { x: 28, y: 1, z: 38 },
+            Anchor { x: 42, y: 1, z: 38 },
+            Anchor { x: 26, y: 1, z: 27 },
+            Anchor { x: 28, y: 1, z: 16 },
+            Anchor { x: 56, y: 1, z: 38 },
+            Anchor { x: 26, y: 1, z: 5 },
+            Anchor { x: 12, y: 1, z: 49 },
+            Anchor { x: 26, y: 1, z: 49 },
+            Anchor { x: 40, y: 1, z: 49 },
+            Anchor { x: 54, y: 1, z: 49 },
+        ],
+        "and4's legacy seed must preserve each emitter-selected primitive origin"
+    );
+
+    let observed = seed
+        .routes()
+        .iter()
+        .map(|route| {
+            (
+                route.id(),
+                route.owner(),
+                route.anchors().first().copied(),
+                route.anchors().last().copied(),
+                route.terminal_kinds(),
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        observed,
+        vec![
+            (
+                "a",
+                Some("a"),
+                Some(Anchor { x: 12, y: 1, z: 48 }),
+                Some(Anchor { x: 13, y: 1, z: 38 }),
+                vec![RouteTerminalKind::RepeaterIntoSupport]
+            ),
+            (
+                "b",
+                Some("b"),
+                Some(Anchor { x: 26, y: 1, z: 48 }),
+                Some(Anchor { x: 27, y: 1, z: 38 }),
+                vec![RouteTerminalKind::RepeaterIntoSupport]
+            ),
+            (
+                "c",
+                Some("c"),
+                Some(Anchor { x: 40, y: 1, z: 48 }),
+                Some(Anchor { x: 41, y: 1, z: 38 }),
+                vec![RouteTerminalKind::RepeaterIntoSupport]
+            ),
+            (
+                "d",
+                Some("d"),
+                Some(Anchor { x: 54, y: 1, z: 48 }),
+                Some(Anchor { x: 55, y: 1, z: 38 }),
+                vec![RouteTerminalKind::RepeaterIntoSupport]
+            ),
+            (
+                "g0",
+                Some("g0"),
+                Some(Anchor { x: 14, y: 1, z: 36 }),
+                Some(Anchor { x: 25, y: 1, z: 27 }),
+                vec![RouteTerminalKind::DirectedDustIntoSupport]
+            ),
+            (
+                "g1",
+                Some("g1"),
+                Some(Anchor { x: 28, y: 1, z: 36 }),
+                Some(Anchor { x: 27, y: 1, z: 27 }),
+                vec![RouteTerminalKind::DirectedDustIntoSupport]
+            ),
+            (
+                "g2",
+                Some("g2"),
+                Some(Anchor { x: 42, y: 1, z: 36 }),
+                Some(Anchor { x: 26, y: 3, z: 33 }),
+                vec![RouteTerminalKind::DirectedDustIntoSupport]
+            ),
+            (
+                "g3",
+                Some("g3"),
+                Some(Anchor { x: 26, y: 1, z: 25 }),
+                Some(Anchor { x: 27, y: 1, z: 16 }),
+                vec![RouteTerminalKind::DirectedDustIntoSupport]
+            ),
+            (
+                "g4",
+                Some("g4"),
+                Some(Anchor { x: 28, y: 1, z: 14 }),
+                Some(Anchor { x: 25, y: 1, z: 5 }),
+                vec![RouteTerminalKind::DirectedDustIntoSupport]
+            ),
+            (
+                "g5",
+                Some("g5"),
+                Some(Anchor { x: 56, y: 1, z: 36 }),
+                Some(Anchor { x: 30, y: 3, z: 11 }),
+                vec![RouteTerminalKind::DirectedDustIntoSupport]
+            ),
+        ],
+        "route owners, coverage endpoints, and terminal choices are explicit legacy facts"
+    );
+}
+
+#[test]
+fn extracted_bare_merge_routes_identify_their_merge_sink_and_terminal_style() {
+    let netlist = bare_merge_netlist();
+    let compiled = compile(&netlist).expect("private merge branches must compile");
+    let seed = seed_from_legacy(&netlist, &compiled).expect("compiled merge must seed");
+
+    assert_eq!(
+        seed.routes()
+            .iter()
+            .map(|route| (route.id(), route.owner(), route.terminal_kinds()))
+            .collect::<Vec<_>>(),
+        vec![
+            ("a", Some("a"), vec![RouteTerminalKind::BareMergeDust]),
+            ("b", Some("b"), vec![RouteTerminalKind::BareMergeDust]),
+        ],
+        "a private merge branch terminates at the merge dust, not a NOR-support repeater"
+    );
+}
+
+#[test]
+fn extracted_fanout_terminal_metadata_keeps_each_sink_identity() {
+    let netlist = fanout_netlist();
+    let compiled = compile(&netlist).expect("fanout fixture must compile");
+    let seed = seed_from_legacy(&netlist, &compiled).expect("compiled fanout must seed");
+    let route = seed
+        .routes()
+        .iter()
+        .find(|route| route.id() == "a")
+        .expect("input edge must exist");
+
+    let mut sinks = route
+        .terminals()
+        .iter()
+        .map(|terminal| {
+            (
+                terminal.sink.gate.as_str(),
+                terminal.sink.input_index,
+                terminal.sink.anchor,
+            )
+        })
+        .collect::<Vec<_>>();
+    sinks.sort_unstable_by_key(|(gate, input_index, _)| (*gate, *input_index));
+    assert_eq!(
+        sinks.iter().map(|(gate, input_index, _)| (*gate, *input_index)).collect::<Vec<_>>(),
+        vec![("left", 0), ("right", 0)],
+        "fanout terminals carry declared sink identities instead of relying on an internal flattening order"
+    );
     assert!(
-        seed.routes().iter().all(|route| route.owner().is_some()),
-        "every extracted route must keep the net that legacy emission assigned it"
+        sinks
+            .iter()
+            .all(|(_, _, anchor)| route.anchors().contains(anchor)),
+        "each identified fanout sink terminates at one of its own edge cells"
     );
 }
 
@@ -113,7 +306,10 @@ fn a_compiled_not_gate_matches_its_truth_table() {
     for (a, expected) in rows {
         set_lever(&mut simulator, lever_a, a);
         let output = read_output(&simulator, output_y);
-        assert_eq!(output, expected, "NOT({a}) should be {expected}, got {output}");
+        assert_eq!(
+            output, expected,
+            "NOT({a}) should be {expected}, got {output}"
+        );
     }
 }
 
@@ -143,7 +339,10 @@ fn a_compiled_and_gate_matches_its_truth_table() {
         set_lever(&mut simulator, lever_a, a);
         set_lever(&mut simulator, lever_b, b);
         let output = read_output(&simulator, output_y);
-        assert_eq!(output, expected, "AND({a}, {b}) should be {expected}, got {output}");
+        assert_eq!(
+            output, expected,
+            "AND({a}, {b}) should be {expected}, got {output}"
+        );
     }
 }
 
@@ -152,15 +351,20 @@ fn a_compiled_circuit_saves_to_a_loadable_litematic() {
     let netlist = and_netlist();
     let compiled = compile(&netlist).expect("this netlist is acyclic and fully driven");
 
-    let mut path = PathBuf::from(std::env::var("CARGO_TARGET_TMPDIR").unwrap_or_else(|_| {
-        std::env::temp_dir().to_string_lossy().to_string()
-    }));
+    let mut path = PathBuf::from(
+        std::env::var("CARGO_TARGET_TMPDIR")
+            .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().to_string()),
+    );
     path.push("reda_compile_end_to_end_and_gate.litematic");
 
     litematic::save(&path, &compiled.world, "and_gate").expect("saving must succeed");
     let loaded = litematic::load(&path).expect("loading must succeed");
 
-    assert_eq!(loaded.size(), compiled.world.size(), "loaded world must have the same dimensions");
+    assert_eq!(
+        loaded.size(),
+        compiled.world.size(),
+        "loaded world must have the same dimensions"
+    );
 
     let (size_x, size_y, size_z) = compiled.world.size();
     for x in 0..size_x {
@@ -196,7 +400,11 @@ fn compiling_the_same_netlist_twice_gives_the_same_world() {
     let first = compile(&and_netlist()).expect("this netlist is acyclic and fully driven");
     let second = compile(&and_netlist()).expect("this netlist is acyclic and fully driven");
 
-    assert_eq!(first.world.size(), second.world.size(), "world size must be stable");
+    assert_eq!(
+        first.world.size(),
+        second.world.size(),
+        "world size must be stable"
+    );
     assert_eq!(first.input_positions, second.input_positions);
     assert_eq!(first.output_positions, second.output_positions);
 
@@ -221,8 +429,18 @@ fn a_cyclic_netlist_is_rejected() {
         inputs: vec![],
         outputs: vec!["loop_b".to_string()],
         gates: vec![
-            Gate { name: "g1".to_string(), inputs: vec!["loop_b".to_string()], output: "loop_a".to_string(), kind: GateKind::Nor(1) },
-            Gate { name: "g2".to_string(), inputs: vec!["loop_a".to_string()], output: "loop_b".to_string(), kind: GateKind::Nor(1) },
+            Gate {
+                name: "g1".to_string(),
+                inputs: vec!["loop_b".to_string()],
+                output: "loop_a".to_string(),
+                kind: GateKind::Nor(1),
+            },
+            Gate {
+                name: "g2".to_string(),
+                inputs: vec!["loop_a".to_string()],
+                output: "loop_b".to_string(),
+                kind: GateKind::Nor(1),
+            },
         ],
     };
 

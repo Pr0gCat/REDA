@@ -47,7 +47,9 @@ use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
 use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use crate::redstone::world::storage::World;
 
-use self::planner::{Anchor, RouteTerminalKind};
+use self::planner::{
+    Anchor, PrimitiveNode, RouteSink, RouteTerminal, RouteTerminalKind,
+};
 
 pub mod equivalence;
 pub mod lowering;
@@ -389,7 +391,11 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
     let mut input_offsets = Vec::with_capacity(input_count);
     for &direction in INPUT_DIRECTIONS.iter().take(input_count) {
         let socket = support.offset(direction);
-        input_offsets.push((socket.x - support.x, socket.y - support.y, socket.z - support.z));
+        input_offsets.push((
+            socket.x - support.x,
+            socket.y - support.y,
+            socket.z - support.z,
+        ));
     }
 
     let output_torch_pos = support.offset(OUTPUT_DIRECTION);
@@ -415,7 +421,11 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
     };
     extend(output_socket);
     for &(dx, dy, dz) in &input_offsets {
-        extend(Position::new(support.x + dx, support.y + dy, support.z + dz));
+        extend(Position::new(
+            support.x + dx,
+            support.y + dy,
+            support.z + dz,
+        ));
     }
 
     let size = (max.0 - min.0 + 1, max.1 - min.1 + 1, max.2 - min.2 + 1);
@@ -495,7 +505,11 @@ pub fn place_merge_gate(world: &mut World, origin: (i32, i32, i32), input_count:
     let mut input_offsets = Vec::with_capacity(input_count);
     for &direction in INPUT_DIRECTIONS.iter().take(input_count) {
         let socket = support.offset(direction);
-        input_offsets.push((socket.x - support.x, socket.y - support.y, socket.z - support.z));
+        input_offsets.push((
+            socket.x - support.x,
+            socket.y - support.y,
+            socket.z - support.z,
+        ));
     }
 
     // No output torch to place -- `output_socket` is where this gate's own
@@ -518,7 +532,11 @@ pub fn place_merge_gate(world: &mut World, origin: (i32, i32, i32), input_count:
     };
     extend(output_socket);
     for &(dx, dy, dz) in &input_offsets {
-        extend(Position::new(support.x + dx, support.y + dy, support.z + dz));
+        extend(Position::new(
+            support.x + dx,
+            support.y + dy,
+            support.z + dz,
+        ));
     }
 
     let size = (max.0 - min.0 + 1, max.1 - min.1 + 1, max.2 - min.2 + 1);
@@ -532,7 +550,11 @@ pub fn place_merge_gate(world: &mut World, origin: (i32, i32, i32), input_count:
     // comment now explains is `emit`'s job to apply, to where its outbound
     // *route* starts (`gate_pin`) -- not to this recorded position, which
     // must stay put.
-    NorCell { size, input_offsets, output_offset: (0, 0, 0) }
+    NorCell {
+        size,
+        input_offsets,
+        output_offset: (0, 0, 0),
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -743,7 +765,11 @@ const RAMP_REST_INTERVAL: i32 = MAX_DUST_RUN - 1;
 /// How many mandatory rest stops (see `RAMP_REST_INTERVAL`) a climb or
 /// descent of `levels` Y-levels needs.
 fn rest_stops_for(levels: i32) -> i32 {
-    if levels <= 0 { 0 } else { (levels - 1) / RAMP_REST_INTERVAL }
+    if levels <= 0 {
+        0
+    } else {
+        (levels - 1) / RAMP_REST_INTERVAL
+    }
 }
 
 /// The physical Z (or X) distance a climb or descent into/out of `band`
@@ -1041,7 +1067,10 @@ const BARE_TERMINATION_RESERVE: i32 = 2;
 /// so the chain, and the extra reserve it costs, goes no further than
 /// `into` itself.
 fn bare_reserve_for_merge(netlist: &Netlist, nets: &[Net], into: usize) -> i32 {
-    let Some(net) = nets.iter().find(|n| matches!(n.source, Source::Gate(g) if g == into)) else {
+    let Some(net) = nets
+        .iter()
+        .find(|n| matches!(n.source, Source::Gate(g) if g == into))
+    else {
         // `into`'s own output feeds nothing further (a declared output
         // only) -- the chain stops at its pin, same base reserve.
         return BARE_TERMINATION_RESERVE;
@@ -1146,7 +1175,10 @@ pub enum CompileError {
     /// inputs it actually has. Reached before anything is placed -- see
     /// [`compile`]'s own doc comment for why this is an error rather than an
     /// implicit lowering.
-    NotRealisable { gate: String, kind: topology::GateKind },
+    NotRealisable {
+        gate: String,
+        kind: topology::GateKind,
+    },
     /// 網表裡有迴路
     CyclicNetlist,
     /// 訊號沒有驅動來源
@@ -1159,6 +1191,10 @@ pub enum CompileError {
         expected_net: String,
         found_net: Option<String>,
     },
+    /// Candidate metadata cannot be realised against the physical legacy
+    /// replay target. This distinguishes an identity/style mismatch from a
+    /// legal circuit that merely fails a redstone invariant.
+    CandidateMetadataViolation { item: String, reason: String },
     /// Two nets' routed dust physically joined into one electrical network --
     /// the connectivity invariant `compile` checks right before it would
     /// otherwise return a circuit (see `verify_connectivity`). This is the
@@ -1213,9 +1249,15 @@ pub enum SignalSink {
     /// A gate input -- specifically the support block its route terminates
     /// against, the same cell `verify_torch_merge` already proved is
     /// *structurally* reached by this net.
-    GateInput { gate: String, support: (i32, i32, i32) },
+    GateInput {
+        gate: String,
+        support: (i32, i32, i32),
+    },
     /// A declared circuit output's lamp.
-    OutputLamp { output: String, lamp: (i32, i32, i32) },
+    OutputLamp {
+        output: String,
+        lamp: (i32, i32, i32),
+    },
 }
 
 /// Which condition of the torch-merge invariant failed. See
@@ -1232,22 +1274,37 @@ pub enum TorchMergeFailure {
     /// will ever report a block as powered. No input could ever invert
     /// this torch, no matter how it is wired, because the support can
     /// never be observed as powered at all.
-    SupportNotConductive { torch: (i32, i32, i32), support: (i32, i32, i32) },
+    SupportNotConductive {
+        torch: (i32, i32, i32),
+        support: (i32, i32, i32),
+    },
     /// A declared input net never structurally reaches the support block --
     /// driving that input would never darken this torch.
-    InputDoesNotReachSupport { torch: (i32, i32, i32), support: (i32, i32, i32), input: String },
+    InputDoesNotReachSupport {
+        torch: (i32, i32, i32),
+        support: (i32, i32, i32),
+        input: String,
+    },
     /// A net that is *not* one of the gate's declared inputs also
     /// structurally reaches the support block, corrupting the merge --
     /// driving that unrelated net would darken a torch it has no business
     /// influencing.
-    ForeignNetReachesSupport { torch: (i32, i32, i32), support: (i32, i32, i32), net: String },
+    ForeignNetReachesSupport {
+        torch: (i32, i32, i32),
+        support: (i32, i32, i32),
+        net: String,
+    },
     /// The torch's own output leaks into some other net's conductor
     /// instead of only the net it is meant to drive. A torch does not
     /// power the block it is attached to (that asymmetry is what makes it
     /// invert), but it powers every *other* neighbour -- so a stray
     /// conductor sitting on any of those other faces gets fed by this
     /// gate's own output.
-    OutputLeaksIntoForeignNet { torch: (i32, i32, i32), leaked_cell: (i32, i32, i32), net: String },
+    OutputLeaksIntoForeignNet {
+        torch: (i32, i32, i32),
+        leaked_cell: (i32, i32, i32),
+        net: String,
+    },
 }
 
 impl std::fmt::Display for CompileError {
@@ -1264,6 +1321,9 @@ impl std::fmt::Display for CompileError {
                 "spacing violation: route metadata assigns {cell:?} to `{expected_net}`, but the reservation records {}",
                 found_net.as_deref().unwrap_or("no net")
             ),
+            CompileError::CandidateMetadataViolation { item, reason } => {
+                write!(f, "candidate metadata violation for {item}: {reason}")
+            }
             CompileError::ConnectivityViolation { cell, found_net, expected_cell, expected_net } => {
                 write!(
                     f,
@@ -1367,6 +1427,7 @@ pub(crate) struct LegacyEmission {
     output_positions: BTreeMap<String, (i32, i32, i32)>,
     gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
     primitive_anchors: Vec<Anchor>,
+    primitive_nodes: Vec<PrimitiveNode>,
     routes: Vec<LegacyRoute>,
 }
 
@@ -1379,6 +1440,10 @@ impl LegacyEmission {
         &self.primitive_anchors
     }
 
+    pub(crate) fn primitive_nodes(&self) -> &[PrimitiveNode] {
+        &self.primitive_nodes
+    }
+
     pub(crate) fn routes(&self) -> &[LegacyRoute] {
         &self.routes
     }
@@ -1389,7 +1454,7 @@ impl LegacyEmission {
 pub(crate) struct LegacyRoute {
     owner: String,
     anchors: Vec<Anchor>,
-    terminal_kinds: Vec<RouteTerminalKind>,
+    terminals: Vec<RouteTerminal>,
 }
 
 impl LegacyRoute {
@@ -1401,8 +1466,8 @@ impl LegacyRoute {
         &self.anchors
     }
 
-    pub(crate) fn terminal_kinds(&self) -> &[RouteTerminalKind] {
-        &self.terminal_kinds
+    pub(crate) fn terminals(&self) -> &[RouteTerminal] {
+        &self.terminals
     }
 }
 
@@ -1415,9 +1480,17 @@ fn ensure_floor(world: &mut World, pos: Position) {
 /// 從 `start` 走到 `end`（兩者必須沿同一軸對齊）是哪個方向。
 fn direction_from(start: Position, end: Position) -> Facing {
     if end.x != start.x {
-        if end.x > start.x { Facing::East } else { Facing::West }
+        if end.x > start.x {
+            Facing::East
+        } else {
+            Facing::West
+        }
     } else if end.z != start.z {
-        if end.z > start.z { Facing::South } else { Facing::North }
+        if end.z > start.z {
+            Facing::South
+        } else {
+            Facing::North
+        }
     } else {
         unreachable!("direction_from 只處理水平直線上、起訖點不同的兩點")
     }
@@ -1453,7 +1526,10 @@ fn straight_run_length(start: Position, direction: Facing, stop_before: Position
 /// into a mandatory terminating repeater instead (which cannot die no matter
 /// what strength reaches it, as long as it is nonzero).
 fn plan_straight_run(len: i32, incoming_strength: u8, reserve: i32) -> (Vec<bool>, u8) {
-    debug_assert!(incoming_strength > 0, "a run cannot start from an already-dead signal");
+    debug_assert!(
+        incoming_strength > 0,
+        "a run cannot start from an already-dead signal"
+    );
     let threshold = (MAX_DUST_RUN - reserve) as i64;
     let mut is_repeater = vec![false; len.max(0) as usize];
     let mut last_refresh: i64 = incoming_strength as i64 - (MAX_SIGNAL_STRENGTH as i64 + 1);
@@ -1603,12 +1679,19 @@ fn lay_bent_path(
     terminal: TerminalKind,
     route: &mut Route,
 ) {
-    debug_assert!(!waypoints.is_empty(), "a bent path must have somewhere to end");
-    debug_assert!(incoming_strength > 0, "a run cannot start from an already-dead signal");
+    debug_assert!(
+        !waypoints.is_empty(),
+        "a bent path must have somewhere to end"
+    );
+    debug_assert!(
+        incoming_strength > 0,
+        "a run cannot start from an already-dead signal"
+    );
 
     let cells = bent_path_cells(start, waypoints);
     let bend_indices = bent_path_bends(&cells, waypoints);
-    let (mut is_repeater, _ending_strength) = plan_bent_path(cells.len(), &bend_indices, incoming_strength, 0);
+    let (mut is_repeater, _ending_strength) =
+        plan_bent_path(cells.len(), &bend_indices, incoming_strength, 0);
     match terminal {
         TerminalKind::RepeaterIntoSupport => {
             // The final cell is a mandatory repeater regardless of the budget
@@ -1655,10 +1738,9 @@ fn bent_path_bends(cells: &[Position], waypoints: &[Position]) -> BTreeSet<usize
     waypoints[..waypoints.len() - 1]
         .iter()
         .map(|&waypoint| {
-            cells
-                .iter()
-                .position(|&cell| cell == waypoint)
-                .expect("every waypoint before the last is pushed onto `cells` by `bent_path_cells`")
+            cells.iter().position(|&cell| cell == waypoint).expect(
+                "every waypoint before the last is pushed onto `cells` by `bent_path_cells`",
+            )
         })
         .collect()
 }
@@ -1720,7 +1802,12 @@ fn bare_ending_bend_indices(cells: &[Position], waypoints: &[Position]) -> BTree
 /// mandatory final repeater on top); the ending strength is what
 /// `bare_branch_landing_strength` needs, to learn what a **bare** ending
 /// actually delivers before any block for it exists.
-fn plan_bent_path(len: usize, bend_indices: &BTreeSet<usize>, incoming_strength: u8, reserve: i32) -> (Vec<bool>, u8) {
+fn plan_bent_path(
+    len: usize,
+    bend_indices: &BTreeSet<usize>,
+    incoming_strength: u8,
+    reserve: i32,
+) -> (Vec<bool>, u8) {
     let threshold = (MAX_DUST_RUN - reserve) as i64;
     let mut is_repeater = vec![false; len];
     let mut last_refresh: i64 = incoming_strength as i64 - (MAX_SIGNAL_STRENGTH as i64 + 1);
@@ -1776,13 +1863,27 @@ fn plan_bent_path(len: usize, bend_indices: &BTreeSet<usize>, incoming_strength:
 /// `reserve` is [`bare_reserve_for_merge`]'s answer for whichever merge
 /// this branch actually feeds, not a fixed constant -- a chain of merges
 /// needs more than one hop's worth (see that function's own doc comment).
-fn lay_bent_path_bare(world: &mut World, start: Position, waypoints: &[Position], incoming_strength: u8, reserve: i32, route: &mut Route) -> u8 {
-    debug_assert!(!waypoints.is_empty(), "a bent path must have somewhere to end");
-    debug_assert!(incoming_strength > 0, "a run cannot start from an already-dead signal");
+fn lay_bent_path_bare(
+    world: &mut World,
+    start: Position,
+    waypoints: &[Position],
+    incoming_strength: u8,
+    reserve: i32,
+    route: &mut Route,
+) -> (u8, RouteTerminalKind) {
+    debug_assert!(
+        !waypoints.is_empty(),
+        "a bent path must have somewhere to end"
+    );
+    debug_assert!(
+        incoming_strength > 0,
+        "a run cannot start from an already-dead signal"
+    );
 
     let cells = bent_path_cells(start, waypoints);
     let bend_indices = bare_ending_bend_indices(&cells, waypoints);
-    let (is_repeater, ending_strength) = plan_bent_path(cells.len(), &bend_indices, incoming_strength, reserve);
+    let (is_repeater, ending_strength) =
+        plan_bent_path(cells.len(), &bend_indices, incoming_strength, reserve);
 
     let mut prev = start;
     for (index, &pos) in cells.iter().enumerate() {
@@ -1797,7 +1898,14 @@ fn lay_bent_path_bare(world: &mut World, start: Position, waypoints: &[Position]
         route.claim(pos);
         prev = pos;
     }
-    ending_strength
+    (
+        ending_strength,
+        if is_repeater[cells.len() - 1] {
+            RouteTerminalKind::BareMergeRepeater
+        } else {
+            RouteTerminalKind::BareMergeDust
+        },
+    )
 }
 
 /// The two horizontal directions perpendicular to `direction` -- the only
@@ -1839,6 +1947,10 @@ struct Footprint {
     /// This deliberately records emitter decisions instead of later inferring
     /// ownership by inspecting the finished world's blocks.
     route_anchors: Vec<Vec<Anchor>>,
+    /// Every sink's concrete terminal location and style, keyed by route.
+    /// This is populated at the actual emit call site, so fanout branches do
+    /// not rely on an incidental flattened route order.
+    route_terminals: Vec<Vec<RouteTerminal>>,
 }
 
 impl Footprint {
@@ -1847,6 +1959,7 @@ impl Footprint {
             reservation: Reservation::new(),
             recording: true,
             route_anchors: Vec::new(),
+            route_terminals: Vec::new(),
         }
     }
 
@@ -1855,6 +1968,7 @@ impl Footprint {
             reservation,
             recording: false,
             route_anchors: Vec::new(),
+            route_terminals: Vec::new(),
         }
     }
 
@@ -1878,18 +1992,40 @@ impl Footprint {
         }
     }
 
-    fn legacy_routes(&self, netlist: &Netlist, nets: &[Net], terminals: &TerminalKinds) -> Vec<LegacyRoute> {
+    fn terminal(
+        &mut self,
+        net: usize,
+        gate: &Gate,
+        input_index: usize,
+        pos: Position,
+        kind: RouteTerminalKind,
+    ) {
+        if self.recording {
+            if self.route_terminals.len() <= net {
+                self.route_terminals.resize_with(net + 1, Vec::new);
+            }
+            self.route_terminals[net].push(RouteTerminal {
+                sink: RouteSink {
+                    gate: gate.output.clone(),
+                    input_index,
+                    anchor: Anchor {
+                        x: pos.x,
+                        y: pos.y,
+                        z: pos.z,
+                    },
+                },
+                kind,
+            });
+        }
+    }
+
+    fn legacy_routes(&self, netlist: &Netlist, nets: &[Net]) -> Vec<LegacyRoute> {
         nets.iter()
             .enumerate()
             .map(|(net, route)| LegacyRoute {
                 owner: net_source_name(netlist, route).to_string(),
                 anchors: self.route_anchors.get(net).cloned().unwrap_or_default(),
-                terminal_kinds: terminals[net]
-                    .iter()
-                    .flatten()
-                    .copied()
-                    .map(RouteTerminalKind::from)
-                    .collect(),
+                terminals: self.route_terminals.get(net).cloned().unwrap_or_default(),
             })
             .collect()
     }
@@ -1907,6 +2043,17 @@ struct Route<'a> {
 impl Route<'_> {
     fn claim(&mut self, pos: Position) {
         self.footprint.claim(pos, self.net);
+    }
+
+    fn terminal(
+        &mut self,
+        gate: &Gate,
+        input_index: usize,
+        pos: Position,
+        kind: RouteTerminalKind,
+    ) {
+        self.footprint
+            .terminal(self.net, gate, input_index, pos, kind);
     }
 }
 
@@ -1944,7 +2091,10 @@ impl Route<'_> {
 /// during the recording pass the reservation is necessarily incomplete, so a
 /// sealing decision made from it could not be trusted.
 fn seal_cross_talk(world: &mut World, pos: Position, direction: Facing, route: &Route) {
-    debug_assert!(!route.footprint.recording, "sealing must only happen once the reservation is complete");
+    debug_assert!(
+        !route.footprint.recording,
+        "sealing must only happen once the reservation is complete"
+    );
     for side in side_directions(direction) {
         for candidate in dust_reach(world, pos, side).iter() {
             if world.get(candidate.x, candidate.y, candidate.z).kind != BlockKind::Air {
@@ -2008,7 +2158,13 @@ fn seal_cross_talk(world: &mut World, pos: Position, direction: Facing, route: &
 /// become one itself) at fixed, band-index-determined positions, so a climb
 /// or descent of any length this router ever asks for survives regardless
 /// of the real strength it happens to arrive with.
-fn move_between_layers(world: &mut World, entry: Position, direction: Facing, target_y: i32, route: &mut Route) -> Position {
+fn move_between_layers(
+    world: &mut World,
+    entry: Position,
+    direction: Facing,
+    target_y: i32,
+    route: &mut Route,
+) -> Position {
     let levels = (target_y - entry.y).abs();
     let climbing = target_y >= entry.y;
     let mut current = entry;
@@ -2084,7 +2240,10 @@ fn plan_track_run(
     reserve: i32,
     taps: &BTreeSet<i32>,
 ) -> (Vec<bool>, Vec<u8>) {
-    debug_assert!(incoming_strength > 0, "a run cannot start from an already-dead signal");
+    debug_assert!(
+        incoming_strength > 0,
+        "a run cannot start from an already-dead signal"
+    );
     let threshold = (MAX_DUST_RUN - reserve) as i64;
 
     // Pick the repeater cells before writing anything: where one repeater
@@ -2292,7 +2451,11 @@ enum Source {
 #[derive(Debug, Clone, Copy)]
 enum Exit {
     /// Down into one input socket of a gate in the row north of this channel.
-    Socket { x: i32, gate: usize, input_index: usize },
+    Socket {
+        x: i32,
+        gate: usize,
+        input_index: usize,
+    },
     /// Straight on northwards, to rejoin a track in a later channel.
     Feedthrough { x: i32, next_slot: usize },
 }
@@ -2339,7 +2502,10 @@ impl Net {
             })
             .collect();
         if slot + 1 < self.channels.len() {
-            exits.push(Exit::Feedthrough { x: self.hops[slot], next_slot: slot + 1 });
+            exits.push(Exit::Feedthrough {
+                x: self.hops[slot],
+                next_slot: slot + 1,
+            });
         }
         exits
     }
@@ -2452,7 +2618,11 @@ struct Floorplan {
 /// show for it.
 ///
 /// Kept: ASAP, unmodified.
-fn compute_asap_levels(netlist: &Netlist, order: &[usize], producer_of: &HashMap<&str, usize>) -> Vec<usize> {
+fn compute_asap_levels(
+    netlist: &Netlist,
+    order: &[usize],
+    producer_of: &HashMap<&str, usize>,
+) -> Vec<usize> {
     let mut level = vec![0usize; netlist.gates.len()];
     for &g in order {
         let mut deepest = 0usize;
@@ -2546,7 +2716,11 @@ fn build_floorplan(
                             count += 1.0;
                         }
                     }
-                    let key = if count > 0.0 { sum / count } else { spread(i, row_len[r]) };
+                    let key = if count > 0.0 {
+                        sum / count
+                    } else {
+                        spread(i, row_len[r])
+                    };
                     (key, i, g)
                 })
                 .collect();
@@ -2567,7 +2741,11 @@ fn build_floorplan(
                         sum += spread(slot[c], row_len[level[c] + 1]);
                         count += 1.0;
                     }
-                    let key = if count > 0.0 { sum / count } else { spread(i, row_len[r]) };
+                    let key = if count > 0.0 {
+                        sum / count
+                    } else {
+                        spread(i, row_len[r])
+                    };
                     (key, i, g)
                 })
                 .collect();
@@ -2600,7 +2778,12 @@ fn build_floorplan(
 
     let row_of: Vec<usize> = level.iter().map(|&l| l + 1).collect();
 
-    Floorplan { row_of, rows, centre_x, lever_x }
+    Floorplan {
+        row_of,
+        rows,
+        centre_x,
+        lever_x,
+    }
 }
 
 /// Collect the nets: one per driven signal that actually has a sink.
@@ -2741,11 +2924,10 @@ fn reserve_feedthrough(
     let channels: Vec<usize> = channels.collect();
     let rows: Vec<usize> = rows.collect();
     let fits = |x: i32| -> bool {
-        if rows.iter().any(|&r| {
-            row_blocked[r]
-                .iter()
-                .any(|&(lo, hi)| x >= lo && x <= hi)
-        }) {
+        if rows
+            .iter()
+            .any(|&r| row_blocked[r].iter().any(|&(lo, hi)| x >= lo && x <= hi))
+        {
             return false;
         }
         !channels.iter().any(|&c| {
@@ -2846,7 +3028,12 @@ fn reserve_columns(plan: &Floorplan, nets: &mut [Net], row_count: usize, channel
 ///
 /// Extracted verbatim from `compile`'s "Left-edge track assignment" section;
 /// see the comment there for why one track can carry many nets.
-fn assign_tracks(plan: &Floorplan, nets: &mut [Net], channel_count: usize, bypass: &[bool]) -> Vec<usize> {
+fn assign_tracks(
+    plan: &Floorplan,
+    nets: &mut [Net],
+    channel_count: usize,
+    bypass: &[bool],
+) -> Vec<usize> {
     let mut track_count = vec![0usize; channel_count];
     for (channel, count) in track_count.iter_mut().enumerate() {
         let mut members: Vec<(i32, i32, usize, usize)> = Vec::new();
@@ -2865,7 +3052,10 @@ fn assign_tracks(plan: &Floorplan, nets: &mut [Net], channel_count: usize, bypas
 
         let mut track_end: Vec<i32> = Vec::new();
         for (lo, hi, n, slot) in members {
-            let track = match track_end.iter().position(|&end| lo - end >= TRACK_SHARE_GAP) {
+            let track = match track_end
+                .iter()
+                .position(|&end| lo - end >= TRACK_SHARE_GAP)
+            {
                 Some(t) => t,
                 None => {
                     track_end.push(i32::MIN / 2);
@@ -2917,7 +3107,11 @@ fn assign_tracks(plan: &Floorplan, nets: &mut [Net], channel_count: usize, bypas
 /// here is structural (a strict Z gap, provable from the climb geometry
 /// alone), not a hopeful placement choice; `verify_connectivity` and
 /// `verify_torch_merge` still check every compile regardless.
-fn layout_z(row_count: usize, channel_count: usize, track_count: &[usize]) -> (Vec<i32>, Vec<Vec<i32>>) {
+fn layout_z(
+    row_count: usize,
+    channel_count: usize,
+    track_count: &[usize],
+) -> (Vec<i32>, Vec<Vec<i32>>) {
     let mut row_z = vec![0i32; row_count];
     let mut track_z: Vec<Vec<i32>> = vec![Vec::new(); channel_count];
     for channel in 0..channel_count {
@@ -3037,7 +3231,11 @@ fn plan_strengths(
             let eff_band = effective_band(track_count, channel, band);
             let reserve = ramp_reserve(eff_band);
             let z = track_z[channel][band];
-            let entry = Position::new(net.entry_column(slot), GATE_Y, z + band_ramp_length(eff_band));
+            let entry = Position::new(
+                net.entry_column(slot),
+                GATE_Y,
+                z + band_ramp_length(eff_band),
+            );
 
             let arriving = if slot == 0 {
                 let pin = match net.source {
@@ -3053,8 +3251,10 @@ fn plan_strengths(
                 let prev_z = track_z[prev_channel][prev_band];
                 let feed_x = net.hops[slot - 1];
                 let track_strength = net_exit[slot - 1][&feed_x];
-                let landing_strength = ramp_ending_strength(band_levels(eff_prev_band), track_strength);
-                let landing = Position::new(feed_x, GATE_Y, prev_z - band_ramp_length(eff_prev_band));
+                let landing_strength =
+                    ramp_ending_strength(band_levels(eff_prev_band), track_strength);
+                let landing =
+                    Position::new(feed_x, GATE_Y, prev_z - band_ramp_length(eff_prev_band));
                 let len = straight_run_length(landing, Facing::North, entry.offset(Facing::North));
                 plan_straight_run(len, landing_strength, reserve).1
             };
@@ -3129,7 +3329,11 @@ fn bare_branch_landing_strength(
             Source::Gate(g) => gate_pin[g],
         };
         let start = bypass_source_start(netlist, net, pin, exit_x);
-        let strength_at_start = if start != pin { source_strength.saturating_sub(1) } else { source_strength };
+        let strength_at_start = if start != pin {
+            source_strength.saturating_sub(1)
+        } else {
+            source_strength
+        };
 
         let mut waypoints: Vec<Position> = Vec::new();
         if start.x != exit_x {
@@ -3240,7 +3444,9 @@ fn compute_net_source_strengths(
         }
     }
 
-    let order = netlist.topological_order().expect("compile() already rejected a cyclic netlist before emit() runs");
+    let order = netlist
+        .topological_order()
+        .expect("compile() already rejected a cyclic netlist before emit() runs");
     for &g in &order {
         let gate = &netlist.gates[g];
         if !gate.is_merge() {
@@ -3397,12 +3603,30 @@ fn merge_branch_is_bare(netlist: &Netlist, net: &Net, gate: usize) -> bool {
 /// now-complete picture. Both calls run the exact same code, so the two
 /// worlds can never disagree about where anything is -- only about whether
 /// the orphaned keep-out cells around a ramp landing got sealed.
-fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footprint: &mut Footprint) -> EmitResult {
-    let RoutingGeometry { plan, row_z, nets, track_z, track_count, bypass, terminals } = *geometry;
+fn emit(
+    world: &mut World,
+    netlist: &Netlist,
+    geometry: &RoutingGeometry,
+    footprint: &mut Footprint,
+) -> EmitResult {
+    let RoutingGeometry {
+        plan,
+        row_z,
+        nets,
+        track_z,
+        track_count,
+        bypass,
+        terminals,
+    } = *geometry;
     let mut gate_cell: Vec<NorCell> = Vec::with_capacity(netlist.gates.len());
-    let mut primitive_anchors: Vec<Anchor> = Vec::with_capacity(netlist.gates.len() + netlist.inputs.len());
+    let mut primitive_anchors: Vec<Anchor> =
+        Vec::with_capacity(netlist.gates.len() + netlist.inputs.len());
     for _ in 0..netlist.gates.len() {
-        gate_cell.push(NorCell { size: (0, 0, 0), input_offsets: Vec::new(), output_offset: (0, 0, 0) });
+        gate_cell.push(NorCell {
+            size: (0, 0, 0),
+            input_offsets: Vec::new(),
+            output_offset: (0, 0, 0),
+        });
     }
     for (g, gate) in netlist.gates.iter().enumerate() {
         let origin = (plan.centre_x[g], GATE_Y, row_z[plan.row_of[g]]);
@@ -3466,15 +3690,33 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
     // one sourced by a merge (see `compute_net_source_strengths`'s own doc
     // comment). Has to run before `plan_strengths`, which now consumes this
     // instead of assuming the constant unconditionally.
-    let net_source_strength =
-        compute_net_source_strengths(netlist, nets, plan, row_z, track_z, track_count, bypass, &lever_pin, &gate_pin, &gate_cell);
+    let net_source_strength = compute_net_source_strengths(
+        netlist,
+        nets,
+        plan,
+        row_z,
+        track_z,
+        track_count,
+        bypass,
+        &lever_pin,
+        &gate_pin,
+        &gate_cell,
+    );
 
     // Strength planning: work out what every ramp's entry and every track's
     // exits will carry, before any of them are actually built. See
     // `plan_strengths` for why this has to happen up front rather than
     // inline in the passes below.
-    let (entry_strength, exit_strength) =
-        plan_strengths(nets, plan, track_z, track_count, &lever_pin, &gate_pin, bypass, &net_source_strength);
+    let (entry_strength, exit_strength) = plan_strengths(
+        nets,
+        plan,
+        track_z,
+        track_count,
+        &lever_pin,
+        &gate_pin,
+        bypass,
+        &net_source_strength,
+    );
 
     // Every net's own pin -- the first cell of its route -- belongs to that
     // net too, exactly like everything the passes below claim as they write
@@ -3516,13 +3758,20 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
             // below.
             continue;
         }
-        let mut route = Route { net: n, footprint: &mut *footprint };
+        let mut route = Route {
+            net: n,
+            footprint: &mut *footprint,
+        };
         for slot in 0..net.channels.len() {
             let channel = net.channels[slot];
             let band = net.tracks[slot];
             let eff_band = effective_band(track_count, channel, band);
             let z = track_z[channel][band];
-            let entry = Position::new(net.entry_column(slot), GATE_Y, z + band_ramp_length(eff_band));
+            let entry = Position::new(
+                net.entry_column(slot),
+                GATE_Y,
+                z + band_ramp_length(eff_band),
+            );
             move_between_layers(world, entry, Facing::North, band_y(eff_band), &mut route);
             for exit in net.exits(slot, &plan.centre_x) {
                 let top = Position::new(exit.x(), band_y(eff_band), z);
@@ -3534,7 +3783,10 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
     // Columns at `GATE_Y`: from a source pin up to its ramp, and from a ramp's
     // landing on to whatever it feeds.
     for (n, net) in nets.iter().enumerate() {
-        let mut route = Route { net: n, footprint: &mut *footprint };
+        let mut route = Route {
+            net: n,
+            footprint: &mut *footprint,
+        };
 
         if bypass[n] {
             // A direct connection: no ramp, no track. `resolve_bypass_and_
@@ -3597,9 +3849,26 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
             waypoints.push(socket);
             if merge_branch_is_bare(netlist, net, gate) {
                 let reserve = bare_reserve_for_merge(netlist, nets, gate);
-                let _ = lay_bent_path_bare(world, start, &waypoints, strength_at_start, reserve, &mut route);
+                let (_, terminal) = lay_bent_path_bare(
+                    world,
+                    start,
+                    &waypoints,
+                    strength_at_start,
+                    reserve,
+                    &mut route,
+                );
+                route.terminal(&netlist.gates[gate], input_index, socket, terminal);
             } else {
-                lay_bent_path(world, start, &waypoints, strength_at_start, terminals[n][0][0], &mut route);
+                let terminal = terminals[n][0][0];
+                lay_bent_path(
+                    world,
+                    start,
+                    &waypoints,
+                    strength_at_start,
+                    terminal,
+                    &mut route,
+                );
+                route.terminal(&netlist.gates[gate], input_index, socket, terminal.into());
             }
             continue;
         }
@@ -3613,7 +3882,11 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
             let band = net.tracks[slot];
             let eff_band = effective_band(track_count, channel, band);
             let z = track_z[channel][band];
-            let entry = Position::new(net.entry_column(slot), GATE_Y, z + band_ramp_length(eff_band));
+            let entry = Position::new(
+                net.entry_column(slot),
+                GATE_Y,
+                z + band_ramp_length(eff_band),
+            );
             if slot == 0 {
                 let pin = match net.source {
                     Source::Lever(i) => lever_pin[i],
@@ -3634,10 +3907,13 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
                 let landing_strength =
                     ramp_ending_strength(band_levels(eff_band), exit_strength[n][slot][&exit.x()]);
                 match exit {
-                    Exit::Socket { gate, input_index, .. } => {
+                    Exit::Socket {
+                        gate, input_index, ..
+                    } => {
                         let (dx, dy, dz) = gate_cell[gate].input_offsets[input_index];
                         let row_z_gate = row_z[plan.row_of[gate]];
-                        let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
+                        let socket =
+                            Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
                         // South's socket sits dead on `landing`'s own column
                         // (see `approach_column`'s doc comment), so this
                         // waypoint list is just `[socket]` there -- no bend.
@@ -3650,19 +3926,34 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
                         waypoints.push(socket);
                         if merge_branch_is_bare(netlist, net, gate) {
                             let reserve = bare_reserve_for_merge(netlist, nets, gate);
-                            let _ = lay_bent_path_bare(world, landing, &waypoints, landing_strength, reserve, &mut route);
+                            let (_, terminal) = lay_bent_path_bare(
+                                world,
+                                landing,
+                                &waypoints,
+                                landing_strength,
+                                reserve,
+                                &mut route,
+                            );
+                            route.terminal(&netlist.gates[gate], input_index, socket, terminal);
                         } else {
                             let sink = net.sinks[slot]
                                 .iter()
                                 .position(|&sink| sink == (gate, input_index))
                                 .expect("every socket exit came from this channel's sinks");
+                            let terminal = terminals[n][slot][sink];
                             lay_bent_path(
                                 world,
                                 landing,
                                 &waypoints,
                                 landing_strength,
-                                terminals[n][slot][sink],
+                                terminal,
                                 &mut route,
+                            );
+                            route.terminal(
+                                &netlist.gates[gate],
+                                input_index,
+                                socket,
+                                terminal.into(),
                             );
                         }
                     }
@@ -3671,7 +3962,8 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
                         let next_band = net.tracks[next_slot];
                         let eff_next_band = effective_band(track_count, next_channel, next_band);
                         let next_z = track_z[next_channel][next_band];
-                        let next_entry = Position::new(x, GATE_Y, next_z + band_ramp_length(eff_next_band));
+                        let next_entry =
+                            Position::new(x, GATE_Y, next_z + band_ramp_length(eff_next_band));
                         lay_dust_run(
                             world,
                             landing,
@@ -3694,7 +3986,10 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
             // Never touches a track -- see the Ramps pass above.
             continue;
         }
-        let mut route = Route { net: n, footprint: &mut *footprint };
+        let mut route = Route {
+            net: n,
+            footprint: &mut *footprint,
+        };
         // Same multi-container indexing as the Columns pass above -- see its
         // own `#[allow]` comment.
         #[allow(clippy::needless_range_loop)]
@@ -3710,8 +4005,16 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
             for exit in net.exits(slot, &plan.centre_x) {
                 taps.insert(exit.x());
             }
-            let track_incoming = ramp_ending_strength(band_levels(eff_band), entry_strength[n][slot]);
-            lay_track(world, (eff_band, z, source_x), (lo, hi), &taps, track_incoming, &mut route);
+            let track_incoming =
+                ramp_ending_strength(band_levels(eff_band), entry_strength[n][slot]);
+            lay_track(
+                world,
+                (eff_band, z, source_x),
+                (lo, hi),
+                &taps,
+                track_incoming,
+                &mut route,
+            );
         }
     }
 
@@ -3823,11 +4126,17 @@ fn directed_dust_terminal_is_legal(
 /// signal-flow edge in both cases, so readers that audit a compiled world
 /// must ask this semantic question rather than treating a repeater's block
 /// kind as the topology itself.
-pub(crate) fn input_socket_feeds_support(world: &World, socket: Position, support: Position) -> bool {
+pub(crate) fn input_socket_feeds_support(
+    world: &World,
+    socket: Position,
+    support: Position,
+) -> bool {
     let toward_support = direction_from(socket, support);
     let socket_state = world.get(socket.x, socket.y, socket.z);
-    (socket_state.kind == BlockKind::Repeater && socket_state.facing == Some(toward_support.opposite()))
-        || (socket_state.kind == BlockKind::RedstoneWire && dust_powers_block_toward(world, socket, toward_support))
+    (socket_state.kind == BlockKind::Repeater
+        && socket_state.facing == Some(toward_support.opposite()))
+        || (socket_state.kind == BlockKind::RedstoneWire
+            && dust_powers_block_toward(world, socket, toward_support))
 }
 
 /// Promote only the terminal repeaters which can become real directed dust.
@@ -3856,10 +4165,16 @@ fn resolve_directed_dust_terminals(
     // merge's named output is a fresh full-strength source.
     let mut group_cells: HashMap<usize, HashSet<Position>> = HashMap::new();
     for (&position, &owner) in reservation {
-        group_cells.entry(groups.root(owner)).or_default().insert(position);
+        group_cells
+            .entry(groups.root(owner))
+            .or_default()
+            .insert(position);
     }
     for (&position, &owner) in &merge_gate_body_owners(netlist, nets, gate_output_positions) {
-        group_cells.entry(groups.root(owner)).or_default().insert(position);
+        group_cells
+            .entry(groups.root(owner))
+            .or_default()
+            .insert(position);
     }
 
     // Every real source in a declared merge group feeds the same dust.  The
@@ -3884,7 +4199,10 @@ fn resolve_directed_dust_terminals(
                 (Position::new(x, y, z), world.get(x, y, z))
             }
         };
-        group_sources.entry(groups.root(n)).or_default().push((source, source_state));
+        group_sources
+            .entry(groups.root(n))
+            .or_default()
+            .push((source, source_state));
     }
     let empty_sources: Vec<(Position, &BlockState)> = Vec::new();
     let group_strength: HashMap<usize, HashMap<Position, u8>> = group_cells
@@ -3908,7 +4226,9 @@ fn resolve_directed_dust_terminals(
                     .get(&netlist.gates[gate].output)
                     .expect("emit records every gate output");
                 let torch = Position::new(torch_x, torch_y, torch_z);
-                let Some(support) = torch_support_position(world.get(torch.x, torch.y, torch.z), torch) else {
+                let Some(support) =
+                    torch_support_position(world.get(torch.x, torch.y, torch.z), torch)
+                else {
                     continue;
                 };
                 let socket = support.offset(INPUT_DIRECTIONS[input_index]);
@@ -4012,7 +4332,10 @@ fn source_pin_position(
 /// -- actually has to avoid.
 fn cell_is_free_for(reservation: &Reservation, pos: Position, net: usize) -> bool {
     let owned_by_other = |p: Position| matches!(reservation.get(&p), Some(&owner) if owner != net);
-    !owned_by_other(pos) && HORIZONTAL.iter().all(|&direction| !owned_by_other(pos.offset(direction)))
+    !owned_by_other(pos)
+        && HORIZONTAL
+            .iter()
+            .all(|&direction| !owned_by_other(pos.offset(direction)))
 }
 
 /// Whether a horizontal jog from `lo` to `hi` (inclusive, one row's own Z --
@@ -4021,8 +4344,15 @@ fn cell_is_free_for(reservation: &Reservation, pos: Position, net: usize) -> boo
 /// jog necessarily starts inside of; a gate or lever body is never a
 /// conductor, so `row_body_zones` is the only place this keep-out is
 /// recorded at all -- a `Reservation` alone would miss it entirely.
-fn jog_crosses_another_row_zone(zones: &[(i32, i32)], self_zone: (i32, i32), lo: i32, hi: i32) -> bool {
-    zones.iter().any(|&zone| zone != self_zone && zone.0 <= hi && lo <= zone.1)
+fn jog_crosses_another_row_zone(
+    zones: &[(i32, i32)],
+    self_zone: (i32, i32),
+    lo: i32,
+    hi: i32,
+) -> bool {
+    zones
+        .iter()
+        .any(|&zone| zone != self_zone && zone.0 <= hi && lo <= zone.1)
 }
 
 /// Resolve which nets bypass the ramp/track machinery, and lay out the
@@ -4175,10 +4505,15 @@ fn resolve_bypass_and_geometry(
     let bypass_proven = compute_bypass(nets, plan);
     let baseline_terminals = default_terminal_kinds(nets);
     let baseline_track_count = assign_tracks(plan, nets, channel_count, &bypass_proven);
-    let (baseline_row_z, baseline_track_z) = layout_z(row_count, channel_count, &baseline_track_count);
+    let (baseline_row_z, baseline_track_z) =
+        layout_z(row_count, channel_count, &baseline_track_count);
 
     let (size_x, size_z) = world_size(plan, nets, &baseline_row_z);
-    let mut scratch = World::new(size_x.max(8), world_height(&baseline_track_count), size_z.max(8));
+    let mut scratch = World::new(
+        size_x.max(8),
+        world_height(&baseline_track_count),
+        size_z.max(8),
+    );
     let mut footprint = Footprint::record();
     {
         let geometry = RoutingGeometry {
@@ -4220,9 +4555,10 @@ fn resolve_bypass_and_geometry(
 
         if pin.x != exit_x {
             let self_zone = match net.source {
-                Source::Lever(_) => {
-                    (net.source_column - COLUMN_CLEARANCE + 1, net.source_column + COLUMN_CLEARANCE - 1)
-                }
+                Source::Lever(_) => (
+                    net.source_column - COLUMN_CLEARANCE + 1,
+                    net.source_column + COLUMN_CLEARANCE - 1,
+                ),
                 Source::Gate(_) => (
                     net.source_column - ENTRY_OFFSET - COLUMN_CLEARANCE + 1,
                     net.source_column + ENTRY_OFFSET + COLUMN_CLEARANCE - 1,
@@ -4256,7 +4592,10 @@ fn resolve_bypass_and_geometry(
         if start != pin {
             cells.push(start);
         }
-        if cells.iter().all(|&pos| cell_is_free_for(&probe_reservation, pos, n)) {
+        if cells
+            .iter()
+            .all(|&pos| cell_is_free_for(&probe_reservation, pos, n))
+        {
             bypass_final[n] = true;
             // Fold this candidate's own cells into the reservation before
             // the next candidate is checked -- otherwise two candidates
@@ -4328,8 +4667,11 @@ impl MergeGroups {
     fn build(netlist: &Netlist, nets: &[Net]) -> Self {
         let mut parent: Vec<usize> = (0..nets.len()).collect();
 
-        let index_of_signal: HashMap<&str, usize> =
-            nets.iter().enumerate().map(|(i, net)| (net_source_name(netlist, net), i)).collect();
+        let index_of_signal: HashMap<&str, usize> = nets
+            .iter()
+            .enumerate()
+            .map(|(i, net)| (net_source_name(netlist, net), i))
+            .collect();
 
         for gate in &netlist.gates {
             if !gate.is_merge() {
@@ -4349,8 +4691,11 @@ impl MergeGroups {
             // would have looked like two unrelated nets whose dust
             // happened to touch -- the very bug this whole relaxation
             // exists to keep catching everywhere else.
-            let mut members: Vec<usize> =
-                gate.inputs.iter().filter_map(|input| index_of_signal.get(input.as_str()).copied()).collect();
+            let mut members: Vec<usize> = gate
+                .inputs
+                .iter()
+                .filter_map(|input| index_of_signal.get(input.as_str()).copied())
+                .collect();
             if let Some(&output_index) = index_of_signal.get(gate.output.as_str()) {
                 members.push(output_index);
             }
@@ -4423,8 +4768,11 @@ fn merge_gate_body_owners(
     gate_output_positions: &BTreeMap<String, (i32, i32, i32)>,
 ) -> HashMap<Position, usize> {
     let groups = MergeGroups::build(netlist, nets);
-    let index_of_signal: HashMap<&str, usize> =
-        nets.iter().enumerate().map(|(i, net)| (net_source_name(netlist, net), i)).collect();
+    let index_of_signal: HashMap<&str, usize> = nets
+        .iter()
+        .enumerate()
+        .map(|(i, net)| (net_source_name(netlist, net), i))
+        .collect();
 
     let mut owners = HashMap::new();
     for (g, gate) in netlist.gates.iter().enumerate() {
@@ -4475,7 +4823,12 @@ fn verify_connectivity(
 ) -> Result<(), CompileError> {
     let groups = MergeGroups::build(netlist, nets);
     let gate_body_owners = merge_gate_body_owners(netlist, nets, gate_output_positions);
-    let owner_of = |pos: &Position| reservation.get(pos).or_else(|| gate_body_owners.get(pos)).copied();
+    let owner_of = |pos: &Position| {
+        reservation
+            .get(pos)
+            .or_else(|| gate_body_owners.get(pos))
+            .copied()
+    };
     let mut visited: HashSet<Position> = HashSet::new();
 
     for flat in world.positions_of(BlockKind::RedstoneWire) {
@@ -4501,12 +4854,17 @@ fn verify_connectivity(
                         match owner {
                             None => owner = Some((found_net, next)),
                             Some((expected_net, expected_cell))
-                                if expected_net != found_net && !groups.same_group(expected_net, found_net) =>
+                                if expected_net != found_net
+                                    && !groups.same_group(expected_net, found_net) =>
                             {
                                 return Err(CompileError::ConnectivityViolation {
                                     cell: (next.x, next.y, next.z),
                                     found_net: net_name(netlist, nets, found_net),
-                                    expected_cell: (expected_cell.x, expected_cell.y, expected_cell.z),
+                                    expected_cell: (
+                                        expected_cell.x,
+                                        expected_cell.y,
+                                        expected_cell.z,
+                                    ),
                                     expected_net: net_name(netlist, nets, expected_net),
                                 });
                             }
@@ -4563,7 +4921,14 @@ fn structural_output(state: &BlockState, direction: Facing) -> (bool, BlockPower
         // `Repeater | Comparator` arm), strong when active.
         BlockKind::Repeater | BlockKind::Comparator => {
             let active = state.facing == Some(direction.opposite());
-            (active, if active { BlockPower::Strong } else { BlockPower::None })
+            (
+                active,
+                if active {
+                    BlockPower::Strong
+                } else {
+                    BlockPower::None
+                },
+            )
         }
         // Standing torch: strong straight up, weak to the four sides,
         // inert straight down -- its own support
@@ -4726,10 +5091,19 @@ fn net_reach(world: &World, cells: &[Position]) -> HashSet<Position> {
                 };
             }
             let neighbour = pos.offset(direction);
-            if drives_dust && world.get(neighbour.x, neighbour.y, neighbour.z).kind == BlockKind::RedstoneWire {
+            if drives_dust
+                && world.get(neighbour.x, neighbour.y, neighbour.z).kind == BlockKind::RedstoneWire
+            {
                 enqueue(neighbour, &mut in_network, &mut queue);
             }
-            mark_powered(world, &mut powered, &mut in_network, &mut queue, neighbour, block_power);
+            mark_powered(
+                world,
+                &mut powered,
+                &mut in_network,
+                &mut queue,
+                neighbour,
+                block_power,
+            );
         }
     }
 
@@ -4830,12 +5204,22 @@ fn verify_torch_merge(
     // own singleton group and this is just `net_reach(net_cells[n])` again.
     let mut group_cells: HashMap<usize, Vec<Position>> = HashMap::new();
     for (n, cells) in net_cells.iter().enumerate() {
-        group_cells.entry(groups.root(n)).or_default().extend(cells.iter().copied());
+        group_cells
+            .entry(groups.root(n))
+            .or_default()
+            .extend(cells.iter().copied());
     }
-    let group_reach: HashMap<usize, HashSet<Position>> =
-        group_cells.iter().map(|(&root, cells)| (root, net_reach(world, cells))).collect();
+    let group_reach: HashMap<usize, HashSet<Position>> = group_cells
+        .iter()
+        .map(|(&root, cells)| (root, net_reach(world, cells)))
+        .collect();
     let reach: Vec<HashSet<Position>> = (0..nets.len())
-        .map(|n| group_reach.get(&groups.root(n)).cloned().unwrap_or_default())
+        .map(|n| {
+            group_reach
+                .get(&groups.root(n))
+                .cloned()
+                .unwrap_or_default()
+        })
         .collect();
 
     for (g, gate) in netlist.gates.iter().enumerate() {
@@ -4858,7 +5242,9 @@ fn verify_torch_merge(
         let Some(support) = torch_support_position(torch_state, torch_pos) else {
             return Err(CompileError::TorchMergeViolation {
                 gate: gate.name.clone(),
-                reason: TorchMergeFailure::NoSupport { torch: (tx, ty, tz) },
+                reason: TorchMergeFailure::NoSupport {
+                    torch: (tx, ty, tz),
+                },
             });
         };
         let support_tuple = (support.x, support.y, support.z);
@@ -4866,7 +5252,10 @@ fn verify_torch_merge(
         if !flags_of(world.get(support.x, support.y, support.z)).is_conductive() {
             return Err(CompileError::TorchMergeViolation {
                 gate: gate.name.clone(),
-                reason: TorchMergeFailure::SupportNotConductive { torch: (tx, ty, tz), support: support_tuple },
+                reason: TorchMergeFailure::SupportNotConductive {
+                    torch: (tx, ty, tz),
+                    support: support_tuple,
+                },
             });
         }
 
@@ -4886,7 +5275,10 @@ fn verify_torch_merge(
             .collect();
 
         for (n, reached) in reach.iter().enumerate() {
-            match (declared.contains(&groups.root(n)), reached.contains(&support)) {
+            match (
+                declared.contains(&groups.root(n)),
+                reached.contains(&support),
+            ) {
                 (true, false) => {
                     return Err(CompileError::TorchMergeViolation {
                         gate: gate.name.clone(),
@@ -5075,8 +5467,10 @@ fn net_signal_strength(
         value: u8,
     ) {
         let target_state = world.get(target.x, target.y, target.z);
-        if matches!(target_state.kind, BlockKind::Repeater | BlockKind::Comparator)
-            && target_state.facing != Some(from_direction.opposite())
+        if matches!(
+            target_state.kind,
+            BlockKind::Repeater | BlockKind::Comparator
+        ) && target_state.facing != Some(from_direction.opposite())
         {
             return;
         }
@@ -5091,13 +5485,23 @@ fn net_signal_strength(
     for &(source, source_state) in sources {
         for direction in ALL_SIX {
             if structural_output(source_state, direction).0 {
-                deliver(world, own_cells, &mut strength, &mut queue, source.offset(direction), direction, MAX_SIGNAL_STRENGTH);
+                deliver(
+                    world,
+                    own_cells,
+                    &mut strength,
+                    &mut queue,
+                    source.offset(direction),
+                    direction,
+                    MAX_SIGNAL_STRENGTH,
+                );
             }
         }
     }
 
     while let Some(pos) = queue.pop_front() {
-        let here = *strength.get(&pos).expect("only positions already given a strength are ever queued");
+        let here = *strength
+            .get(&pos)
+            .expect("only positions already given a strength are ever queued");
         let state = world.get(pos.x, pos.y, pos.z);
 
         if state.kind == BlockKind::RedstoneWire {
@@ -5112,7 +5516,15 @@ fn net_signal_strength(
                 let next = here - 1;
                 for direction in HORIZONTAL {
                     for neighbour in dust_connections(world, pos, direction).iter() {
-                        deliver(world, own_cells, &mut strength, &mut queue, neighbour, direction, next);
+                        deliver(
+                            world,
+                            own_cells,
+                            &mut strength,
+                            &mut queue,
+                            neighbour,
+                            direction,
+                            next,
+                        );
                     }
                 }
             }
@@ -5126,7 +5538,15 @@ fn net_signal_strength(
             for direction in HORIZONTAL {
                 let neighbour = pos.offset(direction);
                 if world.get(neighbour.x, neighbour.y, neighbour.z).kind == BlockKind::Repeater {
-                    deliver(world, own_cells, &mut strength, &mut queue, neighbour, direction, MAX_SIGNAL_STRENGTH);
+                    deliver(
+                        world,
+                        own_cells,
+                        &mut strength,
+                        &mut queue,
+                        neighbour,
+                        direction,
+                        MAX_SIGNAL_STRENGTH,
+                    );
                 }
             }
             // A straight dust run also weakly powers the conductive block it
@@ -5142,7 +5562,15 @@ fn net_signal_strength(
                     && flags_of(world.get(neighbour.x, neighbour.y, neighbour.z)).is_conductive()
                     && dust_powers_block_toward(world, pos, direction)
                 {
-                    deliver(world, own_cells, &mut strength, &mut queue, neighbour, direction, here);
+                    deliver(
+                        world,
+                        own_cells,
+                        &mut strength,
+                        &mut queue,
+                        neighbour,
+                        direction,
+                        here,
+                    );
                 }
             }
         } else if flags_of(state).is_conductive() {
@@ -5166,8 +5594,17 @@ fn net_signal_strength(
             // lights it fine.
             for direction in ALL_SIX {
                 let neighbour = pos.offset(direction);
-                if world.get(neighbour.x, neighbour.y, neighbour.z).kind == BlockKind::RedstoneWire {
-                    deliver(world, own_cells, &mut strength, &mut queue, neighbour, direction, here);
+                if world.get(neighbour.x, neighbour.y, neighbour.z).kind == BlockKind::RedstoneWire
+                {
+                    deliver(
+                        world,
+                        own_cells,
+                        &mut strength,
+                        &mut queue,
+                        neighbour,
+                        direction,
+                        here,
+                    );
                 }
             }
         } else {
@@ -5188,7 +5625,15 @@ fn net_signal_strength(
             // failure mode this invariant exists to catch.
             for direction in ALL_SIX {
                 if structural_output(state, direction).0 {
-                    deliver(world, own_cells, &mut strength, &mut queue, pos.offset(direction), direction, MAX_SIGNAL_STRENGTH);
+                    deliver(
+                        world,
+                        own_cells,
+                        &mut strength,
+                        &mut queue,
+                        pos.offset(direction),
+                        direction,
+                        MAX_SIGNAL_STRENGTH,
+                    );
                 }
             }
         }
@@ -5249,8 +5694,11 @@ fn verify_signal_strength(
     output_positions: &BTreeMap<String, (i32, i32, i32)>,
 ) -> Result<(), CompileError> {
     let groups = MergeGroups::build(netlist, nets);
-    let index_of_signal: HashMap<&str, usize> =
-        nets.iter().enumerate().map(|(i, net)| (net_source_name(netlist, net), i)).collect();
+    let index_of_signal: HashMap<&str, usize> = nets
+        .iter()
+        .enumerate()
+        .map(|(i, net)| (net_source_name(netlist, net), i))
+        .collect();
 
     let mut net_cells: Vec<HashSet<Position>> = vec![HashSet::new(); nets.len()];
     for (&pos, &owner) in reservation {
@@ -5263,7 +5711,10 @@ fn verify_signal_strength(
     // `verify_torch_merge`'s `group_cells` already makes).
     let mut group_cells: HashMap<usize, HashSet<Position>> = HashMap::new();
     for (n, cells) in net_cells.iter().enumerate() {
-        group_cells.entry(groups.root(n)).or_default().extend(cells.iter().copied());
+        group_cells
+            .entry(groups.root(n))
+            .or_default()
+            .extend(cells.iter().copied());
     }
 
     // Every merge's own junction and outbound-pin cells, too -- see
@@ -5303,7 +5754,10 @@ fn verify_signal_strength(
                 (Position::new(x, y, z), world.get(x, y, z))
             }
         };
-        group_sources.entry(groups.root(n)).or_default().push((source, source_state));
+        group_sources
+            .entry(groups.root(n))
+            .or_default()
+            .push((source, source_state));
     }
 
     let empty_sources: Vec<(Position, &BlockState)> = Vec::new();
@@ -5382,17 +5836,25 @@ fn verify_signal_strength(
             // whenever it has one) ever receive a non-zero signal.
             let root = merge_output_group_root(netlist, g, &index_of_signal, &groups)
                 .expect("an undriven merge input would already have failed compile's own UndrivenSignal check");
-            group_strength.get(&root).and_then(|strength| strength.get(&pin)).copied().unwrap_or(0) > 0
+            group_strength
+                .get(&root)
+                .and_then(|strength| strength.get(&pin))
+                .copied()
+                .unwrap_or(0)
+                > 0
         } else {
-            ALL_SIX
-                .into_iter()
-                .any(|direction| torch_pos.offset(direction) == pin && structural_output(torch_state, direction).0)
+            ALL_SIX.into_iter().any(|direction| {
+                torch_pos.offset(direction) == pin && structural_output(torch_state, direction).0
+            })
         };
 
         if !delivers {
             return Err(CompileError::SignalStrengthViolation {
                 net: output_name.clone(),
-                sink: SignalSink::OutputLamp { output: output_name.clone(), lamp: (lx, ly, lz) },
+                sink: SignalSink::OutputLamp {
+                    output: output_name.clone(),
+                    lamp: (lx, ly, lz),
+                },
             });
         }
     }
@@ -5400,9 +5862,9 @@ fn verify_signal_strength(
     Ok(())
 }
 
-/// Re-run the physical invariant suite against an already-emitted legacy
-/// candidate. The world and ownership reservation come from the emitter's
-/// metadata; ownership is never guessed by scanning its blocks.
+/// Re-run the physical invariant suite against a fresh legacy emission.
+/// Its world and ownership reservation come from the new compilation;
+/// ownership is never guessed by scanning blocks.
 pub(crate) fn verify_legacy_emission(emission: &LegacyEmission) -> Result<(), CompileError> {
     verify_spacing(emission)?;
     verify_connectivity(
@@ -5434,6 +5896,7 @@ pub(crate) fn verify_legacy_emission(emission: &LegacyEmission) -> Result<(), Co
 /// and support cell is explicitly assigned to one net before any world scan.
 fn verify_spacing(emission: &LegacyEmission) -> Result<(), CompileError> {
     let mut seen: HashMap<Position, String> = HashMap::new();
+    let groups = MergeGroups::build(&emission.netlist, &emission.nets);
     for (net, route) in emission.routes.iter().enumerate() {
         for anchor in &route.anchors {
             let position = Position::new(anchor.x, anchor.y, anchor.z);
@@ -5452,6 +5915,104 @@ fn verify_spacing(emission: &LegacyEmission) -> Result<(), CompileError> {
                 });
             }
         }
+
+        for terminal in &route.terminals {
+            verify_route_terminal(emission, net, route, terminal)?;
+        }
+    }
+
+    // This is deliberately stricter than checking the reservation table:
+    // `dust_reach` sees the same same-level/climb/descend cells a newly laid
+    // dust wire would reach. A different net may not occupy any of them,
+    // unless both are the declared members of one wire merge group.
+    for (&position, &owner) in &emission.reservation {
+        if emission.world.get(position.x, position.y, position.z).kind != BlockKind::RedstoneWire {
+            continue;
+        }
+        for direction in HORIZONTAL {
+            for neighbour in dust_reach(&emission.world, position, direction).iter() {
+                let Some(&other) = emission.reservation.get(&neighbour) else {
+                    continue;
+                };
+                if owner != other && groups.root(owner) != groups.root(other) {
+                    return Err(CompileError::SpacingViolation {
+                        cell: (neighbour.x, neighbour.y, neighbour.z),
+                        expected_net: net_source_name(&emission.netlist, &emission.nets[owner])
+                            .to_string(),
+                        found_net: Some(
+                            net_source_name(&emission.netlist, &emission.nets[other]).to_string(),
+                        ),
+                    });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn verify_route_terminal(
+    emission: &LegacyEmission,
+    net: usize,
+    route: &LegacyRoute,
+    terminal: &RouteTerminal,
+) -> Result<(), CompileError> {
+    let gate = emission
+        .netlist
+        .gates
+        .iter()
+        .position(|gate| gate.output == terminal.sink.gate)
+        .ok_or_else(|| CompileError::CandidateMetadataViolation {
+            item: route.owner.clone(),
+            reason: format!("terminal names unknown gate `{}`", terminal.sink.gate),
+        })?;
+    if !emission.nets[net]
+        .sinks
+        .iter()
+        .flatten()
+        .any(|&(sink_gate, sink_input)| {
+            sink_gate == gate && sink_input == terminal.sink.input_index
+        })
+    {
+        return Err(CompileError::CandidateMetadataViolation {
+            item: route.owner.clone(),
+            reason: "terminal sink is not an edge endpoint of this route".to_string(),
+        });
+    }
+    let anchor = terminal.sink.anchor;
+    let position = Position::new(anchor.x, anchor.y, anchor.z);
+    if emission.reservation.get(&position) != Some(&net) {
+        return Err(CompileError::SpacingViolation {
+            cell: (position.x, position.y, position.z),
+            expected_net: route.owner.clone(),
+            found_net: emission
+                .reservation
+                .get(&position)
+                .and_then(|owner| emission.nets.get(*owner))
+                .map(|owner| net_source_name(&emission.netlist, owner).to_string()),
+        });
+    }
+    let actual = emission.world.get(position.x, position.y, position.z).kind;
+    let matches = match terminal.kind {
+        RouteTerminalKind::RepeaterIntoSupport => {
+            actual == BlockKind::Repeater && !emission.netlist.gates[gate].is_merge()
+        }
+        RouteTerminalKind::DirectedDustIntoSupport => {
+            actual == BlockKind::RedstoneWire && !emission.netlist.gates[gate].is_merge()
+        }
+        RouteTerminalKind::BareMergeDust => {
+            actual == BlockKind::RedstoneWire
+                && merge_branch_is_bare(&emission.netlist, &emission.nets[net], gate)
+        }
+        RouteTerminalKind::BareMergeRepeater => {
+            actual == BlockKind::Repeater
+                && merge_branch_is_bare(&emission.netlist, &emission.nets[net], gate)
+        }
+    };
+    if !matches {
+        return Err(CompileError::CandidateMetadataViolation {
+            item: route.owner.clone(),
+            reason: "terminal style does not match its realised sink block".to_string(),
+        });
     }
     Ok(())
 }
@@ -5476,7 +6037,10 @@ fn merge_output_group_root(
     if let Some(&output_index) = index_of_signal.get(netlist.gates[gate].output.as_str()) {
         return Some(groups.root(output_index));
     }
-    netlist.gates[gate].inputs.iter().find_map(|input| index_of_signal.get(input.as_str()).map(|&i| groups.root(i)))
+    netlist.gates[gate]
+        .inputs
+        .iter()
+        .find_map(|input| index_of_signal.get(input.as_str()).map(|&i| groups.root(i)))
 }
 
 /// Compile a netlist into a redstone world.
@@ -5502,7 +6066,10 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     for gate in &netlist.gates {
         let realisable = gate.kind.is_realisable() && gate.kind.accepts_arity(gate.inputs.len());
         if !realisable {
-            return Err(CompileError::NotRealisable { gate: gate.output.clone(), kind: gate.kind });
+            return Err(CompileError::NotRealisable {
+                gate: gate.output.clone(),
+                kind: gate.kind,
+            });
         }
     }
     for gate in &netlist.gates {
@@ -5518,7 +6085,9 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         }
     }
 
-    let order = netlist.topological_order().ok_or(CompileError::CyclicNetlist)?;
+    let order = netlist
+        .topological_order()
+        .ok_or(CompileError::CyclicNetlist)?;
 
     let mut producer_of: HashMap<&str, usize> = HashMap::new();
     for (index, gate) in netlist.gates.iter().enumerate() {
@@ -5531,8 +6100,14 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     let mut nets = build_nets(netlist, &order, &plan, &producer_of);
 
     reserve_columns(&plan, &mut nets, row_count, channel_count);
-    let (bypass, row_z, track_z) =
-        resolve_bypass_and_geometry(netlist, &plan, &mut nets, row_count, channel_count, BYPASS_QUERY_MAX_DISTANCE);
+    let (bypass, row_z, track_z) = resolve_bypass_and_geometry(
+        netlist,
+        &plan,
+        &mut nets,
+        row_count,
+        channel_count,
+        BYPASS_QUERY_MAX_DISTANCE,
+    );
 
     let (size_x, size_z) = world_size(&plan, &nets, &row_z);
     let track_count: Vec<usize> = track_z.iter().map(Vec::len).collect();
@@ -5553,7 +6128,12 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     };
     let mut baseline_world = World::new(size_x.max(8), size_y, size_z.max(8));
     let mut baseline_footprint = Footprint::record();
-    let baseline_result = emit(&mut baseline_world, netlist, &baseline_geometry, &mut baseline_footprint);
+    let baseline_result = emit(
+        &mut baseline_world,
+        netlist,
+        &baseline_geometry,
+        &mut baseline_footprint,
+    );
     let terminals = resolve_directed_dust_terminals(
         &mut baseline_world,
         &baseline_footprint.reservation,
@@ -5594,7 +6174,7 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     emit(&mut scratch, netlist, &geometry, &mut footprint);
     drop(scratch);
 
-    let legacy_routes = footprint.legacy_routes(netlist, &nets, &terminals);
+    let legacy_routes = footprint.legacy_routes(netlist, &nets);
     let mut footprint = Footprint::enforce(footprint.reservation);
     let mut world = World::new(size_x.max(8), size_y, size_z.max(8));
     let EmitResult {
@@ -5609,12 +6189,24 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     // Checked here, unconditionally, on every compile -- not just the ones a
     // test happens to exercise -- because a violation is a bug in *this*
     // router, not in the netlist it was given.
-    verify_connectivity(&world, &footprint.reservation, netlist, &nets, &gate_output_positions)?;
+    verify_connectivity(
+        &world,
+        &footprint.reservation,
+        netlist,
+        &nets,
+        &gate_output_positions,
+    )?;
 
     // The torch-merge invariant: connectivity alone never looks at a torch,
     // so it cannot tell a working NOR from one whose input is wired into
     // the wrong block. Checked unconditionally too, for the same reason.
-    verify_torch_merge(&world, &footprint.reservation, netlist, &nets, &gate_output_positions)?;
+    verify_torch_merge(
+        &world,
+        &footprint.reservation,
+        netlist,
+        &nets,
+        &gate_output_positions,
+    )?;
 
     // The signal-strength invariant: connectivity and torch-merge both
     // reason about what touches what; neither knows redstone dust decays.
@@ -5633,6 +6225,7 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         &output_positions,
     )?;
 
+    let primitive_nodes = legacy_primitive_nodes(netlist, &primitive_anchors);
     let legacy_emission = LegacyEmission {
         netlist: netlist.clone(),
         world: world.clone(),
@@ -5642,6 +6235,7 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         output_positions: output_positions.clone(),
         gate_output_positions: gate_output_positions.clone(),
         primitive_anchors,
+        primitive_nodes,
         routes: legacy_routes,
     };
 
@@ -5654,6 +6248,27 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     })
 }
 
+fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<PrimitiveNode> {
+    let mut nodes = Vec::with_capacity(anchors.len());
+    for (gate, anchor) in netlist.gates.iter().zip(anchors.iter().copied()) {
+        nodes.push(PrimitiveNode {
+            id: format!("gate:{}", gate.output),
+            anchor,
+        });
+    }
+    for (input, anchor) in netlist
+        .inputs
+        .iter()
+        .zip(anchors.iter().skip(netlist.gates.len()).copied())
+    {
+        nodes.push(PrimitiveNode {
+            id: format!("input:{input}"),
+            anchor,
+        });
+    }
+    nodes
+}
+
 #[cfg(test)]
 mod tests {
     use super::topology::GateKind;
@@ -5664,7 +6279,14 @@ mod tests {
     /// lookups, not real routing geometry -- `verify_connectivity` never
     /// looks at anything but `source`.
     fn nameless_net(source: Source) -> Net {
-        Net { source, source_column: 0, channels: Vec::new(), tracks: Vec::new(), sinks: Vec::new(), hops: Vec::new() }
+        Net {
+            source,
+            source_column: 0,
+            channels: Vec::new(),
+            tracks: Vec::new(),
+            sinks: Vec::new(),
+            hops: Vec::new(),
+        }
     }
 
     #[test]
@@ -5708,8 +6330,15 @@ mod tests {
     /// model spec asks for.
     #[test]
     fn verify_connectivity_rejects_two_nets_whose_dust_touches() {
-        let netlist = Netlist { inputs: vec!["a".to_string(), "b".to_string()], outputs: Vec::new(), gates: Vec::new() };
-        let nets = vec![nameless_net(Source::Lever(0)), nameless_net(Source::Lever(1))];
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: Vec::new(),
+            gates: Vec::new(),
+        };
+        let nets = vec![
+            nameless_net(Source::Lever(0)),
+            nameless_net(Source::Lever(1)),
+        ];
 
         let mut world = World::new(5, 5, 5);
         let net_a_cell = Position::new(1, 1, 2);
@@ -5737,8 +6366,14 @@ mod tests {
         );
 
         let message = err.to_string();
-        assert!(message.contains("(2, 1, 2)"), "message must name the offending cell: {message}");
-        assert!(message.contains('a') && message.contains('b'), "message must name both nets: {message}");
+        assert!(
+            message.contains("(2, 1, 2)"),
+            "message must name the offending cell: {message}"
+        );
+        assert!(
+            message.contains('a') && message.contains('b'),
+            "message must name both nets: {message}"
+        );
     }
 
     /// The same two cells, but far enough apart that `dust_connections`
@@ -5746,8 +6381,15 @@ mod tests {
     /// actually touches.
     #[test]
     fn verify_connectivity_accepts_two_nets_whose_dust_never_touches() {
-        let netlist = Netlist { inputs: vec!["a".to_string(), "b".to_string()], outputs: Vec::new(), gates: Vec::new() };
-        let nets = vec![nameless_net(Source::Lever(0)), nameless_net(Source::Lever(1))];
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: Vec::new(),
+            gates: Vec::new(),
+        };
+        let nets = vec![
+            nameless_net(Source::Lever(0)),
+            nameless_net(Source::Lever(1)),
+        ];
 
         let mut world = World::new(6, 5, 6);
         let net_a_cell = Position::new(1, 1, 2);
@@ -5761,7 +6403,10 @@ mod tests {
         reservation.insert(net_a_cell, 0);
         reservation.insert(net_b_cell, 1);
 
-        assert_eq!(verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()), Ok(()));
+        assert_eq!(
+            verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()),
+            Ok(())
+        );
     }
 
     // -----------------------------------------------------------------
@@ -5791,11 +6436,18 @@ mod tests {
                 name: "m".to_string(),
                 inputs: vec!["a".to_string(), "b".to_string()],
                 output: "y".to_string(),
-                kind: if declare_merge { GateKind::Or(2) } else { GateKind::Nor(2) },
+                kind: if declare_merge {
+                    GateKind::Or(2)
+                } else {
+                    GateKind::Nor(2)
+                },
             }],
         };
-        let nets =
-            vec![nameless_net(Source::Lever(0)), nameless_net(Source::Lever(1)), nameless_net(Source::Gate(0))];
+        let nets = vec![
+            nameless_net(Source::Lever(0)),
+            nameless_net(Source::Lever(1)),
+            nameless_net(Source::Gate(0)),
+        ];
 
         let mut world = World::new(6, 5, 6);
         let a_cell = Position::new(1, 1, 2);
@@ -5830,10 +6482,11 @@ mod tests {
     fn verify_connectivity_still_rejects_the_same_touch_without_a_declared_merge() {
         let (netlist, nets, world, reservation) = merge_touch_fixture(false);
 
-        let err = verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()).expect_err(
-            "the identical geometry, with `is_merge` false, is nothing but three nets whose \
+        let err = verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new())
+            .expect_err(
+                "the identical geometry, with `is_merge` false, is nothing but three nets whose \
              dust happens to touch -- undeclared, that must still be rejected",
-        );
+            );
         assert!(
             matches!(err, CompileError::ConnectivityViolation { .. }),
             "expected a connectivity violation, got: {err}"
@@ -5850,7 +6503,9 @@ mod tests {
     /// `y`'s own (non-existent) net index, as an earlier version of that
     /// function did, would silently un-relax the check for exactly the
     /// circuits this task builds.
-    fn merge_touch_fixture_with_no_net_for_the_output(declare_merge: bool) -> (Netlist, Vec<Net>, World, Reservation) {
+    fn merge_touch_fixture_with_no_net_for_the_output(
+        declare_merge: bool,
+    ) -> (Netlist, Vec<Net>, World, Reservation) {
         let netlist = Netlist {
             inputs: vec!["a".to_string(), "b".to_string()],
             outputs: vec!["y".to_string()],
@@ -5858,12 +6513,19 @@ mod tests {
                 name: "m".to_string(),
                 inputs: vec!["a".to_string(), "b".to_string()],
                 output: "y".to_string(),
-                kind: if declare_merge { GateKind::Or(2) } else { GateKind::Nor(2) },
+                kind: if declare_merge {
+                    GateKind::Or(2)
+                } else {
+                    GateKind::Nor(2)
+                },
             }],
         };
         // No net for `y` at all -- exactly what `build_nets` would produce
         // for a merge whose output drives nothing but a declared output.
-        let nets = vec![nameless_net(Source::Lever(0)), nameless_net(Source::Lever(1))];
+        let nets = vec![
+            nameless_net(Source::Lever(0)),
+            nameless_net(Source::Lever(1)),
+        ];
 
         let mut world = World::new(6, 5, 6);
         let a_cell = Position::new(1, 1, 2);
@@ -5887,7 +6549,8 @@ mod tests {
 
     #[test]
     fn verify_connectivity_accepts_a_bare_merge_touch_even_when_its_output_has_no_net_of_its_own() {
-        let (netlist, nets, world, reservation) = merge_touch_fixture_with_no_net_for_the_output(true);
+        let (netlist, nets, world, reservation) =
+            merge_touch_fixture_with_no_net_for_the_output(true);
 
         assert_eq!(
             verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()),
@@ -5898,13 +6561,19 @@ mod tests {
     }
 
     #[test]
-    fn verify_connectivity_still_rejects_the_same_touch_without_a_declared_merge_even_with_no_net_for_the_output() {
-        let (netlist, nets, world, reservation) = merge_touch_fixture_with_no_net_for_the_output(false);
+    fn verify_connectivity_still_rejects_the_same_touch_without_a_declared_merge_even_with_no_net_for_the_output(
+    ) {
+        let (netlist, nets, world, reservation) =
+            merge_touch_fixture_with_no_net_for_the_output(false);
 
-        let err = verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()).expect_err(
-            "undeclared, this is still nothing but two nets whose dust happens to touch",
+        let err = verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new())
+            .expect_err(
+                "undeclared, this is still nothing but two nets whose dust happens to touch",
+            );
+        assert!(
+            matches!(err, CompileError::ConnectivityViolation { .. }),
+            "expected a connectivity violation, got: {err}"
         );
-        assert!(matches!(err, CompileError::ConnectivityViolation { .. }), "expected a connectivity violation, got: {err}");
     }
 
     // -----------------------------------------------------------------
@@ -5917,20 +6586,38 @@ mod tests {
     // -----------------------------------------------------------------
 
     fn merge_gate(inputs: &[&str], output: &str) -> Gate {
-        Gate { name: output.to_string(), inputs: inputs.iter().map(|s| s.to_string()).collect(), output: output.to_string(), kind: GateKind::Or(inputs.len()) }
+        Gate {
+            name: output.to_string(),
+            inputs: inputs.iter().map(|s| s.to_string()).collect(),
+            output: output.to_string(),
+            kind: GateKind::Or(inputs.len()),
+        }
     }
 
     fn net_with_sinks(source: Source, sinks: Vec<(usize, usize)>) -> Net {
-        Net { source, source_column: 0, channels: vec![0], tracks: vec![0], sinks: vec![sinks], hops: Vec::new() }
+        Net {
+            source,
+            source_column: 0,
+            channels: vec![0],
+            tracks: vec![0],
+            sinks: vec![sinks],
+            hops: Vec::new(),
+        }
     }
 
     #[test]
     fn merge_branch_is_bare_when_its_net_feeds_only_the_merge() {
-        let netlist =
-            Netlist { inputs: vec!["a".to_string()], outputs: Vec::new(), gates: vec![merge_gate(&["a", "b"], "y")] };
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: Vec::new(),
+            gates: vec![merge_gate(&["a", "b"], "y")],
+        };
         // `a`'s only sink is the merge's own first input.
         let net = net_with_sinks(Source::Lever(0), vec![(0, 0)]);
-        assert!(merge_branch_is_bare(&netlist, &net, 0), "a's only sink is the merge itself -- this branch is private");
+        assert!(
+            merge_branch_is_bare(&netlist, &net, 0),
+            "a's only sink is the merge itself -- this branch is private"
+        );
     }
 
     #[test]
@@ -5939,7 +6626,12 @@ mod tests {
             inputs: vec!["a".to_string()],
             outputs: Vec::new(),
             gates: vec![
-                Gate { name: "s".to_string(), inputs: vec!["a".to_string()], output: "s".to_string(), kind: GateKind::Nor(1) },
+                Gate {
+                    name: "s".to_string(),
+                    inputs: vec!["a".to_string()],
+                    output: "s".to_string(),
+                    kind: GateKind::Nor(1),
+                },
                 merge_gate(&["a", "b"], "y"),
             ],
         };
@@ -5962,10 +6654,18 @@ mod tests {
         let netlist = Netlist {
             inputs: vec!["a".to_string()],
             outputs: Vec::new(),
-            gates: vec![Gate { name: "g0".to_string(), inputs: vec!["a".to_string()], output: "g0".to_string(), kind: GateKind::Nor(1) }],
+            gates: vec![Gate {
+                name: "g0".to_string(),
+                inputs: vec!["a".to_string()],
+                output: "g0".to_string(),
+                kind: GateKind::Nor(1),
+            }],
         };
         let net = net_with_sinks(Source::Lever(0), vec![(0, 0)]);
-        assert!(!merge_branch_is_bare(&netlist, &net, 0), "a non-merge gate's socket is never a bare join");
+        assert!(
+            !merge_branch_is_bare(&netlist, &net, 0),
+            "a non-merge gate's socket is never a bare join"
+        );
     }
 
     #[test]
@@ -5978,10 +6678,16 @@ mod tests {
         // between the two sockets only ever circulates `a`'s own signal
         // back into a branch that was already carrying it, which corrupts
         // nothing.
-        let netlist =
-            Netlist { inputs: vec!["a".to_string()], outputs: Vec::new(), gates: vec![merge_gate(&["a", "a"], "y")] };
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: Vec::new(),
+            gates: vec![merge_gate(&["a", "a"], "y")],
+        };
         let net = net_with_sinks(Source::Lever(0), vec![(0, 0), (0, 1)]);
-        assert!(merge_branch_is_bare(&netlist, &net, 0), "both sinks are this same merge -- still nothing to isolate against");
+        assert!(
+            merge_branch_is_bare(&netlist, &net, 0),
+            "both sinks are this same merge -- still nothing to isolate against"
+        );
     }
 
     // -----------------------------------------------------------------
@@ -6083,7 +6789,11 @@ mod tests {
             !directed_dust_terminal_is_legal(&mut world, &reservation, 0, socket, support, 2),
             "a perpendicular attachment makes terminal dust a corner, which cannot weakly power east"
         );
-        assert_eq!(world.get(socket.x, socket.y, socket.z).kind, BlockKind::Repeater, "the probe must restore the baseline world");
+        assert_eq!(
+            world.get(socket.x, socket.y, socket.z).kind,
+            BlockKind::Repeater,
+            "the probe must restore the baseline world"
+        );
     }
 
     #[test]
@@ -6115,7 +6825,10 @@ mod tests {
         let netlist = directed_dust_terminal_netlist();
         let compiled = compile(&netlist).expect("a one-input NOR must compile");
 
-        let (torch_x, torch_y, torch_z) = *compiled.gate_output_positions.get("y").expect("gate output must be recorded");
+        let (torch_x, torch_y, torch_z) = *compiled
+            .gate_output_positions
+            .get("y")
+            .expect("gate output must be recorded");
         let torch = Position::new(torch_x, torch_y, torch_z);
         let support = torch_support_position(compiled.world.get(torch.x, torch.y, torch.z), torch)
             .expect("the NOR output must be a supported torch");
@@ -6131,24 +6844,42 @@ mod tests {
             "the terminal dust must be a straight live run pointing into the NOR support"
         );
 
-        let input = *compiled.input_positions.get("a").expect("input lever must be recorded");
-        let output = *compiled.output_positions.get("y").expect("output lamp must be recorded");
+        let input = *compiled
+            .input_positions
+            .get("a")
+            .expect("input lever must be recorded");
+        let output = *compiled
+            .output_positions
+            .get("y")
+            .expect("output lamp must be recorded");
         let mut simulator = Simulator::new(compiled.world);
-        simulator.run_until_stable(200).expect("the compiled NOT must settle");
+        simulator
+            .run_until_stable(200)
+            .expect("the compiled NOT must settle");
         for (on, expected) in [(false, false), (true, true)] {
             let mut lever_state = simulator.world().get(input.0, input.1, input.2).clone();
             lever_state.lit = on;
-            simulator.world_mut().set(input.0, input.1, input.2, lever_state);
-            simulator.run_until_stable(200).expect("the compiled NOT must settle after an input change");
-            assert_eq!(simulator.world().get(output.0, output.1, output.2).lit, expected, "NOT(NOT({on}))");
+            simulator
+                .world_mut()
+                .set(input.0, input.1, input.2, lever_state);
+            simulator
+                .run_until_stable(200)
+                .expect("the compiled NOT must settle after an input change");
+            assert_eq!(
+                simulator.world().get(output.0, output.1, output.2).lit,
+                expected,
+                "NOT(NOT({on}))"
+            );
         }
     }
 
     #[test]
     fn directed_dust_terminals_cover_a_real_verilog_and4_merge_output() {
-        let circuit = crate::circuits::verilog::find("verilog:and4").expect("the shipped circuit must exist");
+        let circuit =
+            crate::circuits::verilog::find("verilog:and4").expect("the shipped circuit must exist");
         let (gate_level, _) = circuit.baked_netlist();
-        let netlist = crate::compile::lowering::lower_optimised(&gate_level).expect("the shipped netlist must lower");
+        let netlist = crate::compile::lowering::lower_optimised(&gate_level)
+            .expect("the shipped netlist must lower");
         let compiled = compile(&netlist).expect("the lowered circuit must compile");
 
         let direct_terminal_count = netlist
@@ -6157,12 +6888,18 @@ mod tests {
             .enumerate()
             .filter(|(_, gate)| !gate.is_merge())
             .flat_map(|(_, gate)| {
-                let &(x, y, z) = compiled.gate_output_positions.get(&gate.output).expect("every gate has a recorded output");
+                let &(x, y, z) = compiled
+                    .gate_output_positions
+                    .get(&gate.output)
+                    .expect("every gate has a recorded output");
                 let torch = Position::new(x, y, z);
-                let support = torch_support_position(compiled.world.get(x, y, z), torch).expect("NOR has a support");
+                let support = torch_support_position(compiled.world.get(x, y, z), torch)
+                    .expect("NOR has a support");
                 (0..gate.inputs.len()).map(move |input| support.offset(INPUT_DIRECTIONS[input]))
             })
-            .filter(|socket| compiled.world.get(socket.x, socket.y, socket.z).kind == BlockKind::RedstoneWire)
+            .filter(|socket| {
+                compiled.world.get(socket.x, socket.y, socket.z).kind == BlockKind::RedstoneWire
+            })
             .count();
 
         assert!(
@@ -6185,8 +6922,14 @@ mod tests {
         let mut gate_output_positions = BTreeMap::new();
         gate_output_positions.insert("out".to_string(), (2, 1, 2));
 
-        let err = verify_torch_merge(&world, &Reservation::new(), &netlist, &nets, &gate_output_positions)
-            .expect_err("a plain block standing in for the output torch must be rejected");
+        let err = verify_torch_merge(
+            &world,
+            &Reservation::new(),
+            &netlist,
+            &nets,
+            &gate_output_positions,
+        )
+        .expect_err("a plain block standing in for the output torch must be rejected");
 
         assert_eq!(
             err,
@@ -6195,7 +6938,10 @@ mod tests {
                 reason: TorchMergeFailure::NoSupport { torch: (2, 1, 2) },
             }
         );
-        assert!(err.to_string().contains("g0"), "message must name the gate: {err}");
+        assert!(
+            err.to_string().contains("g0"),
+            "message must name the gate: {err}"
+        );
     }
 
     #[test]
@@ -6214,18 +6960,30 @@ mod tests {
         let mut gate_output_positions = BTreeMap::new();
         gate_output_positions.insert("out".to_string(), (2, 1, 2));
 
-        let err = verify_torch_merge(&world, &Reservation::new(), &netlist, &nets, &gate_output_positions)
-            .expect_err("a non-conductive support must be rejected -- this torch could never invert");
+        let err = verify_torch_merge(
+            &world,
+            &Reservation::new(),
+            &netlist,
+            &nets,
+            &gate_output_positions,
+        )
+        .expect_err("a non-conductive support must be rejected -- this torch could never invert");
 
         assert_eq!(
             err,
             CompileError::TorchMergeViolation {
                 gate: "g0".to_string(),
-                reason: TorchMergeFailure::SupportNotConductive { torch: (2, 1, 2), support: (2, 0, 2) },
+                reason: TorchMergeFailure::SupportNotConductive {
+                    torch: (2, 1, 2),
+                    support: (2, 0, 2)
+                },
             }
         );
         let message = err.to_string();
-        assert!(message.contains("g0") && message.contains("(2, 0, 2)"), "message: {message}");
+        assert!(
+            message.contains("g0") && message.contains("(2, 0, 2)"),
+            "message: {message}"
+        );
     }
 
     #[test]
@@ -6245,8 +7003,16 @@ mod tests {
         let mut gate_output_positions = BTreeMap::new();
         gate_output_positions.insert("out".to_string(), (2, 1, 2));
 
-        let err = verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions)
-            .expect_err("an input net with no conductor at all must not be accepted as reaching the support");
+        let err = verify_torch_merge(
+            &world,
+            &reservation,
+            &netlist,
+            &nets,
+            &gate_output_positions,
+        )
+        .expect_err(
+            "an input net with no conductor at all must not be accepted as reaching the support",
+        );
 
         assert_eq!(
             err,
@@ -6260,7 +7026,10 @@ mod tests {
             }
         );
         let message = err.to_string();
-        assert!(message.contains('a') && message.contains("g0"), "message: {message}");
+        assert!(
+            message.contains('a') && message.contains("g0"),
+            "message: {message}"
+        );
     }
 
     #[test]
@@ -6272,7 +7041,12 @@ mod tests {
         let netlist = Netlist {
             inputs: vec!["b".to_string()],
             outputs: Vec::new(),
-            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string(), kind: GateKind::Nor(0) }],
+            gates: vec![Gate {
+                name: "g0".to_string(),
+                inputs: Vec::new(),
+                output: "out".to_string(),
+                kind: GateKind::Nor(0),
+            }],
         };
         let nets = vec![Net {
             source: Source::Lever(0),
@@ -6295,8 +7069,14 @@ mod tests {
         let mut gate_output_positions = BTreeMap::new();
         gate_output_positions.insert("out".to_string(), (2, 1, 2));
 
-        let err = verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions)
-            .expect_err("a repeater from an undeclared net feeding the support must be rejected");
+        let err = verify_torch_merge(
+            &world,
+            &reservation,
+            &netlist,
+            &nets,
+            &gate_output_positions,
+        )
+        .expect_err("a repeater from an undeclared net feeding the support must be rejected");
 
         assert_eq!(
             err,
@@ -6310,7 +7090,10 @@ mod tests {
             }
         );
         let message = err.to_string();
-        assert!(message.contains('b') && message.contains("g0"), "message: {message}");
+        assert!(
+            message.contains('b') && message.contains("g0"),
+            "message: {message}"
+        );
     }
 
     #[test]
@@ -6323,7 +7106,12 @@ mod tests {
         let netlist = Netlist {
             inputs: vec!["leak".to_string()],
             outputs: Vec::new(),
-            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string(), kind: GateKind::Nor(0) }],
+            gates: vec![Gate {
+                name: "g0".to_string(),
+                inputs: Vec::new(),
+                output: "out".to_string(),
+                kind: GateKind::Nor(0),
+            }],
         };
         let nets = vec![Net {
             source: Source::Lever(0),
@@ -6345,8 +7133,14 @@ mod tests {
         let mut gate_output_positions = BTreeMap::new();
         gate_output_positions.insert("out".to_string(), (2, 1, 2));
 
-        let err = verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions)
-            .expect_err("a torch powering a foreign net's wire must be rejected");
+        let err = verify_torch_merge(
+            &world,
+            &reservation,
+            &netlist,
+            &nets,
+            &gate_output_positions,
+        )
+        .expect_err("a torch powering a foreign net's wire must be rejected");
 
         assert_eq!(
             err,
@@ -6360,7 +7154,10 @@ mod tests {
             }
         );
         let message = err.to_string();
-        assert!(message.contains("leak") && message.contains("g0"), "message: {message}");
+        assert!(
+            message.contains("leak") && message.contains("g0"),
+            "message: {message}"
+        );
     }
 
     /// The positive case, built with the same by-hand machinery as the
@@ -6384,7 +7181,13 @@ mod tests {
         gate_output_positions.insert("out".to_string(), (2, 1, 2));
 
         assert_eq!(
-            verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions),
+            verify_torch_merge(
+                &world,
+                &reservation,
+                &netlist,
+                &nets,
+                &gate_output_positions
+            ),
             Ok(())
         );
     }
@@ -6425,7 +7228,12 @@ mod tests {
             gates: vec![
                 // Checked first (see below): with no merge declared, this
                 // is where the rejection must fire.
-                Gate { name: "g1".to_string(), inputs: vec!["y".to_string()], output: "out".to_string(), kind: GateKind::Nor(1) },
+                Gate {
+                    name: "g1".to_string(),
+                    inputs: vec!["y".to_string()],
+                    output: "out".to_string(),
+                    kind: GateKind::Nor(1),
+                },
                 // `m` is never actually reached by `verify_torch_merge`'s
                 // own loop in either scenario: declared, it is skipped
                 // outright (`is_merge`); undeclared, `g1` above already
@@ -6436,7 +7244,11 @@ mod tests {
                     name: "m".to_string(),
                     inputs: vec!["a".to_string(), "b".to_string()],
                     output: "y".to_string(),
-                    kind: if declare_merge { GateKind::Or(2) } else { GateKind::Nor(2) },
+                    kind: if declare_merge {
+                        GateKind::Or(2)
+                    } else {
+                        GateKind::Nor(2)
+                    },
                 },
             ],
         };
@@ -6461,8 +7273,18 @@ mod tests {
         let repeater_b = Position::new(4, 0, 1); // north of the support, facing south into it
         world.set(support.x, support.y, support.z, stone());
         world.set(torch.x, torch.y, torch.z, standing_torch());
-        world.set(repeater_a.x, repeater_a.y, repeater_a.z, repeater(Facing::East));
-        world.set(repeater_b.x, repeater_b.y, repeater_b.z, repeater(Facing::South));
+        world.set(
+            repeater_a.x,
+            repeater_a.y,
+            repeater_a.z,
+            repeater(Facing::East),
+        );
+        world.set(
+            repeater_b.x,
+            repeater_b.y,
+            repeater_b.z,
+            repeater(Facing::South),
+        );
 
         let mut reservation = Reservation::new();
         reservation.insert(repeater_a, 0);
@@ -6472,16 +7294,33 @@ mod tests {
         let mut gate_output_positions = BTreeMap::new();
         gate_output_positions.insert("out".to_string(), (torch.x, torch.y, torch.z));
 
-        MergeConsumerFixture { netlist, nets, world, reservation, gate_output_positions }
+        MergeConsumerFixture {
+            netlist,
+            nets,
+            world,
+            reservation,
+            gate_output_positions,
+        }
     }
 
     #[test]
     fn torch_merge_accepts_both_branches_of_a_declared_merge_as_g1s_input() {
-        let MergeConsumerFixture { netlist, nets, world, reservation, gate_output_positions } =
-            merge_consumer_fixture(true);
+        let MergeConsumerFixture {
+            netlist,
+            nets,
+            world,
+            reservation,
+            gate_output_positions,
+        } = merge_consumer_fixture(true);
 
         assert_eq!(
-            verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions),
+            verify_torch_merge(
+                &world,
+                &reservation,
+                &netlist,
+                &nets,
+                &gate_output_positions
+            ),
             Ok(()),
             "`m`'s `is_merge` declares `a` and `b` as the same net `y`, which `g1` declares as \
              its own input -- both branches reaching the support is exactly what was asked for"
@@ -6490,17 +7329,32 @@ mod tests {
 
     #[test]
     fn torch_merge_still_rejects_the_same_two_repeaters_without_a_declared_merge() {
-        let MergeConsumerFixture { netlist, nets, world, reservation, gate_output_positions } =
-            merge_consumer_fixture(false);
+        let MergeConsumerFixture {
+            netlist,
+            nets,
+            world,
+            reservation,
+            gate_output_positions,
+        } = merge_consumer_fixture(false);
 
-        let err = verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions).expect_err(
+        let err = verify_torch_merge(
+            &world,
+            &reservation,
+            &netlist,
+            &nets,
+            &gate_output_positions,
+        )
+        .expect_err(
             "the identical world, with `is_merge` false on `m`, is nothing but an undeclared \
              net reaching g1's support -- `g1` only ever declared `y`, never `a`",
         );
         assert!(
             matches!(
                 err,
-                CompileError::TorchMergeViolation { reason: TorchMergeFailure::ForeignNetReachesSupport { .. }, .. }
+                CompileError::TorchMergeViolation {
+                    reason: TorchMergeFailure::ForeignNetReachesSupport { .. },
+                    ..
+                }
             ),
             "expected a foreign-net violation naming the undeclared branch, got: {err}"
         );
@@ -6535,7 +7389,13 @@ mod tests {
     /// Lay `len` cells of plain dust from `start` (inclusive) along `+x`,
     /// each claimed for `net`. Returns the position one past the last cell
     /// laid -- where a caller's next component goes.
-    fn lay_test_dust_run(world: &mut World, reservation: &mut Reservation, start: Position, len: i32, net: usize) -> Position {
+    fn lay_test_dust_run(
+        world: &mut World,
+        reservation: &mut Reservation,
+        start: Position,
+        len: i32,
+        net: usize,
+    ) -> Position {
         for i in 0..len {
             let pos = Position::new(start.x + i, start.y, start.z);
             world.set(pos.x, pos.y, pos.z, dust());
@@ -6571,8 +7431,14 @@ mod tests {
         world.set(lever_pos.x, lever_pos.y, lever_pos.z, lever(false));
 
         let mut reservation = Reservation::new();
-        let after_run = lay_test_dust_run(&mut world, &mut reservation, Position::new(1, 0, 2), 16, 0);
-        world.set(after_run.x, after_run.y, after_run.z, repeater(Facing::East));
+        let after_run =
+            lay_test_dust_run(&mut world, &mut reservation, Position::new(1, 0, 2), 16, 0);
+        world.set(
+            after_run.x,
+            after_run.y,
+            after_run.z,
+            repeater(Facing::East),
+        );
         reservation.insert(after_run, 0);
 
         let support = after_run.offset(Facing::East);
@@ -6590,7 +7456,13 @@ mod tests {
             "one continuous, uncontested dust network must satisfy connectivity"
         );
         assert_eq!(
-            verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions),
+            verify_torch_merge(
+                &world,
+                &reservation,
+                &netlist,
+                &nets,
+                &gate_output_positions
+            ),
             Ok(()),
             "net_reach seeds every claimed cell at once, so it never notices the run is too long"
         );
@@ -6610,12 +7482,16 @@ mod tests {
             err,
             CompileError::SignalStrengthViolation {
                 net: "a".to_string(),
-                sink: SignalSink::GateInput { gate: "g0".to_string(), support: (support.x, support.y, support.z) },
+                sink: SignalSink::GateInput {
+                    gate: "g0".to_string(),
+                    support: (support.x, support.y, support.z)
+                },
             }
         );
         let message = err.to_string();
         assert!(
-            message.contains("g0") && message.contains(&format!("{:?}", (support.x, support.y, support.z))),
+            message.contains("g0")
+                && message.contains(&format!("{:?}", (support.x, support.y, support.z))),
             "message must name the gate and the unreached support: {message}"
         );
     }
@@ -6646,7 +7522,12 @@ mod tests {
         reservation.insert(pin, 0);
 
         let repeater_a = Position::new(2, 1, 2);
-        world.set(repeater_a.x, repeater_a.y, repeater_a.z, repeater(Facing::East));
+        world.set(
+            repeater_a.x,
+            repeater_a.y,
+            repeater_a.z,
+            repeater(Facing::East),
+        );
         reservation.insert(repeater_a, 0);
 
         // (3, 1, 2) -- repeater A's own designated output cell -- is left
@@ -6658,7 +7539,12 @@ mod tests {
         reservation.insert(landing, 0);
 
         let repeater_b = Position::new(4, 0, 2);
-        world.set(repeater_b.x, repeater_b.y, repeater_b.z, repeater(Facing::East));
+        world.set(
+            repeater_b.x,
+            repeater_b.y,
+            repeater_b.z,
+            repeater(Facing::East),
+        );
         reservation.insert(repeater_b, 0);
 
         let support = Position::new(5, 0, 2);
@@ -6691,18 +7577,24 @@ mod tests {
             &input_positions,
             &output_positions,
         )
-        .expect_err("a repeater whose output lands on air must never deliver a signal past the gap");
+        .expect_err(
+            "a repeater whose output lands on air must never deliver a signal past the gap",
+        );
 
         assert_eq!(
             err,
             CompileError::SignalStrengthViolation {
                 net: "a".to_string(),
-                sink: SignalSink::GateInput { gate: "g0".to_string(), support: (support.x, support.y, support.z) },
+                sink: SignalSink::GateInput {
+                    gate: "g0".to_string(),
+                    support: (support.x, support.y, support.z)
+                },
             }
         );
         let message = err.to_string();
         assert!(
-            message.contains("g0") && message.contains(&format!("{:?}", (support.x, support.y, support.z))),
+            message.contains("g0")
+                && message.contains(&format!("{:?}", (support.x, support.y, support.z))),
             "message must name the gate and the unreached support: {message}"
         );
     }
@@ -6729,16 +7621,28 @@ mod tests {
         let mut reservation = Reservation::new();
         // Segment 1: pin + 12 more cells (13 cells total, hops 0..12), the
         // last one still carrying strength 3 -- comfortably non-zero.
-        let after_first_run = lay_test_dust_run(&mut world, &mut reservation, Position::new(1, 0, 2), 13, 0);
-        world.set(after_first_run.x, after_first_run.y, after_first_run.z, repeater(Facing::East));
+        let after_first_run =
+            lay_test_dust_run(&mut world, &mut reservation, Position::new(1, 0, 2), 13, 0);
+        world.set(
+            after_first_run.x,
+            after_first_run.y,
+            after_first_run.z,
+            repeater(Facing::East),
+        );
         reservation.insert(after_first_run, 0);
 
         // Segment 2: 16 plain cells after the (genuinely firing) repeater --
         // one too many again, exactly like the single-segment case, just
         // moved one refresh later.
         let segment_two_start = after_first_run.offset(Facing::East);
-        let after_second_run = lay_test_dust_run(&mut world, &mut reservation, segment_two_start, 16, 0);
-        world.set(after_second_run.x, after_second_run.y, after_second_run.z, repeater(Facing::East));
+        let after_second_run =
+            lay_test_dust_run(&mut world, &mut reservation, segment_two_start, 16, 0);
+        world.set(
+            after_second_run.x,
+            after_second_run.y,
+            after_second_run.z,
+            repeater(Facing::East),
+        );
         reservation.insert(after_second_run, 0);
 
         let support = after_second_run.offset(Facing::East);
@@ -6750,9 +7654,18 @@ mod tests {
         gate_output_positions.insert("out".to_string(), (torch.x, torch.y, torch.z));
         let output_positions = BTreeMap::new();
 
-        assert_eq!(verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()), Ok(()));
         assert_eq!(
-            verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions),
+            verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()),
+            Ok(())
+        );
+        assert_eq!(
+            verify_torch_merge(
+                &world,
+                &reservation,
+                &netlist,
+                &nets,
+                &gate_output_positions
+            ),
             Ok(()),
             "a torch-merge check that never decays anything calls the support reached \
              regardless of how many segments, or how long, sit between the source and it"
@@ -6773,7 +7686,10 @@ mod tests {
             err,
             CompileError::SignalStrengthViolation {
                 net: "a".to_string(),
-                sink: SignalSink::GateInput { gate: "g0".to_string(), support: (support.x, support.y, support.z) },
+                sink: SignalSink::GateInput {
+                    gate: "g0".to_string(),
+                    support: (support.x, support.y, support.z)
+                },
             }
         );
     }
@@ -6796,13 +7712,25 @@ mod tests {
         world.set(lever_pos.x, lever_pos.y, lever_pos.z, lever(false));
 
         let mut reservation = Reservation::new();
-        let after_first_run = lay_test_dust_run(&mut world, &mut reservation, Position::new(1, 0, 2), 13, 0);
-        world.set(after_first_run.x, after_first_run.y, after_first_run.z, repeater(Facing::East));
+        let after_first_run =
+            lay_test_dust_run(&mut world, &mut reservation, Position::new(1, 0, 2), 13, 0);
+        world.set(
+            after_first_run.x,
+            after_first_run.y,
+            after_first_run.z,
+            repeater(Facing::East),
+        );
         reservation.insert(after_first_run, 0);
 
         let segment_two_start = after_first_run.offset(Facing::East);
-        let after_second_run = lay_test_dust_run(&mut world, &mut reservation, segment_two_start, 10, 0);
-        world.set(after_second_run.x, after_second_run.y, after_second_run.z, repeater(Facing::East));
+        let after_second_run =
+            lay_test_dust_run(&mut world, &mut reservation, segment_two_start, 10, 0);
+        world.set(
+            after_second_run.x,
+            after_second_run.y,
+            after_second_run.z,
+            repeater(Facing::East),
+        );
         reservation.insert(after_second_run, 0);
 
         let support = after_second_run.offset(Facing::East);
@@ -6814,9 +7742,18 @@ mod tests {
         gate_output_positions.insert("out".to_string(), (torch.x, torch.y, torch.z));
         let output_positions = BTreeMap::new();
 
-        assert_eq!(verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()), Ok(()));
         assert_eq!(
-            verify_torch_merge(&world, &reservation, &netlist, &nets, &gate_output_positions),
+            verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()),
+            Ok(())
+        );
+        assert_eq!(
+            verify_torch_merge(
+                &world,
+                &reservation,
+                &netlist,
+                &nets,
+                &gate_output_positions
+            ),
             Ok(())
         );
         assert_eq!(
@@ -6848,7 +7785,12 @@ mod tests {
         let netlist = Netlist {
             inputs: Vec::new(),
             outputs: vec!["out".to_string()],
-            gates: vec![Gate { name: "g0".to_string(), inputs: Vec::new(), output: "out".to_string(), kind: GateKind::Nor(0) }],
+            gates: vec![Gate {
+                name: "g0".to_string(),
+                inputs: Vec::new(),
+                output: "out".to_string(),
+                kind: GateKind::Nor(0),
+            }],
         };
         let nets: Vec<Net> = Vec::new();
 
@@ -6879,10 +7821,16 @@ mod tests {
             err,
             CompileError::SignalStrengthViolation {
                 net: "out".to_string(),
-                sink: SignalSink::OutputLamp { output: "out".to_string(), lamp: (2, 0, 1) },
+                sink: SignalSink::OutputLamp {
+                    output: "out".to_string(),
+                    lamp: (2, 0, 1)
+                },
             }
         );
         let message = err.to_string();
-        assert!(message.contains("out") && message.contains("(2, 0, 1)"), "message: {message}");
+        assert!(
+            message.contains("out") && message.contains("(2, 0, 1)"),
+            "message: {message}"
+        );
     }
 }

@@ -100,7 +100,9 @@ pub struct PaletteEntry {
     #[serde(rename = "Name")]
     pub name: String,
     #[serde(rename = "Properties", default)]
-    pub properties: HashMap<String, String>,
+    /// NBT preserves map insertion order, so use a sorted map for stable
+    /// external bytes regardless of `HashMap`'s randomized iteration order.
+    pub properties: BTreeMap<String, String>,
 }
 
 /// 這個方塊種類的哪些 blockstate property 會被讀進 `BlockState` 的結構化欄位。
@@ -142,11 +144,18 @@ pub fn parse_block_name(name: &str, properties: &HashMap<String, String>) -> Blo
         "minecraft:redstone_block" => BlockKind::RedstoneBlock,
         "minecraft:redstone_lamp" => BlockKind::Lamp,
         "minecraft:piston" | "minecraft:sticky_piston" => BlockKind::Piston,
-        "minecraft:glass" | "minecraft:tinted_glass" | "minecraft:glowstone"
-        | "minecraft:sea_lantern" | "minecraft:tnt" | "minecraft:ice" => BlockKind::Glass,
+        "minecraft:glass"
+        | "minecraft:tinted_glass"
+        | "minecraft:glowstone"
+        | "minecraft:sea_lantern"
+        | "minecraft:tnt"
+        | "minecraft:ice" => BlockKind::Glass,
         n if n.ends_with("_slab") => BlockKind::Slab,
-        "minecraft:stone" | "minecraft:smooth_stone" | "minecraft:cobblestone"
-        | "minecraft:dirt" | "minecraft:oak_planks" => BlockKind::Solid,
+        "minecraft:stone"
+        | "minecraft:smooth_stone"
+        | "minecraft:cobblestone"
+        | "minecraft:dirt"
+        | "minecraft:oak_planks" => BlockKind::Solid,
         "minecraft:observer" => BlockKind::Observer,
         "minecraft:target" => BlockKind::Target,
         "minecraft:daylight_detector" => BlockKind::DaylightDetector,
@@ -262,7 +271,12 @@ pub fn load(path: &Path) -> Result<World, FormatError> {
     let mut palette = Palette::new();
     let mut index_map = Vec::with_capacity(region.block_state_palette.len());
     for entry in &region.block_state_palette {
-        let state = parse_block_name(&entry.name, &entry.properties);
+        let properties: HashMap<String, String> = entry
+            .properties
+            .iter()
+            .map(|(key, value)| (key.clone(), value.clone()))
+            .collect();
+        let state = parse_block_name(&entry.name, &properties);
         index_map.push(palette.intern(state));
     }
 
@@ -305,7 +319,7 @@ pub fn load(path: &Path) -> Result<World, FormatError> {
 /// 只寫出該方塊真正擁有的 property —— 多寫會讓 Minecraft 拒絕載入。
 pub fn block_state_to_entry(state: &BlockState) -> PaletteEntry {
     // 先放回沒建模的屬性，再讓結構化欄位覆寫 —— 兩者的 key 依定義不重疊。
-    let mut properties: HashMap<String, String> = state
+    let mut properties: BTreeMap<String, String> = state
         .extra_properties
         .iter()
         .map(|(k, v)| (k.clone(), v.clone()))
@@ -463,6 +477,45 @@ mod tests {
     }
 
     #[test]
+    fn saving_a_property_rich_world_is_byte_deterministic() {
+        let mut world = World::new(2, 1, 1);
+        world.set(
+            0,
+            0,
+            0,
+            parse_block_name(
+                "minecraft:redstone_wall_torch",
+                &props(&[("facing", "north"), ("lit", "true")]),
+            ),
+        );
+        world.set(
+            1,
+            0,
+            0,
+            parse_block_name(
+                "minecraft:repeater",
+                &props(&[("facing", "east"), ("delay", "2"), ("powered", "false")]),
+            ),
+        );
+
+        let directory =
+            std::env::temp_dir().join(format!("reda-litematic-determinism-{}", std::process::id()));
+        std::fs::create_dir_all(&directory).expect("create isolated output directory");
+        let mut outputs = Vec::new();
+        for index in 0..16 {
+            let path = directory.join(format!("{index}.litematic"));
+            save(&path, &world, "property_order").expect("save must succeed");
+            outputs.push(std::fs::read(path).expect("read saved litematic"));
+        }
+        std::fs::remove_dir_all(&directory).expect("remove isolated output directory");
+
+        assert!(
+            outputs.windows(2).all(|pair| pair[0] == pair[1]),
+            "the NBT property map must have one stable serialization order"
+        );
+    }
+
+    #[test]
     fn parses_plain_stone() {
         let b = parse_block_name("minecraft:stone", &props(&[]));
         assert_eq!(b.kind, BlockKind::Solid);
@@ -490,16 +543,10 @@ mod tests {
 
     #[test]
     fn parses_slab_half() {
-        let top = parse_block_name(
-            "minecraft:smooth_stone_slab",
-            &props(&[("type", "top")]),
-        );
+        let top = parse_block_name("minecraft:smooth_stone_slab", &props(&[("type", "top")]));
         assert_eq!(top.half, Some(SlabHalf::Top));
 
-        let double = parse_block_name(
-            "minecraft:smooth_stone_slab",
-            &props(&[("type", "double")]),
-        );
+        let double = parse_block_name("minecraft:smooth_stone_slab", &props(&[("type", "double")]));
         assert_eq!(double.half, Some(SlabHalf::Double));
     }
 
@@ -535,9 +582,15 @@ mod tests {
         );
         let entry = block_state_to_entry(&b);
         assert_eq!(entry.name, "minecraft:repeater");
-        assert_eq!(entry.properties.get("facing").map(String::as_str), Some("north"));
+        assert_eq!(
+            entry.properties.get("facing").map(String::as_str),
+            Some("north")
+        );
         assert_eq!(entry.properties.get("delay").map(String::as_str), Some("3"));
-        assert_eq!(entry.properties.get("powered").map(String::as_str), Some("true"));
+        assert_eq!(
+            entry.properties.get("powered").map(String::as_str),
+            Some("true")
+        );
     }
 
     #[test]
@@ -622,7 +675,11 @@ mod tests {
         // mode 決定比較器是比較還是減法 —— 弄丟它等於把元件換成另一個
         let b = parse_block_name(
             "minecraft:comparator",
-            &props(&[("mode", "subtract"), ("powered", "true"), ("facing", "north")]),
+            &props(&[
+                ("mode", "subtract"),
+                ("powered", "true"),
+                ("facing", "north"),
+            ]),
         );
         let entry = block_state_to_entry(&b);
         assert_eq!(
@@ -630,8 +687,14 @@ mod tests {
             Some("subtract"),
             "a subtract comparator must not become a compare comparator"
         );
-        assert_eq!(entry.properties.get("facing").map(String::as_str), Some("north"));
-        assert_eq!(entry.properties.get("powered").map(String::as_str), Some("true"));
+        assert_eq!(
+            entry.properties.get("facing").map(String::as_str),
+            Some("north")
+        );
+        assert_eq!(
+            entry.properties.get("powered").map(String::as_str),
+            Some("true")
+        );
     }
 
     #[test]
@@ -649,7 +712,12 @@ mod tests {
 
         let rep = parse_block_name(
             "minecraft:repeater",
-            &props(&[("locked", "true"), ("delay", "1"), ("powered", "false"), ("facing", "east")]),
+            &props(&[
+                ("locked", "true"),
+                ("delay", "1"),
+                ("powered", "false"),
+                ("facing", "east"),
+            ]),
         );
         let rep_entry = block_state_to_entry(&rep);
         assert_eq!(
@@ -664,7 +732,11 @@ mod tests {
         // query `state.face` instead of poking at a string bag.
         let lever = parse_block_name(
             "minecraft:lever",
-            &props(&[("face", "ceiling"), ("facing", "west"), ("powered", "false")]),
+            &props(&[
+                ("face", "ceiling"),
+                ("facing", "west"),
+                ("powered", "false"),
+            ]),
         );
         assert_eq!(lever.face, Some(Face::Ceiling));
         assert!(
@@ -710,12 +782,39 @@ mod tests {
     fn every_input_property_comes_back_out() {
         // 通用不變式:讀進來的 key 集合必須等於寫出去的 key 集合
         let cases: Vec<(&str, Vec<(&str, &str)>)> = vec![
-            ("minecraft:observer", vec![("facing", "up"), ("powered", "false")]),
-            ("minecraft:oak_stairs", vec![("facing", "east"), ("half", "top"), ("shape", "straight"), ("waterlogged", "false")]),
-            ("minecraft:redstone_wire", vec![("power", "9"), ("north", "side"), ("east", "up")]),
-            ("minecraft:hopper", vec![("facing", "down"), ("enabled", "true")]),
-            ("minecraft:lever", vec![("face", "wall"), ("facing", "south"), ("powered", "true")]),
-            ("minecraft:stone_button", vec![("face", "ceiling"), ("facing", "east"), ("powered", "false")]),
+            (
+                "minecraft:observer",
+                vec![("facing", "up"), ("powered", "false")],
+            ),
+            (
+                "minecraft:oak_stairs",
+                vec![
+                    ("facing", "east"),
+                    ("half", "top"),
+                    ("shape", "straight"),
+                    ("waterlogged", "false"),
+                ],
+            ),
+            (
+                "minecraft:redstone_wire",
+                vec![("power", "9"), ("north", "side"), ("east", "up")],
+            ),
+            (
+                "minecraft:hopper",
+                vec![("facing", "down"), ("enabled", "true")],
+            ),
+            (
+                "minecraft:lever",
+                vec![("face", "wall"), ("facing", "south"), ("powered", "true")],
+            ),
+            (
+                "minecraft:stone_button",
+                vec![
+                    ("face", "ceiling"),
+                    ("facing", "east"),
+                    ("powered", "false"),
+                ],
+            ),
         ];
 
         for (name, pairs) in cases {
@@ -758,7 +857,10 @@ mod tests {
             &props(&[("power", "7")]),
         );
         assert_eq!(plate.kind, BlockKind::WeightedPressurePlate);
-        assert_eq!(plate.power, 7, "analog power must reach the structured field");
+        assert_eq!(
+            plate.power, 7,
+            "analog power must reach the structured field"
+        );
 
         let entry = block_state_to_entry(&plate);
         assert_eq!(entry.properties.get("power").map(String::as_str), Some("7"));
@@ -776,7 +878,10 @@ mod tests {
         );
         assert_eq!(plate.kind, BlockKind::PressurePlate);
         let entry = block_state_to_entry(&plate);
-        assert_eq!(entry.properties.get("powered").map(String::as_str), Some("true"));
+        assert_eq!(
+            entry.properties.get("powered").map(String::as_str),
+            Some("true")
+        );
         assert!(!entry.properties.contains_key("power"));
     }
 

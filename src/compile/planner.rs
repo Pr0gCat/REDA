@@ -10,13 +10,39 @@ pub struct Anchor {
     pub z: i32,
 }
 
+/// The node whose primitive is placed at an anchor.  Candidate coordinates
+/// alone are ambiguous once two same-shaped primitives exist, so the node
+/// identity travels with the candidate and is checked during realisation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PrimitiveNode {
+    pub id: String,
+    pub anchor: Anchor,
+}
+
+/// One declared sink of a route, recorded directly instead of inferred from
+/// the flattened terminal order.  A fanout route can therefore be verified
+/// even when its physical branches are emitted in a different order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteSink {
+    pub gate: String,
+    pub input_index: usize,
+    pub anchor: Anchor,
+}
+
+/// The physical terminal selected for one declared route sink.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RouteTerminal {
+    pub sink: RouteSink,
+    pub kind: RouteTerminalKind,
+}
+
 /// One routed connection in a candidate plan.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Route {
     id: String,
     anchors: Vec<Anchor>,
     owner: Option<String>,
-    terminal_kinds: Vec<RouteTerminalKind>,
+    terminals: Vec<RouteTerminal>,
 }
 
 /// The physical component selected at a route's final socket.
@@ -24,6 +50,11 @@ pub struct Route {
 pub enum RouteTerminalKind {
     RepeaterIntoSupport,
     DirectedDustIntoSupport,
+    /// A private branch ending directly in a declared wire merge's dust.
+    BareMergeDust,
+    /// A private merge branch whose strength budget still needs a final
+    /// repeater; it terminates at merge dust, never at a NOR support.
+    BareMergeRepeater,
 }
 
 impl Route {
@@ -40,18 +71,18 @@ impl Route {
             id: id.into(),
             anchors: distinct_anchors,
             owner: None,
-            terminal_kinds: Vec::new(),
+            terminals: Vec::new(),
         }
     }
 
     pub(crate) fn from_legacy(
         id: String,
         anchors: Vec<Anchor>,
-        terminal_kinds: Vec<RouteTerminalKind>,
+        terminals: Vec<RouteTerminal>,
     ) -> Self {
         let mut route = Self::new(id.clone(), anchors);
         route.owner = Some(id);
-        route.terminal_kinds = terminal_kinds;
+        route.terminals = terminals;
         route
     }
 
@@ -69,8 +100,16 @@ impl Route {
     }
 
     /// The terminal decisions emitted for this route's sinks.
-    pub fn terminal_kinds(&self) -> &[RouteTerminalKind] {
-        &self.terminal_kinds
+    pub fn terminal_kinds(&self) -> Vec<RouteTerminalKind> {
+        self.terminals
+            .iter()
+            .map(|terminal| terminal.kind)
+            .collect()
+    }
+
+    /// The sink identity and physical terminal for every fanout branch.
+    pub fn terminals(&self) -> &[RouteTerminal] {
+        &self.terminals
     }
 }
 
@@ -79,13 +118,16 @@ impl Route {
 #[derive(Debug, Clone)]
 pub struct PlanCandidate {
     anchors: Vec<Anchor>,
+    primitive_nodes: Vec<PrimitiveNode>,
     routes: Vec<Route>,
     legacy_emission: Option<LegacyEmission>,
 }
 
 impl PartialEq for PlanCandidate {
     fn eq(&self, other: &Self) -> bool {
-        self.anchors == other.anchors && self.routes == other.routes
+        self.anchors == other.anchors
+            && self.primitive_nodes == other.primitive_nodes
+            && self.routes == other.routes
     }
 }
 
@@ -96,6 +138,7 @@ impl PlanCandidate {
     pub fn new(anchors: Vec<Anchor>, routes: Vec<Route>) -> Self {
         Self {
             anchors,
+            primitive_nodes: Vec::new(),
             routes,
             legacy_emission: None,
         }
@@ -103,11 +146,13 @@ impl PlanCandidate {
 
     pub(crate) fn from_legacy(
         anchors: Vec<Anchor>,
+        primitive_nodes: Vec<PrimitiveNode>,
         routes: Vec<Route>,
         legacy_emission: LegacyEmission,
     ) -> Self {
         Self {
             anchors,
+            primitive_nodes,
             routes,
             legacy_emission: Some(legacy_emission),
         }
@@ -115,6 +160,11 @@ impl PlanCandidate {
 
     pub fn anchors(&self) -> &[Anchor] {
         &self.anchors
+    }
+
+    /// The explicit node identity associated with every primitive anchor.
+    pub fn primitive_nodes(&self) -> &[PrimitiveNode] {
+        &self.primitive_nodes
     }
 
     pub fn routes(&self) -> &[Route] {
@@ -174,7 +224,9 @@ pub enum PlannerError {
 impl std::fmt::Display for PlannerError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::LegacyMetadataUnavailable => write!(f, "compiled circuit has no legacy emission metadata"),
+            Self::LegacyMetadataUnavailable => {
+                write!(f, "compiled circuit has no legacy emission metadata")
+            }
             Self::NetlistDoesNotMatchCompiledOutput => {
                 write!(f, "netlist does not match the legacy compiler output")
             }
@@ -208,25 +260,47 @@ pub fn seed_from_legacy(
             Route::from_legacy(
                 route.owner().to_string(),
                 route.anchors().to_vec(),
-                route.terminal_kinds().to_vec(),
+                route.terminals().to_vec(),
             )
         })
         .collect();
 
     Ok(PlanCandidate::from_legacy(
         emission.primitive_anchors().to_vec(),
+        emission.primitive_nodes().to_vec(),
         routes,
         emission.clone(),
     ))
 }
 
-/// Realise a legacy seed and run the compiler's physical invariant suite.
+/// Check a candidate against a fresh legacy emission, then run the full
+/// physical invariant suite against that newly emitted world.
+///
+/// The retained legacy metadata supplies only the immutable netlist.  A
+/// candidate must match every newly extracted seed field before an invariant
+/// runs, so verification can never reuse the old emission's world as reality.
 pub fn verify_candidate(candidate: &PlanCandidate) -> Result<(), PlannerError> {
-    let emission = candidate
+    let netlist = candidate
         .legacy_emission
         .as_ref()
-        .ok_or(PlannerError::LegacyMetadataUnavailable)?;
-    compile::verify_legacy_emission(emission).map_err(PlannerError::PhysicalInvariant)
+        .ok_or(PlannerError::LegacyMetadataUnavailable)?
+        .netlist();
+    let compiled = compile::compile(netlist).map_err(PlannerError::PhysicalInvariant)?;
+    let expected = seed_from_legacy(netlist, &compiled)?;
+    if candidate != &expected {
+        return Err(PlannerError::PhysicalInvariant(
+            compile::CompileError::CandidateMetadataViolation {
+                item: "candidate".to_string(),
+                reason: "candidate metadata does not match the freshly emitted legacy seed"
+                    .to_string(),
+            },
+        ));
+    }
+
+    let fresh_emission = compiled
+        .legacy_emission()
+        .expect("legacy compilation always records its emission metadata");
+    compile::verify_legacy_emission(fresh_emission).map_err(PlannerError::PhysicalInvariant)
 }
 
 /// Integer weights for the candidate cost terms.
@@ -558,6 +632,8 @@ fn compare_fractions(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::circuits::and4::build_and4_netlist;
+    use crate::compile::Gate;
 
     fn fixture_seed() -> PlanCandidate {
         PlanCandidate::new(
@@ -732,5 +808,140 @@ mod tests {
                 turns: 0,
             }
         );
+    }
+
+    fn legacy_and4_seed() -> PlanCandidate {
+        let (netlist, _) = build_and4_netlist();
+        let compiled = compile::compile(&netlist).expect("and4 fixture must compile");
+        seed_from_legacy(&netlist, &compiled).expect("compiled fixture must seed")
+    }
+
+    fn legacy_fanout_seed() -> PlanCandidate {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["left".to_string(), "right".to_string()],
+            gates: vec![Gate::nor("left", &["a"]), Gate::nor("right", &["a"])],
+        };
+        let compiled = compile::compile(&netlist).expect("fanout fixture must compile");
+        seed_from_legacy(&netlist, &compiled).expect("fanout fixture must seed")
+    }
+
+    #[test]
+    fn plan_candidate_equality_includes_primitive_nodes() {
+        let expected = legacy_and4_seed();
+        let mut candidate = expected.clone();
+        candidate.primitive_nodes[0].id.push_str("-wrong");
+
+        assert_ne!(candidate, expected);
+    }
+
+    #[test]
+    fn verify_candidate_rejects_a_corrupted_primitive_anchor() {
+        let mut candidate = legacy_and4_seed();
+        candidate.anchors[0].x += 1;
+
+        assert!(
+            matches!(
+                verify_candidate(&candidate),
+                Err(PlannerError::PhysicalInvariant(_))
+            ),
+            "verification must realise candidate primitive anchors, not use the retained seed"
+        );
+    }
+
+    #[test]
+    fn verify_candidate_rejects_a_corrupted_route_cell_or_owner() {
+        let mut candidate = legacy_and4_seed();
+        candidate.routes[0].anchors[0] = Anchor { x: 25, y: 1, z: 49 };
+        assert!(matches!(
+            verify_candidate(&candidate),
+            Err(PlannerError::PhysicalInvariant(
+                compile::CompileError::CandidateMetadataViolation { .. }
+            ))
+        ));
+
+        let mut candidate = legacy_and4_seed();
+        candidate.routes[0].owner = Some("not-a".to_string());
+        assert!(matches!(
+            verify_candidate(&candidate),
+            Err(PlannerError::PhysicalInvariant(
+                compile::CompileError::CandidateMetadataViolation { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn verify_candidate_rejects_a_corrupted_directed_dust_terminal_choice() {
+        let mut candidate = legacy_and4_seed();
+        let route = candidate
+            .routes
+            .iter_mut()
+            .find(|route| {
+                route
+                    .terminals
+                    .iter()
+                    .any(|terminal| terminal.kind == RouteTerminalKind::DirectedDustIntoSupport)
+            })
+            .expect("and4 includes a directed-dust terminal");
+        route.terminals[0].kind = RouteTerminalKind::RepeaterIntoSupport;
+
+        assert!(
+            matches!(
+                verify_candidate(&candidate),
+                Err(PlannerError::PhysicalInvariant(_))
+            ),
+            "terminal metadata must describe the realised terminal block"
+        );
+    }
+
+    #[test]
+    fn verify_candidate_rejects_a_terminal_attached_to_the_wrong_sink_identity() {
+        let mut candidate = legacy_and4_seed();
+        candidate.routes[0].terminals[0].sink.input_index = 99;
+
+        assert!(matches!(
+            verify_candidate(&candidate),
+            Err(PlannerError::PhysicalInvariant(
+                compile::CompileError::CandidateMetadataViolation { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn verify_candidate_rejects_a_fanout_with_a_missing_sink_terminal() {
+        let mut candidate = legacy_fanout_seed();
+        let route = candidate
+            .routes
+            .iter_mut()
+            .find(|route| route.id == "a")
+            .expect("fanout source route must be present");
+        assert_eq!(route.terminals.len(), 2, "fixture must expose both sinks");
+        route.terminals.pop();
+
+        assert!(matches!(
+            verify_candidate(&candidate),
+            Err(PlannerError::PhysicalInvariant(
+                compile::CompileError::CandidateMetadataViolation { .. }
+            ))
+        ));
+    }
+
+    #[test]
+    fn verify_candidate_rejects_a_bare_merge_terminal_that_claims_a_nor_support() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec!["y".to_string()],
+            gates: vec![Gate::merge("y", &["a", "b"])],
+        };
+        let compiled = compile::compile(&netlist).expect("merge fixture must compile");
+        let mut candidate = seed_from_legacy(&netlist, &compiled).expect("merge fixture must seed");
+        candidate.routes[0].terminals[0].kind = RouteTerminalKind::RepeaterIntoSupport;
+
+        assert!(matches!(
+            verify_candidate(&candidate),
+            Err(PlannerError::PhysicalInvariant(
+                compile::CompileError::CandidateMetadataViolation { .. }
+            ))
+        ));
     }
 }
