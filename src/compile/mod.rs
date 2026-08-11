@@ -262,7 +262,7 @@ impl Netlist {
 const INPUT_DIRECTIONS: [Facing; 3] = [Facing::West, Facing::East, Facing::South];
 
 /// 輸出固定朝北。
-const OUTPUT_DIRECTION: Facing = Facing::North;
+pub(crate) const OUTPUT_DIRECTION: Facing = Facing::North;
 
 /// Where a NOR gate's support block sits, and where its output torch and
 /// input sockets are relative to it. `size` is the ground-plan bounding box
@@ -293,7 +293,7 @@ fn stone() -> BlockState {
     state
 }
 
-fn dust() -> BlockState {
+pub(crate) fn dust() -> BlockState {
     let mut state = BlockState::air();
     state.kind = BlockKind::RedstoneWire;
     state.name = "minecraft:redstone_wire".to_string();
@@ -316,7 +316,7 @@ fn wall_torch(facing: Facing) -> BlockState {
 /// simulator's first settle pass is what gives it a correct initial value
 /// (see `Simulator::new`, which recomputes dust strengths and then schedules
 /// any mismatched component before the caller ever reads anything).
-fn lamp() -> BlockState {
+pub(crate) fn lamp() -> BlockState {
     let mut state = BlockState::air();
     state.kind = BlockKind::Lamp;
     state.name = "minecraft:redstone_lamp".to_string();
@@ -1457,6 +1457,10 @@ pub(crate) struct LegacyRoute {
     owner: String,
     anchors: Vec<Anchor>,
     terminals: Vec<RouteTerminal>,
+    /// The block written into each anchor, parallel to `anchors`.
+    blocks: Vec<BlockState>,
+    /// The block one cell below each anchor, parallel to `anchors`.
+    floors: Vec<BlockState>,
 }
 
 impl LegacyRoute {
@@ -1471,10 +1475,18 @@ impl LegacyRoute {
     pub(crate) fn terminals(&self) -> &[RouteTerminal] {
         &self.terminals
     }
+
+    pub(crate) fn blocks(&self) -> &[BlockState] {
+        &self.blocks
+    }
+
+    pub(crate) fn floors(&self) -> &[BlockState] {
+        &self.floors
+    }
 }
 
 /// 把一格地板鋪在 `pos` 正下方，讓紅石粉／拉桿／中繼器能立在上面。
-fn ensure_floor(world: &mut World, pos: Position) {
+pub(crate) fn ensure_floor(world: &mut World, pos: Position) {
     let floor = pos.down();
     world.set(floor.x, floor.y, floor.z, stone());
 }
@@ -2021,13 +2033,38 @@ impl Footprint {
         }
     }
 
-    fn legacy_routes(&self, netlist: &Netlist, nets: &[Net]) -> Vec<LegacyRoute> {
+    /// Pair every recorded route cell with the block the recording pass put
+    /// there.
+    ///
+    /// `emitted` must be the world that actually ships, not the recording
+    /// pass's scratch copy: the recording pass writes seals the enforcing
+    /// pass refuses, so replaying its blocks would put stone where the final
+    /// circuit has air. The recorded *ownership* still comes from the
+    /// recording pass, which is the only place it exists.
+    fn legacy_routes(&self, netlist: &Netlist, nets: &[Net], emitted: &World) -> Vec<LegacyRoute> {
         nets.iter()
             .enumerate()
-            .map(|(net, route)| LegacyRoute {
-                owner: net_source_name(netlist, route).to_string(),
-                anchors: self.route_anchors.get(net).cloned().unwrap_or_default(),
-                terminals: self.route_terminals.get(net).cloned().unwrap_or_default(),
+            .map(|(net, route)| {
+                let anchors = self.route_anchors.get(net).cloned().unwrap_or_default();
+                let blocks = anchors
+                    .iter()
+                    .map(|anchor| emitted.get(anchor.x, anchor.y, anchor.z).clone())
+                    .collect();
+                // The cell each anchor stands on. `ensure_floor` writes
+                // unconditionally, so the emitter floors cells that end up
+                // empty; which ones is not derivable from the finished
+                // blocks, only observable here.
+                let floors = anchors
+                    .iter()
+                    .map(|anchor| emitted.get(anchor.x, anchor.y - 1, anchor.z).clone())
+                    .collect();
+                LegacyRoute {
+                    owner: net_source_name(netlist, route).to_string(),
+                    anchors,
+                    terminals: self.route_terminals.get(net).cloned().unwrap_or_default(),
+                    blocks,
+                    floors,
+                }
             })
             .collect()
     }
@@ -6194,8 +6231,12 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     emit(&mut scratch, netlist, &geometry, &mut footprint);
     drop(scratch);
 
-    let legacy_routes = footprint.legacy_routes(netlist, &nets);
-    let mut footprint = Footprint::enforce(footprint.reservation);
+    // Ownership only exists in the recording pass -- `claim` is a no-op once
+    // the reservation is complete -- so the recording footprint is kept alive
+    // past the pass that produced it. The blocks it names are read out of the
+    // world that actually ships, below.
+    let recorded = footprint;
+    let mut footprint = Footprint::enforce(recorded.reservation.clone());
     let mut world = World::new(size_x.max(8), size_y, size_z.max(8));
     let EmitResult {
         input_positions,
@@ -6245,6 +6286,7 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         &output_positions,
     )?;
 
+    let legacy_routes = recorded.legacy_routes(netlist, &nets, &world);
     let primitive_nodes = legacy_primitive_nodes(netlist, &primitive_anchors);
     let legacy_emission = LegacyEmission {
         netlist: netlist.clone(),

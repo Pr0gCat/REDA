@@ -5,6 +5,7 @@ use crate::compile::primitive_graph::{reexpand_gate, EntrySelection, NodeId};
 use crate::compile::topology::{Library, Primitive};
 use crate::compile::{self, CompiledCircuit, LegacyEmission, Netlist};
 use crate::redstone::simulator::position::Position;
+use crate::redstone::world::block::BlockState;
 use crate::redstone::world::storage::World;
 
 /// A fixed coordinate selected by the planner without referring to a world.
@@ -63,6 +64,17 @@ pub struct Route {
     anchors: Vec<Anchor>,
     owner: Option<String>,
     terminals: Vec<RouteTerminal>,
+    /// What actually stands in each anchor, parallel to `anchors`.
+    ///
+    /// A candidate is meant to be a complete physical realisation, so the
+    /// block in every routed cell is recorded by whoever chose it -- the
+    /// legacy emitter for a seed, the planner's own router for a moved
+    /// route -- rather than re-derived from the finished world.
+    realisation: Vec<BlockState>,
+    /// What each anchor stands on, parallel to `anchors`.  Recorded rather
+    /// than derived: the emitter floors cells it then leaves empty, and a
+    /// finished world cannot say which stone was laid for which reason.
+    floors: Vec<BlockState>,
 }
 
 /// The physical component selected at a route's final socket.
@@ -156,6 +168,8 @@ impl Route {
             anchors: distinct_anchors,
             owner: None,
             terminals: Vec::new(),
+            realisation: Vec::new(),
+            floors: Vec::new(),
         }
     }
 
@@ -163,11 +177,35 @@ impl Route {
         id: String,
         anchors: Vec<Anchor>,
         terminals: Vec<RouteTerminal>,
+        realisation: Vec<BlockState>,
+        floors: Vec<BlockState>,
     ) -> Self {
         let mut route = Self::new(id.clone(), anchors);
         route.owner = Some(id);
         route.terminals = terminals;
+        route.realisation = realisation;
+        route.floors = floors;
         route
+    }
+
+    /// A route with declared anchors and terminals but no realisation --
+    /// what a fixture, or a freshly rerouted edge, actually looks like.
+    #[cfg(test)]
+    pub(crate) fn unrealised(
+        id: String,
+        anchors: Vec<Anchor>,
+        terminals: Vec<RouteTerminal>,
+    ) -> Self {
+        Self::from_legacy(id, anchors, terminals, Vec::new(), Vec::new())
+    }
+
+    /// The block this route puts in each of its anchors, in anchor order.
+    ///
+    /// Empty until something decides: a route that has been moved but not
+    /// re-realised has anchors and no blocks, and emission refuses it rather
+    /// than inventing dust.
+    pub fn realisation(&self) -> &[BlockState] {
+        &self.realisation
     }
 
     pub fn id(&self) -> &str {
@@ -387,6 +425,56 @@ impl std::fmt::Display for PlannerError {
     }
 }
 
+/// Realise a whole candidate: its primitives, then its routes.
+///
+/// The result is a world built from nothing but the plan.  For a seed this
+/// must reproduce the legacy emitter's world exactly; for any other candidate
+/// it is that candidate's actual, checkable output rather than a promise.
+pub fn emit_candidate(
+    candidate: &PlanCandidate,
+    netlist: &Netlist,
+    size: (i32, i32, i32),
+) -> Result<World, PlannerError> {
+    let mut world = emit_primitives(candidate, netlist, size)?;
+    emit_routes(&mut world, candidate)?;
+    Ok(world)
+}
+
+/// Write every route's own cells, and the floor each one stands on.
+///
+/// A route with no recorded realisation is refused: the alternative is to
+/// guess that an unrealised cell wants dust, which would silently produce a
+/// different circuit from the one the planner scored.
+fn emit_routes(world: &mut World, candidate: &PlanCandidate) -> Result<(), PlannerError> {
+    for route in &candidate.routes {
+        if route.realisation.len() != route.anchors.len()
+            || route.floors.len() != route.anchors.len()
+        {
+            return Err(PlannerError::UnrealisableNode {
+                id: route.id.clone(),
+                reason: format!(
+                    "{} anchor(s) but {} block(s) and {} floor(s)",
+                    route.anchors.len(),
+                    route.realisation.len(),
+                    route.floors.len()
+                ),
+            });
+        }
+
+        for ((anchor, block), floor) in route
+            .anchors
+            .iter()
+            .zip(route.realisation.iter())
+            .zip(route.floors.iter())
+        {
+            world.set(anchor.x, anchor.y - 1, anchor.z, floor.clone());
+            world.set(anchor.x, anchor.y, anchor.z, block.clone());
+        }
+    }
+
+    Ok(())
+}
+
 /// Put every primitive a candidate places back into a world.
 ///
 /// This is the half of realisation that needs nothing but the candidate: each
@@ -410,6 +498,7 @@ pub fn emit_primitives(
     }
 
     let mut world = World::new(size.0, size.1, size.2);
+    let mut gate_pin: Vec<Position> = Vec::with_capacity(netlist.gates.len());
     for (index, node) in candidate.primitive_nodes.iter().enumerate() {
         let anchor = node.anchor;
         let origin = (anchor.x, anchor.y, anchor.z);
@@ -417,10 +506,12 @@ pub fn emit_primitives(
         match netlist.gates.get(index) {
             Some(gate) => match (node.realisation, gate.is_merge()) {
                 (NodeRealisation::WireMerge, true) => {
-                    compile::place_merge_gate(&mut world, origin, gate.inputs.len());
+                    let cell = compile::place_merge_gate(&mut world, origin, gate.inputs.len());
+                    gate_pin.push(output_pin(&mut world, anchor, &cell));
                 }
                 (NodeRealisation::Primitive(Primitive::Torch), false) => {
-                    compile::place_nor_gate(&mut world, origin, gate.inputs.len());
+                    let cell = compile::place_nor_gate(&mut world, origin, gate.inputs.len());
+                    gate_pin.push(output_pin(&mut world, anchor, &cell));
                 }
                 (realisation, _) => {
                     return Err(PlannerError::UnrealisableNode {
@@ -449,7 +540,40 @@ pub fn emit_primitives(
         }
     }
 
+    // A declared output's lamp is not part of any gate cell and is not
+    // claimed by a route: it hangs under the producing gate's own pin, which
+    // is the one place nothing else can reach.
+    for output in &netlist.outputs {
+        let gate = netlist
+            .gates
+            .iter()
+            .position(|gate| &gate.output == output)
+            .ok_or_else(|| PlannerError::UnrealisableNode {
+                id: output.clone(),
+                reason: "declared output has no producing gate".to_string(),
+            })?;
+        let lamp = gate_pin[gate].down();
+        world.set(lamp.x, lamp.y, lamp.z, compile::lamp());
+    }
+
     Ok(world)
+}
+
+/// Write a gate's own output pin -- the dust one hop out from its torch --
+/// and report where it landed.
+///
+/// The pin belongs to the gate, not to any route: a gate with no sinks still
+/// has one, and a declared output's lamp hangs beneath it.
+fn output_pin(world: &mut World, anchor: Anchor, cell: &compile::NorCell) -> Position {
+    let torch = Position::new(
+        anchor.x + cell.output_offset.0,
+        anchor.y + cell.output_offset.1,
+        anchor.z + cell.output_offset.2,
+    );
+    let pin = torch.offset(compile::OUTPUT_DIRECTION);
+    compile::ensure_floor(world, pin);
+    world.set(pin.x, pin.y, pin.z, compile::dust());
+    pin
 }
 
 impl std::error::Error for PlannerError {}
@@ -907,6 +1031,8 @@ pub fn seed_from_legacy(
                 route.owner().to_string(),
                 route.anchors().to_vec(),
                 route.terminals().to_vec(),
+                route.blocks().to_vec(),
+                route.floors().to_vec(),
             )
         })
         .collect();
@@ -1636,7 +1762,7 @@ mod tests {
                 })
                 .collect(),
             vec![
-                Route::from_legacy(
+                Route::unrealised(
                     "incident".to_string(),
                     vec![Anchor { x: 0, y: 0, z: 0 }, Anchor { x: 4, y: 0, z: 0 }],
                     vec![],
@@ -1712,7 +1838,7 @@ mod tests {
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
                 },
             ],
-            vec![Route::from_legacy(
+            vec![Route::unrealised(
                 "source".to_string(),
                 vec![source, other_sink, old_moved_sink],
                 vec![
@@ -1792,7 +1918,7 @@ mod tests {
                     realisation: NodeRealisation::WireMerge,
                 },
             ],
-            vec![Route::from_legacy(
+            vec![Route::unrealised(
                 "a".to_string(),
                 vec![source, Anchor { x: 1, y: 0, z: 0 }, merge],
                 vec![RouteTerminal {
@@ -1936,7 +2062,7 @@ mod tests {
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
                 },
             ],
-            vec![Route::from_legacy(
+            vec![Route::unrealised(
                 "a".to_string(),
                 vec![
                     source,
@@ -1982,7 +2108,7 @@ mod tests {
                     },
                 ],
                 vec![
-                    Route::from_legacy(
+                    Route::unrealised(
                         "a".to_string(),
                         vec![source, Anchor { x: 1, y: 0, z: 0 }],
                         vec![RouteTerminal {
@@ -1994,7 +2120,7 @@ mod tests {
                             kind: RouteTerminalKind::RepeaterIntoSupport,
                         }],
                     ),
-                    Route::from_legacy(
+                    Route::unrealised(
                         "a".to_string(),
                         vec![source, Anchor { x: 0, y: 0, z: 1 }],
                         vec![RouteTerminal {
@@ -2078,7 +2204,7 @@ mod tests {
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
                 },
             ],
-            vec![Route::from_legacy(
+            vec![Route::unrealised(
                 "a".to_string(),
                 vec![
                     Anchor { x: 0, y: 0, z: 0 },

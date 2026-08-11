@@ -9,11 +9,12 @@ use std::path::PathBuf;
 use reda::circuits::and4::build_and4_netlist;
 use reda::compile::physical;
 use reda::compile::planner::{
-    emit_primitives, seed_from_legacy, verify_candidate, Anchor, NodeRealisation, NormalisedScore,
-    PlannerWeights, RouteTerminalKind,
+    emit_candidate, emit_primitives, seed_from_legacy, verify_candidate, Anchor, NodeRealisation,
+    NormalisedScore, PlannerWeights, RouteTerminalKind,
 };
 use reda::compile::topology::Primitive;
 use reda::redstone::world::block::BlockKind;
+use reda::redstone::world::storage::World;
 use reda::compile::{compile, CompileError, CompiledCircuit, Gate, Netlist};
 use reda::formats::litematic;
 use reda::redstone::simulator::Simulator;
@@ -146,6 +147,68 @@ fn a_seed_names_the_physical_realisation_behind_every_placed_node() {
                 node.id
             );
         }
+    }
+}
+
+/// Report every cell where two worlds disagree, capped so a wholesale
+/// mismatch stays readable.
+fn assert_worlds_identical(realised: &World, expected: &World, what: &str) {
+    assert_eq!(realised.size(), expected.size(), "{what}: world size");
+
+    let mut total = 0usize;
+    let mut shown = Vec::new();
+    for flat in 0..realised.cells().len() {
+        let (x, y, z) = realised.decode(flat);
+        let (got, want) = (realised.get(x, y, z), expected.get(x, y, z));
+        if got != want {
+            total += 1;
+            if shown.len() < 12 {
+                shown.push(format!("  ({x}, {y}, {z}): got {:?}, want {:?}", got.kind, want.kind));
+            }
+        }
+    }
+
+    assert!(
+        total == 0,
+        "{what}: {total} cell(s) differ; first {}:\n{}",
+        shown.len(),
+        shown.join("\n")
+    );
+}
+
+/// The acceptance test for making the planner load-bearing: a candidate has
+/// to be a complete physical realisation, not a sketch only the legacy
+/// emitter can finish. A seed is the one candidate whose correct realisation
+/// is already known, so it is the only honest oracle available before any
+/// candidate has been moved.
+///
+/// Byte equality, not "close enough": every block, in every cell, including
+/// the floors the emitter lays under cells it then leaves empty. Those are
+/// not derivable from a finished world, which is why they are recorded
+/// rather than inferred.
+///
+/// Run over several shapes deliberately -- a lone NOR, a bare merge, a
+/// fanout, and a real multi-row circuit -- because a candidate that only
+/// round-trips and4 has proved nothing about merges or fanout.
+#[test]
+fn a_legacy_seed_re_emits_the_exact_world_the_legacy_compiler_built() {
+    let (and4, _) = build_and4_netlist();
+    let circuits: [(&str, Netlist); 5] = [
+        ("not", not_netlist()),
+        ("and", and_netlist()),
+        ("bare merge", bare_merge_netlist()),
+        ("fanout", fanout_netlist()),
+        ("and4", and4),
+    ];
+
+    for (name, netlist) in circuits {
+        let compiled = compile(&netlist).expect("every fixture compiles");
+        let seed =
+            seed_from_legacy(&netlist, &compiled).expect("legacy output must be extractable");
+        let realised = emit_candidate(&seed, &netlist, compiled.world.size())
+            .expect("a legacy seed must be fully realisable");
+
+        assert_worlds_identical(&realised, &compiled.world, name);
     }
 }
 
