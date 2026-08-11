@@ -216,6 +216,8 @@ pub enum ExpandError {
     /// library (unlike the hard-coded router) is exactly the place new gate
     /// kinds are meant to be added.
     NoLibraryEntry { gate: String, arity: usize },
+    /// A positive-edge DFF must have exactly its data and clock inputs.
+    InvalidDffArity { gate: String, arity: usize },
     /// A gate input, or a declared output, names a signal nothing in the
     /// netlist drives. `compile` already rejects this before it ever builds
     /// a floorplan (`CompileError::UndrivenSignal`); `expand` re-checks it
@@ -249,6 +251,10 @@ impl std::fmt::Display for ExpandError {
             ExpandError::NoLibraryEntry { gate, arity } => {
                 write!(f, "no library entry for gate `{gate}` (fan-in {arity})")
             }
+            ExpandError::InvalidDffArity { gate, arity } => write!(
+                f,
+                "DFF gate `{gate}` needs exactly 2 inputs (data and clock), got {arity}"
+            ),
             ExpandError::UndrivenSignal(name) => write!(f, "signal `{name}` is never driven"),
             ExpandError::CyclicNetlist => write!(f, "netlist has a combinational cycle"),
             ExpandError::NotRealisable { gate, kind } => write!(
@@ -508,6 +514,12 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
         let gate = &netlist.gates[g];
 
         if gate.kind == GateKind::DffPosedge {
+            if !gate.kind.accepts_arity(gate.inputs.len()) {
+                return Err(ExpandError::InvalidDffArity {
+                    gate: gate.output.clone(),
+                    arity: gate.inputs.len(),
+                });
+            }
             let entry =
                 library
                     .stateful_entry(gate.kind)
@@ -810,6 +822,29 @@ mod tests {
                         || (edge.from == s_lock && edge.to == s_data))
             }),
             "lock controls must never masquerade as ordinary rear-data signal edges"
+        );
+    }
+
+    #[test]
+    fn expand_rejects_a_one_input_dff_instead_of_panicking() {
+        let netlist = Netlist {
+            inputs: vec!["data".to_string()],
+            outputs: vec![],
+            gates: vec![Gate {
+                name: "q".to_string(),
+                inputs: vec!["data".to_string()],
+                output: "q".to_string(),
+                kind: GateKind::DffPosedge,
+            }],
+        };
+
+        assert_eq!(
+            expand(&netlist, &Library::default_library())
+                .expect_err("a DFF without a clock must be rejected"),
+            ExpandError::InvalidDffArity {
+                gate: "q".to_string(),
+                arity: 1,
+            }
         );
     }
 
