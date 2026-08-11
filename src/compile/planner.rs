@@ -858,12 +858,24 @@ struct LaidBranch {
 /// to assume a strength of `16 - path length`, which is neither the real
 /// maximum nor aware that a repeater resets it.
 fn realise_branch(source: Anchor, cells: &[Anchor]) -> LaidBranch {
-    let bends: BTreeSet<usize> = cells
+    let mut bends: BTreeSet<usize> = cells
         .windows(3)
         .enumerate()
         .filter(|(_, window)| direction(window[0], window[1]) != direction(window[1], window[2]))
         .map(|(index, _)| index + 1)
         .collect();
+    // A repeater needs a flat cell to stand on and a horizontal facing, so a
+    // staircase step can never hold one. `bend_indices` already means exactly
+    // "no repeater here", so saying it there lets `plan_bent_path` put the
+    // refresh somewhere it fits -- rather than placing one on a stair and
+    // having realisation quietly downgrade it to dust and lose the refresh.
+    let mut previous = source;
+    for (index, cell) in cells.iter().enumerate() {
+        if cell.y != previous.y {
+            bends.insert(index);
+        }
+        previous = *cell;
+    }
 
     let (is_repeater, _) = compile::plan_bent_path(
         cells.len(),
@@ -1084,11 +1096,15 @@ fn deterministic_astar(
     reservation: &Reservation,
 ) -> Option<Vec<Anchor>> {
     let margin = manhattan_distance(start, goal).saturating_add(2) as i32;
-    // Y is not widened. A step in Y is a dust staircase, and a repeater cannot
-    // stand on one -- so a search free to climb produces runs whose strength
-    // refreshes get silently downgraded to dust, and 41 cells of it reach
-    // nothing. Staircases need rules this planner does not have yet; until it
-    // does, a route stays in the plane its endpoints share.
+    // Y is widened by a couple of levels rather than by `margin`: a route may
+    // now climb, because a step is a real staircase and the strength budget
+    // knows a stair cannot hold a repeater. It has no reason to climb far, and
+    // every level costs the search a whole plane of cells to consider.
+    // Climb only. Every cell stands on a floor one level below it, and the
+    // gate plane already sits on the lowest floor there is -- a route that
+    // descends from it is digging through the ground, which is why one did,
+    // and why its blocks were written outside the world and carried nothing.
+    const CLIMB: i32 = 2;
     let min = Anchor {
         x: start.x.min(goal.x).saturating_sub(margin),
         y: start.y.min(goal.y),
@@ -1096,7 +1112,7 @@ fn deterministic_astar(
     };
     let max = Anchor {
         x: start.x.max(goal.x).saturating_add(margin),
-        y: start.y.max(goal.y),
+        y: start.y.max(goal.y).saturating_add(CLIMB),
         z: start.z.max(goal.z).saturating_add(margin),
     };
     let mut frontier = BTreeSet::from([SearchState {
@@ -1118,6 +1134,13 @@ fn deterministic_astar(
         for next in neighbours(state.anchor) {
             if !within_bounds(next, min, max)
                 || !anchor_is_free_for(next, start, goal, terminal_support, owner, reservation)
+                || staircase_clearance(state.anchor, next)
+                    .into_iter()
+                    .any(|cell| {
+                        reservation
+                            .owner(&cell)
+                            .is_some_and(|occupied_by| occupied_by != owner)
+                    })
             {
                 continue;
             }
@@ -1149,33 +1172,41 @@ fn reconstruct_path(previous: BTreeMap<Anchor, Anchor>, goal: Anchor) -> Vec<Anc
     path
 }
 
-fn neighbours(anchor: Anchor) -> [Anchor; 6] {
-    [
-        Anchor {
-            x: anchor.x - 1,
-            ..anchor
-        },
-        Anchor {
-            x: anchor.x + 1,
-            ..anchor
-        },
-        Anchor {
-            y: anchor.y - 1,
-            ..anchor
-        },
-        Anchor {
-            y: anchor.y + 1,
-            ..anchor
-        },
-        Anchor {
-            z: anchor.z - 1,
-            ..anchor
-        },
-        Anchor {
-            z: anchor.z + 1,
-            ..anchor
-        },
-    ]
+/// Where dust at `anchor` can reach in one step.
+///
+/// `connectivity::dust_reach` is the rule: the four horizontal neighbours, and
+/// each of those one level up or one level down. Never the cell directly above
+/// or below -- dust does not stack, it climbs, and a search that thinks
+/// otherwise lays runs that carry nothing.
+fn neighbours(anchor: Anchor) -> Vec<Anchor> {
+    let mut steps = Vec::with_capacity(12);
+    for sideways in horizontal_neighbours(anchor) {
+        steps.push(sideways);
+        steps.push(Anchor { y: sideways.y + 1, ..sideways });
+        steps.push(Anchor { y: sideways.y - 1, ..sideways });
+    }
+    steps
+}
+
+/// The cells a staircase step needs, beyond the one it lands on.
+///
+/// Climbing to `to` puts dust on top of the cell beside `from`, so that cell
+/// becomes the riser -- which is also the floor the realisation lays under
+/// `to`, so it costs nothing extra as long as nobody else owns it. The cell
+/// directly above `from` has to stay clear, or the climb is blocked.
+///
+/// Descending needs the opposite: the cell beside `from` must stay *empty*,
+/// because a solid one there is what would have made this a climb instead.
+fn staircase_clearance(from: Anchor, to: Anchor) -> Vec<Anchor> {
+    if to.y == from.y {
+        return Vec::new();
+    }
+    let riser = Anchor { y: from.y, ..to };
+    if to.y > from.y {
+        vec![riser, Anchor { y: from.y + 1, ..from }]
+    } else {
+        vec![riser]
+    }
 }
 
 fn within_bounds(anchor: Anchor, min: Anchor, max: Anchor) -> bool {
@@ -1231,6 +1262,14 @@ fn keep_out(anchor: Anchor) -> Vec<Anchor> {
 }
 
 fn reserve_path(reservation: &mut Reservation, owner: &str, path: &[Anchor]) {
+    for window in path.windows(2) {
+        for cell in staircase_clearance(window[0], window[1]) {
+            // Solid: a riser is a block and a descent needs air, and neither
+            // joins a net running past it. Both simply have to stay this
+            // route's to decide.
+            reservation.insert(cell, owner, Occupancy::Solid);
+        }
+    }
     for &anchor in path {
         reservation.insert(anchor, owner, Occupancy::Conductor);
     }
@@ -3407,6 +3446,37 @@ mod tests {
         );
     }
 
+    /// The search has to move the way dust moves.
+    ///
+    /// `connectivity::dust_reach` says a dust cell reaches its four horizontal
+    /// neighbours, and those neighbours one level up or one level down -- a
+    /// staircase. It never reaches the cell directly above or below itself.
+    /// A search that steps straight down produces exactly what it did before
+    /// this: a run that descends three levels and carries nothing.
+    #[test]
+    fn the_search_steps_the_way_dust_does() {
+        let here = Anchor { x: 4, y: 4, z: 4 };
+        let steps = neighbours(here);
+
+        assert!(
+            !steps.iter().any(|step| step.x == here.x && step.z == here.z),
+            "dust never reaches the cell directly above or below itself"
+        );
+        for step in &steps {
+            let horizontal = (step.x - here.x).abs() + (step.z - here.z).abs();
+            assert_eq!(horizontal, 1, "every step moves exactly one cell sideways");
+            assert!(
+                (step.y - here.y).abs() <= 1,
+                "a staircase climbs or descends one level, never more"
+            );
+        }
+        assert_eq!(
+            steps.len(),
+            12,
+            "four directions, each level with the source or one step either way"
+        );
+    }
+
     /// Keep-out is about conductors, not about everything a primitive owns.
     ///
     /// The channel-safety spec derives the rule from `dust_reach`: two
@@ -3493,25 +3563,16 @@ mod tests {
     /// Legal is not enough: a circuit the planner placed itself has to compute
     /// what it was asked to.
     ///
-    /// and4 is the first circuit this cannot place, and the reason is the
-    /// routing model rather than the placement. Every net is searched for in
-    /// one plane, because a step in Y is a dust staircase and a repeater
-    /// cannot stand on one -- routing in 3D without those rules produced a
-    /// 41-cell run of unbroken dust that reached nothing. In one plane, with
-    /// no reserved corridors, the searches block each other: this is what
-    /// channels and tracks exist to solve, and this planner has neither.
+    /// and4 is the first real circuit this places end to end without the
+    /// legacy emitter: 656 blocks against that emitter's 472, settling in the
+    /// same 18 game ticks. Bigger, because the layout here is deliberately
+    /// plain and sparse -- compaction is `optimise`'s job.
     ///
-    /// Widening the spacing does not fix it, because the keep-out is also
-    /// wrong near a gate: a cell's horizontal neighbours are checked one level
-    /// up and down, and a gate's own floor stone sits exactly there, so the
-    /// approach to a gate reads as occupied when it is not.
-    ///
-    /// Two things are needed and neither is a tweak: keep-out that
-    /// distinguishes a solid floor from a conductor, and either reserved
-    /// routing corridors or the staircase rules that would let a route leave
-    /// the plane.
+    /// It took the routing to become three-dimensional. Everything before this
+    /// searched one plane, where the nets simply block each other; a staircase
+    /// lets one cross over another, which is what channels and tracks exist to
+    /// arrange and what this planner now does without them.
     #[test]
-    #[ignore = "known: single-plane routing with no corridors cannot place and4"]
     fn a_self_placed_and4_computes_and4() {
         use crate::redstone::simulator::Simulator;
         use crate::redstone::world::block::BlockKind;
