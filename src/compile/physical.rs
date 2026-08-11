@@ -4,23 +4,27 @@ use crate::redstone::world::block::{BlockKind, Face, Facing};
 
 /// The electrically distinct endpoint roles exposed by physical primitives.
 ///
-/// Side inputs have a stable left/right name relative to the primitive's
-/// Minecraft `facing` direction, rather than collapsing two real locations
-/// into one ambiguous side port.
+/// Side inputs retain one electrical kind. Their stable left/right identity
+/// is carried by [`PhysicalPort::side`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PortKind {
     TorchInput,
     TorchOutput,
     RepeaterRear,
-    RepeaterSideLeft,
-    RepeaterSideRight,
+    RepeaterSide,
     RepeaterFront,
     ComparatorRear,
-    ComparatorSideLeft,
-    ComparatorSideRight,
+    ComparatorSide,
     ComparatorFront,
     LeverOutput,
     LampInput,
+}
+
+/// The side of a diode relative to its stored Minecraft `facing` direction.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum RelativeSide {
+    Left,
+    Right,
 }
 
 /// One local block belonging to a physical primitive variant.
@@ -39,6 +43,7 @@ pub struct PhysicalPort {
     pub kind: PortKind,
     pub position: Position,
     pub direction: Facing,
+    pub side: Option<RelativeSide>,
 }
 
 /// One orientation of a primitive, expressed entirely in local coordinates.
@@ -56,6 +61,11 @@ impl PhysicalVariant {
             .unwrap_or_else(|| panic!("variant has no {kind:?} port"))
     }
 
+    /// Return every local port with `kind`, preserving declaration order.
+    pub fn ports_of(&self, kind: PortKind) -> impl Iterator<Item = &PhysicalPort> {
+        self.ports.iter().filter(move |port| port.kind == kind)
+    }
+
     pub fn block_at(&self, position: Position) -> &LocalBlock {
         self.blocks
             .iter()
@@ -65,6 +75,7 @@ impl PhysicalVariant {
 }
 
 const ORIGIN: Position = Position { x: 0, y: 0, z: 0 };
+const DOWN: Position = Position { x: 0, y: -1, z: 0 };
 const NORTH: Position = Position { x: 0, y: 0, z: -1 };
 const SOUTH: Position = Position { x: 0, y: 0, z: 1 };
 const EAST: Position = Position { x: 1, y: 0, z: 0 };
@@ -89,6 +100,21 @@ const fn port(kind: PortKind, position: Position, direction: Facing) -> Physical
         kind,
         position,
         direction,
+        side: None,
+    }
+}
+
+const fn side_port(
+    kind: PortKind,
+    position: Position,
+    direction: Facing,
+    side: RelativeSide,
+) -> PhysicalPort {
+    PhysicalPort {
+        kind,
+        position,
+        direction,
+        side: Some(side),
     }
 }
 
@@ -145,45 +171,85 @@ static TORCH_VARIANTS: [PhysicalVariant; 4] = [
     },
 ];
 
-static REPEATER_NORTH_BLOCKS: [LocalBlock; 1] = [block(
-    ORIGIN,
-    BlockKind::Repeater,
-    Some(Facing::North),
-    None,
-)];
-static REPEATER_SOUTH_BLOCKS: [LocalBlock; 1] = [block(
-    ORIGIN,
-    BlockKind::Repeater,
-    Some(Facing::South),
-    None,
-)];
-static REPEATER_EAST_BLOCKS: [LocalBlock; 1] =
-    [block(ORIGIN, BlockKind::Repeater, Some(Facing::East), None)];
-static REPEATER_WEST_BLOCKS: [LocalBlock; 1] =
-    [block(ORIGIN, BlockKind::Repeater, Some(Facing::West), None)];
+static REPEATER_NORTH_BLOCKS: [LocalBlock; 2] = [
+    block(DOWN, BlockKind::Solid, None, None),
+    block(ORIGIN, BlockKind::Repeater, Some(Facing::North), None),
+];
+static REPEATER_SOUTH_BLOCKS: [LocalBlock; 2] = [
+    block(DOWN, BlockKind::Solid, None, None),
+    block(ORIGIN, BlockKind::Repeater, Some(Facing::South), None),
+];
+static REPEATER_EAST_BLOCKS: [LocalBlock; 2] = [
+    block(DOWN, BlockKind::Solid, None, None),
+    block(ORIGIN, BlockKind::Repeater, Some(Facing::East), None),
+];
+static REPEATER_WEST_BLOCKS: [LocalBlock; 2] = [
+    block(DOWN, BlockKind::Solid, None, None),
+    block(ORIGIN, BlockKind::Repeater, Some(Facing::West), None),
+];
 
 static REPEATER_NORTH_PORTS: [PhysicalPort; 4] = [
     port(PortKind::RepeaterRear, ORIGIN, Facing::North),
-    port(PortKind::RepeaterSideLeft, ORIGIN, Facing::West),
-    port(PortKind::RepeaterSideRight, ORIGIN, Facing::East),
+    side_port(
+        PortKind::RepeaterSide,
+        ORIGIN,
+        Facing::West,
+        RelativeSide::Left,
+    ),
+    side_port(
+        PortKind::RepeaterSide,
+        ORIGIN,
+        Facing::East,
+        RelativeSide::Right,
+    ),
     port(PortKind::RepeaterFront, ORIGIN, Facing::South),
 ];
 static REPEATER_SOUTH_PORTS: [PhysicalPort; 4] = [
     port(PortKind::RepeaterRear, ORIGIN, Facing::South),
-    port(PortKind::RepeaterSideLeft, ORIGIN, Facing::East),
-    port(PortKind::RepeaterSideRight, ORIGIN, Facing::West),
+    side_port(
+        PortKind::RepeaterSide,
+        ORIGIN,
+        Facing::East,
+        RelativeSide::Left,
+    ),
+    side_port(
+        PortKind::RepeaterSide,
+        ORIGIN,
+        Facing::West,
+        RelativeSide::Right,
+    ),
     port(PortKind::RepeaterFront, ORIGIN, Facing::North),
 ];
 static REPEATER_EAST_PORTS: [PhysicalPort; 4] = [
     port(PortKind::RepeaterRear, ORIGIN, Facing::East),
-    port(PortKind::RepeaterSideLeft, ORIGIN, Facing::North),
-    port(PortKind::RepeaterSideRight, ORIGIN, Facing::South),
+    side_port(
+        PortKind::RepeaterSide,
+        ORIGIN,
+        Facing::North,
+        RelativeSide::Left,
+    ),
+    side_port(
+        PortKind::RepeaterSide,
+        ORIGIN,
+        Facing::South,
+        RelativeSide::Right,
+    ),
     port(PortKind::RepeaterFront, ORIGIN, Facing::West),
 ];
 static REPEATER_WEST_PORTS: [PhysicalPort; 4] = [
     port(PortKind::RepeaterRear, ORIGIN, Facing::West),
-    port(PortKind::RepeaterSideLeft, ORIGIN, Facing::South),
-    port(PortKind::RepeaterSideRight, ORIGIN, Facing::North),
+    side_port(
+        PortKind::RepeaterSide,
+        ORIGIN,
+        Facing::South,
+        RelativeSide::Left,
+    ),
+    side_port(
+        PortKind::RepeaterSide,
+        ORIGIN,
+        Facing::North,
+        RelativeSide::Right,
+    ),
     port(PortKind::RepeaterFront, ORIGIN, Facing::East),
 ];
 
@@ -206,30 +272,42 @@ static REPEATER_VARIANTS: [PhysicalVariant; 4] = [
     },
 ];
 
-static LEVER_NORTH_BLOCKS: [LocalBlock; 1] = [block(
-    ORIGIN,
-    BlockKind::Lever,
-    Some(Facing::North),
-    Some(Face::Floor),
-)];
-static LEVER_SOUTH_BLOCKS: [LocalBlock; 1] = [block(
-    ORIGIN,
-    BlockKind::Lever,
-    Some(Facing::South),
-    Some(Face::Floor),
-)];
-static LEVER_EAST_BLOCKS: [LocalBlock; 1] = [block(
-    ORIGIN,
-    BlockKind::Lever,
-    Some(Facing::East),
-    Some(Face::Floor),
-)];
-static LEVER_WEST_BLOCKS: [LocalBlock; 1] = [block(
-    ORIGIN,
-    BlockKind::Lever,
-    Some(Facing::West),
-    Some(Face::Floor),
-)];
+static LEVER_NORTH_BLOCKS: [LocalBlock; 2] = [
+    block(DOWN, BlockKind::Solid, None, None),
+    block(
+        ORIGIN,
+        BlockKind::Lever,
+        Some(Facing::North),
+        Some(Face::Floor),
+    ),
+];
+static LEVER_SOUTH_BLOCKS: [LocalBlock; 2] = [
+    block(DOWN, BlockKind::Solid, None, None),
+    block(
+        ORIGIN,
+        BlockKind::Lever,
+        Some(Facing::South),
+        Some(Face::Floor),
+    ),
+];
+static LEVER_EAST_BLOCKS: [LocalBlock; 2] = [
+    block(DOWN, BlockKind::Solid, None, None),
+    block(
+        ORIGIN,
+        BlockKind::Lever,
+        Some(Facing::East),
+        Some(Face::Floor),
+    ),
+];
+static LEVER_WEST_BLOCKS: [LocalBlock; 2] = [
+    block(DOWN, BlockKind::Solid, None, None),
+    block(
+        ORIGIN,
+        BlockKind::Lever,
+        Some(Facing::West),
+        Some(Face::Floor),
+    ),
+];
 static LEVER_NORTH_PORTS: [PhysicalPort; 1] = [port(PortKind::LeverOutput, ORIGIN, Facing::North)];
 static LEVER_SOUTH_PORTS: [PhysicalPort; 1] = [port(PortKind::LeverOutput, ORIGIN, Facing::South)];
 static LEVER_EAST_PORTS: [PhysicalPort; 1] = [port(PortKind::LeverOutput, ORIGIN, Facing::East)];
@@ -301,6 +379,7 @@ fn is_orthogonal(left: Facing, right: Facing) -> bool {
 mod tests {
     use super::*;
     use crate::compile::topology::Primitive;
+    use crate::redstone::rules::taxonomy::flags_of;
     use crate::redstone::simulator::component::torch_support_position;
     use crate::redstone::simulator::position::Position;
     use crate::redstone::world::block::{BlockKind, BlockState, Facing};
@@ -341,12 +420,55 @@ mod tests {
         let variant = variants(Primitive::Repeater)[0];
         let rear = variant.port(PortKind::RepeaterRear);
         let front = variant.port(PortKind::RepeaterFront);
-        let left = variant.port(PortKind::RepeaterSideLeft);
-        let right = variant.port(PortKind::RepeaterSideRight);
+        let sides: Vec<&PhysicalPort> = variant.ports_of(PortKind::RepeaterSide).collect();
+        let left = sides
+            .iter()
+            .copied()
+            .find(|port| port.side == Some(RelativeSide::Left))
+            .expect("a repeater has a left side port");
+        let right = sides
+            .iter()
+            .copied()
+            .find(|port| port.side == Some(RelativeSide::Right))
+            .expect("a repeater has a right side port");
 
+        assert_eq!(sides.len(), 2);
         assert_eq!(rear.direction.opposite(), front.direction);
         assert!(is_orthogonal(rear.direction, left.direction));
         assert_eq!(left.direction.opposite(), right.direction);
+    }
+
+    #[test]
+    fn public_side_port_kinds_cover_repeaters_and_comparators() {
+        assert_ne!(PortKind::RepeaterSide, PortKind::ComparatorSide);
+    }
+
+    #[test]
+    fn every_repeater_variant_includes_a_rigid_floor_support() {
+        for variant in variants(Primitive::Repeater) {
+            let support = variant.block_at(Position::new(0, -1, 0));
+            assert_eq!(support.kind, BlockKind::Solid);
+            assert!(
+                flags_of(&state_for(support)).can_carry_repeater(),
+                "repeater support must satisfy Minecraft's RIGID support rule"
+            );
+        }
+    }
+
+    #[test]
+    fn every_floor_lever_variant_includes_a_full_floor_support() {
+        for variant in variants(Primitive::Lever) {
+            assert_eq!(
+                variant.block_at(Position::new(0, 0, 0)).face,
+                Some(Face::Floor)
+            );
+            let support = variant.block_at(Position::new(0, -1, 0));
+            assert_eq!(support.kind, BlockKind::Solid);
+            assert!(
+                flags_of(&state_for(support)).can_carry_dust(),
+                "a floor lever support must have a full top face"
+            );
+        }
     }
 
     #[test]
@@ -378,5 +500,14 @@ mod tests {
             lamp.port(PortKind::LampInput).position,
             Position::new(0, 0, 0)
         );
+    }
+
+    fn state_for(block: &LocalBlock) -> BlockState {
+        let mut state = BlockState::air();
+        state.kind = block.kind;
+        state.facing = block.facing;
+        state.face = block.face;
+        state.name = "minecraft:stone".to_string();
+        state
     }
 }
