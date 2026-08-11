@@ -670,6 +670,11 @@ impl Library {
         self.entries.get(&kind).map(Vec::as_slice).unwrap_or(&[])
     }
 
+    /// Return one registered technique by its stable library index.
+    pub fn entry_at(&self, kind: GateKind, index: usize) -> Option<&LibraryEntry> {
+        self.entries_for(kind).get(index)
+    }
+
     /// The technique `primitive_graph::expand` should use for `kind` today.
     ///
     /// Picks the first registered entry, unconditionally. The spec is
@@ -2227,5 +2232,19 @@ mod tests {
             );
         }
         assert_eq!(GateKind::from_wire_name("nonsense", 2), None);
+    }
+
+    #[test]
+    fn library_entry_indices_keep_bare_merge_before_isolated_merge() {
+        let library = Library::default_library();
+        assert_eq!(
+            library.entry_at(GateKind::Or(2), 0).unwrap().name,
+            "wire-merge-or2 (bare)"
+        );
+        assert_eq!(
+            library.entry_at(GateKind::Or(2), 1).unwrap().name,
+            "wire-merge-or2 (isolated)"
+        );
+        assert!(library.entry_at(GateKind::Or(2), 2).is_none());
     }
 }

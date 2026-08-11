@@ -22,7 +22,7 @@
 //! adjacency -- remains a planner concern; the typed relation only preserves
 //! the electrical port contract that distinguishes a repeater lock from data.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use super::topology::{
     GateKind, Library, LibraryEntry, Primitive, StatefulPrimitiveRole, StatefulTopology,
@@ -37,6 +37,10 @@ pub type NodeId = usize;
 
 /// Index into [`PrimitiveGraph::edges`].
 pub type EdgeId = usize;
+
+/// The selected library entry for each gate index.  Absence means the
+/// library's normal default policy remains in effect.
+pub type EntrySelection = BTreeMap<usize, usize>;
 
 /// Where one node of the flat graph came from -- what lets a region be
 /// re-expanded later without rebuilding the rest of the graph (spec: "The
@@ -243,6 +247,15 @@ pub enum ExpandError {
     /// netlist than the caller handed over would make every one of those
     /// indices point at the wrong gate.
     NotRealisable { gate: String, kind: GateKind },
+    /// A requested alternative is not registered for the gate's kind.
+    UnknownLibraryEntry { gate: String, entry: usize },
+    /// A registered alternative would violate the signal graph's hard
+    /// fan-out constraint (for example, a bare merge on a shared signal).
+    IllegalLibraryEntry {
+        gate: String,
+        entry: usize,
+        reason: String,
+    },
 }
 
 impl std::fmt::Display for ExpandError {
@@ -261,6 +274,12 @@ impl std::fmt::Display for ExpandError {
                 f,
                 "gate `{gate}` is a {kind:?}, which has no redstone realisation of its own -- run                  `compile::lowering::lower` on this netlist first"
             ),
+            ExpandError::UnknownLibraryEntry { gate, entry } => {
+                write!(f, "gate `{gate}` has no library entry {entry}")
+            }
+            ExpandError::IllegalLibraryEntry { gate, entry, reason } => {
+                write!(f, "gate `{gate}` cannot use library entry {entry}: {reason}")
+            }
         }
     }
 }
@@ -461,6 +480,30 @@ fn instantiate_stateful(
 /// isolation, where an isolated branch's repeater is the one thing standing
 /// between a shared producer and the junction.
 pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, ExpandError> {
+    expand_with_selection(netlist, library, &EntrySelection::new())
+}
+
+/// Rebuild the graph after changing one gate's library entry.  The caller
+/// keeps the prior selections; all other gates retain their chosen/default
+/// entry.  This deliberately validates topology only and never invokes the
+/// legacy physical router.
+pub fn reexpand_gate(
+    netlist: &Netlist,
+    library: &Library,
+    selected_entries: &EntrySelection,
+    gate: usize,
+    entry: usize,
+) -> Result<PrimitiveGraph, ExpandError> {
+    let mut selected_entries = selected_entries.clone();
+    selected_entries.insert(gate, entry);
+    expand_with_selection(netlist, library, &selected_entries)
+}
+
+fn expand_with_selection(
+    netlist: &Netlist,
+    library: &Library,
+    selected_entries: &EntrySelection,
+) -> Result<PrimitiveGraph, ExpandError> {
     let mut graph = PrimitiveGraph::empty(netlist.gates.len());
 
     // One Lever node per primary input, keyed by name so gate inputs below
@@ -512,6 +555,15 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
 
     for g in order {
         let gate = &netlist.gates[g];
+        let requested_entry = selected_entries.get(&g).copied();
+        if let Some(entry) = requested_entry {
+            if gate.kind != GateKind::DffPosedge && library.entry_at(gate.kind, entry).is_none() {
+                return Err(ExpandError::UnknownLibraryEntry {
+                    gate: gate.output.clone(),
+                    entry,
+                });
+            }
+        }
 
         if gate.kind == GateKind::DffPosedge {
             if !gate.kind.accepts_arity(gate.inputs.len()) {
@@ -538,6 +590,25 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
                 gate.inputs[1].clone(),
             ));
         } else if gate.is_merge() {
+            let selected = requested_entry.and_then(|entry| library.entry_at(gate.kind, entry));
+            if let Some(entry) = requested_entry {
+                if selected.is_none() {
+                    return Err(ExpandError::UnknownLibraryEntry {
+                        gate: gate.output.clone(),
+                        entry,
+                    });
+                }
+            }
+            let force_bare = selected.is_some_and(|entry| entry.template.nodes.is_empty());
+            let force_isolated = selected.is_some_and(|entry| !entry.template.nodes.is_empty());
+            if force_bare && gate.inputs.iter().any(|input| !branch_is_bare(input, g)) {
+                return Err(ExpandError::IllegalLibraryEntry {
+                    gate: gate.output.clone(),
+                    entry: requested_entry.expect("bare entry was requested"),
+                    reason: "a bare merge may not consume a signal with another consumer"
+                        .to_string(),
+                });
+            }
             let mut contributions: Vec<NodeId> = Vec::new();
             let mut owned_nodes: Vec<NodeId> = Vec::new();
 
@@ -545,7 +616,7 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
                 let producer = resolve_producer(input_name, &lever_of, &producer_of, &output_of)
                     .ok_or_else(|| ExpandError::UndrivenSignal(input_name.clone()))?;
 
-                if branch_is_bare(input_name, g) {
+                if !force_isolated && branch_is_bare(input_name, g) {
                     contributions.extend(producer);
                 } else {
                     let role = TemplateNode::IsolatingRepeater(index);
@@ -570,8 +641,9 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
             }
             let arity = gate.inputs.len();
             let kind = GateKind::Nor(arity);
-            let entry = library
-                .choose(kind)
+            let entry = requested_entry
+                .and_then(|entry| library.entry_at(kind, entry))
+                .or_else(|| library.choose(kind))
                 .ok_or_else(|| ExpandError::NoLibraryEntry {
                     gate: gate.output.clone(),
                     arity,
@@ -687,6 +759,36 @@ mod tests {
             output: output.to_string(),
             kind: GateKind::DffPosedge,
         }
+    }
+
+    #[test]
+    fn reexpanding_a_shared_merge_as_bare_is_rejected() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec!["merged".to_string(), "other".to_string()],
+            gates: vec![merge("merged", &["a", "b"]), gate("other", &["a"])],
+        };
+        let library = Library::default_library();
+
+        assert!(matches!(
+            reexpand_gate(&netlist, &library, &EntrySelection::new(), 0, 0),
+            Err(ExpandError::IllegalLibraryEntry { .. })
+        ));
+    }
+
+    #[test]
+    fn reexpanding_a_nor_with_an_unknown_entry_is_rejected() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["y".to_string()],
+            gates: vec![gate("y", &["a"])],
+        };
+        let library = Library::default_library();
+
+        assert!(matches!(
+            reexpand_gate(&netlist, &library, &EntrySelection::new(), 0, 1),
+            Err(ExpandError::UnknownLibraryEntry { .. })
+        ));
     }
 
     #[test]
