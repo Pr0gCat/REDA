@@ -6348,7 +6348,10 @@ pub enum PlannerKind {
 
 /// Every cell a gate's own realisation occupies, found by realising it into a
 /// scratch world rather than by re-deriving the cell geometry a second time.
-pub(crate) fn gate_footprint(origin: (i32, i32, i32), gate: &Gate) -> (Vec<Anchor>, Anchor) {
+pub(crate) fn gate_footprint(
+    origin: (i32, i32, i32),
+    gate: &Gate,
+) -> (Vec<Anchor>, Vec<Anchor>, Anchor) {
     let mut scratch = World::new(64, 8, 64);
     let shifted = (32, 1, 32);
     let cell = if gate.is_merge() {
@@ -6366,15 +6369,35 @@ pub(crate) fn gate_footprint(origin: (i32, i32, i32), gate: &Gate) -> (Vec<Ancho
     let pin = torch.offset(OUTPUT_DIRECTION);
     scratch.set(pin.x, pin.y, pin.z, dust());
 
+    // A gate's input sockets are left as air for the router to fill, which
+    // does not make them free: a net wandering through one gives the gate's
+    // support an extra connection and turns the terminal beside it from a
+    // straight line into a corner, so it stops driving the support at all.
+    // They belong to the gate; only the net terminating in one may enter it,
+    // and that step is appended rather than searched.
+    for direction in INPUT_DIRECTIONS.iter().take(gate.inputs.len()) {
+        let socket = Position::new(shifted.0, shifted.1, shifted.2).offset(*direction);
+        scratch.set(socket.x, socket.y, socket.z, stone());
+    }
+
     let mut cells = Vec::new();
+    let mut conductors = Vec::new();
     for flat in 0..scratch.cells().len() {
         let (x, y, z) = scratch.decode(flat);
-        if scratch.get(x, y, z).kind != BlockKind::Air {
-            cells.push(Anchor {
-                x: origin.0 + (x - shifted.0),
-                y: origin.1 + (y - shifted.1),
-                z: origin.2 + (z - shifted.2),
-            });
+        let kind = scratch.get(x, y, z).kind;
+        if kind == BlockKind::Air {
+            continue;
+        }
+        let cell = Anchor {
+            x: origin.0 + (x - shifted.0),
+            y: origin.1 + (y - shifted.1),
+            z: origin.2 + (z - shifted.2),
+        };
+        cells.push(cell);
+        // Solid material is occupied but inert: a net may run beside a gate's
+        // support or its floor. Anything else here joins what touches it.
+        if kind != BlockKind::Solid {
+            conductors.push(cell);
         }
     }
     let output_pin = Anchor {
@@ -6382,7 +6405,7 @@ pub(crate) fn gate_footprint(origin: (i32, i32, i32), gate: &Gate) -> (Vec<Ancho
         y: origin.1 + (pin.y - shifted.1),
         z: origin.2 + (pin.z - shifted.2),
     };
-    (cells, output_pin)
+    (cells, conductors, output_pin)
 }
 
 fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<PrimitiveNode> {
@@ -6396,12 +6419,14 @@ fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<Primitiv
         } else {
             NodeRealisation::Primitive(Primitive::Torch)
         };
-        let (footprint, output_pin) = gate_footprint((anchor.x, anchor.y, anchor.z), gate);
+        let (footprint, conductors, output_pin) =
+            gate_footprint((anchor.x, anchor.y, anchor.z), gate);
         nodes.push(PrimitiveNode {
             id: format!("gate:{}", gate.output),
             anchor,
             realisation,
             footprint,
+            conductors,
             output_pin: Some(output_pin),
         });
     }
@@ -6414,8 +6439,10 @@ fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<Primitiv
             id: format!("input:{input}"),
             anchor,
             realisation: NodeRealisation::Primitive(Primitive::Lever),
-            // A lever is its own cell plus the pin dust one step north.
+            // A lever is its own cell plus the pin dust one step north, and
+            // both of them conduct.
             footprint: vec![anchor, Anchor { z: anchor.z - 1, ..anchor }],
+            conductors: vec![anchor, Anchor { z: anchor.z - 1, ..anchor }],
             output_pin: Some(Anchor { z: anchor.z - 1, ..anchor }),
         });
     }

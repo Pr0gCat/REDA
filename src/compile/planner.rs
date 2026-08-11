@@ -38,6 +38,9 @@ pub struct PrimitiveNode {
     /// The component to emit here.  Recorded by whoever chose the anchor;
     /// never re-derived from the node's name or from surrounding blocks.
     pub realisation: NodeRealisation,
+    /// The subset of `footprint` that conducts: torches, dust, levers, lamps.
+    /// Support and floor blocks are occupied but do not join a passing net.
+    pub conductors: Vec<Anchor>,
     /// Every cell this node's realisation occupies, its anchor included.
     ///
     /// A NOR cell is a support block, a torch, its input sockets and its
@@ -60,6 +63,15 @@ impl PrimitiveNode {
     /// anchor for a node whose pin nobody recorded.
     pub fn source(&self) -> Anchor {
         self.output_pin.unwrap_or(self.anchor)
+    }
+
+    /// Whether `cell` conducts, for a cell this node occupies.
+    pub fn occupancy_of(&self, cell: Anchor) -> Occupancy {
+        if self.conductors.contains(&cell) {
+            Occupancy::Conductor
+        } else {
+            Occupancy::Solid
+        }
     }
 
     pub fn occupied(&self) -> &[Anchor] {
@@ -703,7 +715,7 @@ pub fn try_move(
         .map(|node| node.occupied().to_vec())
         .unwrap_or_else(|| vec![from]);
     for cell in &old_cells {
-        if reservation.get(cell) == Some(&moved_owner) {
+        if reservation.owner(cell) == Some(moved_owner.as_str()) {
             reservation.remove(cell);
         }
     }
@@ -716,11 +728,13 @@ pub fn try_move(
             z: cell.z + delta.2,
         })
         .collect();
-    if new_cells.iter().any(|cell| reservation.contains_key(cell)) {
+    if new_cells.iter().any(|cell| reservation.is_taken(cell)) {
         return Err(PlannerError::AnchorOccupied(to));
     }
-    for cell in &new_cells {
-        reservation.insert(*cell, moved_owner.clone());
+    let moved_node = candidate.primitive_nodes.get(primitive);
+    for (cell, original) in new_cells.iter().zip(&old_cells) {
+        let occupancy = moved_node.map_or(Occupancy::Solid, |node| node.occupancy_of(*original));
+        reservation.insert(*cell, &moved_owner, occupancy);
     }
 
     for (route_index, route) in candidate.routes.iter().enumerate() {
@@ -957,16 +971,18 @@ impl PlanCandidate {
                 .any(|terminal| node.id == format!("gate:{}", terminal.sink.gate))
     }
 
-    fn live_reservation(&self, incident: &[bool]) -> BTreeMap<Anchor, String> {
-        let mut reservation = BTreeMap::new();
+    fn live_reservation(&self, incident: &[bool]) -> Reservation {
+        let mut reservation = Reservation::new();
         for (index, anchor) in self.anchors.iter().copied().enumerate() {
-            reservation.insert(anchor, format!("primitive:{index}"));
+            reservation.insert(anchor, &format!("primitive:{index}"), Occupancy::Solid);
         }
         // A primitive keeps other nets out of every cell it occupies, not
-        // just the one its anchor names.
+        // just the one its anchor names -- but only the cells that conduct
+        // keep them out of the cells *beside* it.
         for (index, node) in self.primitive_nodes.iter().enumerate() {
+            let owner = format!("primitive:{index}");
             for &cell in node.occupied() {
-                reservation.insert(cell, format!("primitive:{index}"));
+                reservation.insert(cell, &owner, node.occupancy_of(cell));
             }
         }
         for (index, route) in self.routes.iter().enumerate() {
@@ -1065,7 +1081,7 @@ fn deterministic_astar(
     goal: Anchor,
     terminal_support: Anchor,
     owner: &str,
-    reservation: &BTreeMap<Anchor, String>,
+    reservation: &Reservation,
 ) -> Option<Vec<Anchor>> {
     let margin = manhattan_distance(start, goal).saturating_add(2) as i32;
     // Y is not widened. A step in Y is a dust staircase, and a repeater cannot
@@ -1177,12 +1193,12 @@ fn anchor_is_free_for(
     goal: Anchor,
     terminal_support: Anchor,
     owner: &str,
-    reservation: &BTreeMap<Anchor, String>,
+    reservation: &Reservation,
 ) -> bool {
     if anchor != start
         && anchor != goal
         && reservation
-            .get(&anchor)
+            .owner(&anchor)
             .is_some_and(|occupied_by| occupied_by != owner)
     {
         return false;
@@ -1192,7 +1208,7 @@ fn anchor_is_free_for(
             || neighbour == goal
             || (anchor == goal && neighbour == terminal_support)
             || reservation
-                .get(&neighbour)
+                .conductor_owner(&neighbour)
                 .is_none_or(|occupied_by| occupied_by == owner)
     })
 }
@@ -1214,11 +1230,9 @@ fn keep_out(anchor: Anchor) -> Vec<Anchor> {
     cells
 }
 
-fn reserve_path(reservation: &mut BTreeMap<Anchor, String>, owner: &str, path: &[Anchor]) {
+fn reserve_path(reservation: &mut Reservation, owner: &str, path: &[Anchor]) {
     for &anchor in path {
-        reservation
-            .entry(anchor)
-            .or_insert_with(|| owner.to_string());
+        reservation.insert(anchor, owner, Occupancy::Conductor);
     }
 }
 
@@ -1246,20 +1260,24 @@ fn preferred_axis_direction(from: Anchor, to: Anchor) -> (i32, i32, i32) {
 }
 
 fn terminal_is_isolated(
-    reservation: &BTreeMap<Anchor, String>,
+    reservation: &Reservation,
     owner: &str,
     predecessor: Anchor,
     terminal: Anchor,
     support: Anchor,
 ) -> bool {
+    let _ = owner;
+    // Any conductor beside the terminal spoils it, including one belonging to
+    // this same net: a directed dust terminal has to be a straight line into
+    // the support, and a second branch of its own route running alongside
+    // gives it another connection and turns it into a corner. Keep-out used to
+    // hide this by keeping everything away; it does not any more.
     horizontal_neighbours(terminal)
         .into_iter()
         .all(|neighbour| {
             neighbour == predecessor
                 || neighbour == support
-                || reservation
-                    .get(&neighbour)
-                    .is_none_or(|occupied_by| occupied_by == owner)
+                || reservation.conductor_owner(&neighbour).is_none()
         })
 }
 
@@ -1288,6 +1306,56 @@ fn unit_horizontal_direction(from: Anchor, to: Anchor) -> Option<(i32, i32, i32)
     let direction = (to.x - from.x, to.y - from.y, to.z - from.z);
     (direction.1 == 0 && direction.0.unsigned_abs() + direction.2.unsigned_abs() == 1)
         .then_some(direction)
+}
+
+/// What a reserved cell holds, as far as keep-out is concerned.
+///
+/// The channel-safety spec derives the rule from `dust_reach`: it is two
+/// *conductor* cells of different nets that need clearance. A support block or
+/// a floor is occupied -- nothing else may be written there -- but a route may
+/// pass beside it, which is what the cell in front of every gate is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Occupancy {
+    Conductor,
+    Solid,
+}
+
+/// Which cells are taken, by whom, and whether they conduct.
+#[derive(Debug, Default, Clone)]
+pub struct Reservation {
+    cells: BTreeMap<Anchor, (String, Occupancy)>,
+}
+
+impl Reservation {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn insert(&mut self, anchor: Anchor, owner: &str, occupancy: Occupancy) {
+        self.cells
+            .entry(anchor)
+            .or_insert_with(|| (owner.to_string(), occupancy));
+    }
+
+    fn remove(&mut self, anchor: &Anchor) {
+        self.cells.remove(anchor);
+    }
+
+    fn owner(&self, anchor: &Anchor) -> Option<&str> {
+        self.cells.get(anchor).map(|(owner, _)| owner.as_str())
+    }
+
+    /// The owner of a cell that conducts; `None` for an empty cell or one
+    /// holding nothing but solid material.
+    fn conductor_owner(&self, anchor: &Anchor) -> Option<&str> {
+        self.cells.get(anchor).and_then(|(owner, occupancy)| {
+            matches!(occupancy, Occupancy::Conductor).then_some(owner.as_str())
+        })
+    }
+
+    fn is_taken(&self, anchor: &Anchor) -> bool {
+        self.cells.contains_key(anchor)
+    }
 }
 
 /// Deliberately sparse. A single routing plane with no reserved corridors --
@@ -1332,7 +1400,8 @@ pub fn plan_from_netlist(netlist: &Netlist) -> Result<PlanCandidate, PlannerErro
         *column += 1;
         anchors.push(anchor);
 
-        let (footprint, output_pin) = compile::gate_footprint((anchor.x, anchor.y, anchor.z), gate);
+        let (footprint, conductors, output_pin) =
+            compile::gate_footprint((anchor.x, anchor.y, anchor.z), gate);
         primitive_nodes.push(PrimitiveNode {
             id: format!("gate:{}", gate.output),
             anchor,
@@ -1342,6 +1411,7 @@ pub fn plan_from_netlist(netlist: &Netlist) -> Result<PlanCandidate, PlannerErro
                 NodeRealisation::Primitive(Primitive::Torch)
             },
             footprint,
+            conductors,
             output_pin: Some(output_pin),
         });
     }
@@ -1359,6 +1429,7 @@ pub fn plan_from_netlist(netlist: &Netlist) -> Result<PlanCandidate, PlannerErro
             anchor,
             realisation: NodeRealisation::Primitive(Primitive::Lever),
             footprint: vec![anchor, pin],
+            conductors: vec![anchor, pin],
             output_pin: Some(pin),
         });
     }
@@ -1399,10 +1470,11 @@ fn route_every_net(
     mut candidate: PlanCandidate,
     netlist: &Netlist,
 ) -> Result<PlanCandidate, PlannerError> {
-    let mut reservation: BTreeMap<Anchor, String> = BTreeMap::new();
+    let mut reservation = Reservation::new();
     for (index, node) in candidate.primitive_nodes.iter().enumerate() {
+        let owner = format!("primitive:{index}");
         for &cell in node.occupied() {
-            reservation.insert(cell, format!("primitive:{index}"));
+            reservation.insert(cell, &owner, node.occupancy_of(cell));
         }
     }
 
@@ -1511,6 +1583,18 @@ fn route_every_net(
                 }
                 style.into()
             };
+
+            // A terminal has to stay a straight line into its support, and a
+            // net is otherwise free to run alongside itself -- so the next
+            // branch of this very route would happily pass beside this
+            // terminal and turn it into a corner that drives nothing. Claim
+            // the cells around it under a name nobody routes as.
+            let guard = format!("terminal:{}.in[{input_index}]", netlist.gates[gate].output);
+            for neighbour in horizontal_neighbours(socket) {
+                if neighbour != predecessor && neighbour != support {
+                    reservation.insert(neighbour, &guard, Occupancy::Solid);
+                }
+            }
 
             route.terminals.push(RouteTerminal {
                 sink: RouteSink {
@@ -2457,6 +2541,7 @@ mod tests {
                         NodeRealisation::Primitive(Primitive::Torch)
                     },
                     footprint: Vec::new(),
+                    conductors: Vec::new(),
                     output_pin: None,
                 })
                 .collect(),
@@ -2526,6 +2611,7 @@ mod tests {
                     anchor: source,
                     realisation: NodeRealisation::Primitive(Primitive::Lever),
                     footprint: Vec::new(),
+                    conductors: Vec::new(),
                     output_pin: None,
                 },
                 PrimitiveNode {
@@ -2533,6 +2619,7 @@ mod tests {
                     anchor: old_moved_sink,
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
                     footprint: Vec::new(),
+                    conductors: Vec::new(),
                     output_pin: None,
                 },
                 PrimitiveNode {
@@ -2540,6 +2627,7 @@ mod tests {
                     anchor: other_sink,
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
                     footprint: Vec::new(),
+                    conductors: Vec::new(),
                     output_pin: None,
                 },
             ],
@@ -2619,6 +2707,7 @@ mod tests {
                     anchor: source,
                     realisation: NodeRealisation::Primitive(Primitive::Lever),
                     footprint: Vec::new(),
+                    conductors: Vec::new(),
                     output_pin: None,
                 },
                 PrimitiveNode {
@@ -2626,6 +2715,7 @@ mod tests {
                     anchor: merge,
                     realisation: NodeRealisation::WireMerge,
                     footprint: Vec::new(),
+                    conductors: Vec::new(),
                     output_pin: None,
                 },
             ],
@@ -2680,6 +2770,7 @@ mod tests {
                 anchor: old_anchor,
                 realisation: NodeRealisation::Primitive(Primitive::Lever),
                 footprint: Vec::new(),
+                conductors: Vec::new(),
                 output_pin: None,
             }],
             vec![stale_route.clone()],
@@ -2770,6 +2861,7 @@ mod tests {
                     anchor: source,
                     realisation: NodeRealisation::Primitive(Primitive::Lever),
                     footprint: Vec::new(),
+                    conductors: Vec::new(),
                     output_pin: None,
                 },
                 PrimitiveNode {
@@ -2777,6 +2869,7 @@ mod tests {
                     anchor: sink,
                     realisation: NodeRealisation::Primitive(Primitive::Torch),
                     footprint: Vec::new(),
+                    conductors: Vec::new(),
                     output_pin: None,
                 },
             ],
@@ -2815,6 +2908,7 @@ mod tests {
                         anchor: source,
                         realisation: NodeRealisation::Primitive(Primitive::Lever),
                         footprint: Vec::new(),
+                        conductors: Vec::new(),
                         output_pin: None,
                     },
                     PrimitiveNode {
@@ -2822,6 +2916,7 @@ mod tests {
                         anchor: merge,
                         realisation: NodeRealisation::WireMerge,
                         footprint: Vec::new(),
+                        conductors: Vec::new(),
                         output_pin: None,
                     },
                     PrimitiveNode {
@@ -2829,6 +2924,7 @@ mod tests {
                         anchor: shared_consumer,
                         realisation: NodeRealisation::Primitive(Primitive::Torch),
                         footprint: Vec::new(),
+                        conductors: Vec::new(),
                         output_pin: None,
                     },
                 ],
@@ -3308,6 +3404,33 @@ mod tests {
         assert!(
             best.cost().delay <= seed.cost().delay,
             "the delay term must follow the circuit it prices"
+        );
+    }
+
+    /// Keep-out is about conductors, not about everything a primitive owns.
+    ///
+    /// The channel-safety spec derives the rule from `dust_reach`: two
+    /// *conductor* cells of different nets need clearance. A gate's floor
+    /// stone is not one. Treating it as one makes the cell in front of every
+    /// gate unroutable, which is why a route could not reach and4's sockets
+    /// however far apart the gates were placed.
+    #[test]
+    fn keep_out_ignores_another_owner_s_plain_floor() {
+        let cell = Anchor { x: 5, y: 1, z: 5 };
+        let neighbour = Anchor { x: 6, y: 1, z: 5 };
+
+        let mut floor_below = Reservation::new();
+        floor_below.insert(Anchor { y: 0, ..neighbour }, "other", Occupancy::Solid);
+        assert!(
+            anchor_is_free_for(cell, cell, cell, cell, "mine", &floor_below),
+            "a solid floor one level down is not a conductor"
+        );
+
+        let mut dust_below = Reservation::new();
+        dust_below.insert(Anchor { y: 0, ..neighbour }, "other", Occupancy::Conductor);
+        assert!(
+            !anchor_is_free_for(cell, cell, cell, cell, "mine", &dust_below),
+            "another net's dust one level down is exactly what keep-out is for"
         );
     }
 
