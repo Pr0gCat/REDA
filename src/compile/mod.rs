@@ -48,7 +48,8 @@ use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use crate::redstone::world::storage::World;
 
 use self::planner::{
-    Anchor, PrimitiveNode, RouteSink, RouteTerminal, RouteTerminalKind,
+    terminal_style, Anchor, PrimitiveNode, RouteSink, RouteTerminal, RouteTerminalKind,
+    TerminalApproach, TerminalStyle,
 };
 
 pub mod equivalence;
@@ -4094,7 +4095,6 @@ fn directed_dust_terminal_is_legal(
     // strength after its one final decay hop.
     if reservation.get(&predecessor) != Some(&net)
         || world.get(predecessor.x, predecessor.y, predecessor.z).kind != BlockKind::RedstoneWire
-        || predecessor_strength <= 1
     {
         return false;
     }
@@ -4102,7 +4102,26 @@ fn directed_dust_terminal_is_legal(
     // No foreign route may occupy the terminal or a horizontal neighbour.
     // Besides preventing an electrical merge, the lateral part preserves a
     // one-axis dust shape, which is what gives this terminal direction.
-    if !cell_is_free_for(reservation, socket, net) {
+    let approach = TerminalApproach::new(
+        Anchor {
+            x: predecessor.x,
+            y: predecessor.y,
+            z: predecessor.z,
+        },
+        Anchor {
+            x: socket.x,
+            y: socket.y,
+            z: socket.z,
+        },
+        Anchor {
+            x: support.x,
+            y: support.y,
+            z: support.z,
+        },
+        predecessor_strength,
+        cell_is_free_for(reservation, socket, net),
+    );
+    if terminal_style(&approach) != TerminalStyle::DirectedDustIntoSupport {
         return false;
     }
 

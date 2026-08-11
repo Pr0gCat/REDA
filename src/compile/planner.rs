@@ -1,5 +1,7 @@
 use std::cmp::Ordering;
+use std::collections::{BTreeMap, BTreeSet};
 
+use crate::compile::primitive_graph::NodeId;
 use crate::compile::{self, CompiledCircuit, LegacyEmission, Netlist};
 
 /// A fixed coordinate selected by the planner without referring to a world.
@@ -55,6 +57,70 @@ pub enum RouteTerminalKind {
     /// A private merge branch whose strength budget still needs a final
     /// repeater; it terminates at merge dust, never at a NOR support.
     BareMergeRepeater,
+}
+
+/// The conservative choice for an ordinary route's final cell.
+///
+/// A dust terminal is valid only when the route proves a straight, live and
+/// isolated approach into the support.  The physical emitter performs the
+/// simulator-backed check as well; this planner-level record prevents a
+/// local move from assuming that an old terminal decision remains valid.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalStyle {
+    DirectedDustIntoSupport,
+    RepeaterIntoSupport,
+}
+
+impl From<TerminalStyle> for RouteTerminalKind {
+    fn from(style: TerminalStyle) -> Self {
+        match style {
+            TerminalStyle::DirectedDustIntoSupport => Self::DirectedDustIntoSupport,
+            TerminalStyle::RepeaterIntoSupport => Self::RepeaterIntoSupport,
+        }
+    }
+}
+
+/// The three cells which establish whether dust can directly power a support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TerminalApproach {
+    pub predecessor: Anchor,
+    pub terminal: Anchor,
+    pub support: Anchor,
+    pub predecessor_strength: u8,
+    pub isolation_proven: bool,
+}
+
+impl TerminalApproach {
+    pub fn new(
+        predecessor: Anchor,
+        terminal: Anchor,
+        support: Anchor,
+        predecessor_strength: u8,
+        isolation_proven: bool,
+    ) -> Self {
+        Self {
+            predecessor,
+            terminal,
+            support,
+            predecessor_strength,
+            isolation_proven,
+        }
+    }
+}
+
+/// Choose dust only for a fully proven directed terminal.
+pub fn terminal_style(approach: &TerminalApproach) -> TerminalStyle {
+    let incoming = unit_horizontal_direction(approach.predecessor, approach.terminal);
+    let outgoing = unit_horizontal_direction(approach.terminal, approach.support);
+    if approach.predecessor_strength > 1
+        && approach.isolation_proven
+        && incoming.is_some()
+        && incoming == outgoing
+    {
+        TerminalStyle::DirectedDustIntoSupport
+    } else {
+        TerminalStyle::RepeaterIntoSupport
+    }
 }
 
 impl Route {
@@ -144,6 +210,21 @@ impl PlanCandidate {
         }
     }
 
+    /// Construct a candidate with the primitive identities required by local
+    /// placement moves.  `primitive` is a [`NodeId`] into this ordered list.
+    pub fn with_primitive_nodes(
+        anchors: Vec<Anchor>,
+        primitive_nodes: Vec<PrimitiveNode>,
+        routes: Vec<Route>,
+    ) -> Self {
+        Self {
+            anchors,
+            primitive_nodes,
+            routes,
+            legacy_emission: None,
+        }
+    }
+
     pub(crate) fn from_legacy(
         anchors: Vec<Anchor>,
         primitive_nodes: Vec<PrimitiveNode>,
@@ -218,6 +299,9 @@ impl PlanCandidate {
 pub enum PlannerError {
     LegacyMetadataUnavailable,
     NetlistDoesNotMatchCompiledOutput,
+    UnknownPrimitive(NodeId),
+    AnchorOccupied(Anchor),
+    NoLocalRoute { from: Anchor, to: Anchor },
     PhysicalInvariant(compile::CompileError),
 }
 
@@ -230,12 +314,438 @@ impl std::fmt::Display for PlannerError {
             Self::NetlistDoesNotMatchCompiledOutput => {
                 write!(f, "netlist does not match the legacy compiler output")
             }
+            Self::UnknownPrimitive(primitive) => write!(f, "unknown primitive node {primitive}"),
+            Self::AnchorOccupied(anchor) => write!(
+                f,
+                "cannot move a primitive onto occupied anchor ({}, {}, {})",
+                anchor.x, anchor.y, anchor.z
+            ),
+            Self::NoLocalRoute { from, to } => write!(
+                f,
+                "no safe local route from ({}, {}, {}) to ({}, {}, {})",
+                from.x, from.y, from.z, to.x, to.y, to.z
+            ),
             Self::PhysicalInvariant(error) => error.fmt(f),
         }
     }
 }
 
 impl std::error::Error for PlannerError {}
+
+/// Move one primitive and rebuild exactly the routes which touch it.
+///
+/// The seed may have come from the legacy router, but an incident route is
+/// rebuilt from its current endpoint anchors only.  Its old intermediate
+/// cells are deliberately never considered as candidates.  Non-incident
+/// routes are cloned unchanged, so their byte representation is stable.
+pub fn try_move(
+    candidate: &PlanCandidate,
+    primitive: NodeId,
+    to: Anchor,
+) -> Result<PlanCandidate, PlannerError> {
+    let from = candidate
+        .primitive_anchor(primitive)
+        .ok_or(PlannerError::UnknownPrimitive(primitive))?;
+    let mut moved = candidate.clone();
+    moved.legacy_emission = None;
+    moved.set_primitive_anchor(primitive, to)?;
+
+    let incident: Vec<bool> = candidate
+        .routes
+        .iter()
+        .map(|route| candidate.route_is_incident(route, primitive, from))
+        .collect();
+    let mut reservation = candidate.live_reservation(&incident, primitive);
+    if reservation.contains_key(&to) {
+        return Err(PlannerError::AnchorOccupied(to));
+    }
+
+    for (route_index, route) in candidate.routes.iter().enumerate() {
+        if !incident[route_index] {
+            continue;
+        }
+
+        let owner = route.id.clone();
+        let (source, supports) = moved.route_endpoints(route_index, primitive, from, to);
+        let mut rebuilt = route.clone();
+        rebuilt.anchors.clear();
+        let mut branches = Vec::with_capacity(supports.len());
+        for support in supports {
+            let terminal = terminal_socket(source, support);
+            let path = deterministic_astar(source, terminal, support, &owner, &reservation).ok_or(
+                PlannerError::NoLocalRoute {
+                    from: source,
+                    to: terminal,
+                },
+            )?;
+            reserve_path(&mut reservation, &owner, &path);
+            append_branch(&mut rebuilt.anchors, &path);
+            branches.push((path, support));
+        }
+
+        for (terminal, (path, support)) in rebuilt.terminals.iter_mut().zip(branches) {
+            let Some(&predecessor) = path.get(path.len().saturating_sub(2)) else {
+                terminal.kind = RouteTerminalKind::RepeaterIntoSupport;
+                continue;
+            };
+            let terminal_anchor = *path.last().expect("A* paths always include their goal");
+            let predecessor_strength = 16_u8.saturating_sub(path.len().saturating_sub(2) as u8);
+            let approach = TerminalApproach::new(
+                predecessor,
+                terminal_anchor,
+                support,
+                predecessor_strength,
+                terminal_is_isolated(&reservation, &owner, predecessor, terminal_anchor, support),
+            );
+            terminal.kind = terminal_style(&approach).into();
+        }
+        moved.routes[route_index] = rebuilt;
+    }
+
+    Ok(moved)
+}
+
+impl PlanCandidate {
+    fn primitive_anchor(&self, primitive: NodeId) -> Option<Anchor> {
+        self.primitive_nodes
+            .get(primitive)
+            .map(|node| node.anchor)
+            .or_else(|| self.anchors.get(primitive).copied())
+    }
+
+    fn set_primitive_anchor(
+        &mut self,
+        primitive: NodeId,
+        anchor: Anchor,
+    ) -> Result<(), PlannerError> {
+        let Some(slot) = self.anchors.get_mut(primitive) else {
+            return Err(PlannerError::UnknownPrimitive(primitive));
+        };
+        *slot = anchor;
+        if let Some(node) = self.primitive_nodes.get_mut(primitive) {
+            node.anchor = anchor;
+        }
+        Ok(())
+    }
+
+    fn route_is_incident(&self, route: &Route, primitive: NodeId, old_anchor: Anchor) -> bool {
+        let Some(node) = self.primitive_nodes.get(primitive) else {
+            return route.anchors.contains(&old_anchor);
+        };
+        route.owner.as_deref() == Some(node.id.strip_prefix("input:").unwrap_or(&node.id))
+            || route.owner.as_deref() == Some(node.id.strip_prefix("gate:").unwrap_or(&node.id))
+            || route
+                .terminals
+                .iter()
+                .any(|terminal| node.id == format!("gate:{}", terminal.sink.gate))
+            || route.anchors.contains(&old_anchor)
+    }
+
+    fn live_reservation(
+        &self,
+        incident: &[bool],
+        moved_primitive: NodeId,
+    ) -> BTreeMap<Anchor, String> {
+        let mut reservation = BTreeMap::new();
+        for (index, anchor) in self.anchors.iter().copied().enumerate() {
+            if index != moved_primitive {
+                reservation.insert(anchor, format!("primitive:{index}"));
+            }
+        }
+        for (index, route) in self.routes.iter().enumerate() {
+            if !incident[index] {
+                reserve_path(&mut reservation, &route.id, &route.anchors);
+            }
+        }
+        reservation
+    }
+
+    fn route_endpoints(
+        &self,
+        route_index: usize,
+        moved_primitive: NodeId,
+        old_anchor: Anchor,
+        new_anchor: Anchor,
+    ) -> (Anchor, Vec<Anchor>) {
+        let route = &self.routes[route_index];
+        let source = self
+            .node_for_route_owner(route)
+            .or_else(|| route.anchors.first().copied())
+            .map(|anchor| {
+                if anchor == old_anchor {
+                    new_anchor
+                } else {
+                    anchor
+                }
+            })
+            .unwrap_or(new_anchor);
+        let supports = if route.terminals.is_empty() {
+            vec![route
+                .anchors
+                .last()
+                .copied()
+                .map(|anchor| {
+                    if anchor == old_anchor {
+                        new_anchor
+                    } else {
+                        anchor
+                    }
+                })
+                .unwrap_or(new_anchor)]
+        } else {
+            route
+                .terminals
+                .iter()
+                .map(|terminal| {
+                    self.node_for_gate(&terminal.sink.gate)
+                        .unwrap_or(terminal.sink.anchor)
+                })
+                .map(|anchor| {
+                    if moved_primitive < self.anchors.len() && anchor == old_anchor {
+                        new_anchor
+                    } else {
+                        anchor
+                    }
+                })
+                .collect()
+        };
+        (source, supports)
+    }
+
+    fn node_for_route_owner(&self, route: &Route) -> Option<Anchor> {
+        let owner = route.owner.as_deref()?;
+        self.primitive_nodes.iter().find_map(|node| {
+            (node.id == format!("input:{owner}") || node.id == format!("gate:{owner}"))
+                .then_some(node.anchor)
+        })
+    }
+
+    fn node_for_gate(&self, gate: &str) -> Option<Anchor> {
+        self.primitive_nodes
+            .iter()
+            .find_map(|node| (node.id == format!("gate:{gate}")).then_some(node.anchor))
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct SearchState {
+    estimate: u64,
+    travelled: u64,
+    anchor: Anchor,
+}
+
+fn deterministic_astar(
+    start: Anchor,
+    goal: Anchor,
+    terminal_support: Anchor,
+    owner: &str,
+    reservation: &BTreeMap<Anchor, String>,
+) -> Option<Vec<Anchor>> {
+    let margin = manhattan_distance(start, goal).saturating_add(2) as i32;
+    let min = Anchor {
+        x: start.x.min(goal.x).saturating_sub(margin),
+        y: start.y.min(goal.y).saturating_sub(margin),
+        z: start.z.min(goal.z).saturating_sub(margin),
+    };
+    let max = Anchor {
+        x: start.x.max(goal.x).saturating_add(margin),
+        y: start.y.max(goal.y).saturating_add(margin),
+        z: start.z.max(goal.z).saturating_add(margin),
+    };
+    let mut frontier = BTreeSet::from([SearchState {
+        estimate: manhattan_distance(start, goal),
+        travelled: 0,
+        anchor: start,
+    }]);
+    let mut travelled = BTreeMap::from([(start, 0_u64)]);
+    let mut previous = BTreeMap::new();
+
+    while let Some(state) = frontier.iter().next().copied() {
+        frontier.remove(&state);
+        if state.anchor == goal {
+            return Some(reconstruct_path(previous, goal));
+        }
+        if travelled.get(&state.anchor) != Some(&state.travelled) {
+            continue;
+        }
+        for next in neighbours(state.anchor) {
+            if !within_bounds(next, min, max)
+                || !anchor_is_free_for(next, start, goal, terminal_support, owner, reservation)
+            {
+                continue;
+            }
+            let next_travelled = state.travelled.saturating_add(1);
+            if travelled
+                .get(&next)
+                .is_some_and(|&known| known <= next_travelled)
+            {
+                continue;
+            }
+            travelled.insert(next, next_travelled);
+            previous.insert(next, state.anchor);
+            frontier.insert(SearchState {
+                estimate: next_travelled.saturating_add(manhattan_distance(next, goal)),
+                travelled: next_travelled,
+                anchor: next,
+            });
+        }
+    }
+    None
+}
+
+fn reconstruct_path(previous: BTreeMap<Anchor, Anchor>, goal: Anchor) -> Vec<Anchor> {
+    let mut path = vec![goal];
+    while let Some(&parent) = previous.get(path.last().expect("path is non-empty")) {
+        path.push(parent);
+    }
+    path.reverse();
+    path
+}
+
+fn neighbours(anchor: Anchor) -> [Anchor; 6] {
+    [
+        Anchor {
+            x: anchor.x - 1,
+            ..anchor
+        },
+        Anchor {
+            x: anchor.x + 1,
+            ..anchor
+        },
+        Anchor {
+            y: anchor.y - 1,
+            ..anchor
+        },
+        Anchor {
+            y: anchor.y + 1,
+            ..anchor
+        },
+        Anchor {
+            z: anchor.z - 1,
+            ..anchor
+        },
+        Anchor {
+            z: anchor.z + 1,
+            ..anchor
+        },
+    ]
+}
+
+fn within_bounds(anchor: Anchor, min: Anchor, max: Anchor) -> bool {
+    anchor.x >= min.x
+        && anchor.x <= max.x
+        && anchor.y >= min.y
+        && anchor.y <= max.y
+        && anchor.z >= min.z
+        && anchor.z <= max.z
+}
+
+fn anchor_is_free_for(
+    anchor: Anchor,
+    start: Anchor,
+    goal: Anchor,
+    terminal_support: Anchor,
+    owner: &str,
+    reservation: &BTreeMap<Anchor, String>,
+) -> bool {
+    if anchor != start
+        && anchor != goal
+        && reservation
+            .get(&anchor)
+            .is_some_and(|occupied_by| occupied_by != owner)
+    {
+        return false;
+    }
+    horizontal_neighbours(anchor).into_iter().all(|neighbour| {
+        neighbour == start
+            || neighbour == goal
+            || (anchor == goal && neighbour == terminal_support)
+            || reservation
+                .get(&neighbour)
+                .is_none_or(|occupied_by| occupied_by == owner)
+    })
+}
+
+fn reserve_path(reservation: &mut BTreeMap<Anchor, String>, owner: &str, path: &[Anchor]) {
+    for &anchor in path {
+        reservation.insert(anchor, owner.to_string());
+    }
+}
+
+fn append_branch(route: &mut Vec<Anchor>, branch: &[Anchor]) {
+    for &anchor in branch {
+        if route.last() != Some(&anchor) {
+            route.push(anchor);
+        }
+    }
+}
+
+fn terminal_socket(source: Anchor, support: Anchor) -> Anchor {
+    let direction = preferred_axis_direction(source, support);
+    Anchor {
+        x: support.x - direction.0,
+        y: support.y - direction.1,
+        z: support.z - direction.2,
+    }
+}
+
+fn preferred_axis_direction(from: Anchor, to: Anchor) -> (i32, i32, i32) {
+    let delta = (to.x - from.x, to.y - from.y, to.z - from.z);
+    if delta.0 != 0 {
+        (delta.0.signum(), 0, 0)
+    } else if delta.2 != 0 {
+        (0, 0, delta.2.signum())
+    } else if delta.1 != 0 {
+        (0, delta.1.signum(), 0)
+    } else {
+        (1, 0, 0)
+    }
+}
+
+fn terminal_is_isolated(
+    reservation: &BTreeMap<Anchor, String>,
+    owner: &str,
+    predecessor: Anchor,
+    terminal: Anchor,
+    support: Anchor,
+) -> bool {
+    horizontal_neighbours(terminal)
+        .into_iter()
+        .all(|neighbour| {
+            neighbour == predecessor
+                || neighbour == support
+                || reservation
+                    .get(&neighbour)
+                    .is_none_or(|occupied_by| occupied_by == owner)
+        })
+}
+
+fn horizontal_neighbours(anchor: Anchor) -> [Anchor; 4] {
+    [
+        Anchor {
+            x: anchor.x - 1,
+            ..anchor
+        },
+        Anchor {
+            x: anchor.x + 1,
+            ..anchor
+        },
+        Anchor {
+            z: anchor.z - 1,
+            ..anchor
+        },
+        Anchor {
+            z: anchor.z + 1,
+            ..anchor
+        },
+    ]
+}
+
+fn unit_horizontal_direction(from: Anchor, to: Anchor) -> Option<(i32, i32, i32)> {
+    let direction = (to.x - from.x, to.y - from.y, to.z - from.z);
+    (direction.1 == 0 && direction.0.unsigned_abs() + direction.2.unsigned_abs() == 1)
+        .then_some(direction)
+}
 
 /// Extract a planner seed from the legacy emitter's explicit metadata.
 ///
@@ -634,6 +1144,108 @@ mod tests {
     use super::*;
     use crate::circuits::and4::build_and4_netlist;
     use crate::compile::Gate;
+
+    fn local_move_fixture() -> PlanCandidate {
+        let anchors = vec![
+            Anchor { x: 0, y: 0, z: 0 },
+            Anchor { x: 4, y: 0, z: 0 },
+            Anchor { x: 0, y: 0, z: 4 },
+            Anchor { x: 4, y: 0, z: 4 },
+        ];
+        PlanCandidate::with_primitive_nodes(
+            anchors.clone(),
+            anchors
+                .iter()
+                .enumerate()
+                .map(|(id, &anchor)| PrimitiveNode {
+                    id: format!("node:{id}"),
+                    anchor,
+                })
+                .collect(),
+            vec![
+                Route::new(
+                    "incident",
+                    vec![Anchor { x: 0, y: 0, z: 0 }, Anchor { x: 4, y: 0, z: 0 }],
+                ),
+                Route::new(
+                    "unrelated",
+                    vec![
+                        Anchor { x: 0, y: 0, z: 4 },
+                        Anchor { x: 1, y: 0, z: 4 },
+                        Anchor { x: 2, y: 0, z: 4 },
+                        Anchor { x: 3, y: 0, z: 4 },
+                        Anchor { x: 4, y: 0, z: 4 },
+                    ],
+                ),
+            ],
+        )
+    }
+
+    #[test]
+    fn moving_one_anchor_reroutes_only_its_incident_edges() {
+        let seed = local_move_fixture();
+        let original_nonincident = seed.routes()[1].clone();
+
+        let moved = try_move(&seed, 0, Anchor { x: 0, y: 1, z: 0 })
+            .expect("the open local fixture must have a legal move");
+
+        assert_eq!(
+            moved.primitive_nodes()[0].anchor,
+            Anchor { x: 0, y: 1, z: 0 }
+        );
+        assert_ne!(moved.routes()[0], seed.routes()[0]);
+        assert_eq!(moved.routes()[1], original_nonincident);
+    }
+
+    #[test]
+    fn local_move_routes_around_a_live_nonincident_reservation() {
+        let mut seed = local_move_fixture();
+        let blocker = Route::new("blocker", vec![Anchor { x: 1, y: 0, z: 0 }]);
+        seed.routes.push(blocker.clone());
+
+        let moved = try_move(&seed, 0, Anchor { x: 0, y: 1, z: 0 })
+            .expect("A* must detour around the live nonincident reservation");
+
+        assert_eq!(moved.routes()[2], blocker);
+        assert!(
+            !moved.routes()[0]
+                .anchors()
+                .contains(&Anchor { x: 1, y: 0, z: 0 }),
+            "the rebuilt edge must not reuse a cell owned by the nonincident route"
+        );
+    }
+
+    #[test]
+    fn a_straight_proven_terminal_uses_dust_but_a_corner_uses_repeater() {
+        let straight = TerminalApproach::new(
+            Anchor { x: 0, y: 0, z: 0 },
+            Anchor { x: 1, y: 0, z: 0 },
+            Anchor { x: 2, y: 0, z: 0 },
+            2,
+            true,
+        );
+        let corner = TerminalApproach::new(
+            Anchor { x: 0, y: 0, z: 1 },
+            Anchor { x: 1, y: 0, z: 1 },
+            Anchor { x: 1, y: 0, z: 2 },
+            2,
+            true,
+        );
+        let weak = TerminalApproach::new(
+            Anchor { x: 0, y: 0, z: 0 },
+            Anchor { x: 1, y: 0, z: 0 },
+            Anchor { x: 2, y: 0, z: 0 },
+            1,
+            true,
+        );
+
+        assert_eq!(
+            terminal_style(&straight),
+            TerminalStyle::DirectedDustIntoSupport
+        );
+        assert_eq!(terminal_style(&corner), TerminalStyle::RepeaterIntoSupport);
+        assert_eq!(terminal_style(&weak), TerminalStyle::RepeaterIntoSupport);
+    }
 
     fn fixture_seed() -> PlanCandidate {
         PlanCandidate::new(

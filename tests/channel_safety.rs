@@ -28,21 +28,105 @@
 //!   straight into a new minimal regression test the way the spec's own
 //!   two-gate case was.
 
+use reda::compile::planner::{
+    terminal_style, try_move, Anchor, PlanCandidate, PrimitiveNode, Route, TerminalApproach,
+    TerminalStyle,
+};
 use reda::compile::topology::GateKind;
 use reda::compile::{compile, CompileError, Gate, Netlist};
 use reda::redstone::simulator::Simulator;
 
 const MAX_TICKS: u64 = 2000;
 
+#[test]
+fn local_move_keeps_nonincident_routes_byte_identical() {
+    let anchors = vec![
+        Anchor { x: 0, y: 0, z: 0 },
+        Anchor { x: 4, y: 0, z: 0 },
+        Anchor { x: 0, y: 0, z: 4 },
+        Anchor { x: 4, y: 0, z: 4 },
+    ];
+    let candidate = PlanCandidate::with_primitive_nodes(
+        anchors.clone(),
+        anchors
+            .iter()
+            .enumerate()
+            .map(|(id, &anchor)| PrimitiveNode {
+                id: format!("node:{id}"),
+                anchor,
+            })
+            .collect(),
+        vec![
+            Route::new(
+                "incident",
+                vec![Anchor { x: 0, y: 0, z: 0 }, Anchor { x: 4, y: 0, z: 0 }],
+            ),
+            Route::new(
+                "unrelated",
+                vec![
+                    Anchor { x: 0, y: 0, z: 4 },
+                    Anchor { x: 1, y: 0, z: 4 },
+                    Anchor { x: 2, y: 0, z: 4 },
+                    Anchor { x: 3, y: 0, z: 4 },
+                    Anchor { x: 4, y: 0, z: 4 },
+                ],
+            ),
+        ],
+    );
+    let unrelated = candidate.routes()[1].clone();
+
+    let moved = try_move(&candidate, 0, Anchor { x: 0, y: 1, z: 0 })
+        .expect("the isolated route can be locally rerouted");
+
+    assert_eq!(moved.routes()[1], unrelated);
+}
+
+#[test]
+fn terminal_style_only_uses_dust_for_a_straight_proven_approach() {
+    let straight = TerminalApproach::new(
+        Anchor { x: 0, y: 0, z: 0 },
+        Anchor { x: 1, y: 0, z: 0 },
+        Anchor { x: 2, y: 0, z: 0 },
+        2,
+        true,
+    );
+    let uncertain_isolation = TerminalApproach::new(
+        Anchor { x: 0, y: 0, z: 0 },
+        Anchor { x: 1, y: 0, z: 0 },
+        Anchor { x: 2, y: 0, z: 0 },
+        2,
+        false,
+    );
+
+    assert_eq!(
+        terminal_style(&straight),
+        TerminalStyle::DirectedDustIntoSupport
+    );
+    assert_eq!(
+        terminal_style(&uncertain_isolation),
+        TerminalStyle::RepeaterIntoSupport
+    );
+}
+
 fn set_lever(simulator: &mut Simulator, position: (i32, i32, i32), on: bool) {
-    let mut state = simulator.world().get(position.0, position.1, position.2).clone();
+    let mut state = simulator
+        .world()
+        .get(position.0, position.1, position.2)
+        .clone();
     state.lit = on;
-    simulator.world_mut().set(position.0, position.1, position.2, state);
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle after changing an input");
+    simulator
+        .world_mut()
+        .set(position.0, position.1, position.2, state);
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle after changing an input");
 }
 
 fn read_output(simulator: &Simulator, position: (i32, i32, i32)) -> bool {
-    simulator.world().get(position.0, position.1, position.2).lit
+    simulator
+        .world()
+        .get(position.0, position.1, position.2)
+        .lit
 }
 
 fn nor(name: &str, inputs: &[&str], output: &str) -> Gate {
@@ -65,7 +149,13 @@ fn nor(name: &str, inputs: &[&str], output: &str) -> Gate {
 /// predated either jog.
 fn two_gate_widened_bypass_netlist() -> Netlist {
     Netlist {
-        inputs: vec!["in0".into(), "in1".into(), "in2".into(), "in3".into(), "in4".into()],
+        inputs: vec![
+            "in0".into(),
+            "in1".into(),
+            "in2".into(),
+            "in3".into(),
+            "in4".into(),
+        ],
         outputs: vec!["g0".into(), "g1".into()],
         gates: vec![
             nor("g0", &["in0", "in3", "in2"], "g0"),
@@ -84,10 +174,18 @@ fn two_feed_forward_nor_gates_at_the_widened_bypass_boundary_compile_and_match_t
     });
 
     let mut simulator = Simulator::new(compiled.world);
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle before the first reading");
 
     let lever = |name: &str| *compiled.input_positions.get(name).unwrap();
-    let (in0, in1, in2, in3, in4) = (lever("in0"), lever("in1"), lever("in2"), lever("in3"), lever("in4"));
+    let (in0, in1, in2, in3, in4) = (
+        lever("in0"),
+        lever("in1"),
+        lever("in2"),
+        lever("in3"),
+        lever("in4"),
+    );
     let g0 = *compiled.output_positions.get("g0").unwrap();
     let g1 = *compiled.output_positions.get("g1").unwrap();
 
@@ -201,12 +299,20 @@ fn random_feed_forward_netlist(rng: &mut SplitMix64) -> Netlist {
             chosen.push(pool.remove(index));
         }
         let output = format!("g{g}");
-        gates.push(nor(&output, &chosen.iter().map(String::as_str).collect::<Vec<_>>(), &output));
+        gates.push(nor(
+            &output,
+            &chosen.iter().map(String::as_str).collect::<Vec<_>>(),
+            &output,
+        ));
         available.push(output);
     }
 
     let outputs: Vec<String> = (0..gate_count).map(|g| format!("g{g}")).collect();
-    Netlist { inputs, outputs, gates }
+    Netlist {
+        inputs,
+        outputs,
+        gates,
+    }
 }
 
 fn describe(netlist: &Netlist) -> String {
@@ -214,7 +320,11 @@ fn describe(netlist: &Netlist) -> String {
     out.push_str(&format!("inputs: {:?}\n", netlist.inputs));
     out.push_str(&format!("outputs: {:?}\n", netlist.outputs));
     for gate in &netlist.gates {
-        out.push_str(&format!("  {} = NOR({})\n", gate.output, gate.inputs.join(", ")));
+        out.push_str(&format!(
+            "  {} = NOR({})\n",
+            gate.output,
+            gate.inputs.join(", ")
+        ));
     }
     out
 }
@@ -248,5 +358,8 @@ fn the_seeded_search_harness_can_tell_a_bad_compile_from_a_good_one() {
         outputs: vec!["y".into()],
         gates: vec![nor("g0", &["a", "never_driven"], "y")],
     };
-    assert!(matches!(compile(&netlist), Err(CompileError::UndrivenSignal(_))));
+    assert!(matches!(
+        compile(&netlist),
+        Err(CompileError::UndrivenSignal(_))
+    ));
 }
