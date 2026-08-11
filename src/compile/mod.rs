@@ -2393,7 +2393,7 @@ fn lay_track(
 /// northwards, so the pin goes on the lever's **north** side: that is the way
 /// the route has to leave anyway, and it keeps the route from turning back
 /// into the lever and overwriting it with dust.
-fn place_primary_input(world: &mut World, home: Position) -> (Position, Position) {
+pub(crate) fn place_primary_input(world: &mut World, home: Position) -> (Position, Position) {
     world.set(home.x, home.y, home.z, lever(false));
     ensure_floor(world, home);
 

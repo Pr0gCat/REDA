@@ -9,10 +9,11 @@ use std::path::PathBuf;
 use reda::circuits::and4::build_and4_netlist;
 use reda::compile::physical;
 use reda::compile::planner::{
-    seed_from_legacy, verify_candidate, Anchor, NodeRealisation, NormalisedScore, PlannerWeights,
-    RouteTerminalKind,
+    emit_primitives, seed_from_legacy, verify_candidate, Anchor, NodeRealisation, NormalisedScore,
+    PlannerWeights, RouteTerminalKind,
 };
 use reda::compile::topology::Primitive;
+use reda::redstone::world::block::BlockKind;
 use reda::compile::{compile, CompileError, CompiledCircuit, Gate, Netlist};
 use reda::formats::litematic;
 use reda::redstone::simulator::Simulator;
@@ -146,6 +147,42 @@ fn a_seed_names_the_physical_realisation_behind_every_placed_node() {
             );
         }
     }
+}
+
+/// The first half of realisation: a candidate's anchors, on their own, must
+/// be able to put the primitives back into a world. Every block this writes
+/// has to be the block the legacy emitter wrote at the same coordinate --
+/// anything else means the candidate lost information the emitter had.
+///
+/// Routes are deliberately not emitted yet, so this checks containment, not
+/// equality: what the primitive pass writes is a subset of the legacy world.
+#[test]
+fn a_seed_re_emits_every_primitive_exactly_where_the_legacy_emitter_put_it() {
+    let (netlist, compiled) = compiled_and4();
+
+    let seed = seed_from_legacy(&netlist, &compiled).expect("legacy output must be extractable");
+    let realised = emit_primitives(&seed, &netlist, compiled.world.size())
+        .expect("a legacy seed must be realisable");
+
+    let mut written = 0usize;
+    for flat in 0..realised.cells().len() {
+        let (x, y, z) = realised.decode(flat);
+        let block = realised.get(x, y, z);
+        if block.kind == BlockKind::Air {
+            continue;
+        }
+        written += 1;
+        assert_eq!(
+            block,
+            compiled.world.get(x, y, z),
+            "primitive realisation disagrees with the legacy world at ({x}, {y}, {z})"
+        );
+    }
+
+    assert!(
+        written > netlist.gates.len() + netlist.inputs.len(),
+        "every gate and lever must contribute at least its own block, got {written}"
+    );
 }
 
 #[test]

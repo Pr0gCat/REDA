@@ -4,6 +4,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::compile::primitive_graph::{reexpand_gate, EntrySelection, NodeId};
 use crate::compile::topology::{Library, Primitive};
 use crate::compile::{self, CompiledCircuit, LegacyEmission, Netlist};
+use crate::redstone::simulator::position::Position;
+use crate::redstone::world::storage::World;
 
 /// A fixed coordinate selected by the planner without referring to a world.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -350,6 +352,10 @@ pub enum PlannerError {
     UnknownPrimitive(NodeId),
     AnchorOccupied(Anchor),
     NoLocalRoute { from: Anchor, to: Anchor },
+    /// A node's recorded realisation cannot be turned into blocks -- either
+    /// the primitive has no emitter yet, or it contradicts the gate it is
+    /// supposed to be realising.
+    UnrealisableNode { id: String, reason: String },
     PhysicalInvariant(compile::CompileError),
 }
 
@@ -373,9 +379,77 @@ impl std::fmt::Display for PlannerError {
                 "no safe local route from ({}, {}, {}) to ({}, {}, {})",
                 from.x, from.y, from.z, to.x, to.y, to.z
             ),
+            Self::UnrealisableNode { id, reason } => {
+                write!(f, "cannot realise node {id}: {reason}")
+            }
             Self::PhysicalInvariant(error) => error.fmt(f),
         }
     }
+}
+
+/// Put every primitive a candidate places back into a world.
+///
+/// This is the half of realisation that needs nothing but the candidate: each
+/// node's own cell, written at the anchor the plan chose, rather than
+/// re-derived from a floorplan the plan no longer owns.  Routes are not
+/// emitted here -- they need the strength model, and they come next.
+///
+/// Node order is the candidate's own [`NodeId`] order, which is the netlist's
+/// gates followed by its primary inputs.  Rather than trust that convention
+/// silently, every gate node's recorded realisation is checked against the
+/// gate it claims to be: a merge that says "torch", or a NOR that says
+/// "merge", is an error rather than a quietly different circuit.
+pub fn emit_primitives(
+    candidate: &PlanCandidate,
+    netlist: &Netlist,
+    size: (i32, i32, i32),
+) -> Result<World, PlannerError> {
+    let expected_nodes = netlist.gates.len() + netlist.inputs.len();
+    if candidate.primitive_nodes.len() != expected_nodes {
+        return Err(PlannerError::NetlistDoesNotMatchCompiledOutput);
+    }
+
+    let mut world = World::new(size.0, size.1, size.2);
+    for (index, node) in candidate.primitive_nodes.iter().enumerate() {
+        let anchor = node.anchor;
+        let origin = (anchor.x, anchor.y, anchor.z);
+
+        match netlist.gates.get(index) {
+            Some(gate) => match (node.realisation, gate.is_merge()) {
+                (NodeRealisation::WireMerge, true) => {
+                    compile::place_merge_gate(&mut world, origin, gate.inputs.len());
+                }
+                (NodeRealisation::Primitive(Primitive::Torch), false) => {
+                    compile::place_nor_gate(&mut world, origin, gate.inputs.len());
+                }
+                (realisation, _) => {
+                    return Err(PlannerError::UnrealisableNode {
+                        id: node.id.clone(),
+                        reason: format!(
+                            "{realisation:?} does not realise {:?}",
+                            netlist.gates[index].kind
+                        ),
+                    })
+                }
+            },
+            None => match node.realisation {
+                NodeRealisation::Primitive(Primitive::Lever) => {
+                    compile::place_primary_input(
+                        &mut world,
+                        Position::new(anchor.x, anchor.y, anchor.z),
+                    );
+                }
+                realisation => {
+                    return Err(PlannerError::UnrealisableNode {
+                        id: node.id.clone(),
+                        reason: format!("{realisation:?} does not realise a primary input"),
+                    })
+                }
+            },
+        }
+    }
+
+    Ok(world)
 }
 
 impl std::error::Error for PlannerError {}
