@@ -19,7 +19,7 @@ use reda::circuits::seven_segment::{
     build_seven_segment_netlist, build_single_segment_netlist,
     INPUT_NAMES as DECODER_INPUT_NAMES, TRUTH_TABLE,
 };
-use reda::compile::{compile, CompiledCircuit, Netlist};
+use reda::compile::{compile, CompiledCircuit, Netlist, PlannerKind};
 use reda::redstone::rules::taxonomy::flags_of;
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::{BlockKind, Face, Facing};
@@ -274,6 +274,34 @@ fn the_compiled_segment_a_matches_its_truth_table() {
 
 /// Where the neighbour a lever with this `face` × `facing` must attach to
 /// lives, in world coordinates.
+/// Every reference circuit ships the world the planner realised.
+///
+/// The unified-3d-planner plan's own acceptance step, and it was the one thing
+/// nothing asserted: `compile` produces its candidate with the row/channel
+/// router and then builds, checks and returns the planner's realisation of it.
+/// Reading the code says so; this says so when the code changes.
+///
+/// The four invariants run inside that realisation, so a green truth table
+/// here is a truth table for a world the planner built.
+#[test]
+fn every_reference_circuit_ships_the_planners_realisation() {
+    let circuits: [(&str, Netlist); 4] = [
+        ("and4", build_and4_netlist().0),
+        ("full_adder", build_full_adder_netlist().0),
+        ("segment_a", build_single_segment_netlist(0).0),
+        ("seven_segment", build_seven_segment_netlist().0),
+    ];
+
+    for (name, netlist) in circuits {
+        let compiled = compile(&netlist).expect("every reference circuit compiles");
+        assert_eq!(
+            compiled.planner_kind(),
+            PlannerKind::Unified3d,
+            "{name} must ship the planner's world, not the emitter's"
+        );
+    }
+}
+
 /// The size of every hand-written circuit, pinned.
 ///
 /// `2026-08-09-global-polarity-assignment.md` made these a hard constraint --
