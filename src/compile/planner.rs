@@ -353,12 +353,17 @@ pub fn try_move(
     let incident: Vec<bool> = candidate
         .routes
         .iter()
-        .map(|route| candidate.route_is_incident(route, primitive, from))
+        .map(|route| candidate.route_is_incident(route, primitive))
         .collect();
-    let mut reservation = candidate.live_reservation(&incident, primitive);
+    let mut reservation = candidate.live_reservation(&incident);
+    let moved_owner = format!("primitive:{primitive}");
+    if reservation.get(&from) == Some(&moved_owner) {
+        reservation.remove(&from);
+    }
     if reservation.contains_key(&to) {
         return Err(PlannerError::AnchorOccupied(to));
     }
+    reservation.insert(to, moved_owner);
 
     for (route_index, route) in candidate.routes.iter().enumerate() {
         if !incident[route_index] {
@@ -384,6 +389,12 @@ pub fn try_move(
         }
 
         for (terminal, (path, support)) in rebuilt.terminals.iter_mut().zip(branches) {
+            if matches!(
+                terminal.kind,
+                RouteTerminalKind::BareMergeDust | RouteTerminalKind::BareMergeRepeater
+            ) {
+                continue;
+            }
             let Some(&predecessor) = path.get(path.len().saturating_sub(2)) else {
                 terminal.kind = RouteTerminalKind::RepeaterIntoSupport;
                 continue;
@@ -428,9 +439,9 @@ impl PlanCandidate {
         Ok(())
     }
 
-    fn route_is_incident(&self, route: &Route, primitive: NodeId, old_anchor: Anchor) -> bool {
+    fn route_is_incident(&self, route: &Route, primitive: NodeId) -> bool {
         let Some(node) = self.primitive_nodes.get(primitive) else {
-            return route.anchors.contains(&old_anchor);
+            return false;
         };
         route.owner.as_deref() == Some(node.id.strip_prefix("input:").unwrap_or(&node.id))
             || route.owner.as_deref() == Some(node.id.strip_prefix("gate:").unwrap_or(&node.id))
@@ -438,19 +449,12 @@ impl PlanCandidate {
                 .terminals
                 .iter()
                 .any(|terminal| node.id == format!("gate:{}", terminal.sink.gate))
-            || route.anchors.contains(&old_anchor)
     }
 
-    fn live_reservation(
-        &self,
-        incident: &[bool],
-        moved_primitive: NodeId,
-    ) -> BTreeMap<Anchor, String> {
+    fn live_reservation(&self, incident: &[bool]) -> BTreeMap<Anchor, String> {
         let mut reservation = BTreeMap::new();
         for (index, anchor) in self.anchors.iter().copied().enumerate() {
-            if index != moved_primitive {
-                reservation.insert(anchor, format!("primitive:{index}"));
-            }
+            reservation.insert(anchor, format!("primitive:{index}"));
         }
         for (index, route) in self.routes.iter().enumerate() {
             if !incident[index] {
@@ -668,7 +672,9 @@ fn anchor_is_free_for(
 
 fn reserve_path(reservation: &mut BTreeMap<Anchor, String>, owner: &str, path: &[Anchor]) {
     for &anchor in path {
-        reservation.insert(anchor, owner.to_string());
+        reservation
+            .entry(anchor)
+            .or_insert_with(|| owner.to_string());
     }
 }
 
@@ -1158,14 +1164,19 @@ mod tests {
                 .iter()
                 .enumerate()
                 .map(|(id, &anchor)| PrimitiveNode {
-                    id: format!("node:{id}"),
+                    id: if id == 0 {
+                        "input:incident".to_string()
+                    } else {
+                        format!("node:{id}")
+                    },
                     anchor,
                 })
                 .collect(),
             vec![
-                Route::new(
-                    "incident",
+                Route::from_legacy(
+                    "incident".to_string(),
                     vec![Anchor { x: 0, y: 0, z: 0 }, Anchor { x: 4, y: 0, z: 0 }],
+                    vec![],
                 ),
                 Route::new(
                     "unrelated",
@@ -1213,6 +1224,95 @@ mod tests {
                 .contains(&Anchor { x: 1, y: 0, z: 0 }),
             "the rebuilt edge must not reuse a cell owned by the nonincident route"
         );
+    }
+
+    #[test]
+    fn moving_a_primitive_keeps_its_destination_reserved_during_rerouting() {
+        let seed = local_move_fixture();
+        let destination = Anchor { x: 0, y: 1, z: 0 };
+
+        let moved =
+            try_move(&seed, 0, destination).expect("the isolated route can be locally rerouted");
+        let reservation = moved.live_reservation(&[true, false]);
+
+        assert_eq!(
+            reservation.get(&destination),
+            Some(&"primitive:0".to_string()),
+            "the rerouted edge must not claim the primitive's new anchor"
+        );
+    }
+
+    fn merge_terminal_fixture(kind: RouteTerminalKind) -> PlanCandidate {
+        let source = Anchor { x: 0, y: 0, z: 0 };
+        let merge = Anchor { x: 4, y: 0, z: 0 };
+        PlanCandidate::with_primitive_nodes(
+            vec![source, merge],
+            vec![
+                PrimitiveNode {
+                    id: "input:a".to_string(),
+                    anchor: source,
+                },
+                PrimitiveNode {
+                    id: "gate:merge".to_string(),
+                    anchor: merge,
+                },
+            ],
+            vec![Route::from_legacy(
+                "a".to_string(),
+                vec![source, Anchor { x: 1, y: 0, z: 0 }, merge],
+                vec![RouteTerminal {
+                    sink: RouteSink {
+                        gate: "merge".to_string(),
+                        input_index: 0,
+                        anchor: merge,
+                    },
+                    kind,
+                }],
+            )],
+        )
+    }
+
+    #[test]
+    fn rerouting_a_wire_merge_keeps_its_bare_terminal_semantics() {
+        for kind in [
+            RouteTerminalKind::BareMergeDust,
+            RouteTerminalKind::BareMergeRepeater,
+        ] {
+            let moved = try_move(
+                &merge_terminal_fixture(kind),
+                0,
+                Anchor { x: 0, y: 1, z: 0 },
+            )
+            .expect("the merge input route can be locally rerouted");
+
+            assert_eq!(
+                moved.routes()[0].terminal_kinds(),
+                vec![kind],
+                "wire-merge terminals must never become NOR-support terminals"
+            );
+        }
+    }
+
+    #[test]
+    fn a_route_touching_the_old_anchor_without_graph_incidence_is_not_rerouted() {
+        let old_anchor = Anchor { x: 0, y: 0, z: 0 };
+        let stale_route = Route::new(
+            "stale-geometry",
+            vec![old_anchor, Anchor { x: 1, y: 0, z: 0 }],
+        );
+        let seed = PlanCandidate::with_primitive_nodes(
+            vec![old_anchor],
+            vec![PrimitiveNode {
+                id: "input:a".to_string(),
+                anchor: old_anchor,
+            }],
+            vec![stale_route.clone()],
+        );
+
+        let moved = try_move(&seed, 0, Anchor { x: 0, y: 1, z: 0 })
+            .expect("moving an unrelated primitive leaves the stale route alone");
+
+        assert_eq!(moved.routes()[0], stale_route);
     }
 
     #[test]
