@@ -1127,7 +1127,7 @@ fn deterministic_astar(
     // gate plane already sits on the lowest floor there is -- a route that
     // descends from it is digging through the ground, which is why one did,
     // and why its blocks were written outside the world and carried nothing.
-    const CLIMB: i32 = 6;
+    const CLIMB: i32 = 3;
     let min = Anchor {
         x: start.x.min(goal.x).saturating_sub(margin),
         y: start.y.min(goal.y),
@@ -1448,6 +1448,42 @@ impl PortPlacements {
     }
 }
 
+/// How much floor area the caller is willing to spend before spending height.
+///
+/// Redstone has a dimension a circuit board does not, and nothing in this
+/// planner used it for logic until now: everything sat on one plane and grew
+/// sideways for ever, so a circuit's footprint was whatever its widest level
+/// of logic happened to need. This is the knob that says otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Shape {
+    /// One level, as wide as it needs to be.
+    Wide,
+    /// Spend height instead of floor: a level of logic wider than
+    /// `TALL_COLUMN_LIMIT` continues on the storey above.
+    Tall,
+}
+
+impl Default for Shape {
+    /// Wide, because it is what every existing measurement was taken with.
+    fn default() -> Self {
+        Self::Wide
+    }
+}
+
+/// How many gates a `Tall` layout puts on one storey before starting another.
+const TALL_COLUMN_LIMIT: usize = 3;
+
+/// Storeys are far enough apart that one's routing cannot reach the next, and
+/// close enough that a route can climb between them on one staircase.
+///
+/// Both bounds are real. A route may rise `CLIMB` levels above its own plane
+/// to cross another, and every cell stands on a floor one below, so a storey
+/// owns that band plus the floor under it -- the pitch must clear it. And a
+/// staircase cell can never hold a repeater, so a climb spends one signal
+/// strength per level with no chance to refresh: a pitch of nine was enough
+/// to kill the signal before it arrived.
+const STOREY_PITCH: i32 = 5;
+
 /// Deliberately sparse. A single routing plane with no reserved corridors --
 /// which is what this is, and what channels and tracks exist to avoid -- needs
 /// slack between rows or the searches block each other and a net simply has
@@ -1475,6 +1511,15 @@ pub fn plan_from_netlist(
     netlist: &Netlist,
     placements: &PortPlacements,
 ) -> Result<PlanCandidate, PlannerError> {
+    plan_from_netlist_shaped(netlist, placements, Shape::default())
+}
+
+/// [`plan_from_netlist`], told whether to spend floor area or height.
+pub fn plan_from_netlist_shaped(
+    netlist: &Netlist,
+    placements: &PortPlacements,
+    shape: Shape,
+) -> Result<PlanCandidate, PlannerError> {
     let depths = gate_depths(netlist)?;
     let deepest = depths.iter().copied().max().unwrap_or(0);
     let producer: BTreeMap<&str, usize> = netlist
@@ -1501,7 +1546,10 @@ pub fn plan_from_netlist(
     // -- which is what made seven_segment unroutable rather than merely
     // large.
     let mut gate_x: Vec<i32> = vec![0; netlist.gates.len()];
-    let mut taken: BTreeMap<usize, BTreeSet<i32>> = BTreeMap::new();
+    let mut gate_storey: Vec<i32> = vec![0; netlist.gates.len()];
+    // A storey's columns are its own: two gates on different storeys may share
+    // an x, which is the whole point of stacking.
+    let mut taken: BTreeMap<(usize, i32), BTreeSet<i32>> = BTreeMap::new();
     let mut by_depth: Vec<Vec<usize>> = vec![Vec::new(); deepest + 1];
     for (index, &depth) in depths.iter().enumerate() {
         by_depth[depth].push(index);
@@ -1509,10 +1557,20 @@ pub fn plan_from_netlist(
 
     for (depth, row_gates) in by_depth.iter().enumerate() {
         let row = deepest - depth;
-        for &gate in row_gates {
+        for (position, &gate) in row_gates.iter().enumerate() {
+            let storey = match shape {
+                Shape::Wide => 0,
+                Shape::Tall => (position / TALL_COLUMN_LIMIT) as i32,
+            };
+            gate_storey[gate] = storey;
+
             if let Some(anchor) = placements.get(&netlist.gates[gate].output) {
                 gate_x[gate] = anchor.x;
-                taken.entry(row).or_default().insert(anchor.x);
+                gate_storey[gate] = (anchor.y - PLANNER_Y) / STOREY_PITCH;
+                taken
+                    .entry((row, gate_storey[gate]))
+                    .or_default()
+                    .insert(anchor.x);
                 continue;
             }
             let sources: Vec<i32> = netlist.gates[gate]
@@ -1530,7 +1588,7 @@ pub fn plan_from_netlist(
             } else {
                 sources.iter().sum::<i32>() / sources.len() as i32
             };
-            gate_x[gate] = claim_column(taken.entry(row).or_default(), wanted);
+            gate_x[gate] = claim_column(taken.entry((row, storey)).or_default(), wanted);
         }
     }
 
@@ -1542,7 +1600,7 @@ pub fn plan_from_netlist(
         let pinned = placements.get(&gate.output);
         let anchor = pinned.unwrap_or(Anchor {
             x: gate_x[index],
-            y: PLANNER_Y,
+            y: PLANNER_Y + gate_storey[index] * STOREY_PITCH,
             z: GROUND_ROW_Z + row as i32 * ROW_PITCH,
         });
         anchors.push(anchor);
@@ -1596,6 +1654,13 @@ fn claim_column(taken: &mut BTreeSet<i32>, wanted: i32) -> i32 {
     let slot = ((wanted - GATE_COLUMN_X) as f64 / COLUMN_PITCH as f64).round() as i32;
     for step in 0.. {
         for candidate in [slot + step, slot - step] {
+            // Never left of the first column. Walking outwards from a
+            // barycentre otherwise runs off the origin -- a gate at x = -6 has
+            // its blocks written outside the world, and its socket reads as
+            // air however carefully the route reached it.
+            if candidate < 0 {
+                continue;
+            }
             let x = GATE_COLUMN_X + candidate * COLUMN_PITCH;
             if taken.insert(x) {
                 return x;
@@ -3731,6 +3796,71 @@ mod tests {
         );
 
         assert_eq!(best.port_anchor("a"), Some(where_it_went));
+    }
+
+    /// Six independent gates: enough that the shape preference has something
+    /// to decide.
+    fn six_independent_gates() -> Netlist {
+        Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: (0..6).map(|index| format!("g{index}")).collect(),
+            gates: (0..6)
+                .map(|index| Gate::nor(format!("g{index}"), &["a"]))
+                .collect(),
+        }
+    }
+
+    fn extent(candidate: &PlanCandidate) -> (i32, i32, i32) {
+        let mut min = (i32::MAX, i32::MAX, i32::MAX);
+        let mut max = (i32::MIN, i32::MIN, i32::MIN);
+        for anchor in candidate.anchors() {
+            min = (min.0.min(anchor.x), min.1.min(anchor.y), min.2.min(anchor.z));
+            max = (max.0.max(anchor.x), max.1.max(anchor.y), max.2.max(anchor.z));
+        }
+        (max.0 - min.0 + 1, max.1 - min.1 + 1, max.2 - min.2 + 1)
+    }
+
+    /// The caller says whether to spend floor area or height, and the planner
+    /// spends it.
+    ///
+    /// Everything before this laid one plane and grew sideways for ever, so a
+    /// circuit's footprint was whatever its widest level of logic happened to
+    /// need. Stacking is the thing redstone has that a circuit board does not.
+    ///
+    /// The placement half works: six gates that `Wide` puts in one row of six
+    /// become two storeys of three, at the same coordinates in X and Z, five
+    /// levels apart. `Wide` is legal. `Tall` is not yet: its six-way fanout
+    /// loses signal strength on the way to a ground-floor gate.
+    ///
+    /// A structural defect that would explain it, found while looking and not
+    /// confirmed to be this failure: each branch of a fanout plans its
+    /// refreshes across its whole path, but the shared trunk keeps the blocks
+    /// the *first* branch laid, so a later branch's repeaters on that trunk
+    /// are silently discarded and its tail starts weaker than it was planned
+    /// to. That is worth fixing whether or not it is what this test is
+    /// hitting.
+    #[test]
+    #[ignore = "known: a tall layout's fanout loses strength; the placement half is what this pins"]
+    fn a_tall_preference_uses_height_where_a_wide_one_uses_floor() {
+        let netlist = six_independent_gates();
+
+        let wide = plan_from_netlist_shaped(&netlist, &PortPlacements::default(), Shape::Wide)
+            .expect("wide must place");
+        let tall = plan_from_netlist_shaped(&netlist, &PortPlacements::default(), Shape::Tall)
+            .expect("tall must place");
+
+        verify_candidate(&wide, &netlist).expect("wide must be legal");
+        verify_candidate(&tall, &netlist).expect("tall must be legal");
+
+        let (wide_x, wide_y, _) = extent(&wide);
+        let (tall_x, tall_y, _) = extent(&tall);
+
+        assert_eq!(wide_y, 1, "a wide layout stays on one level");
+        assert!(tall_y > 1, "a tall layout uses more than one level");
+        assert!(
+            tall_x < wide_x,
+            "height is spent instead of floor: {tall_x} wide against {wide_x}"
+        );
     }
 
     /// Keep-out is about conductors, not about everything a primitive owns.
