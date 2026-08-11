@@ -4,7 +4,7 @@
 
 **Goal:** Accept Yosys `$_DFF_P_` cells, realise them as a redstone master-slave storage element, analyse their clock period, and certify a four-bit register in Minecraft Java 26.2.
 
-**Architecture:** Keep the gate-level `Netlist` explicit about sequential boundaries. A new `GateKind::DffPosedge` cuts dependency edges for combinational ordering, while a separate stateful topology entry owns the internal feedback of the physical implementation. The compiler retains all four physical invariants; sequential state changes are driven only through an external clock input. A real 26.2 client performs paste and lever clicks, while RCON reads the resulting state; RCON `/setblock` is not used to claim dynamic diode behaviour.
+**Architecture:** Keep the gate-level `Netlist` explicit about sequential boundaries. A new `GateKind::DffPosedge` cuts dependency edges for combinational ordering, while a separate Design H stateful topology entry owns its typed repeater-lock control relations. The compiler retains all four physical invariants; sequential state changes are driven only through an external clock input. A real 26.2 client performs paste and lever clicks, while RCON reads the resulting state; RCON `/setblock` is not used to claim dynamic diode behaviour.
 
 **Tech Stack:** Rust 2021, Yosys JSON frontend, REDA simulator and compiler, Litematica 26.2 schema 7.1, vanilla Minecraft Java 26.2 with RCON readback, `./check.sh`.
 
@@ -26,7 +26,7 @@
 - `src/compile/mod.rs` exposes a deterministic combinational dependency order that cuts at sequential gates, validates source signals, and eventually places the sequential macro.
 - `src/frontend/yosys_json.rs` maps `$_DFF_P_` with pins `D, C` into the gate-level netlist instead of rejecting it.
 - `src/compile/lowering.rs` preserves `DffPosedge` while lowering each combinational island; it never attempts to decompose a register into a combinational NOR graph.
-- `src/compile/primitive_graph.rs` represents a sequential cell's owned feedback region without using a DAG-only expansion routine for that region.
+- `src/compile/primitive_graph.rs` represents a sequential cell's owned Design H region, including typed repeater lock-side relations that are not ordinary data edges.
 - `src/timing/mod.rs` adds register-to-register setup-period analysis beside the existing input-to-output settle model.
 - `src/circuits/verilog.rs`, `tests/sequential_frontend.rs`, and `tests/sequential_compile.rs` own small register fixtures and simulator-level regressions.
 - `conformance/` owns a client-paste manifest and RCON readback record; it does not claim that `/setblock` toggled a clock.
@@ -131,7 +131,7 @@ git add src/compile/topology.rs src/frontend/yosys_json.rs src/compile/lowering.
 git commit -m "feat(frontend): preserve positive-edge DFF cells"
 ```
 
-### Task 3: Add a stateful primitive-graph topology without weakening graph checks
+### Task 3: Add a Design H stateful primitive-graph topology without weakening graph checks
 
 **Files:**
 - Modify: `src/compile/primitive_graph.rs`
@@ -140,37 +140,38 @@ git commit -m "feat(frontend): preserve positive-edge DFF cells"
 
 **Interfaces:**
 - `PrimitiveGraph` gains a stateful-region record containing the DFF’s `D` landing, clock landing, `Q` contributor, and the primitives internally owned by the cell.
-- `expand()` uses `Netlist::combinational_order()` for inter-cell edges and accepts an internal DFF feedback cycle only inside that record.
+- The stateful region records ordinary signal flow and typed `RepeaterLockSide` relations; the latter cannot be routed as rear data input.
+- `expand()` uses `Netlist::combinational_order()` for inter-cell edges. Design H stores state in locked repeaters; it has no invented combinational feedback cycle.
 - `ExpandError::CyclicNetlist` remains the result for a graph whose cycle contains no sequential cell.
 
 - [ ] **Step 1: Write failing graph tests**
 
-Expand the `through_dff` circuit from Task 1 with a library that contains the DFF entry. Assert its graph contains a DFF-owned primitive region and an edge from the DFF `Q` contributor to the `d` NOR. In a separate test, expand `pure_loop` and assert `Err(ExpandError::CyclicNetlist)`.
+Expand the `through_dff` circuit from Task 1 with a library that contains the DFF entry. Assert its region has `M_DATA`, `S_DATA`, `M_LOCK`, `INV_C`, and `S_LOCK`; assert the two lock edges are `RepeaterLockSide`, and an edge from the DFF `Q` contributor reaches the `d` NOR. In a separate test, expand `pure_loop` and assert `Err(ExpandError::CyclicNetlist)`.
 
 - [ ] **Step 2: Verify RED**
 
-Run: `cargo test primitive_graph_accepts_dff_feedback --lib -- --nocapture`
+Run: `cargo test primitive_graph_accepts_design_h_dff --lib -- --nocapture`
 
-Expected: DFF has no library entry or expansion still fails as cyclic.
+Expected: DFF has no library entry or Design H region expansion is absent.
 
-- [ ] **Step 3: Implement a latch-first DFF entry**
+- [ ] **Step 3: Implement the Design H DFF entry**
 
-Represent one level-sensitive latch as a cross-coupled pair of `Primitive::Torch` nodes plus named data/enable landing nodes. Define `DffPosedge` as two latch regions, master enabled when `C` is low and slave when `C` is high. Keep the internal feedback edges in the region; do not call the DAG layout routine over them. Expose only `D`, `C`, and `Q` as inter-cell ports.
+Represent `DffPosedge` as four `Primitive::Repeater` nodes (`M_DATA`, `S_DATA`, `M_LOCK`, `S_LOCK`) plus one `Primitive::Torch` node (`INV_C`). Define ordinary edges `D → M_DATA → S_DATA → Q`, `C → M_LOCK`, `C → INV_C → S_LOCK`; define typed lock-side relations `M_LOCK ⇒ M_DATA` and `S_LOCK ⇒ S_DATA`. `M_LOCK` receives `C`; `S_LOCK` receives `!C`. Expose only `D`, `C`, and `Q` as inter-cell ports. Do not create a cross-coupled torch feedback edge. See `2026-08-11-dff-design-h.md`.
 
 - [ ] **Step 4: Verify GREEN**
 
-Run: `cargo test primitive_graph_accepts_dff_feedback --lib -- --nocapture; cargo test primitive_graph_rejects_combinational_cycle --lib -- --nocapture`
+Run: `cargo test primitive_graph_accepts_design_h_dff --lib -- --nocapture; cargo test primitive_graph_rejects_combinational_cycle --lib -- --nocapture`
 
-Expected: a DFF feedback cycle is represented; a bare NOR loop is still rejected.
+Expected: a DFF Design H region and typed lock-side relations are represented; a bare NOR loop is still rejected.
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/compile/topology.rs src/compile/primitive_graph.rs
-git commit -m "feat(topology): represent DFF feedback as a stateful region"
+git commit -m "feat(topology): represent Design H as a stateful DFF region"
 ```
 
-### Task 4: Realise and simulate the latch/DFF macro
+### Task 4: Realise and simulate the Design H DFF macro
 
 **Files:**
 - Modify: `src/compile/mod.rs`
@@ -179,13 +180,13 @@ git commit -m "feat(topology): represent DFF feedback as a stateful region"
 - Test: `tests/sequential_compile.rs`
 
 **Interfaces:**
-- `compile()` recognises `GateKind::DffPosedge` and places its fixed master-slave latch macro with explicit D/C/Q ports.
+- `compile()` recognises `GateKind::DffPosedge` and places its fixed Design H master-slave macro with explicit D/C/Q ports.
 - `Simulator` exposes a stable sequential observation after each externally applied clock transition.
 - `CompiledCircuit` records DFF output positions so dump/viewer/conformance use a single `Q` source.
 
 - [ ] **Step 1: Write failing functional tests**
 
-Create a one-bit DFF netlist with inputs `d`, `clk` and output `q`. The test sequence is `d=0, clk=0; d=1, clk=0; clk=1; d=0, clk=0; clk=1`. After each `run_until_stable`, assert Q is respectively `0, 0, 1, 1, 0`. Also compile a two-bit independent DFF pair and assert toggling one D input cannot alter the other Q.
+Create a one-bit DFF netlist with inputs `d`, `clk` and output `q`. Drive `d=0,clk=0; clk↑; clk↓; d↑; clk↑; d↓; clk↓; clk↑`. After each stable state, assert known Q values `0,0,0,1,1,1,0`; inspect each tick to assert master/slave lock states stay complementary and the output cannot change on a falling edge. Also compile a two-bit independent DFF pair and assert toggling one D input cannot alter the other Q.
 
 - [ ] **Step 2: Verify RED**
 
@@ -195,7 +196,7 @@ Expected: `compile()` reports `NotRealisable` for `DffPosedge`.
 
 - [ ] **Step 3: Implement the macro and port routing**
 
-Place two named level-sensitive latch substructures for each DFF, reserve their internal cells before ordinary routing, and emit D/C/Q ports as ordinary nets with typed directions. Run the four existing physical invariants over all external ports and a dedicated stateful-macro structural check over internal feedback, rather than pretending its two cross-coupled torches form a combinational net.
+Place the verified Design H macro: data repeaters in series, master lock driven by `C`, slave lock driven by an explicit torch-derived `!C`. Reserve internal cells before ordinary routing and emit D/C/Q ports as ordinary nets with typed directions. Run the four existing physical invariants over all external ports and a dedicated stateful-macro structural check over lock-side relations; never treat them as normal rear inputs.
 
 - [ ] **Step 4: Verify GREEN**
 
@@ -207,7 +208,7 @@ Expected: the sequence holds state correctly, independent bits remain isolated, 
 
 ```bash
 git add src/compile/mod.rs src/redstone/simulator/component.rs src/redstone/simulator/mod.rs tests/sequential_compile.rs
-git commit -m "feat(compile): place a master-slave redstone DFF"
+git commit -m "feat(compile): place the Design H redstone DFF"
 ```
 
 ### Task 5: Analyse sequential timing and expose the artifact
