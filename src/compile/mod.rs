@@ -49,6 +49,7 @@ use crate::redstone::world::storage::World;
 
 pub mod equivalence;
 pub mod lowering;
+pub mod planner;
 pub mod polarity;
 pub mod primitive_graph;
 pub mod routing_stats;
