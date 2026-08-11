@@ -31,6 +31,7 @@
 use std::path::Path;
 
 use reda::circuits::{and4, full_adder, seven_segment, verilog};
+use reda::compile::lowering::{lower, lower_optimised};
 use reda::compile::{compile, CompiledCircuit, Netlist};
 use reda::formats::litematic;
 use reda::redstone::world::block::BlockKind;
@@ -102,6 +103,18 @@ struct SelectedCircuit {
     name: String,
     netlist: Netlist,
     output_labels: Vec<(String, String)>,
+    lowering_path: LoweringPath,
+}
+
+/// The lowering contract selected by the source circuit.  Hand-written
+/// reference netlists use the compatibility path; a synthesized netlist is
+/// where the whole-netlist polarity optimizer belongs.  Keep this beside the
+/// selected netlist so the litematic binary cannot silently diverge from
+/// `mc_dump`.
+#[derive(Clone, Copy)]
+enum LoweringPath {
+    Ordinary,
+    Optimised,
 }
 
 /// Turn the command line into a circuit, or into a message explaining why it
@@ -114,7 +127,12 @@ fn select(args: &[String], circuits: &[CircuitInfo]) -> Result<SelectedCircuit, 
         };
         let (netlist, output_labels) = verilog::synthesize_file(Path::new(path), top_module)
             .map_err(|err| format!("could not synthesize {path} ({top_module}): {err}"))?;
-        return Ok(SelectedCircuit { name: top_module.clone(), netlist, output_labels });
+        return Ok(SelectedCircuit {
+            name: top_module.clone(),
+            netlist,
+            output_labels,
+            lowering_path: LoweringPath::Optimised,
+        });
     }
 
     let requested = args.first().expect("select is only called with at least one argument");
@@ -130,6 +148,7 @@ fn select(args: &[String], circuits: &[CircuitInfo]) -> Result<SelectedCircuit, 
             name: circuit.name.replace(':', "_"),
             netlist,
             output_labels,
+            lowering_path: LoweringPath::Optimised,
         });
     }
 
@@ -138,6 +157,7 @@ fn select(args: &[String], circuits: &[CircuitInfo]) -> Result<SelectedCircuit, 
             name: info.name.to_string(),
             netlist: (info.build)(),
             output_labels: (info.output_labels)(),
+            lowering_path: LoweringPath::Ordinary,
         });
     }
 
@@ -221,7 +241,7 @@ fn main() {
         return;
     }
 
-    let SelectedCircuit { name, netlist, output_labels } = match select(&args, &circuits) {
+    let SelectedCircuit { name, netlist, output_labels, lowering_path } = match select(&args, &circuits) {
         Ok(selected) => selected,
         Err(message) => {
             eprintln!("{message}");
@@ -234,7 +254,10 @@ fn main() {
     // synthesized netlist arrives at the gate level. This is the identity on
     // every hand-written circuit, so `gate_count` below still reports what
     // really gets placed either way.
-    let netlist = match reda::compile::lowering::lower(&netlist) {
+    let netlist = match match lowering_path {
+        LoweringPath::Ordinary => lower(&netlist),
+        LoweringPath::Optimised => lower_optimised(&netlist),
+    } {
         Ok(lowered) => lowered,
         Err(err) => {
             eprintln!("circuit '{name}' could not be lowered into redstone: {err}");

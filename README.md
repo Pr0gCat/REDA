@@ -5,7 +5,7 @@ enough to prove the result before anyone pastes it into a world.
 
 Verilog goes in; a `.litematic` comes out; the project's own simulator runs the
 compiled circuit's full truth table, and a conformance harness re-runs it inside
-a real 1.20.1 server. The premise is that redstone's cost model is not CMOS's --
+a real Minecraft Java 26.2 server. The premise is that redstone's cost model is not CMOS's --
 fan-in barely affects delay, an OR is a wire join and costs nothing, and delay is
 overwhelmingly a placement problem -- so the interesting work is a technology
 library and a cost model that say what redstone actually costs.

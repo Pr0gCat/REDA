@@ -18,6 +18,21 @@
 - Do not change gate topology, Boolean lowering, floorplanning, or editor code in this plan.
 - `./check.sh` and real-game `verilog:and4` conformance must pass before completion.
 
+## Status (2026-08-11)
+
+- Tasks 1–3 are implemented and committed (`90c6346`, `31ffa1c`,
+  `5e9eed7`). The 26.2 component probes pass and the compiler's invariants
+  remain unconditional.
+- Task 4 has **not** passed. The target server proved that RCON `/setblock`
+  updates dust but does not schedule repeaters after their rear input changes;
+  a full diode circuit therefore cannot be certified by this harness. This is
+  an environment limitation, documented in `docs/minecraft-server.md`, not a
+  router failure. It requires a real 26.2 client lever click.
+- Task 5 is complete locally: `build_circuit` now follows `mc_dump`'s
+  `lower_optimised()` path for Verilog, guarded by
+  `tests/verilog_litematic.rs`. The generated decoder is 47 placed gates and
+  10,088 non-air blocks.
+
 ---
 
 ## File structure

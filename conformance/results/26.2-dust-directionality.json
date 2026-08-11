@@ -1,0 +1,196 @@
+{
+  "label": "26.2-dust-directionality",
+  "probes": [
+    {
+      "name": "dust_shape_decides_which_block_it_powers",
+      "category": "dust-directionality",
+      "assumption": "A dust cell weakly powers the block it points into: a straight run (or a stub, which vanilla fills out into a straight run) powers the blocks at both ends of its axis, while a corner, a T, or an isolated dot powers no horizontal neighbour at all. One rule covers all four: the neighbour in direction D is powered exactly when the opposite side is connected and neither perpendicular side is.",
+      "source": "src/redstone/simulator/propagate.rs: dust_power_toward and dust_side_connected",
+      "checks": [
+        {
+          "question": "straight: the dust is powered at all",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "straight: the lamp it points into lights",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "corner: the dust is powered at all",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "corner: the lamp beside it stays dark",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "T: the dust is powered at all",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "T: the lamp beside it stays dark",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dot: the dust is powered at all",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dot: the cell really has no connected side",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "dot: an unconnected dust powers no horizontal neighbour",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "control: joining one side turns the same cell into a straight run (vanilla fills in the far side by itself)",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "control: and that same untouched lamp now lights",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": [],
+      "never_transitioned": false
+    },
+    {
+      "name": "a_component_beside_a_line_can_cost_it_its_direction",
+      "category": "dust-directionality",
+      "assumption": "Whether an adjacent component destroys a run's direction depends on whether dust connects to it, not on whether it is powered: a repeater lying along the run's cross axis connects and kills the direction, while the same repeater turned perpendicular does not connect and changes nothing. Both repeaters here stay inert throughout.",
+      "source": "src/redstone/simulator/propagate.rs: dust_side_connected, component branch",
+      "checks": [
+        {
+          "question": "control: a bare straight run powers the block it points into",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "an aligned (connecting) repeater beside the run kills that",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "a perpendicular (non-connecting) repeater beside the run does not",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "both repeaters really are inert throughout",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": [],
+      "never_transitioned": false
+    },
+    {
+      "name": "dust_weak_power_turns_off_a_torch_on_the_block_its_line_points_into",
+      "category": "dust-directionality",
+      "assumption": "The case the compiler's whole cell library rests on: the weak power a dust run puts into the block it points into is enough to invert a torch attached to that block -- and a perpendicular branch, which costs the run its direction, leaves the same torch lit.",
+      "source": "src/redstone/simulator/component.rs: torch_should_be_lit, via propagate::block_power_at and dust_power_toward",
+      "checks": [
+        {
+          "question": "baseline: straight lane's torch starts lit",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "baseline: branched lane's torch starts lit",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "straight: the run is powered",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "straight: the torch on the block it points into inverts off",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "straight: and its own dust goes dark with it",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "branched: the run is powered just the same",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "branched: the torch stays lit",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        },
+        {
+          "question": "branched: and its own dust stays at full strength",
+          "expected": true,
+          "actual": true,
+          "matches": true,
+          "note": ""
+        }
+      ],
+      "measurements": [],
+      "never_transitioned": false
+    }
+  ]
+}

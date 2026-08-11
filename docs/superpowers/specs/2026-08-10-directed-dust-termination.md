@@ -9,8 +9,9 @@ cost function.
 
 ## Fact already established
 
-`2026-08-09-dust-directionality.md` measured this rule on a real 1.20.1
-server and the simulator now implements it:
+`2026-08-09-dust-directionality.md` originally measured this rule on 1.20.1;
+the three shape probes were re-run on the target 26.2 server on 2026-08-11
+with the same result. The simulator now implements it:
 
 - dust weakly powers the block below it;
 - horizontally, a dust cell powers a block only when its opposite side is
@@ -29,7 +30,7 @@ repeater and to a comparator. This is not the normal rule that a strongly
 powered block re-drives nearby dust; it is a special rule of a diode reading
 the block immediately behind it.
 
-This was re-measured on a live 1.20.1 server on 2026-08-10, using the minimal
+This was re-measured on a live 26.2 server on 2026-08-10, using the minimal
 shape below. The source redstone block is placed last, so every observed state
 is a real transition rather than a forced blockstate.
 
@@ -114,7 +115,10 @@ ability the emitter cannot build.
 4. Claim the dust cell and its required keep-out before approving the next
    candidate. This follows the live-reservation discipline introduced for
    widened bypasses; candidates must see earlier approved candidates.
-5. Emit dust for approved candidates and preserve repeaters otherwise.
+5. Emit dust for approved candidates and preserve repeaters otherwise. A
+   route whose strength planner needs the final cell as a refresh repeater
+   keeps that repeater even if its final geometry would otherwise be a legal
+   dust arrival.
    `verify_connectivity`, `verify_torch_merge` and `verify_signal_strength`
    remain unconditional. They are constraints, not cost terms.
 6. Correct the simulator before changing the router: split `signal_from` into
@@ -141,8 +145,11 @@ ability the emitter cannot build.
   correctness. At least `verilog:and4` removes the observed redundant
   terminal repeater. Re-measure blocks, terminal-repeaters, and settle ticks
   instead of promising a count in advance.
-- Run `./check.sh` and the real 1.20.1 conformance harness for the changed
-  `verilog:and4` circuit; the browser 3D view must expose the changed output.
+- Run `./check.sh`. RCON probes on 26.2 certify the component-level rules;
+  whole-circuit diode behaviour must be driven by a real 26.2 client action,
+  because `/setblock` does not schedule a repeater after its rear input
+  changes (documented in `docs/minecraft-server.md`). The browser 3D view
+  must expose the changed output.
 
 ## Out of scope
 

@@ -5,8 +5,9 @@
 //! （**可以是負的**）、`BlockStatePalette`、`BlockStates`（LongArray）、
 //! `TileEntities`、`Entities`。
 //!
-//! 目前版本是 **6**（對應 MC 1.20.1）；讀取時也接受 7，因為兩者的
-//! 方塊資料編碼完全相同，差別只在 TileEntity 內的 item stack NBT。
+//! 寫出版本是 **7 / sub-version 1**（Litematica 26.2）；讀取時也接受舊的
+//! 6。兩者的方塊資料編碼相同，主要差別在較新版本的 metadata / block
+//! entity 表達；REDA 目前不寫 block entity。
 //!
 //! **沒有官方規格** —— 這個實作依據的是 Litematica 原始碼與社群逆向文件。
 
@@ -21,22 +22,23 @@ use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing, SlabHal
 use crate::redstone::world::palette::Palette;
 use crate::redstone::world::storage::World;
 
-/// 寫出時使用的 schematic 版本。
+/// Schema written by the installed Litematica 26.2 release.
 ///
-/// 用 6 而不是 7：版本 7 是為 MC 1.20.5+ 引入的，1.20.1 的 Litematica
-/// 會拒絕載入。兩者的**方塊資料編碼完全相同**，差別只在 TileEntity 內的
-/// item stack NBT —— 而我們根本不寫 TileEntity。所以寫 6 對 1.20.x 全系列
-/// 相容，1.20.5+ 也讀得懂。
-pub const SCHEMATIC_VERSION: i32 = 6;
+/// Litematica 26.2 declares schema version 7, sub-version 1.  REDA's target
+/// is Minecraft 26.2, so emitting the older 1.20.1 schema would mislabel the
+/// download even though this project's palette contains no block entities.
+pub const SCHEMATIC_VERSION: i32 = 7;
+pub const SCHEMATIC_SUB_VERSION: i32 = 1;
 
-/// 讀取時接受的最高版本。我們寫 6，但社群的檔案可能是 7。
+/// 讀取時接受的最高版本；26.2 Litematica writes 7.
 pub const MAX_SUPPORTED_VERSION: i32 = 7;
 
 /// 讀取時接受的最低版本。
 pub const MIN_SUPPORTED_VERSION: i32 = 6;
 
-/// MC 1.20.1 的 data version。
-pub const DATA_VERSION_1_20: i32 = 3465;
+/// Minecraft Java 26.2's data version, confirmed from the target server's
+/// `version` command (`data = 4903`).
+pub const DATA_VERSION_26_2: i32 = 4903;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LitematicFile {
@@ -424,9 +426,9 @@ pub fn save(path: &Path, world: &World, name: &str) -> Result<(), FormatError> {
     regions.insert(name.to_string(), region);
 
     let file = LitematicFile {
-        minecraft_data_version: DATA_VERSION_1_20,
+        minecraft_data_version: DATA_VERSION_26_2,
         version: SCHEMATIC_VERSION,
-        sub_version: 1,
+        sub_version: SCHEMATIC_SUB_VERSION,
         metadata: Metadata {
             name: name.to_string(),
             author: "REDA".to_string(),
@@ -781,11 +783,16 @@ mod tests {
     #[test]
     #[allow(clippy::assertions_on_constants)]
     fn written_version_is_loadable_by_the_target_minecraft_version() {
-        // 版本 7 是 1.20.5+ 才有的，1.20.1 的 Litematica 會拒絕載入。
-        // 我們寫的檔案必須能被目標版本讀取。
+        // The installed 26.2 Litematica jar declares schema version 7,
+        // sub-version 1.  Its target Minecraft data version is the live
+        // server's `version` response: 4903.
         assert_eq!(
-            SCHEMATIC_VERSION, 6,
-            "writing version 7 produces files 1.20.1 Litematica refuses"
+            SCHEMATIC_VERSION, 7,
+            "26.2 Litematica writes schema version 7"
+        );
+        assert_eq!(
+            DATA_VERSION_26_2, 4903,
+            "26.2's live server reports data version 4903"
         );
         assert!(
             MAX_SUPPORTED_VERSION >= SCHEMATIC_VERSION,

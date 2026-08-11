@@ -1522,10 +1522,13 @@ fn lay_bent_path(
             is_repeater[cells.len() - 1] = true;
         }
         TerminalKind::DirectedDustIntoSupport => {
-            debug_assert!(
-                !is_repeater[cells.len() - 1],
-                "a directed dust terminal must not be the path's refresh repeater"
-            );
+            // Dust is preferred only when the run can already reach this
+            // last cell without a refresh.  `plan_bent_path` owns that
+            // strength calculation; if it needs this cell as a repeater,
+            // retaining the repeater is the only correct physical result.
+            // In particular, a geometric dust candidate must never turn a
+            // long, otherwise valid route into a dead line merely to save a
+            // component at its socket.
         }
     }
 

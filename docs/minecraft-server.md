@@ -1,16 +1,18 @@
-# Minecraft server for redstone conformance testing
+# Minecraft 26.2 server for redstone conformance testing
 
-This sets up the ground-truth server described in
-`docs/superpowers/specs/2026-08-07-minecraft-conformance.md`: a real vanilla
-1.20.1 server, driven over RCON, that the (separate, not-yet-written) test
-harness will use to place compiled circuits and check them against a real
-game rather than our own simulator.
+REDA's ground-truth target is **Minecraft Java 26.2**, not 1.20.1.  The
+current vanilla server lives in `minecraft-server-26.2/`, runs on its bundled
+JDK 25, and is the server every current fidelity or conformance result must
+name. Its live `version` command reports data version **4903**.
 
-Everything in this section lives under `minecraft-server/` at the repo root,
-which is entirely gitignored. Nothing here touches `src/`, `tests/`, or
-`viewer/`.
+The older `minecraft-server/` tree below is retained only as a historical
+1.20.1 comparison environment. It must not be used to certify a current REDA
+layout.
 
-## What was downloaded
+The target server lives under `minecraft-server-26.2/` at the repo root and
+is entirely gitignored. Nothing here touches `src/`, `tests/`, or `viewer/`.
+
+## Historical 1.20.1 setup
 
 **Eclipse Temurin JDK 21** (Windows x64, `.zip`), because Minecraft 1.20.1
 requires Java 17+ and the machine only had Java 8/11 installed. Resolved via
@@ -56,13 +58,13 @@ This repo will not flip that to `true` — accepting Mojang's EULA is your
 decision, not the agent's. The server refuses to start until you change that
 line to `eula=true` yourself. See https://aka.ms/MinecraftEULA before you do.
 
-## Starting and stopping
+## Starting and stopping the target server
 
 ```bash
-./minecraft-server/run-server.sh       # git-bash / WSL
+./minecraft-server-26.2/run-server.sh       # git-bash / WSL
 ```
 ```powershell
-.\minecraft-server\run-server.ps1      # PowerShell
+.\minecraft-server-26.2\run-server.ps1      # PowerShell
 ```
 
 Both scripts resolve the bundled JDK by path, so they work regardless of
@@ -158,12 +160,10 @@ of opening the RCON socket while `eula=false`. Once you flip that line, the
 harness's first RCON connection attempt against `127.0.0.1:25575` with the
 password in `server.properties` is the next real test.
 
-## The 26.2 sibling server
+## Target server details: 26.2
 
-`minecraft-server-26.2/` is a second, independent server set up the same
-way, for comparing 1.20.1's redstone behaviour against Minecraft's current
-release (26.2, Mojang's latest year-based version). Entirely gitignored,
-same as `minecraft-server/`, for the same reasons.
+`minecraft-server-26.2/` is the independent, gitignored target server. The
+older `minecraft-server/` tree remains only for historical 1.20.1 comparison.
 
 **Minecraft 26.2 `server.jar`**, resolved the same way as 1.20.1's:
 
@@ -196,12 +196,11 @@ above) -- 26.2 added a few new keys on first run (`management-server-*`,
 generated defaults since none of them matter to a redstone conformance
 harness.
 
-**`minecraft-server-26.2/server/eula.txt` also reads `eula=false`.** Same
-rule as the 1.20.1 server: this repo will not flip it, even though the
-identical Mojang EULA has already been accepted once for the sibling
-server -- that acceptance covered running *that* server, not a second,
-independently-downloaded one. Flip it yourself before starting
-`minecraft-server-26.2/run-server.sh`.
+**Current local state:** `minecraft-server-26.2/server/eula.txt` is
+`eula=true`, accepted by the user after reading Mojang's EULA. The target
+server has started successfully; when it is running, its RCON listener is on
+localhost. The server directory is gitignored, so a fresh checkout still
+requires its owner to accept the EULA before it can run.
 
 ## Conformance probe suite
 
@@ -213,3 +212,21 @@ answer against what the code assumes. See the module docstrings in
 `conformance/harness.py` and `conformance/probes.py` for the methodology
 (and its hard-won limitations), and `conformance/run.py --help` /
 `conformance/compare.py --help` for usage.
+
+## 26.2 RCON limitation: it cannot activate repeaters
+
+This was measured directly on the target server on 2026-08-11.  With a
+repeater placed first, then a powered dust line placed behind it, RCON reads
+the dust at power 13/14 but the repeater remains `powered=false` indefinitely.
+The same result occurs when the source is a real redstone block directly
+behind the repeater, when an existing lever is changed from off to on, after
+`/tick step`, and after removing/replacing the lever.  Conversely, forcing
+the repeater block state to `powered=true` drives its output normally.
+
+So this is a limitation of the command-placement/update path, not evidence
+that REDA's router or the 26.2 redstone rule is wrong.  RCON remains useful
+for static rules such as dust directionality and weak rear-block inputs, but
+it cannot certify a circuit containing repeaters or comparators after it has
+been built with `/setblock`.  Dynamic whole-circuit certification needs a real
+26.2 client action (paste/build, then physically click the input levers); RCON
+may still read the resulting lamps and block states.
