@@ -2,16 +2,18 @@
 """Run every probe in probes.py against a live Minecraft server over RCON.
 
 Usage:
-    python run.py --properties ../minecraft-server/server/server.properties --out results/1.20.1.json --label 1.20.1
     python run.py --properties ../minecraft-server-26.2/server/server.properties --out results/26.2.json --label 26.2
+    # Historical 1.20.1 comparison only:
+    python run.py --properties ../minecraft-server/server/server.properties --out results/1.20.1.json --label 1.20.1
 
 Reads host/port/password from the target server's server.properties (the
 same file the server itself reads, per docs/minecraft-server.md), forceloads
 one region for the whole run, executes every probe in probes.py in its own
 slot, writes a JSON report, and prints a summary table.
 
-The server must already be running (see minecraft-server/run-server.sh or
+The current server must already be running (see
 minecraft-server-26.2/run-server.sh) with RCON enabled before this is run.
+The 1.20.1 command above is historical comparison evidence only.
 """
 
 from __future__ import annotations

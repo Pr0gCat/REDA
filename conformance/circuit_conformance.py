@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """End-to-end conformance harness: place any circuit `mc_dump` can describe
-into a real Minecraft 1.20.1 server, drive its levers through every input
+into the current Minecraft 26.2 server, drive its levers through every input
 vector, read every output, and compare against the pure-boolean NOR truth
 table.
 
@@ -26,18 +26,21 @@ as it always did over the one output `and4` happens to have.
 Usage:
     cargo run --release --bin mc_dump -- and4 > /tmp/and4.txt
     python circuit_conformance.py --dump /tmp/and4.txt \
-        --properties ../minecraft-server/server/server.properties \
-        --out results/and4_head.json --label head
+        --properties ../minecraft-server-26.2/server/server.properties \
+        --out results/and4_26.2.json --label 26.2
 
     cargo run --release --bin mc_dump -- seven_segment > /tmp/decoder.txt
     python circuit_conformance.py --dump /tmp/decoder.txt \
-        --properties ../minecraft-server/server/server.properties \
-        --out results/decoder_head.json --label head
+        --properties ../minecraft-server-26.2/server/server.properties \
+        --out results/decoder_26.2.json --label 26.2
 
     cargo run --release --bin mc_dump -- verilog:seven_segment > /tmp/vdecoder.txt
     python circuit_conformance.py --dump /tmp/vdecoder.txt \
-        --properties ../minecraft-server/server/server.properties \
-        --out results/verilog_decoder_head.json --label head
+        --properties ../minecraft-server-26.2/server/server.properties \
+        --out results/verilog_decoder_26.2.json --label 26.2
+
+Historical 1.20.1 reports and commands are retained only for comparison
+evidence; they are not current certification commands.
 
 # Wired-OR merges
 

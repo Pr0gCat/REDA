@@ -12,7 +12,7 @@ layout.
 The target server lives under `minecraft-server-26.2/` at the repo root and
 is entirely gitignored. Nothing here touches `src/`, `tests/`, or `viewer/`.
 
-## Historical 1.20.1 setup
+## Historical only: 1.20.1 setup
 
 **Eclipse Temurin JDK 21** (Windows x64, `.zip`), because Minecraft 1.20.1
 requires Java 17+ and the machine only had Java 8/11 installed. Resolved via
@@ -36,7 +36,7 @@ rather than a hardcoded URL:
 3. Downloaded and verified with `sha1sum` — matched. Placed at
    `minecraft-server/server/server.jar`.
 
-## Directory layout
+## Historical only: 1.20.1 directory layout
 
 ```
 minecraft-server/           (gitignored in full)
@@ -46,7 +46,7 @@ minecraft-server/           (gitignored in full)
   run-server.ps1             same, for PowerShell
 ```
 
-## The one line you need to change
+## Historical only: the one line you need to change
 
 `minecraft-server/server/eula.txt` currently reads:
 
@@ -74,7 +74,7 @@ what `java` is on the machine's PATH. They run the server in the foreground
 To stop: `Ctrl+C` in the terminal (the vanilla server has a shutdown hook
 that saves and exits cleanly), or send `stop` over RCON.
 
-## RCON
+## Historical only: RCON
 
 - Enabled: `enable-rcon=true`
 - Port: `25575` (`rcon.port` in `server.properties`)
@@ -93,7 +93,7 @@ the password from `server.properties`, then issue `SERVERDATA_EXECCOMMAND`
 packets (`/forceload add ...`, `/setblock ...`, `/data get block ...`, etc.)
 and read the responses.
 
-## `server.properties` choices and why
+## Historical only: `server.properties` choices and why
 
 The full file is at `minecraft-server/server/server.properties`. The choices
 that matter for a redstone conformance harness:
@@ -135,7 +135,7 @@ that matter for a redstone conformance harness:
 - `level-seed=reda-conformance` — fixed, so the (irrelevant, since it's flat)
   seed is at least reproducible rather than random per generation.
 
-## Verification performed
+## Historical only: verification performed
 
 Confirmed, with the bundled JDK and without ever touching `eula.txt`:
 

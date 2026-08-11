@@ -1,7 +1,8 @@
 #!/usr/bin/env python
-"""Diff two run.py JSON reports (e.g. 1.20.1 vs 26.2) into a rule-by-rule table.
+"""Diff current 26.2 evidence against historical 1.20.1 evidence.
 
 Usage:
+    # Historical comparison only:
     python compare.py results/1.20.1.json results/26.2.json
 """
 
