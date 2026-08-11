@@ -1,5 +1,7 @@
 use std::cmp::Ordering;
 
+use crate::compile::{self, CompiledCircuit, LegacyEmission, Netlist};
+
 /// A fixed coordinate selected by the planner without referring to a world.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Anchor {
@@ -13,6 +15,15 @@ pub struct Anchor {
 pub struct Route {
     id: String,
     anchors: Vec<Anchor>,
+    owner: Option<String>,
+    terminal_kinds: Vec<RouteTerminalKind>,
+}
+
+/// The physical component selected at a route's final socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteTerminalKind {
+    RepeaterIntoSupport,
+    DirectedDustIntoSupport,
 }
 
 impl Route {
@@ -28,7 +39,20 @@ impl Route {
         Self {
             id: id.into(),
             anchors: distinct_anchors,
+            owner: None,
+            terminal_kinds: Vec::new(),
         }
+    }
+
+    pub(crate) fn from_legacy(
+        id: String,
+        anchors: Vec<Anchor>,
+        terminal_kinds: Vec<RouteTerminalKind>,
+    ) -> Self {
+        let mut route = Self::new(id.clone(), anchors);
+        route.owner = Some(id);
+        route.terminal_kinds = terminal_kinds;
+        route
     }
 
     pub fn id(&self) -> &str {
@@ -38,20 +62,55 @@ impl Route {
     pub fn anchors(&self) -> &[Anchor] {
         &self.anchors
     }
+
+    /// The source net this route belongs to, if it came from legacy emission.
+    pub fn owner(&self) -> Option<&str> {
+        self.owner.as_deref()
+    }
+
+    /// The terminal decisions emitted for this route's sinks.
+    pub fn terminal_kinds(&self) -> &[RouteTerminalKind] {
+        &self.terminal_kinds
+    }
 }
 
 /// Immutable planner input.  It deliberately contains no [`World`]-backed
 /// state: legacy placement remains outside this candidate model for now.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct PlanCandidate {
     anchors: Vec<Anchor>,
     routes: Vec<Route>,
+    legacy_emission: Option<LegacyEmission>,
 }
+
+impl PartialEq for PlanCandidate {
+    fn eq(&self, other: &Self) -> bool {
+        self.anchors == other.anchors && self.routes == other.routes
+    }
+}
+
+impl Eq for PlanCandidate {}
 
 impl PlanCandidate {
     /// Construct a pure candidate from its selected anchors and route IDs.
     pub fn new(anchors: Vec<Anchor>, routes: Vec<Route>) -> Self {
-        Self { anchors, routes }
+        Self {
+            anchors,
+            routes,
+            legacy_emission: None,
+        }
+    }
+
+    pub(crate) fn from_legacy(
+        anchors: Vec<Anchor>,
+        routes: Vec<Route>,
+        legacy_emission: LegacyEmission,
+    ) -> Self {
+        Self {
+            anchors,
+            routes,
+            legacy_emission: Some(legacy_emission),
+        }
     }
 
     pub fn anchors(&self) -> &[Anchor] {
@@ -102,6 +161,72 @@ impl PlanCandidate {
             },
         })
     }
+}
+
+/// A legacy compiler output cannot be converted into a legal planner seed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlannerError {
+    LegacyMetadataUnavailable,
+    NetlistDoesNotMatchCompiledOutput,
+    PhysicalInvariant(compile::CompileError),
+}
+
+impl std::fmt::Display for PlannerError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::LegacyMetadataUnavailable => write!(f, "compiled circuit has no legacy emission metadata"),
+            Self::NetlistDoesNotMatchCompiledOutput => {
+                write!(f, "netlist does not match the legacy compiler output")
+            }
+            Self::PhysicalInvariant(error) => error.fmt(f),
+        }
+    }
+}
+
+impl std::error::Error for PlannerError {}
+
+/// Extract a planner seed from the legacy emitter's explicit metadata.
+///
+/// This intentionally never inspects world blocks to guess route ownership:
+/// `emit` recorded each primitive anchor, route owner and terminal decision at
+/// the time it made the corresponding placement decision.
+pub fn seed_from_legacy(
+    netlist: &Netlist,
+    compiled: &CompiledCircuit,
+) -> Result<PlanCandidate, PlannerError> {
+    let emission = compiled
+        .legacy_emission()
+        .ok_or(PlannerError::LegacyMetadataUnavailable)?;
+    if emission.netlist() != netlist {
+        return Err(PlannerError::NetlistDoesNotMatchCompiledOutput);
+    }
+
+    let routes = emission
+        .routes()
+        .iter()
+        .map(|route| {
+            Route::from_legacy(
+                route.owner().to_string(),
+                route.anchors().to_vec(),
+                route.terminal_kinds().to_vec(),
+            )
+        })
+        .collect();
+
+    Ok(PlanCandidate::from_legacy(
+        emission.primitive_anchors().to_vec(),
+        routes,
+        emission.clone(),
+    ))
+}
+
+/// Realise a legacy seed and run the compiler's physical invariant suite.
+pub fn verify_candidate(candidate: &PlanCandidate) -> Result<(), PlannerError> {
+    let emission = candidate
+        .legacy_emission
+        .as_ref()
+        .ok_or(PlannerError::LegacyMetadataUnavailable)?;
+    compile::verify_legacy_emission(emission).map_err(PlannerError::PhysicalInvariant)
 }
 
 /// Integer weights for the candidate cost terms.

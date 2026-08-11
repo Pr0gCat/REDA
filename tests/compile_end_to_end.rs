@@ -6,7 +6,9 @@
 use reda::compile::topology::GateKind;
 use std::path::PathBuf;
 
-use reda::compile::{compile, CompileError, Gate, Netlist};
+use reda::circuits::and4::build_and4_netlist;
+use reda::compile::planner::{seed_from_legacy, verify_candidate, NormalisedScore, PlannerWeights};
+use reda::compile::{compile, CompileError, CompiledCircuit, Gate, Netlist};
 use reda::formats::litematic;
 use reda::redstone::simulator::Simulator;
 
@@ -59,6 +61,39 @@ fn and_netlist() -> Netlist {
             },
         ],
     }
+}
+
+fn compiled_and4() -> (Netlist, CompiledCircuit) {
+    let (netlist, _) = build_and4_netlist();
+    let compiled = compile(&netlist).expect("and4 is acyclic and fully driven");
+    (netlist, compiled)
+}
+
+#[test]
+fn legacy_and4_extracts_to_a_legal_candidate_with_unit_seed_score() {
+    let (netlist, compiled) = compiled_and4();
+
+    let seed = seed_from_legacy(&netlist, &compiled).expect("legacy output must be extractable");
+
+    verify_candidate(&seed).expect("the extracted candidate must retain legacy legality");
+    assert_eq!(
+        seed.score(&PlannerWeights::default())
+            .expect("and4 seed score must fit the exact representation"),
+        NormalisedScore::ONE
+    );
+}
+
+#[test]
+fn extracted_candidate_preserves_each_primitive_anchor_and_route_owner() {
+    let (netlist, compiled) = compiled_and4();
+
+    let seed = seed_from_legacy(&netlist, &compiled).expect("legacy output must be extractable");
+
+    assert_eq!(seed.anchors().len(), netlist.gates.len() + netlist.inputs.len());
+    assert!(
+        seed.routes().iter().all(|route| route.owner().is_some()),
+        "every extracted route must keep the net that legacy emission assigned it"
+    );
 }
 
 #[test]

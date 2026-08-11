@@ -47,6 +47,8 @@ use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
 use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use crate::redstone::world::storage::World;
 
+use self::planner::{Anchor, RouteTerminalKind};
+
 pub mod equivalence;
 pub mod lowering;
 pub mod physical;
@@ -1149,6 +1151,14 @@ pub enum CompileError {
     CyclicNetlist,
     /// 訊號沒有驅動來源
     UndrivenSignal(String),
+    /// Legacy route metadata assigns a physical cell to the wrong net (or to
+    /// more than one net). This is the reservation/spacing invariant that
+    /// guards the other physical checks' ownership input.
+    SpacingViolation {
+        cell: (i32, i32, i32),
+        expected_net: String,
+        found_net: Option<String>,
+    },
     /// Two nets' routed dust physically joined into one electrical network --
     /// the connectivity invariant `compile` checks right before it would
     /// otherwise return a circuit (see `verify_connectivity`). This is the
@@ -1249,6 +1259,11 @@ impl std::fmt::Display for CompileError {
             ),
             CompileError::CyclicNetlist => write!(f, "netlist has a cycle"),
             CompileError::UndrivenSignal(name) => write!(f, "signal `{name}` is never driven"),
+            CompileError::SpacingViolation { cell, expected_net, found_net } => write!(
+                f,
+                "spacing violation: route metadata assigns {cell:?} to `{expected_net}`, but the reservation records {}",
+                found_net.as_deref().unwrap_or("no net")
+            ),
             CompileError::ConnectivityViolation { cell, found_net, expected_cell, expected_net } => {
                 write!(
                     f,
@@ -1330,6 +1345,65 @@ pub struct CompiledCircuit {
     /// (`LAMP_TURN_ON_DELAY_GAME_TICKS` / `LAMP_TURN_OFF_DELAY_GAME_TICKS`)
     /// is a display convenience, not part of the logic.
     pub gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
+    /// Explicit ownership data recorded while the legacy emitter places the
+    /// world.  This is intentionally not reconstructed from block kinds.
+    legacy_emission: LegacyEmission,
+}
+
+impl CompiledCircuit {
+    pub(crate) fn legacy_emission(&self) -> Option<&LegacyEmission> {
+        Some(&self.legacy_emission)
+    }
+}
+
+/// The legacy emitter's complete, replayable physical realisation.
+#[derive(Debug, Clone)]
+pub(crate) struct LegacyEmission {
+    netlist: Netlist,
+    world: World,
+    reservation: Reservation,
+    nets: Vec<Net>,
+    input_positions: BTreeMap<String, (i32, i32, i32)>,
+    output_positions: BTreeMap<String, (i32, i32, i32)>,
+    gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
+    primitive_anchors: Vec<Anchor>,
+    routes: Vec<LegacyRoute>,
+}
+
+impl LegacyEmission {
+    pub(crate) fn netlist(&self) -> &Netlist {
+        &self.netlist
+    }
+
+    pub(crate) fn primitive_anchors(&self) -> &[Anchor] {
+        &self.primitive_anchors
+    }
+
+    pub(crate) fn routes(&self) -> &[LegacyRoute] {
+        &self.routes
+    }
+}
+
+/// Per-net metadata captured at each legacy routing write.
+#[derive(Debug, Clone)]
+pub(crate) struct LegacyRoute {
+    owner: String,
+    anchors: Vec<Anchor>,
+    terminal_kinds: Vec<RouteTerminalKind>,
+}
+
+impl LegacyRoute {
+    pub(crate) fn owner(&self) -> &str {
+        &self.owner
+    }
+
+    pub(crate) fn anchors(&self) -> &[Anchor] {
+        &self.anchors
+    }
+
+    pub(crate) fn terminal_kinds(&self) -> &[RouteTerminalKind] {
+        &self.terminal_kinds
+    }
 }
 
 /// 把一格地板鋪在 `pos` 正下方，讓紅石粉／拉桿／中繼器能立在上面。
@@ -1460,6 +1534,15 @@ fn bent_path_cells(start: Position, waypoints: &[Position]) -> Vec<Position> {
 enum TerminalKind {
     RepeaterIntoSupport,
     DirectedDustIntoSupport,
+}
+
+impl From<TerminalKind> for RouteTerminalKind {
+    fn from(kind: TerminalKind) -> Self {
+        match kind {
+            TerminalKind::RepeaterIntoSupport => Self::RepeaterIntoSupport,
+            TerminalKind::DirectedDustIntoSupport => Self::DirectedDustIntoSupport,
+        }
+    }
 }
 
 /// One terminal decision for every `nets[net][channel][sink]` socket.
@@ -1752,15 +1835,27 @@ type Reservation = HashMap<Position, usize>;
 struct Footprint {
     reservation: Reservation,
     recording: bool,
+    /// Route cells in the exact ownership context in which `emit` wrote them.
+    /// This deliberately records emitter decisions instead of later inferring
+    /// ownership by inspecting the finished world's blocks.
+    route_anchors: Vec<Vec<Anchor>>,
 }
 
 impl Footprint {
     fn record() -> Self {
-        Footprint { reservation: Reservation::new(), recording: true }
+        Footprint {
+            reservation: Reservation::new(),
+            recording: true,
+            route_anchors: Vec::new(),
+        }
     }
 
     fn enforce(reservation: Reservation) -> Self {
-        Footprint { reservation, recording: false }
+        Footprint {
+            reservation,
+            recording: false,
+            route_anchors: Vec::new(),
+        }
     }
 
     /// Record that `pos` is this net's conductor cell -- dust, a repeater,
@@ -1769,8 +1864,34 @@ impl Footprint {
     /// be discovering new cells at that point, only consulting them.
     fn claim(&mut self, pos: Position, net: usize) {
         if self.recording {
-            self.reservation.insert(pos, net);
+            let previous = self.reservation.insert(pos, net);
+            if previous.is_none() {
+                if self.route_anchors.len() <= net {
+                    self.route_anchors.resize_with(net + 1, Vec::new);
+                }
+                self.route_anchors[net].push(Anchor {
+                    x: pos.x,
+                    y: pos.y,
+                    z: pos.z,
+                });
+            }
         }
+    }
+
+    fn legacy_routes(&self, netlist: &Netlist, nets: &[Net], terminals: &TerminalKinds) -> Vec<LegacyRoute> {
+        nets.iter()
+            .enumerate()
+            .map(|(net, route)| LegacyRoute {
+                owner: net_source_name(netlist, route).to_string(),
+                anchors: self.route_anchors.get(net).cloned().unwrap_or_default(),
+                terminal_kinds: terminals[net]
+                    .iter()
+                    .flatten()
+                    .copied()
+                    .map(RouteTerminalKind::from)
+                    .collect(),
+            })
+            .collect()
     }
 }
 
@@ -2189,6 +2310,7 @@ impl Exit {
 /// `channels`, `tracks` and `sinks` are parallel: entry `i` describes the
 /// net's presence in channel `channels[i]`. `hops[i]` is the feed-through
 /// column that carries it from `channels[i]` to `channels[i + 1]`.
+#[derive(Debug, Clone)]
 struct Net {
     source: Source,
     source_column: i32,
@@ -3211,6 +3333,7 @@ struct EmitResult {
     input_positions: BTreeMap<String, (i32, i32, i32)>,
     output_positions: BTreeMap<String, (i32, i32, i32)>,
     gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
+    primitive_anchors: Vec<Anchor>,
 }
 
 /// Everything the placement/routing stages before `emit` computed about
@@ -3277,11 +3400,17 @@ fn merge_branch_is_bare(netlist: &Netlist, net: &Net, gate: usize) -> bool {
 fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footprint: &mut Footprint) -> EmitResult {
     let RoutingGeometry { plan, row_z, nets, track_z, track_count, bypass, terminals } = *geometry;
     let mut gate_cell: Vec<NorCell> = Vec::with_capacity(netlist.gates.len());
+    let mut primitive_anchors: Vec<Anchor> = Vec::with_capacity(netlist.gates.len() + netlist.inputs.len());
     for _ in 0..netlist.gates.len() {
         gate_cell.push(NorCell { size: (0, 0, 0), input_offsets: Vec::new(), output_offset: (0, 0, 0) });
     }
     for (g, gate) in netlist.gates.iter().enumerate() {
         let origin = (plan.centre_x[g], GATE_Y, row_z[plan.row_of[g]]);
+        primitive_anchors.push(Anchor {
+            x: origin.0,
+            y: origin.1,
+            z: origin.2,
+        });
         gate_cell[g] = if gate.is_merge() {
             place_merge_gate(world, origin, gate.inputs.len())
         } else {
@@ -3294,6 +3423,11 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
     for (i, name) in netlist.inputs.iter().enumerate() {
         let home = Position::new(plan.lever_x[i], GATE_Y, row_z[0]);
         let (lever_pos, pin) = place_primary_input(world, home);
+        primitive_anchors.push(Anchor {
+            x: lever_pos.x,
+            y: lever_pos.y,
+            z: lever_pos.z,
+        });
         input_positions.insert(name.clone(), (lever_pos.x, lever_pos.y, lever_pos.z));
         lever_pin.push(pin);
     }
@@ -3626,7 +3760,12 @@ fn emit(world: &mut World, netlist: &Netlist, geometry: &RoutingGeometry, footpr
         output_positions.insert(output_name.clone(), (lamp_pos.x, lamp_pos.y, lamp_pos.z));
     }
 
-    EmitResult { input_positions, output_positions, gate_output_positions }
+    EmitResult {
+        input_positions,
+        output_positions,
+        gate_output_positions,
+        primitive_anchors,
+    }
 }
 
 /// Whether an already-reserved terminal repeater can safely become dust.
@@ -5261,6 +5400,62 @@ fn verify_signal_strength(
     Ok(())
 }
 
+/// Re-run the physical invariant suite against an already-emitted legacy
+/// candidate. The world and ownership reservation come from the emitter's
+/// metadata; ownership is never guessed by scanning its blocks.
+pub(crate) fn verify_legacy_emission(emission: &LegacyEmission) -> Result<(), CompileError> {
+    verify_spacing(emission)?;
+    verify_connectivity(
+        &emission.world,
+        &emission.reservation,
+        &emission.netlist,
+        &emission.nets,
+        &emission.gate_output_positions,
+    )?;
+    verify_torch_merge(
+        &emission.world,
+        &emission.reservation,
+        &emission.netlist,
+        &emission.nets,
+        &emission.gate_output_positions,
+    )?;
+    verify_signal_strength(
+        &emission.world,
+        &emission.reservation,
+        &emission.netlist,
+        &emission.nets,
+        &emission.gate_output_positions,
+        &emission.input_positions,
+        &emission.output_positions,
+    )
+}
+
+/// The reservation is the legacy router's spacing contract: every conductor
+/// and support cell is explicitly assigned to one net before any world scan.
+fn verify_spacing(emission: &LegacyEmission) -> Result<(), CompileError> {
+    let mut seen: HashMap<Position, String> = HashMap::new();
+    for (net, route) in emission.routes.iter().enumerate() {
+        for anchor in &route.anchors {
+            let position = Position::new(anchor.x, anchor.y, anchor.z);
+            let found_net = emission
+                .reservation
+                .get(&position)
+                .and_then(|owner| emission.nets.get(*owner))
+                .map(|owner| net_source_name(&emission.netlist, owner).to_string());
+            if seen.insert(position, route.owner.clone()).is_some()
+                || emission.reservation.get(&position) != Some(&net)
+            {
+                return Err(CompileError::SpacingViolation {
+                    cell: (position.x, position.y, position.z),
+                    expected_net: route.owner.clone(),
+                    found_net,
+                });
+            }
+        }
+    }
+    Ok(())
+}
+
 /// The `MergeGroups` root that governs `gate`'s own output signal, whether
 /// or not that signal has its own `Net` -- a merge whose output feeds
 /// nothing but a declared circuit output has no `Net` of its own at all
@@ -5399,10 +5594,15 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     emit(&mut scratch, netlist, &geometry, &mut footprint);
     drop(scratch);
 
+    let legacy_routes = footprint.legacy_routes(netlist, &nets, &terminals);
     let mut footprint = Footprint::enforce(footprint.reservation);
     let mut world = World::new(size_x.max(8), size_y, size_z.max(8));
-    let EmitResult { input_positions, output_positions, gate_output_positions } =
-        emit(&mut world, netlist, &geometry, &mut footprint);
+    let EmitResult {
+        input_positions,
+        output_positions,
+        gate_output_positions,
+        primitive_anchors,
+    } = emit(&mut world, netlist, &geometry, &mut footprint);
 
     // The connectivity invariant: whatever the two passes above actually
     // wrote, it must partition into exactly the nets the netlist asked for.
@@ -5433,7 +5633,25 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         &output_positions,
     )?;
 
-    Ok(CompiledCircuit { world, input_positions, output_positions, gate_output_positions })
+    let legacy_emission = LegacyEmission {
+        netlist: netlist.clone(),
+        world: world.clone(),
+        reservation: footprint.reservation.clone(),
+        nets: nets.clone(),
+        input_positions: input_positions.clone(),
+        output_positions: output_positions.clone(),
+        gate_output_positions: gate_output_positions.clone(),
+        primitive_anchors,
+        routes: legacy_routes,
+    };
+
+    Ok(CompiledCircuit {
+        world,
+        input_positions,
+        output_positions,
+        gate_output_positions,
+        legacy_emission,
+    })
 }
 
 #[cfg(test)]
