@@ -12,28 +12,31 @@
 //! placed block, exactly as `topology::Template` describes one gate's own
 //! internal structure.
 //!
-//! # Every edge is signal flow
+//! # Signal edges and stateful control relations
 //!
-//! There is no `EdgeKind` here, and deliberately so: "rigidity" -- the idea
-//! that two primitives must become physical adjacency -- is a realisation
-//! concept, decided by a planner that does not exist yet, never a property
-//! of the signal graph itself (spec: "There are no rigid edges here"). Every
-//! [`Edge`] this module produces is directed the same way, producer to
-//! consumer, and means the same thing: a signal goes from `from` to `to`.
-//! For today's NOR-only library that makes the flat graph isomorphic to the
-//! netlist it expands -- see `topology`'s own doc comment for why that is
-//! the correct, unsurprising state of this layer rather than a sign it is
-//! missing something.
+//! Ordinary [`EdgeKind::Signal`] edges are directed producer-to-consumer
+//! signal flow.  The sole exception is a Design H DFF's
+//! [`EdgeKind::RepeaterLockSide`] relation: it is still directed from its
+//! controlling repeater to the locked data repeater, but it must be realised
+//! at a side port, never as rear-data signal flow.  Rigidity -- physical
+//! adjacency -- remains a planner concern; the typed relation only preserves
+//! the electrical port contract that distinguishes a repeater lock from data.
 
 use std::collections::HashMap;
 
-use super::topology::{GateKind, Library, LibraryEntry, Primitive, TemplateNode};
+use super::topology::{
+    GateKind, Library, LibraryEntry, Primitive, StatefulPrimitiveRole, StatefulTopology,
+    TemplateNode,
+};
 use super::Netlist;
 
 /// Index into `PrimitiveGraph::nodes`. Stable for the lifetime of one
 /// `PrimitiveGraph` -- nothing in this module ever removes a node, so an id
 /// handed out earlier stays valid until the graph itself is dropped.
 pub type NodeId = usize;
+
+/// Index into [`PrimitiveGraph::edges`].
+pub type EdgeId = usize;
 
 /// Where one node of the flat graph came from -- what lets a region be
 /// re-expanded later without rebuilding the rest of the graph (spec: "The
@@ -62,15 +65,51 @@ pub enum Provenance {
 pub struct Node {
     pub primitive: Primitive,
     pub provenance: Provenance,
+    /// `Some` only for a node owned by a stateful macro.  `provenance` still
+    /// gives every node its gate index; this field preserves the Design H
+    /// role without overloading a combinational template role.
+    pub stateful_role: Option<StatefulPrimitiveRole>,
 }
 
-/// One edge of the flat graph: a signal from `from` to `to`, and nothing
-/// else -- see this module's doc comment for why there is no `kind` field
-/// any more.
-#[derive(Debug)]
+/// How two primitives are related.  A lock-side relation is intentionally
+/// not an ordinary signal input: a realiser must attach it to a repeater's
+/// side port rather than its rear data port.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EdgeKind {
+    Signal,
+    RepeaterLockSide,
+}
+
+/// One relation of the flat primitive graph.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Edge {
     pub from: NodeId,
     pub to: NodeId,
+    pub kind: EdgeKind,
+}
+
+/// One instantiated stateful macro.  Its node and edge ids refer directly
+/// into the owning [`PrimitiveGraph`], so the graph has one source of truth
+/// for every relationship while consumers can still recognise the DFF as a
+/// single region.
+#[derive(Debug)]
+pub struct StatefulRegion {
+    pub gate: usize,
+    pub d_landing: NodeId,
+    pub clock_landing: NodeId,
+    pub q_contributor: NodeId,
+    pub primitives: Vec<NodeId>,
+    pub ordinary_edges: Vec<EdgeId>,
+    pub lock_side_relations: Vec<EdgeId>,
+    roles: Vec<(StatefulPrimitiveRole, NodeId)>,
+}
+
+impl StatefulRegion {
+    pub fn node_for(&self, role: StatefulPrimitiveRole) -> Option<NodeId> {
+        self.roles
+            .iter()
+            .find_map(|&(candidate, node)| (candidate == role).then_some(node))
+    }
 }
 
 /// One flat graph of primitives for a whole circuit -- the output of
@@ -108,6 +147,8 @@ pub struct PrimitiveGraph {
     /// consumer may rely on is that every element indexes a real node, and
     /// that a gate driving a declared output has at least one.
     pub output_nodes: Vec<Vec<NodeId>>,
+    /// Every stateful macro expanded from a sequential netlist gate.
+    pub stateful_regions: Vec<StatefulRegion>,
 }
 
 impl PrimitiveGraph {
@@ -117,17 +158,43 @@ impl PrimitiveGraph {
             edges: Vec::new(),
             gate_nodes: vec![Vec::new(); gate_count],
             output_nodes: vec![Vec::new(); gate_count],
+            stateful_regions: Vec::new(),
         }
     }
 
     fn push_node(&mut self, primitive: Primitive, provenance: Provenance) -> NodeId {
         let id = self.nodes.len();
-        self.nodes.push(Node { primitive, provenance });
+        self.nodes.push(Node {
+            primitive,
+            provenance,
+            stateful_role: None,
+        });
         id
     }
 
-    fn push_edge(&mut self, from: NodeId, to: NodeId) {
-        self.edges.push(Edge { from, to });
+    fn push_stateful_node(
+        &mut self,
+        primitive: Primitive,
+        provenance: Provenance,
+        role: StatefulPrimitiveRole,
+    ) -> NodeId {
+        let id = self.nodes.len();
+        self.nodes.push(Node {
+            primitive,
+            provenance,
+            stateful_role: Some(role),
+        });
+        id
+    }
+
+    fn push_edge(&mut self, from: NodeId, to: NodeId) -> EdgeId {
+        self.push_edge_kind(from, to, EdgeKind::Signal)
+    }
+
+    fn push_edge_kind(&mut self, from: NodeId, to: NodeId, kind: EdgeKind) -> EdgeId {
+        let id = self.edges.len();
+        self.edges.push(Edge { from, to, kind });
+        id
     }
 
     /// Every edge whose `from` is `node`.
@@ -205,8 +272,13 @@ impl std::error::Error for ExpandError {}
 /// name a real output primitive -- a wire-merge `Or` entry (which may have
 /// none, see `or_bare_entry`'s own doc comment) goes through
 /// [`expand`]'s own merge-specific branch instead, never through here.
-fn instantiate(graph: &mut PrimitiveGraph, gate: usize, entry: &LibraryEntry) -> (NodeId, Vec<NodeId>) {
-    let mut id_of: HashMap<TemplateNode, NodeId> = HashMap::with_capacity(entry.template.nodes.len());
+fn instantiate(
+    graph: &mut PrimitiveGraph,
+    gate: usize,
+    entry: &LibraryEntry,
+) -> (NodeId, Vec<NodeId>) {
+    let mut id_of: HashMap<TemplateNode, NodeId> =
+        HashMap::with_capacity(entry.template.nodes.len());
     let mut instance_nodes = Vec::with_capacity(entry.template.nodes.len());
 
     for &(role, primitive) in &entry.template.nodes {
@@ -220,13 +292,84 @@ fn instantiate(graph: &mut PrimitiveGraph, gate: usize, entry: &LibraryEntry) ->
 
     graph.gate_nodes[gate] = instance_nodes;
 
-    let output = entry
+    let output = entry.template.output.map(|role| id_of[&role]).expect(
+        "instantiate only ever runs on a Nor/Buf entry, which always names a real output primitive",
+    );
+    let inputs: Vec<NodeId> = entry
         .template
-        .output
-        .map(|role| id_of[&role])
-        .expect("instantiate only ever runs on a Nor/Buf entry, which always names a real output primitive");
-    let inputs: Vec<NodeId> = entry.template.inputs.iter().map(|role| id_of[role]).collect();
+        .inputs
+        .iter()
+        .map(|role| id_of[role])
+        .collect();
     (output, inputs)
+}
+
+/// The only reuse of [`TemplateNode`] inside a stateful macro is for the
+/// stable, gate-indexed provenance identifier already understood by older
+/// graph consumers.  The semantic role is carried separately in
+/// [`Node::stateful_role`], so these identifiers never claim Design H is a
+/// combinational template or an isolated merge.
+fn stateful_provenance_role(role: StatefulPrimitiveRole) -> TemplateNode {
+    match role {
+        StatefulPrimitiveRole::MData => TemplateNode::Torch,
+        StatefulPrimitiveRole::SData => TemplateNode::SecondTorch,
+        StatefulPrimitiveRole::MLock => TemplateNode::IsolatingRepeater(0),
+        StatefulPrimitiveRole::InvC => TemplateNode::IsolatingRepeater(1),
+        StatefulPrimitiveRole::SLock => TemplateNode::IsolatingRepeater(2),
+    }
+}
+
+/// Instantiate the fixed stateful portion of Design H.  External D/C edges
+/// are attached afterwards, once every gate has published its Q contributor;
+/// this is what permits feedback paths that cross a DFF boundary.
+fn instantiate_stateful(
+    graph: &mut PrimitiveGraph,
+    gate: usize,
+    entry: &StatefulTopology,
+) -> StatefulRegion {
+    let mut roles = Vec::with_capacity(entry.nodes.len());
+    let mut primitives = Vec::with_capacity(entry.nodes.len());
+    for &(role, primitive) in &entry.nodes {
+        let node = graph.push_stateful_node(
+            primitive,
+            Provenance::Gate {
+                gate,
+                role: stateful_provenance_role(role),
+            },
+            role,
+        );
+        roles.push((role, node));
+        primitives.push(node);
+    }
+    let node_for = |role| {
+        roles
+            .iter()
+            .find_map(|&(candidate, node)| (candidate == role).then_some(node))
+            .expect("a stateful topology relation names one of its nodes")
+    };
+    let mut ordinary_edges = Vec::new();
+    for &(from, to) in &entry.signal_edges {
+        ordinary_edges.push(graph.push_edge(node_for(from), node_for(to)));
+    }
+    let mut lock_side_relations = Vec::new();
+    for &(from, to) in &entry.repeater_lock_sides {
+        lock_side_relations.push(graph.push_edge_kind(
+            node_for(from),
+            node_for(to),
+            EdgeKind::RepeaterLockSide,
+        ));
+    }
+
+    StatefulRegion {
+        gate,
+        d_landing: node_for(entry.d_landing),
+        clock_landing: node_for(entry.clock_landing),
+        q_contributor: node_for(entry.q_contributor),
+        primitives,
+        ordinary_edges,
+        lock_side_relations,
+        roles,
+    }
 }
 
 /// Substitute each gate in `netlist` for its `library` entry and stitch the
@@ -318,7 +461,10 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
     // can look it up.
     let mut lever_of: HashMap<&str, NodeId> = HashMap::with_capacity(netlist.inputs.len());
     for name in &netlist.inputs {
-        let id = graph.push_node(Primitive::Lever, Provenance::PrimaryInput { name: name.clone() });
+        let id = graph.push_node(
+            Primitive::Lever,
+            Provenance::PrimaryInput { name: name.clone() },
+        );
         lever_of.insert(name.as_str(), id);
     }
 
@@ -336,10 +482,15 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
             consumers_of.entry(input.as_str()).or_default().push(g);
         }
     }
-    let branch_is_bare =
-        |signal: &str, into_gate: usize| consumers_of.get(signal).is_some_and(|gs| gs.iter().all(|&g| g == into_gate));
+    let branch_is_bare = |signal: &str, into_gate: usize| {
+        consumers_of
+            .get(signal)
+            .is_some_and(|gs| gs.iter().all(|&g| g == into_gate))
+    };
 
-    let order = netlist.topological_order().ok_or(ExpandError::CyclicNetlist)?;
+    let order = netlist
+        .combinational_order()
+        .ok_or(ExpandError::CyclicNetlist)?;
 
     // Every gate's own contribution set -- see this function's own doc
     // comment for why this is `Vec<NodeId>` per gate rather than one
@@ -348,11 +499,33 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
     // `graph` is being mutated; it is moved into the graph verbatim once the
     // loop is done (see `PrimitiveGraph::output_nodes`).
     let mut output_of: Vec<Vec<NodeId>> = vec![Vec::new(); netlist.gates.len()];
+    // A DFF publishes Q before its D cone is processed.  Defer only the
+    // external D/C attachments, so a legal q -> combinational logic -> D
+    // feedback path can still resolve after all contributors exist.
+    let mut pending_stateful_inputs: Vec<(usize, String, String)> = Vec::new();
 
     for g in order {
         let gate = &netlist.gates[g];
 
-        if gate.is_merge() {
+        if gate.kind == GateKind::DffPosedge {
+            let entry =
+                library
+                    .stateful_entry(gate.kind)
+                    .ok_or_else(|| ExpandError::NoLibraryEntry {
+                        gate: gate.output.clone(),
+                        arity: gate.inputs.len(),
+                    })?;
+            let region = instantiate_stateful(&mut graph, g, entry);
+            graph.gate_nodes[g] = region.primitives.clone();
+            output_of[g] = vec![region.q_contributor];
+            let region_index = graph.stateful_regions.len();
+            graph.stateful_regions.push(region);
+            pending_stateful_inputs.push((
+                region_index,
+                gate.inputs[0].clone(),
+                gate.inputs[1].clone(),
+            ));
+        } else if gate.is_merge() {
             let mut contributions: Vec<NodeId> = Vec::new();
             let mut owned_nodes: Vec<NodeId> = Vec::new();
 
@@ -364,7 +537,8 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
                     contributions.extend(producer);
                 } else {
                     let role = TemplateNode::IsolatingRepeater(index);
-                    let repeater = graph.push_node(Primitive::Repeater, Provenance::Gate { gate: g, role });
+                    let repeater =
+                        graph.push_node(Primitive::Repeater, Provenance::Gate { gate: g, role });
                     for from in producer {
                         graph.push_edge(from, repeater);
                     }
@@ -377,13 +551,19 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
             output_of[g] = contributions;
         } else {
             if gate.kind != GateKind::Nor(gate.inputs.len()) {
-                return Err(ExpandError::NotRealisable { gate: gate.output.clone(), kind: gate.kind });
+                return Err(ExpandError::NotRealisable {
+                    gate: gate.output.clone(),
+                    kind: gate.kind,
+                });
             }
             let arity = gate.inputs.len();
             let kind = GateKind::Nor(arity);
             let entry = library
                 .choose(kind)
-                .ok_or_else(|| ExpandError::NoLibraryEntry { gate: gate.output.clone(), arity })?;
+                .ok_or_else(|| ExpandError::NoLibraryEntry {
+                    gate: gate.output.clone(),
+                    arity,
+                })?;
             let (output, input_targets) = instantiate(&mut graph, g, entry);
 
             for (index, input_name) in gate.inputs.iter().enumerate() {
@@ -398,6 +578,37 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
         }
     }
 
+    for (region_index, data_input, clock_input) in pending_stateful_inputs {
+        let (d_landing, clock_landing, inverted_clock) = {
+            let region = &graph.stateful_regions[region_index];
+            (
+                region.d_landing,
+                region.clock_landing,
+                region
+                    .node_for(StatefulPrimitiveRole::InvC)
+                    .expect("Design H includes INV_C"),
+            )
+        };
+        let data_producers = resolve_producer(&data_input, &lever_of, &producer_of, &output_of)
+            .ok_or_else(|| ExpandError::UndrivenSignal(data_input.clone()))?;
+        let clock_producers = resolve_producer(&clock_input, &lever_of, &producer_of, &output_of)
+            .ok_or_else(|| ExpandError::UndrivenSignal(clock_input.clone()))?;
+
+        for from in data_producers {
+            let edge = graph.push_edge(from, d_landing);
+            graph.stateful_regions[region_index]
+                .ordinary_edges
+                .push(edge);
+        }
+        for from in clock_producers {
+            let direct_clock_edge = graph.push_edge(from, clock_landing);
+            let inverted_clock_edge = graph.push_edge(from, inverted_clock);
+            graph.stateful_regions[region_index]
+                .ordinary_edges
+                .extend([direct_clock_edge, inverted_clock_edge]);
+        }
+    }
+
     graph.output_nodes = output_of.clone();
 
     // One edge per declared output, from *every* one of its driving gate's
@@ -406,7 +617,12 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
         let &g = producer_of
             .get(output_name.as_str())
             .ok_or_else(|| ExpandError::UndrivenSignal(output_name.clone()))?;
-        let lamp = graph.push_node(Primitive::Lamp, Provenance::PrimaryOutput { name: output_name.clone() });
+        let lamp = graph.push_node(
+            Primitive::Lamp,
+            Provenance::PrimaryOutput {
+                name: output_name.clone(),
+            },
+        );
         for &from in &output_of[g] {
             graph.push_edge(from, lamp);
         }
@@ -446,7 +662,170 @@ mod tests {
     }
 
     fn merge(output: &str, inputs: &[&str]) -> Gate {
-        Gate { kind: GateKind::Or(inputs.len()), ..gate(output, inputs) }
+        Gate {
+            kind: GateKind::Or(inputs.len()),
+            ..gate(output, inputs)
+        }
+    }
+
+    fn dff(output: &str, data: &str, clock: &str) -> Gate {
+        Gate {
+            name: output.to_string(),
+            inputs: vec![data.to_string(), clock.to_string()],
+            output: output.to_string(),
+            kind: GateKind::DffPosedge,
+        }
+    }
+
+    #[test]
+    fn primitive_graph_accepts_design_h_dff() {
+        // d = !q; q captures d on the clock edge.  The feedback is legal
+        // because it crosses the DFF's state boundary, not a combinational
+        // loop.
+        let netlist = Netlist {
+            inputs: vec!["clk".to_string()],
+            outputs: vec!["q".to_string()],
+            gates: vec![gate("d", &["q"]), dff("q", "d", "clk")],
+        };
+        let graph = expand(&netlist, &Library::default_library())
+            .expect("a Design H DFF is a realisable stateful region");
+
+        let region = graph
+            .stateful_regions
+            .iter()
+            .find(|region| region.gate == 1)
+            .expect("DFF region");
+        assert_eq!(
+            graph.nodes[region.d_landing].stateful_role,
+            Some(StatefulPrimitiveRole::MData)
+        );
+        assert_eq!(
+            graph.nodes[region.clock_landing].stateful_role,
+            Some(StatefulPrimitiveRole::MLock)
+        );
+        assert_eq!(
+            graph.nodes[region.q_contributor].stateful_role,
+            Some(StatefulPrimitiveRole::SData)
+        );
+        assert_eq!(
+            region.primitives.len(),
+            5,
+            "Design H owns four repeaters and INV_C"
+        );
+
+        for (role, primitive) in [
+            (StatefulPrimitiveRole::MData, Primitive::Repeater),
+            (StatefulPrimitiveRole::SData, Primitive::Repeater),
+            (StatefulPrimitiveRole::MLock, Primitive::Repeater),
+            (StatefulPrimitiveRole::InvC, Primitive::Torch),
+            (StatefulPrimitiveRole::SLock, Primitive::Repeater),
+        ] {
+            let node = region
+                .primitives
+                .iter()
+                .copied()
+                .find(|&node| graph.nodes[node].stateful_role == Some(role))
+                .unwrap_or_else(|| panic!("missing {role:?}"));
+            assert_eq!(graph.nodes[node].primitive, primitive, "{role:?}");
+        }
+
+        let m_data = region
+            .node_for(StatefulPrimitiveRole::MData)
+            .expect("M_DATA");
+        let s_data = region
+            .node_for(StatefulPrimitiveRole::SData)
+            .expect("S_DATA");
+        let m_lock = region
+            .node_for(StatefulPrimitiveRole::MLock)
+            .expect("M_LOCK");
+        let inv_c = region.node_for(StatefulPrimitiveRole::InvC).expect("INV_C");
+        let s_lock = region
+            .node_for(StatefulPrimitiveRole::SLock)
+            .expect("S_LOCK");
+        let d_source = graph.gate_nodes[0][0];
+        let clock_source = graph
+            .nodes
+            .iter()
+            .position(|node| matches!(&node.provenance, Provenance::PrimaryInput { name } if name == "clk"))
+            .expect("clock lever");
+        assert!(
+            graph.edges.iter().any(|edge| edge.kind == EdgeKind::Signal
+                && edge.from == d_source
+                && edge.to == m_data),
+            "D feeds M_DATA"
+        );
+        assert!(
+            graph.edges.iter().any(|edge| edge.kind == EdgeKind::Signal
+                && edge.from == m_data
+                && edge.to == s_data),
+            "M_DATA feeds S_DATA"
+        );
+        assert!(
+            graph.edges.iter().any(|edge| edge.kind == EdgeKind::Signal
+                && edge.from == region.q_contributor
+                && edge.to == d_source),
+            "Q feeds d"
+        );
+        assert!(
+            graph.edges.iter().any(|edge| edge.kind == EdgeKind::Signal
+                && edge.from == clock_source
+                && edge.to == m_lock),
+            "C feeds M_LOCK"
+        );
+        assert!(
+            graph.edges.iter().any(|edge| edge.kind == EdgeKind::Signal
+                && edge.from == clock_source
+                && edge.to == inv_c),
+            "C feeds INV_C"
+        );
+        assert!(
+            graph.edges.iter().any(|edge| edge.kind == EdgeKind::Signal
+                && edge.from == inv_c
+                && edge.to == s_lock),
+            "INV_C feeds S_LOCK"
+        );
+        assert_eq!(
+            graph
+                .edges
+                .iter()
+                .filter(|edge| edge.kind == EdgeKind::RepeaterLockSide)
+                .map(|edge| (edge.from, edge.to))
+                .collect::<Vec<_>>(),
+            vec![(m_lock, m_data), (s_lock, s_data)],
+            "only the two repeater side-lock relations are typed control edges"
+        );
+        assert_eq!(
+            region.lock_side_relations.len(),
+            2,
+            "the region retains both typed control relations"
+        );
+        assert!(region
+            .lock_side_relations
+            .iter()
+            .all(|&edge| graph.edges[edge].kind == EdgeKind::RepeaterLockSide));
+        assert!(
+            !graph.edges.iter().any(|edge| {
+                edge.kind == EdgeKind::Signal
+                    && ((edge.from == m_lock && edge.to == m_data)
+                        || (edge.from == s_lock && edge.to == s_data))
+            }),
+            "lock controls must never masquerade as ordinary rear-data signal edges"
+        );
+    }
+
+    #[test]
+    fn primitive_graph_rejects_combinational_cycle() {
+        let netlist = Netlist {
+            inputs: vec![],
+            outputs: vec!["a".to_string()],
+            gates: vec![gate("a", &["b"]), gate("b", &["a"])],
+        };
+
+        assert_eq!(
+            expand(&netlist, &Library::default_library())
+                .expect_err("pure combinational feedback is illegal"),
+            ExpandError::CyclicNetlist
+        );
     }
 
     /// For a NOR gate, "which nodes does this gate own" and "which nodes
@@ -454,12 +833,18 @@ mod tests {
     /// `output_nodes` adds nothing for a NOR-only netlist, and says so.
     #[test]
     fn a_nor_gates_output_nodes_row_is_exactly_its_own_torch() {
-        let netlist =
-            Netlist { inputs: vec!["a".to_string()], outputs: vec!["g0".to_string()], gates: vec![gate("g0", &["a"])] };
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["g0".to_string()],
+            gates: vec![gate("g0", &["a"])],
+        };
         let graph = expand(&netlist, &Library::default_library()).expect("valid netlist");
         assert_eq!(graph.output_nodes, graph.gate_nodes);
         assert_eq!(graph.output_nodes[0].len(), 1);
-        assert_eq!(graph.nodes[graph.output_nodes[0][0]].primitive, Primitive::Torch);
+        assert_eq!(
+            graph.nodes[graph.output_nodes[0][0]].primitive,
+            Primitive::Torch
+        );
     }
 
     /// A merge whose every branch is bare owns no primitive at all, so
@@ -474,11 +859,18 @@ mod tests {
         let netlist = Netlist {
             inputs: vec!["a".to_string(), "b".to_string()],
             outputs: vec!["m".to_string()],
-            gates: vec![gate("g0", &["a"]), gate("g1", &["b"]), merge("m", &["g0", "g1"])],
+            gates: vec![
+                gate("g0", &["a"]),
+                gate("g1", &["b"]),
+                merge("m", &["g0", "g1"]),
+            ],
         };
         let graph = expand(&netlist, &Library::default_library()).expect("valid netlist");
 
-        assert!(graph.gate_nodes[2].is_empty(), "an all-bare merge instantiates no primitive");
+        assert!(
+            graph.gate_nodes[2].is_empty(),
+            "an all-bare merge instantiates no primitive"
+        );
         assert_eq!(
             graph.output_nodes[2],
             vec![graph.gate_nodes[0][0], graph.gate_nodes[1][0]],
@@ -497,11 +889,20 @@ mod tests {
         let netlist = Netlist {
             inputs: vec!["a".to_string(), "b".to_string()],
             outputs: vec!["m".to_string(), "g2".to_string()],
-            gates: vec![gate("g0", &["a"]), gate("g1", &["b"]), merge("m", &["g0", "g1"]), gate("g2", &["g0"])],
+            gates: vec![
+                gate("g0", &["a"]),
+                gate("g1", &["b"]),
+                merge("m", &["g0", "g1"]),
+                gate("g2", &["g0"]),
+            ],
         };
         let graph = expand(&netlist, &Library::default_library()).expect("valid netlist");
 
-        assert_eq!(graph.gate_nodes[2].len(), 1, "only the isolated branch's repeater belongs to the merge");
+        assert_eq!(
+            graph.gate_nodes[2].len(),
+            1,
+            "only the isolated branch's repeater belongs to the merge"
+        );
         let repeater = graph.gate_nodes[2][0];
         assert_eq!(graph.nodes[repeater].primitive, Primitive::Repeater);
         assert_eq!(
@@ -513,23 +914,49 @@ mod tests {
 
     #[test]
     fn expanding_a_single_not_gate_yields_one_lever_one_torch_one_lamp_and_two_edges() {
-        let netlist =
-            Netlist { inputs: vec!["a".to_string()], outputs: vec!["g0".to_string()], gates: vec![gate("g0", &["a"])] };
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["g0".to_string()],
+            gates: vec![gate("g0", &["a"])],
+        };
         let library = Library::default_library();
         let graph = expand(&netlist, &library).expect("a 1-input NOR has a library entry");
 
         let primitives: Vec<Primitive> = graph.nodes.iter().map(|n| n.primitive).collect();
-        assert_eq!(primitives.iter().filter(|&&p| p == Primitive::Lever).count(), 1);
-        assert_eq!(primitives.iter().filter(|&&p| p == Primitive::Torch).count(), 1);
-        assert_eq!(primitives.iter().filter(|&&p| p == Primitive::Lamp).count(), 1);
-        assert_eq!(graph.nodes.len(), 3, "no Support, no per-input Repeater any more");
+        assert_eq!(
+            primitives
+                .iter()
+                .filter(|&&p| p == Primitive::Lever)
+                .count(),
+            1
+        );
+        assert_eq!(
+            primitives
+                .iter()
+                .filter(|&&p| p == Primitive::Torch)
+                .count(),
+            1
+        );
+        assert_eq!(
+            primitives.iter().filter(|&&p| p == Primitive::Lamp).count(),
+            1
+        );
+        assert_eq!(
+            graph.nodes.len(),
+            3,
+            "no Support, no per-input Repeater any more"
+        );
 
         // Lever->Torch, Torch->Lamp: exactly the netlist's own two edges,
         // nothing else.
         assert_eq!(graph.edges.len(), 2);
 
         assert_eq!(graph.gate_nodes.len(), 1);
-        assert_eq!(graph.gate_nodes[0].len(), 1, "a NOR gate is one node: its torch");
+        assert_eq!(
+            graph.gate_nodes[0].len(),
+            1,
+            "a NOR gate is one node: its torch"
+        );
     }
 
     #[test]
@@ -540,14 +967,24 @@ mod tests {
         let netlist = Netlist {
             inputs: vec!["a".to_string()],
             outputs: vec!["g1".to_string(), "g2".to_string()],
-            gates: vec![gate("g0", &["a"]), gate("g1", &["g0"]), gate("g2", &["g0", "a"])],
+            gates: vec![
+                gate("g0", &["a"]),
+                gate("g1", &["g0"]),
+                gate("g2", &["g0", "a"]),
+            ],
         };
         let library = Library::default_library();
         let graph = expand(&netlist, &library).expect("every gate here has 1 or 2 inputs");
 
         let g0_torch = graph.gate_nodes[0][0];
         assert!(
-            matches!(&graph.nodes[g0_torch].provenance, Provenance::Gate { gate: 0, role: TemplateNode::Torch }),
+            matches!(
+                &graph.nodes[g0_torch].provenance,
+                Provenance::Gate {
+                    gate: 0,
+                    role: TemplateNode::Torch
+                }
+            ),
             "gate 0 is a single Torch node"
         );
         // g0 is not itself a declared output, so its torch gets no lamp
@@ -560,8 +997,11 @@ mod tests {
     #[test]
     fn expand_rejects_a_gate_with_no_library_entry_for_its_arity() {
         use std::collections::BTreeMap;
-        let netlist =
-            Netlist { inputs: vec!["a".to_string()], outputs: vec![], gates: vec![gate("g0", &["a", "b", "c", "d"])] };
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec![],
+            gates: vec![gate("g0", &["a", "b", "c", "d"])],
+        };
         // A library that only knows about arity 1..=3, same shape as
         // `Library::default_library` but built directly so this test does
         // not depend on that constructor's own arity range.
@@ -573,13 +1013,22 @@ mod tests {
 
         // "b", "c", "d" are undriven too, but arity is checked first.
         let err = expand(&netlist, &library).expect_err("fan-in 4 has no entry");
-        assert_eq!(err, ExpandError::NoLibraryEntry { gate: "g0".to_string(), arity: 4 });
+        assert_eq!(
+            err,
+            ExpandError::NoLibraryEntry {
+                gate: "g0".to_string(),
+                arity: 4
+            }
+        );
     }
 
     #[test]
     fn expand_rejects_an_undriven_input() {
-        let netlist =
-            Netlist { inputs: vec![], outputs: vec![], gates: vec![gate("g0", &["nowhere"])] };
+        let netlist = Netlist {
+            inputs: vec![],
+            outputs: vec![],
+            gates: vec![gate("g0", &["nowhere"])],
+        };
         let library = Library::default_library();
         let err = expand(&netlist, &library).expect_err("`nowhere` drives nothing");
         assert_eq!(err, ExpandError::UndrivenSignal("nowhere".to_string()));
@@ -595,7 +1044,11 @@ mod tests {
         let netlist = Netlist {
             inputs: vec!["a".to_string(), "b".to_string()],
             outputs: vec!["g2".to_string()],
-            gates: vec![gate("g0", &["a"]), gate("g1", &["b"]), gate("g2", &["g0", "g1"])],
+            gates: vec![
+                gate("g0", &["a"]),
+                gate("g1", &["b"]),
+                gate("g2", &["g0", "g1"]),
+            ],
         };
         let library = Library::default_library();
         let graph = expand(&netlist, &library).expect("valid netlist");

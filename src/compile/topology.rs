@@ -248,9 +248,7 @@ impl GateKind {
             | GateKind::Xnor
             | GateKind::AndNot
             | GateKind::OrNot
-            | GateKind::DffPosedge => {
-                Some(2)
-            }
+            | GateKind::DffPosedge => Some(2),
             GateKind::Aoi3 | GateKind::Oai3 | GateKind::Mux | GateKind::Nmux => Some(3),
             GateKind::Aoi4 | GateKind::Oai4 => Some(4),
         }
@@ -260,7 +258,9 @@ impl GateKind {
     pub fn arity(self) -> usize {
         match self {
             GateKind::Nor(arity) | GateKind::Or(arity) => arity,
-            other => other.fixed_arity().expect("every non-Nor/Or kind is fixed-arity"),
+            other => other
+                .fixed_arity()
+                .expect("every non-Nor/Or kind is fixed-arity"),
         }
     }
 
@@ -358,7 +358,12 @@ impl GateKind {
     ///
     /// Panics if `inputs.len()` disagrees with [`GateKind::arity`].
     pub fn evaluate(self, inputs: &[bool]) -> bool {
-        assert_eq!(inputs.len(), self.arity(), "{self:?} takes {} input(s)", self.arity());
+        assert_eq!(
+            inputs.len(),
+            self.arity(),
+            "{self:?} takes {} input(s)",
+            self.arity()
+        );
         match self {
             GateKind::Nor(_) => !inputs.iter().any(|&b| b),
             GateKind::Or(_) => inputs.iter().any(|&b| b),
@@ -381,13 +386,7 @@ impl GateKind {
                     inputs[0]
                 }
             }
-            GateKind::Nmux => {
-                !(if inputs[2] {
-                    inputs[1]
-                } else {
-                    inputs[0]
-                })
-            }
+            GateKind::Nmux => !(if inputs[2] { inputs[1] } else { inputs[0] }),
             GateKind::DffPosedge => panic!("a DFF needs its previous state and a clock transition"),
         }
     }
@@ -459,7 +458,10 @@ const YOSYS_CELL_KINDS: &[(&str, GateKind)] = &[
 /// than a silent skip (a dropped cell is a netlist that still compiles, to
 /// the wrong circuit).
 pub fn gate_kind_for_yosys_cell(cell_type: &str) -> Option<GateKind> {
-    YOSYS_CELL_KINDS.iter().find(|&&(name, _)| name == cell_type).map(|&(_, kind)| kind)
+    YOSYS_CELL_KINDS
+        .iter()
+        .find(|&&(name, _)| name == cell_type)
+        .map(|&(_, kind)| kind)
 }
 
 /// Every Yosys cell type [`gate_kind_for_yosys_cell`] knows, for tests and
@@ -495,6 +497,32 @@ pub enum TemplateNode {
     /// another would mean two branches sharing one repeater's single input
     /// face, which is not a real technique.
     IsolatingRepeater(usize),
+}
+
+/// The fixed roles inside the Design H positive-edge DFF.  These names are
+/// deliberately about the stateful macro rather than a placement: a planner
+/// may rotate the complete macro, but may not rewire these relations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum StatefulPrimitiveRole {
+    MData,
+    SData,
+    MLock,
+    InvC,
+    SLock,
+}
+
+/// A positionless stateful macro topology.  `signal_edges` are ordinary
+/// producer-to-consumer signal flow; `repeater_lock_sides` are control
+/// relations that must terminate at the target repeater's side, never at its
+/// rear data input.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StatefulTopology {
+    pub nodes: Vec<(StatefulPrimitiveRole, Primitive)>,
+    pub signal_edges: Vec<(StatefulPrimitiveRole, StatefulPrimitiveRole)>,
+    pub repeater_lock_sides: Vec<(StatefulPrimitiveRole, StatefulPrimitiveRole)>,
+    pub d_landing: StatefulPrimitiveRole,
+    pub clock_landing: StatefulPrimitiveRole,
+    pub q_contributor: StatefulPrimitiveRole,
 }
 
 /// A relational preference between two of a template's own nodes --
@@ -590,6 +618,7 @@ pub struct LibraryEntry {
 /// alternatives actually exist yet.
 pub struct Library {
     entries: BTreeMap<GateKind, Vec<LibraryEntry>>,
+    stateful_entries: BTreeMap<GateKind, StatefulTopology>,
 }
 
 impl Library {
@@ -598,7 +627,10 @@ impl Library {
     /// library (e.g. to exercise `primitive_graph::ExpandError`); real
     /// callers want [`Library::default_library`].
     pub fn new(entries: BTreeMap<GateKind, Vec<LibraryEntry>>) -> Self {
-        Library { entries }
+        Library {
+            entries,
+            stateful_entries: BTreeMap::new(),
+        }
     }
 
     /// Today's library: one entry per NOR arity this compiler ever places
@@ -614,14 +646,22 @@ impl Library {
     /// bare vs. isolated per branch, per gate instance).
     pub fn default_library() -> Self {
         let mut entries = BTreeMap::new();
+        let mut stateful_entries = BTreeMap::new();
         for arity in 1..=3 {
             entries.insert(GateKind::Nor(arity), vec![nor_entry(arity)]);
         }
         entries.insert(GateKind::Buf, vec![buf_entry()]);
         for arity in 2..=3 {
-            entries.insert(GateKind::Or(arity), vec![or_bare_entry(arity), or_isolated_entry(arity)]);
+            entries.insert(
+                GateKind::Or(arity),
+                vec![or_bare_entry(arity), or_isolated_entry(arity)],
+            );
         }
-        Library { entries }
+        stateful_entries.insert(GateKind::DffPosedge, dff_design_h_topology());
+        Library {
+            entries,
+            stateful_entries,
+        }
     }
 
     /// Every technique known for `kind`, in the order they were registered.
@@ -641,6 +681,36 @@ impl Library {
     pub fn choose(&self, kind: GateKind) -> Option<&LibraryEntry> {
         self.entries_for(kind).first()
     }
+
+    /// The fixed stateful topology for `kind`, if this library knows one.
+    /// Stateful entries intentionally do not appear in [`Self::entries_for`]:
+    /// they are not interchangeable combinational templates and cannot be
+    /// instantiated through a rear-input-only interface.
+    pub fn stateful_entry(&self, kind: GateKind) -> Option<&StatefulTopology> {
+        self.stateful_entries.get(&kind)
+    }
+}
+
+/// Design H: a master/slave DFF made of two data repeaters, two locking
+/// repeaters, and an inverted clock.  The two side-lock relationships are
+/// typed separately so no later phase can route them as ordinary data wires.
+fn dff_design_h_topology() -> StatefulTopology {
+    use StatefulPrimitiveRole::{InvC, MData, MLock, SData, SLock};
+
+    StatefulTopology {
+        nodes: vec![
+            (MData, Primitive::Repeater),
+            (SData, Primitive::Repeater),
+            (MLock, Primitive::Repeater),
+            (InvC, Primitive::Torch),
+            (SLock, Primitive::Repeater),
+        ],
+        signal_edges: vec![(MData, SData), (InvC, SLock)],
+        repeater_lock_sides: vec![(MLock, MData), (SLock, SData)],
+        d_landing: MData,
+        clock_landing: MLock,
+        q_contributor: SData,
+    }
 }
 
 /// The one technique this library ships for an `arity`-input NOR: a single
@@ -651,7 +721,10 @@ impl Library {
 /// doc comment) -- it is the gate's signal flow and nothing else: `n`
 /// inbound edges, one outbound.
 fn nor_entry(arity: usize) -> LibraryEntry {
-    assert!((1..=3).contains(&arity), "a NOR gate's fan-in is 1..=3, got {arity}");
+    assert!(
+        (1..=3).contains(&arity),
+        "a NOR gate's fan-in is 1..=3, got {arity}"
+    );
 
     let name = match arity {
         1 => "torch-nor1 (not)",
@@ -682,7 +755,10 @@ fn buf_entry() -> LibraryEntry {
     LibraryEntry {
         name: "torch-torch-buf (buf)",
         template: Template {
-            nodes: vec![(TemplateNode::Torch, Primitive::Torch), (TemplateNode::SecondTorch, Primitive::Torch)],
+            nodes: vec![
+                (TemplateNode::Torch, Primitive::Torch),
+                (TemplateNode::SecondTorch, Primitive::Torch),
+            ],
             internal_edges: vec![(TemplateNode::Torch, TemplateNode::SecondTorch)],
             inputs: vec![TemplateNode::Torch],
             output: Some(TemplateNode::SecondTorch),
@@ -709,14 +785,23 @@ fn buf_entry() -> LibraryEntry {
 /// anything besides this merge -- see [`GateKind::Or`]'s doc comment and
 /// `or_isolated_entry` for the alternative when that does not hold.
 fn or_bare_entry(arity: usize) -> LibraryEntry {
-    assert!((2..=3).contains(&arity), "an OR entry's fan-in is 2..=3, got {arity}");
+    assert!(
+        (2..=3).contains(&arity),
+        "an OR entry's fan-in is 2..=3, got {arity}"
+    );
     LibraryEntry {
         name: match arity {
             2 => "wire-merge-or2 (bare)",
             3 => "wire-merge-or3 (bare)",
             _ => unreachable!("checked by the assert above"),
         },
-        template: Template { nodes: Vec::new(), internal_edges: Vec::new(), inputs: Vec::new(), output: None, embedding_hints: Vec::new() },
+        template: Template {
+            nodes: Vec::new(),
+            internal_edges: Vec::new(),
+            inputs: Vec::new(),
+            output: None,
+            embedding_hints: Vec::new(),
+        },
     }
 }
 
@@ -735,9 +820,13 @@ fn or_bare_entry(arity: usize) -> LibraryEntry {
 /// rule (see [`GateKind::Or`]'s doc comment for why that per-branch mixing
 /// is not itself expressed as further library entries).
 fn or_isolated_entry(arity: usize) -> LibraryEntry {
-    assert!((2..=3).contains(&arity), "an OR entry's fan-in is 2..=3, got {arity}");
-    let nodes: Vec<(TemplateNode, Primitive)> =
-        (0..arity).map(|i| (TemplateNode::IsolatingRepeater(i), Primitive::Repeater)).collect();
+    assert!(
+        (2..=3).contains(&arity),
+        "an OR entry's fan-in is 2..=3, got {arity}"
+    );
+    let nodes: Vec<(TemplateNode, Primitive)> = (0..arity)
+        .map(|i| (TemplateNode::IsolatingRepeater(i), Primitive::Repeater))
+        .collect();
     let inputs: Vec<TemplateNode> = (0..arity).map(TemplateNode::IsolatingRepeater).collect();
     LibraryEntry {
         name: match arity {
@@ -745,7 +834,13 @@ fn or_isolated_entry(arity: usize) -> LibraryEntry {
             3 => "wire-merge-or3 (isolated)",
             _ => unreachable!("checked by the assert above"),
         },
-        template: Template { nodes, internal_edges: Vec::new(), inputs, output: None, embedding_hints: Vec::new() },
+        template: Template {
+            nodes,
+            internal_edges: Vec::new(),
+            inputs,
+            output: None,
+            embedding_hints: Vec::new(),
+        },
     }
 }
 
@@ -768,7 +863,10 @@ pub enum SignalPolarity {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Operand {
     /// One logical rail of the gate's declared input `pin`, in pin order.
-    Input { pin: usize, polarity: SignalPolarity },
+    Input {
+        pin: usize,
+        polarity: SignalPolarity,
+    },
     /// The result of the recipe's `i`-th earlier step. Always refers
     /// backwards, so a recipe is a DAG by construction and needs no cycle
     /// check ([`Expansion::validate`] enforces it).
@@ -874,13 +972,19 @@ impl Expansion {
                         assert!(pin < kind.arity(), "{kind:?} step {index}: no input {pin}")
                     }
                     Operand::Step(s) => {
-                        assert!(s < index, "{kind:?} step {index}: operand step {s} is not strictly earlier")
+                        assert!(
+                            s < index,
+                            "{kind:?} step {index}: operand step {s} is not strictly earlier"
+                        )
                     }
                 }
             }
         }
         for (index, &pin) in self.pre_materialize_negative_inputs.iter().enumerate() {
-            assert!(pin < kind.arity(), "{kind:?}: pre-materialized input {pin} is out of range");
+            assert!(
+                pin < kind.arity(),
+                "{kind:?}: pre-materialized input {pin} is out of range"
+            );
             assert!(
                 !self.pre_materialize_negative_inputs[..index].contains(&pin),
                 "{kind:?}: pre-materialized input {pin} appears more than once"
@@ -908,8 +1012,14 @@ impl Expansion {
         let mut values: Vec<bool> = Vec::with_capacity(self.steps.len());
         for step in &self.steps {
             let read = |operand: &Operand| match *operand {
-                Operand::Input { pin, polarity: SignalPolarity::Positive } => inputs[pin],
-                Operand::Input { pin, polarity: SignalPolarity::Negative } => !inputs[pin],
+                Operand::Input {
+                    pin,
+                    polarity: SignalPolarity::Positive,
+                } => inputs[pin],
+                Operand::Input {
+                    pin,
+                    polarity: SignalPolarity::Negative,
+                } => !inputs[pin],
                 Operand::Step(s) => values[s],
             };
             values.push(match step {
@@ -917,7 +1027,9 @@ impl Expansion {
                 Step::Merge(ops) => ops.iter().any(&read),
             });
         }
-        *values.last().expect("a validated expansion has at least one step")
+        *values
+            .last()
+            .expect("a validated expansion has at least one step")
     }
 }
 
@@ -944,8 +1056,14 @@ fn positive_expansion_for(kind: GateKind) -> Expansion {
     use Operand::Step as S;
     use SignalPolarity::{Negative, Positive};
 
-    let positive = |pin| Operand::Input { pin, polarity: Positive };
-    let negative = |pin| Operand::Input { pin, polarity: Negative };
+    let positive = |pin| Operand::Input {
+        pin,
+        polarity: Positive,
+    };
+    let negative = |pin| Operand::Input {
+        pin,
+        polarity: Negative,
+    };
 
     let steps = match kind {
         // The two kinds redstone builds directly: one step, itself.
@@ -978,7 +1096,7 @@ fn positive_expansion_for(kind: GateKind) -> Expansion {
         GateKind::Xor => vec![
             Step::Nor(vec![negative(0), positive(1)]), // a & !b
             Step::Nor(vec![negative(1), positive(0)]), // b & !a
-            Step::Merge(vec![S(0), S(1)]),              // their OR
+            Step::Merge(vec![S(0), S(1)]),             // their OR
         ],
         // XNOR: the same two products, joined by a torch instead of a merge,
         // which inverts as it joins.
@@ -992,13 +1110,13 @@ fn positive_expansion_for(kind: GateKind) -> Expansion {
         // `c` -- the OR and the inversion are the same torch.
         GateKind::Aoi3 => vec![
             Step::Nor(vec![negative(0), negative(1)]), // a & b
-            Step::Nor(vec![S(0), positive(2)]),         // !((a & b) | c)
+            Step::Nor(vec![S(0), positive(2)]),        // !((a & b) | c)
         ],
         // OAI3: `!((a | b) & c) == !(a | b) | !c`. De Morgan turns it into a
         // merge of two torches -- no product term is ever built.
         GateKind::Oai3 => vec![
             Step::Nor(vec![positive(0), positive(1)]), // !(a | b)
-            Step::Merge(vec![S(0), negative(2)]),       // their OR
+            Step::Merge(vec![S(0), negative(2)]),      // their OR
         ],
         // AOI4: `!((a & b) | (c & d))` -- two ANDs, then one torch that ORs
         // and inverts them together.
@@ -1021,7 +1139,7 @@ fn positive_expansion_for(kind: GateKind) -> Expansion {
         GateKind::Mux => vec![
             Step::Nor(vec![negative(1), negative(2)]), // b & s
             Step::Nor(vec![negative(0), positive(2)]), // a & !s
-            Step::Merge(vec![S(0), S(1)]),              // their OR
+            Step::Merge(vec![S(0), S(1)]),             // their OR
         ],
         // NMUX: the same two products joined by a torch, which inverts.
         GateKind::Nmux => vec![
@@ -1038,15 +1156,24 @@ fn positive_expansion_for(kind: GateKind) -> Expansion {
         GateKind::Xor | GateKind::Xnor => vec![0, 1],
         _ => Vec::new(),
     };
-    Expansion { steps, pre_materialize_negative_inputs }
+    Expansion {
+        steps,
+        pre_materialize_negative_inputs,
+    }
 }
 
 fn negative_expansion_for(kind: GateKind) -> Expansion {
     use Operand::Step as S;
     use SignalPolarity::{Negative, Positive};
 
-    let positive = |pin| Operand::Input { pin, polarity: Positive };
-    let negative = |pin| Operand::Input { pin, polarity: Negative };
+    let positive = |pin| Operand::Input {
+        pin,
+        polarity: Positive,
+    };
+    let negative = |pin| Operand::Input {
+        pin,
+        polarity: Negative,
+    };
 
     let steps = match kind {
         // The complement of a one-input NOR is a buffer, which still needs a
@@ -1110,7 +1237,10 @@ fn negative_expansion_for(kind: GateKind) -> Expansion {
         GateKind::Xor | GateKind::Xnor => vec![0, 1],
         _ => Vec::new(),
     };
-    Expansion { steps, pre_materialize_negative_inputs }
+    Expansion {
+        steps,
+        pre_materialize_negative_inputs,
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -1187,7 +1317,11 @@ impl Template {
     /// `SecondTorch`, the one internal edge from `Torch`.
     fn fan_in(&self, node: TemplateNode) -> usize {
         let external = self.inputs.iter().filter(|&&role| role == node).count();
-        let internal = self.internal_edges.iter().filter(|(_, to)| *to == node).count();
+        let internal = self
+            .internal_edges
+            .iter()
+            .filter(|(_, to)| *to == node)
+            .count();
         external + internal
     }
 
@@ -1272,7 +1406,10 @@ pub fn expansion_cost_for_polarity(kind: GateKind, polarity: SignalPolarity) -> 
         .iter()
         .flat_map(Expansion::operands)
         .filter_map(|operand| match *operand {
-            Operand::Input { pin, polarity: SignalPolarity::Negative } => Some(pin),
+            Operand::Input {
+                pin,
+                polarity: SignalPolarity::Negative,
+            } => Some(pin),
             Operand::Input { .. } | Operand::Step(_) => None,
         })
         .collect();
@@ -1286,8 +1423,14 @@ pub fn expansion_cost_for_polarity(kind: GateKind, polarity: SignalPolarity) -> 
         let upstream = operands
             .iter()
             .map(|operand| match *operand {
-                Operand::Input { polarity: SignalPolarity::Positive, .. } => 0,
-                Operand::Input { polarity: SignalPolarity::Negative, .. } => 1,
+                Operand::Input {
+                    polarity: SignalPolarity::Positive,
+                    ..
+                } => 0,
+                Operand::Input {
+                    polarity: SignalPolarity::Negative,
+                    ..
+                } => 1,
                 Operand::Step(s) => depth[s],
             })
             .max()
@@ -1304,10 +1447,13 @@ pub fn expansion_cost_for_polarity(kind: GateKind, polarity: SignalPolarity) -> 
         }
     }
 
-    let torches = *depth.last().expect("a validated expansion has at least one step");
+    let torches = *depth
+        .last()
+        .expect("a validated expansion has at least one step");
     RealisationCost {
         area,
-        delay_game_ticks: crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS * torches as u64,
+        delay_game_ticks: crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS
+            * torches as u64,
     }
 }
 
@@ -1401,19 +1547,33 @@ pub fn entry_cost(kind: GateKind, entry: &LibraryEntry) -> RealisationCost {
             "`{}` realises an OR, which has no output primitive to take a signal from",
             entry.name
         );
-        return RealisationCost { area: merge_footprint_area(arity), delay_game_ticks: 0 };
+        return RealisationCost {
+            area: merge_footprint_area(arity),
+            delay_game_ticks: 0,
+        };
     }
 
-    let output = template
-        .output
-        .unwrap_or_else(|| panic!("`{}` ({kind:?}) has no output node to measure a delay to", entry.name));
+    let output = template.output.unwrap_or_else(|| {
+        panic!(
+            "`{}` ({kind:?}) has no output node to measure a delay to",
+            entry.name
+        )
+    });
     let mut area = 0u32;
     for &(node, primitive) in &template.nodes {
-        assert_eq!(primitive, Primitive::Torch, "entry_cost only knows how to price a Torch node");
+        assert_eq!(
+            primitive,
+            Primitive::Torch,
+            "entry_cost only knows how to price a Torch node"
+        );
         area += nor_footprint_area(template.fan_in(node));
     }
-    let delay_game_ticks = crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS * template.torch_depth(output) as u64;
-    RealisationCost { area, delay_game_ticks }
+    let delay_game_ticks = crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS
+        * template.torch_depth(output) as u64;
+    RealisationCost {
+        area,
+        delay_game_ticks,
+    }
 }
 
 #[cfg(test)]
@@ -1425,9 +1585,16 @@ mod tests {
         let library = Library::default_library();
         for arity in 1..=3 {
             let entries = library.entries_for(GateKind::Nor(arity));
-            assert_eq!(entries.len(), 1, "arity {arity} should have exactly one entry");
+            assert_eq!(
+                entries.len(),
+                1,
+                "arity {arity} should have exactly one entry"
+            );
         }
-        assert!(library.entries_for(GateKind::Nor(4)).is_empty(), "fan-in 4 has no entry -- it is not hardware");
+        assert!(
+            library.entries_for(GateKind::Nor(4)).is_empty(),
+            "fan-in 4 has no entry -- it is not hardware"
+        );
     }
 
     #[test]
@@ -1439,9 +1606,20 @@ mod tests {
     fn every_nor_entry_is_a_single_torch_node_with_no_internal_edges() {
         for arity in 1..=3 {
             let entry = nor_entry(arity);
-            assert_eq!(entry.template.nodes, vec![(TemplateNode::Torch, Primitive::Torch)], "arity {arity}");
-            assert!(entry.template.internal_edges.is_empty(), "arity {arity}: a single-node entry has nothing to connect internally");
-            assert_eq!(entry.template.output, Some(TemplateNode::Torch), "arity {arity}");
+            assert_eq!(
+                entry.template.nodes,
+                vec![(TemplateNode::Torch, Primitive::Torch)],
+                "arity {arity}"
+            );
+            assert!(
+                entry.template.internal_edges.is_empty(),
+                "arity {arity}: a single-node entry has nothing to connect internally"
+            );
+            assert_eq!(
+                entry.template.output,
+                Some(TemplateNode::Torch),
+                "arity {arity}"
+            );
         }
     }
 
@@ -1450,7 +1628,14 @@ mod tests {
         for arity in 1..=3 {
             let entry = nor_entry(arity);
             assert_eq!(entry.template.inputs.len(), arity, "arity {arity}");
-            assert!(entry.template.inputs.iter().all(|&role| role == TemplateNode::Torch), "arity {arity}");
+            assert!(
+                entry
+                    .template
+                    .inputs
+                    .iter()
+                    .all(|&role| role == TemplateNode::Torch),
+                "arity {arity}"
+            );
         }
     }
 
@@ -1471,16 +1656,30 @@ mod tests {
     fn gate_kind_for_yosys_cell_maps_the_simple_cells_abc_actually_emits() {
         // The seven types `abc` emitted on the seven-segment decoder, plus
         // the two redstone builds directly.
-        assert_eq!(gate_kind_for_yosys_cell("$_NOT_"), Some(GateKind::Nor(1)), "a 1-input NOR *is* an inverter");
+        assert_eq!(
+            gate_kind_for_yosys_cell("$_NOT_"),
+            Some(GateKind::Nor(1)),
+            "a 1-input NOR *is* an inverter"
+        );
         assert_eq!(gate_kind_for_yosys_cell("$_NOR_"), Some(GateKind::Nor(2)));
-        assert_eq!(gate_kind_for_yosys_cell("$_OR_"), Some(GateKind::Or(2)), "an OR is a wire merge, not a gate");
+        assert_eq!(
+            gate_kind_for_yosys_cell("$_OR_"),
+            Some(GateKind::Or(2)),
+            "an OR is a wire merge, not a gate"
+        );
         assert_eq!(gate_kind_for_yosys_cell("$_AND_"), Some(GateKind::And));
         assert_eq!(gate_kind_for_yosys_cell("$_NAND_"), Some(GateKind::Nand));
-        assert_eq!(gate_kind_for_yosys_cell("$_ANDNOT_"), Some(GateKind::AndNot));
+        assert_eq!(
+            gate_kind_for_yosys_cell("$_ANDNOT_"),
+            Some(GateKind::AndNot)
+        );
         assert_eq!(gate_kind_for_yosys_cell("$_ORNOT_"), Some(GateKind::OrNot));
         assert_eq!(gate_kind_for_yosys_cell("$_MUX_"), Some(GateKind::Mux));
         assert_eq!(gate_kind_for_yosys_cell("$_BUF_"), Some(GateKind::Buf));
-        assert_eq!(gate_kind_for_yosys_cell("$_DFF_P_"), Some(GateKind::DffPosedge));
+        assert_eq!(
+            gate_kind_for_yosys_cell("$_DFF_P_"),
+            Some(GateKind::DffPosedge)
+        );
     }
 
     /// Every combinational cell type this table names must have an
@@ -1490,12 +1689,19 @@ mod tests {
     fn every_known_yosys_cell_expands_and_its_arity_is_the_kinds_own() {
         for (cell_type, kind) in known_yosys_cell_types() {
             if kind.is_sequential() {
-                assert_eq!(kind, GateKind::DffPosedge, "only the named DFF is stateful today");
+                assert_eq!(
+                    kind,
+                    GateKind::DffPosedge,
+                    "only the named DFF is stateful today"
+                );
                 continue;
             }
             let expansion = expansion_for(kind);
             expansion.validate(kind);
-            assert!(!expansion.steps.is_empty(), "{cell_type} ({kind:?}) expands to nothing");
+            assert!(
+                !expansion.steps.is_empty(),
+                "{cell_type} ({kind:?}) expands to nothing"
+            );
         }
     }
 
@@ -1507,8 +1713,16 @@ mod tests {
         assert_eq!(gate_kind_for_yosys_cell("$__ZERO"), None);
         assert_eq!(gate_kind_for_yosys_cell("$__ONE"), None);
         assert_eq!(gate_kind_for_yosys_cell("$_DLATCH_P_"), None);
-        assert_eq!(gate_kind_for_yosys_cell("$_TBUF_"), None, "there is no tri-state in redstone");
-        assert_eq!(gate_kind_for_yosys_cell("$_and_"), None, "the table is exact-match, not case-insensitive");
+        assert_eq!(
+            gate_kind_for_yosys_cell("$_TBUF_"),
+            None,
+            "there is no tri-state in redstone"
+        );
+        assert_eq!(
+            gate_kind_for_yosys_cell("$_and_"),
+            None,
+            "the table is exact-match, not case-insensitive"
+        );
         // The genlib-era names. `abc -genlib redstone_nor.genlib` is gone,
         // so a netlist can never contain these again; nothing should
         // silently accept one.
@@ -1518,13 +1732,20 @@ mod tests {
     }
 
     #[test]
-    fn buf_entry_is_two_chained_torches_with_the_input_on_the_first_and_the_output_from_the_second() {
+    fn buf_entry_is_two_chained_torches_with_the_input_on_the_first_and_the_output_from_the_second()
+    {
         let entry = buf_entry();
         assert_eq!(
             entry.template.nodes,
-            vec![(TemplateNode::Torch, Primitive::Torch), (TemplateNode::SecondTorch, Primitive::Torch)]
+            vec![
+                (TemplateNode::Torch, Primitive::Torch),
+                (TemplateNode::SecondTorch, Primitive::Torch)
+            ]
         );
-        assert_eq!(entry.template.internal_edges, vec![(TemplateNode::Torch, TemplateNode::SecondTorch)]);
+        assert_eq!(
+            entry.template.internal_edges,
+            vec![(TemplateNode::Torch, TemplateNode::SecondTorch)]
+        );
         assert_eq!(entry.template.inputs, vec![TemplateNode::Torch]);
         assert_eq!(entry.template.output, Some(TemplateNode::SecondTorch));
     }
@@ -1534,7 +1755,11 @@ mod tests {
         for arity in 1..=3 {
             let cost = entry_cost(GateKind::Nor(arity), &nor_entry(arity));
             assert_eq!(cost.area, nor_footprint_area(arity), "arity {arity}");
-            assert_eq!(cost.delay_game_ticks, crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS, "arity {arity}");
+            assert_eq!(
+                cost.delay_game_ticks,
+                crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS,
+                "arity {arity}"
+            );
         }
     }
 
@@ -1542,7 +1767,10 @@ mod tests {
     fn entry_cost_of_buf_is_two_nor1_footprints_at_two_torch_delays() {
         let cost = entry_cost(GateKind::Buf, &buf_entry());
         assert_eq!(cost.area, 2 * nor_footprint_area(1));
-        assert_eq!(cost.delay_game_ticks, 2 * crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS);
+        assert_eq!(
+            cost.delay_game_ticks,
+            2 * crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS
+        );
     }
 
     /// Both footprint tables are the one realisation fact `entry_cost`
@@ -1596,25 +1824,44 @@ mod tests {
         let library = Library::default_library();
         for arity in 2..=3 {
             let entries = library.entries_for(GateKind::Or(arity));
-            assert_eq!(entries.len(), 2, "arity {arity} should have exactly the bare and isolated entries");
-            assert!(entries[0].name.contains("bare"), "arity {arity}: bare entry should be registered first");
+            assert_eq!(
+                entries.len(),
+                2,
+                "arity {arity} should have exactly the bare and isolated entries"
+            );
+            assert!(
+                entries[0].name.contains("bare"),
+                "arity {arity}: bare entry should be registered first"
+            );
             assert!(entries[1].name.contains("isolated"), "arity {arity}");
         }
-        assert!(library.entries_for(GateKind::Or(4)).is_empty(), "fan-in 4 has no entry -- it is not hardware");
-        assert!(library.entries_for(GateKind::Or(1)).is_empty(), "a 1-input OR is not registered");
+        assert!(
+            library.entries_for(GateKind::Or(4)).is_empty(),
+            "fan-in 4 has no entry -- it is not hardware"
+        );
+        assert!(
+            library.entries_for(GateKind::Or(1)).is_empty(),
+            "a 1-input OR is not registered"
+        );
     }
 
     #[test]
     fn or_bare_entry_has_no_nodes_no_inputs_and_no_output_primitive() {
         for arity in 2..=3 {
             let entry = or_bare_entry(arity);
-            assert!(entry.template.nodes.is_empty(), "arity {arity}: a bare merge places nothing");
+            assert!(
+                entry.template.nodes.is_empty(),
+                "arity {arity}: a bare merge places nothing"
+            );
             assert!(entry.template.internal_edges.is_empty(), "arity {arity}");
             assert!(
                 entry.template.inputs.is_empty(),
                 "arity {arity}: there is no node for a declared input to land on"
             );
-            assert_eq!(entry.template.output, None, "arity {arity}: no primitive realises this gate's output");
+            assert_eq!(
+                entry.template.output, None,
+                "arity {arity}: no primitive realises this gate's output"
+            );
         }
     }
 
@@ -1622,17 +1869,39 @@ mod tests {
     fn or_isolated_entry_has_one_distinct_repeater_per_branch_and_still_no_output_primitive() {
         for arity in 2..=3 {
             let entry = or_isolated_entry(arity);
-            assert_eq!(entry.template.nodes.len(), arity, "arity {arity}: one repeater per branch");
+            assert_eq!(
+                entry.template.nodes.len(),
+                arity,
+                "arity {arity}: one repeater per branch"
+            );
             for &(role, primitive) in &entry.template.nodes {
-                assert_eq!(primitive, Primitive::Repeater, "arity {arity}: every node here is a repeater");
-                assert!(matches!(role, TemplateNode::IsolatingRepeater(_)), "arity {arity}");
+                assert_eq!(
+                    primitive,
+                    Primitive::Repeater,
+                    "arity {arity}: every node here is a repeater"
+                );
+                assert!(
+                    matches!(role, TemplateNode::IsolatingRepeater(_)),
+                    "arity {arity}"
+                );
             }
             // Every branch lands on its *own* node -- no two inputs share a
             // repeater's single input face.
-            let distinct: std::collections::BTreeSet<TemplateNode> = entry.template.inputs.iter().copied().collect();
-            assert_eq!(distinct.len(), arity, "arity {arity}: every input must name a distinct node");
-            assert!(entry.template.internal_edges.is_empty(), "arity {arity}: branches do not feed each other");
-            assert_eq!(entry.template.output, None, "arity {arity}: even isolated, a merge has no output primitive");
+            let distinct: std::collections::BTreeSet<TemplateNode> =
+                entry.template.inputs.iter().copied().collect();
+            assert_eq!(
+                distinct.len(),
+                arity,
+                "arity {arity}: every input must name a distinct node"
+            );
+            assert!(
+                entry.template.internal_edges.is_empty(),
+                "arity {arity}: branches do not feed each other"
+            );
+            assert_eq!(
+                entry.template.output, None,
+                "arity {arity}: even isolated, a merge has no output primitive"
+            );
         }
     }
 
@@ -1664,7 +1933,10 @@ mod tests {
         for arity in 2..=3 {
             let bare = entry_cost(GateKind::Or(arity), &or_bare_entry(arity));
             let isolated = entry_cost(GateKind::Or(arity), &or_isolated_entry(arity));
-            assert_eq!(isolated, bare, "arity {arity}: one number has to price both realisations");
+            assert_eq!(
+                isolated, bare,
+                "arity {arity}: one number has to price both realisations"
+            );
             assert_eq!(isolated.area, merge_footprint_area(arity), "arity {arity}");
             assert_eq!(isolated.delay_game_ticks, 0, "arity {arity}");
         }
@@ -1681,7 +1953,11 @@ mod tests {
         for (&kind, entries) in &library.entries {
             for entry in entries {
                 let cost = entry_cost(kind, entry);
-                assert!(cost.area > 0, "{kind:?}'s entry `{}` is priced at zero area", entry.name);
+                assert!(
+                    cost.area > 0,
+                    "{kind:?}'s entry `{}` is priced at zero area",
+                    entry.name
+                );
             }
         }
     }
@@ -1696,7 +1972,10 @@ mod tests {
     /// Stateful kinds are deliberately excluded: they have no
     /// combinational expansion.
     fn every_gate_kind() -> Vec<GateKind> {
-        let mut kinds: Vec<GateKind> = (1..=3).map(GateKind::Nor).chain((2..=3).map(GateKind::Or)).collect();
+        let mut kinds: Vec<GateKind> = (1..=3)
+            .map(GateKind::Nor)
+            .chain((2..=3).map(GateKind::Or))
+            .collect();
         // Exhaustive on purpose: a new variant must be added here too.
         for kind in [
             GateKind::Buf,
@@ -1714,7 +1993,9 @@ mod tests {
             GateKind::Nmux,
         ] {
             match kind {
-                GateKind::Nor(_) | GateKind::Or(_) => unreachable!("listed separately, with their arities"),
+                GateKind::Nor(_) | GateKind::Or(_) => {
+                    unreachable!("listed separately, with their arities")
+                }
                 GateKind::Buf
                 | GateKind::And
                 | GateKind::Nand
@@ -1728,7 +2009,9 @@ mod tests {
                 | GateKind::Oai4
                 | GateKind::Mux
                 | GateKind::Nmux => kinds.push(kind),
-                GateKind::DffPosedge => unreachable!("stateful kinds do not have combinational expansions"),
+                GateKind::DffPosedge => {
+                    unreachable!("stateful kinds do not have combinational expansions")
+                }
             }
         }
         kinds
@@ -1792,8 +2075,14 @@ mod tests {
     #[test]
     fn and_selects_signed_torch_and_merge_topologies() {
         let negative_inputs = vec![
-            Operand::Input { pin: 0, polarity: SignalPolarity::Negative },
-            Operand::Input { pin: 1, polarity: SignalPolarity::Negative },
+            Operand::Input {
+                pin: 0,
+                polarity: SignalPolarity::Negative,
+            },
+            Operand::Input {
+                pin: 1,
+                polarity: SignalPolarity::Negative,
+            },
         ];
         assert_eq!(
             expansion_for_polarity(GateKind::And, SignalPolarity::Positive).steps,
@@ -1817,7 +2106,10 @@ mod tests {
                 expansion_for(GateKind::Nor(arity)).steps,
                 vec![Step::Nor(
                     (0..arity)
-                        .map(|pin| Operand::Input { pin, polarity: SignalPolarity::Positive })
+                        .map(|pin| Operand::Input {
+                            pin,
+                            polarity: SignalPolarity::Positive
+                        })
                         .collect()
                 )]
             );
@@ -1827,7 +2119,10 @@ mod tests {
                 expansion_for(GateKind::Or(arity)).steps,
                 vec![Step::Merge(
                     (0..arity)
-                        .map(|pin| Operand::Input { pin, polarity: SignalPolarity::Positive })
+                        .map(|pin| Operand::Input {
+                            pin,
+                            polarity: SignalPolarity::Positive
+                        })
                         .collect()
                 )]
             );
@@ -1887,7 +2182,12 @@ mod tests {
         for arity in 2..=3 {
             let kind = GateKind::Or(arity);
             for entry in library.entries_for(kind) {
-                assert_eq!(entry_cost(kind, entry), expansion_cost(kind), "{kind:?} / `{}`", entry.name);
+                assert_eq!(
+                    entry_cost(kind, entry),
+                    expansion_cost(kind),
+                    "{kind:?} / `{}`",
+                    entry.name
+                );
             }
         }
     }
