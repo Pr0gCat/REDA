@@ -24,7 +24,12 @@ echo "== viewer: test =="
 echo "== viewer: clippy =="
 (cd viewer && cargo clippy --all-targets -- -D warnings 2>&1 | tail -1)
 
-echo "== viewer: wasm builds =="
-(cd viewer && cargo build --release --target wasm32-unknown-unknown 2>&1 | tail -1)
+# `wasm-pack`, not `cargo build --target wasm32`: the latter proves the crate
+# compiles and leaves `viewer/pkg/` exactly as stale as it was. The page loads
+# `pkg/`, so a green check with a seven-hour-old bundle is the same failure
+# `viewer/serve.py` exists to prevent, one level up -- a viewer showing the
+# compiler as it was, indistinguishable from a change that did nothing.
+echo "== viewer: wasm bundle =="
+(cd viewer && wasm-pack build --target web 2>&1 | tail -1)
 
 echo "OK"

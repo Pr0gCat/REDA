@@ -14,7 +14,9 @@ This is two pieces:
 
 ## Rebuilding the wasm module
 
-From `viewer/`, with `wasm-pack` installed and cargo on `PATH`:
+`./check.sh` does this as its last step, so anything that passes a check is
+already loadable. To do it by hand, from `viewer/`, with `wasm-pack` installed
+and cargo on `PATH`:
 
 ```sh
 wasm-pack build --target web
