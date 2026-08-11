@@ -215,6 +215,14 @@ pub enum GateKind {
     Mux,
     /// `$_NMUX_`. `Y = !(S ? B : A)`.
     Nmux,
+    /// `$_DFF_P_`. A positive-edge-triggered flip-flop with pin order
+    /// `D, C` and stateful output `Q`.
+    ///
+    /// Unlike every combinational kind above, this is a dependency boundary:
+    /// its output is available to the next combinational cycle before its D
+    /// input is evaluated.  It deliberately has no boolean `evaluate`
+    /// implementation; a DFF needs prior state and a clock transition.
+    DffPosedge,
 }
 
 impl GateKind {
@@ -234,7 +242,13 @@ impl GateKind {
         match self {
             GateKind::Nor(_) | GateKind::Or(_) => None,
             GateKind::Buf => Some(1),
-            GateKind::And | GateKind::Nand | GateKind::Xor | GateKind::Xnor | GateKind::AndNot | GateKind::OrNot => {
+            GateKind::And
+            | GateKind::Nand
+            | GateKind::Xor
+            | GateKind::Xnor
+            | GateKind::AndNot
+            | GateKind::OrNot
+            | GateKind::DffPosedge => {
                 Some(2)
             }
             GateKind::Aoi3 | GateKind::Oai3 | GateKind::Mux | GateKind::Nmux => Some(3),
@@ -250,12 +264,31 @@ impl GateKind {
         }
     }
 
+    /// Whether this exact gate kind may be instantiated with `arity` input
+    /// signals.  Keep this distinct from [`Self::arity`]: callers validating
+    /// an untrusted netlist must compare a declared input count rather than
+    /// assume it was already valid.
+    pub fn accepts_arity(self, arity: usize) -> bool {
+        match self {
+            GateKind::Nor(expected) | GateKind::Or(expected) => expected == arity,
+            other => other.fixed_arity() == Some(arity),
+        }
+    }
+
     /// Whether redstone builds this kind directly -- `Nor` (a torch) or `Or`
     /// (a wire merge). These are the only two kinds `compile` can place and
     /// `primitive_graph::expand` can turn into primitives; everything else
     /// has to go through `lowering::lower` first.
     pub fn is_realisable(self) -> bool {
         matches!(self, GateKind::Nor(_) | GateKind::Or(_))
+    }
+
+    /// Whether this gate owns state and therefore cuts dependency edges for
+    /// combinational ordering.  A cycle is legal only when it crosses one of
+    /// these elements; a loop containing only combinational gates remains an
+    /// error.
+    pub fn is_sequential(self) -> bool {
+        matches!(self, GateKind::DffPosedge)
     }
 
     /// The name this kind goes by in the baked-netlist text format, in
@@ -284,6 +317,7 @@ impl GateKind {
             GateKind::Oai4 => "oai4",
             GateKind::Mux => "mux",
             GateKind::Nmux => "nmux",
+            GateKind::DffPosedge => "dff_p",
         }
     }
 
@@ -309,16 +343,18 @@ impl GateKind {
             "oai4" => GateKind::Oai4,
             "mux" => GateKind::Mux,
             "nmux" => GateKind::Nmux,
+            "dff_p" => GateKind::DffPosedge,
             _ => return None,
         })
     }
 
     /// Evaluate this kind's own boolean function on `inputs` (in pin order).
-    /// The one place the *meaning* of each gate-level kind is written down
-    /// as executable truth rather than as a comment -- which is what lets
-    /// `lowering`'s tests check an expansion against the gate it claims to
-    /// realise, exhaustively, instead of against a second hand-derivation
-    /// of the same formula.
+    /// The one place the *combinational meaning* of each gate-level kind is
+    /// written down as executable truth rather than as a comment -- which is
+    /// what lets `lowering`'s tests check an expansion against the gate it
+    /// claims to realise, exhaustively, instead of against a second
+    /// hand-derivation of the same formula. Stateful kinds intentionally
+    /// panic: their meaning includes previous state and a transition.
     ///
     /// Panics if `inputs.len()` disagrees with [`GateKind::arity`].
     pub fn evaluate(self, inputs: &[bool]) -> bool {
@@ -352,6 +388,7 @@ impl GateKind {
                     inputs[0]
                 })
             }
+            GateKind::DffPosedge => panic!("a DFF needs its previous state and a clock transition"),
         }
     }
 }
@@ -382,9 +419,9 @@ impl GateKind {
 /// exactly the set its `abc` pass's default `-g` gate list can produce.
 /// Deliberately absent, and staying absent:
 ///
-/// - `$_DFF_*_`, `$_DLATCH_*_`, `$_SR_*_` and every other sequential cell.
-///   Sequential logic is a later task; a cell with state has no
-///   realisation here, so it stays a hard error naming the cell.
+/// - `$_DLATCH_*_`, `$_SR_*_` and every sequential cell other than the
+///   positive-edge DFF planned below. A cell with state must have a named
+///   topology entry; it must never silently enter the combinational library.
 /// - `$_TBUF_`, and Yosys's `$__ZERO`/`$__ONE` constant drivers. There is
 ///   no tri-state and no "always on" cell in real redstone, so an entry for
 ///   either would be a lie.
@@ -808,8 +845,10 @@ impl Expansion {
     /// `place_nor_gate`/`place_merge_gate` have three free input faces, the
     /// fourth being the output).
     ///
-    /// Called by `every_expansion_is_well_formed` over every kind, so a
-    /// recipe added later cannot quietly declare a 4-input torch.
+    /// Called by `every_expansion_is_well_formed` over every combinational
+    /// kind, so a recipe added later cannot quietly declare a 4-input torch.
+    /// Stateful entries have a transition contract and are tested without
+    /// calling this function.
     pub fn validate(&self, kind: GateKind) {
         assert!(!self.steps.is_empty(), "{kind:?}'s expansion has no steps");
         for (index, step) in self.steps.iter().enumerate() {
@@ -987,6 +1026,9 @@ fn positive_expansion_for(kind: GateKind) -> Expansion {
             Step::Nor(vec![negative(0), positive(2)]),
             Step::Nor(vec![S(0), S(1)]),
         ],
+        GateKind::DffPosedge => {
+            panic!("DFFs are stateful topology entries, not combinational expansions")
+        }
     };
 
     let pre_materialize_negative_inputs = match kind {
@@ -1056,6 +1098,9 @@ fn negative_expansion_for(kind: GateKind) -> Expansion {
             Step::Nor(vec![negative(0), positive(2)]),
             Step::Merge(vec![S(0), S(1)]),
         ],
+        GateKind::DffPosedge => {
+            panic!("DFFs are stateful topology entries, not combinational expansions")
+        }
     };
 
     let pre_materialize_negative_inputs = match kind {
@@ -1641,6 +1686,8 @@ mod tests {
     /// Every kind this module can name. Written out rather than derived so
     /// that adding a variant to `GateKind` without deciding how it becomes
     /// redstone fails to compile here (the `match` below is exhaustive).
+    /// Stateful kinds are deliberately excluded: they have no
+    /// combinational expansion.
     fn every_gate_kind() -> Vec<GateKind> {
         let mut kinds: Vec<GateKind> = (1..=3).map(GateKind::Nor).chain((2..=3).map(GateKind::Or)).collect();
         // Exhaustive on purpose: a new variant must be added here too.
@@ -1674,6 +1721,7 @@ mod tests {
                 | GateKind::Oai4
                 | GateKind::Mux
                 | GateKind::Nmux => kinds.push(kind),
+                GateKind::DffPosedge => unreachable!("stateful kinds do not have combinational expansions"),
             }
         }
         kinds

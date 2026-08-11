@@ -157,12 +157,14 @@ pub struct Netlist {
 }
 
 impl Netlist {
-    /// 依相依關係排出計算順序。回傳 `None` 表示網表有迴路。
+    /// Return the deterministic order of the combinational part of this
+    /// netlist.  A sequential gate's Q output is a source for this cycle;
+    /// its D/C inputs are sampled only at its clock boundary, so edges *into*
+    /// that gate do not participate in combinational cycle detection.
     ///
-    /// 相依關係只看「這個閘的輸入是不是另一個閘的輸出」—— 外部輸入不算
-    /// 相依，一開始就可用。用 Kahn 演算法，處理順序固定（依索引由小到大），
-    /// 保證同一個網表每次排出來的順序都一樣。
-    pub fn topological_order(&self) -> Option<Vec<usize>> {
+    /// Consequently a path such as `q -> NOR -> DFF(D=q') -> q` is legal,
+    /// while a loop consisting only of NOR/merge gates still returns `None`.
+    pub fn combinational_order(&self) -> Option<Vec<usize>> {
         let gate_count = self.gates.len();
 
         let mut producer_of: HashMap<&str, usize> = HashMap::new();
@@ -173,6 +175,9 @@ impl Netlist {
         let mut in_degree = vec![0usize; gate_count];
         let mut dependents: Vec<Vec<usize>> = vec![Vec::new(); gate_count];
         for (index, gate) in self.gates.iter().enumerate() {
+            if gate.kind.is_sequential() {
+                continue;
+            }
             for input in &gate.inputs {
                 if let Some(&producer_index) = producer_of.get(input.as_str()) {
                     dependents[producer_index].push(index);
@@ -193,11 +198,16 @@ impl Netlist {
             }
         }
 
-        if order.len() == gate_count {
-            Some(order)
-        } else {
-            None
-        }
+        (order.len() == gate_count).then_some(order)
+    }
+
+    /// 依相依關係排出計算順序。回傳 `None` 表示網表有迴路。
+    ///
+    /// 相依關係只看「這個閘的輸入是不是另一個閘的輸出」—— 外部輸入不算
+    /// 相依，一開始就可用。用 Kahn 演算法，處理順序固定（依索引由小到大），
+    /// 保證同一個網表每次排出來的順序都一樣。
+    pub fn topological_order(&self) -> Option<Vec<usize>> {
+        self.combinational_order()
     }
 
     /// 這個訊號名稱是不是某個外部輸入或某個閘的輸出。
@@ -5293,10 +5303,7 @@ fn merge_output_group_root(
 /// impossible rather than merely discouraged.
 pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     for gate in &netlist.gates {
-        let realisable = match gate.kind {
-            topology::GateKind::Nor(arity) | topology::GateKind::Or(arity) => arity == gate.inputs.len(),
-            _ => false,
-        };
+        let realisable = gate.kind.is_realisable() && gate.kind.accepts_arity(gate.inputs.len());
         if !realisable {
             return Err(CompileError::NotRealisable { gate: gate.output.clone(), kind: gate.kind });
         }
@@ -5438,6 +5445,38 @@ mod tests {
     /// looks at anything but `source`.
     fn nameless_net(source: Source) -> Net {
         Net { source, source_column: 0, channels: Vec::new(), tracks: Vec::new(), sinks: Vec::new(), hops: Vec::new() }
+    }
+
+    #[test]
+    fn sequential_boundary_cuts_feedback_but_a_pure_combinational_loop_stays_cyclic() {
+        let through_dff = Netlist {
+            inputs: vec!["clk".to_string()],
+            outputs: vec!["q".to_string()],
+            gates: vec![
+                Gate::nor("d", &["q"]),
+                Gate {
+                    name: "q".to_string(),
+                    inputs: vec!["d".to_string(), "clk".to_string()],
+                    output: "q".to_string(),
+                    kind: GateKind::DffPosedge,
+                },
+            ],
+        };
+
+        assert_eq!(through_dff.combinational_order(), Some(vec![1, 0]));
+        assert!(GateKind::DffPosedge.is_sequential());
+        assert_eq!(GateKind::DffPosedge.fixed_arity(), Some(2));
+        assert_eq!(GateKind::DffPosedge.wire_name(), "dff_p");
+        assert!(GateKind::DffPosedge.accepts_arity(2));
+        assert!(!GateKind::DffPosedge.accepts_arity(1));
+
+        let pure_loop = Netlist {
+            inputs: Vec::new(),
+            outputs: vec!["a".to_string()],
+            gates: vec![Gate::nor("a", &["b"]), Gate::nor("b", &["a"])],
+        };
+
+        assert_eq!(pure_loop.combinational_order(), None);
     }
 
     /// The connectivity invariant, built directly rather than hoped for:
