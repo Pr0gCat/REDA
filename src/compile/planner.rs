@@ -1208,6 +1208,15 @@ fn deterministic_astar(
             {
                 continue;
             }
+            // Every step costs one, height included. Pricing a climb higher
+            // was tried and made things worse, for a reason worth keeping:
+            // a climb spends one signal strength per level and no cell of it
+            // can hold a repeater, so it has to happen while the signal is
+            // still fresh. Discouraging it just moves it later, to where the
+            // signal can no longer afford it. What a climb needs is for the
+            // strength budget to reserve for it in advance --
+            // `plan_bent_path` takes a `reserve` for exactly that -- not to
+            // be made unattractive.
             let next_travelled = state.travelled.saturating_add(1);
             if travelled
                 .get(&next)

@@ -1849,13 +1849,20 @@ pub(crate) fn plan_bent_path(
             continue;
         }
         let mut j = i;
-        while (j as i64) > last_refresh + 1 && bend_indices.contains(&j) {
+        while j > 0 && (j as i64) > last_refresh + 1 && bend_indices.contains(&j) {
             j -= 1;
         }
-        debug_assert!(
-            !bend_indices.contains(&j),
-            "bends must never be dense enough to leave no room for a repeater"
-        );
+        if bend_indices.contains(&j) {
+            // Nowhere in this run can hold the refresh: every candidate cell
+            // is a bend or a staircase step. The row/channel router never
+            // produces such a run -- its bends are sparse by construction --
+            // but the planner's own routes climb, and a climb is a solid line
+            // of cells no repeater can stand on. Leave it unplaced and let
+            // `verify_signal_strength` report what that costs, rather than
+            // walking `j` off the bottom of the array on the way there.
+            i += 1;
+            continue;
+        }
         is_repeater[j] = true;
         last_refresh = j as i64;
         i = j + 1;
