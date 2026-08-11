@@ -853,10 +853,16 @@ impl Session {
         let compiled = if circuit_name.starts_with(PLANNED_PREFIX) {
             // Nothing is pinned here: the viewer's job is to show what the
             // planner does when it is left to decide.
+            //
+            // `{error}`, not `{error:?}`: `CompileError` writes a sentence
+            // saying what failed and why -- "the geometry is structurally
+            // connected but the real, decayed signal dies out before it
+            // arrives" -- and the derived Debug throws all of that away for a
+            // struct dump. This page is where a person reads these.
             compile_planned(&netlist, &PortPlacements::default())
-                .map_err(|error| format!("compile_planned() failed: {error:?}"))?
+                .map_err(|error| format!("the planner could not build this circuit: {error}"))?
         } else {
-            compile(&netlist).map_err(|error| format!("compile() failed: {error:?}"))?
+            compile(&netlist).map_err(|error| format!("this circuit does not compile: {error}"))?
         };
 
         // Every gate in `netlist` is a NOR or a merge of fan-in 1..=3 --
@@ -940,7 +946,7 @@ impl Session {
         // is fully settled before a caller ever reads it.
         simulator
             .run_until_stable(MAX_GAME_TICKS)
-            .map_err(|error| format!("initial settle failed: {error:?}"))?;
+            .map_err(|error| format!("the circuit never settled: {error:?}"))?;
 
         Ok(Session {
             circuit_name: circuit_name.to_string(),
