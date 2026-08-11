@@ -301,8 +301,9 @@ fn is_orthogonal(left: Facing, right: Facing) -> bool {
 mod tests {
     use super::*;
     use crate::compile::topology::Primitive;
+    use crate::redstone::simulator::component::torch_support_position;
     use crate::redstone::simulator::position::Position;
-    use crate::redstone::world::block::{BlockKind, Facing};
+    use crate::redstone::world::block::{BlockKind, BlockState, Facing};
 
     #[test]
     fn a_torch_variant_exposes_input_on_its_support_and_output_at_its_torch() {
@@ -314,6 +315,25 @@ mod tests {
         assert_eq!(variant.block_at(output.position).kind, BlockKind::WallTorch);
         assert_eq!(input.direction, output.direction.opposite());
         assert_eq!(output.position, input.position.offset(output.direction));
+    }
+
+    #[test]
+    fn every_torch_variant_attaches_its_torch_to_the_input_support() {
+        for variant in variants(Primitive::Torch) {
+            let input = variant.port(PortKind::TorchInput);
+            let output = variant.port(PortKind::TorchOutput);
+            let torch = variant.block_at(output.position);
+            let mut state = BlockState::air();
+            state.kind = torch.kind;
+            state.facing = torch.facing;
+
+            assert_eq!(
+                torch_support_position(&state, output.position),
+                Some(input.position),
+                "torch facing {:?} must attach to its input support",
+                torch.facing
+            );
+        }
     }
 
     #[test]
