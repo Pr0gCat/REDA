@@ -154,10 +154,12 @@ test.
 A new module, `src/compile/relax.rs`:
 
 ```rust
-/// One primitive, in continuous space.
+/// One thing in continuous space. Not always a primitive: a support block is
+/// a body too (see below), and it has no node in the primitive graph and no
+/// `Primitive` kind, because it is not a component -- it is what a component
+/// stands on.
 struct Body {
-    node: NodeId,
-    kind: Primitive,
+    what: BodyKind,
     position: [f64; 3],
     facing: f64,        // radians; quantised to four at snap
     /// Half-extents along the body's own axes, from the blocks
@@ -173,10 +175,22 @@ struct Body {
 /// A spring, attached at a port on each end.
 struct Pull { from: (usize, PortKind), to: (usize, PortKind), stiffness: f64 }
 
+enum BodyKind {
+    /// A component the primitive graph named.
+    Primitive { node: NodeId, kind: Primitive },
+    /// A block something stands on or attaches to. Solid; conducts only when
+    /// it is a NOR's support, which is that gate's input node.
+    Support { holds: usize, carries: Option<Signal> },
+}
+
 /// A relation that must hold exactly. Projected, never pulled.
 enum Weld {
+    /// A wall torch on the face of its support.
     OnFace { torch: usize, support: usize },
+    /// Design H's lock repeater at the data repeater's side.
     BesideAt { lock: usize, data: usize, side: RelativeSide },
+    /// Anything that has to stand on something: dust, a repeater, a lever.
+    StandsOn { body: usize, support: usize },
 }
 
 struct RelaxEffort { iterations: usize, seed: u64 }
@@ -512,6 +526,30 @@ the expectations to the measured values and records the old ones alongside. The
 test's meaning moves from "these must not change" to "these were measured at
 this commit, and changing them again needs an explanation" -- which is what it
 was always for.
+
+## Staging
+
+Review grew this design twice: supports became bodies, and separation gained a
+routing reservation. Both were necessary and both are load-bearing, and the
+result is larger than one sitting's work. It is still one design -- every part
+of it exists to make the same placement legal -- but it should land in three
+pieces, each of which leaves the tree green:
+
+1. **Relaxation and snapping, primitives only.** No support bodies, no upward
+   separation. Bodies stay at the Y their starting layout gave them, which is
+   one plane, so nothing needs holding up and the third dimension is not yet
+   in play. This is enough to answer the question the whole design exists for:
+   does relaxation place better than rows and barycentres. `plan_from_netlist`
+   switches to it; `compile()` does not.
+2. **Supports as bodies, and separation that may push upwards.** Height
+   becomes available and starts paying for itself. The `Shape::Tall` knob is
+   removed here, since this is what replaces it.
+3. **The switchover.** `compile()` moves once every reference circuit places,
+   routes, verifies and matches its truth table.
+
+Splitting it this way also gives the answer to "is relaxation better" before
+the expensive part is built, which is the order this session's measurements
+argue for.
 
 ## Out of scope
 
