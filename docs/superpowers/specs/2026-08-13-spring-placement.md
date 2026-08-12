@@ -180,7 +180,7 @@ Netlist
 PrimitiveGraph
   |  relax                        NEW -- continuous, spacing projected each step
 ContinuousPlacement
-  |  snap                         NEW -- quantise facing, re-project, round
+  |  snap                         NEW -- round positions to the lattice
 PlanCandidate                     anchors and variants, not yet routed
   |  route_every_net              exists -- A* with rip-up
   |  realise_and_verify           exists -- blocks, then four invariants
@@ -214,9 +214,6 @@ struct Body {
     /// a sphere, and a sphere large enough to contain one wastes exactly the
     /// space this design exists to win.
     half_extent: [f64; 3],
-    /// How far the furthest port sits from the centre. Quantising the facing
-    /// swings the ports, so this is what the snap margin has to cover.
-    port_radius: f64,
 }
 
 /// A spring, attached at a port on each end.
@@ -350,7 +347,8 @@ Four terms, each with a source:
 3. room for the nets that must reach the body -- the edges that need routing,
    which is its degree less its welds, times one route's width, so that a
    relaxed placement has corridors rather than only clearance;
-4. a rounding margin, derived below.
+4. one cell of rounding margin, which is what rounding a position can cost --
+   see "What `snap` has left to do".
 
 ### How welds and separations compose
 
@@ -372,9 +370,9 @@ each stay clear of the others may have no arrangement at all.
 
 A weld's offset is a function of facing. A torch is one cell north of its
 support *when facing north*, and rotating the body rotates the weld with it --
-which is why `snap` quantises facings before its second projection: welds whose
-offsets moved need re-satisfying at the facings that will actually be built,
-not at the continuous ones that will not.
+which is why a step re-satisfies welds after choosing facings and not before:
+a body that turned has moved the cell its weld points at, and the weld has to
+be restored at the facing that will actually be built.
 
 ### Nothing pushes into the third dimension on its own
 
@@ -593,8 +591,8 @@ giving it an arity it was not built to have. Stage 0 is smaller and duller than
 and the socket arithmetic they share take a facing, return sockets rotated by
 it, and the five callers ask them rather than `INPUT_DIRECTIONS`.
 `physical.rs` keeps what it is good for -- the component's own blocks and
-ports, which relaxation needs at arbitrary angles -- and does not become
-something it is not.
+ports at each of the four facings, which is exactly what the solver chooses
+among -- and does not become something it is not.
 
 Stage 1 should therefore be two: the geometry work, then the relaxation. The
 estimate that called this "three changes, none large" was made by reading
@@ -624,9 +622,15 @@ wrinkled for no benefit.
 
 ### What `physical.rs` has to gain
 
+Nothing, which is not what this section said until facings stopped being
+continuous.
+
 It gives four discrete facings for a torch, a repeater, a lever and a lamp,
-each with typed ports and the blocks it occupies. Relaxation needs port offsets
-at an *arbitrary* angle.
+each with typed ports and the blocks it occupies -- and four discrete facings
+is exactly what the solver chooses among. The rotation machinery an earlier
+draft asked for, a canonical layout rotated to arbitrary angles, has nothing to
+do: the enumeration reads `variants(kind)[facing]` and takes the ports as
+given.
 
 It gives none at all for a comparator: `variants(Primitive::Comparator)`
 returns an empty slice, while `PortKind` declares `ComparatorRear`,
@@ -636,35 +640,27 @@ here is an accident of the current library rather than a rule, and a body whose
 primitive has no variants must be an error naming the primitive, not a silent
 placement of nothing.
 
-The addition is small: treat facing 0 as canonical and rotate. The four
-variants become the four quantised cases of one layout, so the continuous stage
-uses the canonical version and `snap` looks the rotated result back up among the
-four. The module stops being dead code and becomes the thing both stages share.
+And it gives nothing for a wire merge, which is why a junction's attachments
+are indices rather than `PortKind`s. See "A third of the gates have no body".
 
-### Why `snap` quantises the facing first
+### What `snap` has left to do
 
-An earlier draft claimed the margin could be one cell, on the grounds that
-rounding moves a body half a cell and two bodies therefore approach by at most
-one. That reasoning covers translation and ignores rotation, which is the
-larger effect: quantising a facing moves it by up to 45 degrees, and a body's
-blocks and ports sit away from its centre, so they swing by up to
-`port_radius * 2 * sin(22.5°)` -- most of a cell for a repeater, more for
-anything larger. A margin of one does not cover it and `snap` would silently
-hand on a placement the projection had already made legal.
+An earlier draft made `snap` three steps, the first of which quantised a
+continuous facing, and argued at length that the rounding margin had to cover
+the ports swinging up to 45 degrees as it did. Facings are never continuous, so
+none of that survives: the solver has already chosen one of four, and snapping
+has no angle to resolve.
 
-So `snap` is three steps, not one:
+What is left is rounding positions, and one cell of margin covers it by the
+argument that was always true for translation alone -- rounding moves a body by
+at most half a cell, so two bodies approach by at most one, and a continuous
+solution separated by the requirement plus one is still separated after.
 
-1. **Quantise every facing** to the nearest of the four, and recompute each
-   body's occupied cells at that facing.
-2. **Project again**, in continuous space, with the facings now fixed. This
-   repairs whatever the rotation broke, and it is the same projection the
-   relaxation was already running.
-3. **Round the positions**, with a margin of one cell -- which now covers what
-   it was always claimed to cover, because after step 2 nothing is rotating.
-
-`snap` returns a `Result` because step 2 can fail: quantising every facing at
-once can produce a configuration with no legal repair, and that is a real
-outcome to report rather than round anyway.
+`snap` still returns a `Result`, for a smaller reason: rounding is exact only
+if the projection converged, and a placement handed to `snap` unconverged has
+no margin to spend. Rounding it anyway would produce the class of failure this
+design exists to avoid -- a layout that looks placed and is illegal in ways the
+invariants find later and attribute elsewhere.
 
 ### What `snap` hands back, and where primitives stop being primitives
 
@@ -741,7 +737,7 @@ say why that is not the same thing.
 The rule is about **ordering candidates**. Two layouts whose scores differ in
 the last bit must not swap places depending on how they were summed, or the
 search stops being reproducible and every measurement taken from it is noise.
-Nothing here orders anything: the relaxation solves, `snap` quantises, and what
+Nothing here orders anything: the relaxation solves, `snap` rounds, and what
 leaves the module is integer anchors and one of four facings. Floats are the
 solver's internal state, not a comparison key.
 
@@ -769,7 +765,6 @@ uses:
 |---|---|---|
 | did not converge | budget spent, violation remains | `DidNotConverge { iterations, worst_violation }`, naming the worst pair |
 | projection deadlock | no progress for N steps, violation remains | a different error, because the remedy differs: constraints that contradict, not a budget that ran out |
-| facings cannot be quantised | `snap` step 2 finds no legal repair | `FacingsDoNotQuantise`, naming a body whose four facings all conflict |
 | violation survives `snap` | checked directly after rounding | the margin argument is wrong; report the pair rather than let an invariant find it later |
 
 The last is a principle: the invariants exist to catch real errors, not to
@@ -797,9 +792,9 @@ build yet is a test nobody can write.
    bodies, because a gate is where one net ends and another begins, so its
    support and its torch are never on the same net. Checked directly on the
    snapped anchors, not through the invariants. This is what the rounding
-   margin claims, and it is what an earlier draft got wrong by forgetting
-   rotation, so the case that tests it is one that rotates: a body whose
-   relaxed facing sits near 45 degrees, where quantising moves it furthest.
+   margin claims, and the case that tests it is one where a body sits close to
+   a half-cell boundary in every axis at once, which is where rounding moves it
+   furthest.
 4. **Welds survive snap.** A torch is on the face of its support.
 5. **Corridors exist.** A placement is not merely legal but routable: the
    router reaches every sink it could reach from the old placement. This is
