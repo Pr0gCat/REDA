@@ -73,8 +73,11 @@ force gives a position and the net *torque* gives a facing. Orientation stops
 being a separate problem, or -- as it is today -- a constant: `place_nor_gate`
 faces north unconditionally.
 
-**Springs encode plain wirelength.** Not the 15-cell step, and not
-criticality-weighted stiffness. §66 is right that the real objective is "every
+**Springs encode plain wirelength, so delay is not in the objective.** Not the
+15-cell step, and not criticality-weighted stiffness. This is worth stating
+against the founding thesis rather than around it: §2 says delay in redstone is
+a placement problem, and this design does not optimise delay. It optimises wire
+and then reports what delay it got. §66 is right that the real objective is "every
 hop on the critical path stays within 15 cells" rather than total wirelength,
 but a short-wire placement satisfies that constraint most of the time, the
 convergence behaviour of a plain quadratic system is known, and a non-monotone
@@ -91,6 +94,36 @@ after every step rather than added as a force. The continuous solution is then
 nearly legal by construction, which is the whole reason to prefer it: the
 solver already knows what legalisation will ask of it.
 
+It applies **between conductors of different nets**, which is the rule as
+written, and not between every pair of bodies. Getting that wrong makes the
+design contradict itself: a torch is *required* to touch its own support, so a
+projection that pushes all pairs apart fights the weld that holds them
+together, and the two take turns undoing each other.
+
+Which means the separation is between **ports, not bodies**. A body does not
+sit on a net: a torch's support carries the signal driving it and its torch
+carries the signal it drives, and those are different nets by definition -- a
+gate is exactly the place one net ends and another begins. Keying the exemption
+off a body would exempt a torch from its own output, or separate it from its
+own input. Two ports are exempt when they carry the same signal, or when a weld
+relates them.
+
+**Room for wires is part of the separation, not a later problem.** Springs pull
+and separation pushes, so the relaxed solution sits at exactly the minimum
+separation everywhere -- a placement with no corridors. Routes then have
+nowhere to go, which is already the observed failure at segment_a and would
+become the failure everywhere. Channels exist in the legacy router for this
+reason and this design has no equivalent, so the separation carries it: each
+body reserves, beyond its own clearance, room for the nets that must reach it.
+
+The reservation is the number of edges that must be *routed* to it -- which is
+its degree less the welds, because a torch and its support are adjacent by
+construction and no wire runs between them -- times the width one route needs.
+
+That is a first estimate and a measurable one: if placements come out routable
+but wasteful, or compact but unroutable, this is the number that was wrong, and
+it is one number.
+
 **Everything switches, including `compile()`.** Legacy stays as a comparison,
 not as the production path. The risk is stated plainly below.
 
@@ -104,7 +137,7 @@ Netlist
 PrimitiveGraph
   |  relax                        NEW -- continuous, spacing projected each step
 ContinuousPlacement
-  |  snap                         NEW -- round to lattice, quantise facing
+  |  snap                         NEW -- quantise facing, re-project, round
 PlanCandidate                     anchors and variants, not yet routed
   |  route_every_net              exists -- A* with rip-up
   |  realise_and_verify           exists -- blocks, then four invariants
@@ -127,7 +160,14 @@ struct Body {
     kind: Primitive,
     position: [f64; 3],
     facing: f64,        // radians; quantised to four at snap
-    extent: f64,        // from physical::variants' blocks
+    /// Half-extents along the body's own axes, from the blocks
+    /// `physical::variants` says it occupies. Not a radius: a NOR cell is not
+    /// a sphere, and a sphere large enough to contain one wastes exactly the
+    /// space this design exists to win.
+    half_extent: [f64; 3],
+    /// How far the furthest port sits from the centre. Quantising the facing
+    /// swings the ports, so this is what the snap margin has to cover.
+    port_radius: f64,
 }
 
 /// A spring, attached at a port on each end.
@@ -141,10 +181,59 @@ enum Weld {
 
 struct RelaxEffort { iterations: usize, seed: u64 }
 
-fn relax(graph: &PrimitiveGraph, effort: RelaxEffort)
+fn relax(graph: &PrimitiveGraph, pinned: &PortPlacements, effort: RelaxEffort)
     -> Result<ContinuousPlacement, PlannerError>;
-fn snap(placement: &ContinuousPlacement) -> Vec<(NodeId, Anchor, u8)>;
+fn snap(placement: &ContinuousPlacement)
+    -> Result<Vec<(NodeId, Anchor, u8)>, PlannerError>;
 ```
+
+### Where the relaxation starts
+
+A spring system with hard constraints is not convex, so the starting point
+decides which solution it finds. Starting everything at the origin gives a
+knot the projection then has to unpick, and starting at random makes the result
+unreproducible unless the randomness is the seed's.
+
+It starts from the placement that exists today: Z by logic depth, X by
+barycentre over already-placed sources. That layout is legal, it is what the
+current `plan_from_netlist` produces, and it is measurably poor -- 656 blocks
+for and4 against the emitter's 472. Relaxation is therefore asked to improve a
+known-bad answer rather than to invent one, and the improvement is measurable
+against the number it started from.
+
+`RelaxEffort`'s seed perturbs that start. It exists so a run can be repeated
+exactly and so a stuck configuration can be retried from a different one, not
+because anything in the solve is random.
+
+### Floating point, against a rule that forbids it
+
+`2026-08-11-unified-3d-planner.md` is explicit: "use rational
+numerator/denominator pairs or integer cross multiplication for normalisation,
+**never floating-point ordering**", and `NormalisedScore` implements exact
+rational comparison to obey it. This design is `f64` throughout, so it has to
+say why that is not the same thing.
+
+The rule is about **ordering candidates**. Two layouts whose scores differ in
+the last bit must not swap places depending on how they were summed, or the
+search stops being reproducible and every measurement taken from it is noise.
+Nothing here orders anything: the relaxation solves, `snap` quantises, and what
+leaves the module is integer anchors and one of four facings. Floats are the
+solver's internal state, not a comparison key.
+
+That distinction holds for one build. It does **not** hold across two, and this
+project has two: `viewer/` compiles the same crate to wasm, and once `compile()`
+uses this placer, the circuit drawn in a browser is the circuit this code
+placed. If wasm and native disagree in the last bits, the same netlist yields
+two different layouts and the viewer stops being evidence about the compiler.
+
+So one test decides it: place a reference circuit natively and under wasm and
+require identical anchors. If they agree, floats stay. If they do not, the
+positions become fixed-point -- the arithmetic is addition, multiplication and
+comparison, all of which fixed-point does exactly -- and the only thing lost is
+the convenience of `f64` in the projection.
+
+This is stated as a risk with a test rather than settled here, because which
+way it goes is a fact about two toolchains and not a matter of design.
 
 ### What `physical.rs` has to gain
 
@@ -172,17 +261,40 @@ the primitive's kind and the edge's kind:
 
 ### The separation the projection enforces
 
-Three terms, each with a source:
+Four terms, each with a source:
 
-1. each body's `extent`, from the blocks `physical::variants` says it occupies;
-2. two cells of conductor clearance, from `2026-08-09-channel-safety-condition.md`;
-3. **plus one**, so that rounding cannot break what the projection established.
+1. each body's half-extents, from the blocks `physical::variants` says it
+   occupies;
+2. two cells of conductor clearance, from
+   `2026-08-09-channel-safety-condition.md`, between different signals only;
+3. room for the nets that must reach the body -- its degree times one route's
+   width, so that a relaxed placement has corridors rather than only clearance;
+4. a rounding margin, derived below.
 
-The third is the reason `snap` can be arithmetic rather than a repair loop.
-Rounding moves a body by at most half a cell, so two bodies can approach by at
-most one; a continuous solution separated by the requirement plus one is
-therefore still separated after rounding. Without it, `snap` becomes a second
-legaliser with its own failure modes.
+### Why `snap` quantises the facing first
+
+An earlier draft claimed the margin could be one cell, on the grounds that
+rounding moves a body half a cell and two bodies therefore approach by at most
+one. That reasoning covers translation and ignores rotation, which is the
+larger effect: quantising a facing moves it by up to 45 degrees, and a body's
+blocks and ports sit away from its centre, so they swing by up to
+`port_radius * 2 * sin(22.5°)` -- most of a cell for a repeater, more for
+anything larger. A margin of one does not cover it and `snap` would silently
+hand on a placement the projection had already made legal.
+
+So `snap` is three steps, not one:
+
+1. **Quantise every facing** to the nearest of the four, and recompute each
+   body's occupied cells at that facing.
+2. **Project again**, in continuous space, with the facings now fixed. This
+   repairs whatever the rotation broke, and it is the same projection the
+   relaxation was already running.
+3. **Round the positions**, with a margin of one cell -- which now covers what
+   it was always claimed to cover, because after step 2 nothing is rotating.
+
+`snap` returns a `Result` because step 2 can fail: quantising every facing at
+once can produce a configuration with no legal repair, and that is a real
+outcome to report rather than round anyway.
 
 ### What `snap` hands back, and where primitives stop being primitives
 
@@ -191,10 +303,11 @@ per gate followed by one per primary input, and `emit_primitives` reads
 `netlist.gates[index]` to decide what to place there.
 
 Today that mismatch is not one. Every realisable gate is a single torch or a
-wire merge, so primitive and gate correspond one to one and `snap` maps
-straight back. It becomes one the moment a gate expands to several primitives
--- Design H's five, or any macro cell -- and at that point `PlanCandidate` has
-to carry primitives rather than gates.
+wire merge, so primitive and gate correspond one to one and `snap`'s `NodeId`
+is a gate index by coincidence rather than by design. It becomes a mismatch the
+moment a gate expands to several primitives -- Design H's five, or any macro
+cell -- and at that point `PlanCandidate` has to carry primitives rather than
+gates, and `snap`'s return type stops fitting.
 
 This document does not do that. It notes where the seam is, so that whoever
 lands the DFF finds it named rather than discovers it.
@@ -221,7 +334,8 @@ uses:
 |---|---|---|
 | did not converge | budget spent, violation remains | `DidNotConverge { iterations, worst_violation }`, naming the worst pair |
 | projection deadlock | no progress for N steps, violation remains | a different error, because the remedy differs: constraints that contradict, not a budget that ran out |
-| violation survives `snap` | checked directly after snapping | the "plus one" reasoning is wrong; report the pair rather than let an invariant find it later |
+| facings cannot be quantised | `snap` step 2 finds no legal repair | `FacingsDoNotQuantise`, naming a body whose four facings all conflict |
+| violation survives `snap` | checked directly after rounding | the margin argument is wrong; report the pair rather than let an invariant find it later |
 
 The last is a principle: the invariants exist to catch real errors, not to
 catch the legaliser's leftovers.
@@ -236,9 +350,12 @@ Cheapest first, each testing one claim:
 2. **Orientation.** A hand-built pair: a torch whose only consumer sits to its
    east ends up facing east. This is the claim that torque produces
    orientation, on a case small enough to verify by hand.
-3. **Separation after snap.** For every reference circuit, no two primitives
-   are closer than the rule allows -- checked directly on the snapped anchors,
-   not through the invariants. This is the claim the "plus one" makes.
+3. **Separation after snap.** For every reference circuit, no two primitives of
+   different signals are closer than the rule allows -- checked directly on the
+   snapped anchors, not through the invariants. This is the claim the margin
+   makes, and it is the one an earlier draft got wrong by forgetting rotation,
+   so it is tested on a case that rotates: a body whose relaxed facing sits
+   near 45 degrees, where quantising moves it furthest.
 4. **Welds survive snap.** A torch is on its support's face; Design H's lock
    repeater is at the data repeater's side.
 5. **End to end.** Every reference circuit places, routes, verifies, and
