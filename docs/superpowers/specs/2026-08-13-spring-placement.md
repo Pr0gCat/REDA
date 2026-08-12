@@ -82,13 +82,14 @@ Six decisions follow, each with the alternative it was chosen over.
 
 **Bodies are primitives, not gates.** A torch, a repeater, a lever and a lamp
 each move on their own; a cell is a soft spring holding its members together,
-not a rigid body. (Review found two things that move and are not primitives:
-the block a component stands on, and a wire merge, which has no primitive at
-all. See "Nothing holds a body up" and "A third of the gates have no body".) The cost is that geometry a topology template used to
-guarantee -- a torch on its support's face, Design H's lock repeater at the
-data repeater's side -- has to become an explicit constraint. The gain is that
+not a rigid body. (Review found one mover that is not a primitive: a wire
+merge, which contributes no primitive at all -- see "A third of the gates have
+no body". It also spent three rounds inventing support bodies before reading
+that a variant's blocks already include what the component stands on -- see "A
+body already carries what it stands on".) The cost is that the one geometric
+relation between *different* bodies -- Design H's lock repeater at the data
+repeater's side -- has to become an explicit constraint. The gain is that
 `physical.rs`'s typed ports become the thing placement is expressed in.
-
 
 
 **Springs attach to ports, not to centres.** Every edge of the primitive graph
