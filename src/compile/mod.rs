@@ -6411,9 +6411,11 @@ pub(crate) fn gate_footprint(
     // straight line into a corner, so it stops driving the support at all.
     // They belong to the gate; only the net terminating in one may enter it,
     // and that step is appended rather than searched.
+    let mut sockets = Vec::new();
     for direction in INPUT_DIRECTIONS.iter().take(gate.inputs.len()) {
         let socket = Position::new(shifted.0, shifted.1, shifted.2).offset(*direction);
         scratch.set(socket.x, socket.y, socket.z, stone());
+        sockets.push(socket);
     }
 
     let mut cells = Vec::new();
@@ -6437,7 +6439,14 @@ pub(crate) fn gate_footprint(
         // that computes the wrong function. It keeps others out like any
         // other conductor.
         let is_support = cell.x == origin.0 && cell.y == origin.1 && cell.z == origin.2;
-        if kind != BlockKind::Solid || (is_support && !gate.is_merge()) {
+        // A socket is stone here only because the router has not filled it
+        // yet; what ends up in it is dust or a repeater. Treated as inert, a
+        // foreign net may sit diagonally above it, and dust joins diagonally
+        // -- two nets in one network, structurally invisible.
+        let is_socket = sockets
+            .iter()
+            .any(|socket| socket.x == x && socket.y == y && socket.z == z);
+        if kind != BlockKind::Solid || is_socket || (is_support && !gate.is_merge()) {
             conductors.push(cell);
         }
     }

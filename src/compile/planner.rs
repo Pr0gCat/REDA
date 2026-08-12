@@ -878,6 +878,16 @@ struct LaidBranch {
     strength_before_terminal: u8,
     /// Repeaters this branch lays between the source and its terminal.
     repeaters: u64,
+    /// Whether the signal is still alive when it reaches the last cell.
+    ///
+    /// A refresh can only stand on a flat cell, and a path that climbs and
+    /// drops repeatedly leaves nowhere to put one -- so the budget asks for a
+    /// refresh, finds every candidate is a stair, and the run carries on
+    /// decaying. The route is laid, connected and dead. Saying so here turns
+    /// it into a routing failure, which the negotiation loop already knows how
+    /// to answer: charge what pushed this path into the air and take a flatter
+    /// one.
+    carries: bool,
 }
 
 /// Lay dust along a rerouted branch, refreshing it with repeaters exactly
@@ -939,6 +949,24 @@ fn realise_branch_from(previous_cell: Anchor, incoming: u8, cells: &[Anchor]) ->
     let reserve = (stairs as i32).min(compile::MAX_DUST_RUN - 2);
     let (is_repeater, _) = compile::plan_bent_path(cells.len(), &bends, incoming, reserve);
 
+    // A refresh immediately before every climb. A staircase spends one
+    // strength per level and can hold no repeater anywhere along it, so a
+    // climb entered on a tired signal arrives dead however short it is --
+    // which is what left segment_a connected and unpowered. Entered at full
+    // strength it is affordable, and this is the only cell that can make it
+    // so: the last flat one before the stairs.
+    let mut is_repeater = is_repeater;
+    let mut previous = source;
+    for (index, cell) in cells.iter().enumerate() {
+        if cell.y != previous.y && index > 0 {
+            let before = index - 1;
+            if !bends.contains(&before) {
+                is_repeater[before] = true;
+            }
+        }
+        previous = *cell;
+    }
+
     let mut blocks = Vec::with_capacity(cells.len());
     let mut previous = source;
     for (index, cell) in cells.iter().enumerate() {
@@ -973,6 +1001,23 @@ fn realise_branch_from(previous_cell: Anchor, incoming: u8, cells: &[Anchor]) ->
         }
     };
 
+    // Walk the blocks that were actually laid, not the plan that asked for
+    // them: a refresh the plan wanted and could not place is exactly the case
+    // this has to catch.
+    let mut carried = incoming;
+    let mut carries = true;
+    for block in &blocks {
+        if block.kind == crate::redstone::world::block::BlockKind::Repeater {
+            carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+            continue;
+        }
+        carried = carried.saturating_sub(1);
+        if carried == 0 {
+            carries = false;
+            break;
+        }
+    }
+
     LaidBranch {
         floors: vec![compile::stone(); blocks.len()],
         repeaters: blocks
@@ -981,6 +1026,7 @@ fn realise_branch_from(previous_cell: Anchor, incoming: u8, cells: &[Anchor]) ->
             .count() as u64,
         blocks,
         strength_before_terminal,
+        carries,
     }
 }
 
@@ -1223,9 +1269,24 @@ fn deterministic_astar(
             // strength budget to reserve for it in advance --
             // `plan_bent_path` takes a `reserve` for exactly that -- not to
             // be made unattractive.
+            // A step in Y costs more than a step across. Not to forbid
+            // climbing -- congestion will still buy it where it is the only
+            // way through -- but because a staircase can hold no refresh
+            // anywhere along it, so a path that wanders up and down leaves the
+            // strength budget nowhere to spend. Pricing it alone was tried
+            // before there was anything to overrule it, and only moved climbs
+            // to where the signal could no longer afford them.
+            const CLIMB_COST: u64 = 3;
+            let closer_in_y =
+                (next.y - goal.y).abs() < (state.anchor.y - goal.y).abs();
+            let step_cost = if next.y == state.anchor.y || closer_in_y {
+                1
+            } else {
+                CLIMB_COST
+            };
             let next_travelled = state
                 .travelled
-                .saturating_add(1)
+                .saturating_add(step_cost)
                 .saturating_add(congestion.price(&next));
             if travelled
                 .get(&next)
@@ -1337,6 +1398,14 @@ impl Congestion {
     fn price(&self, cell: &Anchor) -> u64 {
         const PER_ROUND: u64 = 6;
         self.charged.get(cell).copied().unwrap_or(0) * PER_ROUND
+    }
+
+    /// Charge these cells whatever they belong to.
+    fn charge_cells(&mut self, cells: &[Anchor]) -> bool {
+        for cell in cells {
+            *self.charged.entry(*cell).or_insert(0) += 1;
+        }
+        !cells.is_empty()
     }
 
     /// Charge every cell inside the box a net gave up crossing that belongs to
@@ -1909,7 +1978,7 @@ fn gate_depths(netlist: &Netlist) -> Result<Vec<usize>, PlannerError> {
 /// Each round removes every route that sits where a failed net needs to go and
 /// re-lays them afterwards, so a round is expensive; the point is to escape a
 /// corner an earlier net walked this one into, not to search.
-const RIP_UP_ROUNDS: usize = 24;
+const RIP_UP_ROUNDS: usize = 64;
 
 fn route_every_net(
     candidate: PlanCandidate,
@@ -1927,9 +1996,11 @@ fn route_every_net(
                     blocked,
                     corridor,
                     reservation,
+                    charge_outright,
                     error,
                 } = *failure;
                 last = Some(error);
+                let charged_air = congestion.charge_cells(&charge_outright);
 
                 // Two levers, and both are needed. Going first gets a net the
                 // corridor it wants when one exists; charging what stood in
@@ -1943,7 +2014,7 @@ fn route_every_net(
                 let reordered = promoted != order;
                 order = promoted;
 
-                if !charged && !reordered {
+                if !charged && !reordered && !charged_air {
                     break;
                 }
             }
@@ -1976,6 +2047,13 @@ struct RoutingFailure {
     /// What the round had claimed by the time it gave up -- who was in the
     /// way, in other words.
     reservation: Reservation,
+    /// Cells to charge outright, whoever owns them.
+    ///
+    /// A route that decays to nothing was not blocked by anybody: it climbed,
+    /// and a climb has nowhere to put a refresh. Charging the corridor asks
+    /// other nets to move, which is no answer -- what has to become expensive
+    /// is the height this net chose, so the next round buys a flatter path.
+    charge_outright: Vec<Anchor>,
     error: PlannerError,
 }
 
@@ -2034,6 +2112,7 @@ fn route_in_order(
                     blocked: signal.clone(),
                     corridor: (Anchor { x: 0, y: 0, z: 0 }, Anchor { x: 0, y: 0, z: 0 }),
                     reservation: Reservation::new(),
+                    charge_outright: Vec::new(),
                     error: PlannerError::UnrealisableNode {
                         id: signal.clone(),
                         reason: "no gate or primary input drives this signal".to_string(),
@@ -2071,6 +2150,7 @@ fn route_in_order(
                         blocked: signal.clone(),
                         corridor: (source, approach),
                         reservation: reservation.clone(),
+                        charge_outright: Vec::new(),
                         error: PlannerError::NoLocalRoute {
                             from: source,
                             to: approach,
@@ -2111,6 +2191,31 @@ fn route_in_order(
             }
 
             let laid = realise_branch_from(previous_cell, carried, &path[shared..]);
+            if !laid.carries {
+                return Err(Box::new(RoutingFailure {
+                    blocked: signal.clone(),
+                    corridor: (source, approach),
+                    reservation: reservation.clone(),
+                    // Every cell this branch put above the gate plane. Nothing
+                    // else is at fault: the climb is what left the refreshes
+                    // nowhere to stand.
+                    charge_outright: path
+                        .iter()
+                        .copied()
+                        .filter(|cell| cell.y > PLANNER_Y)
+                        .collect(),
+                    error: PlannerError::PhysicalInvariant(
+                        compile::CompileError::CandidateMetadataViolation {
+                            item: signal.clone(),
+                            reason: format!(
+                                "the route to {}.in[{input_index}] decays to nothing before it \
+                                 arrives, and no cell along it can hold a refresh",
+                                netlist.gates[gate].output
+                            ),
+                        },
+                    ),
+                }));
+            }
             // Whether the strength budget already needs the socket cell to be
             // a refresh. If it does, no terminal-style preference may take it
             // away: dust that cannot reach is not a cheaper terminal, it is a
@@ -4041,16 +4146,13 @@ mod tests {
     /// assumed.
     ///
     /// and4 and full_adder place, route and verify without the legacy emitter.
-    /// segment_a routes completely -- every net reaches every sink, which took
-    /// nets charging what stood in their way -- and then arrives dead: net
-    /// `g4` reaches `g17` structurally and with nothing left.
-    ///
-    /// So the search is no longer the limit at this size. Refresh planning is:
-    /// a negotiated route detours around what it cannot afford, which makes it
-    /// longer, and a detour that climbs cannot hold a repeater anywhere along
-    /// the climb.
+    /// segment_a routes, carries its signal past the router's own reckoning,
+    /// and is still refused by the strength invariant at one sink out of many
+    /// -- so what remains is the gap between what the router believes a branch
+    /// carries and what the whole network actually delivers, which is a
+    /// fanout's shared trunk being counted once per branch.
     #[test]
-    #[ignore = "known: segment_a routes completely and arrives dead"]
+    #[ignore = "known: segment_a routes and one sink still arrives dead"]
     fn how_far_the_planners_own_placement_carries() {
         use crate::circuits::full_adder::build_full_adder_netlist;
         use crate::circuits::seven_segment::{
