@@ -2810,7 +2810,7 @@ fn optimise_with_report(
     loop {
         let epoch = best.clone();
         let mut improved = false;
-        for proposal in enumerate_candidates(&epoch, effort.seed) {
+        for change in enumerate_moves(&epoch, effort.seed) {
             if evaluations >= effort.evaluations {
                 return OptimisationReport {
                     gate_effort: gate_efforts(&best),
@@ -2820,15 +2820,14 @@ fn optimise_with_report(
             }
             evaluations += 1;
             generation += 1;
-            // Legality is what the circuit says, not what a cheaper stand-in
-            // says. `validate_candidate_reservation` had no spacing, strength
-            // or torch-merge check and assumed every directed-dust terminal
-            // was isolated, so it accepted proposals no one could build --
-            // which is how the terminal-flip family below survived: it used
-            // to relabel a terminal without touching the block underneath it.
-            if verify_candidate(&proposal, netlist).is_err() {
+            let Some(proposal) = change.apply(&epoch) else {
                 continue;
-            }
+            };
+            // Score first, then verify. Legality is still what the circuit
+            // says -- `verify_candidate` builds the world and runs every
+            // invariant on it -- but a proposal that does not beat the best is
+            // discarded either way, and building a whole world to reject it is
+            // the entire cost of this loop. Only a winner is worth proving.
             let Ok(proposal_score) =
                 proposal.score_against_at(&baseline, &weights, effort, generation)
             else {
@@ -2838,10 +2837,14 @@ fn optimise_with_report(
             else {
                 continue;
             };
-            if proposal_score.order < best_score.order {
-                best = proposal;
-                improved = true;
+            if proposal_score.order >= best_score.order {
+                continue;
             }
+            if verify_candidate(&proposal, netlist).is_err() {
+                continue;
+            }
+            best = proposal;
+            improved = true;
         }
         if !improved || evaluations >= effort.evaluations {
             return OptimisationReport {
@@ -2853,7 +2856,14 @@ fn optimise_with_report(
     }
 }
 
-fn enumerate_candidates(candidate: &PlanCandidate, seed: u64) -> Vec<PlanCandidate> {
+/// Every local change worth trying, as instructions rather than candidates.
+///
+/// This used to return the candidates themselves, which meant building all of
+/// them -- rerouting every incident net of every primitive in six directions
+/// -- before the loop that spends the evaluation budget had run once. For
+/// seven_segment that is five hundred reroutes to decide whether to keep the
+/// first. The budget can only bound the work if the work happens inside it.
+fn enumerate_moves(candidate: &PlanCandidate, seed: u64) -> Vec<Move> {
     const MOVES: [(i32, i32, i32); 6] = [
         (-1, 0, 0),
         (0, -1, 0),
@@ -2862,27 +2872,62 @@ fn enumerate_candidates(candidate: &PlanCandidate, seed: u64) -> Vec<PlanCandida
         (0, 1, 0),
         (1, 0, 0),
     ];
-    let mut proposals = Vec::new();
     let rotation = (seed as usize) % MOVES.len();
+    let mut moves = Vec::new();
     for primitive in 0..candidate.anchors.len() {
         let from = candidate.anchors[primitive];
         for offset in 0..MOVES.len() {
             let (x, y, z) = MOVES[(offset + rotation) % MOVES.len()];
-            if let Ok(moved) = try_move(
-                candidate,
+            moves.push(Move::Shift {
                 primitive,
-                Anchor {
+                to: Anchor {
                     x: from.x.saturating_add(x),
                     y: from.y.saturating_add(y),
                     z: from.z.saturating_add(z),
                 },
-            ) {
-                proposals.push(moved);
+            });
+        }
+    }
+    for gate in topology_alternatives(candidate) {
+        moves.push(gate);
+    }
+    moves
+}
+
+
+/// One local change, not yet made.
+#[derive(Debug, Clone, Copy)]
+enum Move {
+    Shift { primitive: NodeId, to: Anchor },
+    Retopologise { gate: usize, entry: usize },
+}
+
+impl Move {
+    /// Carry this out, or report that it cannot be.
+    fn apply(self, candidate: &PlanCandidate) -> Option<PlanCandidate> {
+        match self {
+            Move::Shift { primitive, to } => try_move(candidate, primitive, to).ok(),
+            Move::Retopologise { gate, entry } => {
+                let mut alternative = candidate.clone();
+                alternative.topology_entries.insert(gate, entry);
+                if !candidate_allows_entry(&alternative, gate, entry) {
+                    return None;
+                }
+                if let Some(emission) = alternative.legacy_emission.as_ref() {
+                    let selection: EntrySelection = alternative.topology_entries.clone();
+                    reexpand_gate(
+                        emission.netlist(),
+                        &Library::default_library(),
+                        &selection,
+                        gate,
+                        entry,
+                    )
+                    .ok()?;
+                }
+                Some(alternative)
             }
         }
     }
-    proposals.extend(topology_feedback_candidates(candidate));
-    proposals
 }
 
 fn gate_efforts(candidate: &PlanCandidate) -> Vec<GateEffort> {
@@ -2936,9 +2981,9 @@ fn gate_efforts(candidate: &PlanCandidate) -> Vec<GateEffort> {
 /// are worth measuring is worse than measuring them: proposals are verified by
 /// building them now, so an alternative that is illegal is rejected and one
 /// that is merely worse loses on its real score.
-fn topology_feedback_candidates(candidate: &PlanCandidate) -> Vec<PlanCandidate> {
+fn topology_alternatives(candidate: &PlanCandidate) -> Vec<Move> {
     let library = Library::default_library();
-    let mut proposals = Vec::new();
+    let mut moves = Vec::new();
     for gate in gate_efforts(candidate) {
         let kind = candidate
             .legacy_emission
@@ -2950,29 +2995,13 @@ fn topology_feedback_candidates(candidate: &PlanCandidate) -> Vec<PlanCandidate>
             if entry == gate.selected_entry {
                 continue;
             }
-            let mut alternative = candidate.clone();
-            alternative.topology_entries.insert(gate.gate, entry);
-            if !candidate_allows_entry(&alternative, gate.gate, entry) {
-                continue;
-            }
-            if let Some(emission) = alternative.legacy_emission.as_ref() {
-                let selection: EntrySelection = alternative.topology_entries.clone();
-                if reexpand_gate(
-                    emission.netlist(),
-                    &library,
-                    &selection,
-                    gate.gate,
-                    entry,
-                )
-                .is_err()
-                {
-                    continue;
-                }
-            }
-            proposals.push(alternative);
+            moves.push(Move::Retopologise {
+                gate: gate.gate,
+                entry,
+            });
         }
     }
-    proposals
+    moves
 }
 
 fn candidate_allows_entry(candidate: &PlanCandidate, gate: usize, entry: usize) -> bool {
@@ -4341,6 +4370,60 @@ mod tests {
             };
             assert_eq!(read("sum"), count % 2 == 1, "sum for inputs {mask:03b}");
             assert_eq!(read("cout"), count >= 2, "cout for inputs {mask:03b}");
+        }
+    }
+
+    /// What optimisation costs and what it buys, per circuit.
+    #[test]
+    #[ignore]
+    fn measure_optimisation_at_scale() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+
+        for (name, netlist) in [
+            ("and4", build_and4_netlist().0),
+            ("full_adder", build_full_adder_netlist().0),
+            ("segment_a", build_single_segment_netlist(0).0),
+            ("seven_segment", build_seven_segment_netlist().0),
+        ] {
+            let compiled = compile::compile(&netlist).expect("compiles");
+            let seed = seed_from_legacy_parts(&netlist, compiled.legacy_emission().unwrap())
+                .expect("seeds");
+
+            let moves = enumerate_moves(&seed, 0x26_02);
+            let mut legal = 0usize;
+            let mut checked = 0usize;
+            for change in moves.iter().take(24) {
+                checked += 1;
+                if change
+                    .apply(&seed)
+                    .is_some_and(|proposal| verify_candidate(&proposal, &netlist).is_ok())
+                {
+                    legal += 1;
+                }
+            }
+
+            let before = seed.cost();
+            let report = optimise_with_report(
+                seed,
+                &netlist,
+                PlannerWeights::default(),
+                PlannerEffort { evaluations: 24, seed: 0x26_02 },
+            );
+            let after = report.candidate.cost();
+
+            eprintln!(
+                "{name}: {} gates | {} proposals, {legal}/{checked} legal | \
+                 delay {}->{} wire {}->{} space {}->{} turns {}->{}",
+                netlist.gates.len(),
+                moves.len(),
+                before.delay, after.delay,
+                before.wire, after.wire,
+                before.space, after.space,
+                before.turns, after.turns,
+            );
         }
     }
 
