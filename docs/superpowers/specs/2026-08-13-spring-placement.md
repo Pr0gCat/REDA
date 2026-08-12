@@ -90,12 +90,21 @@ bind often, weighting comes later, with the measurement that says so.
 
 **The spacing rule is the counterforce, and it is a hard constraint.** Not
 pairwise electrical repulsion, and not a bin density term. Two conductors of
-different nets need two cells of clearance -- derived in
-`2026-08-09-channel-safety-condition.md` from `dust_reach`, and enforced today
-by `verify_spacing`. That number is not a tuning parameter, so it is projected
-after every step rather than added as a force. The continuous solution is then
-nearly legal by construction, which is the whole reason to prefer it: the
-solver already knows what legalisation will ask of it.
+different nets need two cells of clearance, derived in
+`2026-08-09-channel-safety-condition.md` from `dust_reach`. That number is not
+a tuning parameter, so it is projected after every step rather than added as a
+force.
+
+Worth being exact about who enforces it today, because the design leans on it
+and the obvious answer is wrong. `verify_spacing` does **not**: it checks cell
+exclusivity, that no cell is claimed by two nets, which is weaker and different.
+The two-cell rule is enforced by construction, in the router's keep-out, and a
+violation surfaces as `ConnectivityViolation` -- two nets physically joined --
+which is the consequence rather than the rule.
+
+So the projection enforces something no single invariant states. That is an
+argument for it, not against: placement is where the rule can be satisfied
+directly instead of being discovered, downstream, as an electrical accident.
 
 It applies **between conductors of different nets**, which is the rule as
 written, and not between every pair of bodies. Getting that wrong makes the
