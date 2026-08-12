@@ -1363,6 +1363,8 @@ Prepend to `src/compile/relax/build.rs`:
 
 use crate::compile::geometry::{self, CellFacing};
 use crate::compile::physical::{self, PortKind, RelativeSide};
+use crate::redstone::simulator::position::Position;
+use crate::redstone::world::block::BlockKind;
 use crate::compile::planner::{Anchor, PortPlacements};
 use crate::compile::primitive_graph::{NodeId, PrimitiveGraph, Provenance};
 use crate::compile::topology::{Primitive, TemplateNode};
@@ -1501,7 +1503,7 @@ pub fn attach_offset(attach: Attach, body: &Body) -> [f64; 3] {
     match attach {
         Attach::Socket(index) => {
             let direction = geometry::input_directions(facing)[index];
-            let step = crate::redstone::simulator::position::Position::new(0, 0, 0).offset(direction);
+            let step = Position::new(0, 0, 0).offset(direction);
             [step.x as f64, step.y as f64, step.z as f64]
         }
         Attach::Pin => {
@@ -1510,7 +1512,7 @@ pub fn attach_offset(attach: Attach, body: &Body) -> [f64; 3] {
                 BodyKind::Primitive { .. } => 2,
             };
             let direction = geometry::output_direction(facing);
-            let mut step = crate::redstone::simulator::position::Position::new(0, 0, 0);
+            let mut step = Position::new(0, 0, 0);
             for _ in 0..hops {
                 step = step.offset(direction);
             }
@@ -1756,8 +1758,7 @@ pub fn build(
                     continue;
                 };
                 let direction = geometry::input_directions(CellFacing::NORTH)[input_index];
-                let socket = crate::redstone::simulator::position::Position::new(at.x, at.y, at.z)
-                    .offset(direction);
+                let socket = Position::new(at.x, at.y, at.z).offset(direction);
                 bodies.push(Body {
                     what: BodyKind::Primitive {
                         node,
@@ -2092,7 +2093,7 @@ Prepend to `src/compile/relax/project.rs`:
 //! layout that is nearly legal.
 
 use crate::compile::geometry;
-use crate::compile::relax::build::{Body, BodyGraph, BodyKind, Weld};
+use crate::compile::relax::build::{cells, BodyGraph, BodyKind, Weld};
 use crate::redstone::simulator::position::Position;
 
 /// Two conductors of different signals need two cells of clearance.
@@ -2252,7 +2253,7 @@ pub fn placed_cells(graph: &BodyGraph) -> Vec<Vec<PlacedCell>> {
         .bodies
         .iter()
         .map(|body| {
-            crate::compile::relax::build::cells(body)
+            cells(body)
                 .into_iter()
                 .map(|cell| PlacedCell {
                     at: [
@@ -3126,7 +3127,6 @@ Create `src/compile/relax/snap.rs`:
 
 use crate::compile::geometry::CellFacing;
 use crate::compile::planner::Anchor;
-use crate::compile::relax::build::BodyKind;
 use crate::compile::relax::project::{required_separations, worst_violation};
 use crate::compile::relax::{ContinuousPlacement, RelaxError};
 
@@ -3251,7 +3251,9 @@ are the numbers to beat.
 - Consumes: `relax::{relax, snap, Axes, RelaxEffort, SnappedNode, RelaxError}`.
 - Produces:
   - `PlanCandidate::with_facings(anchors, primitive_nodes, routes, facings: Vec<CellFacing>) -> Self` -- the constructor `variant_indices` never had.
-  - `PlannerError` gains `Relaxation(RelaxError)`.
+  - `PlannerError` gains `Relaxation(RelaxError)`, with a `Display` arm that
+    forwards: `write!(f, "{error}")`. `RelaxError` already says which bodies
+    and by how much, and wrapping that in a second sentence would bury it.
   - `plan_from_netlist` and `plan_from_netlist_shaped` keep their signatures.
   - `fn starting_layout(netlist: &Netlist, placements: &PortPlacements, shape: Shape) -> Result<Vec<Anchor>, PlannerError>` -- the existing depth-and-barycentre code, extracted verbatim.
 

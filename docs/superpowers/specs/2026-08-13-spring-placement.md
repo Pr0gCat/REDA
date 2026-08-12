@@ -224,15 +224,25 @@ struct Pull { from: (usize, Attach), to: (usize, Attach), stiffness: f64 }
 
 /// Where on a body a spring attaches.
 ///
-/// `PortKind` names the ports of the four components that have an
-/// orientation, and nothing else: there is no variant that can name a wire
-/// merge's socket or its outbound pin, because `physical.rs` has never modelled
-/// a merge. A junction's attachments are given by index instead -- input `i`,
-/// or the outbound pin -- which is all a merge's geometry distinguishes.
+/// `PortKind` names the ports of the four components that have an orientation,
+/// and nothing else: there is no variant for a wire merge's socket or its
+/// outbound pin, because `physical.rs` has never modelled a merge.
+///
+/// It is also not enough for a NOR. A three-input NOR has one `TorchInput`
+/// port and three sockets, on three different faces; attaching all three
+/// inputs to the one port would tell the solver they are the same place, and
+/// they are a cell apart in three directions. So the gate-cell attachments are
+/// geometric -- a socket by index, and the pin -- and they serve a NOR and a
+/// merge alike, because `place_merge_gate` is built to a NOR's exact
+/// footprint. `Port` is left for the primitives placed as primitives rather
+/// than as gate cells: an isolated branch's repeater, reading at its rear.
 enum Attach {
+    /// The cell a gate's `index`-th declared input arrives in.
+    Socket(usize),
+    /// The cell a gate's outgoing net starts from.
+    Pin,
+    /// A port `physical.rs` names.
     Port(PortKind),
-    JunctionInput(usize),
-    JunctionOutput,
 }
 
 enum BodyKind {
@@ -263,8 +273,11 @@ struct RelaxEffort { iterations: usize, seed: u64 }
 
 fn relax(graph: &PrimitiveGraph, pinned: &PortPlacements, effort: RelaxEffort)
     -> Result<ContinuousPlacement, PlannerError>;
+/// Keyed by `PlanCandidate` node -- gates, then primary inputs -- and not by
+/// `NodeId`: a bare merge's junction has no node to be named by, because
+/// `expand` produces no primitive for one.
 fn snap(placement: &ContinuousPlacement)
-    -> Result<Vec<(NodeId, Anchor, u8)>, PlannerError>;
+    -> Result<Vec<SnappedNode>, PlannerError>;
 ```
 
 ### Resolving a port from an edge
@@ -301,6 +314,13 @@ stiffness is therefore high enough to dominate any single signal pull on the
 same body, which for `k = 1` signal springs and a bounded degree means the
 maximum degree in the graph. That is a derived number, recomputed per circuit,
 not a constant to tune.
+
+It also has no caller yet, which is worth saying rather than leaving a reader
+to look for one. Every gate with more than one body today is an isolated merge,
+and a merge holds itself together with a `Weld::AtSocket` rather than with a
+stiff spring -- the repeater goes in the socket, exactly, not merely nearby.
+Cohesion is for Design H, the first gate whose members are genuinely free to
+drift apart. Until then every spring in the system has `k = 1`.
 
 A step is not a gradient step. The objective is quadratic, so with the
 constraints held aside it has a direct solution -- the linear system
