@@ -429,6 +429,32 @@ That this had to be found rather than being obvious is the cost of describing
 placement in terms of `physical.rs`, which models the four components that have
 an orientation and has never had anything to say about the one that does not.
 
+### A lamp is not free, and pinning one is ambiguous
+
+`Provenance::PrimaryOutput` gives every declared output a lamp node, so
+relaxation would treat it as a body and find it a position. Emission would
+ignore that: `emit_primitives` puts the lamp at `gate_pin[gate].down()`,
+directly under the pin of the gate that drives it, derived and not chosen.
+
+Relaxation moving something emission overrides is worse than it sounds -- the
+lamp would take part in the springs and the separation, pulling on its
+neighbours and reserving space, from a position nothing ever builds it at. So a
+lamp is welded, not free: `StandsOn`'s sibling, fixed under its gate's pin, and
+it moves only because its gate does.
+
+That also makes `PortPlacements` ambiguous for outputs, which this design
+inherits rather than introduces. `port_anchor` resolves a declared output to
+`gate:{name}` -- pinning one pins the *gate*, and the lamp lands wherever the
+gate's pin puts it. Someone writing "output `y` goes here" means the lamp,
+because the lamp is the thing a person reads off the finished circuit. The two
+differ by the pin offset, so a pin that looks obeyed is off by two cells in a
+direction the caller did not choose.
+
+Resolving it is a decision, not a discovery, and this design takes the reading
+that matches the words: pinning a declared output pins its lamp, and the gate
+is placed so that its pin lands above it. Pinning a primary input already means
+its lever, which is the same reading.
+
 ### Orientation has nowhere to go yet
 
 The headline of this design is that torque decides facing. Walking stage 1
