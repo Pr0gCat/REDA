@@ -201,6 +201,20 @@ fn snap(placement: &ContinuousPlacement)
     -> Result<Vec<(NodeId, Anchor, u8)>, PlannerError>;
 ```
 
+### Resolving a port from an edge
+
+`primitive_graph`'s edges name nodes, not ports, but the port is determined by
+the primitive's kind and the edge's kind:
+
+- a torch's input is its support (`TorchInput`), its output is the torch
+  (`TorchOutput`);
+- a repeater reads at the rear (`RepeaterRear`) and drives the front
+  (`RepeaterFront`);
+- `EdgeKind::RepeaterLockSide` resolves to `RepeaterSide`, and produces a
+  `Weld` rather than a `Pull`.
+
+`PortKind` already enumerates exactly these. This is a lookup, not a new idea.
+
 ### What the springs actually minimise, and what stiffness means
 
 Spring energy is `k * d^2` summed over pulls, `d` measured between the two
@@ -228,97 +242,6 @@ twitching below that cannot change what `snap` produces; running past it buys
 nothing measurable. Reaching `RelaxEffort::iterations` without reaching that
 threshold is `DidNotConverge`.
 
-### Support blocks are not all alike
-
-The previous section makes a support a body. Which of them are conductors, for
-the separation that only applies between different nets, is not obvious and was
-got wrong in the code before it was got wrong here.
-
-A floor under dust is inert: another net may run beside it. A **NOR's support
-is the gate's input node** -- dust laid against it powers it and turns the
-torch off -- so it separates from foreign nets like any conductor. That was
-found on 2026-08-12 by the planner placing a full adder that passed all four
-invariants and computed the wrong sum, and it is fixed in
-`gate_footprint` today.
-
-So a support body carries the same port-level distinction as any other: a
-NOR's support is a conductor on the gate's *input* net, a floor is a conductor
-on nothing at all. Getting this wrong does not produce an illegal circuit. It
-produces a legal one that computes something else, which is worse, and no
-invariant catches it.
-
-### Where the relaxation starts
-
-A spring system with hard constraints is not convex, so the starting point
-decides which solution it finds. Starting everything at the origin gives a
-knot the projection then has to unpick, and starting at random makes the result
-unreproducible unless the randomness is the seed's.
-
-It starts from the placement that exists today: Z by logic depth, X by
-barycentre over already-placed sources. That layout is legal, it is what the
-current `plan_from_netlist` produces, and it is measurably poor -- 656 blocks
-for and4 against the emitter's 472. Relaxation is therefore asked to improve a
-known-bad answer rather than to invent one, and the improvement is measurable
-against the number it started from.
-
-`RelaxEffort`'s seed perturbs that start. It exists so a run can be repeated
-exactly and so a stuck configuration can be retried from a different one, not
-because anything in the solve is random.
-
-### Floating point, against a rule that forbids it
-
-`2026-08-11-unified-3d-planner.md` is explicit: "use rational
-numerator/denominator pairs or integer cross multiplication for normalisation,
-**never floating-point ordering**", and `NormalisedScore` implements exact
-rational comparison to obey it. This design is `f64` throughout, so it has to
-say why that is not the same thing.
-
-The rule is about **ordering candidates**. Two layouts whose scores differ in
-the last bit must not swap places depending on how they were summed, or the
-search stops being reproducible and every measurement taken from it is noise.
-Nothing here orders anything: the relaxation solves, `snap` quantises, and what
-leaves the module is integer anchors and one of four facings. Floats are the
-solver's internal state, not a comparison key.
-
-That distinction holds for one build. It does **not** hold across two, and this
-project has two: `viewer/` compiles the same crate to wasm, and once `compile()`
-uses this placer, the circuit drawn in a browser is the circuit this code
-placed. If wasm and native disagree in the last bits, the same netlist yields
-two different layouts and the viewer stops being evidence about the compiler.
-
-So one test decides it: place a reference circuit natively and under wasm and
-require identical anchors. If they agree, floats stay. If they do not, the
-positions become fixed-point -- the arithmetic is addition, multiplication and
-comparison, all of which fixed-point does exactly -- and the only thing lost is
-the convenience of `f64` in the projection.
-
-This is stated as a risk with a test rather than settled here, because which
-way it goes is a fact about two toolchains and not a matter of design.
-
-### What `physical.rs` has to gain
-
-It gives four discrete facings per primitive, each with typed ports and the
-blocks it occupies. Relaxation needs port offsets at an *arbitrary* angle.
-
-The addition is small: treat facing 0 as canonical and rotate. The four
-variants become the four quantised cases of one layout, so the continuous stage
-uses the canonical version and `snap` looks the rotated result back up among the
-four. The module stops being dead code and becomes the thing both stages share.
-
-### Resolving a port from an edge
-
-`primitive_graph`'s edges name nodes, not ports, but the port is determined by
-the primitive's kind and the edge's kind:
-
-- a torch's input is its support (`TorchInput`), its output is the torch
-  (`TorchOutput`);
-- a repeater reads at the rear (`RepeaterRear`) and drives the front
-  (`RepeaterFront`);
-- `EdgeKind::RepeaterLockSide` resolves to `RepeaterSide`, and produces a
-  `Weld` rather than a `Pull`.
-
-`PortKind` already enumerates exactly these. This is a lookup, not a new idea.
-
 ### The separation the projection enforces
 
 Four terms, each with a source:
@@ -332,58 +255,19 @@ Four terms, each with a source:
    relaxed placement has corridors rather than only clearance;
 4. a rounding margin, derived below.
 
-### Why `snap` quantises the facing first
-
-An earlier draft claimed the margin could be one cell, on the grounds that
-rounding moves a body half a cell and two bodies therefore approach by at most
-one. That reasoning covers translation and ignores rotation, which is the
-larger effect: quantising a facing moves it by up to 45 degrees, and a body's
-blocks and ports sit away from its centre, so they swing by up to
-`port_radius * 2 * sin(22.5°)` -- most of a cell for a repeater, more for
-anything larger. A margin of one does not cover it and `snap` would silently
-hand on a placement the projection had already made legal.
-
-So `snap` is three steps, not one:
-
-1. **Quantise every facing** to the nearest of the four, and recompute each
-   body's occupied cells at that facing.
-2. **Project again**, in continuous space, with the facings now fixed. This
-   repairs whatever the rotation broke, and it is the same projection the
-   relaxation was already running.
-3. **Round the positions**, with a margin of one cell -- which now covers what
-   it was always claimed to cover, because after step 2 nothing is rotating.
-
-`snap` returns a `Result` because step 2 can fail: quantising every facing at
-once can produce a configuration with no legal repair, and that is a real
-outcome to report rather than round anyway.
-
-### What `snap` hands back, and where primitives stop being primitives
-
-Relaxation moves primitives. `PlanCandidate` is indexed by *gate*: one anchor
-per gate followed by one per primary input, and `emit_primitives` reads
-`netlist.gates[index]` to decide what to place there.
-
-Today that mismatch is not one. Every realisable gate is a single torch or a
-wire merge, so primitive and gate correspond one to one and `snap`'s `NodeId`
-is a gate index by coincidence rather than by design. It becomes a mismatch the
-moment a gate expands to several primitives -- Design H's five, or any macro
-cell -- and at that point `PlanCandidate` has to carry primitives rather than
-gates, and `snap`'s return type stops fitting.
-
-This document does not do that. It notes where the seam is, so that whoever
-lands the DFF finds it named rather than discovers it.
-
 ### Nothing pushes into the third dimension on its own
 
-The design says relaxation spreads in three dimensions because the forces push
-that way. Reviewing it: they do not.
+The obvious reading of everything above is that relaxation will use all three
+dimensions, because the forces are three-dimensional. It will not, and the
+reason is worth stating before someone builds it and wonders why every layout
+comes out flat.
 
 Springs pull along edges and separation pushes along the shortest way out. Both
-act in the plane their bodies are already in, and the starting configuration is
+act in the plane their bodies already occupy, and the starting configuration is
 planar -- everything sits at one Y, because that is what the current placement
-produces. A planar configuration under in-plane forces stays planar. The
-relaxation would never use height at all, and `Shape::Tall` would be removed in
-favour of a mechanism that does not do its job.
+produces. A planar configuration under in-plane forces stays planar. Height
+would never be used at all, and `Shape::Tall` would have been removed in favour
+of a mechanism that never did its job.
 
 Two ways out, and this document takes the second.
 
@@ -434,6 +318,109 @@ This is a real addition, not a clarification. It roughly doubles the body count
 for a dust-heavy circuit, and it is the reason the estimate "relaxation is a
 small module" should be distrusted until measured.
 
+### Support blocks are not all alike
+
+Supports being bodies raises a question the single-plane world never had to
+answer: which of them conduct, for a separation that only applies between
+different nets. It is not obvious, and it was got wrong in the code before it
+was got wrong here.
+
+A floor under dust is inert: another net may run beside it. A **NOR's support
+is the gate's input node** -- dust laid against it powers it and turns the
+torch off -- so it separates from foreign nets like any conductor. That was
+found on 2026-08-12 by the planner placing a full adder that passed all four
+invariants and computed the wrong sum, and it is fixed in
+`gate_footprint` today.
+
+So a support body carries the same port-level distinction as any other: a
+NOR's support is a conductor on the gate's *input* net, a floor is a conductor
+on nothing at all. Getting this wrong does not produce an illegal circuit. It
+produces a legal one that computes something else, which is worse, and no
+invariant catches it.
+
+### Where the relaxation starts
+
+A spring system with hard constraints is not convex, so the starting point
+decides which solution it finds. Starting everything at the origin gives a
+knot the projection then has to unpick, and starting at random makes the result
+unreproducible unless the randomness is the seed's.
+
+It starts from the placement that exists today: Z by logic depth, X by
+barycentre over already-placed sources. That layout is legal, it is what the
+current `plan_from_netlist` produces, and it is measurably poor -- 656 blocks
+for and4 against the emitter's 472. Relaxation is therefore asked to improve a
+known-bad answer rather than to invent one, and the improvement is measurable
+against the number it started from.
+
+`RelaxEffort`'s seed perturbs that start. It exists so a run can be repeated
+exactly and so a stuck configuration can be retried from a different one, not
+because anything in the solve is random.
+
+### What `physical.rs` has to gain
+
+It gives four discrete facings per primitive, each with typed ports and the
+blocks it occupies. Relaxation needs port offsets at an *arbitrary* angle.
+
+The addition is small: treat facing 0 as canonical and rotate. The four
+variants become the four quantised cases of one layout, so the continuous stage
+uses the canonical version and `snap` looks the rotated result back up among the
+four. The module stops being dead code and becomes the thing both stages share.
+
+### Why `snap` quantises the facing first
+
+An earlier draft claimed the margin could be one cell, on the grounds that
+rounding moves a body half a cell and two bodies therefore approach by at most
+one. That reasoning covers translation and ignores rotation, which is the
+larger effect: quantising a facing moves it by up to 45 degrees, and a body's
+blocks and ports sit away from its centre, so they swing by up to
+`port_radius * 2 * sin(22.5°)` -- most of a cell for a repeater, more for
+anything larger. A margin of one does not cover it and `snap` would silently
+hand on a placement the projection had already made legal.
+
+So `snap` is three steps, not one:
+
+1. **Quantise every facing** to the nearest of the four, and recompute each
+   body's occupied cells at that facing.
+2. **Project again**, in continuous space, with the facings now fixed. This
+   repairs whatever the rotation broke, and it is the same projection the
+   relaxation was already running.
+3. **Round the positions**, with a margin of one cell -- which now covers what
+   it was always claimed to cover, because after step 2 nothing is rotating.
+
+`snap` returns a `Result` because step 2 can fail: quantising every facing at
+once can produce a configuration with no legal repair, and that is a real
+outcome to report rather than round anyway.
+
+### What `snap` hands back, and where primitives stop being primitives
+
+Relaxation moves primitives. `PlanCandidate` is indexed by *gate*: one anchor
+per gate followed by one per primary input, and `emit_primitives` reads
+`netlist.gates[index]` to decide what to place there.
+
+Today that mismatch is not one. Every realisable gate is a single torch or a
+wire merge, so primitive and gate correspond one to one and `snap`'s `NodeId`
+is a gate index by coincidence rather than by design. It becomes a mismatch the
+moment a gate expands to several primitives -- Design H's five, or any macro
+cell -- and at that point `PlanCandidate` has to carry primitives rather than
+gates, and `snap`'s return type stops fitting.
+
+Supports widen the same seam. `snap` returns anchors keyed by `NodeId`, and a
+support body has no node -- so once floors are a placement decision rather than
+something emission lays silently, the output has to carry them and
+`PlanCandidate` has nowhere to put them. `emit_primitives` creates floors
+today by calling `ensure_floor` as it writes each cell, and that is precisely
+the silent step this design is taking away.
+
+Which is why supports arrive in stage 2 and not stage 1. Stage 1 leaves every
+body on the plane its starting layout gave it, floors stay emission's business,
+and `snap` returning gate anchors is honest because nothing else exists to
+return. Stage 2 pays for both at once: `PlanCandidate` carries primitives and
+their supports, and `emit_primitives` stops inventing floors.
+
+This document does not do that work. It names the seam, so that whoever widens
+it -- for supports or for the DFF -- finds it described rather than discovers
+it.
+
 ### Pinned ports and the shape preference
 
 `PortPlacements` survives unchanged and gets simpler: a pinned port is a body
@@ -451,6 +438,36 @@ and narrower; with no knob to ask, it becomes: six gates that all consume one
 signal, crowded enough that spreading sideways costs more than stacking, end up
 on more than one level. That is a weaker claim than the current test makes, and
 it is the true one -- height is now earned by crowding rather than requested.
+
+### Floating point, against a rule that forbids it
+
+`2026-08-11-unified-3d-planner.md` is explicit: "use rational
+numerator/denominator pairs or integer cross multiplication for normalisation,
+**never floating-point ordering**", and `NormalisedScore` implements exact
+rational comparison to obey it. This design is `f64` throughout, so it has to
+say why that is not the same thing.
+
+The rule is about **ordering candidates**. Two layouts whose scores differ in
+the last bit must not swap places depending on how they were summed, or the
+search stops being reproducible and every measurement taken from it is noise.
+Nothing here orders anything: the relaxation solves, `snap` quantises, and what
+leaves the module is integer anchors and one of four facings. Floats are the
+solver's internal state, not a comparison key.
+
+That distinction holds for one build. It does **not** hold across two, and this
+project has two: `viewer/` compiles the same crate to wasm, and once `compile()`
+uses this placer, the circuit drawn in a browser is the circuit this code
+placed. If wasm and native disagree in the last bits, the same netlist yields
+two different layouts and the viewer stops being evidence about the compiler.
+
+So one test decides it: place a reference circuit natively and under wasm and
+require identical anchors. If they agree, floats stay. If they do not, the
+positions become fixed-point -- the arithmetic is addition, multiplication and
+comparison, all of which fixed-point does exactly -- and the only thing lost is
+the convenience of `f64` in the projection.
+
+This is stated as a risk with a test rather than settled here, because which
+way it goes is a fact about two toolchains and not a matter of design.
 
 ## Error handling
 
