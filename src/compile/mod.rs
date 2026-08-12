@@ -6430,9 +6430,14 @@ pub(crate) fn gate_footprint(
             z: origin.2 + (z - shifted.2),
         };
         cells.push(cell);
-        // Solid material is occupied but inert: a net may run beside a gate's
-        // support or its floor. Anything else here joins what touches it.
-        if kind != BlockKind::Solid {
+        // Solid material is inert -- a net may run beside a floor -- with one
+        // exception that is not material at all: a NOR's support block is the
+        // gate's input node. Dust laid against it powers it and turns the
+        // torch off, so a foreign net running past reads as a legal layout
+        // that computes the wrong function. It keeps others out like any
+        // other conductor.
+        let is_support = cell.x == origin.0 && cell.y == origin.1 && cell.z == origin.2;
+        if kind != BlockKind::Solid || (is_support && !gate.is_merge()) {
             conductors.push(cell);
         }
     }

@@ -1178,30 +1178,14 @@ fn deterministic_astar(
             continue;
         }
         for next in neighbours(state.anchor) {
-            // A descent needs the cell it drops past to stay air, and every
-            // cell of this same path lays a floor one below itself. A path
-            // that climbs, steps aside and drops back down goes under its own
-            // floor and the drop is blocked -- a conflict inside one path,
-            // which the reservation cannot see because none of it is written
-            // yet.
-            if next.y < state.anchor.y {
-                let above_riser = Anchor {
-                    x: next.x,
-                    y: state.anchor.y + 1,
-                    z: next.z,
-                };
-                let mut walk = Some(state.anchor);
-                let mut blocked = false;
-                while let Some(cell) = walk {
-                    if cell == above_riser {
-                        blocked = true;
-                        break;
-                    }
-                    walk = previous.get(&cell).copied();
-                }
-                if blocked {
-                    continue;
-                }
+            // A path may not build over or under its own steps. Every cell
+            // lays a floor one below itself, a drop needs the cell it falls
+            // past to stay air, and a climb needs the cell above the one it
+            // leaves to stay clear -- so a path that doubles back on itself in
+            // Y breaks a step it already took. Neither case is visible to the
+            // reservation, because none of this path is written yet.
+            if self_obstructs(&previous, state.anchor, next) {
+                continue;
             }
 
             if !within_bounds(next, min, max)
@@ -1272,6 +1256,50 @@ fn neighbours(anchor: Anchor) -> Vec<Anchor> {
         steps.push(Anchor { y: sideways.y - 1, ..sideways });
     }
     steps
+}
+
+/// Whether stepping from `at` to `next` breaks a step this same path already
+/// took, or is broken by one.
+///
+/// Two mirrored cases, both found the same way -- by asking the simulator
+/// where a route's signal actually stopped:
+///
+/// * a drop past a cell whose air is occupied by the floor of a cell the path
+///   already passed through, two levels up;
+/// * a step into a cell whose own floor lands directly above a cell the path
+///   climbed out of, which blocks that climb.
+fn self_obstructs(
+    previous: &BTreeMap<Anchor, Anchor>,
+    at: Anchor,
+    next: Anchor,
+) -> bool {
+    // The cell whose floor would fill the gap this drop needs.
+    let drop_blocker = (next.y < at.y).then(|| Anchor {
+        x: next.x,
+        y: at.y + 1,
+        z: next.z,
+    });
+    // The cell this step's own floor would land on top of.
+    let smothered = Anchor {
+        x: next.x,
+        y: next.y - 2,
+        z: next.z,
+    };
+
+    let mut successor = None;
+    let mut walk = Some(at);
+    while let Some(cell) = walk {
+        if Some(cell) == drop_blocker {
+            return true;
+        }
+        // `cell` climbed if the step the path took out of it went up.
+        if cell == smothered && successor.is_some_and(|after: Anchor| after.y > cell.y) {
+            return true;
+        }
+        successor = Some(cell);
+        walk = previous.get(&cell).copied();
+    }
+    false
 }
 
 /// The owner a route's staircase structure is claimed under: its own name
@@ -3950,17 +3978,11 @@ mod tests {
     /// How far the planner's own placement carries, measured rather than
     /// assumed.
     ///
-    /// and4 places, routes, verifies and computes and4. full_adder now routes
-    /// completely -- every net reaches every sink, which nothing above and4
-    /// managed before rip-up -- and fails afterwards, on signal strength: net
-    /// `g3` arrives at `g5` dead.
-    ///
-    /// So the search is no longer what limits this. What does is refresh
-    /// planning on the routes it now finds: they are longer and they climb,
-    /// a staircase cell can hold no repeater, and reserving strength for the
-    /// stairs in advance was tried here and did not close the gap.
+    /// and4 and full_adder place, route and verify without the legacy emitter.
+    /// segment_a does not: a net runs out of room and rip-up cannot find it
+    /// any, so the search is what limits this again.
     #[test]
-    #[ignore = "known: full_adder routes completely and arrives dead"]
+    #[ignore = "known: segment_a and up run out of room"]
     fn how_far_the_planners_own_placement_carries() {
         use crate::circuits::full_adder::build_full_adder_netlist;
         use crate::circuits::seven_segment::{
@@ -4093,6 +4115,51 @@ mod tests {
             tall_x < wide_x,
             "height is spent instead of floor: {tall_x} wide against {wide_x}"
         );
+    }
+
+    /// full_adder, placed and routed by the planner alone, computes a full
+    /// adder.
+    ///
+    /// The first circuit past and4 to survive without the legacy emitter, and
+    /// it took the routing to stop breaking its own geometry: a path lays a
+    /// floor under every cell it occupies, so one that doubles back on itself
+    /// in Y either drops past a gap its own floor has filled or lands a floor
+    /// on the head of a cell it climbed out of. Both were silent -- the
+    /// circuit was structurally connected and electrically dead.
+    #[test]
+    fn a_self_placed_full_adder_computes_a_full_adder() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::redstone::simulator::Simulator;
+
+        // The declared outputs carry generated signal names; the builder's map
+        // is what says which is `sum` and which is `cout`.
+        let (netlist, ports) = build_full_adder_netlist();
+        let candidate =
+            plan_from_netlist(&netlist, &PortPlacements::default()).expect("full_adder places");
+        let realised = realise_and_verify(&candidate, &netlist, candidate_world_size(&candidate))
+            .expect("full_adder is legal");
+
+        let mut simulator = Simulator::new(realised.world.clone());
+        simulator.run_until_stable(4000).expect("settles");
+
+        let inputs = ["a", "b", "cin"];
+        for mask in 0u8..8 {
+            for (bit, name) in inputs.iter().enumerate() {
+                let at = realised.ports.input_positions[*name];
+                let mut state = simulator.world().get(at.0, at.1, at.2).clone();
+                state.lit = (mask >> bit) & 1 == 1;
+                simulator.world_mut().set(at.0, at.1, at.2, state);
+            }
+            simulator.run_until_stable(4000).expect("settles");
+
+            let count = (0..3).filter(|bit| (mask >> bit) & 1 == 1).count();
+            let read = |name: &str| {
+                let at = realised.ports.output_positions[&ports[name]];
+                simulator.world().get(at.0, at.1, at.2).lit
+            };
+            assert_eq!(read("sum"), count % 2 == 1, "sum for inputs {mask:03b}");
+            assert_eq!(read("cout"), count >= 2, "cout for inputs {mask:03b}");
+        }
     }
 
     /// Keep-out is about conductors, not about everything a primitive owns.
