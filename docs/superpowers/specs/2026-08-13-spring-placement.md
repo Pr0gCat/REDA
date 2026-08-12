@@ -346,6 +346,34 @@ circuit without room grows the way redstone can. It also gives the seeded
 perturbation nothing to do, so the seed goes back to being only a way to retry
 a stuck configuration.
 
+### Nothing holds a body up
+
+§7.1 warned that legalising onto a 3D redstone lattice is far harder than onto
+2D standard-cell rows, and this is where that bites. The design lets a body sit
+at any height and never says what it stands on.
+
+Dust needs a solid block beneath it. A repeater and a lever need one. A wall
+torch needs a block on the face it attaches to -- which the `OnFace` weld
+already covers, and it is the only one of the four that does. Today the
+question does not arise: everything sits at one Y and the emitter lays a floor
+under each cell as it writes it.
+
+Once separation may push upwards it arises immediately. A repeater relaxed to
+Y = 7 needs a solid block at Y = 6, that block occupies a cell, and that cell
+participates in separation like anything else. Height is not free space; it is
+space that has to be built up to.
+
+Support is therefore a **body**, not an afterthought: every primitive that
+needs one gets a companion at a fixed offset below it, welded there, with its
+own extent in the separation. Which makes floors a placement decision rather
+than something emission does silently, and makes the count honest -- a stacked
+layout pays for its floors in the same units as everything else, so the
+relaxation can see that stacking costs blocks and decide accordingly.
+
+This is a real addition, not a clarification. It roughly doubles the body count
+for a dust-heavy circuit, and it is the reason the estimate "relaxation is a
+small module" should be distrusted until measured.
+
 ### Pinned ports and the shape preference
 
 `PortPlacements` survives unchanged and gets simpler: a pinned port is a body
@@ -386,8 +414,11 @@ catch the legaliser's leftovers.
 Cheapest first, each testing one claim:
 
 1. **Determinism.** Same graph and effort, identical placement, bit for bit.
-2. **Orientation.** A hand-built pair: a torch whose only consumer sits to its
-   east ends up facing east. This is the claim that torque produces
+2. **Orientation.** A hand-built pair, stated as geometry rather than as a
+   compass bearing, since "faces east" means different things for a wall torch
+   and a repeater: a repeater whose only consumer sits to its east ends up
+   driving its front eastwards, and a torch whose support sits to its west ends
+   up attached to that face. This is the claim that torque produces
    orientation, on a case small enough to verify by hand.
 3. **Separation after snap.** For every reference circuit, no two primitives of
    different signals are closer than the rule allows -- checked directly on the
