@@ -200,8 +200,11 @@ enum BodyKind {
     /// A component the primitive graph named.
     Primitive { node: NodeId, kind: Primitive },
     /// A block something stands on or attaches to. Solid; conducts only when
-    /// it is a NOR's support, which is that gate's input node.
-    Support { holds: usize, carries: Option<Signal> },
+    /// it is a NOR's support, in which case it carries that gate's input
+    /// signal. Signals are the netlist's own names -- `String` -- because
+    /// nothing in this codebase interns them and inventing a type here would
+    /// be a second way to say the same thing.
+    Support { holds: usize, carries: Option<String> },
 }
 
 /// A relation that must hold exactly. Projected, never pulled.
@@ -379,8 +382,17 @@ because anything in the solve is random.
 
 ### What `physical.rs` has to gain
 
-It gives four discrete facings per primitive, each with typed ports and the
-blocks it occupies. Relaxation needs port offsets at an *arbitrary* angle.
+It gives four discrete facings for a torch, a repeater, a lever and a lamp,
+each with typed ports and the blocks it occupies. Relaxation needs port offsets
+at an *arbitrary* angle.
+
+It gives none at all for a comparator: `variants(Primitive::Comparator)`
+returns an empty slice, while `PortKind` declares `ComparatorRear`,
+`ComparatorSide` and `ComparatorFront` that nothing constructs. No library
+entry uses a comparator today, so relaxation never meets one -- but "never"
+here is an accident of the current library rather than a rule, and a body whose
+primitive has no variants must be an error naming the primitive, not a silent
+placement of nothing.
 
 The addition is small: treat facing 0 as canonical and rotate. The four
 variants become the four quantised cases of one layout, so the continuous stage
