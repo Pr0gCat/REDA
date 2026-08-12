@@ -204,7 +204,9 @@ A new module, `src/compile/relax.rs`:
 struct Body {
     what: BodyKind,
     position: [f64; 3],
-    facing: f64,        // radians; quantised to four at snap
+    /// Radians, quantised to four at snap. Meaningless for a junction: dust is
+    /// isotropic, so a merge has no front to turn.
+    facing: f64,
     /// Half-extents along the body's own axes, from the blocks
     /// `physical::variants` says it occupies. Not a radius: a NOR cell is not
     /// a sphere, and a sphere large enough to contain one wastes exactly the
@@ -216,7 +218,20 @@ struct Body {
 }
 
 /// A spring, attached at a port on each end.
-struct Pull { from: (usize, PortKind), to: (usize, PortKind), stiffness: f64 }
+struct Pull { from: (usize, Attach), to: (usize, Attach), stiffness: f64 }
+
+/// Where on a body a spring attaches.
+///
+/// `PortKind` names the ports of the four components that have an
+/// orientation, and nothing else: there is no variant that can name a wire
+/// merge's socket or its outbound pin, because `physical.rs` has never modelled
+/// a merge. A junction's attachments are given by index instead -- input `i`,
+/// or the outbound pin -- which is all a merge's geometry distinguishes.
+enum Attach {
+    Port(PortKind),
+    JunctionInput(usize),
+    JunctionOutput,
+}
 
 enum BodyKind {
     /// A component the primitive graph named.
