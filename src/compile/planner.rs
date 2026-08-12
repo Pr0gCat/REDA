@@ -774,7 +774,15 @@ pub fn try_move(
         let mut branches = Vec::with_capacity(supports.len());
         for support in supports {
             let terminal = terminal_socket(source, support);
-            let path = deterministic_astar(source, terminal, support, &owner, &reservation).ok_or(
+            let path = deterministic_astar(
+                source,
+                terminal,
+                support,
+                &owner,
+                &reservation,
+                &Congestion::default(),
+            )
+            .ok_or(
                 PlannerError::NoLocalRoute {
                     from: source,
                     to: terminal,
@@ -1140,6 +1148,7 @@ fn deterministic_astar(
     terminal_support: Anchor,
     owner: &str,
     reservation: &Reservation,
+    congestion: &Congestion,
 ) -> Option<Vec<Anchor>> {
     let margin = manhattan_distance(start, goal).saturating_add(2) as i32;
     // Y is widened by a couple of levels rather than by `margin`: a route may
@@ -1214,7 +1223,10 @@ fn deterministic_astar(
             // strength budget to reserve for it in advance --
             // `plan_bent_path` takes a `reserve` for exactly that -- not to
             // be made unattractive.
-            let next_travelled = state.travelled.saturating_add(1);
+            let next_travelled = state
+                .travelled
+                .saturating_add(1)
+                .saturating_add(congestion.price(&next));
             if travelled
                 .get(&next)
                 .is_some_and(|&known| known <= next_travelled)
@@ -1300,6 +1312,50 @@ fn self_obstructs(
         walk = previous.get(&cell).copied();
     }
     false
+}
+
+/// What each cell has cost a net that could not get past it.
+///
+/// Routing every net once and giving nothing back makes the first net to
+/// reach a corridor its owner, and no ordering fixes a layout where corridors
+/// have to be shared: segment_a fails with one net laid clean across the only
+/// row another needs, and moving either to the front just moves the wall.
+///
+/// So a net that cannot reach its sink charges the cells that were in its way,
+/// and the round is laid again. Nothing is forbidden by this -- a charged cell
+/// is still usable, just dearer than going round -- which is what lets the
+/// nets separate themselves rather than be ordered by a guess. Prices only
+/// ever rise, so a corridor fought over repeatedly ends up avoided by
+/// everything that has an alternative.
+#[derive(Debug, Default, Clone)]
+pub struct Congestion {
+    charged: BTreeMap<Anchor, u64>,
+}
+
+impl Congestion {
+    /// What using `cell` adds to a route's length, in cells.
+    fn price(&self, cell: &Anchor) -> u64 {
+        const PER_ROUND: u64 = 6;
+        self.charged.get(cell).copied().unwrap_or(0) * PER_ROUND
+    }
+
+    /// Charge every cell inside the box a net gave up crossing that belongs to
+    /// somebody else. Its own cells and the fixed furniture are not charged:
+    /// primitives cannot move, and a net cannot get out of its own way.
+    fn charge(&mut self, reservation: &Reservation, from: Anchor, to: Anchor, mine: &str) -> bool {
+        let mut charged_any = false;
+        for cell in reservation.cells_within(from, to) {
+            let Some(owner) = reservation.owner(&cell) else {
+                continue;
+            };
+            if owner == mine || owner.starts_with("primitive:") {
+                continue;
+            }
+            *self.charged.entry(cell).or_insert(0) += 1;
+            charged_any = true;
+        }
+        charged_any
+    }
 }
 
 /// The owner a route's staircase structure is claimed under: its own name
@@ -1541,9 +1597,8 @@ impl Reservation {
         })
     }
 
-    /// Every other route with a cell inside the box spanned by `from` and
-    /// `to`, in a deterministic order.
-    fn owners_within(&self, from: Anchor, to: Anchor, mine: &str) -> Vec<String> {
+    /// Every reserved cell inside the box spanned by `from` and `to`.
+    fn cells_within(&self, from: Anchor, to: Anchor) -> Vec<Anchor> {
         let (lo, hi) = (
             Anchor {
                 x: from.x.min(to.x),
@@ -1556,16 +1611,13 @@ impl Reservation {
                 z: from.z.max(to.z),
             },
         );
-        let mut owners: BTreeSet<&str> = BTreeSet::new();
-        for (cell, (owner, _)) in &self.cells {
-            if cell.x < lo.x || cell.x > hi.x || cell.z < lo.z || cell.z > hi.z {
-                continue;
-            }
-            if owner != mine && !owner.starts_with("primitive:") && !owner.starts_with("stair:") {
-                owners.insert(owner.as_str());
-            }
-        }
-        owners.into_iter().map(str::to_string).collect()
+        self.cells
+            .keys()
+            .filter(|cell| {
+                cell.x >= lo.x && cell.x <= hi.x && cell.z >= lo.z && cell.z <= hi.z
+            })
+            .copied()
+            .collect()
     }
 
     fn is_taken(&self, anchor: &Anchor) -> bool {
@@ -1857,41 +1909,43 @@ fn gate_depths(netlist: &Netlist) -> Result<Vec<usize>, PlannerError> {
 /// Each round removes every route that sits where a failed net needs to go and
 /// re-lays them afterwards, so a round is expensive; the point is to escape a
 /// corner an earlier net walked this one into, not to search.
-const RIP_UP_ROUNDS: usize = 8;
+const RIP_UP_ROUNDS: usize = 24;
 
 fn route_every_net(
     candidate: PlanCandidate,
     netlist: &Netlist,
 ) -> Result<PlanCandidate, PlannerError> {
-    // Nets are routed in a deterministic order, and an early one can take the
-    // only corridor a later one had. Rather than order them cleverly -- which
-    // is a guess -- a net that cannot be routed says which nets are in its
-    // way, and they go to the back of the queue.
     let mut order: Vec<String> = net_sinks(netlist).into_keys().collect();
+    let mut congestion = Congestion::default();
     let mut last: Option<PlannerError> = None;
 
     for _ in 0..RIP_UP_ROUNDS {
-        match route_in_order(candidate.clone(), netlist, &order) {
+        match route_in_order(candidate.clone(), netlist, &order, &congestion) {
             Ok(routed) => return Ok(routed),
             Err(failure) => {
-                let RoutingFailure { blocked, blockers, error } = *failure;
+                let RoutingFailure {
+                    blocked,
+                    corridor,
+                    reservation,
+                    error,
+                } = *failure;
                 last = Some(error);
-                if blockers.is_empty() {
+
+                // Two levers, and both are needed. Going first gets a net the
+                // corridor it wants when one exists; charging what stood in
+                // its way makes the others give it one when it does not.
+                // Ordering alone left full_adder unroutable, and charging
+                // alone left it worse -- a net promoted to the front still
+                // walks into a wall nobody has any reason to avoid.
+                let charged = congestion.charge(&reservation, corridor.0, corridor.1, &blocked);
+                let mut promoted: Vec<String> = vec![blocked.clone()];
+                promoted.extend(order.iter().filter(|name| **name != blocked).cloned());
+                let reordered = promoted != order;
+                order = promoted;
+
+                if !charged && !reordered {
                     break;
                 }
-                // The blocked net moves ahead of everything that blocked it.
-                let mut reordered: Vec<String> = Vec::with_capacity(order.len());
-                reordered.push(blocked.clone());
-                reordered.extend(
-                    order
-                        .iter()
-                        .filter(|name| **name != blocked)
-                        .cloned(),
-                );
-                if reordered == order {
-                    break;
-                }
-                order = reordered;
             }
         }
     }
@@ -1916,7 +1970,12 @@ fn net_sinks(netlist: &Netlist) -> BTreeMap<String, Vec<(usize, usize)>> {
 /// A net that could not be routed, and who was standing in its way.
 struct RoutingFailure {
     blocked: String,
-    blockers: Vec<String>,
+    /// The box the search gave up crossing: from the net's source to the sink
+    /// it could not reach.
+    corridor: (Anchor, Anchor),
+    /// What the round had claimed by the time it gave up -- who was in the
+    /// way, in other words.
+    reservation: Reservation,
     error: PlannerError,
 }
 
@@ -1924,6 +1983,7 @@ fn route_in_order(
     mut candidate: PlanCandidate,
     netlist: &Netlist,
     order: &[String],
+    congestion: &Congestion,
 ) -> Result<PlanCandidate, Box<RoutingFailure>> {
     let mut reservation = Reservation::new();
     for (index, node) in candidate.primitive_nodes.iter().enumerate() {
@@ -1972,7 +2032,8 @@ fn route_in_order(
             .ok_or_else(|| {
                 Box::new(RoutingFailure {
                     blocked: signal.clone(),
-                    blockers: Vec::new(),
+                    corridor: (Anchor { x: 0, y: 0, z: 0 }, Anchor { x: 0, y: 0, z: 0 }),
+                    reservation: Reservation::new(),
                     error: PlannerError::UnrealisableNode {
                         id: signal.clone(),
                         reason: "no gate or primary input drives this signal".to_string(),
@@ -1997,19 +2058,19 @@ fn route_in_order(
                 z: socket.z + (socket.z - support.z),
             };
             let mut path = match deterministic_astar(
-                source, approach, socket, &signal, &reservation,
+                source,
+                approach,
+                socket,
+                &signal,
+                &reservation,
+                congestion,
             ) {
                 Some(path) => path,
                 None => {
-                    // Who is standing between this net and its sink. Anything
-                    // reserved inside the box the search gave up on, that is
-                    // another net's, is a candidate to be moved out of the
-                    // way -- not by rerouting it here, but by letting this net
-                    // go first next time round.
-                    let blockers = reservation.owners_within(source, approach, &signal);
                     return Err(Box::new(RoutingFailure {
                         blocked: signal.clone(),
-                        blockers,
+                        corridor: (source, approach),
+                        reservation: reservation.clone(),
                         error: PlannerError::NoLocalRoute {
                             from: source,
                             to: approach,
@@ -3203,6 +3264,7 @@ mod tests {
             other_sink,
             "source",
             &without_destination_reservation,
+            &Congestion::default(),
         )
         .expect("the direct fanout branch is routable without the destination reservation");
         assert_eq!(
@@ -3979,10 +4041,16 @@ mod tests {
     /// assumed.
     ///
     /// and4 and full_adder place, route and verify without the legacy emitter.
-    /// segment_a does not: a net runs out of room and rip-up cannot find it
-    /// any, so the search is what limits this again.
+    /// segment_a routes completely -- every net reaches every sink, which took
+    /// nets charging what stood in their way -- and then arrives dead: net
+    /// `g4` reaches `g17` structurally and with nothing left.
+    ///
+    /// So the search is no longer the limit at this size. Refresh planning is:
+    /// a negotiated route detours around what it cannot afford, which makes it
+    /// longer, and a detour that climbs cannot hold a repeater anywhere along
+    /// the climb.
     #[test]
-    #[ignore = "known: segment_a and up run out of room"]
+    #[ignore = "known: segment_a routes completely and arrives dead"]
     fn how_far_the_planners_own_placement_carries() {
         use crate::circuits::full_adder::build_full_adder_netlist;
         use crate::circuits::seven_segment::{
