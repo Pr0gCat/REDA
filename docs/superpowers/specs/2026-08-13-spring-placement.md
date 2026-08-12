@@ -418,9 +418,29 @@ north. Rotate the gate and its sockets rotate with it, so the router looks for
 them in the wrong cells, and the approach cell it derives from socket and
 support is wrong by the same rotation.
 
-None of the four is large. All are invisible until something wants a facing
-other than north, which is why nothing has noticed that `variant_indices` has
-been dead since it was added.
+Counting where else that assumption lives, rather than assuming it is those
+two: `INPUT_DIRECTIONS` and `OUTPUT_DIRECTION` are read in **five modules**.
+`compile/mod.rs` places and emits with them. `planner.rs` routes and finds
+output pins with them. `equivalence.rs` walks `INPUT_DIRECTIONS` to decide
+which sockets actually feed a gate, and `OUTPUT_DIRECTION` to find its pin.
+`world_partition.rs` resolves a node's position from an `INPUT_DIRECTIONS`
+offset. `routing_stats.rs` finds a source pin with `OUTPUT_DIRECTION`. The last
+two are what the viewer's topology view and several tests are built on.
+
+So orientation is not four small changes. It is one assumption held in five
+places, and rotating a gate falsifies all of them at once -- silently, because
+each is a lookup that still returns a cell, just the wrong one.
+
+Which argues for doing it as its own piece of work, before any relaxation
+exists: make `physical::variants` the single place a gate's geometry is
+written, and have all five ask it for the sockets and pin of a gate at a given
+facing. That is a refactor with no behaviour change while every facing is
+north, testable on its own, and it turns "orientation reaches the blocks" from
+a cross-cutting change into a value that one function already returns.
+
+Stage 1 should therefore be two: the geometry refactor, then the relaxation.
+The estimate that called this "three changes, none large" was made by looking
+at emission and not grepping.
 
 ### Where the relaxation starts
 
@@ -693,10 +713,16 @@ result is larger than one sitting's work. It is still one design -- every part
 of it exists to make the same placement legal -- but it should land in three
 pieces, each of which leaves the tree green:
 
-1. **Relaxation and snapping, primitives only**, and the three changes that let
-   a chosen facing reach the blocks -- see "Orientation has nowhere to go yet",
-   without which the stage's headline result is unobservable. No support
-   bodies, no upward separation. Bodies stay at the Y their starting layout gave them, so nothing
+0. **One place for a gate's geometry.** `physical::variants` becomes the only
+   thing that knows where a gate's sockets and output pin are, and the five
+   modules that hardcode `INPUT_DIRECTIONS` and `OUTPUT_DIRECTION` ask it
+   instead, passing a facing. No behaviour changes while every facing is north,
+   which is what makes it testable on its own -- every existing measurement
+   must come out identical.
+
+1. **Relaxation and snapping, primitives only.** With geometry already asking
+   for a facing, a chosen one reaches the blocks by being passed rather than by
+   changing five modules at once. No support bodies, no upward separation. Bodies stay at the Y their starting layout gave them, so nothing
    needs holding up and the third dimension is not yet in play. This is enough
    to answer the question the whole design exists for: does relaxation place
    better than rows and barycentres. `plan_from_netlist` switches to it;
