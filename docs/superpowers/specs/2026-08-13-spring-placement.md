@@ -234,27 +234,22 @@ enum Attach {
 }
 
 enum BodyKind {
-    /// A component the primitive graph named.
+    /// A component the primitive graph named. Its blocks include whatever it
+    /// stands on or attaches to; `physical.rs` has always said so.
     Primitive { node: NodeId, kind: Primitive },
     /// A declared wire merge. It has no primitive and no facing -- see
     /// "A third of the gates have no body".
     Junction { gate: usize },
-    /// A block something stands on or attaches to. Solid; conducts only when
-    /// it is a NOR's support, in which case it carries that gate's input
-    /// signal. Signals are the netlist's own names -- `String` -- because
-    /// nothing in this codebase interns them and inventing a type here would
-    /// be a second way to say the same thing.
-    Support { holds: usize, carries: Option<String> },
 }
 
-/// A relation that must hold exactly. Projected, never pulled.
+/// A relation between two bodies that must hold exactly. Projected, never
+/// pulled.
+///
+/// One variant, because the others turned out to be relations inside a single
+/// body: a torch and its support, a repeater and its floor, are one body each.
 enum Weld {
-    /// A wall torch on the face of its support.
-    OnFace { torch: usize, support: usize },
     /// Design H's lock repeater at the data repeater's side.
     BesideAt { lock: usize, data: usize, side: RelativeSide },
-    /// Anything that has to stand on something: dust, a repeater, a lever.
-    StandsOn { body: usize, support: usize },
 }
 
 struct RelaxEffort { iterations: usize, seed: u64 }
@@ -410,195 +405,53 @@ circuit without room grows the way redstone can. It also leaves the seed with
 one job instead of two -- retrying a stuck configuration, not breaking
 symmetry.
 
-### Nothing holds a body up
+### A body already carries what it stands on
 
 §7.1 warned that legalising onto a 3D redstone lattice is far harder than onto
-2D standard-cell rows, and this is where that bites. The design lets a body sit
-at any height and never says what it stands on.
+2D standard-cell rows, and three rounds of this review went looking for that
+difficulty in the wrong place: they concluded that a body at height needs a
+support block placed under it, made supports bodies, welded them, and worked
+out which of them conduct.
 
-Dust needs a solid block beneath it. A repeater and a lever need one. A wall
-torch needs a block on the face it attaches to -- which the `OnFace` weld
-already covers, and it is the only one of the four that does. A support block
-itself needs nothing, which is why nobody has noticed that the planner leaves
-air under every one of them.
+`physical.rs` had already answered it. Every variant includes the block its
+component stands on or attaches to:
 
-Today the question does not arise: everything sits at one Y, and what stands on
-something stands on floor that emission laid or replayed without anyone
-deciding it.
+- a torch is `{ORIGIN: Solid, NORTH: WallTorch}` -- the support is the torch's
+  own block, and a support block needs nothing beneath it, which is why the
+  cell under one is air today and always has been;
+- a repeater is `{DOWN: Solid, ORIGIN: Repeater}`;
+- a lever is `{DOWN: Solid, ORIGIN: Lever}`.
 
-Once separation may push upwards it arises immediately. A repeater relaxed to
-Y = 7 needs a solid block at Y = 6, that block occupies a cell, and that cell
-participates in separation like anything else. Height is not free space; it is
-space that has to be built up to.
+So there is no support body, no `StandsOn`, and no `OnFace`: a torch and its
+support are one body, not two welded together. What holds a body up is part of
+what a body is, and it separates from foreign nets like the rest of it, by the
+term that already says "the cells each body occupies".
 
-Support is therefore a **body**, not an afterthought: every primitive that
-needs one gets a companion at a fixed offset below it, welded there, with its
-own extent in the separation. Which makes floors a placement decision rather
-than something emission does silently, and makes the count honest -- a stacked
-layout pays for its floors in the same units as everything else, so the
-relaxation can see that stacking costs blocks and decide accordingly.
+What does still need floors is dust the *router* lays, which routing already
+handles by recording the floor under every cell it writes. That is out of scope
+here, and it was the whole of the real problem.
 
-This is a real addition, not a clarification. It roughly doubles the body count
-for a dust-heavy circuit, and it is the reason the estimate "relaxation is a
-small module" should be distrusted until measured.
+The lesson is narrower than "check physical.rs". Three rounds reasoned forward
+from "bodies are primitives" to what a primitive must therefore need, and never
+read what the module that describes a primitive already said it has.
 
-### Support blocks are not all alike
+### A NOR's support is a conductor, and it is one of the torch's own cells
 
-Supports being bodies raises a question the single-plane world never had to
-answer: which of them conduct, for a separation that only applies between
-different nets. It is not obvious, and it was got wrong in the code before it
-was got wrong here.
+Which cells of a body conduct is not uniform, and the case that matters was
+found the expensive way. A **NOR's support is the gate's input node**: dust laid
+against it powers it and turns the torch off. On 2026-08-12 the planner placed
+a full adder that passed all four invariants and computed the wrong sum,
+because a foreign net was free to run against a support the code treated as
+inert. `gate_footprint` marks it a conductor today.
 
-A floor under dust is inert: another net may run beside it. A **NOR's support
-is the gate's input node** -- dust laid against it powers it and turns the
-torch off -- so it separates from foreign nets like any conductor. That was
-found on 2026-08-12 by the planner placing a full adder that passed all four
-invariants and computed the wrong sum, and it is fixed in
-`gate_footprint` today.
+Since a torch and its support are one body, that is a statement about a body's
+cells rather than about a separate support body: the `ORIGIN` cell of a torch
+variant carries the gate's input signal, its `NORTH` cell carries the output,
+and the separation is between cells carrying different signals. A repeater's
+`DOWN` floor carries nothing and is inert.
 
-So a support body carries the same port-level distinction as any other: a
-NOR's support is a conductor on the gate's *input* net, a floor is a conductor
-on nothing at all. Getting this wrong does not produce an illegal circuit. It
-produces a legal one that computes something else, which is worse, and no
-invariant catches it.
-
-### A third of the gates have no body
-
-"Bodies are primitives" excludes more than it looks. A wire merge contributes
-**no primitive at all**: `topology`'s own test says so by name --
-`or_bare_entry_has_no_nodes_no_inputs_and_no_output_primitive`, "a bare merge
-places nothing" -- with an empty template, no internal edges, and no node for a
-declared input to land on. `primitive_graph::expand` therefore produces nothing
-for it.
-
-More precisely, because the two kinds of merge differ and the difference
-matters. For a **bare** branch, `expand` does `contributions.extend(producer)`:
-the merge is transparent, and its consumers are wired straight to its
-producers. For an **isolated** one, each input gets an `IsolatingRepeater`,
-which is a real primitive with a real node.
-
-So an isolated merge is placed by its repeaters, and a bare merge is placed by
-nothing at all -- while `place_merge_gate` writes blocks at its anchor either
-way, and routes terminate on its sockets. In `verilog:seven_segment` that is 17
-merges of 47 gates.
-
-Bodies therefore come from the primitive graph's nodes **and** the netlist's
-merges. A merge's body is a junction: extent from what `place_merge_gate`
-occupies, ports at its input sockets and its outbound pin, and no facing at
-all. Dust is isotropic -- it has no front -- so a junction is the one body for
-which torque means nothing and `snap` has no angle to quantise.
-
-Note what this does to the spring network. The graph wires a bare merge's
-consumers directly to its producers, so springs alone would pull those two
-groups together and never notice the junction sitting between them. Adding the
-junction as a body means also re-inserting it into the pulls: producer to
-junction, junction to consumer, in place of the through-edge the graph
-provides. Placement's graph is not quite the primitive graph, and that is the
-first place they part.
-
-That this had to be found rather than being obvious is the cost of describing
-placement in terms of `physical.rs`, which models the four components that have
-an orientation and has never had anything to say about the one that does not.
-
-### A lamp is not free, and pinning one is ambiguous
-
-`Provenance::PrimaryOutput` gives every declared output a lamp node, so
-relaxation would treat it as a body and find it a position. Emission would
-ignore that: `emit_primitives` puts the lamp at `gate_pin[gate].down()`,
-directly under the pin of the gate that drives it, derived and not chosen.
-
-Relaxation moving something emission overrides is worse than it sounds -- the
-lamp would take part in the springs and the separation, pulling on its
-neighbours and reserving space, from a position nothing ever builds it at. So a
-lamp is welded, not free, and it needs no new weld to say so: `emit_primitives`
-puts it at `gate_pin.down()`, which makes it the block that pin's dust stands
-on. `StandsOn { body: pin, support: lamp }` is already exactly that
-relationship. A lamp is a support that happens to be readable.
-
-That also makes `PortPlacements` ambiguous for outputs, which this design
-inherits rather than introduces. `port_anchor` resolves a declared output to
-`gate:{name}` -- pinning one pins the *gate*, and the lamp lands wherever the
-gate's pin puts it. Someone writing "output `y` goes here" means the lamp,
-because the lamp is the thing a person reads off the finished circuit. The two
-differ by the pin offset, so a pin that looks obeyed is off by two cells in a
-direction the caller did not choose.
-
-Resolving it is a decision, not a discovery, and this design takes the reading
-that matches the words: pinning a declared output pins its lamp, and the gate
-is placed so that its pin lands above it. Pinning a primary input already means
-its lever, which is the same reading.
-
-### Orientation has nowhere to go yet
-
-The headline of this design is that torque decides facing. Walking stage 1
-through to the blocks: it cannot, and the gap is wider than a missing
-parameter.
-
-`PlanCandidate` already carries `variant_indices`, one per body, which is
-exactly where a chosen facing belongs. It is set to `vec![0; n]` at every
-construction site and read by nothing. `place_nor_gate(world, origin,
-input_count)` takes no facing, `gate_footprint(origin, gate)` takes none
-either, and `emit_primitives` calls them without one. A relaxation that turns
-every gate to face its consumer would hand that decision to a pipeline in which
-every gate faces north, and the tests would pass, because nothing downstream
-disagrees with a facing nobody applies.
-
-So stage 1 owes three changes it would be easy to leave out:
-
-- `place_nor_gate` and `place_merge_gate` take a facing, and place their
-  support, torch and sockets rotated by it -- which is what
-  `physical::variants` already describes and they currently ignore;
-- `gate_footprint` takes the same facing, so the cells a body occupies and the
-  cells it keeps others out of are the rotated ones;
-- `emit_primitives` reads `variant_indices` instead of assuming zero.
-
-And a fourth, which is not in emission at all. `route_every_net` finds a
-socket with `step(support, INPUT_DIRECTIONS[input_index])`, and
-`INPUT_DIRECTIONS` is `[West, East, South]` -- the sockets of a gate facing
-north. Rotate the gate and its sockets rotate with it, so the router looks for
-them in the wrong cells, and the approach cell it derives from socket and
-support is wrong by the same rotation.
-
-Counting where else that assumption lives, rather than assuming it is those
-two: `INPUT_DIRECTIONS` and `OUTPUT_DIRECTION` are read in **five modules**.
-`compile/mod.rs` places and emits with them. `planner.rs` routes and finds
-output pins with them. `equivalence.rs` walks `INPUT_DIRECTIONS` to decide
-which sockets actually feed a gate, and `OUTPUT_DIRECTION` to find its pin.
-`world_partition.rs` resolves a node's position from an `INPUT_DIRECTIONS`
-offset. `routing_stats.rs` finds a source pin with `OUTPUT_DIRECTION`. The last
-two are what the viewer's topology view and several tests are built on.
-
-So orientation is not four small changes. It is one assumption held in five
-places, and rotating a gate falsifies all of them at once -- silently, because
-each is a lookup that still returns a cell, just the wrong one.
-
-Which argues for doing it as its own piece of work, before any relaxation
-exists: one place that answers "where are this gate's sockets and pin, at this
-facing", and five callers that ask it instead of assuming north.
-
-That place is **not** `physical::variants`, which was the obvious answer and is
-the wrong one. Comparing what it says to what the emitter does: for a torch it
-says `{ORIGIN: Solid, NORTH: WallTorch facing North}`, and `place_nor_gate`
-writes exactly those two blocks, so they agree on the component. But
-`variants(primitive)` takes no arity, and sockets are a property of arity -- a
-one-input NOR and a three-input NOR are the same two blocks and three different
-socket sets. Its single `TorchInput` port sits on the support, which is
-electrically right, since all three sockets power that one block, and says
-nothing about which cell input 2 arrives in.
-
-So the geometry the router needs is not in `physical.rs` and cannot be without
-giving it an arity it was not built to have. Stage 0 is smaller and duller than
-"make physical.rs the source of truth": `place_nor_gate`, `place_merge_gate`
-and the socket arithmetic they share take a facing, return sockets rotated by
-it, and the five callers ask them rather than `INPUT_DIRECTIONS`.
-`physical.rs` keeps what it is good for -- the component's own blocks and
-ports at each of the four facings, which is exactly what the solver chooses
-among -- and does not become something it is not.
-
-Stage 1 should therefore be two: the geometry work, then the relaxation. The
-estimate that called this "three changes, none large" was made by reading
-emission and not grepping; the one that then called `physical.rs` the answer
-was made by reading its name and not its signature.
+Getting this wrong does not produce an illegal circuit. It produces a legal one
+that computes something else, which is worse, and no invariant catches it.
 
 ### Where the relaxation starts
 
@@ -823,7 +676,8 @@ build yet is a test nobody can write.
 **Stage 2 -- supports as bodies, separation that may push upwards**
 
 8. **Every body stands on something.** After snap, each primitive that needs
-   support has one, at the offset its weld requires.
+   support has one -- which is a test that its own blocks were written, not
+   that a separate body was placed under it.
 9. **Crowding produces height.** Six gates all consuming one signal, packed
    tightly enough that spreading sideways costs more than stacking, end up on
    more than one level. This replaces the test `Shape::Tall` currently has, and
