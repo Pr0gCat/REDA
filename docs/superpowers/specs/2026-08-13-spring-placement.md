@@ -400,16 +400,30 @@ places nothing" -- with an empty template, no internal edges, and no node for a
 declared input to land on. `primitive_graph::expand` therefore produces nothing
 for it.
 
-A relaxation over the primitive graph's nodes would place no merge. In
-`verilog:seven_segment` that is 17 gates of 47: invisible to the springs,
-absent from the separation, unplaced -- while `place_merge_gate` puts real
-blocks at that gate's anchor and routes terminate on its sockets.
+More precisely, because the two kinds of merge differ and the difference
+matters. For a **bare** branch, `expand` does `contributions.extend(producer)`:
+the merge is transparent, and its consumers are wired straight to its
+producers. For an **isolated** one, each input gets an `IsolatingRepeater`,
+which is a real primitive with a real node.
 
-So bodies come from the primitive graph's nodes **and** the netlist's merges. A
-merge's body is a junction: extent from what `place_merge_gate` occupies, ports
-at its input sockets and its outbound pin, and no facing at all. Dust is
-isotropic -- it has no front -- so a junction is the one body for which torque
-means nothing and `snap` has no angle to quantise.
+So an isolated merge is placed by its repeaters, and a bare merge is placed by
+nothing at all -- while `place_merge_gate` writes blocks at its anchor either
+way, and routes terminate on its sockets. In `verilog:seven_segment` that is 17
+merges of 47 gates.
+
+Bodies therefore come from the primitive graph's nodes **and** the netlist's
+merges. A merge's body is a junction: extent from what `place_merge_gate`
+occupies, ports at its input sockets and its outbound pin, and no facing at
+all. Dust is isotropic -- it has no front -- so a junction is the one body for
+which torque means nothing and `snap` has no angle to quantise.
+
+Note what this does to the spring network. The graph wires a bare merge's
+consumers directly to its producers, so springs alone would pull those two
+groups together and never notice the junction sitting between them. Adding the
+junction as a body means also re-inserting it into the pulls: producer to
+junction, junction to consumer, in place of the through-edge the graph
+provides. Placement's graph is not quite the primitive graph, and that is the
+first place they part.
 
 That this had to be found rather than being obvious is the cost of describing
 placement in terms of `physical.rs`, which models the four components that have
