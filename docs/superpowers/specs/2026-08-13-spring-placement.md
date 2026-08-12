@@ -247,9 +247,14 @@ enum BodyKind {
 /// A relation between two bodies that must hold exactly. Projected, never
 /// pulled.
 ///
-/// One variant, because the others turned out to be relations inside a single
-/// body: a torch and its support, a repeater and its floor, are one body each.
+/// Two variants. The others an earlier draft listed turned out to be relations
+/// inside a single body: a torch and its support, a repeater and its floor,
+/// are one body each.
 enum Weld {
+    /// An isolated merge branch's repeater, in the junction's socket for that
+    /// branch -- which is where `world_partition::resolve_node_position`
+    /// already resolves it to.
+    AtSocket { repeater: usize, junction: usize, input_index: usize },
     /// Design H's lock repeater at the data repeater's side.
     BesideAt { lock: usize, data: usize, side: RelativeSide },
 }
@@ -372,11 +377,11 @@ why a step re-satisfies welds after choosing facings and not before: a body
 that turned has moved the cell its weld points at, and the weld has to be
 restored at the facing that will actually be built.
 
-With one weld in the design and the DFF that needs it not yet compilable, this
-machinery is exercised by nothing until the DFF lands. It stays, because the
-alternative is the DFF arriving to find welds unspecified -- but a reader
-should know that everything in this section is, today, a contract with no
-caller.
+`AtSocket` is exercised the moment relaxation meets an isolated merge, which
+`verilog:seven_segment` does seventeen times. `BesideAt` is not: the DFF that
+needs it is not compilable yet, so that one variant is a contract with no
+caller, kept because the alternative is the DFF arriving to find welds
+unspecified.
 
 ### Nothing pushes into the third dimension on its own
 
@@ -435,9 +440,17 @@ merges of 47 gates.
 
 Bodies therefore come from the primitive graph's nodes **and** the netlist's
 merges. A merge's body is a junction: extent from what `place_merge_gate`
-occupies, ports at its input sockets and its outbound pin, and no facing at
-all. Dust is isotropic -- it has no front -- so a junction is the one body for
-which torque means nothing.
+occupies, and ports at its input sockets and its outbound pin.
+
+It has a facing, which an earlier draft denied on the grounds that dust is
+isotropic and has no front. The dust does not; the cell does.
+`place_merge_gate` is built to the *exact same footprint* as a NOR of the same
+arity -- sockets on the three `INPUT_DIRECTIONS` faces, and one cell reserved
+one hop out in `OUTPUT_DIRECTION` where its outbound route starts. Turning a
+junction turns those four cells, so torque on one is real: it decides which
+face each branch arrives on and which side the merge's own route leaves from.
+What a junction has no facing *for* is the block at its centre, which is dust
+and stays dust whichever way the cell is turned.
 
 Note what this does to the spring network. The graph wires a bare merge's
 consumers directly to its producers, so springs alone would pull those two
@@ -580,33 +593,34 @@ That is the whole of the seam: not the mapping, which exists, but
 five primitives would relax to five positions and be collapsed to one on the
 way out.
 
-Supports widen the same seam. `snap` returns anchors keyed by `NodeId`, and a
-support body has no node -- so once floors are a placement decision rather than
-something emission lays silently, the output has to carry them and
-`PlanCandidate` has nowhere to put them.
+What widens the seam is a gate with more than one body, and one exists today.
+An isolated merge is a junction plus one `IsolatingRepeater` per branch, so it
+relaxes to several positions and has one anchor to hand back. Design H is not
+the first gate to outgrow `PlanCandidate`; the seven-segment decoder already
+does.
 
-Where floors come from today is worth stating exactly, because it is three
-places and none of them is a decision. `emit_primitives` calls `ensure_floor`
-once, for a gate's output pin. `emit_routes` writes floors it *replayed* from
-what the legacy emitter recorded. And `place_nor_gate` lays none at all: a
-gate's support sits on whatever happens to be beneath it, which in a
-legacy-seeded world is floor the router laid for its own reasons.
+Stage 1 does not widen it. It welds instead: an isolated branch's repeater sits
+in the junction's socket for that branch, which is where
+`world_partition::resolve_node_position` already resolves it to and where the
+router terminates that branch regardless. Welded there, the repeater's relaxed
+position is never something the collapse throws away, because the weld never
+let it be anywhere else. Relaxation gives up nothing it was going to be allowed
+to keep.
 
-Which means supports already float. Under the planner's own placement, the cell
-below a NOR's support is air -- observed on 2026-08-12 while tracing a dead
-signal, at `(14, 0, 5)` under `g0`. It does not matter yet, because a support
-block needs nothing beneath it to work. It starts mattering the moment anything
-is placed above one.
+That is an answer about today's gates, not a general one. Design H's five
+primitives are five genuinely free positions, and welding them to fixed offsets
+would be inventing a rigid macro rather than placing one. Whoever brings the
+DFF has to widen `PlanCandidate` to one anchor per primitive, and this document
+names the seam so that they find it described rather than discover it.
 
-Which is why supports arrive in stage 2 and not stage 1. Stage 1 leaves every
-body on the plane its starting layout gave it, floors stay emission's business,
-and `snap` returning gate anchors is honest because nothing else exists to
-return. Stage 2 pays for both at once: `PlanCandidate` carries primitives and
-their supports, and `emit_primitives` stops inventing floors.
-
-This document does not do that work. It names the seam, so that whoever widens
-it -- for supports or for the DFF -- finds it described rather than discovers
-it.
+Floors are worth stating exactly while the seam is open, because they come from
+three places and none of them is a decision. `emit_primitives` calls
+`ensure_floor` once, for a gate's output pin. `emit_routes` writes floors it
+*replayed* from what the legacy emitter recorded. `place_merge_gate` floors its
+own junction and `place_nor_gate` floors nothing, because a support block needs
+nothing beneath it. None of that is placement's business -- floors are for
+dust, and dust is the router's -- but a reader tracing why a cell is solid
+should find all three answers in one place.
 
 ### Pinned ports and the shape preference
 
@@ -684,8 +698,9 @@ build yet is a test nobody can write.
 2. **Orientation.** A hand-built pair, stated as geometry rather than as a
    compass bearing, since "faces east" means different things for a wall torch
    and a repeater: a repeater whose only consumer sits to its east ends up
-   driving its front eastwards, and a torch whose support sits to its west ends
-   up attached to that face. This is the claim that torque produces
+   driving its front eastwards, and a torch whose only consumer sits to its
+   west ends up with its torch block on the west face of its own support,
+   because that is the cell its output port lives in. This is the claim that torque produces
    orientation, on a case small enough to verify by hand.
 3. **Separation after snap.** For every reference circuit, no two *ports*
    carrying different signals are closer than the rule allows -- ports, not
@@ -721,11 +736,14 @@ build yet is a test nobody can write.
    they were and slower than the emitter -- beating one by giving up the other
    is not an improvement, it is a different trade.
 
-**Stage 2 -- supports as bodies, separation that may push upwards**
+**Stage 2 -- separation that may push upwards**
 
-8. **Every body stands on something.** After snap, each primitive that needs
-   support has one -- which is a test that its own blocks were written, not
-   that a separate body was placed under it.
+8. **A stacked pair is left alone.** Two bodies whose cells share a column and
+   differ in Y are already separated, and the projection moves neither. This is
+   the vertical exemption read straight off the safety condition -- its unsafe
+   case needs a horizontal cardinal step, so there is no pure-vertical case at
+   all -- and it is the whole reason height is cheaper than width. Test 9 is
+   what it buys; this is the mechanism, tested where it can be seen.
 9. **Crowding produces height.** Six gates all consuming one signal, packed
    tightly enough that spreading sideways costs more than stacking, end up on
    more than one level. This replaces the test `Shape::Tall` currently has, and
@@ -780,26 +798,29 @@ was always for.
 
 ## Staging
 
-Review grew this design twice: supports became bodies, and separation gained a
-routing reservation. Both were necessary and both are load-bearing, and the
-result is larger than one sitting's work. It is still one design -- every part
-of it exists to make the same placement legal -- but it should land in three
-pieces, each of which leaves the tree green:
+Review grew this design twice: wire merges gained junction bodies, and
+separation gained a routing reservation. Both were necessary and both are
+load-bearing, and the result is larger than one sitting's work. It is still one
+design -- every part of it exists to make the same placement legal -- but it
+should land in three pieces, each of which leaves the tree green:
 
 0. **One place for a gate's geometry.** The socket and pin arithmetic takes a
-   facing and answers with cells rotated by it, and the five modules that
-   hardcode `INPUT_DIRECTIONS` and `OUTPUT_DIRECTION` ask it instead of
-   assuming north. No behaviour changes while every facing is north, which is
-   what makes it testable on its own -- every existing measurement must come
-   out identical.
+   facing and answers with cells rotated by it, and the six modules that assume
+   north ask it instead. Five name `INPUT_DIRECTIONS` or `OUTPUT_DIRECTION`
+   outright; the sixth is `topology.rs`, which hardcodes the *consequence* as
+   footprint-area tables -- `nor_footprint_area`'s 6/9/12 and
+   `merge_footprint_area`'s 6/9 -- with no symbol to grep for and a round-trip
+   test pinning them to what `place_nor_gate` really builds. No behaviour
+   changes while every facing is north, which is what makes it testable on its
+   own -- every existing measurement must come out identical.
 
 1. **Relaxation and snapping, primitives only.** With geometry already asking
    for a facing, a chosen one reaches the blocks by being passed rather than by
-   changing five modules at once. No support bodies, no upward separation. Bodies stay at the Y their starting layout gave them, so nothing
-   needs holding up and the third dimension is not yet in play. This is enough
-   to answer the question the whole design exists for: does relaxation place
-   better than rows and barycentres. `plan_from_netlist` switches to it;
-   `compile()` does not.
+   changing six modules at once. No upward separation: bodies stay at the Y
+   their starting layout gave them, so the third dimension is not yet in play.
+   This is enough to answer the question the whole design exists for: does
+   relaxation place better than rows and barycentres. `plan_from_netlist`
+   switches to it; `compile()` does not.
 
    `Shape::Tall` survives this stage, which matters because otherwise the stage
    does not leave the tree green. It chooses the *starting* layout, and a stage
@@ -807,10 +828,10 @@ pieces, each of which leaves the tree green:
    `a_tall_preference_uses_height_where_a_wide_one_uses_floor` still passes
    unchanged. It is stage 2 that takes the knob away, and stage 2 that replaces
    its test.
-2. **Supports as bodies, and separation that may push upwards.** Height becomes
-   available and starts paying for itself, and `Shape::Tall` is removed here
-   because this is what replaces it: its test becomes "crowd it and it stacks"
-   rather than "ask for tall and get tall".
+2. **Separation that may push upwards.** Height becomes available and starts
+   paying for itself, and `Shape::Tall` is removed here because this is what
+   replaces it: its test becomes "crowd it and it stacks" rather than "ask for
+   tall and get tall".
 3. **The switchover.** `compile()` moves once every reference circuit places,
    routes, verifies and matches its truth table.
 
