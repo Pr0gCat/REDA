@@ -322,9 +322,13 @@ at any height and never says what it stands on.
 
 Dust needs a solid block beneath it. A repeater and a lever need one. A wall
 torch needs a block on the face it attaches to -- which the `OnFace` weld
-already covers, and it is the only one of the four that does. Today the
-question does not arise: everything sits at one Y and the emitter lays a floor
-under each cell as it writes it.
+already covers, and it is the only one of the four that does. A support block
+itself needs nothing, which is why nobody has noticed that the planner leaves
+air under every one of them.
+
+Today the question does not arise: everything sits at one Y, and what stands on
+something stands on floor that emission laid or replayed without anyone
+deciding it.
 
 Once separation may push upwards it arises immediately. A repeater relaxed to
 Y = 7 needs a solid block at Y = 6, that block occupies a cell, and that cell
@@ -440,9 +444,20 @@ gates, and `snap`'s return type stops fitting.
 Supports widen the same seam. `snap` returns anchors keyed by `NodeId`, and a
 support body has no node -- so once floors are a placement decision rather than
 something emission lays silently, the output has to carry them and
-`PlanCandidate` has nowhere to put them. `emit_primitives` creates floors
-today by calling `ensure_floor` as it writes each cell, and that is precisely
-the silent step this design is taking away.
+`PlanCandidate` has nowhere to put them.
+
+Where floors come from today is worth stating exactly, because it is three
+places and none of them is a decision. `emit_primitives` calls `ensure_floor`
+once, for a gate's output pin. `emit_routes` writes floors it *replayed* from
+what the legacy emitter recorded. And `place_nor_gate` lays none at all: a
+gate's support sits on whatever happens to be beneath it, which in a
+legacy-seeded world is floor the router laid for its own reasons.
+
+Which means supports already float. Under the planner's own placement, the cell
+below a NOR's support is air -- observed on 2026-08-12 while tracing a dead
+signal, at `(14, 0, 5)` under `g0`. It does not matter yet, because a support
+block needs nothing beneath it to work. It starts mattering the moment anything
+is placed above one.
 
 Which is why supports arrive in stage 2 and not stage 1. Stage 1 leaves every
 body on the plane its starting layout gave it, floors stay emission's business,
