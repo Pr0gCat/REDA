@@ -319,6 +319,30 @@ Four terms, each with a source:
    relaxed placement has corridors rather than only clearance;
 4. a rounding margin, derived below.
 
+### How welds and separations compose
+
+The projection has two kinds of constraint and the design has not said how they
+compose. A weld is an equality -- a torch sits exactly one cell from its
+support, no nearer and no further. A separation is an inequality -- at least
+this far from a foreign conductor. Pushing a support away from a foreign net
+drags it out from under its torch unless the weld is restored, and restoring
+the weld can push the torch back into what the separation just cleared.
+
+They compose by alternating, welds last: separate every violating pair, then
+re-satisfy every weld, and repeat until neither moves anything. Welds last
+because a weld violated is a circuit that does not work, while a separation
+violated is a circuit that works and is illegal; if only one can hold at the
+end of a step, it must be the one whose failure the invariants would not catch
+as a wrong answer. Not converging is the deadlock the error table already
+names, and it is a real outcome: three bodies that must each touch a fourth and
+each stay clear of the others may have no arrangement at all.
+
+A weld's offset is a function of facing. A torch is one cell north of its
+support *when facing north*, and rotating the body rotates the weld with it --
+which is why `snap` quantises facings before its second projection: welds whose
+offsets moved need re-satisfying at the facings that will actually be built,
+not at the continuous ones that will not.
+
 ### Nothing pushes into the third dimension on its own
 
 The obvious reading of everything above is that relaxation will use all three
