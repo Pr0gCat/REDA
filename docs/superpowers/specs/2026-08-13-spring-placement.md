@@ -411,9 +411,16 @@ So stage 1 owes three changes it would be easy to leave out:
   cells it keeps others out of are the rotated ones;
 - `emit_primitives` reads `variant_indices` instead of assuming zero.
 
-None is large. All three are invisible until something wants a facing other
-than north, which is why nothing has noticed that `variant_indices` has been
-dead since it was added.
+And a fourth, which is not in emission at all. `route_every_net` finds a
+socket with `step(support, INPUT_DIRECTIONS[input_index])`, and
+`INPUT_DIRECTIONS` is `[West, East, South]` -- the sockets of a gate facing
+north. Rotate the gate and its sockets rotate with it, so the router looks for
+them in the wrong cells, and the approach cell it derives from socket and
+support is wrong by the same rotation.
+
+None of the four is large. All are invisible until something wants a facing
+other than north, which is why nothing has noticed that `variant_indices` has
+been dead since it was added.
 
 ### Where the relaxation starts
 
@@ -714,8 +721,12 @@ argue for.
 
 ## Out of scope
 
-- **Routing.** The A* and rip-up path stays as it is. Changing placement and
-  routing together would leave nothing to attribute a regression to.
+- **Routing.** The A* and rip-up path stays as it is -- with one exception this
+  design forces and cannot avoid: the router derives a gate's sockets from a
+  fixed `INPUT_DIRECTIONS`, so it has to be told the facing that relaxation
+  chose. That is a substitution, not a change of algorithm, and everything else
+  about routing stays out of scope: changing placement and routing together
+  would leave nothing to attribute a regression to.
 - **Weighting springs by criticality.** Timing-driven placement is the obvious
   next question and is deliberately deferred until a measurement says plain
   wirelength misses the 15-cell constraint often enough to matter.
