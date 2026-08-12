@@ -387,6 +387,34 @@ on nothing at all. Getting this wrong does not produce an illegal circuit. It
 produces a legal one that computes something else, which is worse, and no
 invariant catches it.
 
+### Orientation has nowhere to go yet
+
+The headline of this design is that torque decides facing. Walking stage 1
+through to the blocks: it cannot, and the gap is wider than a missing
+parameter.
+
+`PlanCandidate` already carries `variant_indices`, one per body, which is
+exactly where a chosen facing belongs. It is set to `vec![0; n]` at every
+construction site and read by nothing. `place_nor_gate(world, origin,
+input_count)` takes no facing, `gate_footprint(origin, gate)` takes none
+either, and `emit_primitives` calls them without one. A relaxation that turns
+every gate to face its consumer would hand that decision to a pipeline in which
+every gate faces north, and the tests would pass, because nothing downstream
+disagrees with a facing nobody applies.
+
+So stage 1 owes three changes it would be easy to leave out:
+
+- `place_nor_gate` and `place_merge_gate` take a facing, and place their
+  support, torch and sockets rotated by it -- which is what
+  `physical::variants` already describes and they currently ignore;
+- `gate_footprint` takes the same facing, so the cells a body occupies and the
+  cells it keeps others out of are the rotated ones;
+- `emit_primitives` reads `variant_indices` instead of assuming zero.
+
+None is large. All three are invisible until something wants a facing other
+than north, which is why nothing has noticed that `variant_indices` has been
+dead since it was added.
+
 ### Where the relaxation starts
 
 A spring system with hard constraints is not convex, so the starting point
@@ -658,8 +686,10 @@ result is larger than one sitting's work. It is still one design -- every part
 of it exists to make the same placement legal -- but it should land in three
 pieces, each of which leaves the tree green:
 
-1. **Relaxation and snapping, primitives only.** No support bodies, no upward
-   separation. Bodies stay at the Y their starting layout gave them, so nothing
+1. **Relaxation and snapping, primitives only**, and the three changes that let
+   a chosen facing reach the blocks -- see "Orientation has nowhere to go yet",
+   without which the stage's headline result is unobservable. No support
+   bodies, no upward separation. Bodies stay at the Y their starting layout gave them, so nothing
    needs holding up and the third dimension is not yet in play. This is enough
    to answer the question the whole design exists for: does relaxation place
    better than rows and barycentres. `plan_from_netlist` switches to it;
