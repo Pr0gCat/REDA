@@ -588,14 +588,22 @@ of it exists to make the same placement legal -- but it should land in three
 pieces, each of which leaves the tree green:
 
 1. **Relaxation and snapping, primitives only.** No support bodies, no upward
-   separation. Bodies stay at the Y their starting layout gave them, which is
-   one plane, so nothing needs holding up and the third dimension is not yet
-   in play. This is enough to answer the question the whole design exists for:
-   does relaxation place better than rows and barycentres. `plan_from_netlist`
-   switches to it; `compile()` does not.
-2. **Supports as bodies, and separation that may push upwards.** Height
-   becomes available and starts paying for itself. The `Shape::Tall` knob is
-   removed here, since this is what replaces it.
+   separation. Bodies stay at the Y their starting layout gave them, so nothing
+   needs holding up and the third dimension is not yet in play. This is enough
+   to answer the question the whole design exists for: does relaxation place
+   better than rows and barycentres. `plan_from_netlist` switches to it;
+   `compile()` does not.
+
+   `Shape::Tall` survives this stage, which matters because otherwise the stage
+   does not leave the tree green. It chooses the *starting* layout, and a stage
+   that never moves a body in Y hands back whatever storeys it was given, so
+   `a_tall_preference_uses_height_where_a_wide_one_uses_floor` still passes
+   unchanged. It is stage 2 that takes the knob away, and stage 2 that replaces
+   its test.
+2. **Supports as bodies, and separation that may push upwards.** Height becomes
+   available and starts paying for itself, and `Shape::Tall` is removed here
+   because this is what replaces it: its test becomes "crowd it and it stacks"
+   rather than "ask for tall and get tall".
 3. **The switchover.** `compile()` moves once every reference circuit places,
    routes, verifies and matches its truth table.
 
