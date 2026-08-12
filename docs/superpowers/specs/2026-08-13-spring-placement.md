@@ -300,6 +300,17 @@ same body, which for `k = 1` signal springs and a bounded degree means the
 maximum degree in the graph. That is a derived number, recomputed per circuit,
 not a constant to tune.
 
+A step is not a gradient step. The objective is quadratic, so with the
+constraints held aside it has a direct solution -- the linear system
+`Ax = f + c` that the founding spec records LogicLoom solving -- and a step is:
+solve it exactly for the current facings, then project. Repeat.
+
+That matters because the alternative needs a step size, and a step size is a
+constant with no derivation, which is the third one this design would have
+carried if nobody looked. Solving exactly has none: the springs decide where
+the bodies want to be, the projection decides where they may be, and neither
+asks how far to move.
+
 Convergence is reached when no body moves more than a tenth of a cell in a
 step. A tenth because the rounding margin is a whole cell, so a system still
 twitching below that cannot change what `snap` produces; running past it buys
