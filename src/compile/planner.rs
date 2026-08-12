@@ -1245,18 +1245,24 @@ fn deterministic_astar(
 
             if !within_bounds(next, min, max)
                 || !anchor_is_free_for(next, start, goal, terminal_support, owner, reservation)
-                || staircase_clearance(state.anchor, next)
-                    .into_iter()
-                    .any(|cell| {
-                        // A conductor there breaks the step whoever laid it.
-                        // Otherwise the cell may be ours, or a staircase this
-                        // same route already built -- two branches climbing
-                        // the same stair is reuse, not a collision.
-                        reservation.conductor_owner(&cell).is_some()
-                            || reservation.owner(&cell).is_some_and(|occupied_by| {
-                                occupied_by != owner && occupied_by != stair_guard(owner)
-                            })
-                    })
+                || staircase_clearance(state.anchor, next).into_iter().any(|cell| {
+                    let foreign = reservation.owner(&cell).is_some_and(|occupied_by| {
+                        occupied_by != owner && occupied_by != stair_guard(owner)
+                    });
+                    // The riser is the one cell a climb *wants* filled -- it
+                    // becomes this route's own floor -- so it may already be
+                    // ours, or a stair this route built: two branches climbing
+                    // one stair is reuse. Everything else a staircase needs has
+                    // to be empty, and empty means empty. A solid block is what
+                    // stops a climb, and every route lays solid floors, so a
+                    // route passing overhead seals this one's way up without
+                    // owning anything that conducts.
+                    let is_riser = next.y > state.anchor.y && cell.y == state.anchor.y;
+                    if is_riser {
+                        return foreign || reservation.conductor_owner(&cell).is_some();
+                    }
+                    reservation.owner(&cell).is_some()
+                })
             {
                 continue;
             }
@@ -4146,13 +4152,19 @@ mod tests {
     /// assumed.
     ///
     /// and4 and full_adder place, route and verify without the legacy emitter.
-    /// segment_a routes, carries its signal past the router's own reckoning,
-    /// and is still refused by the strength invariant at one sink out of many
-    /// -- so what remains is the gap between what the router believes a branch
-    /// carries and what the whole network actually delivers, which is a
-    /// fanout's shared trunk being counted once per branch.
+    /// segment_a does not, and the reason is a choice rather than a gap: a
+    /// climb needs the cell above the one it leaves to be *empty*, and every
+    /// route lays solid floors, so a route passing overhead seals another's
+    /// way up while owning nothing that conducts. Enforcing that costs
+    /// routability -- segment_a routed completely without it, and delivered
+    /// nothing to six of its sinks.
+    ///
+    /// A router that lays dead circuits is worse than one that says it cannot,
+    /// so the rule stays and the search is what has to improve. It also has to
+    /// get faster: at this size a round is minutes, and there are sixty-four
+    /// of them.
     #[test]
-    #[ignore = "known: segment_a routes and one sink still arrives dead"]
+    #[ignore = "known: segment_a needs a better search, not a looser rule"]
     fn how_far_the_planners_own_placement_carries() {
         use crate::circuits::full_adder::build_full_adder_netlist;
         use crate::circuits::seven_segment::{
