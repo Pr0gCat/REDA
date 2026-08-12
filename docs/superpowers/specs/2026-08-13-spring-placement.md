@@ -199,10 +199,10 @@ test.
 A new module, `src/compile/relax.rs`:
 
 ```rust
-/// One thing in continuous space. Not always a primitive: a support block is
-/// a body too (see below), and it has no node in the primitive graph and no
-/// `Primitive` kind, because it is not a component -- it is what a component
-/// stands on.
+/// One thing in continuous space. Not always a primitive: a wire merge is a
+/// body with no primitive behind it -- see "A third of the gates have no
+/// body". What a component stands on is not a body at all; it is part of the
+/// component's own blocks.
 struct Body {
     what: BodyKind,
     position: [f64; 3],
