@@ -209,11 +209,12 @@ struct Body {
     /// integrate and none to quantise later. Meaningless for a junction --
     /// dust is isotropic, so a merge has no front to turn.
     facing: Facing,
-    /// Half-extents along the body's own axes, from the blocks
-    /// `physical::variants` says it occupies. Not a radius: a NOR cell is not
-    /// a sphere, and a sphere large enough to contain one wastes exactly the
-    /// space this design exists to win.
-    half_extent: [f64; 3],
+    // No stored extent. With a facing always one of four, the cells a body
+    // occupies are `variants(kind)[facing].blocks` -- already axis-aligned,
+    // already exact. An earlier draft carried half-extents because it expected
+    // to need them at arbitrary angles, and a radius before that, which would
+    // have wasted the space this design exists to win: a NOR cell is not a
+    // sphere.
 }
 
 /// A spring, attached at a port on each end.
@@ -340,8 +341,8 @@ threshold is `DidNotConverge`.
 
 Four terms, each with a source:
 
-1. each body's half-extents, from the blocks `physical::variants` says it
-   occupies;
+1. the cells each body occupies, which `variants(kind)[facing].blocks` gives
+   exactly;
 2. two cells of conductor clearance, from
    `2026-08-09-channel-safety-condition.md`, between different signals only;
 3. room for the nets that must reach the body -- the edges that need routing,
@@ -796,7 +797,15 @@ build yet is a test nobody can write.
    a half-cell boundary in every axis at once, which is where rounding moves it
    furthest.
 4. **Welds survive snap.** A torch is on the face of its support.
-5. **Corridors exist.** A placement is not merely legal but routable: the
+   Additionally, that welds win: a body forced by separation away from
+   something it is welded to ends the step welded, and the separation is the
+   constraint left violated. It is the order the projection promises, and the
+   one whose reverse would produce a circuit that does not work.
+5. **An unconverged placement is refused, not rounded.** `snap` on a placement
+   whose projection ran out of iterations returns an error naming the worst
+   remaining violation. Rounding it would spend a margin that is not there, and
+   the resulting illegality would surface later attributed to something else.
+6. **Corridors exist.** A placement is not merely legal but routable: the
    router reaches every sink it could reach from the old placement. This is
    what the third separation term claims, and it is the one with no precedent
    to lean on -- legacy reserves routing space by construction and this does it
@@ -804,7 +813,7 @@ build yet is a test nobody can write.
    rather than "every sink" because `segment_a` and above do not route today
    whatever places them, and this test is about placement, not about fixing
    that.
-6. **Better than what it replaced.** and4 placed by relaxation against and4
+7. **Better than what it replaced.** and4 placed by relaxation against and4
    placed by rows and barycentres: 572 blocks and 24 game ticks are the numbers
    to beat, and if neither is beaten the design failed at the thing it was
    written for. Both, because rows and barycentres are already smaller than
@@ -813,13 +822,13 @@ build yet is a test nobody can write.
 
 **Stage 2 -- supports as bodies, separation that may push upwards**
 
-7. **Every body stands on something.** After snap, each primitive that needs
+8. **Every body stands on something.** After snap, each primitive that needs
    support has one, at the offset its weld requires.
-8. **Crowding produces height.** Six gates all consuming one signal, packed
+9. **Crowding produces height.** Six gates all consuming one signal, packed
    tightly enough that spreading sideways costs more than stacking, end up on
    more than one level. This replaces the test `Shape::Tall` currently has, and
    claims less: height is earned rather than requested.
-9. **Native and wasm agree.** The same circuit placed by both toolchains gives
+10. **Native and wasm agree.** The same circuit placed by both toolchains gives
    identical anchors. If it does not, positions become fixed-point; see above.
    Stage 2 rather than stage 1 because stage 1 does not reach `compile()`, so
    the viewer is still drawing the legacy placement and a divergence would
@@ -827,12 +836,12 @@ build yet is a test nobody can write.
 
 **Stage 3 -- the switchover**
 
-10. **End to end.** Every reference circuit places, routes, verifies, and
+11. **End to end.** Every reference circuit places, routes, verifies, and
     matches its truth table.
 
 **Whenever the DFF lands**
 
-11. **The lock weld survives snap.** Design H's lock repeater is at the data
+12. **The lock weld survives snap.** Design H's lock repeater is at the data
     repeater's side. Not written yet, and not writable: `compile()` rejects
     `GateKind::DffPosedge` before placement, so there is no Design H region to
     place. Listed because `BesideAt` exists in this design for it, and an
