@@ -510,12 +510,17 @@ Relaxation moves primitives. `PlanCandidate` is indexed by *gate*: one anchor
 per gate followed by one per primary input, and `emit_primitives` reads
 `netlist.gates[index]` to decide what to place there.
 
-Today that mismatch is not one. Every realisable gate is a single torch or a
-wire merge, so primitive and gate correspond one to one and `snap`'s `NodeId`
-is a gate index by coincidence rather than by design. It becomes a mismatch the
-moment a gate expands to several primitives -- Design H's five, or any macro
-cell -- and at that point `PlanCandidate` has to carry primitives rather than
-gates, and `snap`'s return type stops fitting.
+The mapping is not a coincidence, which an earlier draft of this section
+claimed. `Provenance::Gate { gate, role }` is on every node, and
+`PrimitiveGraph::gate_nodes[gate]` answers "which primitives are this gate" in
+O(1). So `snap` groups its bodies by provenance and hands back one anchor per
+gate, deliberately, and the grouping is already correct for a gate of five
+primitives -- it just has nowhere to put the other four.
+
+That is the whole of the seam: not the mapping, which exists, but
+`PlanCandidate` having one anchor per gate to put the answer in. Design H's
+five primitives would relax to five positions and be collapsed to one on the
+way out.
 
 Supports widen the same seam. `snap` returns anchors keyed by `NodeId`, and a
 support body has no node -- so once floors are a placement decision rather than
