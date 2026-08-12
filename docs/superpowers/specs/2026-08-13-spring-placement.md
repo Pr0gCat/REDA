@@ -82,13 +82,14 @@ Six decisions follow, each with the alternative it was chosen over.
 
 **Bodies are primitives, not gates.** A torch, a repeater, a lever and a lamp
 each move on their own; a cell is a soft spring holding its members together,
-not a rigid body. The cost is that geometry a topology template used to
+not a rigid body. (Review found two things that move and are not primitives:
+the block a component stands on, and a wire merge, which has no primitive at
+all. See "Nothing holds a body up" and "A third of the gates have no body".) The cost is that geometry a topology template used to
 guarantee -- a torch on its support's face, Design H's lock repeater at the
 data repeater's side -- has to become an explicit constraint. The gain is that
 `physical.rs`'s typed ports become the thing placement is expressed in.
 
-Review added one body that is not a component at all: the block a component
-stands on. See "Nothing holds a body up".
+
 
 **Springs attach to ports, not to centres.** Every edge of the primitive graph
 lands on a specific port, and `physical.rs` already says where each port sits
@@ -220,6 +221,9 @@ struct Pull { from: (usize, PortKind), to: (usize, PortKind), stiffness: f64 }
 enum BodyKind {
     /// A component the primitive graph named.
     Primitive { node: NodeId, kind: Primitive },
+    /// A declared wire merge. It has no primitive and no facing -- see
+    /// "A third of the gates have no body".
+    Junction { gate: usize },
     /// A block something stands on or attaches to. Solid; conducts only when
     /// it is a NOR's support, in which case it carries that gate's input
     /// signal. Signals are the netlist's own names -- `String` -- because
@@ -386,6 +390,30 @@ NOR's support is a conductor on the gate's *input* net, a floor is a conductor
 on nothing at all. Getting this wrong does not produce an illegal circuit. It
 produces a legal one that computes something else, which is worse, and no
 invariant catches it.
+
+### A third of the gates have no body
+
+"Bodies are primitives" excludes more than it looks. A wire merge contributes
+**no primitive at all**: `topology`'s own test says so by name --
+`or_bare_entry_has_no_nodes_no_inputs_and_no_output_primitive`, "a bare merge
+places nothing" -- with an empty template, no internal edges, and no node for a
+declared input to land on. `primitive_graph::expand` therefore produces nothing
+for it.
+
+A relaxation over the primitive graph's nodes would place no merge. In
+`verilog:seven_segment` that is 17 gates of 47: invisible to the springs,
+absent from the separation, unplaced -- while `place_merge_gate` puts real
+blocks at that gate's anchor and routes terminate on its sockets.
+
+So bodies come from the primitive graph's nodes **and** the netlist's merges. A
+merge's body is a junction: extent from what `place_merge_gate` occupies, ports
+at its input sockets and its outbound pin, and no facing at all. Dust is
+isotropic -- it has no front -- so a junction is the one body for which torque
+means nothing and `snap` has no angle to quantise.
+
+That this had to be found rather than being obvious is the cost of describing
+placement in terms of `physical.rs`, which models the four components that have
+an orientation and has never had anything to say about the one that does not.
 
 ### Orientation has nowhere to go yet
 
