@@ -349,11 +349,11 @@ Four terms, each with a source:
 ### How welds and separations compose
 
 The projection has two kinds of constraint and the design has not said how they
-compose. A weld is an equality -- a torch sits exactly one cell from its
-support, no nearer and no further. A separation is an inequality -- at least
-this far from a foreign conductor. Pushing a support away from a foreign net
-drags it out from under its torch unless the weld is restored, and restoring
-the weld can push the torch back into what the separation just cleared.
+compose. A weld is an equality -- Design H's lock repeater sits exactly beside
+its data repeater, no nearer and no further. A separation is an inequality --
+at least this far from a foreign conductor. Pushing the lock away from a
+foreign net drags it off the data repeater's side unless the weld is restored,
+and restoring the weld can push it back into what the separation just cleared.
 
 They compose by alternating, welds last: separate every violating pair, then
 re-satisfy every weld, and repeat until neither moves anything. Welds last
@@ -364,11 +364,17 @@ as a wrong answer. Not converging is the deadlock the error table already
 names, and it is a real outcome: three bodies that must each touch a fourth and
 each stay clear of the others may have no arrangement at all.
 
-A weld's offset is a function of facing. A torch is one cell north of its
-support *when facing north*, and rotating the body rotates the weld with it --
-which is why a step re-satisfies welds after choosing facings and not before:
-a body that turned has moved the cell its weld points at, and the weld has to
-be restored at the facing that will actually be built.
+A weld's offset is a function of facing. The lock sits at the data repeater's
+*side*, and which cell is "the side" turns with the data repeater -- which is
+why a step re-satisfies welds after choosing facings and not before: a body
+that turned has moved the cell its weld points at, and the weld has to be
+restored at the facing that will actually be built.
+
+With one weld in the design and the DFF that needs it not yet compilable, this
+machinery is exercised by nothing until the DFF lands. It stays, because the
+alternative is the DFF arriving to find welds unspecified -- but a reader
+should know that everything in this section is, today, a contract with no
+caller.
 
 ### Nothing pushes into the third dimension on its own
 
