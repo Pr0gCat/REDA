@@ -474,15 +474,32 @@ places, and rotating a gate falsifies all of them at once -- silently, because
 each is a lookup that still returns a cell, just the wrong one.
 
 Which argues for doing it as its own piece of work, before any relaxation
-exists: make `physical::variants` the single place a gate's geometry is
-written, and have all five ask it for the sockets and pin of a gate at a given
-facing. That is a refactor with no behaviour change while every facing is
-north, testable on its own, and it turns "orientation reaches the blocks" from
-a cross-cutting change into a value that one function already returns.
+exists: one place that answers "where are this gate's sockets and pin, at this
+facing", and five callers that ask it instead of assuming north.
 
-Stage 1 should therefore be two: the geometry refactor, then the relaxation.
-The estimate that called this "three changes, none large" was made by looking
-at emission and not grepping.
+That place is **not** `physical::variants`, which was the obvious answer and is
+the wrong one. Comparing what it says to what the emitter does: for a torch it
+says `{ORIGIN: Solid, NORTH: WallTorch facing North}`, and `place_nor_gate`
+writes exactly those two blocks, so they agree on the component. But
+`variants(primitive)` takes no arity, and sockets are a property of arity -- a
+one-input NOR and a three-input NOR are the same two blocks and three different
+socket sets. Its single `TorchInput` port sits on the support, which is
+electrically right, since all three sockets power that one block, and says
+nothing about which cell input 2 arrives in.
+
+So the geometry the router needs is not in `physical.rs` and cannot be without
+giving it an arity it was not built to have. Stage 0 is smaller and duller than
+"make physical.rs the source of truth": `place_nor_gate`, `place_merge_gate`
+and the socket arithmetic they share take a facing, return sockets rotated by
+it, and the five callers ask them rather than `INPUT_DIRECTIONS`.
+`physical.rs` keeps what it is good for -- the component's own blocks and
+ports, which relaxation needs at arbitrary angles -- and does not become
+something it is not.
+
+Stage 1 should therefore be two: the geometry work, then the relaxation. The
+estimate that called this "three changes, none large" was made by reading
+emission and not grepping; the one that then called `physical.rs` the answer
+was made by reading its name and not its signature.
 
 ### Where the relaxation starts
 
@@ -760,12 +777,12 @@ result is larger than one sitting's work. It is still one design -- every part
 of it exists to make the same placement legal -- but it should land in three
 pieces, each of which leaves the tree green:
 
-0. **One place for a gate's geometry.** `physical::variants` becomes the only
-   thing that knows where a gate's sockets and output pin are, and the five
-   modules that hardcode `INPUT_DIRECTIONS` and `OUTPUT_DIRECTION` ask it
-   instead, passing a facing. No behaviour changes while every facing is north,
-   which is what makes it testable on its own -- every existing measurement
-   must come out identical.
+0. **One place for a gate's geometry.** The socket and pin arithmetic takes a
+   facing and answers with cells rotated by it, and the five modules that
+   hardcode `INPUT_DIRECTIONS` and `OUTPUT_DIRECTION` ask it instead of
+   assuming north. No behaviour changes while every facing is north, which is
+   what makes it testable on its own -- every existing measurement must come
+   out identical.
 
 1. **Relaxation and snapping, primitives only.** With geometry already asking
    for a facing, a chosen one reaches the blocks by being passed rather than by
