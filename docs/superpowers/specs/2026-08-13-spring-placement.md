@@ -151,8 +151,9 @@ reason and this design has no equivalent, so the separation carries it: each
 body reserves, beyond its own clearance, room for the nets that must reach it.
 
 The reservation is the number of edges that must be *routed* to it -- which is
-its degree less the welds, because a torch and its support are adjacent by
-construction and no wire runs between them -- times the width one route needs.
+its degree less the edges that stay inside one body, because a torch's support
+is one of the torch's own cells and no wire runs between them -- times the
+width one route needs.
 
 That is a first estimate, and the doubt about it is specific rather than
 general: a halo is not a channel. Legacy reserves *shared* corridors that many
@@ -655,11 +656,13 @@ build yet is a test nobody can write.
    margin claims, and the case that tests it is one where a body sits close to
    a half-cell boundary in every axis at once, which is where rounding moves it
    furthest.
-4. **Welds survive snap.** A torch is on the face of its support.
-   Additionally, that welds win: a body forced by separation away from
-   something it is welded to ends the step welded, and the separation is the
-   constraint left violated. It is the order the projection promises, and the
-   one whose reverse would produce a circuit that does not work.
+4. **Welds win.** A body forced by separation away from something it is welded
+   to ends the step welded, and the separation is the constraint left violated.
+   It is the order the projection promises, and the one whose reverse would
+   produce a circuit that does not work. With `BesideAt` the only weld and the
+   DFF not yet compilable, this is tested on a synthetic pair of bodies rather
+   than a circuit -- which is honest, because the contract is the projection's,
+   not the DFF's.
 5. **An unconverged placement is refused, not rounded.** `snap` on a placement
    whose projection ran out of iterations returns an error naming the worst
    remaining violation. Rounding it would spend a margin that is not there, and
