@@ -57,11 +57,12 @@ only large-scale in-game auto-router with published behaviour, uses
 force-directed placement. It is also the branch this project has no evidence
 against, the retracted argument in §7.1 having been the only one.
 
-Five decisions follow, each with the alternative it was chosen over.
+Six decisions follow, each with the alternative it was chosen over.
 
 **Bodies are primitives, not gates.** A torch, a repeater, a lever and a lamp
 each move on their own; a cell is a soft spring holding its members together,
-not a rigid body. The cost is that geometry a topology template used to
+not a rigid body. (Review added one thing that moves and is not a component at
+all -- the block a component stands on. See "Nothing holds a body up".) The cost is that geometry a topology template used to
 guarantee -- a torch on its support's face, Design H's lock repeater at the
 data repeater's side -- has to become an explicit constraint. The gain is that
 `physical.rs`'s typed ports become the thing placement is expressed in.
@@ -488,7 +489,11 @@ catch the legaliser's leftovers.
 
 ## Testing
 
-Cheapest first, each testing one claim:
+Each test names one claim, and the stage it belongs to -- the staging section
+below splits this design into three, and a test for something a stage does not
+build yet is a test nobody can write.
+
+**Stage 1 -- relaxation and snapping, one plane**
 
 1. **Determinism.** Same graph and effort, identical placement, bit for bit.
 2. **Orientation.** A hand-built pair, stated as geometry rather than as a
@@ -497,23 +502,53 @@ Cheapest first, each testing one claim:
    driving its front eastwards, and a torch whose support sits to its west ends
    up attached to that face. This is the claim that torque produces
    orientation, on a case small enough to verify by hand.
-3. **Separation after snap.** For every reference circuit, no two primitives of
-   different signals are closer than the rule allows -- checked directly on the
-   snapped anchors, not through the invariants. This is the claim the margin
-   makes, and it is the one an earlier draft got wrong by forgetting rotation,
-   so it is tested on a case that rotates: a body whose relaxed facing sits
-   near 45 degrees, where quantising moves it furthest.
-4. **Welds survive snap.** A torch is on its support's face; Design H's lock
-   repeater is at the data repeater's side.
-5. **Corridors exist.** A placement is not merely legal but routable: for every
-   reference circuit, the router reaches every sink. This is the claim the
-   third separation term makes, and it is the one with no precedent to lean on
-   -- legacy reserves routing space by construction and this does it by a
-   number that was guessed.
-6. **Native and wasm agree.** The same circuit placed by both toolchains gives
+3. **Separation after snap.** For every reference circuit, no two *ports*
+   carrying different signals are closer than the rule allows -- ports, not
+   bodies, because a gate is where one net ends and another begins, so its
+   support and its torch are never on the same net. Checked directly on the
+   snapped anchors, not through the invariants. This is what the rounding
+   margin claims, and it is what an earlier draft got wrong by forgetting
+   rotation, so the case that tests it is one that rotates: a body whose
+   relaxed facing sits near 45 degrees, where quantising moves it furthest.
+4. **Welds survive snap.** A torch is on the face of its support.
+5. **Corridors exist.** A placement is not merely legal but routable: the
+   router reaches every sink it could reach from the old placement. This is
+   what the third separation term claims, and it is the one with no precedent
+   to lean on -- legacy reserves routing space by construction and this does it
+   by a number that was guessed. It says "could reach from the old placement"
+   rather than "every sink" because `segment_a` and above do not route today
+   whatever places them, and this test is about placement, not about fixing
+   that.
+6. **Better than what it replaced.** and4 placed by relaxation against and4
+   placed by rows and barycentres: 656 blocks is the number to beat, and if it
+   is not beaten the design failed at the thing it was written for.
+
+**Stage 2 -- supports as bodies, separation that may push upwards**
+
+7. **Every body stands on something.** After snap, each primitive that needs
+   support has one, at the offset its weld requires.
+8. **Crowding produces height.** Six gates all consuming one signal, packed
+   tightly enough that spreading sideways costs more than stacking, end up on
+   more than one level. This replaces the test `Shape::Tall` currently has, and
+   claims less: height is earned rather than requested.
+9. **Native and wasm agree.** The same circuit placed by both toolchains gives
    identical anchors. If it does not, positions become fixed-point; see above.
-7. **End to end.** Every reference circuit places, routes, verifies, and
-   matches its truth table.
+   Stage 2 rather than stage 1 because stage 1 does not reach `compile()`, so
+   the viewer is still drawing the legacy placement and a divergence would
+   mislead nobody yet.
+
+**Stage 3 -- the switchover**
+
+10. **End to end.** Every reference circuit places, routes, verifies, and
+    matches its truth table.
+
+**Whenever the DFF lands**
+
+11. **The lock weld survives snap.** Design H's lock repeater is at the data
+    repeater's side. Not written yet, and not writable: `compile()` rejects
+    `GateKind::DffPosedge` before placement, so there is no Design H region to
+    place. Listed because `BesideAt` exists in this design for it, and an
+    unexercised constraint is one nobody has checked.
 
 ## The condition for switching `compile()`
 
