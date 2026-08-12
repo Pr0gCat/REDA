@@ -187,6 +187,52 @@ fn snap(placement: &ContinuousPlacement)
     -> Result<Vec<(NodeId, Anchor, u8)>, PlannerError>;
 ```
 
+### What the springs actually minimise, and what stiffness means
+
+Spring energy is `k * d^2` summed over pulls, `d` measured between the two
+ports rather than the two centres. Quadratic, so the unconstrained system is
+the classic one and its behaviour is documented; the projection is what makes
+it non-convex, not the objective.
+
+Every signal spring has `k = 1`. There is no per-edge weighting, because
+weighting is the criticality question deferred above, and a stiffness that
+varies without a measurement behind it is the sort of number this project
+already spent time removing from the planner.
+
+Cell cohesion is the one exception, and it needs a stated value rather than an
+adjective. A cell's members must end up adjacent or the cell is not a cell, so
+cohesion is not a preference competing with wirelength -- it is a weld that has
+been softened only to let the solver reach the configuration gradually. Its
+stiffness is therefore high enough to dominate any single signal pull on the
+same body, which for `k = 1` signal springs and a bounded degree means the
+maximum degree in the graph. That is a derived number, recomputed per circuit,
+not a constant to tune.
+
+Convergence is reached when no body moves more than a tenth of a cell in a
+step. A tenth because the rounding margin is a whole cell, so a system still
+twitching below that cannot change what `snap` produces; running past it buys
+nothing measurable. Reaching `RelaxEffort::iterations` without reaching that
+threshold is `DidNotConverge`.
+
+### Support blocks are not all alike
+
+The previous section makes a support a body. Which of them are conductors, for
+the separation that only applies between different nets, is not obvious and was
+got wrong in the code before it was got wrong here.
+
+A floor under dust is inert: another net may run beside it. A **NOR's support
+is the gate's input node** -- dust laid against it powers it and turns the
+torch off -- so it separates from foreign nets like any conductor. That was
+found on 2026-08-12 by the planner placing a full adder that passed all four
+invariants and computed the wrong sum, and it is fixed in
+`gate_footprint` today.
+
+So a support body carries the same port-level distinction as any other: a
+NOR's support is a conductor on the gate's *input* net, a floor is a conductor
+on nothing at all. Getting this wrong does not produce an illegal circuit. It
+produces a legal one that computes something else, which is worse, and no
+invariant catches it.
+
 ### Where the relaxation starts
 
 A spring system with hard constraints is not convex, so the starting point
