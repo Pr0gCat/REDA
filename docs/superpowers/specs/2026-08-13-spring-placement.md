@@ -267,8 +267,9 @@ Four terms, each with a source:
    occupies;
 2. two cells of conductor clearance, from
    `2026-08-09-channel-safety-condition.md`, between different signals only;
-3. room for the nets that must reach the body -- its degree times one route's
-   width, so that a relaxed placement has corridors rather than only clearance;
+3. room for the nets that must reach the body -- the edges that need routing,
+   which is its degree less its welds, times one route's width, so that a
+   relaxed placement has corridors rather than only clearance;
 4. a rounding margin, derived below.
 
 ### Why `snap` quantises the facing first
@@ -312,6 +313,39 @@ gates, and `snap`'s return type stops fitting.
 This document does not do that. It notes where the seam is, so that whoever
 lands the DFF finds it named rather than discovers it.
 
+### Nothing pushes into the third dimension on its own
+
+The design says relaxation spreads in three dimensions because the forces push
+that way. Reviewing it: they do not.
+
+Springs pull along edges and separation pushes along the shortest way out. Both
+act in the plane their bodies are already in, and the starting configuration is
+planar -- everything sits at one Y, because that is what the current placement
+produces. A planar configuration under in-plane forces stays planar. The
+relaxation would never use height at all, and `Shape::Tall` would be removed in
+favour of a mechanism that does not do its job.
+
+Two ways out, and this document takes the second.
+
+**Perturb.** Give every body a small random offset in Y at the start, seeded.
+Symmetry broken, and where the forces genuinely prefer a second storey they
+find one. Cheap, and it makes the seed do something real. But it also means a
+circuit that should be flat comes out slightly wrinkled, and every body pays
+rounding error in a dimension it did not need.
+
+**Let separation choose the axis.** When two bodies must be pushed apart, the
+projection already picks a direction; today's reading is "the shortest way
+out", which in a planar crowd is always in-plane. Let it also consider up, and
+a crowded region resolves by stacking rather than by spreading -- which is the
+behaviour `Shape::Tall` was approximating by hand, arrived at by the physics
+instead of by a hardcoded three.
+
+The second is preferred because it makes height a consequence of crowding,
+which is what it is: a circuit with room stays flat and pays nothing, and a
+circuit without room grows the way redstone can. It also gives the seeded
+perturbation nothing to do, so the seed goes back to being only a way to retry
+a stuck configuration.
+
 ### Pinned ports and the shape preference
 
 `PortPlacements` survives unchanged and gets simpler: a pinned port is a body
@@ -319,11 +353,16 @@ with infinite mass. It contributes force to its neighbours and takes none, and
 `snap` returns it exactly where it was pinned.
 
 `Shape::Tall` does not survive. It packs a level of logic wider than three
-gates onto the storey above, which is a heuristic standing in for the thing
-relaxation does directly -- spreading in three dimensions because the forces
-push that way. Keeping both would mean two mechanisms deciding height, one of
-them by a hardcoded three. It is removed when this lands, and the test that
-pins it becomes a test that a tall circuit uses more than one level at all.
+gates onto the storey above -- a hand-made rule standing in for what separation
+now does when it is allowed to push upwards. Keeping both would mean two
+mechanisms deciding height, one of them by a hardcoded three.
+
+Its test changes rather than disappears. `a_tall_preference_uses_height_where_a
+_wide_one_uses_floor` asks for `Shape::Tall` and checks the result is taller
+and narrower; with no knob to ask, it becomes: six gates that all consume one
+signal, crowded enough that spreading sideways costs more than stacking, end up
+on more than one level. That is a weaker claim than the current test makes, and
+it is the true one -- height is now earned by crowding rather than requested.
 
 ## Error handling
 
@@ -358,13 +397,32 @@ Cheapest first, each testing one claim:
    near 45 degrees, where quantising moves it furthest.
 4. **Welds survive snap.** A torch is on its support's face; Design H's lock
    repeater is at the data repeater's side.
-5. **End to end.** Every reference circuit places, routes, verifies, and
+5. **Corridors exist.** A placement is not merely legal but routable: for every
+   reference circuit, the router reaches every sink. This is the claim the
+   third separation term makes, and it is the one with no precedent to lean on
+   -- legacy reserves routing space by construction and this does it by a
+   number that was guessed.
+6. **Native and wasm agree.** The same circuit placed by both toolchains gives
+   identical anchors. If it does not, positions become fixed-point; see above.
+7. **End to end.** Every reference circuit places, routes, verifies, and
    matches its truth table.
 
 ## The condition for switching `compile()`
 
 All four hand-written circuits and both Verilog circuits must place, route,
 verify, and match their truth tables. Not one fewer.
+
+That condition may be unreachable for a reason this document does not own.
+`segment_a` and `seven_segment` do not route today under the planner's own
+router, whatever places them -- the failure recorded in
+`how_far_the_planners_own_placement_carries` is the router running out of room
+and rip-up failing to find any. A better placement may well fix it, since
+crowding is what it ran out of. It may equally not.
+
+If placement measurably improves and routing still fails at that size, the
+answer is not to weaken this condition. It is that routing became the next
+piece of work, and this design says so in advance rather than discovering it
+and quietly shipping a `compile()` that only handles small circuits.
 
 Beating the legacy emitter is **not** a condition. The choice recorded here is
 to switch when it is correct, not when it is better, so a placement that is
