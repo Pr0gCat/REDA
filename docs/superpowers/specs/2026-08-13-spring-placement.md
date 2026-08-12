@@ -46,6 +46,27 @@ model encodes real spacing knowledge, and "rows by logic depth, columns by
 barycentre" does not have it. That is the thing to replace, and replacing it
 means having knowledge of its own, not having freedom.
 
+### The assumption this rests on
+
+Worth naming, because everything below depends on it and it is not proven:
+**that the knowledge is the rules, and the structure was only one way of
+obeying them.**
+
+What legacy knows is expressed as structure -- rows carrying signal one way,
+channels between them, approach columns entering a socket from the side a
+terminal can read. The design keeps the last of those, in the router, and
+replaces the rest with two rules and a physics: conductors of different nets
+stay two cells apart, and a body reserves room for the wires that must reach
+it. If that captures what the rows were for, relaxation finds a better
+arrangement than a fixed pattern can, because it is not obliged to be regular.
+
+If it does not, the result will be a layout that satisfies both rules and is
+still worse, and the honest conclusion then is that the structure *was* the
+knowledge -- that rows and channels encode something about redstone that two
+pairwise rules cannot say. Test 6 is what asks the question, and it is the
+reason the first stage stops before `compile()`: to get the answer before the
+expensive half is built.
+
 ## The decision
 
 Global placement is **analytical**: a continuous relaxation, legalised onto the
