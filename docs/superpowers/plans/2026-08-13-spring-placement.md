@@ -1142,7 +1142,7 @@ by signal name, and a bare merge's own body is what that lookup returns.
 - Test: `src/compile/relax/build.rs`
 
 **Interfaces:**
-- Consumes: `compile::geometry::CellFacing`, `compile::physical::{PortKind, RelativeSide, variants}`, `compile::primitive_graph::{PrimitiveGraph, NodeId, Provenance}`, `compile::topology::{Primitive, TemplateNode}`, `compile::{Netlist, Gate}`, `compile::planner::{Anchor, PortPlacements}`.
+- Consumes: `compile::geometry::CellFacing`, `compile::physical::{PortKind, RelativeSide, variants}`, `compile::primitive_graph::{PrimitiveGraph, NodeId, Provenance}`, `compile::topology::{Primitive, TemplateNode}`, `compile::{Netlist, Gate}`, `compile::planner::{Anchor, PortPlacements}`. Not `PlannerError`: `build` is below `planner` in the dependency order and must not reach up into it.
 - Produces:
   - `pub struct Body { pub what: BodyKind, pub position: [f64; 3], pub facing: CellFacing, pub pinned: bool }`
   - `pub enum BodyKind { Primitive { node: NodeId, kind: Primitive }, Junction { gate: usize } }`
@@ -1151,7 +1151,9 @@ by signal name, and a bare merge's own body is what that lookup returns.
   - `pub enum Weld { AtSocket { repeater: usize, junction: usize, input_index: usize }, BesideAt { lock: usize, data: usize, side: RelativeSide } }`
   - `pub struct BodyGraph { pub bodies: Vec<Body>, pub pulls: Vec<Pull>, pub welds: Vec<Weld>, pub nodes: Vec<Vec<usize>>, pub anchor_body: Vec<usize> }`
   - `pub fn attach_offset(attach: Attach, body: &Body) -> [f64; 3]`
-  - `pub fn build(netlist: &Netlist, graph: &PrimitiveGraph, start: &[Anchor], pinned: &PortPlacements) -> Result<BodyGraph, PlannerError>`
+  - `pub struct Cell { pub offset: (i32, i32, i32), pub carries: Option<String> }`
+  - `pub fn cells(body: &Body) -> Vec<Cell>`
+  - `pub fn build(netlist: &Netlist, graph: &PrimitiveGraph, start: &[Anchor], pinned: &PortPlacements) -> Result<BodyGraph, String>` -- the error is a sentence, because the only two failures are "a gate instantiated no primitive" and "a declared input has no lever", and `RelaxError::CannotBuild` is what carries it
   - `pub const SIGNAL_STIFFNESS: f64 = 1.0;`
 
 - [ ] **Step 1: Write the failing tests**
@@ -1167,11 +1169,11 @@ mod tests {
     use crate::compile::{Gate, Netlist};
 
     fn nor(output: &str, inputs: &[&str]) -> Gate {
-        Gate::nor(output.to_string(), inputs)
+        Gate::nor(output, inputs)
     }
 
     fn built(netlist: &Netlist) -> BodyGraph {
-        let graph = expand(netlist, &Library::default()).expect("expands");
+        let graph = expand(netlist, &Library::default_library()).expect("expands");
         let start = vec![Anchor { x: 0, y: 1, z: 0 }; netlist.gates.len() + netlist.inputs.len()];
         build(netlist, &graph, &start, &PortPlacements::default()).expect("builds")
     }
@@ -1188,7 +1190,7 @@ mod tests {
             gates: vec![
                 nor("na", &["a"]),
                 nor("nb", &["b"]),
-                Gate::merge("m".into(), &["na", "nb"]),
+                Gate::merge("m", &["na", "nb"]),
                 nor("out", &["m"]),
             ],
         };
@@ -1225,7 +1227,7 @@ mod tests {
             gates: vec![
                 nor("na", &["a"]),
                 nor("nb", &["b"]),
-                Gate::merge("m".into(), &["na", "nb"]),
+                Gate::merge("m", &["na", "nb"]),
                 nor("out", &["m"]),
                 nor("spy", &["nb"]),
             ],
@@ -1317,7 +1319,7 @@ mod tests {
         let mut placements = PortPlacements::default();
         placements.pin("a", Anchor { x: 40, y: 1, z: 9 });
 
-        let graph = expand(&netlist, &Library::default()).expect("expands");
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
         let start = vec![Anchor { x: 0, y: 1, z: 0 }; 2];
         let built = build(&netlist, &graph, &start, &placements).expect("builds");
 
@@ -1361,7 +1363,7 @@ Prepend to `src/compile/relax/build.rs`:
 
 use crate::compile::geometry::{self, CellFacing};
 use crate::compile::physical::{self, PortKind, RelativeSide};
-use crate::compile::planner::{Anchor, PlannerError, PortPlacements};
+use crate::compile::planner::{Anchor, PortPlacements};
 use crate::compile::primitive_graph::{NodeId, PrimitiveGraph, Provenance};
 use crate::compile::topology::{Primitive, TemplateNode};
 use crate::compile::Netlist;
@@ -1384,6 +1386,17 @@ pub const SIGNAL_STIFFNESS: f64 = 1.0;
 pub struct Body {
     pub what: BodyKind,
     pub position: [f64; 3],
+    /// The net each declared input arrives on, in declared order.
+    ///
+    /// Copied from the netlist at build time rather than looked up later,
+    /// because a facing changes where a body's cells are and never changes
+    /// what they carry -- so the labels are settled once and the offsets are
+    /// recomputed every round.
+    pub inputs: Vec<String>,
+    /// The net this body drives, if it drives one. `None` for a body that is
+    /// not the one carrying its gate's output -- an isolated branch's
+    /// repeater drives into the junction, not out of the gate.
+    pub output: Option<String>,
     /// One of four. Never continuous: a body's best facing is found by trying
     /// all four against the pulls on its ports, so there is no angle to
     /// integrate and none to quantise later.
@@ -1521,7 +1534,152 @@ pub fn attach_offset(attach: Attach, body: &Body) -> [f64; 3] {
 `Attach::Socket(index)` panics for `index >= 3`, which is correct: a gate with
 four declared inputs is one `place_nor_gate` already refuses.
 
-- [ ] **Step 5: Write `build`**
+- [ ] **Step 5: Write `cells` -- what a body occupies, and what each cell carries**
+
+Separation is between **cells carrying different signals**, not between body
+centres. A body is not a point: a torch is its support and its torch block, and
+which of those two a foreign net may run against is the difference between a
+legal circuit and a legal circuit that computes the wrong function. On
+2026-08-12 the planner placed a full adder that passed all four invariants and
+computed the wrong sum, because a foreign net was free to run against a NOR's
+support -- which is the gate's input node -- that the code treated as inert.
+
+```rust
+/// One cell a body occupies, and the signal it carries.
+///
+/// `None` is inert: solid material a foreign net may run beside. A repeater's
+/// `DOWN` floor is the case that exists today.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Cell {
+    pub offset: (i32, i32, i32),
+    pub carries: Option<String>,
+}
+
+/// Every cell `body` occupies, and what each carries.
+///
+/// A gate cell's answer is `place_nor_gate`'s and `place_merge_gate`'s, stated
+/// as signals rather than as blocks:
+///
+/// - the **support** (or junction) carries every declared input's net. It is
+///   the gate's input node -- dust laid against it powers it -- and a NOR is
+///   N sources into one sink, so it is on all of them at once.
+/// - each **socket** carries its own branch's net, and is a conductor even
+///   though it is air: what ends up there is dust or a repeater.
+/// - the **torch** and the **pin** carry the gate's own output net.
+/// - a **repeater's floor** carries nothing.
+pub fn cells(body: &Body) -> Vec<Cell> {
+    let facing = body.facing;
+    let mut cells = Vec::new();
+
+    match (&body.output, body.inputs.is_empty()) {
+        // A body carrying a gate's output is a gate cell: support or junction,
+        // sockets, torch, pin.
+        (Some(output), _) => {
+            // The support or junction is the gate's input node -- N sources
+            // into one sink -- so it is on every input net at once. Modelled
+            // as the first, which is enough: what matters is that it is *not*
+            // inert and *not* on the output net.
+            cells.push(Cell {
+                offset: (0, 0, 0),
+                carries: body.inputs.first().cloned(),
+            });
+            for (index, signal) in body.inputs.iter().enumerate() {
+                let step = Position::new(0, 0, 0).offset(geometry::input_directions(facing)[index]);
+                cells.push(Cell {
+                    offset: (step.x, step.y, step.z),
+                    carries: Some(signal.clone()),
+                });
+            }
+
+            let out = geometry::output_direction(facing);
+            // A NOR's torch stands between origin and pin; a merge's junction
+            // is the origin, so its pin is one hop rather than two.
+            let hops = match body.what {
+                BodyKind::Junction { .. } => 1,
+                BodyKind::Primitive { .. } => 2,
+            };
+            let mut step = Position::new(0, 0, 0);
+            for _ in 0..hops {
+                step = step.offset(out);
+                cells.push(Cell {
+                    offset: (step.x, step.y, step.z),
+                    carries: Some(output.clone()),
+                });
+            }
+            if matches!(body.what, BodyKind::Junction { .. }) {
+                // `place_merge_gate` floors its own junction; a NOR does not,
+                // because a support block needs nothing beneath it.
+                cells.push(Cell { offset: (0, -1, 0), carries: None });
+            }
+        }
+        // Anything else is placed as a primitive: an isolated branch's
+        // repeater, or a primary input's lever. `physical.rs` says which cells
+        // it occupies, and a variant's blocks already include what it stands
+        // on.
+        (None, _) => {
+            let BodyKind::Primitive { kind, .. } = body.what else {
+                unreachable!("a junction always carries its gate's output")
+            };
+            let variant = &physical::variants(kind)[usize::from(facing.index())];
+            for block in variant.blocks {
+                cells.push(Cell {
+                    offset: (block.position.x, block.position.y, block.position.z),
+                    carries: match block.kind {
+                        // A repeater's floor and a lever's floor are inert: a
+                        // net may run beside them.
+                        BlockKind::Solid => None,
+                        _ => body.inputs.first().cloned(),
+                    },
+                });
+            }
+        }
+    }
+    cells
+}
+```
+
+A lever is the one primitive body with an `output` and no `inputs`, so it takes
+the gate-cell arm with an empty socket list: origin, then its pin one hop out.
+That is exactly what `place_primary_input` writes.
+
+**Two exemptions the projection needs, both from this table.** Cells sharing a
+signal are exempt: a producer's pin and its consumer's socket carry the same
+net, and the route between them is what makes them one. Cells with `carries:
+None` are exempt from everything except occupying the same cell as another
+body.
+
+- [ ] **Step 6: Refuse a primitive with no variants**
+
+`variants(Primitive::Comparator)` returns an empty slice, and `PortKind`
+declares `ComparatorRear`, `ComparatorSide` and `ComparatorFront` that nothing
+constructs. No library entry uses a comparator today, so relaxation never meets
+one -- but that is an accident of the current library rather than a rule, and
+indexing an empty slice would panic somewhere unhelpful.
+
+The guard goes in `build`, beside every primitive body it creates -- written
+out in Step 7. A body whose primitive has no variants is an error naming the
+primitive, not a silent placement of nothing, and not a panic from indexing an
+empty slice somewhere with no context.
+
+Add the test:
+
+```rust
+    /// A primitive `physical.rs` has no variants for cannot be placed, and
+    /// says so by name.
+    #[test]
+    fn a_primitive_with_no_variants_is_refused_by_name() {
+        assert!(
+            physical::variants(Primitive::Comparator).is_empty(),
+            "this test is about the primitive that has none; if that changed, \
+             pick another or delete this"
+        );
+    }
+```
+
+which is a guard rather than a placement: no netlist can reach a comparator
+today, so the reachable half of the claim is the `is_empty` check in `build`.
+
+- [ ] **Step 7: Write `build`**
 
 ```rust
 /// Bodies, pulls and welds for `netlist`, started from `start`.
@@ -1536,7 +1694,7 @@ pub fn build(
     graph: &PrimitiveGraph,
     start: &[Anchor],
     pinned: &PortPlacements,
-) -> Result<BodyGraph, PlannerError> {
+) -> Result<BodyGraph, String> {
     let node_count = netlist.gates.len() + netlist.inputs.len();
     assert_eq!(start.len(), node_count, "one start anchor per candidate node");
 
@@ -1556,23 +1714,28 @@ pub fn build(
             bodies.push(Body {
                 what: BodyKind::Junction { gate: gate_index },
                 position,
+                inputs: gate.inputs.clone(),
+                output: Some(gate.output.clone()),
                 facing: CellFacing::NORTH,
                 pinned: is_pinned,
             });
             bodies.len() - 1
         } else {
             let node = *graph.gate_nodes[gate_index].first().ok_or_else(|| {
-                PlannerError::UnrealisableNode {
-                    id: gate.output.clone(),
-                    reason: "a non-merge gate instantiated no primitive".to_string(),
-                }
+                format!("gate `{}` instantiated no primitive", gate.output)
             })?;
+            let kind = graph.nodes[node].primitive;
+            if physical::variants(kind).is_empty() {
+                return Err(format!(
+                    "gate `{}` needs a `{kind:?}`, which has no physical variants",
+                    gate.output
+                ));
+            }
             bodies.push(Body {
-                what: BodyKind::Primitive {
-                    node,
-                    kind: graph.nodes[node].primitive,
-                },
+                what: BodyKind::Primitive { node, kind },
                 position,
+                inputs: gate.inputs.clone(),
+                output: Some(gate.output.clone()),
                 facing: CellFacing::NORTH,
                 pinned: is_pinned,
             });
@@ -1601,6 +1764,10 @@ pub fn build(
                         kind: graph.nodes[node].primitive,
                     },
                     position: [socket.x as f64, socket.y as f64, socket.z as f64],
+                    // Its branch's net, and no output of its own: it drives
+                    // into the junction, not out of the gate.
+                    inputs: vec![gate.inputs[input_index].clone()],
+                    output: None,
                     facing: CellFacing::NORTH,
                     pinned: is_pinned,
                 });
@@ -1622,10 +1789,7 @@ pub fn build(
                 matches!(&graph.nodes[candidate].provenance,
                     Provenance::PrimaryInput { name: declared } if declared == name)
             })
-            .ok_or_else(|| PlannerError::UnrealisableNode {
-                id: name.clone(),
-                reason: "a declared input has no lever".to_string(),
-            })?;
+            .ok_or_else(|| format!("declared input `{name}` has no lever"))?;
         let candidate_node = netlist.gates.len() + input_index;
         let at = start[candidate_node];
         bodies.push(Body {
@@ -1634,6 +1798,10 @@ pub fn build(
                 kind: graph.nodes[node].primitive,
             },
             position: [at.x as f64, at.y as f64, at.z as f64],
+            // A lever drives its own name and reads nothing, which is what
+            // gives it a gate cell's shape with no sockets.
+            inputs: Vec::new(),
+            output: Some(name.clone()),
             facing: CellFacing::NORTH,
             pinned: pinned.get(name).is_some(),
         });
@@ -1710,7 +1878,7 @@ fn signal_pulls(
 }
 ```
 
-- [ ] **Step 6: Declare the module and re-export**
+- [ ] **Step 8: Declare the module and re-export**
 
 `src/compile/relax/mod.rs`:
 
@@ -1721,19 +1889,19 @@ mod linear;
 pub use build::{attach_offset, Attach, Body, BodyGraph, BodyKind, Pull, Weld, SIGNAL_STIFFNESS};
 ```
 
-- [ ] **Step 7: Run the tests**
+- [ ] **Step 9: Run the tests**
 
 Run: `cargo test --release --lib compile::relax::build`
 
-Expected: 5 passed.
+Expected: 6 passed.
 
-- [ ] **Step 8: Run the whole suite**
+- [ ] **Step 10: Run the whole suite**
 
 Run: `./check.sh`
 
 Expected: `failed=0`. Nothing calls `build` outside its own tests yet.
 
-- [ ] **Step 9: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
 git add -A && git commit -m "feat(relax): the spring network is not the primitive graph, and here is where they part"
@@ -1753,7 +1921,7 @@ has a source.
 - Test: `src/compile/relax/project.rs`
 
 **Interfaces:**
-- Consumes: `build::{Body, BodyKind, BodyGraph, Weld, Attach, attach_offset}`, `compile::geometry`.
+- Consumes: `build::{Body, BodyKind, BodyGraph, Cell, Weld, cells}`, `compile::geometry`.
 - Produces:
   - `pub const CONDUCTOR_CLEARANCE: f64 = 2.0;`
   - `pub const SNAP_MARGIN: f64 = 1.0;`
@@ -1765,6 +1933,8 @@ has a source.
   - `pub fn project(graph: &mut BodyGraph, required: &[f64], axes: Axes) -> Result<(), Violation>`
   - `pub fn worst_violation(graph: &BodyGraph, required: &[f64]) -> Option<Violation>`
   - `pub fn required_separations(graph: &BodyGraph) -> Vec<f64>`
+  - `pub struct PlacedCell { pub at: [f64; 3], pub carries: Option<String> }`
+  - `pub fn placed_cells(graph: &BodyGraph) -> Vec<Vec<PlacedCell>>`
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1779,10 +1949,14 @@ mod tests {
     use crate::compile::physical::RelativeSide;
     use crate::compile::topology::Primitive;
 
+    /// A one-cell body on its own net, which is the simplest thing the
+    /// projection can be asked about.
     fn body(x: f64, y: f64, z: f64) -> Body {
         Body {
             what: BodyKind::Primitive { node: 0, kind: Primitive::Torch },
             position: [x, y, z],
+            inputs: vec![format!("net{x}{y}{z}")],
+            output: None,
             facing: CellFacing::NORTH,
             pinned: false,
         }
@@ -2019,27 +2193,78 @@ pub fn required_separations(graph: &BodyGraph) -> Vec<f64> {
         .collect()
 }
 
-/// Whether two bodies are far enough apart.
+/// How far short of the requirement the closest offending pair of cells is.
 ///
-/// Horizontal Chebyshev against the pair's own requirement, **or** two cells
-/// of height. The horizontal requirement carries the routing reservation and
-/// the vertical one does not, which is exactly why crowding buys height rather
-/// than width: a body with nowhere to go sideways has somewhere to go up, and
-/// it is cheaper.
+/// **Cells, not centres.** A body is not a point: a torch is its support and
+/// its torch block, and two torches three apart facing each other have their
+/// torch blocks one apart. Measuring between centres would separate the wrong
+/// thing and produce exactly the failure this design exists to avoid.
+///
+/// Each pair is measured by horizontal Chebyshev against the requirement,
+/// **or** two cells of height. The horizontal requirement carries the routing
+/// reservation and the vertical one does not, which is why crowding buys
+/// height rather than width: a body with nowhere to go sideways has somewhere
+/// to go up, and it is cheaper.
 ///
 /// Conservative in two ways the derivation would allow relaxing -- it forbids
 /// the horizontal diagonal, which `dust_reach` has no case for, and it ignores
 /// that a repeater is a firewall on its non-facing sides. Both are a
 /// measurement away, and both are the first thing to try if layouts come out
 /// sparse.
-fn shortfall(left: &Body, right: &Body, required: f64) -> f64 {
-    let dx = (left.position[0] - right.position[0]).abs();
-    let dy = (left.position[1] - right.position[1]).abs();
-    let dz = (left.position[2] - right.position[2]).abs();
-    if dy >= CONDUCTOR_CLEARANCE {
-        return 0.0;
+fn shortfall(left: &[PlacedCell], right: &[PlacedCell], required: f64) -> f64 {
+    let mut worst: f64 = 0.0;
+    for here in left {
+        for there in right {
+            // Same net: the route between them is what makes them one thing.
+            if here.carries.is_some() && here.carries == there.carries {
+                continue;
+            }
+            // Inert material -- a repeater's floor -- keeps nothing out but
+            // its own cell, which cell exclusivity already covers.
+            if here.carries.is_none() || there.carries.is_none() {
+                continue;
+            }
+            let dx = (here.at[0] - there.at[0]).abs();
+            let dy = (here.at[1] - there.at[1]).abs();
+            let dz = (here.at[2] - there.at[2]).abs();
+            if dy >= CONDUCTOR_CLEARANCE {
+                continue;
+            }
+            worst = worst.max(required - dx.max(dz));
+        }
     }
-    (required - dx.max(dz)).max(0.0)
+    worst.max(0.0)
+}
+
+/// One of a body's cells, in world coordinates.
+///
+/// Recomputed each round rather than cached: a body that turned has moved
+/// every cell it owns, and a cached one would be the layout before the turn.
+#[derive(Debug, Clone)]
+pub struct PlacedCell {
+    pub at: [f64; 3],
+    pub carries: Option<String>,
+}
+
+/// Where every body's cells are right now.
+pub fn placed_cells(graph: &BodyGraph) -> Vec<Vec<PlacedCell>> {
+    graph
+        .bodies
+        .iter()
+        .map(|body| {
+            crate::compile::relax::build::cells(body)
+                .into_iter()
+                .map(|cell| PlacedCell {
+                    at: [
+                        body.position[0] + cell.offset.0 as f64,
+                        body.position[1] + cell.offset.1 as f64,
+                        body.position[2] + cell.offset.2 as f64,
+                    ],
+                    carries: cell.carries,
+                })
+                .collect()
+        })
+        .collect()
 }
 ```
 
@@ -2068,6 +2293,7 @@ fn exempt(graph: &BodyGraph, left: usize, right: usize) -> bool {
 
 /// The worst pair still too close, for an error that names something.
 pub fn worst_violation(graph: &BodyGraph, required: &[f64]) -> Option<Violation> {
+    let cells = placed_cells(graph);
     let mut worst: Option<Violation> = None;
     for left in 0..graph.bodies.len() {
         for right in (left + 1)..graph.bodies.len() {
@@ -2075,7 +2301,7 @@ pub fn worst_violation(graph: &BodyGraph, required: &[f64]) -> Option<Violation>
                 continue;
             }
             let need = required[left].max(required[right]);
-            let short = shortfall(&graph.bodies[left], &graph.bodies[right], need);
+            let short = shortfall(&cells[left], &cells[right], need);
             if short > 0.0 && worst.is_none_or(|current| short > current.shortfall) {
                 worst = Some(Violation { left, right, shortfall: short });
             }
@@ -2101,16 +2327,21 @@ would charge a low-degree neighbour for its neighbour's fan-out.
 pub fn project(graph: &mut BodyGraph, required: &[f64], axes: Axes) -> Result<(), Violation> {
     for _ in 0..PROJECTION_ROUNDS {
         let mut moved = false;
+        // Recomputed once per round, not once per pair: within a round the
+        // separations are decided against one consistent picture, which is
+        // what keeps the order of the pair loop from changing the answer.
+        let cells = placed_cells(graph);
         for left in 0..graph.bodies.len() {
             for right in (left + 1)..graph.bodies.len() {
                 if exempt(graph, left, right) {
                     continue;
                 }
                 let need = required[left].max(required[right]);
-                if shortfall(&graph.bodies[left], &graph.bodies[right], need) <= 0.0 {
+                let short = shortfall(&cells[left], &cells[right], need);
+                if short <= 0.0 {
                     continue;
                 }
-                separate(graph, left, right, need, axes);
+                separate(graph, left, right, short, axes);
                 moved = true;
             }
         }
@@ -2130,17 +2361,20 @@ pub fn project(graph: &mut BodyGraph, required: &[f64], axes: Axes) -> Result<()
 
 /// Push one pair apart along whichever allowed axis costs least.
 ///
-/// Y is measured against [`CONDUCTOR_CLEARANCE`] rather than against the pair's
-/// own requirement, for the reason [`shortfall`] gives: height does not carry
-/// the routing reservation.
-fn separate(graph: &mut BodyGraph, left: usize, right: usize, need: f64, axes: Axes) {
+/// `short` is what [`shortfall`] measured on the closest offending pair of
+/// cells, so moving the bodies that far along any axis clears it. Y is charged
+/// [`CONDUCTOR_CLEARANCE`] flat instead, for the reason [`shortfall`] gives:
+/// height does not carry the routing reservation, so stacking is cheaper than
+/// spreading exactly when a region is crowded.
+fn separate(graph: &mut BodyGraph, left: usize, right: usize, short: f64, axes: Axes) {
     let (mut axis, mut cost) = (usize::MAX, f64::INFINITY);
     for candidate in axes.iter() {
-        let target = if candidate == 1 { CONDUCTOR_CLEARANCE } else { need };
-        let gap = (graph.bodies[left].position[candidate]
-            - graph.bodies[right].position[candidate])
-            .abs();
-        let deficit = target - gap;
+        let deficit = if candidate == 1 {
+            let gap = (graph.bodies[left].position[1] - graph.bodies[right].position[1]).abs();
+            CONDUCTOR_CLEARANCE - gap
+        } else {
+            short
+        };
         if deficit < cost {
             axis = candidate;
             cost = deficit;
@@ -2282,15 +2516,12 @@ mod tests {
         Netlist {
             inputs: vec!["a".into()],
             outputs: vec!["c".into()],
-            gates: vec![
-                Gate::nor("b".to_string(), &["a"]),
-                Gate::nor("c".to_string(), &["b"]),
-            ],
+            gates: vec![Gate::nor("b", &["a"]), Gate::nor("c", &["b"])],
         }
     }
 
     fn relaxed(netlist: &Netlist, effort: RelaxEffort) -> ContinuousPlacement {
-        let graph = expand(netlist, &Library::default()).expect("expands");
+        let graph = expand(netlist, &Library::default_library()).expect("expands");
         let start: Vec<Anchor> = (0..netlist.gates.len() + netlist.inputs.len())
             .map(|index| Anchor { x: index as i32 * 20, y: 1, z: index as i32 * 16 })
             .collect();
@@ -2331,7 +2562,7 @@ mod tests {
     #[test]
     fn a_body_turns_to_face_what_pulls_it() {
         let netlist = chain();
-        let graph = expand(&netlist, &Library::default()).expect("expands");
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
         // `b`'s only consumer, `c`, sits far to the east of it.
         let start = vec![
             Anchor { x: 0, y: 1, z: 0 },   // gate b
@@ -2365,7 +2596,7 @@ mod tests {
     #[test]
     fn running_out_of_iterations_is_an_error_that_names_the_worst_pair() {
         let netlist = chain();
-        let graph = expand(&netlist, &Library::default()).expect("expands");
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
         let start = vec![Anchor { x: 0, y: 1, z: 0 }; 3];
         let error = relax(
             &netlist,
@@ -2452,6 +2683,10 @@ pub enum RelaxError {
     /// A connected component with nothing pinned in it: it may slide freely,
     /// so the system has no unique answer.
     Unsolvable { component_row: usize },
+    /// The netlist and its primitive graph do not agree well enough to build
+    /// bodies from -- a gate with no primitive, a declared input with no
+    /// lever.
+    CannotBuild { reason: String },
 }
 
 impl std::fmt::Display for RelaxError {
@@ -2471,6 +2706,9 @@ impl std::fmt::Display for RelaxError {
                 f,
                 "the spring system has no unique answer at body {component_row}: nothing in its component is pinned"
             ),
+            RelaxError::CannotBuild { reason } => {
+                write!(f, "cannot build bodies for this netlist: {reason}")
+            }
         }
     }
 }
@@ -2612,7 +2850,7 @@ pub fn relax(
     effort: RelaxEffort,
 ) -> Result<ContinuousPlacement, RelaxError> {
     let mut bodies = build::build(netlist, graph, start, pinned)
-        .map_err(|_| RelaxError::Unsolvable { component_row: 0 })?;
+        .map_err(|reason| RelaxError::CannotBuild { reason })?;
     perturb(&mut bodies, effort.seed);
 
     let mut free = vec![None; bodies.bodies.len()];
@@ -2723,3 +2961,1045 @@ Expected: `failed=0`.
 ```bash
 git add -A && git commit -m "feat(relax): a step is a solve, a choice among four, and a projection"
 ```
+
+---
+
+### Task 9: Landing on the lattice, and refusing to when it would lie
+
+`snap` rounds positions and collapses each gate's bodies to the one anchor
+`PlanCandidate` has room for. It returns a `Result` for one reason: rounding is
+exact only if the projection converged, and a placement handed here
+unconverged has no margin to spend. Rounding it anyway would produce exactly
+the class of failure this design exists to avoid -- a layout that looks placed
+and is illegal in ways the invariants find later and attribute elsewhere.
+
+**Files:**
+- Create: `src/compile/relax/snap.rs`
+- Modify: `src/compile/relax/mod.rs`
+- Test: `src/compile/relax/snap.rs`
+
+**Interfaces:**
+- Consumes: `ContinuousPlacement`, `RelaxError`, `project::{required_separations, worst_violation}`, `planner::Anchor`, `geometry::CellFacing`.
+- Produces:
+  - `pub struct SnappedNode { pub node: usize, pub anchor: Anchor, pub facing: CellFacing }`
+  - `pub fn snap(placement: &ContinuousPlacement) -> Result<Vec<SnappedNode>, RelaxError>`
+  - `RelaxError` gains `SurvivedSnap { worst: Violation }`
+
+`SnappedNode` is keyed by **candidate node index**, not by `NodeId`. The spec's
+sketch said `NodeId`, and it cannot: a bare merge's junction has no node --
+`expand` produces no primitive for one -- so there is no `NodeId` to name it
+by. Gate index then input index is the order `emit_primitives` reads
+positionally, which is the order the answer has to arrive in anyway.
+
+- [ ] **Step 1: Write the failing tests**
+
+Create `src/compile/relax/snap.rs` with this test module:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compile::library::Library;
+    use crate::compile::primitive_graph::expand;
+    use crate::compile::relax::{relax, Axes, RelaxEffort};
+    use crate::compile::{Gate, Netlist};
+
+    fn chain() -> Netlist {
+        Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["c".into()],
+            gates: vec![Gate::nor("b", &["a"]), Gate::nor("c", &["b"])],
+        }
+    }
+
+    /// One answer per node `PlanCandidate` expects, in the order it expects
+    /// them: gates, then primary inputs.
+    #[test]
+    fn snap_answers_once_per_candidate_node_in_candidate_order() {
+        let netlist = chain();
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
+        let start: Vec<Anchor> = (0..3)
+            .map(|index| Anchor { x: index * 20, y: 1, z: index * 16 })
+            .collect();
+        let mut placements = PortPlacements::default();
+        placements.pin("a", start[2]);
+
+        let placement = relax(&netlist, &graph, &start, &placements, Axes::IN_PLANE, RelaxEffort::default())
+            .expect("relaxes");
+        let snapped = snap(&placement).expect("a converged placement rounds");
+
+        assert_eq!(snapped.len(), 3);
+        for (index, node) in snapped.iter().enumerate() {
+            assert_eq!(node.node, index, "answers are not in candidate order");
+        }
+    }
+
+    /// A pinned port comes back exactly where it was pinned. Not near it.
+    #[test]
+    fn a_pinned_port_snaps_to_where_it_was_pinned() {
+        let netlist = chain();
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
+        let start: Vec<Anchor> = (0..3)
+            .map(|index| Anchor { x: index * 20, y: 1, z: index * 16 })
+            .collect();
+        let pinned_at = Anchor { x: 37, y: 1, z: 41 };
+        let mut placements = PortPlacements::default();
+        placements.pin("a", pinned_at);
+
+        let placement = relax(&netlist, &graph, &start, &placements, Axes::IN_PLANE, RelaxEffort::default())
+            .expect("relaxes");
+        let snapped = snap(&placement).expect("rounds");
+
+        assert_eq!(snapped[2].anchor, pinned_at, "input `a` was pinned");
+    }
+
+    /// An unconverged placement is refused rather than rounded. The margin it
+    /// would spend is not there.
+    #[test]
+    fn an_unconverged_placement_is_refused_rather_than_rounded() {
+        let netlist = chain();
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
+        let start = vec![Anchor { x: 0, y: 1, z: 0 }; 3];
+        let placement = ContinuousPlacement {
+            graph: crate::compile::relax::build::build(
+                &netlist,
+                &graph,
+                &start,
+                &PortPlacements::default(),
+            )
+            .expect("builds"),
+            converged: false,
+            iterations: 1,
+        };
+
+        let error = snap(&placement).expect_err("an unconverged placement has no margin");
+        assert!(matches!(error, RelaxError::DidNotConverge { .. }));
+    }
+
+    /// Rounding moves a body by at most half a cell, so two approach by at
+    /// most one -- which is what `SNAP_MARGIN` claims. The case that tests it
+    /// is one sitting on a half-cell boundary in every axis at once, where
+    /// rounding moves a body furthest.
+    #[test]
+    fn separation_survives_rounding_from_a_half_cell_boundary() {
+        let netlist = chain();
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
+        let start = vec![Anchor { x: 0, y: 1, z: 0 }; 3];
+        let mut built = crate::compile::relax::build::build(
+            &netlist,
+            &graph,
+            &start,
+            &PortPlacements::default(),
+        )
+        .expect("builds");
+
+        let required = crate::compile::relax::project::required_separations(&built);
+        let gap = required[0].max(required[1]) + crate::compile::relax::SNAP_MARGIN;
+        built.bodies[0].position = [0.5, 1.5, 0.5];
+        built.bodies[1].position = [0.5 + gap, 1.5, 0.5];
+        built.bodies[2].position = [0.5 + 2.0 * gap, 1.5, 0.5];
+
+        let placement = ContinuousPlacement { graph: built, converged: true, iterations: 1 };
+        snap(&placement).expect("a solution separated by the requirement plus one survives");
+    }
+}
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `cargo test --release --lib compile::relax::snap`
+
+Expected: compile failure -- `snap` and `SnappedNode` do not exist.
+
+- [ ] **Step 3: Write `snap`**
+
+Create `src/compile/relax/snap.rs`:
+
+```rust
+//! Rounding a relaxed placement onto the lattice, and refusing to when that
+//! would be a lie.
+//!
+//! There is no facing to quantise here. The solver chose one of four at every
+//! step, so what is left is rounding positions -- and one cell of margin
+//! covers that, because rounding moves a body by at most half a cell, so two
+//! bodies approach by at most one.
+
+use crate::compile::geometry::CellFacing;
+use crate::compile::planner::Anchor;
+use crate::compile::relax::build::BodyKind;
+use crate::compile::relax::project::{required_separations, worst_violation};
+use crate::compile::relax::{ContinuousPlacement, RelaxError};
+
+/// Where one of `PlanCandidate`'s nodes goes, and which way it is built.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SnappedNode {
+    /// Index into `PlanCandidate`'s nodes: gates first, then primary inputs.
+    ///
+    /// Not a `NodeId`. A bare merge's junction has no node -- `expand`
+    /// produces no primitive for one -- so there would be nothing to name it
+    /// by, and this is the order `emit_primitives` reads anyway.
+    pub node: usize,
+    pub anchor: Anchor,
+    pub facing: CellFacing,
+}
+
+/// Round a converged placement onto the lattice.
+pub fn snap(placement: &ContinuousPlacement) -> Result<Vec<SnappedNode>, RelaxError> {
+    if !placement.converged {
+        let required = required_separations(&placement.graph);
+        let worst = worst_violation(&placement.graph, &required).unwrap_or(
+            crate::compile::relax::Violation { left: 0, right: 0, shortfall: 0.0 },
+        );
+        return Err(RelaxError::DidNotConverge {
+            iterations: placement.iterations,
+            worst,
+        });
+    }
+
+    let mut rounded = placement.graph.clone();
+    for body in &mut rounded.bodies {
+        for axis in 0..3 {
+            body.position[axis] = body.position[axis].round();
+        }
+    }
+
+    // The margin's claim, checked rather than trusted. The invariants exist to
+    // catch real errors, not to catch the legaliser's leftovers.
+    let required = required_separations(&rounded);
+    if let Some(worst) = worst_violation(&rounded, &required) {
+        return Err(RelaxError::SurvivedSnap { worst });
+    }
+
+    Ok(rounded
+        .anchor_body
+        .iter()
+        .enumerate()
+        .map(|(node, &body)| SnappedNode {
+            node,
+            anchor: Anchor {
+                x: rounded.bodies[body].position[0] as i32,
+                y: rounded.bodies[body].position[1] as i32,
+                z: rounded.bodies[body].position[2] as i32,
+            },
+            facing: rounded.bodies[body].facing,
+        })
+        .collect())
+}
+```
+
+The collapse is the `anchor_body` lookup and nothing more. A gate's other
+bodies -- an isolated merge's branch repeaters -- are welded to that anchor, so
+their relaxed positions are never something this throws away: the weld never
+let them be anywhere else.
+
+- [ ] **Step 4: Add the error variant**
+
+In `src/compile/relax/mod.rs`, add to `RelaxError` and its `Display`:
+
+```rust
+    /// A violation survived rounding, so the margin argument is wrong.
+    ///
+    /// Reported here rather than left for an invariant, which would find it
+    /// downstream and attribute it to routing.
+    SurvivedSnap { worst: Violation },
+```
+
+```rust
+            RelaxError::SurvivedSnap { worst } => write!(
+                f,
+                "rounding left bodies {} and {} {:.3} too close: the snap margin is wrong",
+                worst.left, worst.right, worst.shortfall
+            ),
+```
+
+- [ ] **Step 5: Declare the module**
+
+`src/compile/relax/mod.rs` gains `mod snap;` and
+`pub use snap::{snap, SnappedNode};`.
+
+- [ ] **Step 6: Run the tests**
+
+Run: `cargo test --release --lib compile::relax::snap`
+
+Expected: 4 passed.
+
+- [ ] **Step 7: Run the whole suite**
+
+Run: `./check.sh`
+
+Expected: `failed=0`.
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add -A && git commit -m "feat(relax): snapping rounds a converged placement and refuses any other"
+```
+
+---
+
+### Task 10: `plan_from_netlist` places by relaxation
+
+The question the whole design exists for gets answered here: does relaxation
+place better than rows and barycentres? 572 blocks and 24 game ticks for and4
+are the numbers to beat.
+
+**Files:**
+- Modify: `src/compile/planner.rs` -- `plan_from_netlist_shaped` (1797-1927), `emit_primitives` (562-677), `PlanCandidate::with_primitive_nodes` (332-347)
+- Test: `src/compile/planner.rs`
+
+**Interfaces:**
+- Consumes: `relax::{relax, snap, Axes, RelaxEffort, SnappedNode, RelaxError}`.
+- Produces:
+  - `PlanCandidate::with_facings(anchors, primitive_nodes, routes, facings: Vec<CellFacing>) -> Self` -- the constructor `variant_indices` never had.
+  - `PlannerError` gains `Relaxation(RelaxError)`.
+  - `plan_from_netlist` and `plan_from_netlist_shaped` keep their signatures.
+  - `fn starting_layout(netlist: &Netlist, placements: &PortPlacements, shape: Shape) -> Result<Vec<Anchor>, PlannerError>` -- the existing depth-and-barycentre code, extracted verbatim.
+
+- [ ] **Step 1: Write the failing tests**
+
+Add to `planner.rs`'s test module:
+
+```rust
+/// Corridors exist: a relaxed placement is not merely legal but routable.
+///
+/// This is what the routing reservation claims, and it is the term with no
+/// precedent to lean on -- legacy reserves routing space by construction and
+/// this does it by a number that was guessed.
+///
+/// "Could reach from the old placement" rather than "every sink" because
+/// segment_a and above do not route today whatever places them, and this test
+/// is about placement.
+#[test]
+fn relaxation_routes_everything_the_old_placement_could() {
+    use crate::circuits::full_adder::build_full_adder_netlist;
+
+    for (name, netlist) in [
+        ("and4", build_and4_netlist().0),
+        ("full_adder", build_full_adder_netlist().0),
+    ] {
+        let candidate = plan_from_netlist(&netlist, &PortPlacements::default())
+            .unwrap_or_else(|error| panic!("{name} must place: {error}"));
+        verify_candidate(&candidate, &netlist)
+            .unwrap_or_else(|error| panic!("{name} must be legal: {error}"));
+    }
+}
+
+/// Better than what it replaced, on both counts.
+///
+/// Both, because rows and barycentres are already smaller than they were and
+/// slower than the emitter -- beating one by giving up the other is not an
+/// improvement, it is a different trade.
+#[test]
+fn relaxation_places_and4_smaller_and_faster_than_rows_and_barycentres() {
+    let (netlist, _) = build_and4_netlist();
+    let candidate = plan_from_netlist(&netlist, &PortPlacements::default()).expect("places");
+    let realised = realise_and_verify(&candidate, &netlist, candidate_world_size(&candidate))
+        .expect("is legal");
+
+    // Counted the way `the_hand_written_circuits_keep_their_measured_size`
+    // counts, so the numbers mean the same thing as the 472 it pins.
+    let (size_x, size_y, size_z) = realised.world.size();
+    let mut blocks = 0usize;
+    for x in 0..size_x {
+        for y in 0..size_y {
+            for z in 0..size_z {
+                if realised.world.get(x, y, z).kind != BlockKind::Air {
+                    blocks += 1;
+                }
+            }
+        }
+    }
+    // The candidate's own delay, in game ticks -- the term
+    // `measure_optimisation_at_scale` prints and the one the 24 came from.
+    let settle = candidate.cost().delay;
+
+    // Rows and barycentres, measured 2026-08-12.
+    assert!(blocks < 572, "relaxation placed {blocks} blocks against 572");
+    assert!(settle < 24, "relaxation settled in {settle} ticks against 24");
+}
+```
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `cargo test --release --lib compile::planner::tests::relaxation`
+
+Expected: both fail -- the first because `plan_from_netlist` still places by
+rows, the second on the two assertions, since rows and barycentres produce
+exactly 572 and 24.
+
+- [ ] **Step 3: Extract the starting layout**
+
+Move `plan_from_netlist_shaped`'s body (1803-1873, ending at the `by_depth`
+loop) into:
+
+```rust
+/// Gates in rows by depth, one signal per column, primary inputs one row past
+/// the deepest.
+///
+/// Kept, because relaxation starts from it. A spring system with hard
+/// constraints is not convex, so the starting point decides which solution it
+/// finds: starting everything at the origin gives a knot the projection has to
+/// unpick, and starting at random makes the result unreproducible. This layout
+/// is legal, reproducible, and measurably poor -- which makes relaxation's job
+/// "improve a known-bad answer" rather than "invent one", and its improvement
+/// measurable against the numbers it started from.
+fn starting_layout(
+    netlist: &Netlist,
+    placements: &PortPlacements,
+    shape: Shape,
+) -> Result<Vec<Anchor>, PlannerError> {
+```
+
+returning one `Anchor` per candidate node -- gates, then primary inputs -- built
+from `gate_x`/`gate_storey`/`row` and `input_x` exactly as lines 1878-1923 do
+today, but without building `PrimitiveNode`s.
+
+- [ ] **Step 4: Relax, snap, and build the candidate**
+
+```rust
+pub fn plan_from_netlist_shaped(
+    netlist: &Netlist,
+    placements: &PortPlacements,
+    shape: Shape,
+) -> Result<PlanCandidate, PlannerError> {
+    let start = starting_layout(netlist, placements, shape)?;
+    let graph = primitive_graph::expand(netlist, &Library::default_library())
+        .map_err(|error| PlannerError::UnrealisableNode {
+            id: "netlist".to_string(),
+            reason: error.to_string(),
+        })?;
+
+    let placement = relax::relax(
+        netlist,
+        &graph,
+        &start,
+        placements,
+        relax::Axes::IN_PLANE,
+        relax::RelaxEffort::default(),
+    )
+    .map_err(PlannerError::Relaxation)?;
+    let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation)?;
+
+    let mut anchors = Vec::with_capacity(snapped.len());
+    let mut facings = Vec::with_capacity(snapped.len());
+    let mut primitive_nodes = Vec::with_capacity(snapped.len());
+
+    for node in &snapped {
+        anchors.push(node.anchor);
+        facings.push(node.facing);
+    }
+
+    for (index, gate) in netlist.gates.iter().enumerate() {
+        let anchor = anchors[index];
+        let (footprint, conductors, output_pin) =
+            compile::gate_footprint((anchor.x, anchor.y, anchor.z), gate, facings[index]);
+        primitive_nodes.push(PrimitiveNode {
+            id: format!("gate:{}", gate.output),
+            anchor,
+            realisation: if gate.is_merge() {
+                NodeRealisation::WireMerge
+            } else {
+                NodeRealisation::Primitive(Primitive::Torch)
+            },
+            footprint,
+            conductors,
+            pinned: placements.get(&gate.output).is_some(),
+            output_pin: Some(output_pin),
+        });
+    }
+
+    for (index, input) in netlist.inputs.iter().enumerate() {
+        let node = netlist.gates.len() + index;
+        let anchor = anchors[node];
+        let pin = step(anchor, compile::geometry::output_direction(facings[node]));
+        primitive_nodes.push(PrimitiveNode {
+            id: format!("input:{input}"),
+            anchor,
+            realisation: NodeRealisation::Primitive(Primitive::Lever),
+            footprint: vec![anchor, pin],
+            conductors: vec![anchor, pin],
+            pinned: placements.get(input).is_some(),
+            output_pin: Some(pin),
+        });
+    }
+
+    let candidate =
+        PlanCandidate::with_facings(anchors, primitive_nodes, Vec::new(), facings);
+    route_every_net(candidate, netlist)
+}
+```
+
+- [ ] **Step 5: Give `PlanCandidate` a constructor that sets facings**
+
+```rust
+    /// Construct a candidate whose nodes are not all built facing north.
+    ///
+    /// `variant_indices` has existed since the candidate model landed and
+    /// every constructor has filled it with zeroes. This is the one that puts
+    /// something in it.
+    pub fn with_facings(
+        anchors: Vec<Anchor>,
+        primitive_nodes: Vec<PrimitiveNode>,
+        routes: Vec<Route>,
+        facings: Vec<geometry::CellFacing>,
+    ) -> Self {
+        assert_eq!(facings.len(), anchors.len(), "one facing per anchor");
+        let mut candidate = PlanCandidate::with_primitive_nodes(anchors, primitive_nodes, routes);
+        candidate.variant_indices = facings.iter().map(|facing| facing.index()).collect();
+        candidate
+    }
+```
+
+- [ ] **Step 6: Make `emit_primitives` build to the recorded facing**
+
+At `planner.rs:613` and `621`, pass `candidate.facing_of(index)` to
+`place_merge_gate` / `place_nor_gate` and to `output_pin`. At `641`, pass it to
+`place_primary_input`. This is where Task 3's `facing_of` stops returning north
+for everything.
+
+- [ ] **Step 7: Settle the socket disagreement Task 3 left**
+
+`try_move`'s `terminal_socket` (1559) picks a socket from the source-to-support
+delta; `route_in_order` picks `input_directions(facing)[input_index]`. With
+facings varying they disagree more often, and the router's answer is the
+correct one -- it is the socket the netlist declared, and `equivalence` checks
+exactly that. Delete `terminal_socket`/`preferred_axis_direction` and have
+`try_move`'s rebuild loop (776) and `3397` call the same
+`input_directions(facing)[input_index]` lookup.
+
+- [ ] **Step 8: Run the tests**
+
+Run: `cargo test --release --lib compile::planner::tests::relaxation`
+
+Expected: both PASS. If the second fails, record the numbers it did produce in
+the commit message: the design's own condition is that failing to beat 572 and
+24 means it failed at the thing it was written for, and that is a result to
+report rather than a test to weaken.
+
+- [ ] **Step 9: Run the whole suite**
+
+Run: `./check.sh`
+
+Expected: `failed=0`. `compile()` still seeds from legacy, so the four pinned
+sizes are unchanged. `how_far_the_planners_own_placement_carries` is still
+ignored; run it by hand to see how far relaxation now carries:
+
+```bash
+cargo test --release --lib compile::planner::tests::how_far_the_planners_own_placement_carries -- --ignored --nocapture
+```
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add -A && git commit -m "feat(planner): placement is a relaxation, not a row and a barycentre"
+```
+
+**Stage 1 is done when** `plan_from_netlist` places by relaxation, and4 is
+smaller and faster than the 572/24 it started from, and `compile()` has not
+moved.
+
+---
+
+# Stage 2 -- separation that may push upwards
+
+### Task 11: Crowding buys height, and `Shape::Tall` stops asking for it
+
+One word changes: `Axes::IN_PLANE` becomes `Axes::ALL`. Everything else in this
+task is removing the hand-made rule that was standing in for it.
+
+Height gets used at all because the vertical requirement is smaller than the
+horizontal one -- [`CONDUCTOR_CLEARANCE`] flat, with no routing reservation on
+top. A body with nowhere to go sideways has somewhere to go up, and it is
+cheaper. That asymmetry is already in `shortfall` from Task 7; this task is
+what lets `separate` act on it.
+
+**Files:**
+- Modify: `src/compile/planner.rs` -- `Shape` (1731-1751) deleted, `plan_from_netlist_shaped` merged into `plan_from_netlist`, `TALL_COLUMN_LIMIT` (1754) deleted, the test at 4299-4329 replaced
+- Modify: `src/compile/relax/project.rs` -- nothing; `Axes::ALL` already exists
+- Test: `src/compile/planner.rs`
+
+**Interfaces:**
+- Consumes: `relax::Axes::ALL`.
+- Produces: `plan_from_netlist(netlist, placements)` is the only entry point.
+  `Shape`, `plan_from_netlist_shaped` and `TALL_COLUMN_LIMIT` are **deleted**.
+  `starting_layout` loses its `shape` parameter and always lays one storey.
+
+- [ ] **Step 1: Write the failing tests**
+
+Replace `a_tall_preference_uses_height_where_a_wide_one_uses_floor` in
+`planner.rs`'s test module with:
+
+```rust
+/// A stacked pair is already separated, and the projection moves neither.
+///
+/// This is the vertical exemption read straight off the safety condition: its
+/// unsafe case needs a horizontal cardinal step, so there is no pure-vertical
+/// case at all. It is the mechanism the next test buys with, tested where it
+/// can be seen rather than inferred from a layout.
+#[test]
+fn two_bodies_in_one_column_are_left_where_they_are() {
+    use crate::compile::relax::{project_for_test, Axes, CONDUCTOR_CLEARANCE};
+
+    let mut graph = project_for_test::two_free_bodies(
+        [10.0, 1.0, 10.0],
+        [10.0, 1.0 + CONDUCTOR_CLEARANCE, 10.0],
+    );
+    let required = vec![9.0, 9.0];
+    project_for_test::project(&mut graph, &required, Axes::ALL).expect("already separated");
+
+    assert_eq!(graph.bodies[0].position, [10.0, 1.0, 10.0]);
+    assert_eq!(graph.bodies[1].position, [10.0, 1.0 + CONDUCTOR_CLEARANCE, 10.0]);
+}
+
+/// Height is earned by crowding rather than requested.
+///
+/// Six gates that all consume one signal have every reason to sit near it and
+/// no room to. Spreading sideways costs the full horizontal requirement,
+/// reservations and all; stacking costs two cells. So they stack.
+///
+/// This replaces `a_tall_preference_uses_height_where_a_wide_one_uses_floor`
+/// and claims less than it did: not "ask for tall and get tall", but "crowd it
+/// and it stacks".
+#[test]
+fn crowding_produces_height() {
+    let netlist = six_independent_gates();
+    let candidate = plan_from_netlist(&netlist, &PortPlacements::default())
+        .expect("six gates on one signal must place");
+    verify_candidate(&candidate, &netlist).expect("must be legal");
+
+    let (_, height, _) = extent(&candidate);
+    assert!(height > 1, "six crowded gates stayed on one level");
+}
+```
+
+`project_for_test` is a `#[cfg(test)] pub(crate)` re-export module in
+`relax/mod.rs` exposing `project`, `required_separations` and a
+`two_free_bodies` fixture, so `planner`'s tests can reach the projection
+without making it public.
+
+- [ ] **Step 2: Run the tests to verify they fail**
+
+Run: `cargo test --release --lib compile::planner::tests::crowding_produces_height`
+
+Expected: FAIL -- relaxation is still in-plane, so six gates spread sideways
+and `height` is 1.
+
+- [ ] **Step 3: Let separation reach for the third dimension**
+
+In `plan_from_netlist`, `relax::Axes::IN_PLANE` becomes `relax::Axes::ALL`.
+
+- [ ] **Step 4: Delete the knob**
+
+Delete `Shape`, its `Default`, `TALL_COLUMN_LIMIT`, and `plan_from_netlist_shaped`.
+Fold its body into `plan_from_netlist`. In `starting_layout`, delete the
+`storey` match (1841-1845) and the `(row, storey)` key becomes `row`; every
+gate starts on one plane and separation decides whether it stays there.
+
+Keep `STOREY_PITCH` -- it is what a pinned anchor's Y is measured against at
+1849, and pinning still works.
+
+- [ ] **Step 5: Run the tests**
+
+Run: `cargo test --release --lib compile::planner::tests`
+
+Expected: PASS, including both new tests.
+
+- [ ] **Step 6: Re-run the corridor test at height**
+
+Run: `cargo test --release --lib compile::planner::tests::relaxation_routes_everything_the_old_placement_could`
+
+Expected: PASS. This is the one that can regress here: routes need floors, and
+a body that moved up may now sit where a floor has to go. If it fails, the
+routing reservation is what to look at first -- the vertical requirement
+carries none, which is deliberate and is exactly the assumption under test.
+
+- [ ] **Step 7: Run the whole suite**
+
+Run: `./check.sh`
+
+Expected: `failed=0`, one fewer test than before (the shape test was replaced
+by two, so one more).
+
+- [ ] **Step 8: Commit**
+
+```bash
+git add -A && git commit -m "feat(relax): height is what crowding buys, not what a knob asks for"
+```
+
+---
+
+### Task 12: Native and wasm place the same circuit
+
+`viewer/` compiles the same crate to wasm, and once `compile()` uses this
+placer the circuit drawn in a browser is the circuit this code placed. If the
+two toolchains disagree in the last bits, the same netlist yields two layouts
+and the viewer stops being evidence about the compiler.
+
+This is stated as a risk with a test rather than settled by argument, because
+which way it goes is a fact about two toolchains.
+
+**Files:**
+- Create: `viewer/tests/placement_agrees_with_native.rs`
+- Modify: `src/compile/planner.rs` -- a `pub fn placement_fingerprint(candidate: &PlanCandidate) -> String`
+- Test: both of the above
+
+**Interfaces:**
+- Produces: `pub fn placement_fingerprint(candidate: &PlanCandidate) -> String` -- every anchor and facing in candidate-node order, as text, so two toolchains can be compared by string rather than by float.
+
+- [ ] **Step 1: Write the fingerprint and the native expectation**
+
+```rust
+/// Every anchor and facing this candidate chose, in candidate-node order.
+///
+/// Text rather than a hash: when two toolchains disagree, the useful output is
+/// which node moved, not that something did.
+pub fn placement_fingerprint(candidate: &PlanCandidate) -> String {
+    candidate
+        .anchors()
+        .iter()
+        .enumerate()
+        .map(|(node, anchor)| {
+            format!(
+                "{node} {} {} {} {}",
+                anchor.x,
+                anchor.y,
+                anchor.z,
+                candidate.facing_of(node).index()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+```
+
+- [ ] **Step 2: Write the failing test**
+
+`viewer/tests/placement_agrees_with_native.rs`:
+
+```rust
+//! The circuit the browser draws is the circuit the compiler placed.
+//!
+//! `viewer/` builds the same crate for wasm. `f64` addition, multiplication
+//! and `sqrt` are exact IEEE-754 operations and the solver contracts no FMA,
+//! so the two should agree bit for bit -- but "should" is an argument and this
+//! is a test. If it fails, the positions become fixed-point: the arithmetic is
+//! addition, multiplication and comparison, all of which fixed-point does
+//! exactly, and the only thing lost is the convenience of `f64` in the
+//! projection.
+
+use reda::circuits::and4::build_and4_netlist;
+use reda::compile::planner::{placement_fingerprint, plan_from_netlist, PortPlacements};
+
+#[test]
+fn and4_places_identically_wherever_it_is_built() {
+    let (netlist, _) = build_and4_netlist();
+    let candidate = plan_from_netlist(&netlist, &PortPlacements::default()).expect("places");
+    let fingerprint = placement_fingerprint(&candidate);
+
+    let expected = include_str!("fixtures/and4_placement.txt");
+    assert_eq!(
+        fingerprint.trim(),
+        expected.trim(),
+        "this toolchain placed and4 somewhere else"
+    );
+}
+```
+
+- [ ] **Step 3: Run it natively to produce the fixture**
+
+Run the test once with the fixture absent, capture the fingerprint it computed,
+and write it to `viewer/tests/fixtures/and4_placement.txt`. The fixture is the
+native answer; the test's job is to make any other toolchain disagree loudly.
+
+- [ ] **Step 4: Run it under wasm**
+
+Run:
+
+```bash
+cd viewer && wasm-pack test --node -- --test placement_agrees_with_native
+```
+
+Expected: PASS. **If it fails**, do not adjust the fixture. Record the
+divergence, and convert `Body::position` and the solver to fixed-point
+(`i64` at 1/1024 of a cell): the arithmetic is addition, multiplication and
+comparison, and `sqrt` appears only in the Cholesky pivot, which can take an
+integer square root. That is a separate task and this test is what would
+justify it.
+
+- [ ] **Step 5: Run the whole suite**
+
+Run: `./check.sh`
+
+Expected: `failed=0` for both crates.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add -A && git commit -m "test(viewer): the browser's circuit is the compiler's circuit, or this says so"
+```
+
+**Stage 2 is done when** six crowded gates stack, `Shape` is gone, and native
+and wasm place and4 identically.
+
+---
+
+# Stage 3 -- the switchover
+
+### Task 13: `compile()` places by relaxation
+
+**Condition, from the spec:** all four hand-written circuits and both Verilog
+circuits must place, route, verify, and match their truth tables. Not one
+fewer.
+
+If placement measurably improves and routing still fails at `segment_a`'s size,
+the answer is **not** to weaken this condition. It is that routing became the
+next piece of work. Say so, stop, and do not ship a `compile()` that only
+handles small circuits.
+
+Beating the legacy emitter is **not** a condition. The choice recorded in the
+spec is to switch when it is correct, not when it is better.
+
+**Files:**
+- Modify: `src/compile/mod.rs` -- `compile` (6137, tail 6313-6335)
+- Modify: `tests/reference_circuits.rs` -- `the_hand_written_circuits_keep_their_measured_size`
+- Modify: `src/compile/planner.rs` -- un-ignore `how_far_the_planners_own_placement_carries`
+- Test: `tests/reference_circuits.rs`, `tests/compile_end_to_end.rs`
+
+**Interfaces:**
+- Consumes: everything above.
+- Produces: `compile()` returns a `CompiledCircuit` whose `legacy_emission` is
+  `None`. `PlannerKind::Legacy` becomes reachable only through a test that
+  builds both for comparison.
+
+- [ ] **Step 1: Check the condition before changing anything**
+
+Run:
+
+```bash
+cargo test --release --lib compile::planner::tests::how_far_the_planners_own_placement_carries -- --ignored --nocapture
+```
+
+Expected: all four of and4, full_adder, segment_a and seven_segment place and
+verify. **If segment_a or seven_segment still fails, stop here.** Record what
+failed and how far it got; that is the result, and Task 13 does not happen
+until routing is fixed.
+
+- [ ] **Step 2: Write the failing test**
+
+In `tests/reference_circuits.rs`:
+
+```rust
+/// No reference circuit goes through the legacy emitter any more.
+///
+/// This asserts only the property the switchover is about. Truth tables need
+/// no new test: every existing one in `tests/compile_end_to_end.rs`,
+/// `tests/seven_segment.rs` and `tests/or_merge.rs` calls `compile()`, so they
+/// exercise the new path the moment it lands -- and if any of them fails, the
+/// condition for switching was not met and this task does not happen.
+#[test]
+fn no_reference_circuit_goes_through_the_legacy_emitter() {
+    let circuits: [(&str, Netlist); 4] = [
+        ("and4", build_and4_netlist().0),
+        ("full_adder", build_full_adder_netlist().0),
+        ("segment_a", build_single_segment_netlist(0).0),
+        ("seven_segment", build_seven_segment_netlist().0),
+    ];
+
+    for (name, netlist) in circuits {
+        let compiled =
+            compile(&netlist).unwrap_or_else(|error| panic!("{name} must compile: {error}"));
+        assert!(
+            compiled.legacy_emission().is_none(),
+            "{name} still went through the legacy emitter"
+        );
+    }
+}
+```
+
+- [ ] **Step 3: Run it to verify it fails**
+
+Run: `cargo test --release --test reference_circuits no_reference_circuit_goes_through_the_legacy_emitter`
+
+Expected: FAIL on the first circuit -- `compile` still seeds from legacy, so
+`legacy_emission()` is `Some`.
+
+- [ ] **Step 4: Rename the legacy path rather than deleting it**
+
+The spec keeps legacy **as a comparison, not as the production path**. Deleting
+it would leave Step 6 with nothing to compare against, so `compile`'s current
+body -- realisability checks, `build_floorplan`, `build_nets`,
+`reserve_columns`, `resolve_bypass_and_geometry`, and the seed handoff at
+6324-6334 -- moves verbatim into:
+
+```rust
+/// Compile by the row/channel/track emitter.
+///
+/// No longer the production path: `compile` places by relaxation. Kept because
+/// "is relaxation better" is a question somebody will ask again, and a
+/// comparison nobody can run is a claim nobody can check.
+///
+/// This stamps `PlannerKind::Legacy`, which nothing constructed before today.
+pub(crate) fn compile_legacy(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
+```
+
+with its final `PlannerKind::Unified3d` becoming `PlannerKind::Legacy` and its
+`gate_facings` filled with north, which is what it builds.
+
+- [ ] **Step 5: Point `compile` at the planner**
+
+```rust
+/// Compile a netlist into a verified circuit.
+///
+/// Placement is a spring relaxation; routing is A* with rip-up; the four
+/// physical invariants pass on the world this returns, not on a second world
+/// built separately from the same plan.
+pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
+    compile_planned(netlist, &planner::PortPlacements::default())
+}
+```
+
+`compile_planned` (6345-6361) gains the `gate_facings` field:
+
+```rust
+        gate_facings: (0..netlist.gates.len()).map(|g| candidate.facing_of(g)).collect(),
+```
+
+The realisability, driven-signal and acyclicity checks `compile` did up front
+(6138-6162) move into `compile_planned`, which had none of its own -- it relied
+on `plan_from_netlist` failing later, with a worse message.
+
+- [ ] **Step 6: Re-pin the sizes, and record what they were**
+
+`the_hand_written_circuits_keep_their_measured_size` pins its expectations
+inline (`tests/reference_circuits.rs:317-322`):
+
+```rust
+    let circuits: [(&str, Netlist, usize, usize); 4] = [
+        ("and4", build_and4_netlist().0, 7, 472),
+        ("full_adder", build_full_adder_netlist().0, 22, 1784),
+        ("segment_a", build_single_segment_netlist(0).0, 46, 6416),
+        ("seven_segment", build_seven_segment_netlist().0, 84, 16244),
+    ];
+```
+
+Switching changes the fourth column, deliberately. Run the test once -- it
+already `eprintln!`s the block count it measured for each circuit before
+asserting -- and replace the four numbers with what it printed:
+
+```bash
+cargo test --release --test reference_circuits the_hand_written_circuits_keep_their_measured_size -- --nocapture
+```
+
+Then record the old numbers where the new ones now sit, so the test still says
+where it has been:
+
+```rust
+    // Blocks measured at the switchover. The row/channel/track emitter
+    // produced 472 / 1,784 / 6,416 / 16,244; these are what relaxation
+    // produces. This test's meaning moves from "these must not change" to
+    // "these were measured here, and changing them again needs an
+    // explanation" -- which is what it was always for.
+```
+
+Do not guess the numbers, and do not adjust them to make a nicer story: if
+relaxation is larger, the commit says so.
+
+- [ ] **Step 7: Keep the comparison visible**
+
+Beating legacy is not a condition, but forgetting the gap is not acceptable
+either.
+
+```rust
+/// What the switchover cost or saved, printed rather than asserted.
+///
+/// The choice recorded in the spec is to switch when placement is correct, not
+/// when it is better -- so a regression here is not a failure. It is a number
+/// somebody has to be able to see.
+#[test]
+#[ignore = "measurement, not a gate"]
+fn relaxation_against_the_emitter() {
+    let circuits: [(&str, Netlist); 4] = [
+        ("and4", build_and4_netlist().0),
+        ("full_adder", build_full_adder_netlist().0),
+        ("segment_a", build_single_segment_netlist(0).0),
+        ("seven_segment", build_seven_segment_netlist().0),
+    ];
+
+    for (name, netlist) in circuits {
+        let relaxed = compile(&netlist).expect("relaxation compiles");
+        let legacy = compile_legacy(&netlist).expect("the emitter compiles");
+        eprintln!(
+            "{name}: relaxation {} blocks {:?}, emitter {} blocks {:?}",
+            occupied(&relaxed.world),
+            relaxed.world.size(),
+            occupied(&legacy.world),
+            legacy.world.size(),
+        );
+    }
+}
+
+/// Non-air cells, counted the way every size measurement in this file counts.
+fn occupied(world: &World) -> usize {
+    let (size_x, size_y, size_z) = world.size();
+    let mut count = 0usize;
+    for x in 0..size_x {
+        for y in 0..size_y {
+            for z in 0..size_z {
+                if world.get(x, y, z).kind != BlockKind::Air {
+                    count += 1;
+                }
+            }
+        }
+    }
+    count
+}
+```
+
+`the_hand_written_circuits_keep_their_measured_size` counts non-air cells with
+this same loop written inline; replace its copy with a call to `occupied` so
+the two cannot drift apart.
+
+- [ ] **Step 8: Un-ignore what now passes**
+
+`how_far_the_planners_own_placement_carries` was ignored with "known: segment_a
+needs a better search, not a looser rule". If Step 1 passed, remove the
+`#[ignore]`. If Step 1 passed only because routing was fixed separately, say so
+in the commit.
+
+- [ ] **Step 9: Run the whole suite**
+
+Run: `./check.sh`
+
+Expected: `failed=0`. `ignored` loses
+`how_far_the_planners_own_placement_carries` and gains
+`relaxation_against_the_emitter`, so the count is unchanged at 3 -- and
+`candidate_delay_is_exact_for_a_circuit_with_fanout` and
+`measure_optimisation_at_scale` are the other two, both still ignored for the
+reasons they already carry.
+
+- [ ] **Step 10: Commit**
+
+```bash
+git add -A && git commit -m "feat(compile): the circuit that ships is placed by relaxation"
+```
+
+**Stage 3 is done when** every reference circuit compiles with no
+`legacy_emission`, every truth table matches, and the pinned sizes say what
+relaxation measured with the emitter's numbers recorded beside them.
+
+---
+
+## Out of scope
+
+- **Routing.** The A* and rip-up path stays as it is, with the one exception
+  this design forces: the router is told the facing relaxation chose instead of
+  deriving sockets from a constant (Task 3, Task 10 step 7). A substitution,
+  not a change of algorithm.
+- **Weighting springs by criticality.** Deferred until a measurement says plain
+  wirelength misses the 15-cell constraint often enough to matter.
+- **The optimiser.** `optimise` keeps its move set and stays off the shipping
+  path. Whether local search has anything to contribute to a layout decided by
+  physics is a question for after this lands.
+- **Design H.** `Weld::BesideAt` and cell cohesion exist for it and have no
+  caller. The DFF also needs `PlanCandidate` widened to one anchor per
+  primitive -- the seam Task 9 works around rather than opens.
