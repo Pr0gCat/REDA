@@ -204,9 +204,11 @@ A new module, `src/compile/relax.rs`:
 struct Body {
     what: BodyKind,
     position: [f64; 3],
-    /// Radians, quantised to four at snap. Meaningless for a junction: dust is
-    /// isotropic, so a merge has no front to turn.
-    facing: f64,
+    /// One of four. Never continuous: a body's best facing is chosen by trying
+    /// all four against the pulls on its ports, so there is no angle to
+    /// integrate and none to quantise later. Meaningless for a junction --
+    /// dust is isotropic, so a merge has no front to turn.
+    facing: Facing,
     /// Half-extents along the body's own axes, from the blocks
     /// `physical::variants` says it occupies. Not a radius: a NOR cell is not
     /// a sphere, and a sphere large enough to contain one wastes exactly the
@@ -310,6 +312,26 @@ constant with no derivation, which is the third one this design would have
 carried if nobody looked. Solving exactly has none: the springs decide where
 the bodies want to be, the projection decides where they may be, and neither
 asks how far to move.
+
+Holding facings aside is what makes it linear, and raises the question the
+design had left out entirely: how a facing changes at all. Torque was named as
+the thing that produces orientation and never given a rule.
+
+It gets one, and the same trick applies. With positions held, each body's best
+facing is a one-dimensional question with four answers -- the pulls on its
+ports are known, and the facing that minimises their energy is found by trying
+all four and keeping the least. Not a rotation integrated over time: an
+enumeration, because there are four.
+
+So a step is three things, alternating: solve positions exactly for the current
+facings, choose each body's best facing for the current positions, project.
+Block coordinate descent, with the block that would have been hard reduced to a
+choice among four. It also means facings are never continuous during the solve,
+which retires `snap`'s first step -- there is nothing left to quantise -- and
+leaves `snap` as re-project and round.
+
+`Body::facing` is therefore one of four, not radians. The type said `f64`
+because the design assumed torque had to be integrated; it does not.
 
 Convergence is reached when no body moves more than a tenth of a cell in a
 step. A tenth because the rounding margin is a whole cell, so a system still
