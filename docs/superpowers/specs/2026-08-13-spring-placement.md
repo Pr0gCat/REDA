@@ -61,11 +61,13 @@ Six decisions follow, each with the alternative it was chosen over.
 
 **Bodies are primitives, not gates.** A torch, a repeater, a lever and a lamp
 each move on their own; a cell is a soft spring holding its members together,
-not a rigid body. (Review added one thing that moves and is not a component at
-all -- the block a component stands on. See "Nothing holds a body up".) The cost is that geometry a topology template used to
+not a rigid body. The cost is that geometry a topology template used to
 guarantee -- a torch on its support's face, Design H's lock repeater at the
 data repeater's side -- has to become an explicit constraint. The gain is that
 `physical.rs`'s typed ports become the thing placement is expressed in.
+
+Review added one body that is not a component at all: the block a component
+stands on. See "Nothing holds a body up".
 
 **Springs attach to ports, not to centres.** Every edge of the primitive graph
 lands on a specific port, and `physical.rs` already says where each port sits
@@ -121,9 +123,18 @@ The reservation is the number of edges that must be *routed* to it -- which is
 its degree less the welds, because a torch and its support are adjacent by
 construction and no wire runs between them -- times the width one route needs.
 
-That is a first estimate and a measurable one: if placements come out routable
-but wasteful, or compact but unroutable, this is the number that was wrong, and
-it is one number.
+That is a first estimate, and the doubt about it is specific rather than
+general: a halo is not a channel. Legacy reserves *shared* corridors that many
+nets run along; this reserves a private ring around each body, and the corridor
+is whatever gaps happen to line up between rings. A high-degree gate gets a
+large ring whether or not its neighbours needed one, so the layout can bloat
+and still not have a connected path through it.
+
+It is measurable, and it is one number: if placements come out routable but
+wasteful, or compact but unroutable, this is what was wrong. If it turns out
+that rings cannot produce corridors at all, the honest next move is a term that
+knows about regions rather than a bigger ring -- which is the bin density this
+design turned down, arriving from the other direction.
 
 **Everything switches, including `compile()`.** Legacy stays as a comparison,
 not as the production path. The risk is stated plainly below.
