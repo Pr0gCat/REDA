@@ -4514,9 +4514,13 @@ mod tests {
     /// what it was asked to.
     ///
     /// and4 is the first real circuit this places end to end without the
-    /// legacy emitter: 656 blocks against that emitter's 472. Bigger, because
-    /// the layout here is deliberately plain and sparse -- compaction is
-    /// `optimise`'s job.
+    /// legacy emitter: 572 blocks against that emitter's 472, and 24 game
+    /// ticks against 18. Bigger and slower, because the layout here is
+    /// deliberately plain and sparse.
+    ///
+    /// It was 656 blocks when first measured. Nothing set out to shrink it --
+    /// the routing fixes that followed, floors a route owns and staircases it
+    /// cannot break, each removed cells that were being wasted on repair.
     ///
     /// The settle figure printed here is the worst over the two sweeps below,
     /// which is **not** the circuit's worst case: driving the levers by hand

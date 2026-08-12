@@ -36,10 +36,10 @@ circuit and the only one loose enough to have slack.
 A second measurement points the same way. The planner's own placement, when it
 places at all, is worse than the router it is meant to replace:
 
-| and4 | blocks |
-|---|---|
-| row/channel/track | 472 |
-| planner's own placement | 656 |
+| and4 | blocks | settle |
+|---|---|---|
+| row/channel/track | 472 | 18 |
+| planner's own placement | 572 | 24 |
 
 The legacy emitter is not a stopgap that happens to work. Its row and channel
 model encodes real spacing knowledge, and "rows by logic depth, columns by
@@ -375,10 +375,10 @@ unreproducible unless the randomness is the seed's.
 
 It starts from the placement that exists today: Z by logic depth, X by
 barycentre over already-placed sources. That layout is legal, it is what the
-current `plan_from_netlist` produces, and it is measurably poor -- 656 blocks
-for and4 against the emitter's 472. Relaxation is therefore asked to improve a
-known-bad answer rather than to invent one, and the improvement is measurable
-against the number it started from.
+current `plan_from_netlist` produces, and it is measurably poor -- 572 blocks
+for and4 against the emitter's 472, and 24 game ticks against 18. Relaxation is
+therefore asked to improve a known-bad answer rather than to invent one, and
+the improvement is measurable against the numbers it started from.
 
 `RelaxEffort`'s seed perturbs that start. It exists so a run can be repeated
 exactly and so a stuck configuration can be retried from a different one, not
@@ -567,8 +567,11 @@ build yet is a test nobody can write.
    whatever places them, and this test is about placement, not about fixing
    that.
 6. **Better than what it replaced.** and4 placed by relaxation against and4
-   placed by rows and barycentres: 656 blocks is the number to beat, and if it
-   is not beaten the design failed at the thing it was written for.
+   placed by rows and barycentres: 572 blocks and 24 game ticks are the numbers
+   to beat, and if neither is beaten the design failed at the thing it was
+   written for. Both, because rows and barycentres are already smaller than
+   they were and slower than the emitter -- beating one by giving up the other
+   is not an improvement, it is a different trade.
 
 **Stage 2 -- supports as bodies, separation that may push upwards**
 
