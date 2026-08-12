@@ -335,9 +335,9 @@ instead of by a hardcoded three.
 
 The second is preferred because it makes height a consequence of crowding,
 which is what it is: a circuit with room stays flat and pays nothing, and a
-circuit without room grows the way redstone can. It also gives the seeded
-perturbation nothing to do, so the seed goes back to being only a way to retry
-a stuck configuration.
+circuit without room grows the way redstone can. It also leaves the seed with
+one job instead of two -- retrying a stuck configuration, not breaking
+symmetry.
 
 ### Nothing holds a body up
 
@@ -439,8 +439,10 @@ directly under the pin of the gate that drives it, derived and not chosen.
 Relaxation moving something emission overrides is worse than it sounds -- the
 lamp would take part in the springs and the separation, pulling on its
 neighbours and reserving space, from a position nothing ever builds it at. So a
-lamp is welded, not free: `StandsOn`'s sibling, fixed under its gate's pin, and
-it moves only because its gate does.
+lamp is welded, not free, and it needs no new weld to say so: `emit_primitives`
+puts it at `gate_pin.down()`, which makes it the block that pin's dust stands
+on. `StandsOn { body: pin, support: lamp }` is already exactly that
+relationship. A lamp is a support that happens to be readable.
 
 That also makes `PortPlacements` ambiguous for outputs, which this design
 inherits rather than introduces. `port_anchor` resolves a declared output to
@@ -541,9 +543,12 @@ for and4 against the emitter's 472, and 24 game ticks against 18. Relaxation is
 therefore asked to improve a known-bad answer rather than to invent one, and
 the improvement is measurable against the numbers it started from.
 
-`RelaxEffort`'s seed perturbs that start. It exists so a run can be repeated
-exactly and so a stuck configuration can be retried from a different one, not
-because anything in the solve is random.
+`RelaxEffort`'s seed perturbs that start, and that is its only job: a stuck
+configuration can be retried from a slightly different one, reproducibly.
+Nothing in the solve is random, and the seed is *not* what breaks the planar
+symmetry -- upward separation does that, for the reason given above. An earlier
+draft had it doing both, which would have made every flat circuit slightly
+wrinkled for no benefit.
 
 ### What `physical.rs` has to gain
 
