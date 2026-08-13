@@ -5,6 +5,7 @@
 
 mod build;
 mod linear;
+mod project;
 
 // Re-exported rather than kept private: nothing outside `#[cfg(test)]` calls
 // the model or the solver until Tasks 7 and 8, and a `pub` item in a private
@@ -15,3 +16,7 @@ pub use build::{
     SIGNAL_STIFFNESS,
 };
 pub use linear::{Factorisation, NotPositiveDefinite};
+pub use project::{
+    placed_cells, project, required_separations, reservation, worst_violation, Axes, PlacedCell,
+    Violation, CONDUCTOR_CLEARANCE, PROJECTION_ROUNDS, ROUTE_PITCH, SETTLED, SNAP_MARGIN,
+};
