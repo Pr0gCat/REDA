@@ -69,9 +69,10 @@
 use std::collections::HashSet;
 
 use super::equivalence::{resolve_contributors, NetlistResolution};
+use super::geometry;
 use super::primitive_graph::{NodeId, PrimitiveGraph, Provenance};
 use super::topology::TemplateNode;
-use super::{input_socket_feeds_support, CompiledCircuit, Netlist, INPUT_DIRECTIONS};
+use super::{input_socket_feeds_support, CompiledCircuit, Netlist};
 use crate::redstone::simulator::component::torch_support_position;
 use crate::redstone::simulator::position::Position;
 use crate::redstone::world::block::BlockKind;
@@ -303,10 +304,10 @@ fn check_gate_input_arity_agrees(
 
             // A merge's own junction is dust, not a torch -- its input
             // sockets sit directly off the junction itself, at the same
-            // `INPUT_DIRECTIONS` offsets a NOR's own sockets use (see
-            // `place_merge_gate`'s own doc comment: it shares a NOR's input
-            // faces), never behind a resolved support.
-            let world_sockets = INPUT_DIRECTIONS
+            // `geometry::input_directions` offsets a NOR's own sockets use
+            // (see `place_merge_gate`'s own doc comment: it shares a NOR's
+            // input faces), never behind a resolved support.
+            let world_sockets = geometry::input_directions(compiled.gate_facings[g])
                 .iter()
                 .filter(|&&direction| {
                     let socket = junction.offset(direction);
@@ -328,7 +329,7 @@ fn check_gate_input_arity_agrees(
 
             let torch_state = compiled.world.get(jx, jy, jz);
             let world_sockets = match torch_support_position(torch_state, junction) {
-                Some(support) => INPUT_DIRECTIONS
+                Some(support) => geometry::input_directions(compiled.gate_facings[g])
                     .iter()
                     .filter(|&&direction| {
                         let socket = support.offset(direction);
@@ -417,7 +418,7 @@ fn resolve_node_position(
             ),
         }),
         // One merge branch's own isolating repeater: at the same
-        // `INPUT_DIRECTIONS[index]` offset off the merge's own junction that
+        // `geometry::gate_sockets` offset off the merge's own junction that
         // a NOR's own input socket sits off its support -- `place_merge_gate`
         // shares a NOR's input faces (see its own doc comment), and
         // `compiled.gate_output_positions` already *is* the junction for a
@@ -430,10 +431,13 @@ fn resolve_node_position(
                 PartitionError::CannotResolveNodePosition { detail: format!("gate `{gate_name}` has no recorded junction position") }
             })?;
             let junction = Position::new(jx, jy, jz);
-            let direction = *INPUT_DIRECTIONS.get(*index).ok_or_else(|| PartitionError::CannotResolveNodePosition {
-                detail: format!("gate `{gate_name}`'s own branch {index} has no `INPUT_DIRECTIONS` entry"),
-            })?;
-            Ok(junction.offset(direction))
+            let facing = compiled.gate_facings[*gate];
+            let sockets = geometry::gate_sockets(junction, netlist.gates[*gate].inputs.len(), facing);
+            sockets.get(*index).copied().ok_or_else(|| {
+                PartitionError::CannotResolveNodePosition {
+                    detail: format!("gate `{gate_name}`'s own branch {index} has no socket"),
+                }
+            })
         }
     }
 }

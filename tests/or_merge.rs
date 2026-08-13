@@ -348,8 +348,8 @@ fn compile_places_the_isolating_repeater_on_exactly_the_shared_branch() {
     let (netlist, _sentinel, merge_output) = build_shared_branch_circuit();
     // `merge(&["a", "b"])` declares `a` as input index 0, which
     // `place_merge_gate` lands on the *west* socket (the same
-    // `INPUT_DIRECTIONS` order every NOR gate's sockets use) -- so this is
-    // exactly where `compile`'s own fanout rule must have placed the
+    // `geometry::input_directions` order every NOR gate's sockets use) -- so
+    // this is exactly where `compile`'s own fanout rule must have placed the
     // isolating repeater, deterministically, not merely "somewhere in the
     // world".
     let compiled = compile(&netlist).expect("the shared-branch circuit compiles");

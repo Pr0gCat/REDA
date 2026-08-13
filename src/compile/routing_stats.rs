@@ -37,7 +37,7 @@ use super::{
     approach_column, band_ramp_length, band_y, bent_path_cells, build_floorplan, build_nets,
     cell_geometry_by_input_count, effective_band, geometry, reserve_columns, resolve_bypass_and_geometry,
     CompileError, CompiledCircuit, Exit, Floorplan, Net, Netlist, Source, BYPASS_QUERY_MAX_DISTANCE, GATE_Y,
-    OUTPUT_DIRECTION, RAMP_REST_INTERVAL,
+    RAMP_REST_INTERVAL,
 };
 use crate::redstone::simulator::position::Position;
 use crate::redstone::world::block::{BlockKind, Facing};
@@ -359,13 +359,16 @@ fn scan_full_track(world: &World, source_x: i32, lo: i32, hi: i32, y: i32, z: i3
 
 fn source_pin(netlist: &Netlist, compiled: &CompiledCircuit, source: Source) -> Position {
     match source {
+        // A lever is still built north -- Stage 1 is where placement starts
+        // choosing for them too. Named rather than bare so that is a decision
+        // the next reader can find, not a constant they have to recognise.
         Source::Lever(i) => {
             let (x, y, z) = compiled.input_positions[&netlist.inputs[i]];
-            Position::new(x, y, z).offset(Facing::North)
+            Position::new(x, y, z).offset(geometry::output_direction(geometry::CellFacing::NORTH))
         }
         Source::Gate(g) => {
             let (x, y, z) = compiled.gate_output_positions[&netlist.gates[g].output];
-            Position::new(x, y, z).offset(OUTPUT_DIRECTION)
+            Position::new(x, y, z).offset(geometry::output_direction(compiled.gate_facings[g]))
         }
     }
 }

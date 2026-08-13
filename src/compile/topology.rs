@@ -1290,8 +1290,8 @@ fn nor_footprint_area(arity: usize) -> u32 {
 /// floorplanner has to hand a row, an X and a Z to, though:
 /// `place_merge_gate` returns a real `NorCell` with a real `size`, computed
 /// by the same bounding-box walk `place_nor_gate` uses, over the same
-/// `INPUT_DIRECTIONS` sockets. The one thing it does not reserve is the
-/// cell the absent output torch would have stood in, so its output socket
+/// `geometry::input_directions` sockets. The one thing it does not reserve
+/// is the cell the absent output torch would have stood in, so its output socket
 /// sits one hop north of the junction where a NOR's sits two hops north of
 /// its support -- which is exactly, and only, one row of Z cheaper:
 ///
@@ -1495,9 +1495,10 @@ pub fn expansion_cost_for_polarity(kind: GateKind, polarity: SignalPolarity) -> 
 /// merge costs nothing. Every step of that is true except the conclusion,
 /// and the step it skips is the one that matters -- *a merge is still a
 /// cell*. `place_merge_gate` returns a real `NorCell` with a real `size`,
-/// computed by the same bounding-box walk over the same `INPUT_DIRECTIONS`
-/// sockets `place_nor_gate` uses; the floorplanner gives it a row and a
-/// slot exactly as it gives one to a NOR (`compile::compute_asap_levels`
+/// computed by the same bounding-box walk over the same
+/// `geometry::input_directions` sockets `place_nor_gate` uses; the
+/// floorplanner gives it a row and a slot exactly as it gives one to a NOR
+/// (`compile::compute_asap_levels`
 /// levelises merge and non-merge gates identically). "Area" in this cost
 /// model has only ever meant that reserved ground plan, never the torch
 /// standing on it, so a merge's area is its own rectangle -- 6 for `Or(2)`,

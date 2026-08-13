@@ -3,7 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::compile::primitive_graph::{reexpand_gate, EntrySelection, NodeId};
 use crate::compile::topology::{Library, Primitive};
-use crate::compile::{self, CompiledCircuit, LegacyEmission, Netlist};
+use crate::compile::{self, geometry, CompiledCircuit, LegacyEmission, Netlist};
 use crate::redstone::simulator::position::Position;
 use crate::redstone::world::block::BlockState;
 use crate::redstone::world::storage::World;
@@ -393,6 +393,14 @@ impl PlanCandidate {
     /// The selected entry for `gate`, or the library default entry zero.
     pub fn selected_entry(&self, gate: usize) -> usize {
         self.topology_entries.get(&gate).copied().unwrap_or(0)
+    }
+
+    /// Which way node `node`'s cell is built.
+    pub fn facing_of(&self, node: usize) -> geometry::CellFacing {
+        self.variant_indices
+            .get(node)
+            .and_then(|&index| geometry::CellFacing::from_index(index))
+            .unwrap_or_default()
     }
 
     /// Report measured local routing, terminal, and variant effort for every
@@ -2120,8 +2128,9 @@ fn route_in_order(
     // spare room above the plane fixes it, because there is no second way in.
     for (gate, definition) in netlist.gates.iter().enumerate() {
         let support = candidate.anchors[gate];
+        let facing = candidate.facing_of(gate);
         for (input_index, driver) in definition.inputs.iter().enumerate() {
-            let socket = step(support, compile::INPUT_DIRECTIONS[input_index]);
+            let socket = step(support, compile::geometry::input_directions(facing)[input_index]);
             let approach = Anchor {
                 x: socket.x + (socket.x - support.x),
                 y: socket.y + (socket.y - support.y),
@@ -2162,13 +2171,21 @@ fn route_in_order(
         route.owner = Some(signal.clone());
         for &(gate, input_index) in &consumers {
             let support = candidate.anchors[gate];
-            let socket = step(support, compile::INPUT_DIRECTIONS[input_index]);
+            let facing = candidate.facing_of(gate);
+            let socket = step(support, compile::geometry::input_directions(facing)[input_index]);
             // A terminal component only drives the support it faces, and only
             // reads from directly behind itself, so the last step into the
             // socket has to be collinear with socket -> support. The legacy
             // router guarantees that with a dedicated approach column; here
             // the search is aimed one cell further out and the socket is
             // appended, which is the same guarantee stated as geometry.
+            //
+            // `try_move`'s own `terminal_socket` picks a socket the other way
+            // -- by the source-to-support delta -- so the two can already
+            // disagree about which face a given input lands on. Settling that
+            // needs a `RouteSink` threaded out of `route_endpoints`, which is
+            // more than turning a cell needs; until then this picks by
+            // declared input index, exactly as it always has.
             let approach = Anchor {
                 x: socket.x + (socket.x - support.x),
                 y: socket.y + (socket.y - support.y),

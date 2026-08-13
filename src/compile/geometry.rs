@@ -79,9 +79,16 @@ pub fn turn(direction: Facing, facing: CellFacing) -> Facing {
 /// Every face a gate cell of this facing accepts an input on, in declared
 /// input order.
 ///
-/// Three, because the fourth horizontal face is the output's. Derived by
-/// turning north's answer rather than tabulated per facing, so there is one
-/// place to be wrong instead of four.
+/// Three, because the fourth horizontal face is the output's. A repeater can
+/// only drive the block directly in front of it, and it has to stand on the
+/// ground beside the support -- so an input can only ever approach along a
+/// compass direction, and one of the four is already spoken for. Three is
+/// therefore the hardware maximum fan-in every NOR gate this compiler places
+/// has (see `place_nor_gate`'s own `assert!`), not a placeholder for something
+/// larger later: a fourth input would need a face a repeater cannot stand on.
+///
+/// Derived by turning north's answer rather than tabulated per facing, so
+/// there is one place to be wrong instead of four.
 pub fn input_directions(facing: CellFacing) -> [Facing; 3] {
     const FACING_NORTH: [Facing; 3] = [Facing::West, Facing::East, Facing::South];
     FACING_NORTH.map(|direction| turn(direction, facing))
@@ -90,6 +97,20 @@ pub fn input_directions(facing: CellFacing) -> [Facing; 3] {
 /// The face a gate cell of this facing sends its output out of.
 pub fn output_direction(facing: CellFacing) -> Facing {
     facing.direction()
+}
+
+/// The cells a gate at `origin` accepts its declared inputs in, in declared
+/// input order.
+///
+/// Six modules used to compute this, each from the same constant and each
+/// slightly differently -- one off a support, one off a junction, one from a
+/// `NorCell`'s `input_offsets`. They are the same cells.
+pub fn gate_sockets(origin: Position, arity: usize, facing: CellFacing) -> Vec<Position> {
+    input_directions(facing)
+        .iter()
+        .take(arity)
+        .map(|&direction| origin.offset(direction))
+        .collect()
 }
 
 #[cfg(test)]

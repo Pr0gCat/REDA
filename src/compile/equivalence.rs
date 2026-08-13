@@ -44,8 +44,8 @@
 //! - **A `Nor`/`Buf` gate's own torch and its support** are checked directly
 //!   against the compiled `World`'s own bytes -- the torch resolves to a
 //!   real, resolvable, conductive support, and exactly `arity` of
-//!   `INPUT_DIRECTIONS`'s sockets (no more, no fewer) actively feed it -- by
-//!   either a repeater or a directed dust terminal.
+//!   `geometry::input_directions`'s sockets (no more, no fewer) actively
+//!   feed it -- by either a repeater or a directed dust terminal.
 //! - **A merge gate's own junction** is checked the same way, in its own
 //!   shape: no torch, no support (`place_merge_gate` writes dust, not a
 //!   support block) -- a bare branch's own socket must be plain dust
@@ -74,9 +74,10 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use super::geometry::{self, CellFacing};
 use super::primitive_graph::{NodeId, PrimitiveGraph, Provenance};
 use super::topology::TemplateNode;
-use super::{input_socket_feeds_support, CompiledCircuit, Netlist, INPUT_DIRECTIONS, OUTPUT_DIRECTION};
+use super::{input_socket_feeds_support, CompiledCircuit, Netlist};
 use crate::redstone::rules::taxonomy::flags_of;
 use crate::redstone::simulator::component::torch_support_position;
 use crate::redstone::simulator::position::Position;
@@ -112,9 +113,9 @@ pub enum EquivalenceError {
     /// `verify_torch_merge` would already reject this, but this module
     /// checks it directly rather than only trusting that invariant ran.
     SupportNotConductive { gate: String, support: (i32, i32, i32) },
-    /// One of this gate's declared input sockets (by `INPUT_DIRECTIONS`
-    /// index, `< arity`) does not actively feed the support. The terminal
-    /// may be a repeater or straight, directed dust.
+    /// One of this gate's declared input sockets (by `geometry::input_
+    /// directions` index, `< arity`) does not actively feed the support. The
+    /// terminal may be a repeater or straight, directed dust.
     InputSocketDoesNotFeedSupport { gate: String, input_index: usize, socket: (i32, i32, i32) },
     /// A socket direction beyond this gate's declared arity nonetheless
     /// actively feeds the support -- more inputs than the netlist declares.
@@ -331,9 +332,9 @@ pub fn verify_expansion_matches_compiled(
 
     for (g, gate) in netlist.gates.iter().enumerate() {
         if gate.is_merge() {
-            verify_merge_gate_structure(netlist, graph, compiled, g, &resolution)?;
+            verify_merge_gate_structure(netlist, graph, compiled, g, compiled.gate_facings[g], &resolution)?;
         } else {
-            verify_gate_structure(netlist, graph, compiled, g, gate.inputs.len(), &resolution)?;
+            verify_gate_structure(netlist, graph, compiled, g, gate.inputs.len(), compiled.gate_facings[g], &resolution)?;
         }
     }
 
@@ -403,6 +404,7 @@ fn verify_gate_structure(
     compiled: &CompiledCircuit,
     g: usize,
     arity: usize,
+    facing: CellFacing,
     resolution: &NetlistResolution,
 ) -> Result<(), EquivalenceError> {
     let gate_name = netlist.gates[g].output.clone();
@@ -457,7 +459,7 @@ fn verify_gate_structure(
     // Every direction `place_nor_gate` could ever use for an input: the
     // declared ones must actively feed the support; the rest must not (or
     // the world has more inputs than the netlist declares).
-    for (index, &direction) in INPUT_DIRECTIONS.iter().enumerate() {
+    for (index, &direction) in geometry::input_directions(facing).iter().enumerate() {
         let socket = support.offset(direction);
         let feeds_support = input_socket_feeds_support(&compiled.world, socket, support);
 
@@ -492,6 +494,7 @@ fn verify_merge_gate_structure(
     graph: &PrimitiveGraph,
     compiled: &CompiledCircuit,
     g: usize,
+    facing: CellFacing,
     resolution: &NetlistResolution,
 ) -> Result<(), EquivalenceError> {
     let gate_name = netlist.gates[g].output.clone();
@@ -553,7 +556,7 @@ fn verify_merge_gate_structure(
         return Err(EquivalenceError::JunctionNotDust { gate: gate_name.clone(), junction: (jx, jy, jz) });
     }
 
-    for (index, &direction) in INPUT_DIRECTIONS.iter().enumerate() {
+    for (index, &direction) in geometry::input_directions(facing).iter().enumerate() {
         let socket = junction.offset(direction);
         let socket_state = compiled.world.get(socket.x, socket.y, socket.z);
         let feeds_junction = socket_state.kind == BlockKind::Repeater && socket_state.facing == Some(direction);
@@ -628,15 +631,18 @@ fn verify_lamp(netlist: &Netlist, compiled: &CompiledCircuit, output_name: &str)
         return Err(EquivalenceError::LampWrongKind { name: output_name.to_string(), position: (lx, ly, lz) });
     }
 
-    let driving_gate = netlist
+    // The index, not the `&Gate`: a `&Gate` cannot index `gate_facings`, and
+    // the caller loops over declared output *names* and so has no gate index
+    // of its own to hand down.
+    let driving = netlist
         .gates
         .iter()
-        .find(|gate| gate.output == output_name)
+        .position(|gate| gate.output == output_name)
         .expect("every declared output is driven by a gate -- checked by `compile` before this ever runs");
     let &(tx, ty, tz) = compiled
         .gate_output_positions
-        .get(&driving_gate.output)
-        .ok_or_else(|| EquivalenceError::TorchNotPlaced { gate: driving_gate.output.clone() })?;
+        .get(&netlist.gates[driving].output)
+        .ok_or_else(|| EquivalenceError::TorchNotPlaced { gate: netlist.gates[driving].output.clone() })?;
 
     // The fixed relationship `emit` actually builds: one cell in the
     // torch's own output direction (its net's own source pin), then
@@ -644,7 +650,9 @@ fn verify_lamp(netlist: &Netlist, compiled: &CompiledCircuit, output_name: &str)
     // (`place_merge_gate`'s own `output_offset` is `(0, 0, 0)`, so its own
     // `gate_output_positions` entry already *is* what a NOR's own torch
     // position would be for this same formula).
-    let expected = Position::new(tx, ty, tz).offset(OUTPUT_DIRECTION).down();
+    let expected = Position::new(tx, ty, tz)
+        .offset(geometry::output_direction(compiled.gate_facings[driving]))
+        .down();
     let expected = (expected.x, expected.y, expected.z);
     if expected != (lx, ly, lz) {
         return Err(EquivalenceError::LampNotAtFixedOffsetFromTorch {

@@ -251,20 +251,6 @@ impl Netlist {
 // "inside a gate" and "between gates" are no longer different routing
 // regimes, only different distances.
 
-/// 輸入的方向，固定順序。最多支援 3 個輸入 —— 第四個水平方向留給輸出。
-///
-/// A repeater can only drive the block directly in front of it, and it has to
-/// sit on the ground next to the support at `GATE_Y` -- so a horizontal input
-/// can only ever approach from one of the four compass directions, and one of
-/// those (`OUTPUT_DIRECTION`) is already spoken for. Three is the hardware
-/// maximum fan-in this gives every NOR gate this compiler ever places (see
-/// `place_nor_gate`'s own `assert!`), not a placeholder for something larger
-/// later -- a fourth input would need a face a repeater cannot stand on.
-pub(crate) const INPUT_DIRECTIONS: [Facing; 3] = [Facing::West, Facing::East, Facing::South];
-
-/// 輸出固定朝北。
-pub(crate) const OUTPUT_DIRECTION: Facing = Facing::North;
-
 /// Where a NOR gate's support block sits, and where its output torch and
 /// input sockets are relative to it. `size` is the ground-plan bounding box
 /// this occupies -- support block, output torch and its pin, and every input
@@ -496,12 +482,12 @@ pub fn place_nor_gate(
 /// test.
 ///
 /// The fix lives in `emit`, not here: it now starts a merge's outbound
-/// route one hop out from `origin`, in `OUTPUT_DIRECTION`, exactly the way
-/// it always started a NOR's own outbound route one hop out from *its*
-/// torch -- this function already reserved that cell (`output_socket`,
-/// below) in the bounding box it returns, it just never got a chance to
-/// matter as an actual routing origin until now. One hop is clearance
-/// enough: `output_socket` is not adjacent to any of `origin`'s own
+/// route one hop out from `origin`, along `geometry::output_direction`,
+/// exactly the way it always started a NOR's own outbound route one hop out
+/// from *its* torch -- this function already reserved that cell
+/// (`output_socket`, below) in the bounding box it returns, it just never got
+/// a chance to matter as an actual routing origin until now. One hop is
+/// clearance enough: `output_socket` is not adjacent to any of `origin`'s own
 /// occupied faces, only to `origin` itself and to whatever this gate
 /// drives -- exactly the same safety a NOR's own two-stage
 /// support-then-torch-then-pin clearance provides, just one stage shorter
@@ -1114,8 +1100,8 @@ fn bare_reserve_for_merge(netlist: &Netlist, nets: &[Net], into: usize) -> i32 {
 /// its raw `pin` (its source's own `gate_pin`/`lever_pin` entry), whenever
 /// (a) the net's source is a merge gate and (b) a bend is actually needed to
 /// get off that column at all (`pin.x != exit_x`) -- one hop further out
-/// from `pin`, along `OUTPUT_DIRECTION`, than the ordinary pin. Returns
-/// `pin` itself, unchanged, in every other case.
+/// from `pin`, along `geometry::output_direction`, than the ordinary pin.
+/// Returns `pin` itself, unchanged, in every other case.
 ///
 /// This has to be a *shifted starting position*, not an extra waypoint on
 /// top of the existing bend -- `lay_bent_path`/`lay_bent_path_bare` both
@@ -1172,18 +1158,23 @@ fn bare_reserve_for_merge(netlist: &Netlist, nets: &[Net], into: usize) -> i32 {
 /// confirming it is a property of this shape, not of ABC's particular
 /// choices.
 ///
-/// The fix costs one extra hop of straight travel in `OUTPUT_DIRECTION`
-/// before the bend is allowed to turn -- moving the bend's own row to
-/// distance 2 from the merge's row, which `dust_reach`'s exhaustive case
-/// list already proves is always safe, independent of column. Only applied
-/// when the source is a merge (an ordinary gate's own pin sits one hop from
-/// a row whose *sockets* are always repeater-terminated, so the identical
-/// geometry is already safe there -- see this same spec's "repeater is a
-/// real firewall" point).
+/// The fix costs one extra hop of straight travel in
+/// `geometry::output_direction` before the bend is allowed to turn -- moving
+/// the bend's own row to distance 2 from the merge's row, which
+/// `dust_reach`'s exhaustive case list already proves is always safe,
+/// independent of column. Only applied when the source is a merge (an
+/// ordinary gate's own pin sits one hop from a row whose *sockets* are always
+/// repeater-terminated, so the identical geometry is already safe there --
+/// see this same spec's "repeater is a real firewall" point).
 fn bypass_source_start(netlist: &Netlist, net: &Net, pin: Position, exit_x: i32) -> Position {
+    // The hop is measured off the source merge's own output face, so it is
+    // that gate's facing this turns -- north for every gate the legacy
+    // emitter builds, and this function and all three that mirror it are
+    // that emitter's.
+    let facing = geometry::CellFacing::NORTH;
     let source_is_merge = matches!(net.source, Source::Gate(g) if netlist.gates[g].is_merge());
     if source_is_merge && pin.x != exit_x {
-        pin.offset(OUTPUT_DIRECTION)
+        pin.offset(geometry::output_direction(facing))
     } else {
         pin
     }
@@ -1428,6 +1419,12 @@ pub struct CompiledCircuit {
     /// (`LAMP_TURN_ON_DELAY_GAME_TICKS` / `LAMP_TURN_OFF_DELAY_GAME_TICKS`)
     /// is a display convenience, not part of the logic.
     pub gate_output_positions: BTreeMap<String, (i32, i32, i32)>,
+    /// Which way each gate's cell was built, by gate index.
+    ///
+    /// Recorded by whoever placed it, never read back off the world: a merge's
+    /// junction is dust, and dust has no facing to read. A verifier that
+    /// re-derives a gate's socket faces has to be told which faces those are.
+    pub gate_facings: Vec<geometry::CellFacing>,
     /// Explicit ownership data recorded while the legacy emitter places the
     /// world.  This is intentionally not reconstructed from block kinds.
     ///
@@ -3613,9 +3610,9 @@ fn compute_net_source_strengths(
             let delivered = if merge_branch_is_bare(netlist, net, g) {
                 // `bare_branch_landing_strength` gives the strength at the
                 // *socket* -- one hop away from the junction itself (the
-                // same `INPUT_DIRECTIONS` offset every socket sits at), and
-                // that last hop is ordinary dust-to-dust decay like any
-                // other, so the junction's own share of it is one less.
+                // same `geometry::input_directions` offset every socket sits
+                // at), and that last hop is ordinary dust-to-dust decay like
+                // any other, so the junction's own share of it is one less.
                 bare_branch_landing_strength(
                     netlist,
                     nets,
@@ -3745,6 +3742,12 @@ fn emit(
         bypass,
         terminals,
     } = *geometry;
+    // The legacy emitter builds every gate north, and this is the one place
+    // that says so. Everything below that needs a face -- where a cell's
+    // sockets are, where its outbound pin sits -- turns this rather than
+    // naming a compass direction of its own, so the day placement starts
+    // choosing facings there is one binding to widen and no site to find.
+    let facing = geometry::CellFacing::NORTH;
     let mut gate_cell: Vec<NorCell> = Vec::with_capacity(netlist.gates.len());
     let mut primitive_anchors: Vec<Anchor> =
         Vec::with_capacity(netlist.gates.len() + netlist.inputs.len());
@@ -3763,19 +3766,9 @@ fn emit(
             z: origin.2,
         });
         gate_cell[g] = if gate.is_merge() {
-            place_merge_gate(
-                world,
-                origin,
-                gate.inputs.len(),
-                geometry::CellFacing::NORTH,
-            )
+            place_merge_gate(world, origin, gate.inputs.len(), facing)
         } else {
-            place_nor_gate(
-                world,
-                origin,
-                gate.inputs.len(),
-                geometry::CellFacing::NORTH,
-            )
+            place_nor_gate(world, origin, gate.inputs.len(), facing)
         };
     }
 
@@ -3783,7 +3776,7 @@ fn emit(
     let mut lever_pin: Vec<Position> = Vec::with_capacity(netlist.inputs.len());
     for (i, name) in netlist.inputs.iter().enumerate() {
         let home = Position::new(plan.lever_x[i], GATE_Y, row_z[0]);
-        let (lever_pos, pin) = place_primary_input(world, home, geometry::CellFacing::NORTH);
+        let (lever_pos, pin) = place_primary_input(world, home, facing);
         primitive_anchors.push(Anchor {
             x: lever_pos.x,
             y: lever_pos.y,
@@ -3816,7 +3809,7 @@ fn emit(
         // (see `place_merge_gate`'s own doc comment for the failure this
         // caused, and how it was found). One more hop out is exactly as
         // clear of them as a NOR's own pin is of *its* input sockets.
-        let p = torch.offset(OUTPUT_DIRECTION);
+        let p = torch.offset(geometry::output_direction(facing));
         ensure_floor(world, p);
         world.set(p.x, p.y, p.z, dust());
         gate_pin.push(p);
@@ -4369,6 +4362,11 @@ fn resolve_directed_dust_terminals(
         })
         .collect();
 
+    // Each socket below is a sink gate's own, so it is that gate's facing
+    // this turns -- north for all of them: the baseline world this reads is
+    // `emit`'s, and `emit` builds every gate north.
+    let facing = geometry::CellFacing::NORTH;
+
     for (n, net) in nets.iter().enumerate() {
         let strength = &group_strength[&groups.root(n)];
 
@@ -4387,7 +4385,7 @@ fn resolve_directed_dust_terminals(
                 else {
                     continue;
                 };
-                let socket = support.offset(INPUT_DIRECTIONS[input_index]);
+                let socket = support.offset(geometry::input_directions(facing)[input_index]);
                 let predecessor = socket.offset(direction_from(socket, support).opposite());
                 if directed_dust_terminal_is_legal(
                     world,
@@ -4475,16 +4473,20 @@ fn source_pin_position(
     cell_of_count: &HashMap<(usize, geometry::CellFacing), NorCell>,
     source: Source,
 ) -> Position {
+    // `emit`, whose answer this has to reproduce exactly, builds every gate
+    // and every lever north.
+    let facing = geometry::CellFacing::NORTH;
     match source {
-        Source::Lever(i) => Position::new(plan.lever_x[i], GATE_Y, row_z[0]).offset(Facing::North),
+        Source::Lever(i) => Position::new(plan.lever_x[i], GATE_Y, row_z[0])
+            .offset(geometry::output_direction(facing)),
         Source::Gate(g) => {
-            let cell = &cell_of_count[&(netlist.gates[g].inputs.len(), geometry::CellFacing::NORTH)];
+            let cell = &cell_of_count[&(netlist.gates[g].inputs.len(), facing)];
             let torch = Position::new(
                 plan.centre_x[g] + cell.output_offset.0,
                 GATE_Y + cell.output_offset.1,
                 row_z[plan.row_of[g]] + cell.output_offset.2,
             );
-            torch.offset(OUTPUT_DIRECTION)
+            torch.offset(geometry::output_direction(facing))
         }
     }
 }
@@ -4941,6 +4943,11 @@ fn merge_gate_body_owners(
         .map(|(i, net)| (net_source_name(netlist, net), i))
         .collect();
 
+    // The outbound pin sits one hop off the junction in the merge's own
+    // output direction, and `place_merge_gate` -- the only thing that writes
+    // these cells -- is only ever called by `emit`, which builds north.
+    let facing = geometry::CellFacing::NORTH;
+
     let mut owners = HashMap::new();
     for (g, gate) in netlist.gates.iter().enumerate() {
         if !gate.is_merge() {
@@ -4954,7 +4961,7 @@ fn merge_gate_body_owners(
         };
         let junction = Position::new(jx, jy, jz);
         owners.insert(junction, root);
-        owners.insert(junction.offset(OUTPUT_DIRECTION), root);
+        owners.insert(junction.offset(geometry::output_direction(facing)), root);
     }
     owners
 }
@@ -6377,6 +6384,7 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         input_positions: realised.ports.input_positions,
         output_positions: realised.ports.output_positions,
         gate_output_positions: realised.ports.gate_output_positions,
+        gate_facings: vec![geometry::CellFacing::NORTH; netlist.gates.len()],
         planner_kind: PlannerKind::Unified3d,
         legacy_emission: Some(legacy_emission),
     })
@@ -6403,6 +6411,7 @@ pub fn compile_planned(
         input_positions: realised.ports.input_positions,
         output_positions: realised.ports.output_positions,
         gate_output_positions: realised.ports.gate_output_positions,
+        gate_facings: vec![geometry::CellFacing::NORTH; netlist.gates.len()],
         planner_kind: PlannerKind::Unified3d,
         legacy_emission: None,
     })
@@ -6640,6 +6649,28 @@ mod tests {
             assert_eq!(nor.input_offsets, merge.input_offsets, "facing {index}");
             assert_eq!(merge.output_offset, (0, 0, 0), "facing {index}");
         }
+    }
+
+    /// Every compiled circuit says which way it built each gate, and today the
+    /// answer is north for all of them.
+    ///
+    /// The value is dull; having somewhere to put it is not. Three modules verify
+    /// a world by recomputing where a gate's sockets must be, and once relaxation
+    /// turns gates they need to be told rather than to assume -- and a merge's
+    /// junction is dust, which cannot be asked.
+    #[test]
+    fn a_compiled_circuit_records_a_facing_for_every_gate() {
+        use crate::circuits::and4::build_and4_netlist;
+        use crate::compile::geometry::CellFacing;
+
+        let (netlist, _) = build_and4_netlist();
+        let compiled = compile(&netlist).expect("and4 compiles");
+
+        assert_eq!(compiled.gate_facings.len(), netlist.gates.len());
+        assert!(
+            compiled.gate_facings.iter().all(|&facing| facing == CellFacing::NORTH),
+            "nothing chooses a facing yet, so every gate must still be north"
+        );
     }
 
     /// A minimal `Net` for tests that only care about `net_name` / ownership
@@ -7254,7 +7285,7 @@ mod tests {
             .iter()
             .enumerate()
             .filter(|(_, gate)| !gate.is_merge())
-            .flat_map(|(_, gate)| {
+            .flat_map(|(g, gate)| {
                 let &(x, y, z) = compiled
                     .gate_output_positions
                     .get(&gate.output)
@@ -7262,7 +7293,8 @@ mod tests {
                 let torch = Position::new(x, y, z);
                 let support = torch_support_position(compiled.world.get(x, y, z), torch)
                     .expect("NOR has a support");
-                (0..gate.inputs.len()).map(move |input| support.offset(INPUT_DIRECTIONS[input]))
+                geometry::gate_sockets(support, gate.inputs.len(), compiled.gate_facings[g])
+                    .into_iter()
             })
             .filter(|socket| {
                 compiled.world.get(socket.x, socket.y, socket.z).kind == BlockKind::RedstoneWire
