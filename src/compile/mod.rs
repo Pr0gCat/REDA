@@ -362,28 +362,40 @@ pub(crate) fn repeater(direction: Facing) -> BlockState {
     state
 }
 
-/// 把一個 n 輸入的 NOR 閘畫進世界：一個支撐塊，加上貼在它北面的輸出火把。
+/// 把一個 n 輸入的 NOR 閘畫進世界：一個支撐塊，加上貼在它輸出面的輸出火把。
 /// 就這樣 —— 沒有內部佈線。
+///
+/// `facing` is the way the finished cell points: its output torch hangs on
+/// that face, and its inputs arrive on the other three. North is the facing
+/// every gate this compiler has ever placed was built to, and it is still
+/// what every caller passes.
 ///
 /// The support block is placed; the torch is placed, attached to it; and
 /// every input this gate actually uses gets a socket coordinate
 /// (`input_offsets`) immediately against one of the support's three free
-/// horizontal faces (west/east/south -- `INPUT_DIRECTIONS`). The socket
-/// itself is left as air, exactly as before: the caller (the router) decides
-/// whether a lever or a repeater ends up there, and that repeater's own
-/// output *is* what powers the support -- there is no support-per-input
-/// block or merge dust standing between the socket and the block it drives
-/// anymore, because a solid block is already powered by any conductor that
-/// faces into it, regardless of which of its faces that happens to be.
+/// horizontal faces (`geometry::input_directions` -- west/east/south for a
+/// cell facing north). The socket itself is left as air, exactly as before:
+/// the caller (the router) decides whether a lever or a repeater ends up
+/// there, and that repeater's own output *is* what powers the support --
+/// there is no support-per-input block or merge dust standing between the
+/// socket and the block it drives anymore, because a solid block is already
+/// powered by any conductor that faces into it, regardless of which of its
+/// faces that happens to be.
 ///
 /// This is `verify_torch_merge`'s N-sources-one-sink invariant made
 /// physical: `support` is the one sink; every input's own route is one
 /// source, terminating directly against it.
-pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: usize) -> NorCell {
+pub fn place_nor_gate(
+    world: &mut World,
+    origin: (i32, i32, i32),
+    input_count: usize,
+    facing: geometry::CellFacing,
+) -> NorCell {
+    let inputs = geometry::input_directions(facing);
     assert!(
-        input_count <= INPUT_DIRECTIONS.len(),
-        "place_nor_gate 最多支援 {} 個輸入，收到 {input_count}",
-        INPUT_DIRECTIONS.len()
+        input_count <= inputs.len(),
+        "place_nor_gate takes at most {} inputs, got {input_count}",
+        inputs.len()
     );
 
     let support = Position::new(origin.0, origin.1, origin.2);
@@ -392,7 +404,7 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
     // 插座留空 —— 由呼叫端（router）決定要接拉桿還是中繼器，並直接面朝
     // `support` 把它充能。
     let mut input_offsets = Vec::with_capacity(input_count);
-    for &direction in INPUT_DIRECTIONS.iter().take(input_count) {
+    for &direction in inputs.iter().take(input_count) {
         let socket = support.offset(direction);
         input_offsets.push((
             socket.x - support.x,
@@ -401,17 +413,18 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
         ));
     }
 
-    let output_torch_pos = support.offset(OUTPUT_DIRECTION);
+    let out = geometry::output_direction(facing);
+    let output_torch_pos = support.offset(out);
     world.set(
         output_torch_pos.x,
         output_torch_pos.y,
         output_torch_pos.z,
-        wall_torch(OUTPUT_DIRECTION),
+        wall_torch(out),
     );
 
     // 邊界盒：涵蓋支撐塊、所有用到的輸入插座，以及輸出插座（火把再往外
     // 一格 -- `emit`稍後會在那裡放這個閘輸出淨路的第一格紅石粉）。
-    let output_socket = output_torch_pos.offset(OUTPUT_DIRECTION);
+    let output_socket = output_torch_pos.offset(out);
     let mut min = (support.x, support.y, support.z);
     let mut max = (support.x, support.y, support.z);
     let mut extend = |p: Position| {
@@ -453,8 +466,8 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
 /// gate), it just has nothing functional to place there.
 ///
 /// Deliberately built to the *exact same footprint* `place_nor_gate` uses
-/// for the same `input_count` -- the same `input_offsets` (the three
-/// horizontal `INPUT_DIRECTIONS` faces around `origin`) and an
+/// for the same `input_count` and `facing` -- the same `input_offsets` (the
+/// three horizontal `geometry::input_directions` faces around `origin`) and an
 /// `output_offset` chosen so `emit`'s generic, gate-kind-agnostic geometry
 /// code (`torch_of`, `cell_geometry_by_input_count`, `source_pin_position`,
 /// `resolve_bypass_and_geometry`) needs no merge-specific case at all --
@@ -467,10 +480,11 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
 /// `output_offset` stays `(0, 0, 0)`: `origin` -- the electrical junction
 /// itself -- is what `emit` records in `gate_output_positions` for this
 /// gate, exactly as before. But `origin` is directly adjacent to every one
-/// of this same gate's own occupied input sockets (`INPUT_DIRECTIONS`:
-/// west, east, south) -- so `emit` must **not** start this gate's own
-/// *outbound route* (`gate_pin`) from `origin` directly the way an earlier
-/// version of this function's own doc comment here used to say it should:
+/// of this same gate's own occupied input sockets
+/// (`geometry::input_directions`: west, east and south for a cell facing
+/// north) -- so `emit` must **not** start this gate's own *outbound route*
+/// (`gate_pin`) from `origin` directly the way an earlier version of this
+/// function's own doc comment here used to say it should:
 /// a downstream route leaving from `origin` and heading in any of those
 /// three directions -- something every router pass does routinely, with no
 /// reason to think of `origin` as special -- would walk straight back
@@ -492,11 +506,17 @@ pub fn place_nor_gate(world: &mut World, origin: (i32, i32, i32), input_count: u
 /// drives -- exactly the same safety a NOR's own two-stage
 /// support-then-torch-then-pin clearance provides, just one stage shorter
 /// because a merge has no torch cell to skip past in the first place.
-pub fn place_merge_gate(world: &mut World, origin: (i32, i32, i32), input_count: usize) -> NorCell {
+pub fn place_merge_gate(
+    world: &mut World,
+    origin: (i32, i32, i32),
+    input_count: usize,
+    facing: geometry::CellFacing,
+) -> NorCell {
+    let inputs = geometry::input_directions(facing);
     assert!(
-        input_count <= INPUT_DIRECTIONS.len(),
-        "place_merge_gate 最多支援 {} 個輸入，收到 {input_count}",
-        INPUT_DIRECTIONS.len()
+        input_count <= inputs.len(),
+        "place_merge_gate takes at most {} inputs, got {input_count}",
+        inputs.len()
     );
 
     let support = Position::new(origin.0, origin.1, origin.2);
@@ -506,7 +526,7 @@ pub fn place_merge_gate(world: &mut World, origin: (i32, i32, i32), input_count:
     // 插座留空 -- 由呼叫端（router）決定要接哪一種收尾：私有分支收裸紅石粉，
     // 有外部扇出的分支收隔離用中繼器。
     let mut input_offsets = Vec::with_capacity(input_count);
-    for &direction in INPUT_DIRECTIONS.iter().take(input_count) {
+    for &direction in inputs.iter().take(input_count) {
         let socket = support.offset(direction);
         input_offsets.push((
             socket.x - support.x,
@@ -522,7 +542,7 @@ pub fn place_merge_gate(world: &mut World, origin: (i32, i32, i32), input_count:
     // `emit` writes the actual dust for it, exactly as it does for a NOR's
     // own pin -- this function only reserves the cell in `input_offsets`'/
     // the bounding box's terms, the same way it always has.
-    let output_socket = support.offset(OUTPUT_DIRECTION);
+    let output_socket = support.offset(geometry::output_direction(facing));
     let mut min = (support.x, support.y, support.z);
     let mut max = (support.x, support.y, support.z);
     let mut extend = |p: Position| {
@@ -2470,15 +2490,21 @@ fn lay_track(
 /// (`power_emitted_by` reports `drives_dust` for a lever in every direction) --
 /// no support block in between, unlike a gate's input socket.
 ///
-/// The levers live in row 0, south of every gate row, and signal flow is
-/// northwards, so the pin goes on the lever's **north** side: that is the way
-/// the route has to leave anyway, and it keeps the route from turning back
-/// into the lever and overwriting it with dust.
-pub(crate) fn place_primary_input(world: &mut World, home: Position) -> (Position, Position) {
+/// The pin goes on the side a cell of this `facing` sends its output out of:
+/// that is the way the route has to leave anyway, and it keeps the route from
+/// turning back into the lever and overwriting it with dust. For the north
+/// every caller passes today that is the lever's north side, which is where
+/// the routes go -- the levers live in row 0, south of every gate row, and
+/// signal flow is northwards.
+pub(crate) fn place_primary_input(
+    world: &mut World,
+    home: Position,
+    facing: geometry::CellFacing,
+) -> (Position, Position) {
     world.set(home.x, home.y, home.z, lever(false));
     ensure_floor(world, home);
 
-    let pin = home.offset(Facing::North);
+    let pin = home.offset(geometry::output_direction(facing));
     ensure_floor(world, pin);
     world.set(pin.x, pin.y, pin.z, dust());
 
@@ -3737,9 +3763,19 @@ fn emit(
             z: origin.2,
         });
         gate_cell[g] = if gate.is_merge() {
-            place_merge_gate(world, origin, gate.inputs.len())
+            place_merge_gate(
+                world,
+                origin,
+                gate.inputs.len(),
+                geometry::CellFacing::NORTH,
+            )
         } else {
-            place_nor_gate(world, origin, gate.inputs.len())
+            place_nor_gate(
+                world,
+                origin,
+                gate.inputs.len(),
+                geometry::CellFacing::NORTH,
+            )
         };
     }
 
@@ -3747,7 +3783,7 @@ fn emit(
     let mut lever_pin: Vec<Position> = Vec::with_capacity(netlist.inputs.len());
     for (i, name) in netlist.inputs.iter().enumerate() {
         let home = Position::new(plan.lever_x[i], GATE_Y, row_z[0]);
-        let (lever_pos, pin) = place_primary_input(world, home);
+        let (lever_pos, pin) = place_primary_input(world, home, geometry::CellFacing::NORTH);
         primitive_anchors.push(Anchor {
             x: lever_pos.x,
             y: lever_pos.y,
@@ -4409,9 +4445,14 @@ fn cell_geometry_by_input_count(netlist: &Netlist) -> HashMap<usize, NorCell> {
     let mut cells = HashMap::new();
     let mut scratch = World::new(20, GATE_ONLY_SCRATCH_HEIGHT, 20);
     for gate in &netlist.gates {
-        cells
-            .entry(gate.inputs.len())
-            .or_insert_with(|| place_nor_gate(&mut scratch, (8, GATE_Y, 8), gate.inputs.len()));
+        cells.entry(gate.inputs.len()).or_insert_with(|| {
+            place_nor_gate(
+                &mut scratch,
+                (8, GATE_Y, 8),
+                gate.inputs.len(),
+                geometry::CellFacing::NORTH,
+            )
+        });
     }
     cells
 }
@@ -6388,13 +6429,14 @@ pub enum PlannerKind {
 pub(crate) fn gate_footprint(
     origin: (i32, i32, i32),
     gate: &Gate,
+    facing: geometry::CellFacing,
 ) -> (Vec<Anchor>, Vec<Anchor>, Anchor) {
     let mut scratch = World::new(64, 8, 64);
     let shifted = (32, 1, 32);
     let cell = if gate.is_merge() {
-        place_merge_gate(&mut scratch, shifted, gate.inputs.len())
+        place_merge_gate(&mut scratch, shifted, gate.inputs.len(), facing)
     } else {
-        place_nor_gate(&mut scratch, shifted, gate.inputs.len())
+        place_nor_gate(&mut scratch, shifted, gate.inputs.len(), facing)
     };
     // The output pin belongs to the gate too: it is written outside the cell
     // and no route may pass through it.
@@ -6403,7 +6445,7 @@ pub(crate) fn gate_footprint(
         shifted.1 + cell.output_offset.1,
         shifted.2 + cell.output_offset.2,
     );
-    let pin = torch.offset(OUTPUT_DIRECTION);
+    let pin = torch.offset(geometry::output_direction(facing));
     scratch.set(pin.x, pin.y, pin.z, dust());
 
     // A gate's input sockets are left as air for the router to fill, which
@@ -6413,7 +6455,10 @@ pub(crate) fn gate_footprint(
     // They belong to the gate; only the net terminating in one may enter it,
     // and that step is appended rather than searched.
     let mut sockets = Vec::new();
-    for direction in INPUT_DIRECTIONS.iter().take(gate.inputs.len()) {
+    for direction in geometry::input_directions(facing)
+        .iter()
+        .take(gate.inputs.len())
+    {
         let socket = Position::new(shifted.0, shifted.1, shifted.2).offset(*direction);
         scratch.set(socket.x, socket.y, socket.z, stone());
         sockets.push(socket);
@@ -6470,8 +6515,11 @@ fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<Primitiv
         } else {
             NodeRealisation::Primitive(Primitive::Torch)
         };
-        let (footprint, conductors, output_pin) =
-            gate_footprint((anchor.x, anchor.y, anchor.z), gate);
+        let (footprint, conductors, output_pin) = gate_footprint(
+            (anchor.x, anchor.y, anchor.z),
+            gate,
+            geometry::CellFacing::NORTH,
+        );
         nodes.push(PrimitiveNode {
             id: format!("gate:{}", gate.output),
             anchor,
@@ -6508,6 +6556,68 @@ mod tests {
     use super::topology::GateKind;
     use super::*;
     use crate::redstone::simulator::Simulator;
+
+    /// A cell built facing anywhere is the north cell turned, cell for cell.
+    ///
+    /// This is the whole of Stage 0's claim. Relaxation will choose facings and
+    /// hand them here; if a turned cell were assembled from its own arithmetic
+    /// rather than from north's, the two would drift apart exactly where nobody
+    /// looks -- at the three facings no reference circuit uses yet.
+    #[test]
+    fn a_turned_gate_cell_is_the_north_one_turned() {
+        use crate::compile::geometry::{self, CellFacing};
+
+        let origin = (16, 1, 16);
+        for arity in 1..=3usize {
+            let mut north_world = World::new(40, 4, 40);
+            let north = place_nor_gate(&mut north_world, origin, arity, CellFacing::NORTH);
+
+            for index in 0..4u8 {
+                let facing = CellFacing::from_index(index).expect("0..4 is horizontal");
+                let mut turned_world = World::new(40, 4, 40);
+                let turned = place_nor_gate(&mut turned_world, origin, arity, facing);
+
+                for (input, &offset) in north.input_offsets.iter().enumerate() {
+                    assert_eq!(
+                        turned.input_offsets[input],
+                        geometry::rotate(offset, facing),
+                        "arity {arity} facing {index}: input {input}'s socket"
+                    );
+                }
+                assert_eq!(
+                    turned.output_offset,
+                    geometry::rotate(north.output_offset, facing),
+                    "arity {arity} facing {index}: output"
+                );
+                // Turning a rectangle swaps its sides; it does not change its area.
+                let north_area = north.size.0 * north.size.2;
+                assert_eq!(
+                    turned.size.0 * turned.size.2,
+                    north_area,
+                    "arity {arity} facing {index}: footprint area"
+                );
+            }
+        }
+    }
+
+    /// A merge is built to the same footprint as a NOR of the same arity, and
+    /// stays that way turned -- which is what lets `emit`'s geometry stay
+    /// gate-kind-agnostic.
+    #[test]
+    fn a_turned_merge_keeps_a_nors_socket_faces() {
+        use crate::compile::geometry::CellFacing;
+
+        let origin = (16, 1, 16);
+        for index in 0..4u8 {
+            let facing = CellFacing::from_index(index).expect("0..4 is horizontal");
+            let mut nor_world = World::new(40, 4, 40);
+            let mut merge_world = World::new(40, 4, 40);
+            let nor = place_nor_gate(&mut nor_world, origin, 3, facing);
+            let merge = place_merge_gate(&mut merge_world, origin, 3, facing);
+            assert_eq!(nor.input_offsets, merge.input_offsets, "facing {index}");
+            assert_eq!(merge.output_offset, (0, 0, 0), "facing {index}");
+        }
+    }
 
     /// A minimal `Net` for tests that only care about `net_name` / ownership
     /// lookups, not real routing geometry -- `verify_connectivity` never

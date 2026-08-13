@@ -1796,7 +1796,12 @@ mod tests {
 
         for arity in 1..=3 {
             let mut world = World::new(20, 6, 20);
-            let cell = super::super::place_nor_gate(&mut world, ORIGIN, arity);
+            let cell = super::super::place_nor_gate(
+                &mut world,
+                ORIGIN,
+                arity,
+                super::super::geometry::CellFacing::NORTH,
+            );
             let (x, _, z) = cell.size;
             assert_eq!(
                 (x * z) as u32,
@@ -1808,7 +1813,12 @@ mod tests {
 
         for arity in 2..=3 {
             let mut world = World::new(20, 6, 20);
-            let cell = super::super::place_merge_gate(&mut world, ORIGIN, arity);
+            let cell = super::super::place_merge_gate(
+                &mut world,
+                ORIGIN,
+                arity,
+                super::super::geometry::CellFacing::NORTH,
+            );
             let (x, _, z) = cell.size;
             assert_eq!(
                 (x * z) as u32,

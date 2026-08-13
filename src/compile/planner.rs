@@ -610,16 +610,36 @@ pub fn emit_primitives(
         match netlist.gates.get(index) {
             Some(gate) => match (node.realisation, gate.is_merge()) {
                 (NodeRealisation::WireMerge, true) => {
-                    let cell = compile::place_merge_gate(&mut world, origin, gate.inputs.len());
-                    let (torch, pin) = output_pin(&mut world, anchor, &cell);
+                    let cell = compile::place_merge_gate(
+                        &mut world,
+                        origin,
+                        gate.inputs.len(),
+                        compile::geometry::CellFacing::NORTH,
+                    );
+                    let (torch, pin) = output_pin(
+                        &mut world,
+                        anchor,
+                        &cell,
+                        compile::geometry::CellFacing::NORTH,
+                    );
                     ports
                         .gate_output_positions
                         .insert(gate.output.clone(), (torch.x, torch.y, torch.z));
                     gate_pin.push(pin);
                 }
                 (NodeRealisation::Primitive(Primitive::Torch), false) => {
-                    let cell = compile::place_nor_gate(&mut world, origin, gate.inputs.len());
-                    let (torch, pin) = output_pin(&mut world, anchor, &cell);
+                    let cell = compile::place_nor_gate(
+                        &mut world,
+                        origin,
+                        gate.inputs.len(),
+                        compile::geometry::CellFacing::NORTH,
+                    );
+                    let (torch, pin) = output_pin(
+                        &mut world,
+                        anchor,
+                        &cell,
+                        compile::geometry::CellFacing::NORTH,
+                    );
                     ports
                         .gate_output_positions
                         .insert(gate.output.clone(), (torch.x, torch.y, torch.z));
@@ -638,7 +658,11 @@ pub fn emit_primitives(
             None => match node.realisation {
                 NodeRealisation::Primitive(Primitive::Lever) => {
                     let home = Position::new(anchor.x, anchor.y, anchor.z);
-                    let (lever, _) = compile::place_primary_input(&mut world, home);
+                    let (lever, _) = compile::place_primary_input(
+                        &mut world,
+                        home,
+                        compile::geometry::CellFacing::NORTH,
+                    );
                     let name = &netlist.inputs[index - netlist.gates.len()];
                     ports
                         .input_positions
@@ -681,13 +705,18 @@ pub fn emit_primitives(
 ///
 /// The pin belongs to the gate, not to any route: a gate with no sinks still
 /// has one, and a declared output's lamp hangs beneath it.
-fn output_pin(world: &mut World, anchor: Anchor, cell: &compile::NorCell) -> (Position, Position) {
+fn output_pin(
+    world: &mut World,
+    anchor: Anchor,
+    cell: &compile::NorCell,
+    facing: compile::geometry::CellFacing,
+) -> (Position, Position) {
     let torch = Position::new(
         anchor.x + cell.output_offset.0,
         anchor.y + cell.output_offset.1,
         anchor.z + cell.output_offset.2,
     );
-    let pin = torch.offset(compile::OUTPUT_DIRECTION);
+    let pin = torch.offset(compile::geometry::output_direction(facing));
     compile::ensure_floor(world, pin);
     world.set(pin.x, pin.y, pin.z, compile::dust());
     (torch, pin)
@@ -1885,8 +1914,11 @@ pub fn plan_from_netlist_shaped(
         });
         anchors.push(anchor);
 
-        let (footprint, conductors, output_pin) =
-            compile::gate_footprint((anchor.x, anchor.y, anchor.z), gate);
+        let (footprint, conductors, output_pin) = compile::gate_footprint(
+            (anchor.x, anchor.y, anchor.z),
+            gate,
+            compile::geometry::CellFacing::NORTH,
+        );
         primitive_nodes.push(PrimitiveNode {
             id: format!("gate:{}", gate.output),
             anchor,
