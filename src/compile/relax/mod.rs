@@ -58,26 +58,69 @@ pub const ANCHOR_STIFFNESS: f64 = 1.0;
 /// decides only how many steps are spent, not what is found -- and a parameter
 /// sweep on 2026-08-13 says otherwise. The projection is not onto a convex
 /// set, so what the loop finds is a local optimum of how far the springs were
-/// let run before the anchor clamped them:
+/// let run before the anchor clamped them.
+///
+/// **Area here is one stated metric**, not a word: round every cell centre of
+/// [`placed_cells`] to the nearest lattice column, count the columns spanned on
+/// X and on Z inclusive, and multiply. Both reference circuits are started from
+/// `plan_from_netlist(netlist, &PortPlacements::default())`'s anchors with
+/// `Axes::IN_PLANE`, nothing pinned, and `RelaxEffort::default()`. Re-measured
+/// on 2026-08-14, after `settled` joined the convergence test -- an earlier
+/// draft of this table named a metric it did not state and could not be
+/// reproduced from the tree.
 ///
 /// | | and4 area | full_adder area |
 /// |---|---|---|
-/// | `k = 1`, `g = 2` | **1,035** in 7 steps | **3,465** in 9 steps |
-/// | `k = 4`, `g = 2` | 2,773 in 2 | 6,950 in 6 |
-/// | `k = 1024`, `g = 2` | 4,095 in 2 | 10,143 in 2 |
-/// | `k = 1`, `g = 64` | 1,924 in 2 | 5,760 in 3 |
+/// | `k = 1`, `g = 2` | **1,125** (45x25) in 8 steps | **3,638** (34x107) in 9 steps |
+/// | `k = 4`, `g = 2` | 2,610 (58x45) in 7 | 7,140 (51x140) in 8 |
+/// | `k = 1024`, `g = 2` | 4,221 (63x67) in 2 | 10,595 (65x163) in 2 |
+/// | `k = 1`, `g = 64` | 2,028 (52x39) in 3 | 5,980 (46x130) in 3 |
 ///
-/// At `k = 1024` the returned area is the starting layout's exactly, for both
-/// circuits: the anchor pins the solve to `x_legal` on the first step and the
-/// loop terminates on what it was handed. So the temptation this comment
-/// exists to refuse is the obvious one -- a circuit is slow, raise the anchor,
-/// it converges in two steps and has placed nothing.
+/// At `k = 1024` what comes back is the layout that went in. The starting
+/// layout measures 63x67 for and4 and 64x163 for full_adder in that same
+/// metric, so and4's 63x67 is its input to the column and full_adder's 65x163
+/// is one column wider on X -- the facing sweep still runs. The anchor pins the
+/// solve to `x_legal` on the first step and the loop terminates on what it was
+/// handed. So the temptation this comment exists to refuse is the obvious one:
+/// a circuit is slow, raise the anchor, it converges in two steps and has
+/// placed nothing.
 ///
 /// `k = 1, g = 2` is the best-quality corner of that sweep and already
 /// converges in single-digit steps. Raising `RelaxEffort::iterations` instead
-/// costs nothing and changes nothing: 256, 1024, 4096 and 16384 all converge
-/// at the same step with an identical trace.
+/// costs nothing and changes nothing: at every corner above, budgets of 256,
+/// 1024, 4096 and 16384 converge at the same step with the same box. That is
+/// safe at any budget only because [`ANCHOR_CEILING`] stops the doubling --
+/// without it a budget past 1024 is where the anchor overflows to `+inf`.
 pub const ANCHOR_GROWTH: f64 = 2.0;
+
+/// Where the doubling stops.
+///
+/// A cap rather than a documented bound, because the failure it prevents is
+/// silent. `anchor` is an `f64` doubling from [`ANCHOR_STIFFNESS`], so it is
+/// `+inf` from step 1025 -- and `+inf` is absorbed rather than refused at every
+/// stage after that. [`Factorisation::of`] rejects only a pivot `<= 0.0`, and
+/// `inf` is not; every pivot becomes `sqrt(inf) = inf`; the back-substitution
+/// divides `inf` by `inf` and every free body's position becomes `NaN`. `NaN`
+/// then passes each of `relax`'s three exit conditions rather than tripping
+/// them: `choose_facings` never beats its `f64::INFINITY` seed because
+/// `NaN < INFINITY` is false, so nothing turns; `project` finds no violation
+/// because every comparison against `NaN` is false; and `fold(0.0, f64::max)`
+/// ignores `NaN` by contract, so `gap` and `settled` both fold to 0.0. The call
+/// would return `Ok` with `converged: true` and a placement of `NaN`s.
+///
+/// Reachable only through [`RelaxEffort::iterations`], which is a `pub` field
+/// this file's own comments tell the reader to raise. The default of 256 does
+/// not get near it.
+///
+/// Nothing measured here is lost by stopping. The anchor reaches `2^60` at step
+/// 61, and both reference circuits converge in single digits: the budget sweep
+/// in [`ANCHOR_GROWTH`] was re-run at 256, 1024, 4096 and 16384 with the cap in
+/// place and every corner gave the same step and the same box. Past that point
+/// the cap is not a compromise either -- once the anchor is `2^53` times a
+/// body's incident stiffness the solve's answer differs from `legal` by less
+/// than an ULP, so doubling further changes nothing but the exponent. A power
+/// of two, so the multiply and the comparison stay exact.
+pub const ANCHOR_CEILING: f64 = (1u64 << 60) as f64;
 
 /// How hard to try, and from where.
 ///
@@ -100,17 +143,32 @@ impl Default for RelaxEffort {
 #[derive(Debug, Clone)]
 pub struct ContinuousPlacement {
     pub graph: BodyGraph,
-    /// Whether the last step moved every body less than [`CONVERGED`].
+    /// Whether the last step met all three of [`relax`]'s exit conditions: the
+    /// solve and the projection agreed to within [`CONVERGED`], the step moved
+    /// the legal configuration less than [`CONVERGED`], and no body turned.
     ///
-    /// `snap` refuses an unconverged placement: rounding is exact only if the
-    /// projection converged, and one that did not has no margin to spend.
+    /// [`relax`] returns this `true` or does not return at all -- a run that
+    /// does not converge is [`RelaxError::DidNotConverge`], never an `Ok`
+    /// carrying `false`. The field is here for the consumer, not the producer:
+    /// `snap` refuses an unconverged placement, because rounding is exact only
+    /// if the projection converged and one that did not has no margin to spend,
+    /// and `snap`'s test for that case hand-builds the `false`.
     pub converged: bool,
     pub iterations: usize,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RelaxError {
-    /// The budget ran out with a violation still standing.
+    /// The budget ran out with every pair legal and the bounds still apart.
+    ///
+    /// Not "with a violation still standing", which is what the sibling below
+    /// is for. `relax` returns [`RelaxError::Deadlocked`] the moment `project`
+    /// errs, so it can only fall through to here after a projection that
+    /// returned `Ok` -- and under `Axes::IN_PLANE` an `Ok` means every pair's
+    /// shortfall is at or under [`SETTLED`], which is the same threshold
+    /// [`worst_violation`] tests. So `worst` is the `{0, 0, 0.0}` placeholder
+    /// in every case a caller with a budget of at least one can reach, and the
+    /// `Display` arm below prints prose rather than a fabricated pair.
     DidNotConverge { iterations: usize, worst: Violation },
     /// No progress, and a violation still standing. A different error because
     /// the remedy differs: constraints that contradict, not a budget that ran
@@ -120,10 +178,19 @@ pub enum RelaxError {
     ///
     /// Not the unpinned-component case, which cannot arise: the anchor on the
     /// diagonal makes `A + anchor * I` strictly diagonally dominant, so it is
-    /// positive definite whether or not anything is pinned. What is left is a
-    /// stiffness that is not positive, or a pull whose two ends are the same
-    /// body -- either a bug in how the graph was built rather than a property
-    /// of the circuit.
+    /// positive definite whether or not anything is pinned. Nor a pull whose
+    /// two ends are the same body: `laplacian`'s free-free arm then has
+    /// `i == j`, so its four writes all land on the one diagonal cell as
+    /// `+k, +k, -k, -k` and cancel, and the right-hand side cancels the same
+    /// way. A self-pull is dropped silently rather than refused -- which is
+    /// worth knowing, because `signal_pulls` emits one for a gate that lists
+    /// its own output as an input.
+    ///
+    /// What is left is a negative stiffness, deep enough to overcome the
+    /// anchor: a bug in how the graph was built rather than a property of the
+    /// circuit. Nothing in the tree reaches it. [`build`] is the only producer
+    /// of a [`Pull`] and it always writes [`SIGNAL_STIFFNESS`], which is `1.0`;
+    /// only a hand-built [`BodyGraph`] could get here.
     Unsolvable { component_row: usize },
     /// The netlist and its primitive graph do not agree well enough to build
     /// bodies from -- a gate with no primitive, a declared input with no
@@ -179,10 +246,14 @@ fn laplacian(graph: &BodyGraph, free: &[Option<usize>], order: usize, anchor: f6
     let mut matrix = vec![0.0; order * order];
     // The anchor sits on the diagonal, which makes the matrix strictly
     // diagonally dominant and so positive definite whether or not anything is
-    // pinned. That matters because `PortPlacements` defaults to empty and
-    // `compile()` passes the default: without an anchor a component free to
-    // translate makes the system singular, and the factorisation refuses it --
-    // correctly, and uselessly.
+    // pinned. That matters because `PortPlacements` defaults to empty and the
+    // netlist-only path takes the default: today the viewer, through
+    // `compile_planned(&netlist, &PortPlacements::default())` at
+    // `viewer/src/lib.rs:862`, and `plan_from_netlist`'s own tests. (`compile()`
+    // is not that caller yet -- it seeds the planner from the legacy emitter and
+    // never builds a `PortPlacements` at all. Task 13 is where it switches.)
+    // Without an anchor a component free to translate makes the system
+    // singular, and the factorisation refuses it -- correctly, and uselessly.
     for slot in 0..order {
         matrix[slot * order + slot] += anchor;
     }
@@ -209,7 +280,9 @@ fn laplacian(graph: &BodyGraph, free: &[Option<usize>], order: usize, anchor: f6
 /// A pull wants `(x_i + off_i) - (x_j + off_j) == 0`, so the port offsets and
 /// every pinned neighbour's position land here. `anchor * legal` is the `c`
 /// term: every free body is also pulled toward where the projection last put
-/// it, which is what makes the two bounds meet.
+/// it, which is what makes the two bounds meet. On the first step there is no
+/// "last put it" yet and `legal` is the layout `relax` was handed, legal or
+/// not; from the first projection on it is the projection's own output.
 fn right_hand_side(
     graph: &BodyGraph,
     free: &[Option<usize>],
@@ -332,8 +405,19 @@ pub fn relax(
 
     let required = project::required_separations(&bodies);
 
-    // The upper bound: a configuration that is legal, and the thing the anchor
-    // pulls toward. It starts as the starting layout, which is legal.
+    // The upper bound: the thing the anchor pulls toward, and from the end of
+    // the first step a configuration that is legal.
+    //
+    // Not on entry. It starts as the layout `relax` was handed, and nothing
+    // checks that: `build` seeds each body from `start` or from its pin without
+    // consulting `required_separations`, and `perturb` then moves bodies by up
+    // to a quarter cell. The counterexample is in this file --
+    // `running_out_of_iterations_is_an_error_that_says_how_many_it_had` hands
+    // `relax` three coincident anchors against a requirement of at least three
+    // cells. Nothing rests on it: the seed enters only as the soft
+    // `anchor * legal` term of step one's right-hand side, and `project` below
+    // replaces it before anything is measured against it. What leaves the loop
+    // is always projected.
     let mut legal: Vec<[f64; 3]> = bodies.bodies.iter().map(|body| body.position).collect();
     let mut anchor = ANCHOR_STIFFNESS;
 
@@ -371,28 +455,65 @@ pub fn relax(
         if let Err(worst) = project::project(&mut bodies, &required, axes) {
             return Err(RelaxError::Deadlocked { worst });
         }
-        legal = bodies.bodies.iter().map(|body| body.position).collect();
+        let previous = std::mem::replace(
+            &mut legal,
+            bodies.bodies.iter().map(|body| body.position).collect(),
+        );
 
-        // Convergence is the two bounds meeting: what the springs want and
-        // what is legal have stopped disagreeing. Not "nothing moved", which
-        // is a different and weaker claim -- a system oscillating between two
-        // configurations moves a lot every step and is going nowhere.
+        // Three conditions, and each one rules out a way of stopping early
+        // that the other two allow.
         //
-        // And no body turned this step, which is the second condition and is
-        // not a formality. Drop it and and4 returns at step *one*: the springs
-        // and the lattice agree there already, on a configuration whose bodies
-        // are still turning, and what comes back has a horizontal bounding box
-        // of 54 by 39 against the 45 by 25 the seven steps produce. Measured on
-        // 2026-08-13, by deleting `!turned` and relaxing both reference
-        // circuits from their starting layouts; full_adder takes nine steps
-        // either way.
+        // `gap` is the two bounds meeting: what the springs want and what is
+        // legal have stopped disagreeing. It is emphatically *not* a settling
+        // test and must not be read as one. `solved` and `legal` are the same
+        // configuration either side of one `project` call, and `project` returns
+        // having moved nothing whenever no pair's shortfall exceeds [`SETTLED`]
+        // -- so an inactive constraint set makes `gap` exactly 0.0 however far
+        // the solve just carried the bodies. What it measures is whether the
+        // projection was idle.
+        //
+        // and4 is the demonstration, measured on 2026-08-14 from
+        // `plan_from_netlist`'s anchors: its step-1 `gap` is 0.0000 while that
+        // same step moves a body 20.80 cells, and the seven further steps take
+        // its bounding box from 54 by 39 to 45 by 25.
+        //
+        // `settled` is the settling test: how far this step moved the legal
+        // configuration itself, `max |legal_new - legal_prev|`. It is the
+        // quantity [`ContinuousPlacement::converged`] describes, and it is what
+        // makes a return mean the relaxation finished rather than that the
+        // constraints happened to be slack. Without it, the exit test on a graph
+        // nothing crowds reduces to `!turned` alone -- a facing condition, and
+        // `build` seeds every body `CellFacing::NORTH`, so it goes false as soon
+        // as one sweep has re-oriented everything. That is step *two* on a chain
+        // laid out north-to-south, and it stops with the two gates 30.09 cells
+        // apart against the 24.78 the nine steps produce.
+        // `a_slack_constraint_set_is_not_a_settled_one` is that graph, and both
+        // of those numbers are measured off it.
+        //
+        // `!turned` is neither of those -- it is what makes `gap` a comparison
+        // of like with like. `solved` is captured before `choose_facings`, so it
+        // is the spring optimum for the *old* facings, while `legal` comes back
+        // from a projection run against the *new* ones. A facing is an input to
+        // both sides: `attach_offset` reads `body.facing` for a socket and for a
+        // pin alike, so the right-hand side the solve minimised is not the one
+        // that holds after a turn, and `project` separates cells the turn has
+        // already moved. The subtraction is still well-defined arithmetic; what
+        // is not well-defined across a turn is reading a small `gap` as "the
+        // springs and the lattice agree", because the next step's solve targets
+        // different offsets and lands somewhere else.
+        //
+        // It is kept for that reason and not for a step count: with `settled` in
+        // the test it no longer changes either reference circuit's answer.
+        // Measured 2026-08-14 by deleting it -- and4 still stops at step 8 with
+        // a 45 by 25 box and full_adder at step 9 with 34 by 107, both
+        // identical to the three-condition run.
         //
         // It cannot spin forever: a facing is an argmin over four with a
         // lowest-index tie-break, evaluated on positions that are themselves
         // converging, so once the positions settle the argmin settles with
-        // them. In those same two runs the case this condition exists for -- a
-        // gap already under [`CONVERGED`] with a body still turning -- arises
-        // once for and4 and never for full_adder.
+        // them. And the anchor grows, so the solve is pulled arbitrarily close
+        // to `legal`, which is already legal -- driving `gap` and `settled`
+        // together to zero.
         let gap = solved
             .iter()
             .zip(&legal)
@@ -403,7 +524,17 @@ pub fn relax(
             })
             .fold(0.0, f64::max);
 
-        if gap < CONVERGED && !turned {
+        let settled = previous
+            .iter()
+            .zip(&legal)
+            .map(|(before, after)| {
+                (0..3)
+                    .map(|axis| (after[axis] - before[axis]).abs())
+                    .fold(0.0, f64::max)
+            })
+            .fold(0.0, f64::max);
+
+        if gap < CONVERGED && settled < CONVERGED && !turned {
             return Ok(ContinuousPlacement {
                 graph: bodies,
                 converged: true,
@@ -411,7 +542,7 @@ pub fn relax(
             });
         }
 
-        anchor *= ANCHOR_GROWTH;
+        anchor = (anchor * ANCHOR_GROWTH).min(ANCHOR_CEILING);
     }
 
     let worst = project::worst_violation(&bodies, &required).unwrap_or(Violation {
@@ -539,8 +670,11 @@ mod tests {
         );
     }
 
-    /// Nothing has to be pinned. `compile()` passes
-    /// `PortPlacements::default()`, so this is the case that actually ships.
+    /// Nothing has to be pinned, and on the netlist-only path nothing is: the
+    /// viewer calls `compile_planned(&netlist, &PortPlacements::default())`
+    /// (`viewer/src/lib.rs:862`) and `plan_from_netlist`'s own tests do the
+    /// same. `compile()` is not that caller today -- it seeds the planner from
+    /// the legacy emitter -- and Task 13 is where it becomes one.
     ///
     /// Without the anchor this is the system the solver refuses before it
     /// starts: every component is free to translate, the Laplacian is singular,
@@ -597,5 +731,224 @@ mod tests {
         )
         .expect_err("one iteration from a knot cannot converge");
         assert!(matches!(error, RelaxError::DidNotConverge { iterations: 1, .. }));
+    }
+
+    /// A slack constraint set is not a settled relaxation, and `gap` alone
+    /// cannot tell them apart.
+    ///
+    /// This chain is laid out north-to-south with sixty cells between
+    /// neighbours, so no pair is ever inside its separation requirement:
+    /// `project` returns having moved nothing on every round, `legal` is
+    /// bit-identical to `solved`, and `gap` is 0.0000 at *every* step. So the
+    /// old two-condition test reduced here to `!turned` alone -- and `build`
+    /// seeds every body [`crate::compile::geometry::CellFacing::NORTH`], which
+    /// this layout makes the argmin from the first sweep on. It returned at
+    /// step 2, two solves in, reporting `converged: true`.
+    ///
+    /// `settled` is what makes the loop keep going, and the numbers say by how
+    /// much. Measured 2026-08-14: without it, 2 steps and 30.09 cells between
+    /// `b` and `c`; with it, 9 steps and 24.78. Both bounds below are loose
+    /// enough to leave that whole gap and still fail on the wrong side of it.
+    #[test]
+    fn a_slack_constraint_set_is_not_a_settled_one() {
+        let netlist = chain();
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
+        let start = vec![
+            Anchor { x: 0, y: 1, z: -60 },  // gate b
+            Anchor { x: 0, y: 1, z: -120 }, // gate c
+            Anchor { x: 0, y: 1, z: 0 },    // input a
+        ];
+        let mut placements = PortPlacements::default();
+        placements.pin("a", start[2]);
+
+        let placement = relax(
+            &netlist,
+            &graph,
+            &start,
+            &placements,
+            Axes::IN_PLANE,
+            RelaxEffort::default(),
+        )
+        .expect("a chain nothing crowds relaxes");
+
+        assert!(
+            placement.iterations >= 5,
+            "it stopped after {} step(s): nothing was measuring whether it had settled",
+            placement.iterations
+        );
+        let b = placement.graph.bodies[placement.graph.anchor_body[0]].position[2];
+        let c = placement.graph.bodies[placement.graph.anchor_body[1]].position[2];
+        assert!(
+            (b - c).abs() < 27.0,
+            "b and c are {:.3} apart; the springs had not finished pulling them together",
+            (b - c).abs()
+        );
+    }
+
+    /// A guardrail on the anchor schedule, not a golden number.
+    ///
+    /// [`ANCHOR_GROWTH`]'s doc argues that raising either anchor number
+    /// converges sooner and places worse, and until this test that argument had
+    /// nothing holding it: `ANCHOR_STIFFNESS = 1024.0` or `ANCHOR_GROWTH = 64.0`
+    /// -- the corners the doc calls "converges in two steps and has placed
+    /// nothing" -- passed every other assertion in the module.
+    ///
+    /// The ceiling is deliberately loose. and4 measures 1,125 at the shipped
+    /// constants (2026-08-14, metric as [`ANCHOR_GROWTH`] states it), 2,028 at
+    /// `g = 64`, 4,221 at `k = 1024` -- and 4,221 is also the starting layout's
+    /// own box, so the `k = 1024` corner really has placed nothing. Anything
+    /// under 1,500 is the shipped corner with room to move; an ordinary
+    /// refactor that shifts a body or two will not trip it, and neither wrong
+    /// anchor can get under it. The step floor catches `k = 1024` (2 steps)
+    /// but *not* `g = 64`, which lands on exactly 3 -- the area assertion is
+    /// what catches that corner.
+    #[test]
+    fn the_anchor_schedule_still_places_and4_small() {
+        let (netlist, _) = crate::circuits::and4::build_and4_netlist();
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
+        let start: Vec<Anchor> =
+            crate::compile::planner::plan_from_netlist(&netlist, &PortPlacements::default())
+                .expect("plans")
+                .anchors()
+                .to_vec();
+
+        let placement = relax(
+            &netlist,
+            &graph,
+            &start,
+            &PortPlacements::default(),
+            Axes::IN_PLANE,
+            RelaxEffort::default(),
+        )
+        .expect("and4 relaxes");
+
+        let cells = placed_cells(&placement.graph);
+        let mut lo = [f64::INFINITY; 3];
+        let mut hi = [f64::NEG_INFINITY; 3];
+        for body in &cells {
+            for cell in body {
+                for axis in [0usize, 2] {
+                    lo[axis] = lo[axis].min(cell.at[axis]);
+                    hi[axis] = hi[axis].max(cell.at[axis]);
+                }
+            }
+        }
+        let width = (hi[0].round() - lo[0].round()) as i64 + 1;
+        let depth = (hi[2].round() - lo[2].round()) as i64 + 1;
+        assert!(
+            width * depth < 1_500,
+            "and4 came back {width} by {depth} = {}; the anchor schedule has stopped placing",
+            width * depth
+        );
+        assert!(
+            placement.iterations >= 3,
+            "and4 converged in {} step(s), which is what an anchor too strong to move anything \
+             looks like",
+            placement.iterations
+        );
+    }
+
+    /// [`Axes`] governs the solve as well as the projection.
+    ///
+    /// Gate `b` starts a storey above everything that pulls on it, and in-plane
+    /// relaxation has to leave it there. Replace the solve's `axes.iter()` with
+    /// `0..3` and this is the only test in the module that notices: every other
+    /// fixture starts every body at `y = 1`, so the Y right-hand side is
+    /// `anchor * 1.0` for every free body and the Y solve returns exactly the
+    /// storey it was given. Here the zero-rest-length Y springs pull `b` down
+    /// onto its neighbours' plane instead -- and `gap` cannot see it, because
+    /// the in-plane projection never writes Y, so `solved` and `legal` agree on
+    /// that axis bit for bit however wrong it is.
+    ///
+    /// Exact equality rather than a tolerance: under [`Axes::IN_PLANE`] nothing
+    /// writes `position[1]` at all -- `separate` moves only the axis
+    /// `cheapest_axis` chose, and `chain()` has no welds, so `satisfy` never
+    /// runs -- so the value has to be the starting one bit for bit.
+    #[test]
+    fn a_body_stays_on_the_storey_it_started_on() {
+        let netlist = chain();
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
+        let start = vec![
+            Anchor { x: 0, y: 6, z: 0 },   // gate b, one storey up
+            Anchor { x: 40, y: 1, z: 0 },  // gate c
+            Anchor { x: -20, y: 1, z: 0 }, // input a
+        ];
+
+        let placement = relax(
+            &netlist,
+            &graph,
+            &start,
+            &PortPlacements::default(),
+            Axes::IN_PLANE,
+            RelaxEffort::default(),
+        )
+        .expect("relaxes");
+
+        for (node, anchor) in start.iter().enumerate() {
+            let body = placement.graph.anchor_body[node];
+            assert_eq!(
+                placement.graph.bodies[body].position[1],
+                f64::from(anchor.y),
+                "node {node} left the storey its starting layout gave it"
+            );
+        }
+    }
+
+    /// The seed's one job, asserted. Seed zero changes nothing; a non-zero seed
+    /// moves every unpinned body in plane and no pinned body at all, by less
+    /// than the quarter cell that would carry one past a neighbour; and two
+    /// seeds give two starts. Without this the whole of `perturb` could be
+    /// emptied to its signature and the suite would not notice -- the only
+    /// non-zero seed anywhere compares two runs at the *same* seed.
+    #[test]
+    fn a_seed_nudges_the_unpinned_in_plane_and_nothing_else() {
+        let netlist = chain();
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
+        let start: Vec<Anchor> = (0..3)
+            .map(|index| Anchor { x: index * 20, y: 1, z: index * 16 })
+            .collect();
+        let mut placements = PortPlacements::default();
+        placements.pin("a", start[2]);
+        let built = || build::build(&netlist, &graph, &start, &placements).expect("builds");
+
+        let mut untouched = built();
+        perturb(&mut untouched, 0);
+        for (index, (before, after)) in built().bodies.iter().zip(&untouched.bodies).enumerate() {
+            assert_eq!(
+                before.position.map(f64::to_bits),
+                after.position.map(f64::to_bits),
+                "seed zero moved body {index}"
+            );
+        }
+
+        let mut nudged = built();
+        perturb(&mut nudged, 0x26_02);
+        for (index, (before, after)) in built().bodies.iter().zip(&nudged.bodies).enumerate() {
+            assert_eq!(
+                before.position[1], after.position[1],
+                "body {index} left its storey"
+            );
+            if before.pinned {
+                assert_eq!(
+                    before.position.map(f64::to_bits),
+                    after.position.map(f64::to_bits),
+                    "pinned body {index} left its pin"
+                );
+                continue;
+            }
+            for axis in [0usize, 2] {
+                let moved = (after.position[axis] - before.position[axis]).abs();
+                assert!(moved > 0.0, "body {index} did not move on axis {axis}");
+                assert!(moved < 0.25, "body {index} moved {moved} on axis {axis}");
+            }
+        }
+
+        let mut other = built();
+        perturb(&mut other, 0x26_03);
+        assert_ne!(
+            nudged.bodies[0].position.map(f64::to_bits),
+            other.bodies[0].position.map(f64::to_bits),
+            "two seeds have to give two starts"
+        );
     }
 }
