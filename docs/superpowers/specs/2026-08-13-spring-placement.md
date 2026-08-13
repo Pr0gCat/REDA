@@ -332,14 +332,60 @@ drift apart. Until then every spring in the system has `k = 1`.
 
 A step is not a gradient step. The objective is quadratic, so with the
 constraints held aside it has a direct solution -- the linear system
-`Ax = f + c` that the founding spec records LogicLoom solving -- and a step is:
-solve it exactly for the current facings, then project. Repeat.
+`Ax = f + c` that the founding spec records LogicLoom solving.
 
-That matters because the alternative needs a step size, and a step size is a
-constant with no derivation, which is the third one this design would have
-carried if nobody looked. Solving exactly has none: the springs decide where
-the bodies want to be, the projection decides where they may be, and neither
-asks how far to move.
+An earlier draft read that as "solve exactly, then project, repeat", and it
+does not converge. Measured on 2026-08-13, with the design's own code compiled
+into the crate: `and4` deadlocked with two bodies 0.030 too close and
+`full_adder` with two 1.372 too close, from the starting layout and from a
+naive grid alike. The projection *alone* converges from the same start. What
+does not converge is the alternation, and the reason is structural rather than
+a budget: springs have zero rest length, so an exact solve collapses every free
+body back onto its neighbours and the projection has to unpick the whole knot
+again from scratch. The two take turns undoing each other, forever.
+
+What the draft dropped was `c`. In the equation it cited, `A` is the spring
+system and `c` is an **anchor** -- a pull from each body toward where it was
+last legally placed. With it, a step is:
+
+1. solve `(A + λI) x = b + λ x_legal` for the current facings, where `x_legal`
+   is the last projected configuration;
+2. choose each body's best facing for the new positions;
+3. project, giving the next `x_legal`;
+4. multiply `λ` by two.
+
+At small `λ` the answer is what the springs want and is illegal; at large `λ`
+it is `x_legal` and is legal. The gap between the two is the classic
+lower-bound/upper-bound pair of analytical placement, and doubling `λ` closes
+it in a number of steps logarithmic in the graph's degree. Convergence is that
+gap falling below a tenth of a cell -- the springs and the lattice have agreed.
+
+The two numbers this needs are derived rather than tuned. `λ` starts at 1,
+which is one more spring of the same `k = 1` every signal spring has: the
+weakest anchor that is not no anchor. It doubles, which is the standard
+schedule.
+
+What is *not* true -- a draft of this paragraph claimed it, and a parameter
+sweep on 2026-08-13 refuted it -- is that the schedule decides only how many
+steps are spent. It decides the answer. The projection is not onto a convex
+set, so the loop finds a local optimum of how far the springs were let run
+before the anchor clamped them, and raising either number converges sooner and
+places monotonically worse: and4's anchors occupy 1,035 cells at `λ = 1`,
+doubling, and 4,095 at `λ = 1024` -- which is the starting layout, returned
+unmoved, because the anchor pinned the solve on the first step. The temptation
+this refuses is the obvious one, and somebody whose circuit is slow will reach
+for it.
+
+What *is* true, and is what a step size does not give, is that every
+intermediate answer is a placement that could be built: what leaves the loop is
+always `x_legal`. A damped step `x + a(x_solved - x)` needs `a` chosen and hands
+back something between two configurations, legal in neither.
+
+`λ >= 1` also makes `A + λI` strictly diagonally dominant, so the system is
+positive definite whether or not anything is pinned. That matters because
+`PortPlacements` defaults to empty and `compile()` passes the default: without
+the anchor, every component is free to translate, the matrix is singular, and
+the solve refuses before it starts.
 
 Holding facings aside is what makes it linear, and raises the question the
 design had left out entirely: how a facing changes at all. Torque was named as
@@ -351,21 +397,35 @@ ports are known, and the facing that minimises their energy is found by trying
 all four and keeping the least. Not a rotation integrated over time: an
 enumeration, because there are four.
 
-So a step is three things, alternating: solve positions exactly for the current
-facings, choose each body's best facing for the current positions, project.
-Block coordinate descent, with the block that would have been hard reduced to a
-choice among four. It also means facings are never continuous during the solve,
+So a step is three things: solve positions for the current facings and the
+current anchor, choose each body's best facing for the current positions,
+project. Block coordinate descent, with the block that would have been hard
+reduced to a choice among four. It also means facings are never continuous during the solve,
 which retires `snap`'s first step -- there is nothing left to quantise -- and
 leaves `snap` as re-project and round.
 
 `Body::facing` is therefore one of four, not radians. The type said `f64`
 because the design assumed torque had to be integrated; it does not.
 
-Convergence is reached when no body moves more than a tenth of a cell in a
-step. A tenth because the rounding margin is a whole cell, so a system still
-twitching below that cannot change what `snap` produces; running past it buys
-nothing measurable. Reaching `RelaxEffort::iterations` without reaching that
-threshold is `DidNotConverge`.
+Convergence is reached when the solved positions and the projected ones differ
+by less than a tenth of a cell **and no body turned that step** -- the two
+bounds have met and the facings have settled. The second condition cannot spin
+forever: a facing is an argmin over four with a lowest-index tie-break,
+evaluated on positions that are themselves converging. Measured, it costs
+between nought and two extra steps. A tenth because the
+rounding margin is a whole cell, so a system still twitching below that cannot
+change what `snap` produces; running past it buys nothing measurable. Reaching
+`RelaxEffort::iterations` without reaching that threshold is `DidNotConverge`.
+
+Two smaller thresholds exist for the same reason and are worth naming, because
+their absence was measured too. The projection tests a violation against a
+tolerance rather than against zero: the design's own premise is that the
+relaxed solution sits *at* the minimum separation, and a pair sitting exactly
+there produces a shortfall of float residue rather than 0. Comparing against
+zero made the projection move bodies by 5e-17 and spend its whole budget at its
+own designed equilibrium -- observed, with a run whose reported violation was
+`0.000`. A millionth of a cell is the tolerance: below anything rounding can
+express, above the residue of summing a few hundred coordinates.
 
 ### The separation the projection enforces
 
@@ -601,6 +661,14 @@ What is left is rounding positions, and one cell of margin covers it by the
 argument that was always true for translation alone -- rounding moves a body by
 at most half a cell, so two bodies approach by at most one, and a continuous
 solution separated by the requirement plus one is still separated after.
+
+The margin is therefore spent exactly once, and which side of `snap` it is on
+matters. The projection enforces requirement *plus* margin; the check after
+rounding enforces the requirement *without* it, because the margin is what
+rounding was allowed to consume. Demanding it on both sides rejects every
+placement the relaxation can produce -- measured, on 2026-08-13: two of the
+snap tests failed with a shortfall of exactly 0.5, which is a rounding's worth
+of a margin being asked for twice.
 
 `snap` still returns a `Result`, for a smaller reason: rounding is exact only
 if the projection converged, and a placement handed to `snap` unconverged has
