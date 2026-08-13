@@ -1181,9 +1181,12 @@ fn bare_reserve_for_merge(netlist: &Netlist, nets: &[Net], into: usize) -> i32 {
 /// ever reaches the shift below).
 ///
 /// Only `resolve_bypass_and_geometry` still passes a literal north, and not
-/// for want of threading: it is what *decides* which nets get a bypass, and
-/// it runs before `emit` has placed a single gate, so there is no built gate
-/// whose facing it could read -- see its own comment.
+/// for want of threading: it is what *decides* which nets get a bypass, so it
+/// runs before the real world is built. It does call `emit` first, into a
+/// scratch probe world it drops, but what comes back is an `EmitResult` of
+/// positions and anchors -- no facings -- and the probe's own facings are that
+/// emitter's literal. So there is nothing to read either way. See its own
+/// comment.
 fn bypass_source_start(
     netlist: &Netlist,
     net: &Net,
@@ -3778,13 +3781,16 @@ fn emit(
     //   * `cell_geometry_by_input_count` -- builds its cell cache keyed on
     //     north alone. The key already admits all four; the builder is handed
     //     a `Netlist` and nothing else, so *which* facings to build cells for
-    //     is a question only its two callers can answer, and one of them
-    //     (`resolve_bypass_and_geometry`) has no answer to give.
+    //     is a question only its three call sites can answer
+    //     (`resolve_bypass_and_geometry`, and `routing_stats`'s `analyze` and
+    //     `distinct_totals_by_part`), and the first of them has no answer.
     //   * `resolve_bypass_and_geometry` -- one binding covering
     //     `source_pin_position`, the `cell_of_count` key and
     //     `bypass_source_start`; source and sink facings collapsed into one,
     //     which only holds while they are equal. It *decides* which nets
-    //     bypass, so it necessarily runs before this emitter places anything.
+    //     bypass, so it runs before the real world is built -- it emits a
+    //     scratch probe world and drops it, and an `EmitResult` carries
+    //     positions and anchors but no facings.
     //   * `resolve_directed_dust_terminals` and `merge_gate_body_owners` --
     //     local bindings, each needing a facing *per gate* rather than one
     //     (see their own comments for exactly which of their callers could
@@ -3817,9 +3823,13 @@ fn emit(
     //     there is genuinely no `facing_of` to ask yet. `route_in_order`, on
     //     the same path but downstream of construction, already asks it.
     //
-    // `git grep -n "CellFacing::NORTH" -- src` regenerates that list (its
-    // remaining hits are test code); keep the two in agreement rather than
-    // trusting either alone.
+    // `git grep -n "CellFacing::NORTH" -- src` regenerates most of that list
+    // (its remaining hits are test code). Not all of it: the planner asserts
+    // north by *omission* rather than by name, in the three
+    // `variant_indices = vec![0; anchors.len()]` lines its constructors carry,
+    // which no grep for the constant will turn up. Regenerate with both, and
+    // keep the result in agreement with this list rather than trusting either
+    // alone.
     let facing = geometry::CellFacing::NORTH;
     let mut gate_cell: Vec<NorCell> = Vec::with_capacity(netlist.gates.len());
     let mut primitive_anchors: Vec<Anchor> =
