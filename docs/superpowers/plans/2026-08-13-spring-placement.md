@@ -1879,8 +1879,15 @@ pub fn attach_offset(attach: Attach, body: &Body) -> [f64; 3] {
 }
 ```
 
-`Attach::Socket(index)` panics for `index >= 3`, which is correct: a gate with
-four declared inputs is one `place_nor_gate` already refuses.
+`Attach::Socket(index)` panics for `index >= 3`, and `build` makes sure it is
+never called that way: Step 6 refuses a gate with four or more declared inputs
+with a sentence.
+
+That refusal is not belt and braces. `expand` rejects a four-input *NOR* --
+`library.choose(Nor(4))` finds nothing -- but its merge path never consults the
+library at all, and `Or(4).accepts_arity(4)` is true, so a four-input merge
+reaches `build` intact. Without the check it would index a `[Facing; 3]` and
+panic one stage before `place_merge_gate`'s `assert!` says what the rule is.
 
 - [ ] **Step 5: Write `cells` -- what a body occupies, and what each cell carries**
 
@@ -1893,10 +1900,6 @@ computed the wrong sum, because a foreign net was free to run against a NOR's
 support -- which is the gate's input node -- that the code treated as inert.
 
 ```rust
-/// One cell a body occupies, and every net that may lawfully touch it.
-///
-/// `None` is inert: solid material a foreign net may run beside. A repeater's
-/// `DOWN` floor is the case that exists today.
 /// One cell a body occupies, and every net that may lawfully touch it.
 ///
 /// A list rather than one name, because a NOR's support is the sink of *all*
@@ -2199,7 +2202,7 @@ pub fn build(
         anchor_body[candidate_node] = bodies.len() - 1;
     }
 
-    let pulls = signal_pulls(netlist, &bodies, &nodes, &anchor_body, &welds);
+    let pulls = signal_pulls(netlist, &anchor_body, &welds);
 
     Ok(BodyGraph {
         bodies,
