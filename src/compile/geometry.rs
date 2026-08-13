@@ -116,9 +116,10 @@ pub fn gate_sockets(origin: Position, arity: usize, facing: CellFacing) -> Vec<P
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compile::physical;
     use crate::compile::topology::Primitive;
+    use crate::compile::{physical, place_nor_gate, GATE_ONLY_SCRATCH_HEIGHT, GATE_Y};
     use crate::redstone::world::block::BlockKind;
+    use crate::redstone::world::storage::World;
 
     /// North is what every gate this compiler has ever placed is built as, so
     /// north has to be the identity and the default or Stage 0 changes
@@ -156,6 +157,48 @@ mod tests {
         for offset in [(1, 0, 0), (0, 0, -1), (-1, 2, 3)] {
             let twice = rotate(rotate(offset, CellFacing::EAST), CellFacing::EAST);
             assert_eq!(twice, rotate(offset, CellFacing::SOUTH), "for {offset:?}");
+        }
+    }
+
+    /// `gate_sockets` is the primitive `compile`, `world_partition` and
+    /// `planner` all resolve a gate's input cells through, and the one thing
+    /// it does that `input_directions` does not -- `take(arity)`, so a
+    /// 1-input gate has one socket and not three -- is pinned nowhere else.
+    ///
+    /// Checked against the placer rather than against a restatement of this
+    /// function's own body: `place_nor_gate` builds the real cell and reports
+    /// where it actually put every socket, so this is a genuine cross-check
+    /// between the two. If they ever disagree, every reader that trusts
+    /// `gate_sockets` is inspecting cells the emitter never wrote.
+    #[test]
+    fn gate_sockets_are_the_cells_place_nor_gate_really_used() {
+        for index in 0..4u8 {
+            let facing = CellFacing::from_index(index).expect("0..4 is horizontal");
+            // 3 is the hardware maximum fan-in -- see `input_directions`.
+            for arity in 1..=3usize {
+                let mut world = World::new(20, GATE_ONLY_SCRATCH_HEIGHT, 20);
+                let origin = (8, GATE_Y, 8);
+                let cell = place_nor_gate(&mut world, origin, arity, facing);
+                let really_used: Vec<Position> = cell
+                    .input_offsets
+                    .iter()
+                    .map(|&(dx, dy, dz)| {
+                        Position::new(origin.0 + dx, origin.1 + dy, origin.2 + dz)
+                    })
+                    .collect();
+
+                assert_eq!(
+                    really_used.len(),
+                    arity,
+                    "{facing:?} placed {} sockets for {arity} declared input(s)",
+                    really_used.len()
+                );
+                assert_eq!(
+                    gate_sockets(Position::new(origin.0, origin.1, origin.2), arity, facing),
+                    really_used,
+                    "{facing:?} with {arity} declared input(s)"
+                );
+            }
         }
     }
 

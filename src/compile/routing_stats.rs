@@ -263,7 +263,13 @@ fn scan_bypass(
     socket: Position,
     row_z_gate: i32,
 ) -> PartTotals {
-    let start = super::bypass_source_start(netlist, net, pin, exit_x);
+    // North, and a literal: this module counts parts by re-deriving `emit`'s
+    // own geometry from a `Netlist` and a finished `World`, and it is handed
+    // neither a `CompiledCircuit` nor its `gate_facings` (see this module's
+    // `source_pin`, which names north for a lever for the same reason). While
+    // `emit` builds north this is exact; when it stops, this signature is one
+    // of the ones that has to grow a facing source.
+    let start = super::bypass_source_start(netlist, net, pin, exit_x, geometry::CellFacing::NORTH);
     let extra_hop = if start != pin { classify(world, start) } else { PartTotals::default() };
 
     let mut waypoints: Vec<Position> = Vec::new();

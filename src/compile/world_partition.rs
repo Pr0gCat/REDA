@@ -432,12 +432,18 @@ fn resolve_node_position(
             })?;
             let junction = Position::new(jx, jy, jz);
             let facing = compiled.gate_facings[*gate];
-            let sockets = geometry::gate_sockets(junction, netlist.gates[*gate].inputs.len(), facing);
-            sockets.get(*index).copied().ok_or_else(|| {
-                PartitionError::CannotResolveNodePosition {
+            // `geometry::gate_sockets` says exactly this, but it allocates a
+            // `Vec` to hand back one cell and this runs once per node. The two
+            // conditions below are that function's, spelled out: `.get` is its
+            // three-face array bound, and `index < arity` is its `take(arity)`.
+            let arity = netlist.gates[*gate].inputs.len();
+            geometry::input_directions(facing)
+                .get(*index)
+                .filter(|_| *index < arity)
+                .map(|&direction| junction.offset(direction))
+                .ok_or_else(|| PartitionError::CannotResolveNodePosition {
                     detail: format!("gate `{gate_name}`'s own branch {index} has no socket"),
-                }
-            })
+                })
         }
     }
 }

@@ -1166,12 +1166,24 @@ fn bare_reserve_for_merge(netlist: &Netlist, nets: &[Net], into: usize) -> i32 {
 /// ordinary gate's own pin sits one hop from a row whose *sockets* are always
 /// repeater-terminated, so the identical geometry is already safe there --
 /// see this same spec's "repeater is a real firewall" point).
-fn bypass_source_start(netlist: &Netlist, net: &Net, pin: Position, exit_x: i32) -> Position {
-    // The hop is measured off the source merge's own output face, so it is
-    // that gate's facing this turns -- north for every gate the legacy
-    // emitter builds, and this function and all three that mirror it are
-    // that emitter's.
-    let facing = geometry::CellFacing::NORTH;
+///
+/// `facing` is the *source* gate's, not the sink's: the hop is measured off
+/// the merge's own output face, so it is that gate's cell this turns. `emit`
+/// passes its own binding, which is the one that decides how the gate at
+/// `net.source` was actually built. The other three callers all only *mirror*
+/// `emit`, and all three still pass a literal north -- but not for the same
+/// reason, and their own comments say which:
+/// `resolve_bypass_and_geometry` and `routing_stats::scan_bypass` have no
+/// placed gate to read a facing off at all, while
+/// `bare_branch_landing_strength` sits on a single-caller chain out of `emit`
+/// and simply has not been threaded yet.
+fn bypass_source_start(
+    netlist: &Netlist,
+    net: &Net,
+    pin: Position,
+    exit_x: i32,
+    facing: geometry::CellFacing,
+) -> Position {
     let source_is_merge = matches!(net.source, Source::Gate(g) if netlist.gates[g].is_merge());
     if source_is_merge && pin.x != exit_x {
         pin.offset(geometry::output_direction(facing))
@@ -3452,7 +3464,18 @@ fn bare_branch_landing_strength(
             Source::Lever(i) => lever_pin[i],
             Source::Gate(g) => gate_pin[g],
         };
-        let start = bypass_source_start(netlist, net, pin, exit_x);
+        // North, as a literal, and this one is a literal only because nobody
+        // has threaded it yet -- not because there is nothing to thread. Be
+        // honest about that: the chain here is `emit` -> `compute_net_source_
+        // strengths` -> this, single-caller at every link, and `emit`'s own
+        // `facing` binding is live at the top of it (the gate bodies and their
+        // pins are already placed by the time `compute_net_source_strengths`
+        // is called). Two signatures, both already carrying
+        // `#[allow(clippy::too_many_arguments)]`, stand between the two.
+        //
+        // The value is right today because `emit` builds north; the day it
+        // does not, this is the first site to plumb, and it plumbs cleanly.
+        let start = bypass_source_start(netlist, net, pin, exit_x, geometry::CellFacing::NORTH);
         let strength_at_start = if start != pin {
             source_strength.saturating_sub(1)
         } else {
@@ -3742,11 +3765,47 @@ fn emit(
         bypass,
         terminals,
     } = *geometry;
-    // The legacy emitter builds every gate north, and this is the one place
-    // that says so. Everything below that needs a face -- where a cell's
-    // sockets are, where its outbound pin sits -- turns this rather than
-    // naming a compass direction of its own, so the day placement starts
-    // choosing facings there is one binding to widen and no site to find.
+    // The legacy emitter builds every gate north. This binding is where that
+    // is *decided* -- every cell placed below, and every face read off one,
+    // turns this rather than naming a compass direction of its own -- but it
+    // is not the only place that says so, and anyone widening it must widen
+    // the rest or the readers will check a turned world against north's faces.
+    //
+    // Everything that still hardcodes north, and what each one is waiting on:
+    //
+    //   * `bare_branch_landing_strength` -- passes a literal to
+    //     `bypass_source_start`. The one below that is reachable from *this*
+    //     binding today (`emit` -> `compute_net_source_strengths` -> it,
+    //     single-caller throughout); it is unthreaded, not unthreadable, and
+    //     is the first to do. See its own comment.
+    //   * `cell_geometry_by_input_count` -- builds its cell cache keyed on
+    //     north alone. The key already admits all four.
+    //   * `resolve_bypass_and_geometry` -- one binding covering
+    //     `source_pin_position`, the `cell_of_count` key and
+    //     `bypass_source_start`; source and sink facings collapsed into one,
+    //     which only holds while they are equal.
+    //   * `resolve_directed_dust_terminals` and `merge_gate_body_owners` --
+    //     local bindings, each needing a facing *per gate* rather than one
+    //     (see their own comments).
+    //   * `legacy_primitive_nodes` -- the `gate_footprint` call that records
+    //     what this emitter built, for the seed the planner then realises.
+    //     Also per gate, and travelling beside `primitive_anchors`.
+    //   * `routing_stats`: `scan_bypass`, `source_pin`'s lever arm, and four
+    //     `cell_of_count` lookups. It reads a finished world back without ever
+    //     being handed `gate_facings`.
+    //   * `compile` and `compile_planned` -- both fill `CompiledCircuit::
+    //     gate_facings` with `vec![NORTH; gates]`. These are the two the
+    //     verifiers actually read, so they are the ones that must stop being a
+    //     constant *first*: widening a placer while these still say north
+    //     produces a world every verifier rejects.
+    //   * `planner::emit_primitives` (five calls) and
+    //     `planner::plan_from_netlist_shaped`'s `gate_footprint` call -- the
+    //     planner's own placement path, which is `PlanCandidate::facing_of`'s
+    //     to widen, not this one's. `route_in_order` there already asks
+    //     `facing_of` and so needs no change.
+    //
+    // `git grep -n "CellFacing::NORTH" -- src` regenerates that list; keep the
+    // two in agreement rather than trusting either alone.
     let facing = geometry::CellFacing::NORTH;
     let mut gate_cell: Vec<NorCell> = Vec::with_capacity(netlist.gates.len());
     let mut primitive_anchors: Vec<Anchor> =
@@ -3960,7 +4019,7 @@ fn emit(
             // of straight travel first, laid here (not folded into
             // `waypoints`) because the shared bent-path machinery is built
             // on a strict "at most one bend, then the destination" shape.
-            let start = bypass_source_start(netlist, net, pin, exit_x);
+            let start = bypass_source_start(netlist, net, pin, exit_x, facing);
             let strength_at_start = if start != pin {
                 ensure_floor(world, start);
                 world.set(start.x, start.y, start.z, dust());
@@ -4362,9 +4421,18 @@ fn resolve_directed_dust_terminals(
         })
         .collect();
 
-    // Each socket below is a sink gate's own, so it is that gate's facing
-    // this turns -- north for all of them: the baseline world this reads is
-    // `emit`'s, and `emit` builds every gate north.
+    // Each socket below is a sink gate's own, so it is that gate's facing this
+    // turns -- north for all of them, and a literal rather than a parameter on
+    // purpose, for the same two reasons `merge_gate_body_owners` gives. The
+    // loop below visits every sink of every net, so one `CellFacing` is the
+    // wrong shape for it: what it will need is a facing per gate. And there is
+    // none to be had here -- this runs against `emit`'s all-repeater baseline
+    // world, built and consumed inside `compile` before any `CompiledCircuit`
+    // (and so any `gate_facings`) exists, and its only caller is `compile`
+    // itself at that same point, so a parameter would move the identical
+    // literal one frame up and dress it as a lookup. When `emit` starts
+    // choosing facings, the placer's own per-gate choice is what has to arrive
+    // here.
     let facing = geometry::CellFacing::NORTH;
 
     for (n, net) in nets.iter().enumerate() {
@@ -4446,6 +4514,12 @@ fn world_size(plan: &Floorplan, nets: &[Net], row_z: &[i32]) -> (i32, i32) {
 fn cell_geometry_by_input_count(netlist: &Netlist) -> HashMap<(usize, geometry::CellFacing), NorCell> {
     let mut cells = HashMap::new();
     let mut scratch = World::new(20, GATE_ONLY_SCRATCH_HEIGHT, 20);
+    // North is the only key this map is ever built for, because it is the only
+    // facing `emit` ever builds. The key already has room for the other three;
+    // what is missing is a source of per-gate facings to enumerate, which is
+    // `emit`'s to provide. A lookup at a facing that was never inserted panics
+    // on the index rather than quietly handing back north's geometry -- see
+    // this function's doc comment on why the facing is in the key at all.
     for gate in &netlist.gates {
         cells
             .entry((gate.inputs.len(), geometry::CellFacing::NORTH))
@@ -4466,16 +4540,22 @@ fn cell_geometry_by_input_count(netlist: &Netlist) -> HashMap<(usize, geometry::
 /// (`place_primary_input`, `torch_of`), recomputed purely from geometry and a
 /// `NorCell` lookup so `resolve_bypass_and_geometry` can size up a
 /// *candidate* bypass path before any real `World` exists to place it in.
+///
+/// `facing` is how the thing at `source` -- a lever or a gate -- was built,
+/// and it is also what keys `cell_of_count`, so the caller must pass the same
+/// value it used to build that map or the lookup finds another facing's
+/// geometry (or nothing at all). Taking it as a parameter rather than naming
+/// north here is the point: the caller and this function used to assert north
+/// separately for the very same gate, with nothing tying the two assertions
+/// together.
 fn source_pin_position(
     netlist: &Netlist,
     plan: &Floorplan,
     row_z: &[i32],
     cell_of_count: &HashMap<(usize, geometry::CellFacing), NorCell>,
     source: Source,
+    facing: geometry::CellFacing,
 ) -> Position {
-    // `emit`, whose answer this has to reproduce exactly, builds every gate
-    // and every lever north.
-    let facing = geometry::CellFacing::NORTH;
     match source {
         Source::Lever(i) => Position::new(plan.lever_x[i], GATE_Y, row_z[0])
             .offset(geometry::output_direction(facing)),
@@ -4705,6 +4785,21 @@ fn resolve_bypass_and_geometry(
     let row_zones = row_body_zones(plan, row_count);
     let mut bypass_final = bypass_proven.clone();
 
+    // North, and a literal, because this pass runs *before* the real world is
+    // built: it decides which nets get a bypass, and `emit` -- the only thing
+    // that knows how a gate was actually built -- is downstream of the answer.
+    // The three uses below are what `cell_geometry_by_input_count` was keyed
+    // for and what `emit` will replay, so they have to agree with `emit`'s own
+    // binding, which is north.
+    //
+    // One binding stands for two different gates here: the net's *source* (at
+    // `source_pin_position` and `bypass_source_start`) and its *sink* (the
+    // `cell_of_count` key and the socket derived from it). That is sound only
+    // while every gate is north. The day facings vary, this splits into two
+    // lookups -- source facing and sink facing -- and `cell_geometry_by_input_
+    // count` has to build a cell per facing actually used, not just north's.
+    let facing = geometry::CellFacing::NORTH;
+
     for (n, net) in nets.iter().enumerate() {
         if bypass_proven[n] || net.channels.len() != 1 || net.sinks[0].len() != 1 {
             continue;
@@ -4716,9 +4811,16 @@ fn resolve_bypass_and_geometry(
             continue;
         }
 
-        let pin = source_pin_position(netlist, plan, &baseline_row_z, &cell_of_count, net.source);
+        let pin = source_pin_position(
+            netlist,
+            plan,
+            &baseline_row_z,
+            &cell_of_count,
+            net.source,
+            facing,
+        );
         let row_z_gate = baseline_row_z[plan.row_of[gate]];
-        let cell = &cell_of_count[&(netlist.gates[gate].inputs.len(), geometry::CellFacing::NORTH)];
+        let cell = &cell_of_count[&(netlist.gates[gate].inputs.len(), facing)];
         let (dx, dy, dz) = cell.input_offsets[input_index];
         let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
 
@@ -4746,7 +4848,7 @@ fn resolve_bypass_and_geometry(
         // shifted start (and its own extra cell) rather than `pin` alone,
         // or a promoted candidate could pass this check against geometry
         // `emit` never actually builds.
-        let start = bypass_source_start(netlist, net, pin, exit_x);
+        let start = bypass_source_start(netlist, net, pin, exit_x, facing);
 
         let mut waypoints: Vec<Position> = Vec::new();
         if start.x != exit_x {
@@ -4946,6 +5048,21 @@ fn merge_gate_body_owners(
     // The outbound pin sits one hop off the junction in the merge's own
     // output direction, and `place_merge_gate` -- the only thing that writes
     // these cells -- is only ever called by `emit`, which builds north.
+    //
+    // A literal rather than a parameter, deliberately, and for a reason that
+    // is about shape rather than laziness: the loop below visits *every* merge
+    // gate, so what it will eventually need is a facing per gate -- a
+    // `&[CellFacing]` indexed by `g` -- not one facing for the whole call. A
+    // single `CellFacing` parameter would type-check and be wrong the first
+    // time two merges face different ways.
+    //
+    // Nor is there a slice to pass today. Of the four callers, only `emit` has
+    // a facing at all (its own binding); `resolve_directed_dust_terminals`,
+    // `verify_connectivity` and `verify_signal_strength` all run against
+    // `emit`'s world before any `CompiledCircuit` -- and so any `gate_facings`
+    // -- exists, and would each have to write the same literal. When `emit`
+    // starts turning gates, the per-gate choice it makes is what has to arrive
+    // here, threaded from `emit` through all four.
     let facing = geometry::CellFacing::NORTH;
 
     let mut owners = HashMap::new();
@@ -6530,6 +6647,12 @@ fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<Primitiv
         } else {
             NodeRealisation::Primitive(Primitive::Torch)
         };
+        // North, and a literal, because these nodes describe cells `emit`
+        // already placed and `emit` places every one north. Like the other
+        // per-gate readers, what this will need is a facing per gate rather
+        // than one for the call -- `emit`'s own choice, carried out alongside
+        // `primitive_anchors`, since `anchors` is exactly the record this
+        // walks and the facings would travel with it.
         let (footprint, conductors, output_pin) = gate_footprint(
             (anchor.x, anchor.y, anchor.z),
             gate,

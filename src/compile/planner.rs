@@ -396,11 +396,32 @@ impl PlanCandidate {
     }
 
     /// Which way node `node`'s cell is built.
+    ///
+    /// Panics on an unknown node or an index no facing has, deliberately, and
+    /// deliberately *not* the lenient `unwrap_or_default()` this was first
+    /// written as. `variant_indices` is a bare `Vec<u8>` with nothing at the
+    /// type level stopping a 4 from being written into it, and the lenient
+    /// form turns every such mistake into north -- silently, and identically
+    /// to a correct north. A gate would then be built, routed and *verified*
+    /// facing a way nobody chose, with no failure anywhere to trace back. Its
+    /// sibling `candidate.anchors[node]`, read one line away at both call
+    /// sites, panics on the same out-of-range node; a facing that shrugged
+    /// where a position screams is the asymmetry that hides the bug.
+    ///
+    /// Please do not "fix" this back to a default.
     pub fn facing_of(&self, node: usize) -> geometry::CellFacing {
-        self.variant_indices
-            .get(node)
-            .and_then(|&index| geometry::CellFacing::from_index(index))
-            .unwrap_or_default()
+        let &index = self.variant_indices.get(node).unwrap_or_else(|| {
+            panic!(
+                "no facing recorded for node {node}: this candidate has {} node(s)",
+                self.variant_indices.len()
+            )
+        });
+        geometry::CellFacing::from_index(index).unwrap_or_else(|| {
+            panic!(
+                "node {node} has variant index {index}, which is not one of the four \
+                 horizontal facings (0..=3)"
+            )
+        })
     }
 
     /// Report measured local routing, terminal, and variant effort for every
@@ -3595,6 +3616,41 @@ mod tests {
         );
         assert_eq!(terminal_style(&corner), TerminalStyle::RepeaterIntoSupport);
         assert_eq!(terminal_style(&weak), TerminalStyle::RepeaterIntoSupport);
+    }
+
+    /// A facing nobody chose must not be indistinguishable from one somebody
+    /// did. `variant_indices` is a bare `Vec<u8>` with nothing at the type
+    /// level keeping it in `0..=3`, and the lenient `unwrap_or_default()` this
+    /// replaced turned both a bad index and an unknown node into north --
+    /// which then builds, routes and *verifies* clean, because north is what
+    /// everything else assumes too. These pin the panic so it does not get
+    /// quietly relaxed back the first time it fires.
+    #[test]
+    #[should_panic(expected = "no facing recorded for node 3")]
+    fn facing_of_refuses_a_node_it_has_no_record_for() {
+        fixture_candidate().facing_of(3);
+    }
+
+    #[test]
+    #[should_panic(expected = "variant index 4")]
+    fn facing_of_refuses_an_index_no_facing_has() {
+        let mut candidate = fixture_candidate();
+        candidate.variant_indices[0] = 4;
+        candidate.facing_of(0);
+    }
+
+    /// ...and the path that is not a bug is untouched: every constructor
+    /// zero-fills `variant_indices`, and zero is north.
+    #[test]
+    fn every_node_of_a_fresh_candidate_faces_north() {
+        let candidate = fixture_candidate();
+        for node in 0..candidate.anchors.len() {
+            assert_eq!(
+                candidate.facing_of(node),
+                geometry::CellFacing::NORTH,
+                "node {node}"
+            );
+        }
     }
 
     fn fixture_seed() -> PlanCandidate {
