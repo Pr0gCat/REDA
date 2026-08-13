@@ -342,10 +342,9 @@ pub fn cells(body: &Body) -> Vec<Cell> {
 /// Bodies, pulls and welds for `netlist`, started from `start`.
 ///
 /// `start` is one anchor per `PlanCandidate` node -- gates, then primary
-/// inputs -- which is what `plan_from_netlist`'s existing depth-and-barycentre
-/// layout produces. Relaxation improves a known-bad answer rather than
-/// inventing one, and the improvement is measurable against the numbers it
-/// started from.
+/// inputs -- which is what `planner::starting_layout`'s depth-and-barycentre
+/// rows produce. Relaxation improves a known-bad answer rather than inventing
+/// one, and the improvement is measurable against the numbers it started from.
 ///
 /// `start` is only a guess, and a port `pinned` names ignores it: a pinned
 /// body starts at its pin. Nothing afterwards would put it there -- the solve

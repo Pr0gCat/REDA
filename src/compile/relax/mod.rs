@@ -9,10 +9,12 @@ mod project;
 mod snap;
 
 // Re-exported rather than kept private: `relax` and `snap` below reach some of
-// these, and nothing outside this directory names any of these modules at all
-// until the planner does, in Task 10. A `pub` item in a private module that
-// nobody reaches is `dead_code` -- an error under `check.sh`'s
-// `cargo clippy --all-targets -- -D warnings`.
+// these, and the four submodules are named by nobody outside this directory at
+// all. Since Task 10 there is one outside caller, `planner`, and it reaches
+// exactly five of the names below -- `relax`, `snap`, `Axes`, `RelaxEffort`
+// and `RelaxError`. Everything else here is reached from inside. A `pub` item
+// in a private module that nobody reaches is `dead_code` -- an error under
+// `check.sh`'s `cargo clippy --all-targets -- -D warnings`.
 pub use build::{
     attach_offset, build, cells, pin_hops, Attach, Body, BodyGraph, BodyKind, Cell, Pull, Weld,
     SIGNAL_STIFFNESS,
@@ -65,11 +67,18 @@ pub const ANCHOR_STIFFNESS: f64 = 1.0;
 /// **Area here is one stated metric**, not a word: round every cell centre of
 /// [`placed_cells`] to the nearest lattice column, count the columns spanned on
 /// X and on Z inclusive, and multiply. Both reference circuits are started from
-/// `plan_from_netlist(netlist, &PortPlacements::default())`'s anchors with
-/// `Axes::IN_PLANE`, nothing pinned, and `RelaxEffort::default()`. Re-measured
-/// on 2026-08-14, after `settled` joined the convergence test -- an earlier
-/// draft of this table named a metric it did not state and could not be
-/// reproduced from the tree.
+/// `planner::starting_layout(netlist, &PortPlacements::default(),
+/// Shape::default())` -- rows and barycentres -- with `Axes::IN_PLANE`, nothing
+/// pinned, and `RelaxEffort::default()`. Re-measured on 2026-08-14, after
+/// `settled` joined the convergence test -- an earlier draft of this table
+/// named a metric it did not state and could not be reproduced from the tree.
+///
+/// It says `starting_layout` and not `plan_from_netlist` for a reason that
+/// only became true in Task 10: `plan_from_netlist` now *is* a relaxation, so
+/// starting from its anchors would relax an already-converged placement and
+/// every row of this table would collapse toward the same small box, `k = 1024`
+/// included. The numbers are unchanged by the switch, because until Task 10
+/// `plan_from_netlist` returned exactly this layout.
 ///
 /// | | and4 area | full_adder area |
 /// |---|---|---|
@@ -513,9 +522,9 @@ pub fn relax(
         // projection was idle.
         //
         // and4 is the demonstration, measured on 2026-08-14 from
-        // `plan_from_netlist`'s anchors: its step-1 `gap` is 0.0000 while that
-        // same step moves a body 20.80 cells, and the seven further steps take
-        // its bounding box from 54 by 39 to 45 by 25.
+        // `planner::starting_layout`'s anchors: its step-1 `gap` is 0.0000
+        // while that same step moves a body 20.80 cells, and the seven further
+        // steps take its bounding box from 54 by 39 to 45 by 25.
         //
         // `settled` is the settling test: how far this step moved the legal
         // configuration itself, `max |legal_new - legal_prev|`. It is the
@@ -639,6 +648,23 @@ mod tests {
             outputs: vec!["c".into()],
             gates: vec![Gate::nor("b", &["a"]), Gate::nor("c", &["b"])],
         }
+    }
+
+    /// Rows and barycentres, which is where every measurement in this file
+    /// starts.
+    ///
+    /// **Not** `plan_from_netlist`'s anchors. Since Task 10 those *are* a
+    /// relaxation's output, so relaxing from them measures how far a converged
+    /// placement moves when relaxed again -- which is not what any doc comment
+    /// here claims and not what the `k = 1024` corner of [`ANCHOR_GROWTH`]'s
+    /// sweep would be caught by.
+    fn starting_layout(netlist: &Netlist, pinned: &PortPlacements) -> Result<Vec<Anchor>, String> {
+        crate::compile::planner::starting_layout(
+            netlist,
+            pinned,
+            crate::compile::planner::Shape::default(),
+        )
+        .map_err(|error| error.to_string())
     }
 
     fn relaxed(netlist: &Netlist, effort: RelaxEffort) -> ContinuousPlacement {
@@ -848,11 +874,7 @@ mod tests {
     fn the_anchor_schedule_still_places_and4_small() {
         let (netlist, _) = crate::circuits::and4::build_and4_netlist();
         let graph = expand(&netlist, &Library::default_library()).expect("expands");
-        let start: Vec<Anchor> =
-            crate::compile::planner::plan_from_netlist(&netlist, &PortPlacements::default())
-                .expect("plans")
-                .anchors()
-                .to_vec();
+        let start = starting_layout(&netlist, &PortPlacements::default()).expect("lays out");
 
         let placement = relax(
             &netlist,

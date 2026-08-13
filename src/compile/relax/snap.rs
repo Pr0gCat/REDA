@@ -92,7 +92,7 @@ pub fn snap(placement: &ContinuousPlacement) -> Result<Vec<SnappedNode>, RelaxEr
     //
     // Asking for it on both sides refuses placements the relaxation is
     // entitled to produce. Measured on 2026-08-14 by deleting the subtraction
-    // below: `full_adder`, relaxed from `plan_from_netlist`'s anchors with
+    // below: `full_adder`, relaxed from `planner::starting_layout`'s anchors with
     // nothing pinned under `Axes::IN_PLANE` and converged in 9 steps, is
     // refused with bodies 20 and 21 exactly 0.500 short -- one rounding's worth
     // of a margin charged twice.
@@ -130,8 +130,11 @@ pub fn snap(placement: &ContinuousPlacement) -> Result<Vec<SnappedNode>, RelaxEr
     // out 0.500 short between gate `na` and the junction, its tightest pair
     // having sat within 0.001 of its requirement before rounding. So the
     // relaxed half of this argument is held by a real converged circuit in
-    // this module, and not only by `full_adder`, which nothing in the tree
-    // runs end to end yet.
+    // this module as well as by `full_adder` -- which since Task 10 the tree
+    // does run end to end, through `plan_from_netlist`, and which
+    // `relaxation_routes_everything_the_old_placement_could` places, routes and
+    // verifies. Charge the margin twice and that test is what fails, at the
+    // `snap` inside `plan_from_netlist_shaped`, before a block is written.
     let required: Vec<f64> = required_separations(&rounded)
         .into_iter()
         .map(|separation| separation - SNAP_MARGIN)

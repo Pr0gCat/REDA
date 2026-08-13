@@ -3807,22 +3807,25 @@ fn emit(
     //     is not one. The four lookups would have to widen the cache above
     //     first: it only ever has north's key built, so asking it for a turned
     //     sink's geometry indexes a key nobody inserted.
-    //   * `compile` and `compile_planned` -- both fill `CompiledCircuit::
-    //     gate_facings` with `vec![NORTH; gates]`. Each does have a
-    //     `PlanCandidate` in scope whose `facing_of` would answer (north, for
-    //     every node, today), so this is a choice rather than a gap: these two
-    //     are what every verifier reads, so they must start varying with the
-    //     placer that makes them vary, and not one commit before it.
-    //   * `planner::emit_primitives` (five calls) -- likewise holds the
-    //     candidate, and `facing_of` would answer north for every node today
-    //     (`variant_indices` is zero-filled by every constructor and nothing
-    //     outside a test writes it). Asking it here is a no-op until the
-    //     placer chooses, and stops being one the same moment -- so it belongs
-    //     with that change, beside the verifiers, not ahead of them.
-    //   * `planner::plan_from_netlist_shaped`'s `gate_footprint` call --
-    //     records footprints while the candidate is still being built, so
-    //     there is genuinely no `facing_of` to ask yet. `route_in_order`, on
-    //     the same path but downstream of construction, already asks it.
+    //   * `compile` -- fills `CompiledCircuit::gate_facings` with
+    //     `vec![NORTH; gates]`, and truthfully: it seeds the planner from this
+    //     emitter (`seed_from_legacy_parts`), never calls `plan_from_netlist`,
+    //     and `from_legacy` zero-fills `variant_indices`, so every gate it
+    //     ships really is north until Task 13 switches it over.
+    //
+    // Three entries left this list in Task 10, which is the task that started
+    // choosing facings. Kept named rather than deleted, because "why is this
+    // one not here any more" is the question a reader of the paragraph above
+    // will ask:
+    //
+    //   * `compile_planned` -- now reads `candidate.facing_of(g)` per gate,
+    //     bound before the candidate is moved into `realise_and_verify`.
+    //   * `planner::emit_primitives` -- now binds `candidate.facing_of(index)`
+    //     once per node and builds the merge, the NOR, both output pins and
+    //     the lever to it.
+    //   * `planner::plan_from_netlist_shaped`'s `gate_footprint` call -- the
+    //     facing is now `snap`'s answer for that node, which exists before the
+    //     footprint is recorded because relaxation chose it first.
     //
     // `git grep -n "CellFacing::NORTH" -- src` regenerates most of that list
     // (its remaining hits are test code). Not all of it: the planner asserts
@@ -6557,6 +6560,13 @@ pub fn compile_planned(
     placements: &planner::PortPlacements,
 ) -> Result<CompiledCircuit, CompileError> {
     let candidate = planner::plan_from_netlist(netlist, placements).map_err(planner_error)?;
+    // Read before `candidate` is moved into `realise_and_verify`, and read off
+    // the candidate rather than assumed: since Task 10 `plan_from_netlist`
+    // places by relaxation and relaxation turns gates, so a verifier handed
+    // north would inspect the wrong cells -- and pass, because the cells it
+    // inspects are empty rather than wrong.
+    let gate_facings: Vec<geometry::CellFacing> =
+        (0..netlist.gates.len()).map(|g| candidate.facing_of(g)).collect();
     let size = planner::candidate_world_size(&candidate);
     let realised = planner::realise_and_verify(&candidate, netlist, size).map_err(planner_error)?;
 
@@ -6565,7 +6575,7 @@ pub fn compile_planned(
         input_positions: realised.ports.input_positions,
         output_positions: realised.ports.output_positions,
         gate_output_positions: realised.ports.gate_output_positions,
-        gate_facings: vec![geometry::CellFacing::NORTH; netlist.gates.len()],
+        gate_facings,
         planner_kind: PlannerKind::Unified3d,
         legacy_emission: None,
     })
@@ -6665,6 +6675,38 @@ pub(crate) fn gate_footprint(
             conductors.push(cell);
         }
     }
+    // The cell directly above a torch, which the gate writes nothing into and
+    // owns anyway.
+    //
+    // `rules::taxonomy` gives a lit torch `BlockPower::Strong` on the block
+    // above it, and a strongly powered block drives every dust beside it. So a
+    // route that merely *stands* on that cell -- realisation writes its floor
+    // there as stone -- reads 15 out of a gate it never connected to, and the
+    // gate's signal enters a net that was not routed to it. Nothing else keeps
+    // it out: the cell is air in the scratch world above, so the scan cannot
+    // see it, and `anchor_is_free_for`'s floor test asks for a *conductor*
+    // below, which is what this makes it.
+    //
+    // Measured on 2026-08-14, before this existed: full_adder placed by
+    // relaxation routed `g2` over `g5`'s torch at (39, 1, 125) with its floor
+    // at (39, 2, 125), and `g2`'s dust at (39, 3, 125) read 15 while `g2`'s own
+    // torch was off -- power rising from 9 at the pin to 15 at that cell, which
+    // is what says which end was the source. Eight of full_adder's 22 gates came
+    // out wrong and every invariant passed: cell exclusivity proves ownership of
+    // *routed* cells, and this cell was owned by nobody.
+    //
+    // Only for a torch. A merge's anchor is dust, and dust powers the block
+    // below it rather than the one above.
+    if !gate.is_merge() {
+        let above = Anchor {
+            x: origin.0 + cell.output_offset.0,
+            y: origin.1 + cell.output_offset.1 + 1,
+            z: origin.2 + cell.output_offset.2,
+        };
+        cells.push(above);
+        conductors.push(above);
+    }
+
     let output_pin = Anchor {
         x: origin.0 + (pin.x - shifted.0),
         y: origin.1 + (pin.y - shifted.1),
@@ -6811,8 +6853,16 @@ mod tests {
         }
     }
 
-    /// Every compiled circuit says which way it built each gate, and today the
-    /// answer is north for all of them.
+    /// Every compiled circuit says which way it built each gate, and for
+    /// `compile` the answer is still north for all of them.
+    ///
+    /// Still, and truthfully: since Task 10 `compile_planned` reports the
+    /// facings relaxation chose, but `compile` is a different path -- it seeds
+    /// the planner from this emitter's own output through
+    /// `seed_from_legacy_parts`, never calls `plan_from_netlist`, and
+    /// `from_legacy` zero-fills `variant_indices`. Task 13 is where that
+    /// changes. `planner::a_planned_circuit_reports_the_facings_it_was_built_at`
+    /// is the same assertion for the path that does turn gates.
     ///
     /// The value is dull; having somewhere to put it is not. Three modules verify
     /// a world by recomputing where a gate's sockets must be, and once relaxation
@@ -6829,7 +6879,7 @@ mod tests {
         assert_eq!(compiled.gate_facings.len(), netlist.gates.len());
         assert!(
             compiled.gate_facings.iter().all(|&facing| facing == CellFacing::NORTH),
-            "nothing chooses a facing yet, so every gate must still be north"
+            "`compile` seeds from the legacy emitter, so every gate must still be north"
         );
     }
 
