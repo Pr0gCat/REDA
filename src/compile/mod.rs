@@ -54,6 +54,7 @@ use self::planner::{
 use self::topology::Primitive;
 
 pub mod equivalence;
+pub mod geometry;
 pub mod lowering;
 pub mod physical;
 pub mod planner;
