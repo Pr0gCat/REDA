@@ -32,8 +32,9 @@ pub struct Factorisation {
 /// so the system has no unique answer. `relax` never hands one over: it adds an
 /// anchor to every diagonal entry, which makes the matrix strictly diagonally
 /// dominant whatever the graph looks like. So what reaches this type from there
-/// is a stiffness that is not positive or a pull whose two ends are the same
-/// body -- a graph built wrong, which is what `RelaxError::Unsolvable` says.
+/// is a stiffness that is not positive -- a graph built wrong, which is what
+/// `RelaxError::Unsolvable` says. Not a pull whose two ends are the same body:
+/// that one cancels in `laplacian`'s own assembly and never arrives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct NotPositiveDefinite {
     pub row: usize,
@@ -130,7 +131,9 @@ mod tests {
     ///
     /// This is the property the whole step loop rests on: `A + λI` with
     /// `λ >= 1` is strictly diagonally dominant, so it is positive definite
-    /// whether or not anything is pinned -- and `compile()` pins nothing.
+    /// whether or not anything is pinned -- and nothing that reaches `relax`
+    /// pins anything today: `PortPlacements` defaults to empty, and the caller
+    /// passing that default is the viewer. Task 13 makes it `compile()`.
     #[test]
     fn an_anchor_on_the_diagonal_makes_the_same_system_solvable() {
         for anchor in [1.0, 2.0, 1024.0] {

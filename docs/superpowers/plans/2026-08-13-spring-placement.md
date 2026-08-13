@@ -3852,9 +3852,11 @@ pub struct ContinuousPlacement {
     /// [`relax`] returns this `true` or does not return at all -- a run that
     /// does not converge is [`RelaxError::DidNotConverge`], never an `Ok`
     /// carrying `false`. The field is here for the consumer, not the producer:
-    /// `snap` refuses an unconverged placement, because rounding is exact only
-    /// if the projection converged and one that did not has no margin to spend,
-    /// and `snap`'s test for that case hand-builds the `false`.
+    /// `snap`, in Task 9, will refuse an unconverged placement, because
+    /// rounding is exact only if the projection converged and one that did not
+    /// has no margin to spend. That consumer does not exist at this commit, so
+    /// nothing reads this field yet and nothing can produce a `false` for it
+    /// to read.
     pub converged: bool,
     pub iterations: usize,
 }
@@ -4029,15 +4031,6 @@ fn right_hand_side(
     }
     rhs
 }
-
-/// Each body's best facing for the current positions, found by trying all
-/// four.
-///
-/// Not a rotation integrated over time: an enumeration, because there are
-/// four. Ties go to the lowest index so the same input always turns the same
-/// way.
-///
-/// Returns whether anything turned, because a step that changed no facing and
 ```
 
 - [ ] **Step 5: Write the facing enumeration**
@@ -4107,9 +4100,17 @@ fn incident_energy(graph: &BodyGraph, body: usize) -> f64 {
 - [ ] **Step 6: Write `relax`**
 
 ```rust
-/// Solve, turn, project, pull the anchor tighter. Repeat until the solved and
-/// the projected configuration stop disagreeing -- which is not the same as
-/// nothing moving, and the loop below says why.
+/// Solve, turn, project, pull the anchor tighter. Repeat until three things
+/// are true at once: the solve and the projection agree, the legal
+/// configuration has stopped moving, and no body turned.
+///
+/// The middle one is not decoration. An earlier draft exited on the first
+/// alone, and it does not measure settling: the projection moves nothing
+/// whenever no pair is violating, so a slack constraint set makes that gap
+/// exactly zero however far the layout still is from where the springs want
+/// it. Measured on 2026-08-13 -- `and4`'s first step already had a gap of
+/// 0.0000, and seven further steps took its extent from 54x39 to 45x25. The
+/// loop below says which condition does what.
 pub fn relax(
     netlist: &Netlist,
     graph: &PrimitiveGraph,
@@ -4239,8 +4240,10 @@ pub fn relax(
         // It cannot spin forever: a facing is an argmin over four with a
         // lowest-index tie-break, evaluated on positions that are themselves
         // converging, so once the positions settle the argmin settles with
-        // them. And the anchor grows, so the solve is pulled arbitrarily close
-        // to `legal`, which is already legal -- driving `gap` and `settled`
+        // them. And the anchor grows -- as far as [`ANCHOR_CEILING`], which
+        // that constant's own doc argues is far past where every measured run
+        // has already exited -- so the solve is pulled arbitrarily close to
+        // `legal`, which is already legal, driving `gap` and `settled`
         // together to zero.
         let gap = solved
             .iter()
