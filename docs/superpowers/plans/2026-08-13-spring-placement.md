@@ -2902,7 +2902,14 @@ fn offence(left: &[PlacedCell], right: &[PlacedCell], required: f64) -> Offence 
 /// output to is an isolated branch's repeater, whose only `Solid` is the `DOWN`
 /// its variant stands on. A floor conducts no net, so nothing has to be held
 /// away from it; the one thing separation would otherwise buy is the cell
-/// itself, and in Stage 1 that is worth nothing. `ensure_floor` writes
+/// itself, and in Stage 1 that is worth nothing.
+///
+/// That inventory is of what `build` produces. This module's own test fixture
+/// deliberately sits outside it -- it hands `Body` an `output: None` with a
+/// `Primitive::Torch`, which no `build` path does, and whose inert `ORIGIN`
+/// cell is a *support* rather than a floor. Nothing in those tests measures
+/// against that cell, but a reader who finds it two hundred lines below should
+/// not have to wonder whether this paragraph is wrong. `ensure_floor` writes
 /// `stone()` through a bare `world.set`, so two floors landing in one cell is
 /// the same stone written twice.
 ///
@@ -4814,8 +4821,11 @@ are this task's to handle, and the reasoning for each is why.
    separation of `r` can land at `r - 1`. The vertical target -- `unseparated`'s
    `dy < CONDUCTOR_CLEARANCE` and `offence`'s charge on `deficit[1]`, which must
    stay the same number -- pays nothing for that. In Stage 1 it costs nothing to
-   omit: no body's Y is ever written, so every `dy` is an integer difference of
-   starting storeys and rounding is the identity on it. The moment `separate` can
+   omit: no body's Y ever *changes*, so every `dy` is an integer difference of
+   starting storeys and rounding is the identity on it. Written, yes -- `satisfy`
+   assigns a welded body's whole `position` -- but every weld `build` produces
+   has a horizontal offset, so the value it writes back is the one already
+   there. The moment `separate` can
    write a fractional Y, a pair sitting at the [`SETTLED`]-legal edge of `2.0`
    with both ends near a half-cell boundary rounds to `1` -- and `1` is the gap
    [`CONDUCTOR_CLEARANCE`] exists to forbid. The derivation of the vertical

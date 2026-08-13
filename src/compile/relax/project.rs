@@ -211,7 +211,14 @@ fn offence(left: &[PlacedCell], right: &[PlacedCell], required: f64) -> Offence 
 /// output to is an isolated branch's repeater, whose only `Solid` is the `DOWN`
 /// its variant stands on. A floor conducts no net, so nothing has to be held
 /// away from it; the one thing separation would otherwise buy is the cell
-/// itself, and in Stage 1 that is worth nothing. `ensure_floor` writes
+/// itself, and in Stage 1 that is worth nothing.
+///
+/// That inventory is of what `build` produces. This module's own test fixture
+/// deliberately sits outside it -- it hands `Body` an `output: None` with a
+/// `Primitive::Torch`, which no `build` path does, and whose inert `ORIGIN`
+/// cell is a *support* rather than a floor. Nothing in those tests measures
+/// against that cell, but a reader who finds it two hundred lines below should
+/// not have to wonder whether this paragraph is wrong. `ensure_floor` writes
 /// `stone()` through a bare `world.set`, so two floors landing in one cell is
 /// the same stone written twice.
 ///
