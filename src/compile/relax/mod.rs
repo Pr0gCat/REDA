@@ -6,10 +6,11 @@
 mod build;
 mod linear;
 mod project;
+mod snap;
 
-// Re-exported rather than kept private: `relax` below reaches some of these,
-// and nothing outside this directory names the module at all until `snap` and
-// the planner do, in Tasks 9 and 10. A `pub` item in a private module that
+// Re-exported rather than kept private: `relax` and `snap` below reach some of
+// these, and nothing outside this directory names any of these modules at all
+// until the planner does, in Task 10. A `pub` item in a private module that
 // nobody reaches is `dead_code` -- an error under `check.sh`'s
 // `cargo clippy --all-targets -- -D warnings`.
 pub use build::{
@@ -21,6 +22,7 @@ pub use project::{
     placed_cells, project, required_separations, reservation, worst_violation, Axes, PlacedCell,
     Violation, CONDUCTOR_CLEARANCE, PROJECTION_ROUNDS, ROUTE_PITCH, SETTLED, SNAP_MARGIN,
 };
+pub use snap::{snap, SnappedNode};
 
 use crate::compile::planner::{Anchor, PortPlacements};
 use crate::compile::primitive_graph::PrimitiveGraph;
@@ -150,11 +152,12 @@ pub struct ContinuousPlacement {
     /// [`relax`] returns this `true` or does not return at all -- a run that
     /// does not converge is [`RelaxError::DidNotConverge`], never an `Ok`
     /// carrying `false`. The field is here for the consumer, not the producer:
-    /// `snap`, in Task 9, will refuse an unconverged placement, because
-    /// rounding is exact only if the projection converged and one that did not
-    /// has no margin to spend. That consumer does not exist at this commit, so
-    /// nothing reads this field yet and nothing can produce a `false` for it
-    /// to read.
+    /// [`snap`] refuses an unconverged placement, because rounding is exact
+    /// only if the projection converged and one that did not has no margin to
+    /// spend. [`snap`] is the one reader in the tree, and since nothing
+    /// produces a `false` the placement that exercises that refusal is
+    /// hand-built -- `an_unconverged_placement_is_refused_rather_than_rounded`,
+    /// in `snap.rs`.
     pub converged: bool,
     pub iterations: usize,
 }
@@ -198,6 +201,11 @@ pub enum RelaxError {
     /// bodies from -- a gate with no primitive, a declared input with no
     /// lever.
     CannotBuild { reason: String },
+    /// A violation survived rounding, so the margin argument is wrong.
+    ///
+    /// Reported here rather than left for an invariant, which would find it
+    /// downstream and attribute it to routing.
+    SurvivedSnap { worst: Violation },
 }
 
 impl std::fmt::Display for RelaxError {
@@ -228,6 +236,11 @@ impl std::fmt::Display for RelaxError {
             RelaxError::CannotBuild { reason } => {
                 write!(f, "cannot build bodies for this netlist: {reason}")
             }
+            RelaxError::SurvivedSnap { worst } => write!(
+                f,
+                "rounding left bodies {} and {} {:.3} too close: the snap margin is wrong",
+                worst.left, worst.right, worst.shortfall
+            ),
         }
     }
 }
