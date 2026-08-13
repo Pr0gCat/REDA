@@ -4208,16 +4208,21 @@ second record starts being wrong.
 
 `CompiledCircuit::gate_facings` is what Task 3 gave the three verifiers,
 `world_partition` and `routing_stats` so they would stop assuming north.
-`compile_planned` (`mod.rs:6414`) fills it with north today, which was true
-until the line above -- and `compile_planned` is the one function that reaches
-`plan_from_netlist`. From this step on it builds turned gates, so a verifier
+`compile_planned` fills it with north today (the `gate_facings:` line in its
+`CompiledCircuit` literal, `mod.rs:6519` at the time of writing), which was
+true until the line above -- and `compile_planned` is the one function that
+reaches `plan_from_netlist`. From this step on it builds turned gates, so a verifier
 handed north would inspect the wrong cells, and pass, because the cells it
 inspects are empty rather than wrong.
 
 `compile()` is not affected and is not changed here: it seeds from the legacy
-emitter (`seed_from_legacy_parts`, `mod.rs:6379`) and never calls
-`plan_from_netlist`, so its gates really are all north until Task 13 switches
-it over. Its own `gate_facings` line at `mod.rs:6387` stays.
+emitter (`seed_from_legacy_parts`) and never calls `plan_from_netlist`, so its
+gates really are all north until Task 13 switches it over. Its own
+`gate_facings` line stays.
+
+Line numbers in `mod.rs` have moved once per Stage 0 task and will move again;
+find both by their `gate_facings:` field in the two `CompiledCircuit` literals
+rather than by line.
 
 ```rust
         gate_facings: (0..netlist.gates.len()).map(|g| candidate.facing_of(g)).collect(),
@@ -4942,10 +4947,11 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
 ```
 
 `compile_planned` already reports its facings -- Task 10 Step 6 wired it, at
-the task where they first stop being north. Nothing to do here.
+the task where they first stop being north, so there is nothing to add to its
+`CompiledCircuit`.
 
-and opens with the checks Step 4 lifted out, which `compile_planned` never had
-any of:
+What it does gain is the front of `compile`: the checks Step 4 lifted out,
+which `compile_planned` never had any of.
 
 ```rust
     // The order itself is the emitter's; what this path wants is the three
