@@ -1347,7 +1347,7 @@ by signal name, and a bare merge's own body is what that lookup returns.
 - Test: `src/compile/relax/build.rs`
 
 **Interfaces:**
-- Consumes: `compile::geometry::CellFacing`, `compile::physical::{PortKind, RelativeSide, variants}`, `compile::primitive_graph::{PrimitiveGraph, NodeId, Provenance}`, `compile::topology::{Primitive, TemplateNode}`, `compile::{Netlist, Gate}`, `compile::planner::{Anchor, PortPlacements}`. Not `PlannerError`: `build` is below `planner` in the dependency order and must not reach up into it.
+- Consumes: `compile::geometry::CellFacing`, `compile::physical::{PortKind, RelativeSide, variants}`, `compile::primitive_graph::{PrimitiveGraph, NodeId, Provenance}`, `compile::topology::{Primitive, TemplateNode}`, `compile::{Netlist, Gate}`, `compile::planner::{Anchor, PortPlacements}`, `redstone::simulator::position::Position`, `redstone::world::block::BlockKind` -- the last two because `cells` steps offsets and reads a variant's block kinds. Not `PlannerError`: `build` is below `planner` in the dependency order and must not reach up into it.
 - Produces:
   - `pub struct Body { pub what: BodyKind, pub position: [f64; 3], pub inputs: Vec<String>, pub output: Option<String>, pub facing: CellFacing, pub pinned: bool }` -- `inputs` and `output` are load-bearing, not decoration: `cells` branches on them, and Task 7's fixture constructs all six fields
   - `pub enum BodyKind { Primitive { node: NodeId, kind: Primitive }, Junction { gate: usize } }`
@@ -1362,7 +1362,7 @@ by signal name, and a bare merge's own body is what that lookup returns.
     -- a *list*, because a NOR's support is on every input net at once; empty
     means inert
   - `pub fn cells(body: &Body) -> Vec<Cell>`
-  - `pub fn build(netlist: &Netlist, graph: &PrimitiveGraph, start: &[Anchor], pinned: &PortPlacements) -> Result<BodyGraph, String>` -- the error is a sentence, because all three failures are one: "a gate instantiated no primitive", "a declared input has no lever", and "this primitive has no physical variants" (Step 6). `RelaxError::CannotBuild` is what carries it
+  - `pub fn build(netlist: &Netlist, graph: &PrimitiveGraph, start: &[Anchor], pinned: &PortPlacements) -> Result<BodyGraph, String>` -- the error is a sentence, because all four failures are one: "a gate instantiated no primitive", "a declared input has no lever", "this primitive has no physical variants" (Step 6), and "a gate declares more inputs than a gate cell has input faces" (Step 7). `RelaxError::CannotBuild` is what carries it
   - `pub const SIGNAL_STIFFNESS: f64 = 1.0;`
 
 - [ ] **Step 1: Write the failing tests, and declare the module**
@@ -1376,12 +1376,16 @@ The re-exports wait for Step 8, when there is something to re-export.
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compile::topology::Library;
     use crate::compile::primitive_graph::expand;
+    use crate::compile::topology::Library;
     use crate::compile::{Gate, Netlist};
 
     fn nor(output: &str, inputs: &[&str]) -> Gate {
         Gate::nor(output, inputs)
+    }
+
+    fn merge(output: &str, inputs: &[&str]) -> Gate {
+        Gate::merge(output, inputs)
     }
 
     fn built(netlist: &Netlist) -> BodyGraph {
@@ -1560,7 +1564,12 @@ mod tests {
         let lever = &graph.bodies[graph.anchor_body[1]];
 
         assert_eq!(attach_offset(Attach::Pin, lever), [0.0, 0.0, -1.0]);
-        assert_eq!(cells(lever).len(), 2, "a lever is its own cell and its pin");
+        assert_eq!(
+            cells(lever).len(),
+            4,
+            "a lever is its own cell and its pin, and `place_primary_input` \
+             floors both"
+        );
     }
 
     /// A lever is a power source, and its own block is that source. Marking it
@@ -1664,6 +1673,31 @@ mod tests {
             .expect("place_merge_gate floors its junction");
         assert!(floor.carries.is_empty(), "a floor keeps nothing out");
     }
+
+    /// A gate cell has three input faces, and a merge is the one gate that can
+    /// reach `build` asking for a fourth: `compile` admits it on
+    /// `Or(4).accepts_arity(4)` and `expand`'s merge path never consults the
+    /// library. Refused with a sentence, rather than panicking on a
+    /// `[Facing; 3]` one stage before `place_merge_gate`'s own `assert!`.
+    #[test]
+    fn a_merge_wider_than_a_gate_cell_is_refused_rather_than_indexed() {
+        let netlist = Netlist {
+            inputs: vec!["a".into(), "b".into(), "c".into(), "d".into()],
+            outputs: vec!["m".into()],
+            gates: vec![merge("m", &["a", "b", "c", "d"])],
+        };
+        // `expand` really does let this through -- the refusal below is
+        // `build`'s to make, not a restatement of one already made.
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
+        let start = vec![Anchor { x: 0, y: 1, z: 0 }; netlist.gates.len() + netlist.inputs.len()];
+
+        let refusal = build(&netlist, &graph, &start, &PortPlacements::default())
+            .expect_err("four inputs do not fit on three faces");
+        assert!(
+            refusal.contains('m') && refusal.contains('4'),
+            "the refusal names the gate and its arity, got {refusal:?}"
+        );
+    }
 }
 ```
 
@@ -1699,12 +1733,12 @@ Prepend to `src/compile/relax/build.rs`:
 
 use crate::compile::geometry::{self, CellFacing};
 use crate::compile::physical::{self, PortKind, RelativeSide};
-use crate::redstone::simulator::position::Position;
-use crate::redstone::world::block::BlockKind;
 use crate::compile::planner::{Anchor, PortPlacements};
 use crate::compile::primitive_graph::{NodeId, PrimitiveGraph, Provenance};
 use crate::compile::topology::{Primitive, TemplateNode};
 use crate::compile::Netlist;
+use crate::redstone::simulator::position::Position;
+use crate::redstone::world::block::BlockKind;
 
 /// Every signal spring pulls the same.
 ///
@@ -1880,14 +1914,16 @@ pub fn attach_offset(attach: Attach, body: &Body) -> [f64; 3] {
 ```
 
 `Attach::Socket(index)` panics for `index >= 3`, and `build` makes sure it is
-never called that way: Step 6 refuses a gate with four or more declared inputs
-with a sentence.
+never called that way: Step 7 refuses a gate with four or more declared inputs
+with a sentence, before it builds any body for that gate.
 
 That refusal is not belt and braces. `expand` rejects a four-input *NOR* --
-`library.choose(Nor(4))` finds nothing -- but its merge path never consults the
-library at all, and `Or(4).accepts_arity(4)` is true, so a four-input merge
-reaches `build` intact. Without the check it would index a `[Facing; 3]` and
-panic one stage before `place_merge_gate`'s `assert!` says what the rule is.
+`library.choose(Nor(4))` finds nothing, because `default_library` registers NOR
+arities 1..=3 only -- but its merge path never consults the library at all, and
+`Or(4).accepts_arity(4)` is true because `Or`'s arity is whatever it was
+declared with, so a four-input merge reaches `build` intact. Without the check
+it would index a `[Facing; 3]` and panic one stage before `place_merge_gate`'s
+`assert!` says what the rule is.
 
 - [ ] **Step 5: Write `cells` -- what a body occupies, and what each cell carries**
 
@@ -1911,8 +1947,8 @@ support -- which is the gate's input node -- that the code treated as inert.
 /// socket the springs are pulling it onto -- on every gate of arity two or
 /// more, for every input past the first.
 ///
-/// Empty means inert: a repeater's floor, a junction's floor. Nothing has to
-/// keep clear of it beyond cell exclusivity.
+/// Empty means inert: a repeater's floor, a junction's floor, a lever's two.
+/// Nothing has to keep clear of it beyond cell exclusivity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cell {
     pub offset: (i32, i32, i32),
@@ -1930,7 +1966,7 @@ pub struct Cell {
 /// - each **socket** carries its own branch's net, and is a conductor even
 ///   though it is air: what ends up there is dust or a repeater.
 /// - the **torch** and the **pin** carry the gate's own output net.
-/// - a **repeater's floor** carries nothing.
+/// - a **floor** -- a repeater's, a junction's, a lever's -- carries nothing.
 pub fn cells(body: &Body) -> Vec<Cell> {
     let facing = body.facing;
     let mut cells = Vec::new();
@@ -1950,7 +1986,10 @@ pub fn cells(body: &Body) -> Vec<Cell> {
             if sink.is_empty() {
                 sink.push(output.clone());
             }
-            cells.push(Cell { offset: (0, 0, 0), carries: sink });
+            cells.push(Cell {
+                offset: (0, 0, 0),
+                carries: sink,
+            });
 
             for (index, signal) in body.inputs.iter().enumerate() {
                 let step = Position::new(0, 0, 0).offset(geometry::input_directions(facing)[index]);
@@ -1969,10 +2008,44 @@ pub fn cells(body: &Body) -> Vec<Cell> {
                     carries: vec![output.clone()],
                 });
             }
-            if matches!(body.what, BodyKind::Junction { .. }) {
-                // `place_merge_gate` floors its own junction; a NOR does not,
-                // because a support block needs nothing beneath it.
-                cells.push(Cell { offset: (0, -1, 0), carries: Vec::new() });
+
+            // What each placer actually lays underneath, which is not the same
+            // for all three gate cells.
+            match body.what {
+                // `place_merge_gate` floors its own junction (`ensure_floor`
+                // before the dust), and nothing else it writes.
+                BodyKind::Junction { .. } => {
+                    cells.push(Cell {
+                        offset: (0, -1, 0),
+                        carries: Vec::new(),
+                    });
+                }
+                // `place_primary_input` floors the lever's home *and* its pin
+                // -- both `ensure_floor` calls -- and `physical::variants`
+                // declares the same `DOWN: Solid` on every lever variant. A
+                // lever body takes this gate-cell arm and so never consults
+                // `physical`, which is how both went missing.
+                BodyKind::Primitive {
+                    kind: Primitive::Lever,
+                    ..
+                } => {
+                    let home_floor = Position::new(0, 0, 0).down();
+                    let pin_floor = step.down();
+                    cells.push(Cell {
+                        offset: (home_floor.x, home_floor.y, home_floor.z),
+                        carries: Vec::new(),
+                    });
+                    cells.push(Cell {
+                        offset: (pin_floor.x, pin_floor.y, pin_floor.z),
+                        carries: Vec::new(),
+                    });
+                }
+                // A NOR floors nothing. `place_nor_gate` writes stone *at* the
+                // support rather than beneath it, hangs the torch on that
+                // support's wall (`wall_torch`, no floor), and leaves its pin's
+                // floor to the route that reaches the cell -- exactly as
+                // `place_merge_gate` leaves its own pin's.
+                _ => {}
             }
         }
         // Anything else is placed as a primitive: an isolated branch's
@@ -2010,8 +2083,11 @@ pub fn cells(body: &Body) -> Vec<Cell> {
 ```
 
 A lever is the one primitive body with an `output` and no `inputs`, so it takes
-the gate-cell arm with an empty socket list: origin, then its pin one hop out.
-That is exactly what `place_primary_input` writes.
+the gate-cell arm with an empty socket list: origin, its pin one hop out, and
+the floor under each. That is exactly what `place_primary_input` writes -- one
+`ensure_floor` on the home, one on the pin. Taking this arm is also why the
+lever's own `physical` variant, which declares the same `DOWN: Solid`, is never
+consulted for it, and why the two floors had to be spelled out here.
 
 **Two exemptions the projection needs, both from this table.** Cells sharing a
 signal are exempt: a producer's pin and its consumer's socket carry the same
@@ -2019,6 +2095,20 @@ net, and the route between them is what makes them one. Sharing, not matching
 -- a support is on every one of its gate's input nets, so a socket carrying the
 second input shares one with it. Cells with an empty `carries` are exempt from
 everything except occupying the same cell as another body.
+
+**What this table leaves out, and what Task 7 has to decide because of it.** A
+gate pin's floor is not modelled, for a NOR or for a merge, because neither
+placer writes it: `place_nor_gate` only reserves the cell in the bounding box it
+returns, and `place_merge_gate` says outright that `emit` writes the dust there
+-- so the route that reaches the pin is what lays the floor under it. A **bare**
+branch's socket is the same case: both placers leave every socket empty for the
+router to finish, and `emit`'s runs call `ensure_floor` on each cell they lay,
+so that socket's dust and its floor arrive together and neither is the gate's.
+An **isolated** branch's socket *is* covered, and only because that repeater is
+a body in its own right, placed as a primitive, whose `physical` variant
+declares `DOWN: Solid`. So the table is "what each placer actually lays
+underneath", consistently -- and Task 7's separation rule has to say what
+happens when two bodies' unmodelled pin floors would want the same cell.
 
 - [ ] **Step 6: Refuse a primitive with no variants**
 
@@ -2088,6 +2178,30 @@ pub fn build(
     let mut welds: Vec<Weld> = Vec::new();
 
     for (gate_index, gate) in netlist.gates.iter().enumerate() {
+        // A gate cell has three input faces -- the fourth is the output's --
+        // and `geometry::input_directions` is a `[Facing; 3]` that every
+        // socket lookup indexes by declared input index: here for a merge's
+        // branch repeaters, and in `attach_offset` and `cells` for every gate.
+        // `place_nor_gate` and `place_merge_gate` each `assert!` the same
+        // bound, but one stage later, so without this the index panic gets
+        // there first with no gate name on it.
+        //
+        // Reachable, and only for a merge: `compile` admits a gate on
+        // `is_realisable() && accepts_arity(len)`, and `Or(4).accepts_arity(4)`
+        // is true because `Or`'s arity is whatever it was declared with.
+        // `expand`'s merge path then never consults the library, so nothing
+        // between here and there objects. A `Nor(4)` is stopped earlier --
+        // `expand` asks `library.choose` for an entry and `default_library`
+        // registers NOR arities 1..=3 only.
+        let faces = geometry::input_directions(CellFacing::NORTH).len();
+        if gate.inputs.len() > faces {
+            return Err(format!(
+                "gate `{}` declares {} inputs, and a gate cell has only {faces} input faces",
+                gate.output,
+                gate.inputs.len()
+            ));
+        }
+
         // A pin is where the body *is*, not merely a flag on it.
         let fixed = pinned.get(&gate.output);
         let at = fixed.unwrap_or(start[gate_index]);
@@ -2107,9 +2221,9 @@ pub fn build(
             });
             bodies.len() - 1
         } else {
-            let node = *graph.gate_nodes[gate_index].first().ok_or_else(|| {
-                format!("gate `{}` instantiated no primitive", gate.output)
-            })?;
+            let node = *graph.gate_nodes[gate_index]
+                .first()
+                .ok_or_else(|| format!("gate `{}` instantiated no primitive", gate.output))?;
             let kind = graph.nodes[node].primitive;
             if physical::variants(kind).is_empty() {
                 return Err(format!(
@@ -2219,11 +2333,7 @@ pub fn build(
 /// A declared output's lamp gets none. `emit_primitives` hangs it under its
 /// producer's pin and `PlanCandidate` has no anchor for it, so its position is
 /// not something relaxation chooses.
-fn signal_pulls(
-    netlist: &Netlist,
-    anchor_body: &[usize],
-    welds: &[Weld],
-) -> Vec<Pull> {
+fn signal_pulls(netlist: &Netlist, anchor_body: &[usize], welds: &[Weld]) -> Vec<Pull> {
     let mut producer_node = std::collections::BTreeMap::new();
     for (index, gate) in netlist.gates.iter().enumerate() {
         producer_node.insert(gate.output.as_str(), index);
@@ -2246,9 +2356,9 @@ fn signal_pulls(
             //
             // Not its rear, despite the port's name: `physical.rs` declares
             // every repeater port at `ORIGIN` and distinguishes them by
-            // `direction`, because a repeater occupies one cell. So this
-            // changes which body absorbs the force, not where the force
-            // lands.
+            // `direction`, which `attach_offset` drops -- because a repeater
+            // occupies one cell. So this changes which body absorbs the force,
+            // not where on that body the force lands.
             let welded = welds.iter().find_map(|weld| match weld {
                 Weld::AtSocket {
                     repeater,
@@ -2291,6 +2401,10 @@ the solver out of `dead_code`:
 mod build;
 mod linear;
 
+// Re-exported rather than kept private: nothing outside `#[cfg(test)]` calls
+// the model or the solver until Tasks 7 and 8, and a `pub` item in a private
+// module that nobody reaches is `dead_code` -- an error under `check.sh`'s
+// `cargo clippy --all-targets -- -D warnings`.
 pub use build::{
     attach_offset, build, cells, pin_hops, Attach, Body, BodyGraph, BodyKind, Cell, Pull, Weld,
     SIGNAL_STIFFNESS,
@@ -2312,7 +2426,7 @@ Interfaces block saying the same thing.)
 
 Run: `cargo test --release --lib compile::relax::build`
 
-Expected: 11 passed.
+Expected: 12 passed.
 
 - [ ] **Step 10: Run the whole suite**
 
