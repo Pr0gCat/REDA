@@ -60,6 +60,7 @@ pub mod physical;
 pub mod planner;
 pub mod polarity;
 pub mod primitive_graph;
+pub mod relax;
 pub mod routing_stats;
 pub mod topology;
 pub mod world_partition;
