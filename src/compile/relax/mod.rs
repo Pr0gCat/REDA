@@ -164,16 +164,30 @@ pub struct ContinuousPlacement {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum RelaxError {
-    /// The budget ran out with every pair legal and the bounds still apart.
+    /// The relaxation never finished.
     ///
-    /// Not "with a violation still standing", which is what the sibling below
-    /// is for. `relax` returns [`RelaxError::Deadlocked`] the moment `project`
-    /// errs, so it can only fall through to here after a projection that
+    /// Not "no progress, and a violation still standing", which is what the
+    /// sibling below is for. This one has **two producers**, and `worst` means
+    /// a different thing in each -- so a caller may not assume either.
+    ///
+    /// From [`relax`], `worst` is the `{0, 0, 0.0}` placeholder: the budget ran
+    /// out with every pair legal and the two bounds still apart. `relax`
+    /// returns [`RelaxError::Deadlocked`] the moment `project` errs, so it can
+    /// only fall through to its own budget check after a projection that
     /// returned `Ok` -- and under `Axes::IN_PLANE` an `Ok` means every pair's
     /// shortfall is at or under [`SETTLED`], which is the same threshold
-    /// [`worst_violation`] tests. So `worst` is the `{0, 0, 0.0}` placeholder
-    /// in every case a caller with a budget of at least one can reach, and the
-    /// `Display` arm below prints prose rather than a fabricated pair.
+    /// [`worst_violation`] tests. There is no pair left to name.
+    ///
+    /// From [`snap`], it usually names a real one. [`snap`] refuses any
+    /// placement whose `converged` is false and measures it as it was handed
+    /// it -- and a placement that never converged is exactly where a violation
+    /// can still be standing.
+    /// `an_unconverged_placement_is_refused_rather_than_rounded` builds one and
+    /// asserts the pair is named and the shortfall positive.
+    ///
+    /// The `Display` arm below therefore branches on `worst.shortfall` rather
+    /// than on which producer raised it: prose for the placeholder, a measured
+    /// pair otherwise.
     DidNotConverge { iterations: usize, worst: Violation },
     /// No progress, and a violation still standing. A different error because
     /// the remedy differs: constraints that contradict, not a budget that ran
@@ -211,9 +225,12 @@ pub enum RelaxError {
 impl std::fmt::Display for RelaxError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            // `relax` raises this after a projection that returned `Ok`, so
-            // there is usually no violating pair to name and `worst` is the
-            // placeholder. Rendering it anyway prints "bodies 0 and 0 are
+            // Which producer raised it decides whether there is a pair worth
+            // printing -- `relax` reaches its budget check only after a
+            // projection that returned `Ok` and so carries the placeholder,
+            // while `snap` measures an unconverged placement and usually finds
+            // a real pair. The shortfall is what tells the two apart here.
+            // Rendering the placeholder anyway prints "bodies 0 and 0 are
             // 0.000 too close", which reads as a measurement of a real pair.
             RelaxError::DidNotConverge { iterations, worst } if worst.shortfall == 0.0 => write!(
                 f,

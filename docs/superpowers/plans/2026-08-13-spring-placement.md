@@ -4351,17 +4351,44 @@ and is illegal in ways the invariants find later and attribute elsewhere.
 - Test: `src/compile/relax/snap.rs`
 
 **Interfaces:**
-- Consumes: `ContinuousPlacement`, `RelaxError`, `Violation`, `SNAP_MARGIN`, `project::{required_separations, worst_violation}`, `planner::Anchor`, `geometry::CellFacing`. `SNAP_MARGIN` because Step 3 spends it exactly once, on the way in.
+- Consumes: `ContinuousPlacement`, `RelaxError`, `Violation`, `SNAP_MARGIN`, `project::{required_separations, worst_violation}`, `planner::Anchor`, `geometry::CellFacing`. `SNAP_MARGIN` because Step 3 spends it exactly once, on the way in. The tests also name `SETTLED`, to state "exactly at the requirement" as two measurements rather than as a comment.
 - Produces:
   - `pub struct SnappedNode { pub node: usize, pub anchor: Anchor, pub facing: CellFacing }`
   - `pub fn snap(placement: &ContinuousPlacement) -> Result<Vec<SnappedNode>, RelaxError>`
   - `RelaxError` gains `SurvivedSnap { worst: Violation }`
+  - `RelaxError::DidNotConverge`'s doc is amended. Task 8 wrote it for its one
+    producer; `snap` is a second, and neither "the budget ran out" nor "`worst`
+    is the placeholder" is true of it. Step 4 below.
 
 `SnappedNode` is keyed by **candidate node index**, not by `NodeId`. The spec's
 sketch said `NodeId`, and it cannot: a bare merge's junction has no node --
 `expand` produces no primitive for one -- so there is no `NodeId` to name it
 by. Gate index then input index is the order `emit_primitives` reads
 positionally, which is the order the answer has to arrive in anyway.
+
+**Two things the tests have to be built to, because the obvious fixture tests
+neither.**
+
+1. **The collapse needs a node that owns two bodies.** `snap` maps over
+   `anchor_body`, which is per candidate node; a `snap` that mapped over
+   `rounded.bodies` instead would be per body. On a plain chain those are the
+   same list in the same order, so every chain fixture passes both. The
+   isolated merge is the shape where they differ -- eight bodies, seven nodes,
+   `anchor_body = [0, 1, 2, 4, 5, 6, 7]` -- and it is already in the tree, as
+   `build.rs`'s `an_isolated_branch_welds_its_repeater_into_the_junctions_socket`.
+   Under the defect it returns eight answers with every gate after the merge
+   shifted by one, which nothing downstream would catch until Task 10 wired it
+   in.
+2. **The rounding worst case is a pair rounding *toward* each other**, not a
+   pair on half-cell boundaries. `f64::round` ties away from zero, so two
+   positive coordinates on half-boundaries both round up, in unison, and their
+   separation does not change at all. The case that spends the margin needs one
+   body to round up and the other down. How much it can spend is arithmetic:
+   `required_separations` is `3 + d/4` for a routed degree `d`, rounding leaves
+   every separation an integer, and the only integer in
+   `[required - 1, required]` is `required - frac(required)` whenever the
+   fraction is not zero -- so the loss is at most 3/4, at `d = 3`. The fixture
+   builds that corner. The test's own doc carries the derivation.
 
 - [ ] **Step 1: Write the failing tests, and declare the module**
 
@@ -4370,9 +4397,10 @@ Create `src/compile/relax/snap.rs` with the test module below, and add
 file is never compiled, so Step 2 would report zero tests instead of a
 failure. The re-export waits for Step 5.
 
-`PortPlacements` is imported here rather than in `snap.rs` itself: four tests
-name it and `snap` never does, so a file-level import would trade a
-missing-name error for an unused-import one.
+`PortPlacements` is imported here rather than in `snap.rs` itself: every test
+names it and `snap` never does, so a file-level import would trade a
+missing-name error for an unused-import one. `SETTLED` is imported for the same
+reason and only the one test uses it.
 
 ```rust
 #[cfg(test)]
@@ -4380,7 +4408,7 @@ mod tests {
     use super::*;
     use crate::compile::planner::PortPlacements;
     use crate::compile::primitive_graph::expand;
-    use crate::compile::relax::{relax, Axes, RelaxEffort};
+    use crate::compile::relax::{relax, Axes, RelaxEffort, SETTLED};
     use crate::compile::topology::Library;
     use crate::compile::{Gate, Netlist};
 
@@ -4392,26 +4420,121 @@ mod tests {
         }
     }
 
+    /// A merge one of whose branches is *isolated*: `nb` feeds both the merge
+    /// and `spy`, so that branch is shared rather than bare and `expand` gives
+    /// it a repeater of its own. That repeater is a body, welded into the
+    /// junction's socket, and it belongs to the merge's node rather than to a
+    /// node of its own -- the only shape in the tree where a node owns more
+    /// than one body.
+    ///
+    /// The same netlist as `build.rs`'s
+    /// `an_isolated_branch_welds_its_repeater_into_the_junctions_socket`,
+    /// where the weld this turns on is asserted.
+    fn isolated_merge() -> Netlist {
+        Netlist {
+            inputs: vec!["a".into(), "b".into()],
+            outputs: vec!["out".into(), "spy".into()],
+            gates: vec![
+                Gate::nor("na", &["a"]),
+                Gate::nor("nb", &["b"]),
+                Gate::merge("m", &["na", "nb"]),
+                Gate::nor("out", &["m"]),
+                Gate::nor("spy", &["nb"]),
+            ],
+        }
+    }
+
+    /// A two-input NOR that something reads: `m` has a routed degree of three,
+    /// so its requirement is `CONDUCTOR_CLEARANCE + ROUTE_PITCH * 3 / 8 +
+    /// SNAP_MARGIN` = 3.75 -- the largest quarter-cell fraction a requirement
+    /// can carry, which is what makes it the worst case for rounding.
+    fn wide() -> Netlist {
+        Netlist {
+            inputs: vec!["a".into(), "b".into()],
+            outputs: vec!["out".into()],
+            gates: vec![Gate::nor("m", &["a", "b"]), Gate::nor("out", &["m"])],
+        }
+    }
+
     /// One answer per node `PlanCandidate` expects, in the order it expects
-    /// them: gates, then primary inputs.
+    /// them: gates, then primary inputs. Per *node*, which is the collapse,
+    /// and the collapse is everything `snap` does beyond rounding.
+    ///
+    /// The fixture is the isolated merge for exactly that reason. On `chain()`
+    /// -- what every other test in this module uses -- `bodies` and
+    /// `anchor_body` are the same list in the same order, so a `snap` that
+    /// mapped over `rounded.bodies` instead would pass every one of them. Here
+    /// it returns eight answers for seven nodes, with the merge's welded
+    /// repeater taking a node slot and every gate after it shifted by one.
+    ///
+    /// It is also, unplanned, the one relaxed circuit in this module that
+    /// spends the rounding margin: its tightest pair -- gate `na` and the
+    /// junction -- sits within 0.001 of its requirement before rounding and
+    /// 0.500 inside it after, so the `expect` below is what fails first if the
+    /// margin above is ever charged twice.
     #[test]
     fn snap_answers_once_per_candidate_node_in_candidate_order() {
-        let netlist = chain();
+        let netlist = isolated_merge();
         let graph = expand(&netlist, &Library::default_library()).expect("expands");
-        let start: Vec<Anchor> = (0..3)
-            .map(|index| Anchor { x: index * 20, y: 1, z: index * 16 })
+        let start: Vec<Anchor> = (0..netlist.gates.len() + netlist.inputs.len())
+            .map(|index| Anchor { x: index as i32 * 20, y: 1, z: index as i32 * 16 })
             .collect();
-        let mut placements = PortPlacements::default();
-        placements.pin("a", start[2]);
 
-        let placement = relax(&netlist, &graph, &start, &placements, Axes::IN_PLANE, RelaxEffort::default())
-            .expect("relaxes");
+        let placement = relax(
+            &netlist,
+            &graph,
+            &start,
+            &PortPlacements::default(),
+            Axes::IN_PLANE,
+            RelaxEffort::default(),
+        )
+        .expect("relaxes");
+
+        // Asserted rather than assumed: this fixture says nothing at all
+        // unless the two counts differ, and a `chain()` here would be a test
+        // that passes against the defect it names.
+        assert_eq!(
+            placement.graph.bodies.len(),
+            8,
+            "the isolated branch's welded repeater is what makes bodies outnumber nodes"
+        );
+        assert_eq!(placement.graph.anchor_body.len(), 7, "five gates and two inputs");
+
         let snapped = snap(&placement).expect("a converged placement rounds");
 
-        assert_eq!(snapped.len(), 3);
+        assert_eq!(snapped.len(), 7, "one answer per candidate node, not per body");
         for (index, node) in snapped.iter().enumerate() {
             assert_eq!(node.node, index, "answers are not in candidate order");
+            let anchor = &placement.graph.bodies[placement.graph.anchor_body[index]];
+            assert_eq!(
+                node.anchor,
+                Anchor {
+                    x: anchor.position[0].round() as i32,
+                    y: anchor.position[1].round() as i32,
+                    z: anchor.position[2].round() as i32,
+                },
+                "node {index} did not come back at its own anchor body"
+            );
         }
+
+        // And the body the collapse dropped is somewhere else, so "one per
+        // node" is a choice rather than an accident of the two coinciding.
+        let merge = 2;
+        let junction = placement.graph.anchor_body[merge];
+        assert_eq!(
+            placement.graph.nodes[merge].len(),
+            2,
+            "the merge's node owns its junction and its branch repeater"
+        );
+        let repeater = *placement.graph.nodes[merge]
+            .iter()
+            .find(|&&body| body != junction)
+            .expect("the other one");
+        assert_ne!(
+            placement.graph.bodies[repeater].position.map(f64::round),
+            placement.graph.bodies[junction].position.map(f64::round),
+            "the repeater sits in the junction's socket, a cell off it"
+        );
     }
 
     /// A pinned port comes back exactly where it was pinned. Not near it.
@@ -4467,27 +4590,53 @@ mod tests {
         assert!(worst.shortfall > 0.0, "and say how far short it fell");
     }
 
-    /// Rounding moves a body by at most half a cell, so two approach by at
-    /// most one -- which is what `SNAP_MARGIN` claims, and this is the case
-    /// that tests it: a placement separated by *exactly* what the projection
-    /// guarantees, with every body on a half-cell boundary in all three axes
-    /// at once, which is where rounding moves one furthest.
+    /// The worst case rounding can hand `snap`, built rather than described: a
+    /// pair sitting exactly at its requirement, positioned so that rounding
+    /// moves one body up and the other *down* and the two approach by 0.75 of
+    /// a cell.
     ///
-    /// Exactly, not generously. A gap wider than the projection can produce
-    /// tests nothing -- the margin would never be spent. What has to hold is
-    /// that the worst case the projection *can* hand over still survives
-    /// rounding, and the worst case is the equilibrium: springs pull and
-    /// separation pushes, so a converged placement sits at the requirement.
+    /// Both halves are load-bearing.
     ///
-    /// The requirement is between cells, and a NOR's input socket reaches one
-    /// cell back toward the neighbour on that side, so the centre gap that
-    /// puts the closest foreign cells exactly at the requirement is one more
-    /// than the requirement itself.
+    /// **Exactly at the requirement**, because a wider gap never spends the
+    /// margin and so tests nothing. Springs pull and separation pushes, so
+    /// wherever separation is what stopped the springs a converged placement
+    /// sits at the requirement, and that is the tightest thing `project` can
+    /// hand over. The two `worst_violation` assertions below are what make
+    /// that a measurement rather than a comment: legal against the
+    /// requirement, violating against a hair more.
+    ///
+    /// **Toward each other**, because `f64::round` ties away from zero. Two
+    /// positive coordinates on half-cell boundaries therefore both round *up*,
+    /// in unison, and the separation between them does not change at all --
+    /// this fixture's Z is that case, both bodies at `z = 0.5` and both
+    /// landing on 1, and it costs nothing. An earlier version of this test
+    /// called "every body on a half-cell boundary in all three axes at once"
+    /// the place "where rounding moves one furthest"; it is the place where
+    /// rounding moves them the same way.
+    ///
+    /// **0.75 is the most that can be lost, and the arithmetic says why.**
+    /// Rounding moves each body by at most half a cell, so a separation closes
+    /// by at most one, and that bound alone is all [`SNAP_MARGIN`] needs to be
+    /// sound. But rounding also leaves every coordinate an integer, so the
+    /// separation afterwards is an integer -- while `required_separations` is
+    /// `CONDUCTOR_CLEARANCE + ROUTE_PITCH * d / 8 + SNAP_MARGIN` = `3 + d/4`
+    /// for a routed degree `d`. Whenever that fraction is not zero, the only
+    /// integer in `[required - 1, required]` is `required - frac(required)`,
+    /// so the loss is either nothing or exactly the fraction: at most 3/4, at
+    /// `d = 3`. This fixture is that corner -- `m` reads both inputs and is
+    /// read by `out` -- and nothing built on `required_separations` can lose
+    /// more without `d` being a multiple of four, where the fraction is zero
+    /// and the two reachable losses are nothing and a whole cell.
+    ///
+    /// The requirement is between *cells*, not centres: `m`'s socket for `b`
+    /// reaches one cell east and `out`'s socket for `m` one cell west, so the
+    /// centre gap that puts the closest foreign cells exactly at the
+    /// requirement is two more than the requirement itself.
     #[test]
-    fn separation_survives_rounding_from_a_half_cell_boundary() {
-        let netlist = chain();
+    fn a_pair_at_its_requirement_survives_rounding_toward_each_other() {
+        let netlist = wide();
         let graph = expand(&netlist, &Library::default_library()).expect("expands");
-        let start = vec![Anchor { x: 0, y: 1, z: 0 }; 3];
+        let start = vec![Anchor { x: 0, y: 1, z: 0 }; 4];
         let mut built = crate::compile::relax::build::build(
             &netlist,
             &graph,
@@ -4496,24 +4645,47 @@ mod tests {
         )
         .expect("builds");
 
-        let required = crate::compile::relax::project::required_separations(&built);
-        let gap = required[0].max(required[1]) + 1.0;
-        built.bodies[0].position = [0.5, 1.5, 0.5];
-        built.bodies[1].position = [0.5 + gap, 1.5, 0.5];
-        built.bodies[2].position = [0.5 + 2.0 * gap, 1.5, 0.5];
+        let required = required_separations(&built);
+        assert_eq!(required[0], 3.75, "`m` is the degree-three body this fixture is for");
+        let gap = required[0].max(required[1]) + 2.0;
+        built.bodies[0].position = [0.5, 1.0, 0.5];
+        built.bodies[1].position = [0.5 + gap, 1.0, 0.5];
+        // The two levers say nothing here and are parked out of reach, on
+        // integers, where rounding is the identity.
+        built.bodies[2].position = [0.0, 1.0, 60.0];
+        built.bodies[3].position = [0.0, 1.0, 120.0];
+
+        assert!(
+            worst_violation(&built, &required).is_none(),
+            "the fixture has to be legal before rounding, or it is not a placement `project` could hand over"
+        );
+        let a_hair: Vec<f64> = required.iter().map(|need| need + 2.0 * SETTLED).collect();
+        let pinched = worst_violation(&built, &a_hair)
+            .expect("and at the requirement with nothing to spare, or it tests nothing");
+        assert_eq!((pinched.left, pinched.right), (0, 1), "the wrong pair is the tight one");
+
+        let west = built.bodies[0].position[0];
+        let east = built.bodies[1].position[0];
+        assert!(west.round() > west, "the west body has to round up");
+        assert!(east.round() < east, "and the east body down, or they do not approach at all");
+        assert_eq!(
+            (east - west) - (east.round() - west.round()),
+            0.75,
+            "the pair has to close by the whole fraction its requirement carries"
+        );
 
         let placement = ContinuousPlacement { graph: built, converged: true, iterations: 1 };
         snap(&placement).expect("what the projection guarantees has to survive rounding");
     }
 
-    /// And a placement one cell tighter than the projection can produce does
-    /// not survive, which is what makes the test above a claim rather than a
+    /// And a placement tighter than the projection can produce does not
+    /// survive, which is what makes the test above a claim rather than a
     /// coincidence of a generous gap.
     #[test]
     fn a_placement_tighter_than_the_projection_allows_is_caught_after_rounding() {
-        let netlist = chain();
+        let netlist = wide();
         let graph = expand(&netlist, &Library::default_library()).expect("expands");
-        let start = vec![Anchor { x: 0, y: 1, z: 0 }; 3];
+        let start = vec![Anchor { x: 0, y: 1, z: 0 }; 4];
         let mut built = crate::compile::relax::build::build(
             &netlist,
             &graph,
@@ -4522,13 +4694,14 @@ mod tests {
         )
         .expect("builds");
 
-        let required = crate::compile::relax::project::required_separations(&built);
-        // Two cells tighter: one gives back the margin rounding is allowed to
-        // spend, and the second is a real violation.
-        let gap = required[0].max(required[1]) + 1.0 - 2.0;
-        built.bodies[0].position = [0.5, 1.5, 0.5];
-        built.bodies[1].position = [0.5 + gap, 1.5, 0.5];
-        built.bodies[2].position = [0.5 + 2.0 * gap, 1.5, 0.5];
+        let required = required_separations(&built);
+        // Two cells tighter than the test above: the first is the margin
+        // rounding is allowed to spend, and the second is a real violation.
+        let gap = required[0].max(required[1]) + 2.0 - 2.0;
+        built.bodies[0].position = [0.5, 1.0, 0.5];
+        built.bodies[1].position = [0.5 + gap, 1.0, 0.5];
+        built.bodies[2].position = [0.0, 1.0, 60.0];
+        built.bodies[3].position = [0.0, 1.0, 120.0];
 
         let placement = ContinuousPlacement { graph: built, converged: true, iterations: 1 };
         let error = snap(&placement).expect_err("this one is genuinely too tight");
@@ -4555,6 +4728,18 @@ Create `src/compile/relax/snap.rs`:
 //! step, so what is left is rounding positions -- and one cell of margin
 //! covers that, because rounding moves a body by at most half a cell, so two
 //! bodies approach by at most one.
+//!
+//! **Horizontally.** [`required_separations`] adds [`SNAP_MARGIN`] to the
+//! horizontal requirement and to nothing else; the vertical gate is a bare
+//! `dy < CONDUCTOR_CLEARANCE` in `project::unseparated`, with no margin on it.
+//! Stage 1 pays nothing for that, because `Axes::IN_PLANE` never writes a
+//! fractional Y: every `dy` is an integer difference of starting storeys and
+//! rounding is the identity on it. Under `Axes::ALL` it becomes live, and this
+//! module is one of the two places it surfaces -- a pair exempted from the
+//! horizontal requirement by sitting `dy = 2.0` apart can round to `dy = 1.0`,
+//! at which point `unseparated` starts judging it by the full horizontal
+//! requirement and `snap` refuses a placement the relaxation was entitled to
+//! produce. Task 11 is where the vertical requirement grows its own margin.
 
 use crate::compile::geometry::CellFacing;
 use crate::compile::planner::Anchor;
@@ -4587,6 +4772,22 @@ pub fn snap(placement: &ContinuousPlacement) -> Result<Vec<SnappedNode>, RelaxEr
         });
     }
 
+    // Every body rounds on its own, and `f64::round` ties away from zero: a
+    // body at `-0.5` lands on -1 while one at `0.5` lands on 1. So a welded
+    // pair whose unit offset spans zero comes out two cells apart rather than
+    // one -- rounding is not offset-preserving across the origin.
+    //
+    // Documented rather than handled, for two reasons that both have to hold.
+    // It is reachable only at an exact `-0.5`: `satisfy` writes a welded
+    // body's position as its anchor's plus an integer offset, so the two
+    // always share a fractional part, and only the one fraction that is a tie
+    // on both sides of zero splits them. And it is inconsequential if reached,
+    // because nothing downstream reads the held body's position. The check
+    // below exempts welded pairs (`project::exempt`), the collapse further
+    // down answers with `anchor_body` -- the junction, never the repeater --
+    // and `world_partition::resolve_node_position` re-derives the repeater's
+    // cell from the junction's position and facing. Handling it would be code
+    // for a coincidence, guarding an answer that is thrown away.
     let mut rounded = placement.graph.clone();
     for body in &mut rounded.bodies {
         for axis in 0..3 {
@@ -4599,15 +4800,47 @@ pub fn snap(placement: &ContinuousPlacement) -> Result<Vec<SnappedNode>, RelaxEr
     //
     // Without the margin, deliberately. `required_separations` is what the
     // *projection* enforces -- clearance, reservation, and one cell of margin
-    // -- and springs pull while separation pushes, so a converged placement
-    // sits exactly at it with the margin already committed. The margin is what
-    // rounding is allowed to consume; what has to survive rounding is the
-    // physical requirement without it.
+    // -- and springs pull while separation pushes, so wherever separation is
+    // what stopped the springs a converged placement sits exactly at it, with
+    // the margin already committed. The margin is what rounding is allowed to
+    // consume; what has to survive rounding is the physical requirement
+    // without it.
     //
-    // Asking for it on both sides rejects every placement the relaxation can
-    // produce. Measured on 2026-08-13: two of this task's four tests failed
-    // with a shortfall of exactly 0.5, which is one rounding's worth of a
-    // margin being charged twice.
+    // Asking for it on both sides refuses placements the relaxation is
+    // entitled to produce. Measured on 2026-08-14 by deleting the subtraction
+    // below: `full_adder`, relaxed from `plan_from_netlist`'s anchors with
+    // nothing pinned under `Axes::IN_PLANE` and converged in 9 steps, is
+    // refused with bodies 20 and 21 exactly 0.500 short -- one rounding's worth
+    // of a margin charged twice.
+    //
+    // `and4` and this module's two-gate chain say nothing either way, and it
+    // is not because they are loose. A converged placement never has a pair
+    // *inside* its requirement -- that is what `project` returning `Ok` means,
+    // `full_adder` included -- so having none is no distinction at all. What
+    // separates them is how much room is left over, and what rounding then
+    // does to the pair that has least. Measured the same day, by inflating
+    // every requirement by `delta` and asking `worst_violation`, in steps of
+    // 0.001, for the smallest `delta` at which a pair appears: before
+    // rounding, `and4`'s tightest pair and `full_adder`'s both sit within
+    // 0.001 of their requirement, at the equilibrium this design is built
+    // around. After rounding `and4`'s tightest pair lands exactly *on* its
+    // requirement -- a rounded separation is an integer and a requirement is a
+    // quarter-cell multiple, so a `delta` under 0.001 means zero -- and the
+    // double charge survives that by nothing whatever, while `full_adder`'s 20
+    // and 21 land 0.500 inside it. The chain is the genuinely slack one: 0.966
+    // before rounding and 1.501 after.
+    //
+    // Two of this module's five tests fail under the double charge, and both
+    // are tests built to spend the margin. The hand-built pair in
+    // `a_pair_at_its_requirement_survives_rounding_toward_each_other` comes
+    // out 0.750 short -- the largest fraction a requirement can carry, and
+    // that test's own doc derives why. The isolated merge that
+    // `snap_answers_once_per_candidate_node_in_candidate_order` relaxes comes
+    // out 0.500 short between gate `na` and the junction, its tightest pair
+    // having sat within 0.001 of its requirement before rounding. So the
+    // relaxed half of this argument is held by a real converged circuit in
+    // this module, and not only by `full_adder`, which nothing in the tree
+    // runs end to end yet.
     let required: Vec<f64> = required_separations(&rounded)
         .into_iter()
         .map(|separation| separation - SNAP_MARGIN)
@@ -4636,9 +4869,15 @@ pub fn snap(placement: &ContinuousPlacement) -> Result<Vec<SnappedNode>, RelaxEr
 The collapse is the `anchor_body` lookup and nothing more. A gate's other
 bodies -- an isolated merge's branch repeaters -- are welded to that anchor, so
 their relaxed positions are never something this throws away: the weld never
-let them be anywhere else.
+let them be anywhere else, and
+`world_partition::resolve_node_position` re-derives the repeater's cell from
+the junction's position and facing downstream anyway. That is also why the
+rounding comment above documents `f64::round`'s tie-away-from-zero asymmetry
+rather than handling it: a welded pair whose unit offset spans zero rounds two
+cells apart instead of one, and the answer it would corrupt is one nothing
+reads.
 
-- [ ] **Step 4: Add the error variant**
+- [ ] **Step 4: Add the error variant, and amend the sibling `snap` changes**
 
 In `src/compile/relax/mod.rs`, add to `RelaxError` and its `Display`:
 
@@ -4658,6 +4897,54 @@ In `src/compile/relax/mod.rs`, add to `RelaxError` and its `Display`:
             ),
 ```
 
+`DidNotConverge` also changes, because this task gives it a second producer.
+Task 8's doc says the budget ran out "with every pair legal" and concludes
+`worst` is the placeholder "in every case a caller with a budget of at least one
+can reach". Both were true of `relax` alone and neither is true of `snap`, which
+measures a placement that never converged and normally finds a real pair --
+`an_unconverged_placement_is_refused_rather_than_rounded` asserts exactly that.
+Replace it with:
+
+```rust
+    /// The relaxation never finished.
+    ///
+    /// Not "no progress, and a violation still standing", which is what the
+    /// sibling below is for. This one has **two producers**, and `worst` means
+    /// a different thing in each -- so a caller may not assume either.
+    ///
+    /// From [`relax`], `worst` is the `{0, 0, 0.0}` placeholder: the budget ran
+    /// out with every pair legal and the two bounds still apart. `relax`
+    /// returns [`RelaxError::Deadlocked`] the moment `project` errs, so it can
+    /// only fall through to its own budget check after a projection that
+    /// returned `Ok` -- and under `Axes::IN_PLANE` an `Ok` means every pair's
+    /// shortfall is at or under [`SETTLED`], which is the same threshold
+    /// [`worst_violation`] tests. There is no pair left to name.
+    ///
+    /// From [`snap`], it usually names a real one. [`snap`] refuses any
+    /// placement whose `converged` is false and measures it as it was handed
+    /// it -- and a placement that never converged is exactly where a violation
+    /// can still be standing.
+    /// `an_unconverged_placement_is_refused_rather_than_rounded` builds one and
+    /// asserts the pair is named and the shortfall positive.
+    ///
+    /// The `Display` arm below therefore branches on `worst.shortfall` rather
+    /// than on which producer raised it: prose for the placeholder, a measured
+    /// pair otherwise.
+    DidNotConverge { iterations: usize, worst: Violation },
+```
+
+and the comment on that `Display` arm with:
+
+```rust
+            // Which producer raised it decides whether there is a pair worth
+            // printing -- `relax` reaches its budget check only after a
+            // projection that returned `Ok` and so carries the placeholder,
+            // while `snap` measures an unconverged placement and usually finds
+            // a real pair. The shortfall is what tells the two apart here.
+            // Rendering the placeholder anyway prints "bodies 0 and 0 are
+            // 0.000 too close", which reads as a measurement of a real pair.
+```
+
 - [ ] **Step 5: Re-export**
 
 `mod snap;` landed in Step 1; `src/compile/relax/mod.rs` now also carries
@@ -4667,8 +4954,20 @@ In `src/compile/relax/mod.rs`, add to `RelaxError` and its `Display`:
 
 Run: `cargo test --release --lib compile::relax::snap`
 
-Expected: 5 passed -- the margin's two halves, `snap`'s two answers, and the
-refusal.
+Expected: 5 passed -- the margin's two halves, `snap`'s two answers (the
+collapse and the pinned port), and the refusal.
+
+Then check each test against the defect it names, because a test that cannot
+fail is not evidence:
+
+- Map over `rounded.bodies` instead of `anchor_body`.
+  `snap_answers_once_per_candidate_node_in_candidate_order` fails on "one
+  answer per candidate node, not per body", and it is the only failure in the
+  whole `--lib` suite.
+- Delete the `- SNAP_MARGIN`. Two tests fail, both built to spend the margin:
+  the hand-built pair by 0.750, and the isolated merge -- which turns out to be
+  the one relaxed circuit in this module that also spends it -- by 0.500,
+  between gate `na` and the junction.
 
 - [ ] **Step 7: Run the whole suite**
 
@@ -4714,6 +5013,21 @@ are the numbers to beat.
   - `fn starting_layout(netlist: &Netlist, placements: &PortPlacements, shape: Shape) -> Result<Vec<Anchor>, PlannerError>` -- the existing depth-and-barycentre code, extracted verbatim.
 
 - [ ] **Step 1: Write the failing tests**
+
+**A `relax` -> `snap` test on `full_adder` belongs in this task**, and Task 9
+could not write it because nothing called `snap` yet. `full_adder` is the only
+reference circuit whose converged placement genuinely spends the rounding
+margin: measured 2026-08-14, relaxed from `plan_from_netlist`'s anchors with
+nothing pinned under `Axes::IN_PLANE`, it converges in 9 steps with its
+tightest pair within 0.001 of its requirement, and after rounding bodies 20 and
+21 sit 0.500 *inside* the full requirement -- so it is the one circuit that
+refuses if `snap` ever charges `SNAP_MARGIN` on both sides. `and4` is not: its
+tightest pair lands exactly *on* its requirement after rounding and survives
+the double charge by nothing at all, which is a pass that says nothing.
+Everything holding that arithmetic today is inside `snap.rs` and either
+hand-built or a four-gate fixture; once this task hands `snap` a real relaxed
+`full_adder`, a test that asserts `snap` returns `Ok` for it is what keeps the
+margin honest against real geometry rather than against a fixture built to it.
 
 Add to `planner.rs`'s test module:
 
@@ -5226,6 +5540,21 @@ are this task's to handle, and the reasoning for each is why.
    requirement is not in question, only the margin: `CONDUCTOR_CLEARANCE` applied
    to an axis is still the right number, and the rounding argument that buys the
    horizontal one a margin applies to it verbatim.
+
+   **It surfaces twice, and the second place is `snap`.** The paragraph above is
+   the direct harm -- a stack that rounds into the gap the clearance forbids.
+   The other is a refusal of something legal. `unseparated` gates the
+   *horizontal* requirement behind `dy < CONDUCTOR_CLEARANCE`, so a pair sitting
+   `dy = 2.0` apart is exempt from it entirely however close it is in plan. Let
+   that pair round to `dy = 1.0` and the horizontal requirement switches on
+   underneath it -- reservations and all, which is far more than the two cells
+   the vertical gate was asking for -- and `snap`'s post-rounding check reports
+   `SurvivedSnap` on a placement the relaxation was entitled to produce.
+   `snap.rs`'s module doc records the same thing from its own end. The margin on
+   the vertical target fixes both: with it, a pair legal at `dy = 3.0` cannot
+   round below `2.0`, so the horizontal gate never opens on a pair that was
+   exempt from it. Worth a third test here, on the `snap` side rather than the
+   `project` side.
 
 Adding the margin moves `two_bodies_in_one_column_are_left_where_they_are`'s two
 bodies: a pair exactly [`CONDUCTOR_CLEARANCE`] apart in Y stops being separated
