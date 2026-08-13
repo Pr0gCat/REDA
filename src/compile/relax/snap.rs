@@ -12,11 +12,18 @@
 //! Stage 1 pays nothing for that, because `Axes::IN_PLANE` never writes a
 //! fractional Y: every `dy` is an integer difference of starting storeys and
 //! rounding is the identity on it. Under `Axes::ALL` it becomes live, and this
-//! module is one of the two places it surfaces -- a pair exempted from the
-//! horizontal requirement by sitting `dy = 2.0` apart can round to `dy = 1.0`,
-//! at which point `unseparated` starts judging it by the full horizontal
-//! requirement and `snap` refuses a placement the relaxation was entitled to
-//! produce. Task 11 is where the vertical requirement grows its own margin.
+//! module is one of the two places it surfaces. The mechanism is narrower than
+//! it looks, and worth stating precisely so Task 11 does not chase the wrong
+//! one: a pair exempted at `dy = 2.0` can only round to `dy = 1.0` by losing
+//! exactly one whole cell, which needs one body at `+0.5` and the other at
+//! `-0.5` -- `f64::round` ties away from zero, so straddling `Y = 0` is the
+//! only way two half-integers move apart rather than in unison. A sweep over
+//! `[-3, 3]` in steps of 0.025 with cell offsets `-4..=4` found 72 such pairs,
+//! and every one of them straddles zero, which no starting storey in this tree
+//! produces. So the exposure is real but is the same coincidence the weld note
+//! below calls "code for a coincidence". Task 11 is where the vertical
+//! requirement grows its own margin, and the reason to give it one is that the
+//! asymmetry exists at all -- not that a circuit has hit it.
 
 use crate::compile::geometry::CellFacing;
 use crate::compile::planner::Anchor;
@@ -104,8 +111,15 @@ pub fn snap(placement: &ContinuousPlacement) -> Result<Vec<SnappedNode>, RelaxEr
     // requirement -- a rounded separation is an integer and a requirement is a
     // quarter-cell multiple, so a `delta` under 0.001 means zero -- and the
     // double charge survives that by nothing whatever, while `full_adder`'s 20
-    // and 21 land 0.500 inside it. The chain is the genuinely slack one: 0.966
-    // before rounding and 1.501 after.
+    // and 21 land 0.500 inside it. The chain this module still relaxes -- the
+    // one in `a_pinned_port_snaps_to_where_it_was_pinned`, pinned at
+    // (37, 1, 41) -- is the genuinely slack one: 1.850 before rounding and
+    // 2.501 after, over 7 steps.
+    //
+    // That slack is a property of the pin rather than of the chain. The same
+    // ladder unpinned fails the double charge by 0.500, at bodies 0 and 2: a
+    // pinned body cannot be moved by the springs, so the pair it belongs to
+    // settles wherever the pin left it rather than at the requirement.
     //
     // Two of this module's five tests fail under the double charge, and both
     // are tests built to spend the margin. The hand-built pair in
@@ -200,8 +214,8 @@ mod tests {
     /// and the collapse is everything `snap` does beyond rounding.
     ///
     /// The fixture is the isolated merge for exactly that reason. On `chain()`
-    /// -- what every other test in this module uses -- `bodies` and
-    /// `anchor_body` are the same list in the same order, so a `snap` that
+    /// and on `wide()` -- between them, what every other test in this module
+    /// uses -- `bodies` and `anchor_body` are the same list in the same order, so a `snap` that
     /// mapped over `rounded.bodies` instead would pass every one of them. Here
     /// it returns eight answers for seven nodes, with the merge's welded
     /// repeater taking a node slot and every gate after it shifted by one.
@@ -436,6 +450,11 @@ mod tests {
         let required = required_separations(&built);
         // Two cells tighter than the test above: the first is the margin
         // rounding is allowed to spend, and the second is a real violation.
+        //
+        // Not that one cell tighter would pass `snap`. The test above is built
+        // to lose 0.75 to rounding, so at one cell tighter the shipped check
+        // already reports 0.75 short. Two cells is what makes this a violation
+        // whichever way rounding moves the pair.
         let gap = required[0].max(required[1]) + 2.0 - 2.0;
         built.bodies[0].position = [0.5, 1.0, 0.5];
         built.bodies[1].position = [0.5 + gap, 1.0, 0.5];
