@@ -256,7 +256,7 @@ impl Netlist {
 /// this occupies -- support block, output torch and its pin, and every input
 /// socket this gate actually uses -- for callers that need a footprint
 /// without touching a `World` (`resolve_bypass_and_geometry`'s candidate
-/// paths, and `topology::nor_footprint_area`, whose own table is checked
+/// paths, and `topology::nor_footprint_area`, whose own answer is checked
 /// against a really-placed cell's `size` here).
 pub struct NorCell {
     /// 這個 cell 佔的空間

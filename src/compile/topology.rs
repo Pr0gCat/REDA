@@ -43,6 +43,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::compile::geometry;
+use crate::redstone::simulator::position::Position;
+
 // ---------------------------------------------------------------------
 // The primitive vocabulary
 // ---------------------------------------------------------------------
@@ -1252,15 +1255,81 @@ fn negative_expansion_for(kind: GateKind) -> Expansion {
 // Realisation cost, derived from the template
 // ---------------------------------------------------------------------
 
+/// The ground-plan area a gate cell occupies, computed from where its cells
+/// are rather than tabulated.
+///
+/// A cell is its origin, one socket per declared input, and its outbound pin
+/// `pin_hops` out along its output face -- two for a NOR, whose output torch
+/// stands between origin and pin, one for a merge, whose junction *is* the
+/// origin. Those are the same points `place_nor_gate` and `place_merge_gate`
+/// walk to fill in `NorCell.size`; this walk is only their X and Z, which is
+/// what an area is.
+///
+/// `u32`, not the `usize` an arity is, because [`RealisationCost`]'s `area`
+/// field is a `u32` and every caller of the two functions below puts the
+/// answer there.
+fn footprint_area(arity: usize, facing: geometry::CellFacing, pin_hops: i32) -> u32 {
+    let origin = Position::new(0, 0, 0);
+    let mut min = (origin.x, origin.z);
+    let mut max = (origin.x, origin.z);
+    let mut extend = |p: Position| {
+        min = (min.0.min(p.x), min.1.min(p.z));
+        max = (max.0.max(p.x), max.1.max(p.z));
+    };
+
+    for socket in geometry::gate_sockets(origin, arity, facing) {
+        extend(socket);
+    }
+    let out = geometry::output_direction(facing);
+    let mut pin = origin;
+    for _ in 0..pin_hops {
+        pin = pin.offset(out);
+    }
+    extend(pin);
+
+    ((max.0 - min.0 + 1) * (max.1 - min.1 + 1)) as u32
+}
+
+/// What `place_nor_gate` reserves for an `arity`-input NOR built to `facing`.
+///
+/// The `assert!` is the one thing the table this replaces gave for free: a
+/// derivation happily computes an area for a fan-in no placer will build,
+/// where a `match` on arity had to name an `unreachable!` arm to get there.
+fn nor_footprint_area_facing(arity: usize, facing: geometry::CellFacing) -> u32 {
+    assert!(
+        (1..=3).contains(&arity),
+        "a NOR gate's fan-in is 1..=3, got {arity}"
+    );
+    footprint_area(arity, facing, 2)
+}
+
+/// What `place_merge_gate` reserves for an `arity`-input wire-merge OR built
+/// to `facing`. One hop shallower than a NOR's, and guarded for the same
+/// reason [`nor_footprint_area_facing`] is.
+fn merge_footprint_area_facing(arity: usize, facing: geometry::CellFacing) -> u32 {
+    assert!(
+        (2..=3).contains(&arity),
+        "a wire-merge OR's fan-in is 2..=3, got {arity}"
+    );
+    footprint_area(arity, facing, 1)
+}
+
 /// `place_nor_gate`'s own ground-plan footprint (X*Z, in blocks) for a NOR
-/// cell with `arity` inputs -- read straight off its bounding-box
-/// computation. This is the one fact a [`Template`]'s cost genuinely cannot
-/// be derived without: `Template` carries no positions at all (this
-/// module's own doc comment, "Topology carries no positions"), and a
-/// footprint is a realisation fact -- how big the support block plus its
+/// cell with `arity` inputs. This is the one fact a [`Template`]'s cost
+/// genuinely cannot be derived without: `Template` carries no positions at
+/// all (this module's own doc comment, "Topology carries no positions"), and
+/// a footprint is a realisation fact -- how big the support block plus its
 /// input sockets actually are on the ground plane -- not a property of the
-/// signal graph. Hand-written here, once, so every entry and every
-/// [`Expansion`] step derives its *own* area from this one table:
+/// signal graph.
+///
+/// Facing-free, and that is derived rather than assumed: turning a cell
+/// swaps the sides of its rectangle and leaves the product alone
+/// (`footprint_area_does_not_depend_on_facing`). North is the facing named
+/// here because a cost model priced off a positionless [`Template`] has none
+/// to consult, not because another would answer differently.
+///
+/// Every entry and every [`Expansion`] step derives its *own* area from this
+/// one place:
 ///
 /// ```text
 ///   inputs   NorCell.size (x,y,z)   ground footprint (x * z)
@@ -1269,22 +1338,19 @@ fn negative_expansion_for(kind: GateKind) -> Expansion {
 ///   3        (3, 1, 4)              12
 /// ```
 ///
+/// Those three areas used to *be* this function -- a `match` on arity, with
+/// no facing to ask about even had a caller held one.
 /// `every_cell_footprint_matches_what_the_placer_actually_reserves` checks
 /// each row against a cell really placed into a scratch `World`.
 fn nor_footprint_area(arity: usize) -> u32 {
-    match arity {
-        1 => 6,
-        2 => 9,
-        3 => 12,
-        other => unreachable!("a NOR gate's fan-in is 1..=3, got {other}"),
-    }
+    nor_footprint_area_facing(arity, geometry::CellFacing::NORTH)
 }
 
 /// `place_merge_gate`'s own ground-plan footprint (X*Z, in blocks) for a
-/// wire-merge cell with `arity` inputs -- read off its bounding-box
-/// computation exactly the way [`nor_footprint_area`] is read off
-/// `place_nor_gate`'s, and for the same reason (a footprint is a
-/// realisation fact a positionless [`Template`] cannot derive).
+/// wire-merge cell with `arity` inputs -- the same derivation
+/// [`nor_footprint_area`] is, for the same reason (a footprint is a
+/// realisation fact a positionless [`Template`] cannot derive), and
+/// differing from it in one number only.
 ///
 /// A merge places no support block and no torch. It is still a *cell* the
 /// floorplanner has to hand a row, an X and a Z to, though:
@@ -1292,7 +1358,7 @@ fn nor_footprint_area(arity: usize) -> u32 {
 /// by the same bounding-box walk `place_nor_gate` uses, over the same
 /// `geometry::input_directions` sockets. The one thing it does not reserve
 /// is the cell the absent output torch would have stood in, so its output socket
-/// sits one hop north of the junction where a NOR's sits two hops north of
+/// sits one hop out from the junction where a NOR's sits two hops out from
 /// its support -- which is exactly, and only, one row of Z cheaper:
 ///
 /// ```text
@@ -1302,16 +1368,12 @@ fn nor_footprint_area(arity: usize) -> u32 {
 /// ```
 ///
 /// `every_cell_footprint_matches_what_the_placer_actually_reserves` (below)
-/// checks both this table and [`nor_footprint_area`] against what
+/// checks both this and [`nor_footprint_area`] against what
 /// `place_merge_gate`/`place_nor_gate` really write into a scratch `World`,
 /// so neither can drift from the placer the way this one silently could
 /// while it did not exist at all.
 fn merge_footprint_area(arity: usize) -> u32 {
-    match arity {
-        2 => 6,
-        3 => 9,
-        other => unreachable!("a wire-merge OR's fan-in is 2..=3, got {other}"),
-    }
+    merge_footprint_area_facing(arity, geometry::CellFacing::NORTH)
 }
 
 impl Template {
@@ -1779,13 +1841,13 @@ mod tests {
         );
     }
 
-    /// Both footprint tables are the one realisation fact `entry_cost`
+    /// Both footprint functions are the one realisation fact `entry_cost`
     /// cannot derive from a positionless `Template`, so both are checked
     /// against what the placer actually reserves -- by placing one cell of
     /// each kind and arity into a scratch `World` and reading `NorCell.size`
     /// back -- the measurement the deleted genlib's derivation comment
     /// claimed had been done by hand, now done by the test suite. Without this, `nor_footprint_area`
-    /// and `merge_footprint_area` are two numbers nothing stops from
+    /// and `merge_footprint_area` are two derivations nothing stops from
     /// drifting away from `place_nor_gate`/`place_merge_gate`.
     #[test]
     fn every_cell_footprint_matches_what_the_placer_actually_reserves() {
@@ -1827,6 +1889,34 @@ mod tests {
                 "OR arity {arity}: place_merge_gate reserves {x}x{z}, merge_footprint_area says {}",
                 merge_footprint_area(arity)
             );
+        }
+    }
+
+    /// A cell's footprint area is what it is whichever way the cell is turned:
+    /// turning a rectangle swaps its sides.
+    ///
+    /// The tables this replaces could not have been asked. They were three
+    /// numbers that happened to be right for north.
+    #[test]
+    fn footprint_area_does_not_depend_on_facing() {
+        use crate::compile::geometry::CellFacing;
+
+        for index in 0..4u8 {
+            let facing = CellFacing::from_index(index).expect("0..4 is horizontal");
+            for arity in 1..=3usize {
+                assert_eq!(
+                    nor_footprint_area_facing(arity, facing),
+                    nor_footprint_area(arity),
+                    "NOR arity {arity} facing {index}"
+                );
+            }
+            for arity in 2..=3usize {
+                assert_eq!(
+                    merge_footprint_area_facing(arity, facing),
+                    merge_footprint_area(arity),
+                    "merge arity {arity} facing {index}"
+                );
+            }
         }
     }
 
