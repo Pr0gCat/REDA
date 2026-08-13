@@ -1168,15 +1168,22 @@ fn bare_reserve_for_merge(netlist: &Netlist, nets: &[Net], into: usize) -> i32 {
 /// see this same spec's "repeater is a real firewall" point).
 ///
 /// `facing` is the *source* gate's, not the sink's: the hop is measured off
-/// the merge's own output face, so it is that gate's cell this turns. `emit`
-/// passes its own binding, which is the one that decides how the gate at
-/// `net.source` was actually built. The other three callers all only *mirror*
-/// `emit`, and all three still pass a literal north -- but not for the same
-/// reason, and their own comments say which:
-/// `resolve_bypass_and_geometry` and `routing_stats::scan_bypass` have no
-/// placed gate to read a facing off at all, while
-/// `bare_branch_landing_strength` sits on a single-caller chain out of `emit`
-/// and simply has not been threaded yet.
+/// the merge's own output face, so it is that gate's cell this turns. Three
+/// of the four callers hand over a real one. `emit` passes its own binding,
+/// which is what decided how the gate at `net.source` was actually built.
+/// `bare_branch_landing_strength` passes that same binding, threaded down to
+/// it through `compute_net_source_strengths`, so the strength it predicts is
+/// measured along the geometry `emit` will really lay.
+/// `routing_stats::scan_bypass` passes the finished circuit's own
+/// `gate_facings` entry for that source gate, read by `routing_stats::
+/// source_pin` off the `CompiledCircuit` it is scanning (for a lever-sourced
+/// net that pair carries north, but a lever is never a merge, so no lever
+/// ever reaches the shift below).
+///
+/// Only `resolve_bypass_and_geometry` still passes a literal north, and not
+/// for want of threading: it is what *decides* which nets get a bypass, and
+/// it runs before `emit` has placed a single gate, so there is no built gate
+/// whose facing it could read -- see its own comment.
 fn bypass_source_start(
     netlist: &Netlist,
     net: &Net,
@@ -3763,36 +3770,56 @@ fn emit(
     // is not the only place that says so, and anyone widening it must widen
     // the rest or the readers will check a turned world against north's faces.
     //
-    // Everything that still hardcodes north, and what each one is waiting on:
+    // Everything that still hardcodes north, and why each one is still a
+    // literal. "No facing to read" is a claim about a site's *callers*, so
+    // every one below was checked by opening them; where a facing is in fact
+    // reachable, the entry says so rather than pretending otherwise:
     //
     //   * `cell_geometry_by_input_count` -- builds its cell cache keyed on
-    //     north alone. The key already admits all four.
+    //     north alone. The key already admits all four; the builder is handed
+    //     a `Netlist` and nothing else, so *which* facings to build cells for
+    //     is a question only its two callers can answer, and one of them
+    //     (`resolve_bypass_and_geometry`) has no answer to give.
     //   * `resolve_bypass_and_geometry` -- one binding covering
     //     `source_pin_position`, the `cell_of_count` key and
     //     `bypass_source_start`; source and sink facings collapsed into one,
-    //     which only holds while they are equal.
+    //     which only holds while they are equal. It *decides* which nets
+    //     bypass, so it necessarily runs before this emitter places anything.
     //   * `resolve_directed_dust_terminals` and `merge_gate_body_owners` --
     //     local bindings, each needing a facing *per gate* rather than one
-    //     (see their own comments).
+    //     (see their own comments for exactly which of their callers could
+    //     supply one and which could not).
     //   * `legacy_primitive_nodes` -- the `gate_footprint` call that records
     //     what this emitter built, for the seed the planner then realises.
     //     Also per gate, and travelling beside `primitive_anchors`.
-    //   * `routing_stats`: `scan_bypass`, `source_pin`'s lever arm, and four
-    //     `cell_of_count` lookups. It reads a finished world back without ever
-    //     being handed `gate_facings`.
+    //   * `routing_stats`: `source_pin`'s lever arm, and four `cell_of_count`
+    //     lookups keyed on the *sink* gate. Not for want of facings -- that
+    //     module holds the `CompiledCircuit`, and `scan_bypass` now reads its
+    //     source gate's facing straight off `gate_facings`. The lever arm has
+    //     nothing to read, because facings are recorded per gate and a lever
+    //     is not one. The four lookups would have to widen the cache above
+    //     first: it only ever has north's key built, so asking it for a turned
+    //     sink's geometry indexes a key nobody inserted.
     //   * `compile` and `compile_planned` -- both fill `CompiledCircuit::
-    //     gate_facings` with `vec![NORTH; gates]`. These are the two the
-    //     verifiers actually read, so they are the ones that must stop being a
-    //     constant *first*: widening a placer while these still say north
-    //     produces a world every verifier rejects.
-    //   * `planner::emit_primitives` (five calls) and
-    //     `planner::plan_from_netlist_shaped`'s `gate_footprint` call -- the
-    //     planner's own placement path, which is `PlanCandidate::facing_of`'s
-    //     to widen, not this one's. `route_in_order` there already asks
-    //     `facing_of` and so needs no change.
+    //     gate_facings` with `vec![NORTH; gates]`. Each does have a
+    //     `PlanCandidate` in scope whose `facing_of` would answer (north, for
+    //     every node, today), so this is a choice rather than a gap: these two
+    //     are what every verifier reads, so they must start varying with the
+    //     placer that makes them vary, and not one commit before it.
+    //   * `planner::emit_primitives` (five calls) -- likewise holds the
+    //     candidate, and `facing_of` would answer north for every node today
+    //     (`variant_indices` is zero-filled by every constructor and nothing
+    //     outside a test writes it). Asking it here is a no-op until the
+    //     placer chooses, and stops being one the same moment -- so it belongs
+    //     with that change, beside the verifiers, not ahead of them.
+    //   * `planner::plan_from_netlist_shaped`'s `gate_footprint` call --
+    //     records footprints while the candidate is still being built, so
+    //     there is genuinely no `facing_of` to ask yet. `route_in_order`, on
+    //     the same path but downstream of construction, already asks it.
     //
-    // `git grep -n "CellFacing::NORTH" -- src` regenerates that list; keep the
-    // two in agreement rather than trusting either alone.
+    // `git grep -n "CellFacing::NORTH" -- src` regenerates that list (its
+    // remaining hits are test code); keep the two in agreement rather than
+    // trusting either alone.
     let facing = geometry::CellFacing::NORTH;
     let mut gate_cell: Vec<NorCell> = Vec::with_capacity(netlist.gates.len());
     let mut primitive_anchors: Vec<Anchor> =
@@ -4778,7 +4805,11 @@ fn resolve_bypass_and_geometry(
     // that knows how a gate was actually built -- is downstream of the answer.
     // The three uses below are what `cell_geometry_by_input_count` was keyed
     // for and what `emit` will replay, so they have to agree with `emit`'s own
-    // binding, which is north.
+    // binding, which is north. The other caller, `routing_stats::
+    // recompute_geometry`, replays this pass from a `Netlist` and nothing else
+    // -- on purpose, so what it reports is re-derived rather than remembered
+    // -- so it has no facing to hand over either, even though the module above
+    // it holds a finished `CompiledCircuit`.
     //
     // One binding stands for two different gates here: the net's *source* (at
     // `source_pin_position` and `bypass_source_start`) and its *sink* (the
@@ -5044,13 +5075,20 @@ fn merge_gate_body_owners(
     // single `CellFacing` parameter would type-check and be wrong the first
     // time two merges face different ways.
     //
-    // Nor is there a slice to pass today. Of the four callers, only `emit` has
-    // a facing at all (its own binding); `resolve_directed_dust_terminals`,
-    // `verify_connectivity` and `verify_signal_strength` all run against
-    // `emit`'s world before any `CompiledCircuit` -- and so any `gate_facings`
-    // -- exists, and would each have to write the same literal. When `emit`
-    // starts turning gates, the per-gate choice it makes is what has to arrive
-    // here, threaded from `emit` through all four.
+    // Nor is there a slice to pass today, but the four callers do not divide
+    // as neatly as "only `emit` knows". `emit` has its own binding.
+    // `resolve_directed_dust_terminals` runs inside `compile` against `emit`'s
+    // baseline world, before any `CompiledCircuit` -- and so any
+    // `gate_facings` -- exists. `verify_connectivity` and
+    // `verify_signal_strength` each run from two places: that same point
+    // inside `compile`, and `verify_realised_world`, which the planner calls
+    // on a world it realised itself. Only that second path has facings
+    // anywhere near it -- `planner::realise_and_verify`'s own candidate, one
+    // frame up, answering `facing_of` per node -- so threading this means
+    // giving *both* paths a slice, not just the planner's, or the same
+    // invariant would be checked against two different ideas of the geometry.
+    // When `emit` starts turning gates, the per-gate choice it makes is what
+    // has to arrive here, threaded from `emit` through all four.
     let facing = geometry::CellFacing::NORTH;
 
     let mut owners = HashMap::new();

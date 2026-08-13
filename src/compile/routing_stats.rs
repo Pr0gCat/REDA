@@ -247,29 +247,29 @@ fn scan_socket_entry(world: &World, landing: Position, socket: Position, row_z_g
     scan_bent_path(world, landing, &waypoints)
 }
 
-/// Mirrors the bypass branch of `emit`'s Columns pass exactly: from `pin`
-/// (via `bypass_source_start`'s own one-extra-hop shift, whenever the net's
-/// source is a merge that needs to jog off its own column -- see that
-/// function's doc comment for why that hop exists and cannot be folded into
-/// `waypoints` the way an ordinary bend can), an optional sideways bend onto
-/// the sink's approach column (`exit_x`), an optional second bend at the
+/// Mirrors the bypass branch of `emit`'s Columns pass exactly: from the
+/// source pin (via `bypass_source_start`'s own one-extra-hop shift, whenever
+/// the net's source is a merge that needs to jog off its own column -- see
+/// that function's doc comment for why that hop exists and cannot be folded
+/// into `waypoints` the way an ordinary bend can), an optional sideways bend
+/// onto the sink's approach column (`exit_x`), an optional second bend at the
 /// destination row, then the socket.
+///
+/// `source` is exactly `source_pin`'s own pair: the cell the net's source
+/// drives into, and the facing of the cell driving it. Both, not just the
+/// pin, because that extra hop is measured off the source cell's own output
+/// face -- the pin alone cannot say where it lands.
 fn scan_bypass(
     world: &World,
     netlist: &Netlist,
     net: &Net,
-    pin: Position,
+    source: (Position, geometry::CellFacing),
     exit_x: i32,
     socket: Position,
     row_z_gate: i32,
 ) -> PartTotals {
-    // North, and a literal: this module counts parts by re-deriving `emit`'s
-    // own geometry from a `Netlist` and a finished `World`, and it is handed
-    // neither a `CompiledCircuit` nor its `gate_facings` (see this module's
-    // `source_pin`, which names north for a lever for the same reason). While
-    // `emit` builds north this is exact; when it stops, this signature is one
-    // of the ones that has to grow a facing source.
-    let start = super::bypass_source_start(netlist, net, pin, exit_x, geometry::CellFacing::NORTH);
+    let (pin, source_facing) = source;
+    let start = super::bypass_source_start(netlist, net, pin, exit_x, source_facing);
     let extra_hop = if start != pin { classify(world, start) } else { PartTotals::default() };
 
     let mut waypoints: Vec<Position> = Vec::new();
@@ -363,18 +363,39 @@ fn scan_full_track(world: &World, source_x: i32, lo: i32, hi: i32, y: i32, z: i3
     totals
 }
 
-fn source_pin(netlist: &Netlist, compiled: &CompiledCircuit, source: Source) -> Position {
+/// The cell a net's source drives into, and the facing of the cell that
+/// drives it. Both come off the same arm because one decision settles both:
+/// where the pin sits is that facing's `output_direction` applied to the
+/// source's own anchor. `scan_bypass` needs the facing for the very net whose
+/// pin this returns, so returning the pair is one lookup rather than two that
+/// could disagree.
+fn source_pin(
+    netlist: &Netlist,
+    compiled: &CompiledCircuit,
+    source: Source,
+) -> (Position, geometry::CellFacing) {
     match source {
-        // A lever is still built north -- Stage 1 is where placement starts
-        // choosing for them too. Named rather than bare so that is a decision
-        // the next reader can find, not a constant they have to recognise.
+        // A lever is still built north -- `CompiledCircuit` records facings
+        // per *gate*, and `emit` places every lever with its own north
+        // binding, so there is nothing else to read. Stage 1 is where
+        // placement starts choosing for levers too. Named rather than bare so
+        // that is a decision the next reader can find, not a constant they
+        // have to recognise.
         Source::Lever(i) => {
+            let facing = geometry::CellFacing::NORTH;
             let (x, y, z) = compiled.input_positions[&netlist.inputs[i]];
-            Position::new(x, y, z).offset(geometry::output_direction(geometry::CellFacing::NORTH))
+            (
+                Position::new(x, y, z).offset(geometry::output_direction(facing)),
+                facing,
+            )
         }
         Source::Gate(g) => {
+            let facing = compiled.gate_facings[g];
             let (x, y, z) = compiled.gate_output_positions[&netlist.gates[g].output];
-            Position::new(x, y, z).offset(geometry::output_direction(compiled.gate_facings[g]))
+            (
+                Position::new(x, y, z).offset(geometry::output_direction(facing)),
+                facing,
+            )
         }
     }
 }
@@ -397,7 +418,7 @@ pub fn analyze(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<RoutingR
             Source::Lever(i) => netlist.inputs[i].clone(),
             Source::Gate(g) => netlist.gates[g].output.clone(),
         };
-        let pin = source_pin(netlist, compiled, net.source);
+        let (pin, source_facing) = source_pin(netlist, compiled, net.source);
 
         if bypass[n] {
             // `compute_bypass` only admits nets with exactly one channel and
@@ -411,7 +432,10 @@ pub fn analyze(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<RoutingR
             let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
 
             let mut parts: BTreeMap<RoutePart, PartTotals> = BTreeMap::new();
-            parts.insert(RoutePart::Bypass, scan_bypass(world, netlist, net, pin, exit_x, socket, row_z_gate));
+            parts.insert(
+                RoutePart::Bypass,
+                scan_bypass(world, netlist, net, (pin, source_facing), exit_x, socket, row_z_gate),
+            );
 
             let sink_label = format!("{}.in[{}]", netlist.gates[gate].output, input_index);
             edges.push(EdgeRoute { source: source_label, sink: sink_label, hops: 1, parts });
@@ -514,7 +538,7 @@ pub fn distinct_totals_by_part(
 
     let mut total: BTreeMap<RoutePart, PartTotals> = BTreeMap::new();
     for (n, net) in nets.iter().enumerate() {
-        let pin = source_pin(netlist, compiled, net.source);
+        let (pin, source_facing) = source_pin(netlist, compiled, net.source);
 
         if bypass[n] {
             let (gate, input_index) = net.sinks[0][0];
@@ -523,7 +547,8 @@ pub fn distinct_totals_by_part(
             let cell = &cell_of_count[&(netlist.gates[gate].inputs.len(), geometry::CellFacing::NORTH)];
             let (dx, dy, dz) = cell.input_offsets[input_index];
             let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
-            *total.entry(RoutePart::Bypass).or_default() += scan_bypass(world, netlist, net, pin, exit_x, socket, row_z_gate);
+            *total.entry(RoutePart::Bypass).or_default() +=
+                scan_bypass(world, netlist, net, (pin, source_facing), exit_x, socket, row_z_gate);
             continue;
         }
 
