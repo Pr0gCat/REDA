@@ -1151,6 +1151,8 @@ by signal name, and a bare merge's own body is what that lookup returns.
   - `pub enum Weld { AtSocket { repeater: usize, junction: usize, input_index: usize }, BesideAt { lock: usize, data: usize, side: RelativeSide } }`
   - `pub struct BodyGraph { pub bodies: Vec<Body>, pub pulls: Vec<Pull>, pub welds: Vec<Weld>, pub nodes: Vec<Vec<usize>>, pub anchor_body: Vec<usize> }`
   - `pub fn attach_offset(attach: Attach, body: &Body) -> [f64; 3]`
+  - `pub fn pin_hops(body: &Body) -> i32` -- 2 for a NOR's torch, 1 for
+    everything else
   - `pub struct Cell { pub offset: (i32, i32, i32), pub carries: Option<String> }`
   - `pub fn cells(body: &Body) -> Vec<Cell>`
   - `pub fn build(netlist: &Netlist, graph: &PrimitiveGraph, start: &[Anchor], pinned: &PortPlacements) -> Result<BodyGraph, String>` -- the error is a sentence, because the only two failures are "a gate instantiated no primitive" and "a declared input has no lever", and `RelaxError::CannotBuild` is what carries it
@@ -1492,12 +1494,26 @@ pub struct BodyGraph {
 - [ ] **Step 4: Write `attach_offset`**
 
 ```rust
+/// How many hops out along a body's output face its pin sits.
+///
+/// One for everything except a NOR, whose torch stands in the first hop and
+/// whose pin is therefore the second: `place_merge_gate` puts a merge's pin
+/// one hop from its junction, and `place_primary_input` puts a lever's one hop
+/// from the lever. An earlier draft keyed this off [`BodyKind`], which made a
+/// lever's pin two hops out here and one hop out everywhere it is really
+/// written.
+pub fn pin_hops(body: &Body) -> i32 {
+    match body.what {
+        BodyKind::Primitive { kind: Primitive::Torch, .. } => 2,
+        _ => 1,
+    }
+}
+
 /// Where an attachment sits relative to its body's own position.
 ///
 /// A gate cell's origin is its support (a NOR) or its junction (a merge), and
 /// both put their sockets on `geometry::input_directions` and their pin out
-/// along `geometry::output_direction` -- a NOR two hops, because its torch
-/// stands in the first one, a merge one.
+/// along `geometry::output_direction`, [`pin_hops`] of them.
 pub fn attach_offset(attach: Attach, body: &Body) -> [f64; 3] {
     let facing = body.facing;
     match attach {
@@ -1507,13 +1523,9 @@ pub fn attach_offset(attach: Attach, body: &Body) -> [f64; 3] {
             [step.x as f64, step.y as f64, step.z as f64]
         }
         Attach::Pin => {
-            let hops = match body.what {
-                BodyKind::Junction { .. } => 1,
-                BodyKind::Primitive { .. } => 2,
-            };
             let direction = geometry::output_direction(facing);
             let mut step = Position::new(0, 0, 0);
-            for _ in 0..hops {
+            for _ in 0..pin_hops(body) {
                 step = step.offset(direction);
             }
             [step.x as f64, step.y as f64, step.z as f64]
@@ -1581,9 +1593,13 @@ pub fn cells(body: &Body) -> Vec<Cell> {
             // into one sink -- so it is on every input net at once. Modelled
             // as the first, which is enough: what matters is that it is *not*
             // inert and *not* on the output net.
+            //
+            // A lever has no inputs and its own block is still a conductor on
+            // the net it drives, so it falls back to that. Labelling it inert
+            // would let a foreign net run straight against a lever.
             cells.push(Cell {
                 offset: (0, 0, 0),
-                carries: body.inputs.first().cloned(),
+                carries: body.inputs.first().cloned().or_else(|| Some(output.clone())),
             });
             for (index, signal) in body.inputs.iter().enumerate() {
                 let step = Position::new(0, 0, 0).offset(geometry::input_directions(facing)[index]);
@@ -1594,14 +1610,8 @@ pub fn cells(body: &Body) -> Vec<Cell> {
             }
 
             let out = geometry::output_direction(facing);
-            // A NOR's torch stands between origin and pin; a merge's junction
-            // is the origin, so its pin is one hop rather than two.
-            let hops = match body.what {
-                BodyKind::Junction { .. } => 1,
-                BodyKind::Primitive { .. } => 2,
-            };
             let mut step = Position::new(0, 0, 0);
-            for _ in 0..hops {
+            for _ in 0..pin_hops(body) {
                 step = step.offset(out);
                 cells.push(Cell {
                     offset: (step.x, step.y, step.z),
@@ -1627,8 +1637,7 @@ pub fn cells(body: &Body) -> Vec<Cell> {
                 cells.push(Cell {
                     offset: (block.position.x, block.position.y, block.position.z),
                     carries: match block.kind {
-                        // A repeater's floor and a lever's floor are inert: a
-                        // net may run beside them.
+                        // A repeater's floor is inert: a net may run beside it.
                         BlockKind::Solid => None,
                         _ => body.inputs.first().cloned(),
                     },
@@ -2130,23 +2139,33 @@ pub const PROJECTION_ROUNDS: usize = 64;
 /// ring rather than in a line: a ring at radius `r` around a cell has about
 /// `8r` lattice cells on it, and `8r >= ROUTE_PITCH * d` gives `r >= d / 4`.
 ///
+/// The spec states this term as `routed_degree * route_width` outright -- a
+/// length. That is the *total* width the routes need, not the radius that
+/// supplies it, and spending it as a radius would hold two degree-4 bodies
+/// eight cells apart before clearance was even added. The perimeter step
+/// converts the one into the other, and the spec's term 3 is amended to match.
+///
 /// **This is the design's one guessed number.** The spec says how it fails: a
 /// halo is not a channel, and a high-degree gate gets a large ring whether or
 /// not its neighbours needed one. If placements come out routable but
 /// wasteful, or compact but unroutable, this is what was wrong.
 pub fn reservation(routed_degree: usize) -> f64 {
-    routed_degree as f64 / 4.0
+    ROUTE_PITCH * routed_degree as f64 / 8.0
 }
 ```
 
 - [ ] **Step 4: Write the separation predicate and the required table**
 
 ```rust
-/// Which axes a repair may use.
+/// Which axes relaxation may move a body along.
 ///
-/// Stage 1 is in-plane: bodies stay at the Y their starting layout gave them.
-/// Stage 2 adds Y, and that one-word difference is the whole of "let
-/// separation choose the axis".
+/// It governs the linear solve as well as the projection, which is what makes
+/// "bodies stay at the Y their starting layout gave them" true rather than
+/// merely intended: restricting only the projection leaves the solve free to
+/// pull every body onto one plane.
+///
+/// Stage 1 is in-plane. Stage 2 adds Y, and that one-word difference is the
+/// whole of "let separation choose the axis".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Axes(&'static [usize]);
 
@@ -2154,7 +2173,7 @@ impl Axes {
     pub const IN_PLANE: Axes = Axes(&[0, 2]);
     pub const ALL: Axes = Axes(&[0, 1, 2]);
 
-    fn iter(self) -> impl Iterator<Item = usize> {
+    pub fn iter(self) -> impl Iterator<Item = usize> {
         self.0.iter().copied()
     }
 }
@@ -2173,20 +2192,15 @@ pub struct Violation {
 /// occupies" -- is not a distance but the thing distances are measured
 /// between, and it is why this is per-body rather than one number.
 pub fn required_separations(graph: &BodyGraph) -> Vec<f64> {
+    // Pulls are the edges a router has to lay dust for, and they are already
+    // exactly that: `signal_pulls` never emits one between a welded pair,
+    // because a welded pair is adjacent by construction and no wire runs
+    // between them. An earlier draft subtracted the welds again here, which
+    // took a route away from every junction that had not been charged for one.
     let mut degree = vec![0usize; graph.bodies.len()];
     for pull in &graph.pulls {
         degree[pull.from.0] += 1;
         degree[pull.to.0] += 1;
-    }
-    // A welded pair is adjacent by construction, so no wire runs between them
-    // and neither reserves room for one.
-    for weld in &graph.welds {
-        let (left, right) = match *weld {
-            Weld::AtSocket { repeater, junction, .. } => (repeater, junction),
-            Weld::BesideAt { lock, data, .. } => (lock, data),
-        };
-        degree[left] = degree[left].saturating_sub(1);
-        degree[right] = degree[right].saturating_sub(1);
     }
     degree
         .into_iter()
@@ -2681,8 +2695,13 @@ pub enum RelaxError {
     /// the remedy differs: constraints that contradict, not a budget that ran
     /// out.
     Deadlocked { worst: Violation },
-    /// A connected component with nothing pinned in it: it may slide freely,
-    /// so the system has no unique answer.
+    /// The factorisation found no positive pivot.
+    ///
+    /// Not the unpinned-component case, which `components_without_a_pin`
+    /// handles before the matrix is built. What is left is a stiffness that is
+    /// not positive, or a pull whose two ends are the same body -- either of
+    /// which is a bug in how the graph was built rather than a property of the
+    /// circuit.
     Unsolvable { component_row: usize },
     /// The netlist and its primitive graph do not agree well enough to build
     /// bodies from -- a gate with no primitive, a declared input with no
@@ -2705,7 +2724,7 @@ impl std::fmt::Display for RelaxError {
             ),
             RelaxError::Unsolvable { component_row } => write!(
                 f,
-                "the spring system has no unique answer at body {component_row}: nothing in its component is pinned"
+                "the spring system has no positive pivot at body {component_row}, which means the graph was built wrong"
             ),
             RelaxError::CannotBuild { reason } => {
                 write!(f, "cannot build bodies for this netlist: {reason}")
@@ -2793,12 +2812,16 @@ fn right_hand_side(graph: &BodyGraph, free: &[Option<usize>], order: usize, axis
 fn choose_facings(graph: &mut BodyGraph) -> bool {
     let mut turned = false;
     for body in 0..graph.bodies.len() {
-        if matches!(graph.bodies[body].what, BodyKind::Junction { .. })
-            && graph.bodies[body].pinned
-        {
-            continue;
-        }
-        let mut best = (graph.bodies[body].facing, f64::INFINITY);
+        // Every body, pinned ones included. `PortPlacements` fixes where a
+        // port sits, not which way its cell is built -- and a pinned output
+        // whose route has to leave the wrong face is exactly the case a
+        // facing exists to fix.
+        // Recorded before the trials, because the loop leaves the *last*
+        // facing tried in the body -- comparing against that would report a
+        // turn on almost every body on almost every step, and the relaxation
+        // would never satisfy its convergence test.
+        let was = graph.bodies[body].facing;
+        let mut best = (was, f64::INFINITY);
         for index in 0..4u8 {
             let facing = crate::compile::geometry::CellFacing::from_index(index)
                 .expect("0..4 is horizontal");
@@ -2808,10 +2831,10 @@ fn choose_facings(graph: &mut BodyGraph) -> bool {
                 best = (facing, energy);
             }
         }
-        if graph.bodies[body].facing != best.0 {
+        graph.bodies[body].facing = best.0;
+        if best.0 != was {
             turned = true;
         }
-        graph.bodies[body].facing = best.0;
     }
     turned
 }
@@ -2854,10 +2877,23 @@ pub fn relax(
         .map_err(|reason| RelaxError::CannotBuild { reason })?;
     perturb(&mut bodies, effort.seed);
 
+    // A component with nothing pinned in it may slide freely, so its system
+    // has no unique answer and the factorisation would refuse it. That is the
+    // normal case, not an edge one: `PortPlacements::default()` pins nothing,
+    // and it is what `compile()` passes. So each such component gets one body
+    // held at its starting position.
+    //
+    // Which body does not matter and the answer is not arbitrary: the solution
+    // is unique up to translation, so holding any member fixes the same
+    // relative layout. The lowest index is chosen because it is reproducible,
+    // and nothing downstream cares where a circuit's origin is -- routing and
+    // realisation measure a bounding box, not an absolute position.
+    let held = components_without_a_pin(&bodies);
+
     let mut free = vec![None; bodies.bodies.len()];
     let mut order = 0;
     for (index, body) in bodies.bodies.iter().enumerate() {
-        if !body.pinned {
+        if !body.pinned && !held.contains(&index) {
             free[index] = Some(order);
             order += 1;
         }
@@ -2870,7 +2906,14 @@ pub fn relax(
     for iteration in 1..=effort.iterations {
         let before: Vec<[f64; 3]> = bodies.bodies.iter().map(|body| body.position).collect();
 
-        for axis in 0..3 {
+        // The same axes the projection may repair on, and for the same
+        // reason. An earlier draft solved all three and restricted only the
+        // projection, which does not hold a body on its storey: springs have
+        // zero rest length, so the Y solve pulls every unpinned body onto its
+        // neighbours' plane and the storeys `Shape::Tall` laid out collapse.
+        // Stage 1 promises bodies stay at the Y their starting layout gave
+        // them; this is what keeps that true.
+        for axis in axes.iter() {
             let mut rhs = right_hand_side(&bodies, &free, order, axis);
             factorisation.solve(&mut rhs);
             for (index, slot) in free.iter().enumerate() {
@@ -2914,6 +2957,58 @@ pub fn relax(
         iterations: effort.iterations,
         worst,
     })
+}
+
+/// One body per pull-connected component that has no pinned member, to hold
+/// that component still during the solve.
+///
+/// Without this the Laplacian is only positive *semi*-definite -- a component
+/// free to translate has a zero eigenvalue -- and [`Factorisation::of`]
+/// refuses it, which is correct of the factorisation and useless as a
+/// placement.
+///
+/// Components are found over the pulls, not the welds: a welded body is
+/// projected onto its anchor every round regardless of where the solve put it,
+/// so it needs no separate hold. It reaches a pinned component through the
+/// same pull its anchor does.
+fn components_without_a_pin(graph: &BodyGraph) -> Vec<usize> {
+    let count = graph.bodies.len();
+    let mut parent: Vec<usize> = (0..count).collect();
+
+    fn find(parent: &mut [usize], mut node: usize) -> usize {
+        while parent[node] != node {
+            parent[node] = parent[parent[node]];
+            node = parent[node];
+        }
+        node
+    }
+
+    for pull in &graph.pulls {
+        let (left, right) = (find(&mut parent, pull.from.0), find(&mut parent, pull.to.0));
+        if left != right {
+            parent[left] = right;
+        }
+    }
+
+    let mut has_pin = vec![false; count];
+    for index in 0..count {
+        if graph.bodies[index].pinned {
+            let root = find(&mut parent, index);
+            has_pin[root] = true;
+        }
+    }
+
+    let mut held = Vec::new();
+    let mut claimed = vec![false; count];
+    for index in 0..count {
+        let root = find(&mut parent, index);
+        if has_pin[root] || claimed[root] {
+            continue;
+        }
+        claimed[root] = true;
+        held.push(index);
+    }
+    held
 }
 
 /// Nudge the start, reproducibly.

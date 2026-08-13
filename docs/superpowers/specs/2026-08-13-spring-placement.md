@@ -154,7 +154,15 @@ body reserves, beyond its own clearance, room for the nets that must reach it.
 The reservation is the number of edges that must be *routed* to it -- which is
 its degree less the edges that stay inside one body, because a torch's support
 is one of the torch's own cells and no wire runs between them -- times the
-width one route needs.
+width one route needs, spread over the ring those routes arrive on. A ring at
+radius `r` around a cell has about `8r` cells on it, so `d` lanes at
+`route_width` need `r >= route_width * d / 8`.
+
+The distinction matters because the two differ by a factor of eight and only
+one of them is a distance. The product is how much *width* the routes need in
+total; the separation this is a term of is a *radius*. Spending the product as
+a radius would hold two degree-four bodies eight cells apart before clearance
+was added at all.
 
 That is a first estimate, and the doubt about it is specific rather than
 general: a halo is not a channel. Legacy reserves *shared* corridors that many
@@ -368,8 +376,13 @@ Four terms, each with a source:
 2. two cells of conductor clearance, from
    `2026-08-09-channel-safety-condition.md`, between different signals only;
 3. room for the nets that must reach the body -- the edges that need routing,
-   which is its degree less its welds, times one route's width, so that a
-   relaxed placement has corridors rather than only clearance;
+   which is its degree less its welds, times one route's width, **spread over
+   the ring that carries them**: routes arrive from every side, so `d` lanes at
+   a route's width sit on a perimeter rather than in a line, and the radius
+   that supplies them is `route_width * d / 8`. An earlier draft wrote the bare
+   product, which is the total width the routes need rather than the radius
+   that supplies it -- it would have held two degree-four bodies eight cells
+   apart before clearance was added at all;
 4. one cell of rounding margin, which is what rounding a position can cost --
    see "What `snap` has left to do".
 
@@ -759,11 +772,19 @@ build yet is a test nobody can write.
 **Stage 2 -- separation that may push upwards**
 
 8. **A stacked pair is left alone.** Two bodies whose cells share a column and
-   differ in Y are already separated, and the projection moves neither. This is
-   the vertical exemption read straight off the safety condition -- its unsafe
-   case needs a horizontal cardinal step, so there is no pure-vertical case at
-   all -- and it is the whole reason height is cheaper than width. Test 9 is
-   what it buys; this is the mechanism, tested where it can be seen.
+   are two apart in Y are already separated, and the projection moves neither.
+   That is the whole reason height is cheaper than width: two cells of Y
+   against a horizontal requirement that also carries the routing reservation.
+   Test 9 is what it buys; this is the mechanism, tested where it can be seen.
+
+   Two rather than one, which the safety condition alone would allow -- its
+   unsafe case needs a horizontal cardinal step, so it has no pure-vertical
+   case at all. The condition is derived from `dust_reach`, which is the
+   *join* mechanism; power reaching a block from the dust above or below it is
+   a different mechanism and nothing here has derived it. Two is
+   `COLUMN_CLEARANCE` applied to an axis rather than a new claim, and it is
+   already cheap enough to produce the stacking. Tightening it to one is worth
+   a measurement, and needs the derivation first.
 9. **Crowding produces height.** Six gates all consuming one signal, packed
    tightly enough that spreading sideways costs more than stacking, end up on
    more than one level. This replaces the test `Shape::Tall` currently has, and
