@@ -3449,6 +3449,7 @@ fn bare_branch_landing_strength(
     gate_cell: &[NorCell],
     lever_pin: &[Position],
     gate_pin: &[Position],
+    facing: geometry::CellFacing,
 ) -> u8 {
     let (gate, input_index) = target;
     let reserve = bare_reserve_for_merge(netlist, nets, gate);
@@ -3464,18 +3465,7 @@ fn bare_branch_landing_strength(
             Source::Lever(i) => lever_pin[i],
             Source::Gate(g) => gate_pin[g],
         };
-        // North, as a literal, and this one is a literal only because nobody
-        // has threaded it yet -- not because there is nothing to thread. Be
-        // honest about that: the chain here is `emit` -> `compute_net_source_
-        // strengths` -> this, single-caller at every link, and `emit`'s own
-        // `facing` binding is live at the top of it (the gate bodies and their
-        // pins are already placed by the time `compute_net_source_strengths`
-        // is called). Two signatures, both already carrying
-        // `#[allow(clippy::too_many_arguments)]`, stand between the two.
-        //
-        // The value is right today because `emit` builds north; the day it
-        // does not, this is the first site to plumb, and it plumbs cleanly.
-        let start = bypass_source_start(netlist, net, pin, exit_x, geometry::CellFacing::NORTH);
+        let start = bypass_source_start(netlist, net, pin, exit_x, facing);
         let strength_at_start = if start != pin {
             source_strength.saturating_sub(1)
         } else {
@@ -3565,6 +3555,7 @@ fn compute_net_source_strengths(
     lever_pin: &[Position],
     gate_pin: &[Position],
     gate_cell: &[NorCell],
+    facing: geometry::CellFacing,
 ) -> Vec<u8> {
     let mut net_source_strength = vec![MAX_SIGNAL_STRENGTH; nets.len()];
 
@@ -3651,6 +3642,7 @@ fn compute_net_source_strengths(
                     gate_cell,
                     lever_pin,
                     gate_pin,
+                    facing,
                 )
                 .saturating_sub(1)
             } else {
@@ -3773,11 +3765,6 @@ fn emit(
     //
     // Everything that still hardcodes north, and what each one is waiting on:
     //
-    //   * `bare_branch_landing_strength` -- passes a literal to
-    //     `bypass_source_start`. The one below that is reachable from *this*
-    //     binding today (`emit` -> `compute_net_source_strengths` -> it,
-    //     single-caller throughout); it is unthreaded, not unthreadable, and
-    //     is the first to do. See its own comment.
     //   * `cell_geometry_by_input_count` -- builds its cell cache keyed on
     //     north alone. The key already admits all four.
     //   * `resolve_bypass_and_geometry` -- one binding covering
@@ -3890,6 +3877,7 @@ fn emit(
         &lever_pin,
         &gate_pin,
         &gate_cell,
+        facing,
     );
 
     // Strength planning: work out what every ramp's entry and every track's
