@@ -1266,8 +1266,8 @@ fn negative_expansion_for(kind: GateKind) -> Expansion {
 /// what an area is.
 ///
 /// `u32`, not the `usize` an arity is, because [`RealisationCost`]'s `area`
-/// field is a `u32` and every caller of the two functions below puts the
-/// answer there.
+/// field is a `u32` and every non-test caller of the two functions below
+/// puts the answer there.
 fn footprint_area(arity: usize, facing: geometry::CellFacing, pin_hops: i32) -> u32 {
     let origin = Position::new(0, 0, 0);
     let mut min = (origin.x, origin.z);
@@ -1844,51 +1844,47 @@ mod tests {
     /// Both footprint functions are the one realisation fact `entry_cost`
     /// cannot derive from a positionless `Template`, so both are checked
     /// against what the placer actually reserves -- by placing one cell of
-    /// each kind and arity into a scratch `World` and reading `NorCell.size`
-    /// back -- the measurement the deleted genlib's derivation comment
-    /// claimed had been done by hand, now done by the test suite. Without this, `nor_footprint_area`
-    /// and `merge_footprint_area` are two derivations nothing stops from
+    /// each kind, arity, and facing into a scratch `World` and reading
+    /// `NorCell.size` back -- the measurement the deleted genlib's
+    /// derivation comment claimed had been done by hand, now done by the
+    /// test suite. Without this, `nor_footprint_area_facing`
+    /// and `merge_footprint_area_facing` are two derivations nothing stops from
     /// drifting away from `place_nor_gate`/`place_merge_gate`.
     #[test]
     fn every_cell_footprint_matches_what_the_placer_actually_reserves() {
+        use crate::compile::geometry::CellFacing;
         use crate::redstone::world::storage::World;
 
         // Big enough that a cell placed in the middle cannot be clipped by
         // the world bounds in any direction.
         const ORIGIN: (i32, i32, i32) = (8, 1, 8);
 
-        for arity in 1..=3 {
-            let mut world = World::new(20, 6, 20);
-            let cell = super::super::place_nor_gate(
-                &mut world,
-                ORIGIN,
-                arity,
-                super::super::geometry::CellFacing::NORTH,
-            );
-            let (x, _, z) = cell.size;
-            assert_eq!(
-                (x * z) as u32,
-                nor_footprint_area(arity),
-                "NOR arity {arity}: place_nor_gate reserves {x}x{z}, nor_footprint_area says {}",
-                nor_footprint_area(arity)
-            );
-        }
+        for index in 0..4u8 {
+            let facing = CellFacing::from_index(index).expect("0..4 is horizontal");
 
-        for arity in 2..=3 {
-            let mut world = World::new(20, 6, 20);
-            let cell = super::super::place_merge_gate(
-                &mut world,
-                ORIGIN,
-                arity,
-                super::super::geometry::CellFacing::NORTH,
-            );
-            let (x, _, z) = cell.size;
-            assert_eq!(
-                (x * z) as u32,
-                merge_footprint_area(arity),
-                "OR arity {arity}: place_merge_gate reserves {x}x{z}, merge_footprint_area says {}",
-                merge_footprint_area(arity)
-            );
+            for arity in 1..=3 {
+                let mut world = World::new(20, 6, 20);
+                let cell = super::super::place_nor_gate(&mut world, ORIGIN, arity, facing);
+                let (x, _, z) = cell.size;
+                assert_eq!(
+                    (x * z) as u32,
+                    nor_footprint_area_facing(arity, facing),
+                    "NOR arity {arity} facing {index}: place_nor_gate reserves {x}x{z}, nor_footprint_area_facing says {}",
+                    nor_footprint_area_facing(arity, facing)
+                );
+            }
+
+            for arity in 2..=3 {
+                let mut world = World::new(20, 6, 20);
+                let cell = super::super::place_merge_gate(&mut world, ORIGIN, arity, facing);
+                let (x, _, z) = cell.size;
+                assert_eq!(
+                    (x * z) as u32,
+                    merge_footprint_area_facing(arity, facing),
+                    "OR arity {arity} facing {index}: place_merge_gate reserves {x}x{z}, merge_footprint_area_facing says {}",
+                    merge_footprint_area_facing(arity, facing)
+                );
+            }
         }
     }
 
