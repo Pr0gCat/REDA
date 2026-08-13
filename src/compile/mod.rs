@@ -4435,24 +4435,30 @@ fn world_size(plan: &Floorplan, nets: &[Net], row_z: &[i32]) -> (i32, i32) {
     (size_x, size_z)
 }
 
-/// One gate cell's socket geometry per distinct input count (1..=3) --
-/// `NorCell`'s offsets are relative, so they do not depend on where a given
-/// gate actually sits, only on how many inputs it has. Shared by
-/// `resolve_bypass_and_geometry` (needs a candidate socket position before
-/// any real gate is placed) and `routing_stats` (needs the same lookup to
-/// read results back out of an already-compiled world).
-fn cell_geometry_by_input_count(netlist: &Netlist) -> HashMap<usize, NorCell> {
+/// One gate cell's socket geometry per distinct (input count, facing) pair --
+/// every offset a `NorCell` carries is relative to the cell's own origin, but
+/// as of `place_nor_gate` taking a `geometry::CellFacing`, "relative" still
+/// means "turned along with the cell": a west-facing 2-input cell's sockets
+/// sit at different offsets than a north-facing one's. Both the input count
+/// and the facing have to be in the key, or a lookup for one facing silently
+/// hands back another's geometry. Shared by `resolve_bypass_and_geometry`
+/// (needs a candidate socket position before any real gate is placed) and
+/// `routing_stats` (needs the same lookup to read results back out of an
+/// already-compiled world).
+fn cell_geometry_by_input_count(netlist: &Netlist) -> HashMap<(usize, geometry::CellFacing), NorCell> {
     let mut cells = HashMap::new();
     let mut scratch = World::new(20, GATE_ONLY_SCRATCH_HEIGHT, 20);
     for gate in &netlist.gates {
-        cells.entry(gate.inputs.len()).or_insert_with(|| {
-            place_nor_gate(
-                &mut scratch,
-                (8, GATE_Y, 8),
-                gate.inputs.len(),
-                geometry::CellFacing::NORTH,
-            )
-        });
+        cells
+            .entry((gate.inputs.len(), geometry::CellFacing::NORTH))
+            .or_insert_with(|| {
+                place_nor_gate(
+                    &mut scratch,
+                    (8, GATE_Y, 8),
+                    gate.inputs.len(),
+                    geometry::CellFacing::NORTH,
+                )
+            });
     }
     cells
 }
@@ -4466,13 +4472,13 @@ fn source_pin_position(
     netlist: &Netlist,
     plan: &Floorplan,
     row_z: &[i32],
-    cell_of_count: &HashMap<usize, NorCell>,
+    cell_of_count: &HashMap<(usize, geometry::CellFacing), NorCell>,
     source: Source,
 ) -> Position {
     match source {
         Source::Lever(i) => Position::new(plan.lever_x[i], GATE_Y, row_z[0]).offset(Facing::North),
         Source::Gate(g) => {
-            let cell = &cell_of_count[&netlist.gates[g].inputs.len()];
+            let cell = &cell_of_count[&(netlist.gates[g].inputs.len(), geometry::CellFacing::NORTH)];
             let torch = Position::new(
                 plan.centre_x[g] + cell.output_offset.0,
                 GATE_Y + cell.output_offset.1,
@@ -4710,7 +4716,7 @@ fn resolve_bypass_and_geometry(
 
         let pin = source_pin_position(netlist, plan, &baseline_row_z, &cell_of_count, net.source);
         let row_z_gate = baseline_row_z[plan.row_of[gate]];
-        let cell = &cell_of_count[&netlist.gates[gate].inputs.len()];
+        let cell = &cell_of_count[&(netlist.gates[gate].inputs.len(), geometry::CellFacing::NORTH)];
         let (dx, dy, dz) = cell.input_offsets[input_index];
         let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
 
@@ -6588,6 +6594,23 @@ mod tests {
                     turned.output_offset,
                     geometry::rotate(north.output_offset, facing),
                     "arity {arity} facing {index}: output"
+                );
+                // `output_offset` only says where the torch *is*; it says nothing
+                // about which way its own blockstate claims to hang. An
+                // implementation that turned the position but left the wall
+                // torch's `facing` hardcoded to North would still pass every
+                // assertion above at three facings out of four -- this is the
+                // one that catches it, by reading the block the turned cell
+                // actually wrote.
+                let torch = Position::new(
+                    origin.0 + turned.output_offset.0,
+                    origin.1 + turned.output_offset.1,
+                    origin.2 + turned.output_offset.2,
+                );
+                assert_eq!(
+                    turned_world.get(torch.x, torch.y, torch.z).facing,
+                    Some(geometry::output_direction(facing)),
+                    "arity {arity} facing {index}: torch blockstate facing"
                 );
                 // Turning a rectangle swaps its sides; it does not change its area.
                 let north_area = north.size.0 * north.size.2;

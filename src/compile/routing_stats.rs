@@ -35,9 +35,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use super::{
     approach_column, band_ramp_length, band_y, bent_path_cells, build_floorplan, build_nets,
-    cell_geometry_by_input_count, effective_band, reserve_columns, resolve_bypass_and_geometry, CompileError,
-    CompiledCircuit, Exit, Floorplan, Net, Netlist, Source, BYPASS_QUERY_MAX_DISTANCE, GATE_Y, OUTPUT_DIRECTION,
-    RAMP_REST_INTERVAL,
+    cell_geometry_by_input_count, effective_band, geometry, reserve_columns, resolve_bypass_and_geometry,
+    CompileError, CompiledCircuit, Exit, Floorplan, Net, Netlist, Source, BYPASS_QUERY_MAX_DISTANCE, GATE_Y,
+    OUTPUT_DIRECTION, RAMP_REST_INTERVAL,
 };
 use crate::redstone::simulator::position::Position;
 use crate::redstone::world::block::{BlockKind, Facing};
@@ -397,7 +397,7 @@ pub fn analyze(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<RoutingR
             let (gate, input_index) = net.sinks[0][0];
             let exit_x = approach_column(plan.centre_x[gate], input_index);
             let row_z_gate = row_z[plan.row_of[gate]];
-            let cell = &cell_of_count[&netlist.gates[gate].inputs.len()];
+            let cell = &cell_of_count[&(netlist.gates[gate].inputs.len(), geometry::CellFacing::NORTH)];
             let (dx, dy, dz) = cell.input_offsets[input_index];
             let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
 
@@ -468,7 +468,7 @@ pub fn analyze(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<RoutingR
 
                         let landing = Position::new(exit_x, GATE_Y, z - ramp_length);
                         let row_z_gate = row_z[plan.row_of[gate]];
-                        let cell = &cell_of_count[&netlist.gates[gate].inputs.len()];
+                        let cell = &cell_of_count[&(netlist.gates[gate].inputs.len(), geometry::CellFacing::NORTH)];
                         let (dx, dy, dz) = cell.input_offsets[input_index];
                         let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
                         *parts.entry(RoutePart::GateEntry).or_default() +=
@@ -511,7 +511,7 @@ pub fn distinct_totals_by_part(
             let (gate, input_index) = net.sinks[0][0];
             let exit_x = approach_column(plan.centre_x[gate], input_index);
             let row_z_gate = row_z[plan.row_of[gate]];
-            let cell = &cell_of_count[&netlist.gates[gate].inputs.len()];
+            let cell = &cell_of_count[&(netlist.gates[gate].inputs.len(), geometry::CellFacing::NORTH)];
             let (dx, dy, dz) = cell.input_offsets[input_index];
             let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
             *total.entry(RoutePart::Bypass).or_default() += scan_bypass(world, netlist, net, pin, exit_x, socket, row_z_gate);
@@ -543,7 +543,7 @@ pub fn distinct_totals_by_part(
                 match exit {
                     Exit::Socket { gate, input_index, .. } => {
                         let row_z_gate = row_z[plan.row_of[gate]];
-                        let cell = &cell_of_count[&netlist.gates[gate].inputs.len()];
+                        let cell = &cell_of_count[&(netlist.gates[gate].inputs.len(), geometry::CellFacing::NORTH)];
                         let (dx, dy, dz) = cell.input_offsets[input_index];
                         let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
                         *total.entry(RoutePart::GateEntry).or_default() +=
