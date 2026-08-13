@@ -2471,10 +2471,11 @@ has a source.
   - `pub fn required_separations(graph: &BodyGraph) -> Vec<f64>`
   - `pub struct PlacedCell { pub at: [f64; 3], pub carries: Vec<String> }`
   - `pub fn placed_cells(graph: &BodyGraph) -> Vec<Vec<PlacedCell>>`
-  - Not produced: `separate`, `shortfall`, `unseparated`, `exempt` and
-    `cheapest_axis` are private to `project.rs`. `separate` in particular takes
-    the axis and the distance it is told to move -- it chooses neither -- so
-    there is no signature here for a caller to hold on to.
+  - Not produced: `Offence`, `offence`, `unseparated`, `cheapest_axis`,
+    `welded_partners`, `exempt`, `separate` and `satisfy` are private to
+    `project.rs`. `separate` in particular takes the axis and the distance it is
+    told to move -- it chooses neither -- so there is no signature here for a
+    caller to hold on to.
 
 - [ ] **Step 1: Write the failing tests, and declare the module**
 
@@ -2574,6 +2575,10 @@ mod tests {
     /// Stage 1 may not spend height. Bodies stay at the Y their starting
     /// layout gave them, so a projection that reaches for the third dimension
     /// here has changed what the stage promised.
+    ///
+    /// It also has to separate them. "Nobody moved in Y" is true of a
+    /// projection that does nothing at all, so the horizontal check is what
+    /// makes this test about *in-plane* rather than about *inert*.
     #[test]
     fn in_plane_projection_never_moves_a_body_in_y() {
         let mut graph = graph_of(
@@ -2581,9 +2586,20 @@ mod tests {
             Vec::new(),
         );
         let required = vec![3.0; 3];
-        let _ = project(&mut graph, &required, Axes::IN_PLANE);
+        project(&mut graph, &required, Axes::IN_PLANE).expect("three bodies in a plane fit");
         for (index, body) in graph.bodies.iter().enumerate() {
             assert_eq!(body.position[1], 1.0, "body {index} left its storey");
+        }
+        for left in 0..3 {
+            for right in (left + 1)..3 {
+                let dx = (graph.bodies[left].position[0] - graph.bodies[right].position[0]).abs();
+                let dz = (graph.bodies[left].position[2] - graph.bodies[right].position[2]).abs();
+                assert!(
+                    dx.max(dz) >= 3.0 - SETTLED,
+                    "bodies {left} and {right} started 0.1 apart and are still {} apart",
+                    dx.max(dz)
+                );
+            }
         }
     }
 
@@ -2612,6 +2628,16 @@ mod tests {
             repeater[2] - junction[2],
         ];
         assert_eq!(offset, [-1.0, 0.0, 0.0], "input 0's socket is one cell west");
+
+        // The weld holding is only interesting if something was pulling on it.
+        // A projection that moved nothing at all would pass the assertion
+        // above, because the fixture starts the repeater at exactly the offset
+        // it is asked to end at.
+        let crowder = graph.bodies[2].position;
+        assert!(
+            (crowder[0] - 0.4).abs() > 1.0,
+            "the body separation was fighting never moved: it is still at {crowder:?}"
+        );
     }
 
     /// A pinned body takes no force, so everything moves around it.
@@ -2788,7 +2814,29 @@ pub fn required_separations(graph: &BodyGraph) -> Vec<f64> {
         .collect()
 }
 
-/// How far short of the requirement the closest offending pair of cells is.
+/// What one walk of a pair's cells found: how far short they are, and what
+/// clearing them along each axis would cost.
+///
+/// One struct rather than two functions because the two answers come from the
+/// same walk. Deciding whether a pair is violating and deciding which way to
+/// push it both range over every cell of one body against every cell of the
+/// other, and the test at the centre of that walk -- [`unseparated`] -- is a
+/// string comparison per net per cell pair. Asking separately meant walking
+/// once for the shortfall and once more per axis, three times over the same
+/// cells for an answer that had already been computed.
+#[derive(Debug, Clone, Copy)]
+struct Offence {
+    /// How far short of the requirement the closest offending pair of cells
+    /// is, by horizontal Chebyshev. Zero when no pair offends.
+    shortfall: f64,
+    /// Per axis, how far the worst offending pair falls short of that axis's
+    /// own target. Computed for all three whether or not [`Axes`] asks for
+    /// them: it is three subtractions inside a loop that is already comparing
+    /// strings, and it lets one walk answer either stage.
+    deficit: [f64; 3],
+}
+
+/// Measure one pair of bodies, cell against cell.
 ///
 /// **Cells, not centres.** A body is not a point: a torch is its support and
 /// its torch block, and two torches three apart facing each other have their
@@ -2816,26 +2864,51 @@ pub fn required_separations(graph: &BodyGraph) -> Vec<f64> {
 /// that a repeater is a firewall on its non-facing sides. Both are a
 /// measurement away, and both are the first thing to try if layouts come out
 /// sparse.
-fn shortfall(left: &[PlacedCell], right: &[PlacedCell], required: f64) -> f64 {
-    let mut worst: f64 = 0.0;
+fn offence(left: &[PlacedCell], right: &[PlacedCell], required: f64) -> Offence {
+    let mut found = Offence { shortfall: 0.0, deficit: [0.0; 3] };
     for here in left {
         for there in right {
             if !unseparated(here, there, required) {
                 continue;
             }
-            let dx = (here.at[0] - there.at[0]).abs();
-            let dz = (here.at[2] - there.at[2]).abs();
-            worst = worst.max(required - dx.max(dz));
+            let apart = [
+                (here.at[0] - there.at[0]).abs(),
+                (here.at[1] - there.at[1]).abs(),
+                (here.at[2] - there.at[2]).abs(),
+            ];
+            found.shortfall = found.shortfall.max(required - apart[0].max(apart[2]));
+            // The worst offending pair decides what a move along each axis
+            // costs, because moving on one axis shifts every pair by the same
+            // amount. Y is charged [`CONDUCTOR_CLEARANCE`] and the horizontal
+            // axes the pair's own requirement, which is the whole of "crowding
+            // buys height".
+            found.deficit[0] = found.deficit[0].max(required - apart[0]);
+            found.deficit[1] = found.deficit[1].max(CONDUCTOR_CLEARANCE - apart[1]);
+            found.deficit[2] = found.deficit[2].max(required - apart[2]);
         }
     }
-    worst.max(0.0)
+    found.shortfall = found.shortfall.max(0.0);
+    found
 }
 
 /// Whether this one pair of cells is a violation.
 ///
 /// Exempt when they *share* a signal -- the route between them is what makes
-/// them one thing -- and when either is inert, which keeps nothing out but its
-/// own cell, and cell exclusivity already covers that.
+/// them one thing -- and when either is inert.
+///
+/// Inert means a floor. `cells` emits an empty `carries` in exactly four
+/// places: a junction's floor, a lever's home floor and its pin's floor, and a
+/// primitive variant's `Solid` block -- and the one body `build` ever gives no
+/// output to is an isolated branch's repeater, whose only `Solid` is the `DOWN`
+/// its variant stands on. A floor conducts no net, so nothing has to be held
+/// away from it; the one thing separation would otherwise buy is the cell
+/// itself, and in Stage 1 that is worth nothing. `ensure_floor` writes
+/// `stone()` through a bare `world.set`, so two floors landing in one cell is
+/// the same stone written twice.
+///
+/// Not because a spacing check covers it. `planner::verify_spacing` walks
+/// `candidate.routes[..].anchors` and proves every *routed* cell has one owner;
+/// a floor produces no anchor and never appears in it.
 ///
 /// Share, not equal. A NOR's support is on every one of its input nets, so a
 /// socket carrying the second input shares a net with it and must not be
@@ -2865,29 +2938,13 @@ fn unseparated(here: &PlacedCell, there: &PlacedCell, required: f64) -> bool {
 /// Y is charged [`CONDUCTOR_CLEARANCE`] flat rather than the pair's own
 /// requirement, because height does not carry the routing reservation. That is
 /// the whole reason crowding buys height: a body with nowhere to go sideways
-/// has somewhere to go up, and it is cheaper.
-fn cheapest_axis(
-    left: &[PlacedCell],
-    right: &[PlacedCell],
-    required: f64,
-    axes: Axes,
-) -> (usize, f64) {
+/// has somewhere to go up, and it is cheaper. [`offence`] applies that charge;
+/// this only chooses between what it measured.
+fn cheapest_axis(found: &Offence, axes: Axes) -> (usize, f64) {
     let mut best = (usize::MAX, f64::INFINITY);
     for axis in axes.iter() {
-        let target = if axis == 1 { CONDUCTOR_CLEARANCE } else { required };
-        // The worst offending pair decides what the move costs, because
-        // moving on one axis shifts every pair by the same amount.
-        let mut deficit: f64 = 0.0;
-        for here in left {
-            for there in right {
-                if !unseparated(here, there, required) {
-                    continue;
-                }
-                deficit = deficit.max(target - (here.at[axis] - there.at[axis]).abs());
-            }
-        }
-        if deficit < best.1 {
-            best = (axis, deficit);
+        if found.deficit[axis] < best.1 {
+            best = (axis, found.deficit[axis]);
         }
     }
     best
@@ -2925,9 +2982,31 @@ pub fn placed_cells(graph: &BodyGraph) -> Vec<Vec<PlacedCell>> {
 }
 ```
 
-- [ ] **Step 5: Write the exemption**
+- [ ] **Step 5: Write the weld exemption and the worst violation**
 
 ```rust
+/// Which bodies each body is welded to.
+///
+/// Built once per pass rather than rediscovered per pair. The pair loop is
+/// quadratic in the bodies and a scan of `welds` is linear in the welds, which
+/// made the exemption test the product of the two -- once per pair, per round,
+/// for [`PROJECTION_ROUNDS`] rounds.
+///
+/// Each weld is recorded from both ends, so the lookup does not care which of
+/// the pair the caller happens to be holding.
+fn welded_partners(graph: &BodyGraph) -> Vec<Vec<usize>> {
+    let mut partners = vec![Vec::new(); graph.bodies.len()];
+    for weld in &graph.welds {
+        let (one, other) = match *weld {
+            Weld::AtSocket { repeater, junction, .. } => (repeater, junction),
+            Weld::BesideAt { lock, data, .. } => (lock, data),
+        };
+        partners[one].push(other);
+        partners[other].push(one);
+    }
+    partners
+}
+
 /// Whether two bodies are allowed to be as close as they are.
 ///
 /// Exempt when a weld relates them -- a welded pair is *required* to touch, so
@@ -2938,27 +3017,27 @@ pub fn placed_cells(graph: &BodyGraph) -> Vec<Vec<PlacedCell>> {
 /// net ends and another begins: a torch's support carries the signal driving
 /// it and its torch carries the signal it drives, and those are different nets
 /// by definition.
-fn exempt(graph: &BodyGraph, left: usize, right: usize) -> bool {
-    graph.welds.iter().any(|weld| {
-        let pair = match *weld {
-            Weld::AtSocket { repeater, junction, .. } => (repeater, junction),
-            Weld::BesideAt { lock, data, .. } => (lock, data),
-        };
-        pair == (left, right) || pair == (right, left)
-    })
+fn exempt(welded: &[Vec<usize>], left: usize, right: usize) -> bool {
+    welded[left].contains(&right)
 }
 
 /// The worst pair still too close, for an error that names something.
 pub fn worst_violation(graph: &BodyGraph, required: &[f64]) -> Option<Violation> {
+    debug_assert_eq!(
+        required.len(),
+        graph.bodies.len(),
+        "the requirement table is indexed by body"
+    );
     let cells = placed_cells(graph);
+    let welded = welded_partners(graph);
     let mut worst: Option<Violation> = None;
     for left in 0..graph.bodies.len() {
         for right in (left + 1)..graph.bodies.len() {
-            if exempt(graph, left, right) {
+            if exempt(&welded, left, right) {
                 continue;
             }
             let need = required[left].max(required[right]);
-            let short = shortfall(&cells[left], &cells[right], need);
+            let short = offence(&cells[left], &cells[right], need).shortfall;
             if short > SETTLED && worst.is_none_or(|current| short > current.shortfall) {
                 worst = Some(Violation { left, right, shortfall: short });
             }
@@ -2972,6 +3051,15 @@ The pair's requirement is `max`, not the sum: a reservation is a ring around
 one body, and two rings that overlap are still one corridor. Taking the sum
 would charge a low-degree neighbour for its neighbour's fan-out.
 
+The exemption table is built per pass rather than per pair for a reason worth
+stating as a number. The pair loop is quadratic in the bodies, and rescanning
+`welds` inside it made the exemption test the product of the two -- and the
+whole of it runs [`PROJECTION_ROUNDS`] times on the deadlock path, which Task 8
+puts inside an alternation. Measured on 2026-08-13 on 87 bodies with 58 welds,
+driven to the full 4096 rounds: 767ms with the per-pair scan and the per-axis
+re-walk of Step 4, 234ms with both hoisted, and the layout that comes out is
+bit-identical.
+
 - [ ] **Step 6: Write the projection**
 
 ```rust
@@ -2982,22 +3070,40 @@ would charge a low-degree neighbour for its neighbour's fan-out.
 /// must be the one whose failure the invariants would not catch as a wrong
 /// answer.
 pub fn project(graph: &mut BodyGraph, required: &[f64], axes: Axes) -> Result<(), Violation> {
+    // Indexed by body below, with nothing in the type tying the two together.
+    // A short table would panic on the index; this says which of the two
+    // arguments was wrong.
+    debug_assert_eq!(
+        required.len(),
+        graph.bodies.len(),
+        "the requirement table is indexed by body"
+    );
+    // Welds do not change during a projection, so the exemption table is built
+    // once for the whole call rather than rescanned per pair.
+    let welded = welded_partners(graph);
     for _ in 0..PROJECTION_ROUNDS {
         let mut moved = false;
-        // Recomputed once per round, not once per pair: within a round the
-        // separations are decided against one consistent picture, which is
-        // what keeps the order of the pair loop from changing the answer.
+        // Recomputed once per round, not once per pair. The snapshot is what
+        // every *decision* in this round is taken against -- which pairs are
+        // violating, by how much, and along which axis -- so no pair is judged
+        // against a position an earlier pair has already moved. The moves
+        // themselves land live: `separate` reads its direction from
+        // `graph.bodies`, so a pair pushed past its neighbour by an earlier
+        // move is pushed the other way. The order of the pair loop therefore
+        // does change the path this takes. It is the same order every time,
+        // which is where determinism comes from -- not from independence.
         let cells = placed_cells(graph);
         for left in 0..graph.bodies.len() {
             for right in (left + 1)..graph.bodies.len() {
-                if exempt(graph, left, right) {
+                if exempt(&welded, left, right) {
                     continue;
                 }
                 let need = required[left].max(required[right]);
-                if shortfall(&cells[left], &cells[right], need) <= SETTLED {
+                let found = offence(&cells[left], &cells[right], need);
+                if found.shortfall <= SETTLED {
                     continue;
                 }
-                let (axis, amount) = cheapest_axis(&cells[left], &cells[right], need, axes);
+                let (axis, amount) = cheapest_axis(&found, axes);
                 if amount <= SETTLED {
                     continue;
                 }
@@ -3005,10 +3111,14 @@ pub fn project(graph: &mut BodyGraph, required: &[f64], axes: Axes) -> Result<()
                 moved = true;
             }
         }
-        let welds = graph.welds.clone();
+        // Taken and put back rather than cloned: `satisfy` reads `bodies` and
+        // never `welds`, and a clone per round is 4096 allocations of a list
+        // that never changes.
+        let welds = std::mem::take(&mut graph.welds);
         for weld in &welds {
             moved |= satisfy(graph, weld);
         }
+        graph.welds = welds;
         if !moved {
             return Ok(());
         }
@@ -3064,11 +3174,10 @@ fn satisfy(graph: &mut BodyGraph, weld: &Weld) -> bool {
             let BodyKind::Primitive { kind, .. } = graph.bodies[data].what else {
                 unreachable!("only a primitive has a side")
             };
-            let port = crate::compile::physical::variants(kind)
-                [usize::from(facing.index())]
-            .ports_of(crate::compile::physical::PortKind::RepeaterSide)
-            .find(|port| port.side == Some(side))
-            .expect("a repeater variant has both sides");
+            let port = crate::compile::physical::variants(kind)[usize::from(facing.index())]
+                .ports_of(crate::compile::physical::PortKind::RepeaterSide)
+                .find(|port| port.side == Some(side))
+                .expect("a repeater variant has both sides");
             (
                 lock,
                 data,
@@ -4676,13 +4785,54 @@ task is removing the hand-made rule that was standing in for it.
 Height gets used at all because the vertical requirement is smaller than the
 horizontal one -- [`CONDUCTOR_CLEARANCE`] flat, with no routing reservation on
 top. A body with nowhere to go sideways has somewhere to go up, and it is
-cheaper. That asymmetry is already in `shortfall` from Task 7; this task is
+cheaper. That asymmetry is already in `offence` from Task 7; this task is
 what lets `separate` act on it.
+
+**Two things the one word makes reachable.** Both are in `project.rs` today and
+neither can fire while `Axes::IN_PLANE` is what gets passed. Task 7 shipped them
+knowingly rather than guessing at a fix no test could have failed against; they
+are this task's to handle, and the reasoning for each is why.
+
+1. **`project` can return `Ok(())` over a live violation.** The pair loop skips a
+   pair whose chosen amount is `<= SETTLED`, and that amount is the *chosen
+   axis's* deficit, not the pair's shortfall. Under `IN_PLANE` those cannot
+   disagree: every axis in that set is charged the same target, so for the cell
+   pair `p` that sets the shortfall, `required - |Δx_p|` and `required - |Δz_p|`
+   are both at least `required - max(|Δx_p|, |Δz_p|)`, which is the shortfall
+   itself -- so every axis's deficit, and therefore the cheapest, is at least the
+   Chebyshev shortfall, and a pair that got past the shortfall test cannot fail
+   the amount test. That proof breaks on exactly one word: axis 1 is charged
+   [`CONDUCTOR_CLEARANCE`] rather than the pair's requirement. A pair at
+   `dy = 1.9999999` has a Y deficit of `1e-7`, below [`SETTLED`], while its
+   horizontal shortfall may be metres. `cheapest_axis` picks Y, the guard skips
+   the pair, nothing else moves it, `moved` stays false, and `project` returns
+   `Ok(())` with the violation still standing. The invariant to restore: if
+   `worst_violation` would name a pair, `project` may not return `Ok`.
+2. **The vertical requirement has no rounding margin.** `required_separations`
+   adds [`SNAP_MARGIN`] to the horizontal requirement because rounding moves each
+   body by up to half a cell, so a gap can close by one and a continuous
+   separation of `r` can land at `r - 1`. The vertical target -- `unseparated`'s
+   `dy < CONDUCTOR_CLEARANCE` and `offence`'s charge on `deficit[1]`, which must
+   stay the same number -- pays nothing for that. In Stage 1 it costs nothing to
+   omit: no body's Y is ever written, so every `dy` is an integer difference of
+   starting storeys and rounding is the identity on it. The moment `separate` can
+   write a fractional Y, a pair sitting at the [`SETTLED`]-legal edge of `2.0`
+   with both ends near a half-cell boundary rounds to `1` -- and `1` is the gap
+   [`CONDUCTOR_CLEARANCE`] exists to forbid. The derivation of the vertical
+   requirement is not in question, only the margin: `CONDUCTOR_CLEARANCE` applied
+   to an axis is still the right number, and the rounding argument that buys the
+   horizontal one a margin applies to it verbatim.
+
+Adding the margin moves `two_bodies_in_one_column_are_left_where_they_are`'s two
+bodies: a pair exactly [`CONDUCTOR_CLEARANCE`] apart in Y stops being separated
+and starts being pushed. That test's fixture has to state the vertical
+requirement this task ships, not the one Task 7 shipped.
 
 **Files:**
 - Modify: `src/compile/planner.rs` -- `Shape` (1731-1751) deleted, `plan_from_netlist_shaped` merged into `plan_from_netlist`, `TALL_COLUMN_LIMIT` (1754) deleted, the test at 4299-4329 replaced
-- Modify: `src/compile/relax/mod.rs` -- add the `project_for_test` module Step 1 needs; `project.rs` itself needs nothing, `Axes::ALL` already exists
-- Test: `src/compile/planner.rs`
+- Modify: `src/compile/relax/mod.rs` -- add the `project_for_test` module Step 1 needs; `Axes::ALL` already exists
+- Modify: `src/compile/relax/project.rs` -- the two above, and a test for each
+- Test: `src/compile/planner.rs`, `src/compile/relax/project.rs`
 
 **Interfaces:**
 - Consumes: `relax::Axes::ALL`.
@@ -4698,6 +4848,11 @@ what lets `separate` act on it.
   fixture: `project` and `required_separations` are already re-exported from
   `relax` (Task 7 Step 7), so the test calls them directly. `#[cfg(test)]`
   because a fixture is not something the shipping crate should offer.
+- Produces: no signature change in `project.rs`. Two behaviour changes, both
+  invisible under `Axes::IN_PLANE` and both stated above: the vertical
+  requirement becomes `CONDUCTOR_CLEARANCE + SNAP_MARGIN` wherever it is
+  written, and `project` stops returning `Ok` over a pair `worst_violation`
+  would name.
 
 - [ ] **Step 1: Write the fixture, and the failing tests**
 
@@ -4753,7 +4908,7 @@ Then replace `a_tall_preference_uses_height_where_a_wide_one_uses_floor` in
 `planner.rs`'s test module with:
 
 ```rust
-/// A pair two cells apart in Y is already separated, and the projection moves
+/// A pair a storey apart in Y is already separated, and the projection moves
 /// neither.
 ///
 /// Two cells, not the safety condition's one. That condition has no
@@ -4761,23 +4916,30 @@ Then replace `a_tall_preference_uses_height_where_a_wide_one_uses_floor` in
 /// step -- but `dust_reach` is the join mechanism, and power arriving from the
 /// dust above a block is a different one nobody has derived here. So the
 /// vertical requirement is `CONDUCTOR_CLEARANCE` applied to an axis, which is
-/// what `shortfall` enforces and what the spec's test 8 asks for. It is still
-/// far cheaper than the horizontal requirement, which carries the routing
-/// reservation on top -- and that gap is the mechanism the next test buys
-/// with, tested where it can be seen rather than inferred from a layout.
+/// what `offence` enforces and what the spec's test 8 asks for.
+///
+/// Plus `SNAP_MARGIN`, for the reason every horizontal requirement carries it:
+/// rounding moves each body by up to half a cell, so a gap can close by one.
+/// Stage 1 never wrote a fractional Y and so never had to pay for that; this
+/// task does.
+///
+/// It is still far cheaper than the horizontal requirement, which carries the
+/// routing reservation on top -- and that gap is the mechanism the next test
+/// buys with, tested where it can be seen rather than inferred from a layout.
 #[test]
 fn two_bodies_in_one_column_are_left_where_they_are() {
-    use crate::compile::relax::{project, project_for_test, Axes, CONDUCTOR_CLEARANCE};
+    use crate::compile::relax::{
+        project, project_for_test, Axes, CONDUCTOR_CLEARANCE, SNAP_MARGIN,
+    };
 
-    let mut graph = project_for_test::two_free_bodies(
-        [10.0, 1.0, 10.0],
-        [10.0, 1.0 + CONDUCTOR_CLEARANCE, 10.0],
-    );
+    let storey = CONDUCTOR_CLEARANCE + SNAP_MARGIN;
+    let mut graph =
+        project_for_test::two_free_bodies([10.0, 1.0, 10.0], [10.0, 1.0 + storey, 10.0]);
     let required = vec![9.0, 9.0];
     project(&mut graph, &required, Axes::ALL).expect("already separated");
 
     assert_eq!(graph.bodies[0].position, [10.0, 1.0, 10.0]);
-    assert_eq!(graph.bodies[1].position, [10.0, 1.0 + CONDUCTOR_CLEARANCE, 10.0]);
+    assert_eq!(graph.bodies[1].position, [10.0, 1.0 + storey, 10.0]);
 }
 
 /// Height is earned by crowding rather than requested.
@@ -4805,6 +4967,61 @@ fn crowding_produces_height() {
 `relax`, because a `pub` item in a private module that only tests reach is
 `dead_code`. The fixture is the only thing this module adds.
 
+Then add to `project.rs`'s own test module, one test per landmine:
+
+```rust
+/// A pair with metres of horizontal shortfall is not left where it is because
+/// the vertical axis happens to be a hair from clear.
+///
+/// The cheapest axis is Y by a wide margin -- a deficit of `1e-7` against
+/// eleven cells on either horizontal axis -- and `1e-7` is below `SETTLED`. A
+/// projection that reads that as "settled" skips the pair, moves nothing else,
+/// and reports the round as quiet.
+#[test]
+fn a_pair_nearly_clear_in_y_is_still_separated() {
+    let mut graph = graph_of(
+        vec![
+            body(0.0, 1.0, 0.0),
+            body(0.0, 1.0 + CONDUCTOR_CLEARANCE - 1e-7, 0.0),
+        ],
+        Vec::new(),
+    );
+    let required = vec![9.0, 9.0];
+    project(&mut graph, &required, Axes::ALL).expect("two bodies always fit");
+    assert!(
+        worst_violation(&graph, &required).is_none(),
+        "reported success over {:?}",
+        worst_violation(&graph, &required)
+    );
+}
+
+/// The vertical requirement buys the same rounding margin the horizontal one
+/// does, in both places it is written.
+///
+/// Two numbers, and a projection is only safe if they are the same one:
+/// `unseparated` decides whether a pair offends, and `offence` decides what
+/// clearing it along Y costs. A margin added to one and not the other is a
+/// projection that moves a pair to a gap it still calls a violation.
+#[test]
+fn the_vertical_requirement_carries_a_rounding_margin() {
+    let below = body(0.0, 1.0, 0.0);
+    let above = body(0.0, 1.0 + CONDUCTOR_CLEARANCE, 0.0);
+    let mut graph = graph_of(vec![below, above], Vec::new());
+    let required = vec![9.0, 9.0];
+    project(&mut graph, &required, Axes::ALL).expect("two bodies always fit");
+
+    let dy = (graph.bodies[0].position[1] - graph.bodies[1].position[1]).abs();
+    assert!(
+        dy >= CONDUCTOR_CLEARANCE + SNAP_MARGIN - SETTLED,
+        "a stack rounding half a cell each way closes by one, and this is {dy}"
+    );
+}
+```
+
+`SNAP_MARGIN` and `SETTLED` are both already on `relax/mod.rs`'s re-export list
+from Task 7 Step 7, and `project.rs`'s test module reaches them through
+`use super::*` either way.
+
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --release --lib compile::planner::tests::crowding_produces_height`
@@ -4814,12 +5031,36 @@ spread sideways and `height` is 1. A compile error here means the fixture from
 Step 1 is missing, which is a different failure and not the one this step is
 looking for.
 
+Run: `cargo test --release --lib compile::relax::project`
+
+Expected: the two new tests FAIL and the seven from Task 7 pass.
+`a_pair_nearly_clear_in_y_is_still_separated` fails on its assertion rather than
+on `expect` -- the bug being caught is precisely that `project` calls this a
+success.
+
 - [ ] **Step 3: Let separation reach for the third dimension**
 
 In `plan_from_netlist_shaped`, `relax::Axes::IN_PLANE` becomes
 `relax::Axes::ALL`. Not `plan_from_netlist`: Task 10 Step 4 put the `relax` call
 in the shaped entry point, and `plan_from_netlist` is a two-line delegation to
 it until Step 4 below folds the two together.
+
+Then the two things that word makes reachable, both in `project.rs`:
+
+- **The amount guard.** `project` may not skip a pair `worst_violation` would
+  name. Every axis deficit is strictly positive for an offending pair --
+  `unseparated` requires `dy < CONDUCTOR_CLEARANCE` and `max(|Δx|, |Δz|) <
+  required`, so each axis is strictly short of its own target -- so there is
+  always a move available, and the question is which guard is the right one, not
+  whether one is needed. Whatever it becomes, `a_pair_nearly_clear_in_y_is_still_separated`
+  is what says it worked.
+- **The vertical margin.** [`SNAP_MARGIN`] on the vertical target, in
+  `unseparated`'s `dy <` test and in `offence`'s charge on `deficit[1]`, which
+  have to remain the same number for the reason
+  `the_vertical_requirement_carries_a_rounding_margin` states. Step 1's
+  `two_bodies_in_one_column_are_left_where_they_are` already states the vertical
+  requirement this task ships rather than Task 7's, which is why it is the one
+  new test that does not fail first.
 
 - [ ] **Step 4: Delete the knob**
 
@@ -4837,6 +5078,10 @@ Run: `cargo test --release --lib compile::planner::tests`
 
 Expected: PASS, including both new tests.
 
+Run: `cargo test --release --lib compile::relax::project`
+
+Expected: 9 passed -- Task 7's seven and Step 1's two.
+
 - [ ] **Step 6: Re-run the corridor test at height**
 
 Run: `cargo test --release --lib compile::planner::tests::relaxation_routes_everything_the_old_placement_could`
@@ -4850,8 +5095,9 @@ carries none, which is deliberate and is exactly the assumption under test.
 
 Run: `./check.sh`
 
-Expected: `failed=0`, one more test than before -- the shape test went out and
-two came in, and Step 4's deletions remove no other test.
+Expected: `failed=0`, three more tests than before -- the shape test went out,
+two came into `planner` and two into `project`, and Step 4's deletions remove no
+other test.
 
 - [ ] **Step 8: Commit**
 

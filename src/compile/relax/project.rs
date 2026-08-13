@@ -123,7 +123,29 @@ pub fn required_separations(graph: &BodyGraph) -> Vec<f64> {
         .collect()
 }
 
-/// How far short of the requirement the closest offending pair of cells is.
+/// What one walk of a pair's cells found: how far short they are, and what
+/// clearing them along each axis would cost.
+///
+/// One struct rather than two functions because the two answers come from the
+/// same walk. Deciding whether a pair is violating and deciding which way to
+/// push it both range over every cell of one body against every cell of the
+/// other, and the test at the centre of that walk -- [`unseparated`] -- is a
+/// string comparison per net per cell pair. Asking separately meant walking
+/// once for the shortfall and once more per axis, three times over the same
+/// cells for an answer that had already been computed.
+#[derive(Debug, Clone, Copy)]
+struct Offence {
+    /// How far short of the requirement the closest offending pair of cells
+    /// is, by horizontal Chebyshev. Zero when no pair offends.
+    shortfall: f64,
+    /// Per axis, how far the worst offending pair falls short of that axis's
+    /// own target. Computed for all three whether or not [`Axes`] asks for
+    /// them: it is three subtractions inside a loop that is already comparing
+    /// strings, and it lets one walk answer either stage.
+    deficit: [f64; 3],
+}
+
+/// Measure one pair of bodies, cell against cell.
 ///
 /// **Cells, not centres.** A body is not a point: a torch is its support and
 /// its torch block, and two torches three apart facing each other have their
@@ -151,26 +173,51 @@ pub fn required_separations(graph: &BodyGraph) -> Vec<f64> {
 /// that a repeater is a firewall on its non-facing sides. Both are a
 /// measurement away, and both are the first thing to try if layouts come out
 /// sparse.
-fn shortfall(left: &[PlacedCell], right: &[PlacedCell], required: f64) -> f64 {
-    let mut worst: f64 = 0.0;
+fn offence(left: &[PlacedCell], right: &[PlacedCell], required: f64) -> Offence {
+    let mut found = Offence { shortfall: 0.0, deficit: [0.0; 3] };
     for here in left {
         for there in right {
             if !unseparated(here, there, required) {
                 continue;
             }
-            let dx = (here.at[0] - there.at[0]).abs();
-            let dz = (here.at[2] - there.at[2]).abs();
-            worst = worst.max(required - dx.max(dz));
+            let apart = [
+                (here.at[0] - there.at[0]).abs(),
+                (here.at[1] - there.at[1]).abs(),
+                (here.at[2] - there.at[2]).abs(),
+            ];
+            found.shortfall = found.shortfall.max(required - apart[0].max(apart[2]));
+            // The worst offending pair decides what a move along each axis
+            // costs, because moving on one axis shifts every pair by the same
+            // amount. Y is charged [`CONDUCTOR_CLEARANCE`] and the horizontal
+            // axes the pair's own requirement, which is the whole of "crowding
+            // buys height".
+            found.deficit[0] = found.deficit[0].max(required - apart[0]);
+            found.deficit[1] = found.deficit[1].max(CONDUCTOR_CLEARANCE - apart[1]);
+            found.deficit[2] = found.deficit[2].max(required - apart[2]);
         }
     }
-    worst.max(0.0)
+    found.shortfall = found.shortfall.max(0.0);
+    found
 }
 
 /// Whether this one pair of cells is a violation.
 ///
 /// Exempt when they *share* a signal -- the route between them is what makes
-/// them one thing -- and when either is inert, which keeps nothing out but its
-/// own cell, and cell exclusivity already covers that.
+/// them one thing -- and when either is inert.
+///
+/// Inert means a floor. `cells` emits an empty `carries` in exactly four
+/// places: a junction's floor, a lever's home floor and its pin's floor, and a
+/// primitive variant's `Solid` block -- and the one body `build` ever gives no
+/// output to is an isolated branch's repeater, whose only `Solid` is the `DOWN`
+/// its variant stands on. A floor conducts no net, so nothing has to be held
+/// away from it; the one thing separation would otherwise buy is the cell
+/// itself, and in Stage 1 that is worth nothing. `ensure_floor` writes
+/// `stone()` through a bare `world.set`, so two floors landing in one cell is
+/// the same stone written twice.
+///
+/// Not because a spacing check covers it. `planner::verify_spacing` walks
+/// `candidate.routes[..].anchors` and proves every *routed* cell has one owner;
+/// a floor produces no anchor and never appears in it.
 ///
 /// Share, not equal. A NOR's support is on every one of its input nets, so a
 /// socket carrying the second input shares a net with it and must not be
@@ -200,29 +247,13 @@ fn unseparated(here: &PlacedCell, there: &PlacedCell, required: f64) -> bool {
 /// Y is charged [`CONDUCTOR_CLEARANCE`] flat rather than the pair's own
 /// requirement, because height does not carry the routing reservation. That is
 /// the whole reason crowding buys height: a body with nowhere to go sideways
-/// has somewhere to go up, and it is cheaper.
-fn cheapest_axis(
-    left: &[PlacedCell],
-    right: &[PlacedCell],
-    required: f64,
-    axes: Axes,
-) -> (usize, f64) {
+/// has somewhere to go up, and it is cheaper. [`offence`] applies that charge;
+/// this only chooses between what it measured.
+fn cheapest_axis(found: &Offence, axes: Axes) -> (usize, f64) {
     let mut best = (usize::MAX, f64::INFINITY);
     for axis in axes.iter() {
-        let target = if axis == 1 { CONDUCTOR_CLEARANCE } else { required };
-        // The worst offending pair decides what the move costs, because
-        // moving on one axis shifts every pair by the same amount.
-        let mut deficit: f64 = 0.0;
-        for here in left {
-            for there in right {
-                if !unseparated(here, there, required) {
-                    continue;
-                }
-                deficit = deficit.max(target - (here.at[axis] - there.at[axis]).abs());
-            }
-        }
-        if deficit < best.1 {
-            best = (axis, deficit);
+        if found.deficit[axis] < best.1 {
+            best = (axis, found.deficit[axis]);
         }
     }
     best
@@ -259,6 +290,28 @@ pub fn placed_cells(graph: &BodyGraph) -> Vec<Vec<PlacedCell>> {
         .collect()
 }
 
+/// Which bodies each body is welded to.
+///
+/// Built once per pass rather than rediscovered per pair. The pair loop is
+/// quadratic in the bodies and a scan of `welds` is linear in the welds, which
+/// made the exemption test the product of the two -- once per pair, per round,
+/// for [`PROJECTION_ROUNDS`] rounds.
+///
+/// Each weld is recorded from both ends, so the lookup does not care which of
+/// the pair the caller happens to be holding.
+fn welded_partners(graph: &BodyGraph) -> Vec<Vec<usize>> {
+    let mut partners = vec![Vec::new(); graph.bodies.len()];
+    for weld in &graph.welds {
+        let (one, other) = match *weld {
+            Weld::AtSocket { repeater, junction, .. } => (repeater, junction),
+            Weld::BesideAt { lock, data, .. } => (lock, data),
+        };
+        partners[one].push(other);
+        partners[other].push(one);
+    }
+    partners
+}
+
 /// Whether two bodies are allowed to be as close as they are.
 ///
 /// Exempt when a weld relates them -- a welded pair is *required* to touch, so
@@ -269,27 +322,27 @@ pub fn placed_cells(graph: &BodyGraph) -> Vec<Vec<PlacedCell>> {
 /// net ends and another begins: a torch's support carries the signal driving
 /// it and its torch carries the signal it drives, and those are different nets
 /// by definition.
-fn exempt(graph: &BodyGraph, left: usize, right: usize) -> bool {
-    graph.welds.iter().any(|weld| {
-        let pair = match *weld {
-            Weld::AtSocket { repeater, junction, .. } => (repeater, junction),
-            Weld::BesideAt { lock, data, .. } => (lock, data),
-        };
-        pair == (left, right) || pair == (right, left)
-    })
+fn exempt(welded: &[Vec<usize>], left: usize, right: usize) -> bool {
+    welded[left].contains(&right)
 }
 
 /// The worst pair still too close, for an error that names something.
 pub fn worst_violation(graph: &BodyGraph, required: &[f64]) -> Option<Violation> {
+    debug_assert_eq!(
+        required.len(),
+        graph.bodies.len(),
+        "the requirement table is indexed by body"
+    );
     let cells = placed_cells(graph);
+    let welded = welded_partners(graph);
     let mut worst: Option<Violation> = None;
     for left in 0..graph.bodies.len() {
         for right in (left + 1)..graph.bodies.len() {
-            if exempt(graph, left, right) {
+            if exempt(&welded, left, right) {
                 continue;
             }
             let need = required[left].max(required[right]);
-            let short = shortfall(&cells[left], &cells[right], need);
+            let short = offence(&cells[left], &cells[right], need).shortfall;
             if short > SETTLED && worst.is_none_or(|current| short > current.shortfall) {
                 worst = Some(Violation { left, right, shortfall: short });
             }
@@ -305,22 +358,40 @@ pub fn worst_violation(graph: &BodyGraph, required: &[f64]) -> Option<Violation>
 /// must be the one whose failure the invariants would not catch as a wrong
 /// answer.
 pub fn project(graph: &mut BodyGraph, required: &[f64], axes: Axes) -> Result<(), Violation> {
+    // Indexed by body below, with nothing in the type tying the two together.
+    // A short table would panic on the index; this says which of the two
+    // arguments was wrong.
+    debug_assert_eq!(
+        required.len(),
+        graph.bodies.len(),
+        "the requirement table is indexed by body"
+    );
+    // Welds do not change during a projection, so the exemption table is built
+    // once for the whole call rather than rescanned per pair.
+    let welded = welded_partners(graph);
     for _ in 0..PROJECTION_ROUNDS {
         let mut moved = false;
-        // Recomputed once per round, not once per pair: within a round the
-        // separations are decided against one consistent picture, which is
-        // what keeps the order of the pair loop from changing the answer.
+        // Recomputed once per round, not once per pair. The snapshot is what
+        // every *decision* in this round is taken against -- which pairs are
+        // violating, by how much, and along which axis -- so no pair is judged
+        // against a position an earlier pair has already moved. The moves
+        // themselves land live: `separate` reads its direction from
+        // `graph.bodies`, so a pair pushed past its neighbour by an earlier
+        // move is pushed the other way. The order of the pair loop therefore
+        // does change the path this takes. It is the same order every time,
+        // which is where determinism comes from -- not from independence.
         let cells = placed_cells(graph);
         for left in 0..graph.bodies.len() {
             for right in (left + 1)..graph.bodies.len() {
-                if exempt(graph, left, right) {
+                if exempt(&welded, left, right) {
                     continue;
                 }
                 let need = required[left].max(required[right]);
-                if shortfall(&cells[left], &cells[right], need) <= SETTLED {
+                let found = offence(&cells[left], &cells[right], need);
+                if found.shortfall <= SETTLED {
                     continue;
                 }
-                let (axis, amount) = cheapest_axis(&cells[left], &cells[right], need, axes);
+                let (axis, amount) = cheapest_axis(&found, axes);
                 if amount <= SETTLED {
                     continue;
                 }
@@ -328,10 +399,14 @@ pub fn project(graph: &mut BodyGraph, required: &[f64], axes: Axes) -> Result<()
                 moved = true;
             }
         }
-        let welds = graph.welds.clone();
+        // Taken and put back rather than cloned: `satisfy` reads `bodies` and
+        // never `welds`, and a clone per round is 4096 allocations of a list
+        // that never changes.
+        let welds = std::mem::take(&mut graph.welds);
         for weld in &welds {
             moved |= satisfy(graph, weld);
         }
+        graph.welds = welds;
         if !moved {
             return Ok(());
         }
@@ -499,6 +574,10 @@ mod tests {
     /// Stage 1 may not spend height. Bodies stay at the Y their starting
     /// layout gave them, so a projection that reaches for the third dimension
     /// here has changed what the stage promised.
+    ///
+    /// It also has to separate them. "Nobody moved in Y" is true of a
+    /// projection that does nothing at all, so the horizontal check is what
+    /// makes this test about *in-plane* rather than about *inert*.
     #[test]
     fn in_plane_projection_never_moves_a_body_in_y() {
         let mut graph = graph_of(
@@ -506,9 +585,20 @@ mod tests {
             Vec::new(),
         );
         let required = vec![3.0; 3];
-        let _ = project(&mut graph, &required, Axes::IN_PLANE);
+        project(&mut graph, &required, Axes::IN_PLANE).expect("three bodies in a plane fit");
         for (index, body) in graph.bodies.iter().enumerate() {
             assert_eq!(body.position[1], 1.0, "body {index} left its storey");
+        }
+        for left in 0..3 {
+            for right in (left + 1)..3 {
+                let dx = (graph.bodies[left].position[0] - graph.bodies[right].position[0]).abs();
+                let dz = (graph.bodies[left].position[2] - graph.bodies[right].position[2]).abs();
+                assert!(
+                    dx.max(dz) >= 3.0 - SETTLED,
+                    "bodies {left} and {right} started 0.1 apart and are still {} apart",
+                    dx.max(dz)
+                );
+            }
         }
     }
 
@@ -537,6 +627,16 @@ mod tests {
             repeater[2] - junction[2],
         ];
         assert_eq!(offset, [-1.0, 0.0, 0.0], "input 0's socket is one cell west");
+
+        // The weld holding is only interesting if something was pulling on it.
+        // A projection that moved nothing at all would pass the assertion
+        // above, because the fixture starts the repeater at exactly the offset
+        // it is asked to end at.
+        let crowder = graph.bodies[2].position;
+        assert!(
+            (crowder[0] - 0.4).abs() > 1.0,
+            "the body separation was fighting never moved: it is still at {crowder:?}"
+        );
     }
 
     /// A pinned body takes no force, so everything moves around it.
