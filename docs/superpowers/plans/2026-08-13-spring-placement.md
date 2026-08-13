@@ -555,7 +555,7 @@ fn output_pin(
 
 `emit_primitives` passes `compile::geometry::CellFacing::NORTH` at all three of
 its call sites for now -- `place_nor_gate`/`place_merge_gate` and `output_pin`
-at 613 and 621, and `place_primary_input` at 641. Task 10 Step 6 is where it
+at 613 and 621, and `place_primary_input` at 641. Task 10 Step 8 is where it
 starts passing `candidate.facing_of(index)` instead. Not Task 8: Task 8 only
 touches `src/compile/relax/mod.rs`, and `emit_primitives` is `planner`'s.
 
@@ -840,7 +840,7 @@ for:
 Note the disagreement this exposes and does not fix: `try_move`'s
 `terminal_socket` (planner.rs:1559) picks a socket by geometry -- the
 source-to-support delta -- while `route_in_order` picks by declared input
-index. They can disagree today. Task 10 Step 7 is where that is settled, and it
+index. They can disagree today. Task 10 Step 9 is where that is settled, and it
 needs a `RouteSink` threaded out of `route_endpoints` to do it; leave it alone
 here, and leave a comment saying so.
 
@@ -4200,14 +4200,76 @@ pub fn plan_from_netlist_shaped(
     }
 ```
 
-- [ ] **Step 6: Make `emit_primitives` build to the recorded facing**
+- [ ] **Step 6: Tell `compile_planned` what facings it just built**
+
+This is the step that keeps two records of the same fact from disagreeing, and
+it belongs here rather than in Stage 3 because **this** is the task where the
+second record starts being wrong.
+
+`CompiledCircuit::gate_facings` is what Task 3 gave the three verifiers,
+`world_partition` and `routing_stats` so they would stop assuming north.
+`compile_planned` (`mod.rs:6414`) fills it with north today, which was true
+until the line above -- and `compile_planned` is the one function that reaches
+`plan_from_netlist`. From this step on it builds turned gates, so a verifier
+handed north would inspect the wrong cells, and pass, because the cells it
+inspects are empty rather than wrong.
+
+`compile()` is not affected and is not changed here: it seeds from the legacy
+emitter (`seed_from_legacy_parts`, `mod.rs:6379`) and never calls
+`plan_from_netlist`, so its gates really are all north until Task 13 switches
+it over. Its own `gate_facings` line at `mod.rs:6387` stays.
+
+```rust
+        gate_facings: (0..netlist.gates.len()).map(|g| candidate.facing_of(g)).collect(),
+```
+
+`candidate` is moved into `realise_and_verify`, so read the facings out before
+that call and bind them:
+
+```rust
+    let candidate = planner::plan_from_netlist(netlist, placements).map_err(planner_error)?;
+    let gate_facings: Vec<geometry::CellFacing> =
+        (0..netlist.gates.len()).map(|g| candidate.facing_of(g)).collect();
+    let size = planner::candidate_world_size(&candidate);
+    let realised = planner::realise_and_verify(&candidate, netlist, size).map_err(planner_error)?;
+```
+
+- [ ] **Step 7: A planned circuit reports the facings it was built at**
+
+```rust
+    /// The two records of a gate's facing -- the candidate's `variant_indices`
+    /// and the compiled circuit's `gate_facings` -- have to agree, because the
+    /// verifiers read the second to check what the first built.
+    #[test]
+    fn a_planned_circuit_reports_the_facings_it_was_built_at() {
+        let netlist = crate::verilog::and4_netlist();
+        let candidate = plan_from_netlist(&netlist, &PortPlacements::default())
+            .expect("and4 places by relaxation");
+        let compiled = crate::compile::compile_planned(&netlist, &PortPlacements::default())
+            .expect("and4 compiles through the planner");
+
+        let expected: Vec<_> = (0..netlist.gates.len()).map(|g| candidate.facing_of(g)).collect();
+        assert_eq!(compiled.gate_facings, expected);
+        assert!(
+            expected.iter().any(|&facing| facing != geometry::CellFacing::NORTH),
+            "relaxation turns something in and4, or this test proves nothing"
+        );
+    }
+```
+
+The second assertion is the one that matters. Without it the test passes
+against a `compile_planned` that still hardcodes north, because
+`plan_from_netlist` would have to have chosen north everywhere for the first
+assertion to hold -- and if it did, this task did not do its job.
+
+- [ ] **Step 8: Make `emit_primitives` build to the recorded facing**
 
 At `planner.rs:613` and `621`, pass `candidate.facing_of(index)` to
 `place_merge_gate` / `place_nor_gate` and to `output_pin`. At `641`, pass it to
 `place_primary_input`. This is where Task 3's `facing_of` stops returning north
 for everything.
 
-- [ ] **Step 7: Settle the socket disagreement Task 3 left**
+- [ ] **Step 9: Settle the socket disagreement Task 3 left**
 
 `try_move`'s `terminal_socket` (1559) picks a socket from the source-to-support
 delta; `route_in_order` picks `input_directions(facing)[input_index]`. With
@@ -4323,7 +4385,7 @@ input_index: 0, .. }` -- and builds through `with_primitive_nodes`, so every
 facing is north and the socket comes out at the same cell the geometric guess
 did. The test's assertions do not move; what moves is which question it asks.
 
-- [ ] **Step 8: Run the tests**
+- [ ] **Step 10: Run the tests**
 
 Run: `cargo test --release --lib compile::planner::tests::relaxation`
 
@@ -4336,7 +4398,7 @@ the design's own condition is that failing to beat 572 and 24 means it failed
 at the thing it was written for, and that is a result to report rather than a
 test to weaken.
 
-- [ ] **Step 9: Run the whole suite**
+- [ ] **Step 11: Run the whole suite**
 
 Run: `./check.sh`
 
@@ -4348,7 +4410,7 @@ ignored; run it by hand to see how far relaxation now carries:
 cargo test --release --lib compile::planner::tests::how_far_the_planners_own_placement_carries -- --ignored --nocapture
 ```
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 12: Commit**
 
 ```bash
 git add -A && git commit -m "feat(planner): placement is a relaxation, not a row and a barycentre"
@@ -4879,11 +4941,8 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
 }
 ```
 
-`compile_planned` (6345-6361) gains the `gate_facings` field:
-
-```rust
-        gate_facings: (0..netlist.gates.len()).map(|g| candidate.facing_of(g)).collect(),
-```
+`compile_planned` already reports its facings -- Task 10 Step 6 wired it, at
+the task where they first stop being north. Nothing to do here.
 
 and opens with the checks Step 4 lifted out, which `compile_planned` never had
 any of:
