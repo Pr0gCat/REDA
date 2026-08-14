@@ -21,13 +21,34 @@
 //! least 2. `a_vertical_gap_at_the_requirement_survives_rounding` is that
 //! argument swept over 1/64 of a cell across `[-6, 6]`.
 //!
-//! An earlier draft of this doc, and Task 11's brief after it, named the
-//! straddling half-integer pair as the mechanism that closes `dy = 2.0` to
-//! `dy = 1.0`. It is the mechanism that opens it. The horizontal requirement
-//! needs its margin for a different reason, which is why the asymmetry is
-//! derived rather than an oversight: `CONDUCTOR_CLEARANCE + reservation(d)` is a
-//! quarter-cell multiple, and an integer gap under a fractional requirement is a
-//! real loss -- up to 3/4 of a cell, which
+//! **That sweep is over body gaps, and `project::unseparated` compares cell
+//! gaps, so it needs a bridge.** Task 11 wrote one -- that rounding commutes
+//! with an integer offset, so a cell pair shrinks by exactly what its bodies do
+//! -- and it is false: at bodies `-1.5` and `0.5` with an offset of 4 the bodies
+//! move apart by one while the cells move together by one. What actually closes
+//! it is two measured facts. Every cell that *carries a net* sits at its body's
+//! own Y, so a conducting pair's cell gap is its body gap
+//! (`build::every_cell_that_carries_a_net_sits_at_its_body_y`; the cells one
+//! level down are floors and carry nothing, and separation never compares an
+//! inert cell). And no body sits below `project::GROUND`, which is 1, so every Y
+//! is positive and ties round up in unison rather than apart.
+//!
+//! **What Task 11's own correction got wrong.** The paragraph this replaced said
+//! the `dy = 2.0` to `dy = 1.0` collapse needs one body at `+0.5` and the other
+//! at `-0.5`, straddling `Y = 0`; that a sweep over `[-3, 3]` in steps of 0.025
+//! with cell offsets `-4..=4` found 72 such pairs and every one straddles zero;
+//! and that no starting storey in this tree produces one. Task 11 deleted it as
+//! the mechanism named backwards. A review re-measured it: every one of those
+//! claims is true, including the 72. It is restored here because it is the live
+//! constraint behind the second fact above -- the margin is unnecessary *because*
+//! `GROUND` keeps Y positive, and a design that ever placed a body at negative Y
+//! would need it again.
+//!
+//! The horizontal requirement needs its margin for a different reason, which is
+//! why the asymmetry is derived rather than an oversight:
+//! `CONDUCTOR_CLEARANCE + reservation(d)` is a quarter-cell multiple, and an
+//! integer gap under a fractional requirement is a real loss -- up to 3/4 of a
+//! cell, which
 //! `a_pair_at_its_requirement_survives_rounding_toward_each_other` builds.
 
 use crate::compile::geometry::CellFacing;
@@ -452,9 +473,10 @@ mod tests {
     /// least [`CONDUCTOR_CLEARANCE`] lands on an integer strictly greater than
     /// `CONDUCTOR_CLEARANCE - 1`, which is at least `CONDUCTOR_CLEARANCE`.
     ///
-    /// Bodies rather than cells, and that loses nothing: a cell sits at its
-    /// body's position plus an integer offset, and rounding commutes with an
-    /// integer, so a cell pair's gap shrinks by exactly what its bodies' does.
+    /// Bodies rather than cells, and the module doc is where that gap is
+    /// closed -- not by rounding commuting with an integer offset, which is
+    /// false, but by every conducting cell sharing its body's Y and by `GROUND`
+    /// keeping every Y positive.
     ///
     /// The task this belongs to was briefed to *add* a vertical margin, on the
     /// argument that a pair sitting at 2.0 can round to 1.0. It cannot, and this
@@ -465,7 +487,7 @@ mod tests {
     /// longer climb for every route between them.
     #[test]
     fn a_vertical_gap_at_the_requirement_survives_rounding() {
-        use crate::compile::relax::CONDUCTOR_CLEARANCE;
+        use crate::compile::relax::VERTICAL_CLEARANCE;
 
         // A 1/64 grid over [-6, 6], which lands exactly on every half-integer
         // and every quarter -- the ties are the whole of the argument, so a grid
@@ -478,14 +500,14 @@ mod tests {
             let low = -6.0 + below as f64 * step;
             for above in below..=steps {
                 let high = -6.0 + above as f64 * step;
-                if high - low < CONDUCTOR_CLEARANCE {
+                if high - low < VERTICAL_CLEARANCE {
                     continue;
                 }
                 pairs += 1;
                 let rounded = high.round() - low.round();
                 worst_shrink = worst_shrink.max((high - low) - rounded);
                 assert!(
-                    rounded >= CONDUCTOR_CLEARANCE,
+                    rounded >= VERTICAL_CLEARANCE,
                     "{low} and {high} are {} apart and round to {rounded}",
                     high - low
                 );

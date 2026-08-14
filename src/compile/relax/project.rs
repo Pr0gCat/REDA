@@ -73,39 +73,68 @@ pub const SNAP_MARGIN: f64 = 1.0;
 /// | 4 | **no route**, (55,5,7) to (62,2,7) | 45x1x23, legal | 33x1x105, legal -- flat |
 /// | 5 | 28x1x1 -- never stacks | 45x1x23, legal | 33x1x105, legal -- flat |
 ///
-/// The two ends of that table are the finding. Below 4, stacking happens and
-/// full_adder stops being buildable: a climb needs a cell at the intervening
-/// level, every cell stands on a floor, and `planner::anchor_is_free_for`
-/// refuses a floor laid on a conductor -- so the column above a body is not
-/// climbable, and a body stacked over the gate plane cannot be reached from it.
-/// At 3 the climb exists and the signal dies on it instead, which is
-/// `planner::STOREY_PITCH`'s second bound: a staircase cell can hold no
-/// repeater, so a climb spends one strength per level with no refresh. At 4 and
-/// above nothing stacks at all, because [`cheapest_axis`] compares deficits and
-/// the horizontal requirement is `CONDUCTOR_CLEARANCE + reservation(d) +
-/// SNAP_MARGIN` = `3 + d/4`, under 4 for every degree in these circuits.
+/// **An earlier reading of this table was wrong in three ways, and the review
+/// that caught it is worth more than the table.** What it said was that the
+/// window where Y is both chosen and routable is empty, structurally: that Y is
+/// chosen only below 4 because the horizontal requirement is `3 + d/4` and
+/// "under 4 for every degree in these circuits", and routable only at 4 and
+/// above because a climb cannot be laid in the column over a body. Measured:
 ///
-/// So the window where Y is both chosen and routable is empty at every value
-/// measured, and it is empty for a reason rather than by coincidence: **height
-/// is chosen only when it is cheaper than the plan, and it is routable only
-/// when it is dearer.** Note also that at 2 the one circuit that does stack
-/// trades 4 columns of width for 40 cells of wire -- the mechanism works and
-/// even there it is not obviously a win.
+/// 1. **No circuit's requirement is under 4.** The harness reports the range:
+///    and4 and full_adder `3.25..4`, six_gates `3.25..4.5`, segment_a and
+///    seven_segment `3.25..5.25` -- degree reaches 9. Worse for the argument,
+///    *every* pair in *every* circuit is dearer than this constant at 2, so Y
+///    is not the expensive axis being passed over. It is always the cheap one.
+/// 2. **The requirement is not what decides.** [`cheapest_axis`] takes the
+///    smallest *deficit*, not the smallest requirement, so Y wins only for a
+///    pair already crowded within `required - VERTICAL_CLEARANCE` on **both**
+///    horizontal axes. That is why and4 never moves a body at any value here --
+///    not because height is dear, but because nothing in it is ever that
+///    boxed in.
+/// 3. **A climb over a body routes.** `planner::anchor_is_free_for` does refuse
+///    a floor laid on a conductor, but that refuses only the column directly
+///    over it; a route climbs *beside* a body and arrives over the top. Built
+///    directly by the review: a NOR stacked 2, 3, 4, 5 or 6 levels over another
+///    in the same column routes and verifies legal, and an 80-cell path with a
+///    6-level climb survives the strength budget, because `realise_branch_from`
+///    already forces a refresh immediately before every climb.
+///
+/// So the premise is not dead and the spec is not amended. What the table
+/// actually shows, at the shipped value of 2:
+///
+/// - **Nothing has ever stacked a gate.** The one body six_gates lifts is
+///   `input:a`, a lever, and the harness names the bodies it lifts rather than
+///   counting them -- `extent`'s Y is a bounding box that counts the empty
+///   clearance gap, which is how "24x3x1" was first read as three storeys of
+///   logic. In every circuit that routes, at every value tried, the count of
+///   *gates* off the plane is zero. "Crowding buys height" has not been
+///   demonstrated on logic at all.
+/// - What it buys on six_gates is 4 columns of width for 40 cells of wire.
+/// - **full_adder loses exactly one route**, `(38,1,124)` to `(40,3,124)`, and
+///   that is the whole of the blocker. It has a reproducible address and it is
+///   a routing problem, not a placement one -- an isolated 2-level climb over
+///   that same distance routes fine, so the cause is that circuit's local
+///   congestion and nobody has yet opened it.
+/// - segment_a and seven_segment route from this planner's placement under
+///   *neither* axis set, so they are evidence for nothing either way.
 ///
 /// Charging Y a plan reservation as well -- a stacked pair required to be 1,
 /// 1.5 or 2 apart in plan on top of the two cells of height -- was built and
-/// measured too, and is *not* in the tree: at 1 six_gates and full_adder both
-/// stopped routing, at 1.5 `snap` refused three circuits because a fractional
-/// requirement needs the margin an integer one does not, and at 2 full_adder
-/// routed and died on signal strength again. Task 11's report states the
-/// variants; they are named here so nobody re-derives them as new.
+/// measured too, and is *not* in the tree, so this paragraph is hearsay by this
+/// branch's own rule and is kept only so nobody re-derives it as new: at 1
+/// six_gates and full_adder both stopped routing, at 1.5 `snap` refused three
+/// circuits because a fractional requirement needs the margin an integer one
+/// does not, and at 2 full_adder routed and died on signal strength. The report
+/// additionally claimed nothing ever stacked under those variants; a reviewer
+/// rebuilt them from its prose and measured 4 of 25, 21 of 50 and 47 of 88
+/// bodies leaving the plane, so that half of it is simply false.
 ///
-/// Which is why `planner::plan_from_netlist` still passes [`Axes::IN_PLANE`].
-/// Everything else this axis needs is here and tested -- the ground plane, the
-/// amount guard, the rounding argument -- and what is missing is on the routing
-/// side: a climb needs a reserved column and a strength budget that pays for it
-/// in advance. `planner::crowding_produces_height` is the test waiting on that,
-/// and it is `#[ignore]`d rather than deleted for the same reason.
+/// `planner::plan_from_netlist` still passes [`Axes::IN_PLANE`], for the
+/// narrower reason the measurements support: the mechanism has never been shown
+/// to move a gate, the only routing circuit it changes trades width for wire,
+/// and one reference circuit regresses. Everything the axis needs is here and
+/// tested -- the ground plane, the amount guard, the rounding argument.
+/// `planner::crowding_produces_height` is the test waiting on it.
 pub const VERTICAL_CLEARANCE: f64 = CONDUCTOR_CLEARANCE;
 
 /// The lowest position a body may be placed at.
@@ -358,12 +387,22 @@ fn unseparated(here: &PlacedCell, there: &PlacedCell, required: f64) -> bool {
 /// has somewhere to go up, and it is cheaper. [`offence`] applies that charge;
 /// this only chooses between what it measured.
 ///
-/// **And "cheaper" is the whole difficulty.** Task 11 measured that this
-/// comparison is what decides whether height is ever spent -- Y wins exactly
-/// when [`VERTICAL_CLEARANCE`] is under `CONDUCTOR_CLEARANCE + reservation(d) +
-/// SNAP_MARGIN`, which for every degree in the reference circuits is under 4 --
-/// and that the climb between the storeys it then produces is only routable at
-/// 4 and above. The table is on [`VERTICAL_CLEARANCE`].
+/// **What this compares is deficits, and that is not the same question.** It is
+/// tempting to read it as "Y wins when [`VERTICAL_CLEARANCE`] is under the
+/// pair's horizontal requirement", and Task 11 shipped that reading in a doc
+/// comment. It is only true of a pair sitting exactly on top of itself. Since
+/// [`offence`] sets `deficit[0] = required - apart[0]` and `deficit[1] =
+/// VERTICAL_CLEARANCE - apart[1]`, Y wins iff the pair is already crowded
+/// within `required - VERTICAL_CLEARANCE` on **both** horizontal axes.
+///
+/// The difference is not academic. At the shipped constant every pair in every
+/// reference circuit is dearer horizontally than vertically, so the requirement
+/// reading predicts all of them stack -- and and4's placement is identical
+/// under `IN_PLANE` and `ALL` at every value tried, to the cell, with no body
+/// off the plane. Rows laid out by depth are wide in Z, so nothing in and4 is
+/// ever crowded on the second axis: the requirement reading cannot see that and
+/// the deficit one predicts it. The measured table is on
+/// [`VERTICAL_CLEARANCE`].
 fn cheapest_axis(found: &Offence, axes: Axes) -> (usize, f64) {
     let mut best = (usize::MAX, f64::INFINITY);
     for axis in axes.iter() {
@@ -898,10 +937,27 @@ mod tests {
                     body.position[1]
                 );
             }
+            // Exactly the requirement, not merely at least it.
+            //
+            // Honest about the reach of this: it pins the *clamp*, and only the
+            // clamp. Disabling the clamp turns this red -- "body 0 of the pair
+            // lifted 0.4 was pushed to 0.44999999999999996, below the ground".
+            // Disabling `grounded` leaves it green, and tightening `>=` to an
+            // exact gap -- which a review proposed as the fix for exactly this
+            // hole -- does not change that. The reason is in `separate`'s own
+            // comment: with `grounded` gone the clamp still catches the low body
+            // each round and the high one keeps paying, so the pair converges to
+            // the same place by halving instead of in one round. `grounded` is a
+            // convergence shortcut, not what makes the answer right, and no
+            // fixture in this tree separates them by final position.
+            //
+            // NOT MEASURED: whether one exists. A pinned body against the floor
+            // is the shape to try, and `separate`'s doc already says that pair
+            // deadlocks.
             let dy = (graph.bodies[0].position[1] - graph.bodies[1].position[1]).abs();
             assert!(
-                dy >= VERTICAL_CLEARANCE - SETTLED,
-                "the pair has to be separated as well as above ground, and it is {dy} apart"
+                (dy - VERTICAL_CLEARANCE).abs() <= SETTLED,
+                "the pair has to land exactly at the requirement, and it is {dy} apart"
             );
         }
     }

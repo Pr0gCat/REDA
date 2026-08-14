@@ -915,3 +915,56 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod vertical_offsets {
+    use super::*;
+    use crate::compile::geometry::CellFacing;
+
+    /// Every cell that carries a net sits at its body's own Y.
+    ///
+    /// `snap`'s argument that the vertical requirement needs no [`SNAP_MARGIN`]
+    /// is swept over *body* gaps, while `project::unseparated` compares *cell*
+    /// gaps. Task 11 bridged the two by asserting that rounding commutes with an
+    /// integer offset, so a cell pair shrinks by exactly what its bodies do.
+    /// That is false in general -- at bodies -1.5 and 0.5 with an offset of 4 the
+    /// bodies move apart by one while the cells move together by one -- and this
+    /// is the premise that actually closes it: a conducting pair's cell gap *is*
+    /// its body gap, because the offset is 0 on both sides.
+    ///
+    /// The cells at offset -1 are floors, and they carry nothing. A floor is
+    /// inert, so separation never compares one.
+    #[test]
+    fn every_cell_that_carries_a_net_sits_at_its_body_y() {
+        let mut worst = 0i32;
+        let mut seen = 0usize;
+        let mut conducting = 0usize;
+        for arity in 1..=3usize {
+            for index in 0..4u8 {
+                let facing = CellFacing::from_index(index).expect("horizontal");
+                for kind in [Primitive::Torch, Primitive::Lever] {
+                    let body = Body {
+                        what: BodyKind::Primitive { node: 0, kind },
+                        position: [0.0, 0.0, 0.0],
+                        inputs: (0..arity).map(|i| format!("n{i}")).collect(),
+                        output: Some("out".to_string()),
+                        facing,
+                        pinned: false,
+                    };
+                    for cell in cells(&body) {
+                        seen += 1;
+                        if cell.carries.is_empty() { continue; }
+                        conducting += 1;
+                        worst = worst.max(cell.offset.1.abs());
+                    }
+                }
+            }
+        }
+        assert_eq!(
+            worst, 0,
+            "a conducting cell {worst} levels off its body breaks snap's vertical argument"
+        );
+        assert!(conducting > 0, "nothing carried a net, so nothing was checked");
+        assert!(seen > conducting, "no inert cells, so the filter proved nothing");
+    }
+}

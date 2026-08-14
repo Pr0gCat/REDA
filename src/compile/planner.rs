@@ -1955,13 +1955,16 @@ pub fn plan_from_netlist(
     netlist: &Netlist,
     placements: &PortPlacements,
 ) -> Result<PlanCandidate, PlannerError> {
-    // Not `Axes::ALL`, and Task 11 measured why rather than assuming it. The
-    // projection can reach for height -- the ground plane and the amount guard
-    // that made that safe are both shipped -- but the stacks it produces are
-    // not routable at any vertical requirement that also gets chosen.
-    // `relax::VERTICAL_CLEARANCE`'s doc carries the four-row table and the
-    // reason the window is empty, and
-    // `measure_axes_all_against_the_reference_circuits` is how to re-run it.
+    // Not `Axes::ALL`. The projection can reach for height -- the ground plane
+    // and the amount guard that made that safe are both shipped -- and Task 11
+    // first recorded here that the stacks it produces are never routable, on a
+    // derivation that a review then measured and refuted. What is true is
+    // narrower: at the shipped requirement the mechanism moves one lever and no
+    // gate, in any circuit, at any value tried; and it costs full_adder exactly
+    // one route, `(38,1,124)` to `(40,3,124)`. That is a routing defect with an
+    // address, not a dead premise. `relax::VERTICAL_CLEARANCE`'s doc carries the
+    // table, what the refuted version claimed, and what replaced it;
+    // `measure_axes_all_against_the_reference_circuits` re-runs every row.
     //
     // The axis set is a parameter of the function below and not of this one:
     // it is this design's decision, not a caller's, and a `pub` knob for it is
@@ -4842,6 +4845,32 @@ mod tests {
             ("segment_a", build_single_segment_netlist(0).0),
             ("seven_segment", build_seven_segment_netlist().0),
         ] {
+            // What the horizontal requirement actually ranges over, because the
+            // first version of this task's finding asserted it was "under 4 for
+            // every degree in these circuits" without measuring it, and it is
+            // not: degree reaches 9 and the requirement reaches 5.25. Y is
+            // charged VERTICAL_CLEARANCE flat, so the count of pairs requiring
+            // more than that is the count `cheapest_axis` could prefer Y for.
+            if let Ok(start) = starting_layout(&netlist, &PortPlacements::default()) {
+                if let Ok(graph) = primitive_graph::expand(&netlist, &Library::default_library())
+                    .map_err(|e| e.to_string())
+                    .and_then(|graph| {
+                        relax::build(&netlist, &graph, &start, &PortPlacements::default())
+                    })
+                {
+                    let required = relax::required_separations(&graph);
+                    let low = required.iter().copied().fold(f64::INFINITY, f64::min);
+                    let high = required.iter().copied().fold(0.0, f64::max);
+                    let dearer =
+                        required.iter().filter(|&&r| r > relax::VERTICAL_CLEARANCE).count();
+                    eprintln!(
+                        "         {name}: {} bodies, requirement {low}..{high}, \
+                         {dearer} dearer than VERTICAL_CLEARANCE",
+                        required.len()
+                    );
+                }
+            }
+
             for (axes, label) in
                 [(relax::Axes::IN_PLANE, "IN_PLANE"), (relax::Axes::ALL, "ALL     ")]
             {
@@ -4853,8 +4882,31 @@ mod tests {
                             Err(error) => format!("ILLEGAL {error}"),
                         };
                         let cost = candidate.cost();
+                        // The levels bodies actually sit on, and how many are
+                        // off the lowest one. `extent`'s Y is a bounding box
+                        // that counts the empty clearance gap, so a pair two
+                        // apart reads as height 3 with nothing stacked -- which
+                        // is how the first reading of this table came to say
+                        // "stacks to 3 storeys" about a layout whose only
+                        // raised body was a lever.
+                        let mut levels: Vec<i32> =
+                            candidate.anchors().iter().map(|anchor| anchor.y).collect();
+                        levels.sort_unstable();
+                        let floor = levels[0];
+                        levels.dedup();
+                        // Named, not counted. Whether the raised body is a gate
+                        // or a lever is the difference between "crowding stacks
+                        // logic" and "crowding lifts a port", and the two read
+                        // identically in a count.
+                        let raised: Vec<String> = candidate
+                            .primitive_nodes()
+                            .iter()
+                            .filter(|node| node.anchor.y > floor)
+                            .map(|node| format!("{}@{}", node.id, node.anchor.y))
+                            .collect();
                         eprintln!(
-                            "{label} {name}: placed {x}x{y}x{z}, delay {} wire {} -- {legal}",
+                            "{label} {name}: placed {x}x{y}x{z}, delay {} wire {} -- {legal}; \
+                             levels {levels:?}, off the floor: {raised:?}",
                             cost.delay, cost.wire
                         );
                     }
@@ -5284,18 +5336,21 @@ mod tests {
     /// Six gates that all consume one signal have every reason to sit near it
     /// and no room to. Spreading sideways costs the full horizontal
     /// requirement, reservations and all; stacking costs `VERTICAL_CLEARANCE`.
-    /// So they stack -- and under `Axes::ALL` they measurably do: three storeys
-    /// in a 24 by 1 footprint, routed and legal.
+    /// So they should stack.
     ///
-    /// **Ignored, and the reason is a measurement rather than a suspicion.**
-    /// `plan_from_netlist` passes `Axes::IN_PLANE`, so this fails as written --
-    /// on its own assertion, with `height` of 1. What it is waiting for is not
-    /// this test getting better but the routing side getting a climb it can
-    /// pay for. The full argument and its four-row table are on
-    /// `relax::VERTICAL_CLEARANCE`; the short version is that height is chosen
-    /// only when it is cheaper than the plan and routable only when it is
-    /// dearer, so at every vertical requirement measured either this netlist
-    /// stacks and full_adder stops routing, or nothing stacks at all.
+    /// **Ignored because the production entry point is flat, and that is the
+    /// only reason.** `plan_from_netlist` passes `Axes::IN_PLANE`, so this
+    /// netlist never leaves one level and the test fails on its own assertion
+    /// with `height` of 1. It does not fail on a climb -- an earlier ignore
+    /// string here named one, and this netlist never builds a climb to fail on.
+    ///
+    /// Switch that one word and this netlist does place, route and verify
+    /// legal. What it does *not* do is stack a gate: the single body that
+    /// leaves the plane is `input:a`, a lever, which is why the assertion this
+    /// test wants is about gates and the harness names the bodies it lifts
+    /// rather than counting them. What the flip waits on is full_adder's one
+    /// lost route, `(38,1,124)` to `(40,3,124)`. The table, and the derivation
+    /// it refuted, are on `relax::VERTICAL_CLEARANCE`.
     ///
     /// This replaces `a_tall_preference_uses_height_where_a_wide_one_uses_floor`
     /// and claims less than it did: not "ask for tall and get tall", but "crowd
@@ -5303,7 +5358,7 @@ mod tests {
     /// `plan_from_netlist_shaped`, so there is no longer a knob standing in for
     /// the answer -- only the answer, and a measurement of what it costs.
     #[test]
-    #[ignore = "known: Axes::ALL stacks and the climb between storeys does not route -- see relax::VERTICAL_CLEARANCE"]
+    #[ignore = "known: plan_from_netlist passes Axes::IN_PLANE, so this is flat and fails at height 1; the flip waits on full_adder's (38,1,124)->(40,3,124) route"]
     fn crowding_produces_height() {
         let netlist = six_independent_gates();
         let candidate = plan_from_netlist(&netlist, &PortPlacements::default())
