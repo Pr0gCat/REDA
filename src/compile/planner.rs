@@ -1926,6 +1926,92 @@ const GATE_COLUMN_X: i32 = 14;
 const INPUT_COLUMN_X: i32 = 12;
 const PLANNER_Y: i32 = 1;
 
+/// Every anchor and facing this candidate chose, in candidate-node order.
+///
+/// Text rather than a hash: when two toolchains disagree, the useful output is
+/// which node moved, not that something did.
+///
+/// **What a match proves, and what it does not.** Every number here has been
+/// through [`relax::snap`], which rounds and casts to `i32`, so this compares
+/// the *visible* layout -- the one the viewer draws and the emitter builds --
+/// and nothing finer. Two toolchains whose solves differ by less than the
+/// distance to the nearest rounding boundary produce the same string. That
+/// distance is not small. Measured by `measure_snapped_fingerprint_slack` on
+/// 2026-08-15: the tightest rounding margin is **0.0268 cells** on and4,
+/// 0.0085 on full_adder, 0.0016 on segment_a, 0.0033 on seven_segment. Against
+/// an `f64` epsilon of 2.2e-16 that is thirteen orders of magnitude of room, so
+/// a matching string here means the two toolchains agree to about a fortieth of
+/// a cell and says nothing finer. The same harness reports the other margin
+/// this string depends on -- the facing argmin, which has no boundary to cross
+/// at all -- at 4.55e-2 relative on and4 and ~4e-3 elsewhere, with no exact
+/// ties. [`continuous_placement_fingerprint`] is the companion that closes the
+/// gap; this one is the readable half.
+pub fn placement_fingerprint(candidate: &PlanCandidate) -> String {
+    candidate
+        .anchors()
+        .iter()
+        .enumerate()
+        .map(|(node, anchor)| {
+            format!(
+                "{node} {} {} {} {}",
+                anchor.x,
+                anchor.y,
+                anchor.z,
+                candidate.facing_of(node).index()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// The same placement one step earlier, before [`relax::snap`] rounds it: every
+/// body's position as raw `f64` bits, plus the step count the loop exited on.
+///
+/// [`placement_fingerprint`] is what the browser and the emitter can see, and
+/// that is exactly why it is the weaker of the two tests. It answers "do the
+/// toolchains lay out the same circuit *today*"; this one answers "do they
+/// compute the same numbers", which is what decides whether they will still lay
+/// out the same circuit on a netlist nobody has run yet. A divergence in the
+/// last bits is invisible to the rounded string until some body happens to sit
+/// near a half-integer, and then it appears as a whole cell with no warning and
+/// no way to date it.
+///
+/// Bodies, not nodes: the solver's unknowns are bodies, and `snap` collapses
+/// several of them onto one node. Hex `f64` bits, not decimal: `{}` on an `f64`
+/// prints the shortest string that round-trips, which is a lossless but
+/// *unstable* rendering -- two bit patterns can only differ here if they really
+/// differ, and the digits do not move when a formatter is improved.
+pub fn continuous_placement_fingerprint(
+    netlist: &Netlist,
+    placements: &PortPlacements,
+) -> Result<String, PlannerError> {
+    let placement = relaxed_placement(netlist, placements, SHIPPING_AXES)?;
+    let mut out = format!("steps {}\n", placement.iterations);
+    for (index, body) in placement.graph.bodies.iter().enumerate() {
+        out.push_str(&format!(
+            "{index} {:016x} {:016x} {:016x} {}\n",
+            body.position[0].to_bits(),
+            body.position[1].to_bits(),
+            body.position[2].to_bits(),
+            body.facing.index()
+        ));
+    }
+    Ok(out)
+}
+
+/// The axis set every shipping placement is solved on.
+///
+/// A constant with two readers rather than a literal at each: this is the one
+/// thing that decides which solve happens, and
+/// [`continuous_placement_fingerprint`] exists to fingerprint *that* solve. A
+/// second `Axes::IN_PLANE` written out by hand is a second thing to flip, and a
+/// fingerprint taken on an axis set the placer no longer uses is a test that
+/// still passes while measuring a circuit nobody builds.
+///
+/// Still not a `pub` knob -- see [`plan_from_netlist`] for why that is `Shape`
+/// again -- and see [`relax::VERTICAL_CLEARANCE`] for what `Axes::ALL` costs.
+const SHIPPING_AXES: relax::Axes = relax::Axes::IN_PLANE;
+
 /// Place and route a netlist without the legacy emitter.
 ///
 /// Everything until now has come from `seed_from_legacy`, which bounds the
@@ -1966,17 +2052,26 @@ pub fn plan_from_netlist(
     // table, what the refuted version claimed, and what replaced it;
     // `measure_axes_all_against_the_reference_circuits` re-runs every row.
     //
-    // The axis set is a parameter of the function below and not of this one:
-    // it is this design's decision, not a caller's, and a `pub` knob for it is
-    // the `Shape` this task deleted all over again.
-    plan_with_axes(netlist, placements, relax::Axes::IN_PLANE)
+    // The axis set is a parameter of the two functions below and not of this
+    // one: it is this design's decision, not a caller's, and a `pub` knob for
+    // it is the `Shape` Task 11 deleted all over again. What it is *here* is
+    // the private [`SHIPPING_AXES`], because Task 12 gave it a second reader
+    // and a literal written out twice is a thing that can be flipped once.
+    plan_with_axes(netlist, placements, SHIPPING_AXES)
 }
 
-fn plan_with_axes(
+/// Build the body graph and run the springs. Everything `plan_with_axes` does
+/// before rounding.
+///
+/// Split out so [`continuous_placement_fingerprint`] fingerprints the placement
+/// this function returns rather than a re-derivation of it. A copy of these
+/// twenty lines living in the fingerprint would make the test agree with itself
+/// and stop agreeing with the placer the first time one of them was edited.
+fn relaxed_placement(
     netlist: &Netlist,
     placements: &PortPlacements,
     axes: relax::Axes,
-) -> Result<PlanCandidate, PlannerError> {
+) -> Result<relax::ContinuousPlacement, PlannerError> {
     let start = starting_layout(netlist, placements)?;
     let graph = primitive_graph::expand(netlist, &Library::default_library()).map_err(|error| {
         PlannerError::UnrealisableNode {
@@ -1985,7 +2080,7 @@ fn plan_with_axes(
         }
     })?;
 
-    let placement = relax::relax(
+    relax::relax(
         netlist,
         &graph,
         &start,
@@ -1993,7 +2088,15 @@ fn plan_with_axes(
         axes,
         relax::RelaxEffort::default(),
     )
-    .map_err(PlannerError::Relaxation)?;
+    .map_err(PlannerError::Relaxation)
+}
+
+fn plan_with_axes(
+    netlist: &Netlist,
+    placements: &PortPlacements,
+    axes: relax::Axes,
+) -> Result<PlanCandidate, PlannerError> {
+    let placement = relaxed_placement(netlist, placements, axes)?;
     let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation)?;
 
     let mut anchors = Vec::with_capacity(snapped.len());
@@ -4802,6 +4905,91 @@ mod tests {
                 }
                 Err(error) => eprintln!("{name}: start {sw}x{sd}={sa} -> relax failed: {error}"),
             }
+        }
+    }
+
+    /// How far a converged placement may drift before
+    /// [`placement_fingerprint`] notices -- the method behind the "about a
+    /// fortieth of a cell" that function's doc cites, and the reason
+    /// [`continuous_placement_fingerprint`] exists next to it.
+    ///
+    /// Two margins, because there are two ways a fingerprint can change:
+    ///
+    /// - **rounding.** `snap` rounds each solved axis, so a coordinate must
+    ///   move to within half a cell of the boundary before the printed integer
+    ///   moves. `0.5 - |p - round(p)|` per body per solved axis, smallest
+    ///   reported. Y is skipped: `SHIPPING_AXES` never solves it, so its margin
+    ///   is a constant that would hide the two real ones.
+    /// - **the facing argmin.** `choose_facings` picks each body's facing as a
+    ///   strict `<` over four energies, and *that* has no boundary to cross --
+    ///   a last-bit difference between the best and the runner-up flips the
+    ///   fifth column outright. Smallest `(runner_up - best)` over all bodies,
+    ///   absolute and relative to `best`, plus a count of exact ties (a tie
+    ///   goes to the lower index on both toolchains, so it is safe, but it is
+    ///   the configuration worth knowing about).
+    ///
+    /// Asserts nothing, like its three sibling harnesses, and swallows a
+    /// `relax` failure so one circuit that cannot place does not hide the rest.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, prints the cited numbers"]
+    fn measure_snapped_fingerprint_slack() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+
+        for (name, netlist) in [
+            ("and4", build_and4_netlist().0),
+            ("full_adder", build_full_adder_netlist().0),
+            ("segment_a", build_single_segment_netlist(0).0),
+            ("seven_segment", build_seven_segment_netlist().0),
+        ] {
+            let placement =
+                match relaxed_placement(&netlist, &PortPlacements::default(), SHIPPING_AXES) {
+                    Ok(placement) => placement,
+                    Err(error) => {
+                        eprintln!("{name}: relax failed: {error}");
+                        continue;
+                    }
+                };
+
+            let mut rounding = f64::INFINITY;
+            for body in &placement.graph.bodies {
+                for axis in SHIPPING_AXES.iter() {
+                    let p = body.position[axis];
+                    rounding = rounding.min(0.5 - (p - p.round()).abs());
+                }
+            }
+
+            let mut graph = placement.graph.clone();
+            let (mut absolute, mut relative, mut ties) = (f64::INFINITY, f64::INFINITY, 0usize);
+            for body in 0..graph.bodies.len() {
+                let was = graph.bodies[body].facing;
+                let mut energies = Vec::with_capacity(4);
+                for index in 0..4u8 {
+                    graph.bodies[body].facing =
+                        geometry::CellFacing::from_index(index).expect("0..4 is horizontal");
+                    energies.push(relax::incident_energy_for_test(&graph, body));
+                }
+                graph.bodies[body].facing = was;
+                energies.sort_by(|a, b| a.partial_cmp(b).expect("no NaN in a converged graph"));
+                let (best, runner_up) = (energies[0], energies[1]);
+                if runner_up == best {
+                    ties += 1;
+                }
+                absolute = absolute.min(runner_up - best);
+                if best != 0.0 {
+                    relative = relative.min((runner_up - best) / best.abs());
+                }
+            }
+
+            eprintln!(
+                "{name}: {} bodies | tightest rounding margin {rounding:.6} cell(s) | \
+                 tightest facing margin {absolute:.6e} absolute, {relative:.6e} relative | \
+                 {ties} exact tie(s) | f64::EPSILON {:.6e}",
+                placement.graph.bodies.len(),
+                f64::EPSILON
+            );
         }
     }
 

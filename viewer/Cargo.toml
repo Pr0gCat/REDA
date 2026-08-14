@@ -15,3 +15,15 @@ serde = { version = "1.0", features = ["derive"] }
 serde-wasm-bindgen = "0.6"
 
 [dev-dependencies]
+# The harness `wasm-pack test` will not start without -- it checks for this
+# crate by name and refuses. Never built into `viewer/pkg/`: a dev-dependency
+# is not in a `cdylib` build, so the Global Constraint (the *solver* takes no
+# dependency) is untouched.
+#
+# `0.3`, and it stays `0.3`. Two things will tell you otherwise and both are
+# wrong: when this line is absent, wasm-pack's own error message instructs you
+# to add `wasm-bindgen-test = "0.2"` (stale advice, does not resolve); and the
+# minor number does not track `wasm-bindgen`'s. Measured 2026-08-15 -- `"0.3"`
+# resolves to wasm-bindgen-test 0.3.76 against the already-locked wasm-bindgen
+# 0.2.126, one `wasm-bindgen` in the lock, and the wasm test runs green.
+wasm-bindgen-test = "0.3"

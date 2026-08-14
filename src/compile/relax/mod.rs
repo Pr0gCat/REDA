@@ -29,6 +29,22 @@ pub use project::{
 };
 pub use snap::{snap, SnappedNode};
 
+/// [`incident_energy`], for a measurement that lives in `planner`.
+///
+/// `choose_facings` picks a facing by a strict `<` over four of these, which
+/// makes it the one place in the solver where a last-bit difference becomes a
+/// different answer without any rounding boundary to cross.
+/// `planner::measure_snapped_fingerprint_slack` reports how close the winner
+/// and the runner-up come, and it cannot do that through `choose_facings`,
+/// which returns only whether something turned.
+///
+/// `#[cfg(test)]` and no wider than the crate: this is a probe, not a second
+/// way to ask the solver a question.
+#[cfg(test)]
+pub(crate) fn incident_energy_for_test(graph: &BodyGraph, body: usize) -> f64 {
+    incident_energy(graph, body)
+}
+
 /// One fixture, for a test that lives in `planner`.
 ///
 /// `project.rs` has this graph already, as its own `graph_of(vec![body(..),

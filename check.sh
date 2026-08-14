@@ -24,6 +24,32 @@ echo "== viewer: test =="
 echo "== viewer: clippy =="
 (cd viewer && cargo clippy --all-targets -- -D warnings 2>&1 | tail -1)
 
+# The stanza above and the one below both run on the host or build for wasm;
+# neither ever *executes* wasm. So without this line the one property Task 12
+# exists to establish -- that the browser's circuit is the compiler's circuit --
+# would be verified exactly once, by hand, and never again. A guarantee nobody
+# re-runs is the same class of defect as a test that cannot fail, which this
+# branch has now shipped four times.
+#
+# **The count, not the exit status.** Measured 2026-08-15 by deleting the
+# `#[wasm_bindgen_test]` attribute: the runner prints `no tests to run!` and
+# **exits 0**. `awk` therefore refuses `s<1` as well as `f>0`, and `pipefail`
+# catches the case where no `test result` line is printed at all.
+#
+# Unfiltered, and not `-- --test placement_agrees_with_native`. Naming the one
+# file reads better and costs 1.5s less, and it means the next wasm test
+# somebody adds is silently outside the gate -- which is this stanza's own
+# failure mode one level up. What the unfiltered run prints instead is five
+# `no tests to run!` lines (the viewer's other test targets carry plain
+# `#[test]`, which the wasm harness does not collect; their 21 native tests are
+# the stanza above's job) and a `Doc-tests reda_viewer` summary of zero. Neither
+# matches `^test result` with a non-zero count, so the sum below is the wasm
+# count and nothing else.
+echo "== viewer: wasm test =="
+(cd viewer && wasm-pack test --node 2>&1 |
+  grep -E "^test result" |
+  awk '{s+=$4; f+=$6} END {print "passed="s, "failed="f; if (s<1 || f>0) exit 1}')
+
 # `wasm-pack`, not `cargo build --target wasm32`: the latter proves the crate
 # compiles and leaves `viewer/pkg/` exactly as stale as it was. The page loads
 # `pkg/`, so a green check with a seven-hour-old bundle is the same failure
