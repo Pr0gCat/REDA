@@ -4654,6 +4654,600 @@ mod tests {
         }
     }
 
+    /// One circuit the Task 13 condition names, and the independently-written
+    /// truth table it has to match.
+    ///
+    /// `expected` is a function of the input bits rather than a re-run of the
+    /// netlist, for the reason `tests/reference_circuits.rs` gives at the top
+    /// of the file: a bug shared between the netlist builder and the checker
+    /// cancels itself out. `inputs` is most-significant bit first, which is
+    /// what makes `decoder_digit` below able to read a BCD digit off it.
+    struct ConditionCircuit {
+        name: &'static str,
+        netlist: Netlist,
+        inputs: &'static [&'static str],
+        /// Netlist signal names, in the order `expected` returns their values.
+        outputs: Vec<String>,
+        expected: fn(&[bool]) -> Vec<bool>,
+    }
+
+    fn and4_expected(bits: &[bool]) -> Vec<bool> {
+        vec![bits.iter().all(|&bit| bit)]
+    }
+
+    fn full_adder_expected(bits: &[bool]) -> Vec<bool> {
+        let ones = bits.iter().filter(|&&bit| bit).count();
+        vec![ones % 2 == 1, ones >= 2]
+    }
+
+    /// The BCD digit `bits` spells, most-significant bit first.
+    fn decoder_digit(bits: &[bool]) -> usize {
+        bits.iter().fold(0usize, |acc, &bit| acc * 2 + usize::from(bit))
+    }
+
+    /// Segments `a`..`g` for a digit, dark for 10..15 -- which is what both
+    /// decoders in this tree are specified to do (`tests/fixtures/
+    /// seven_segment.v`'s own comment, and `TRUTH_TABLE`'s ten rows).
+    fn seven_segment_expected(bits: &[bool]) -> Vec<bool> {
+        let digit = decoder_digit(bits);
+        let table = crate::circuits::seven_segment::TRUTH_TABLE;
+        (0..7).map(|segment| digit < table.len() && table[digit][segment] == 1).collect()
+    }
+
+    /// Segment `a` alone -- index 0 of `SEGMENT_NAMES`, which is the segment
+    /// `build_single_segment_netlist(0)` builds.
+    fn segment_a_expected(bits: &[bool]) -> Vec<bool> {
+        vec![seven_segment_expected(bits)[0]]
+    }
+
+    /// Drive every input combination through the real simulator and compare
+    /// each output against `expected`.
+    ///
+    /// `Ok(n)` is "n vectors, all of them right". Every failure is a `String`
+    /// rather than a panic, because the harness below has five more circuits
+    /// to report after this one.
+    fn simulated_truth_table(
+        compiled: &CompiledCircuit,
+        inputs: &[&str],
+        outputs: &[String],
+        expected: fn(&[bool]) -> Vec<bool>,
+    ) -> Result<usize, String> {
+        const MAX_TICKS: u64 = 2000;
+
+        let mut levers = Vec::with_capacity(inputs.len());
+        for name in inputs {
+            match compiled.input_positions.get(*name) {
+                Some(position) => levers.push(*position),
+                None => return Err(format!("compiled circuit has no lever for input `{name}`")),
+            }
+        }
+        let mut sinks = Vec::with_capacity(outputs.len());
+        for signal in outputs {
+            match compiled.output_positions.get(signal) {
+                Some(position) => sinks.push(*position),
+                None => return Err(format!("compiled circuit has no output `{signal}`")),
+            }
+        }
+
+        let mut simulator = crate::redstone::simulator::Simulator::new(compiled.world.clone());
+        if let Err(error) = simulator.run_until_stable(MAX_TICKS) {
+            return Err(format!("did not settle before the first reading: {error:?}"));
+        }
+
+        let mut wrong = 0usize;
+        let mut first: Option<String> = None;
+        let vectors = 1usize << inputs.len();
+        for combination in 0..vectors {
+            let bits: Vec<bool> = (0..inputs.len())
+                .map(|index| (combination >> (inputs.len() - 1 - index)) & 1 == 1)
+                .collect();
+            for (position, &bit) in levers.iter().zip(bits.iter()) {
+                let mut state = simulator.world().get(position.0, position.1, position.2).clone();
+                state.lit = bit;
+                simulator.world_mut().set(position.0, position.1, position.2, state);
+                if let Err(error) = simulator.run_until_stable(MAX_TICKS) {
+                    return Err(format!("did not settle at {bits:?}: {error:?}"));
+                }
+            }
+            let want = expected(&bits);
+            for (index, position) in sinks.iter().enumerate() {
+                let got = simulator.world().get(position.0, position.1, position.2).lit;
+                if got != want[index] {
+                    wrong += 1;
+                    first.get_or_insert(format!(
+                        "{bits:?} -> `{}` expected {}, got {got}",
+                        outputs[index], want[index]
+                    ));
+                }
+            }
+        }
+
+        match first {
+            None => Ok(vectors),
+            Some(example) => {
+                Err(format!("{wrong} readings wrong over {vectors} vectors, first: {example}"))
+            }
+        }
+    }
+
+    /// The six circuits Task 13's condition names, each carried as far through
+    /// the shipping path as it gets -- reported, never asserted, and never
+    /// stopping at the first failure.
+    ///
+    /// ```bash
+    /// cargo test --release --lib \
+    ///   compile::planner::tests::the_six_condition_circuits_stage_by_stage \
+    ///   -- --ignored --nocapture
+    /// ```
+    ///
+    /// # Why six and not four
+    ///
+    /// The condition is "all four hand-written circuits **and both Verilog
+    /// circuits** must place, route, verify, and match their truth tables".
+    /// Everything that measured it before this measured four:
+    /// `how_far_the_planners_own_placement_carries` above panics at segment_a
+    /// and has therefore never reported seven_segment, and `viewer`'s
+    /// `which_reference_circuits_place_and_which_also_route` swallows failures
+    /// but still surveys the same four hand-written ones. The other two are
+    /// the whole of [`crate::circuits::verilog::CIRCUITS`] -- `verilog:and4`
+    /// and `verilog:seven_segment` -- and no measurement in this tree had ever
+    /// run them through `plan_from_netlist` at all.
+    ///
+    /// They arrive by [`crate::circuits::verilog::VerilogCircuit::baked_netlist`]
+    /// rather than by synthesis, so this needs no Yosys and gives the same
+    /// answer on every machine; `tests/verilog_frontend.rs`'s
+    /// `the_baked_netlists_match_fresh_synthesis` is what holds the baked copy
+    /// equal to what Yosys produces. Each is then lowered by the same function
+    /// its own acceptance test lowers it with -- `lower` for `verilog:and4`
+    /// (`the_verilog_and4_matches_its_truth_table`), `lower_optimised` for
+    /// `verilog:seven_segment`
+    /// (`optimised_lowering_preserves_every_verilog_decoder_vector`) -- because
+    /// a circuit compiled through a lowering nothing ships would answer a
+    /// question nobody asked.
+    ///
+    /// # The four stages, reported separately
+    ///
+    /// Which stage a circuit reaches is the whole input to what happens next,
+    /// so a row that fails says where:
+    ///
+    /// 1. **place** -- [`relaxed_placement`] converges and [`relax::snap`]
+    ///    rounds it onto the lattice.
+    /// 2. **route** -- [`plan_from_netlist`] returns a candidate, which is
+    ///    stage 1 again plus `route_every_net`.
+    /// 3. **verify** -- [`verify_candidate`], which *is* [`realise_and_verify`]
+    ///    with the world dropped, so this covers both names.
+    /// 4. **truth table** -- [`compile::compile_planned`], then the real
+    ///    simulator over every input combination against a table written in
+    ///    this module rather than read back out of the netlist.
+    ///
+    /// A stage runs only if the one before it passed; otherwise it prints
+    /// `NOT REACHED`, which is a different statement from a failure and is
+    /// kept a different word on purpose.
+    ///
+    /// # What it measured
+    ///
+    /// Run on 2026-08-15 at this HEAD, `--release`, whole run 54.8s:
+    ///
+    /// | circuit | lowered gates | bodies | place | route | verify | truth table |
+    /// |---|---|---|---|---|---|---|
+    /// | and4 | 7 | 11 | Ok | Ok | Ok | Ok, 16 vectors |
+    /// | full_adder | 22 | 25 | Ok | Ok | Ok | Ok, 8 vectors |
+    /// | segment_a | 46 | 50 | Ok 0.3s | **Err 31.2s** | NOT REACHED | NOT REACHED |
+    /// | seven_segment | 84 | 88 | Ok 1.1s | **Err 20.6s** | NOT REACHED | NOT REACHED |
+    /// | verilog:and4 | 9 | 13 | Ok | Ok | Ok | Ok, 16 vectors |
+    /// | verilog:seven_segment | 47 | 74 | **Err 0.8s** | NOT REACHED | NOT REACHED | NOT REACHED |
+    ///
+    /// Three of the six go all the way. The other three fail in **two
+    /// different places**, which is the thing this test was written to find
+    /// out and the thing measuring only four circuits could not:
+    ///
+    /// * segment_a and seven_segment place and do not route, with
+    ///   `no safe local route from (99, 1, 97) to (122, 1, 89)` and
+    ///   `no safe local route from (83, 1, 106) to (83, 1, 96)`. That is the
+    ///   frontier the ledger already knew about.
+    /// * `verilog:seven_segment` **does not place at all**:
+    ///   `projection deadlocked: bodies 2 and 3 cannot be 1.250 further apart
+    ///   and stay welded`, out of [`relax::project`], in 0.8s. It is not the
+    ///   biggest circuit here -- seven_segment has 84 gates to its 47 and
+    ///   places fine -- so this is not a size wall.
+    ///   `the_smallest_netlist_that_deadlocks_the_projection` below reduces it
+    ///   to five gates and names the shape.
+    ///
+    /// Addresses are printed, not asserted: a route address that moves when
+    /// placement moves is not a regression.
+    ///
+    /// Asserts nothing, so it can never fail and can never gate anything. It
+    /// spends most of its time inside `route_every_net` failing twice over,
+    /// which is why it is `#[ignore]`d.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, surveys all six condition circuits, takes minutes"]
+    fn the_six_condition_circuits_stage_by_stage() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist, SEGMENT_NAMES,
+        };
+        use crate::compile::lowering::{lower, lower_optimised};
+        use std::time::Instant;
+
+        let (and4, and4_output) = build_and4_netlist();
+        let (adder, adder_outputs) = build_full_adder_netlist();
+        let (segment_a, segment_a_output) = build_single_segment_netlist(0);
+        let (decoder, decoder_outputs) = build_seven_segment_netlist();
+
+        let lowered_verilog = |name: &str, optimised: bool| -> (Netlist, Vec<String>) {
+            let circuit = crate::circuits::verilog::find(name)
+                .unwrap_or_else(|| panic!("{name} must be in the catalog"));
+            let (netlist, labels) = circuit.baked_netlist();
+            let lowered = if optimised { lower_optimised(&netlist) } else { lower(&netlist) }
+                .unwrap_or_else(|error| panic!("{name} must lower: {error}"));
+            (lowered, labels.into_iter().map(|(_, signal)| signal).collect())
+        };
+        let (verilog_and4, verilog_and4_outputs) = lowered_verilog("verilog:and4", false);
+        let (verilog_decoder, verilog_decoder_outputs) =
+            lowered_verilog("verilog:seven_segment", true);
+
+        let cases = [
+            ConditionCircuit {
+                name: "and4",
+                netlist: and4,
+                inputs: &crate::circuits::and4::INPUT_NAMES[..],
+                outputs: vec![and4_output],
+                expected: and4_expected,
+            },
+            ConditionCircuit {
+                name: "full_adder",
+                netlist: adder,
+                inputs: &crate::circuits::full_adder::INPUT_NAMES[..],
+                outputs: vec![adder_outputs["sum"].clone(), adder_outputs["cout"].clone()],
+                expected: full_adder_expected,
+            },
+            ConditionCircuit {
+                name: "segment_a",
+                netlist: segment_a,
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: vec![segment_a_output],
+                expected: segment_a_expected,
+            },
+            ConditionCircuit {
+                name: "seven_segment",
+                netlist: decoder,
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: SEGMENT_NAMES.iter().map(|name| decoder_outputs[name].clone()).collect(),
+                expected: seven_segment_expected,
+            },
+            ConditionCircuit {
+                name: "verilog:and4",
+                netlist: verilog_and4,
+                inputs: &crate::circuits::and4::INPUT_NAMES[..],
+                outputs: verilog_and4_outputs,
+                expected: and4_expected,
+            },
+            ConditionCircuit {
+                name: "verilog:seven_segment",
+                netlist: verilog_decoder,
+                // Most-significant bit first, which is `INPUT_NAMES`'s order
+                // and not the order the baked file happens to declare them in.
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: verilog_decoder_outputs,
+                expected: seven_segment_expected,
+            },
+        ];
+
+        for case in &cases {
+            let gates = case.netlist.gates.len();
+
+            let started = Instant::now();
+            let place = match relaxed_placement(
+                &case.netlist,
+                &PortPlacements::default(),
+                SHIPPING_AXES,
+            ) {
+                Ok(placement) => match relax::snap(&placement) {
+                    Ok(_) => Ok(format!(
+                        "Ok {:.1}s ({} bodies, {} steps)",
+                        started.elapsed().as_secs_f64(),
+                        placement.graph.bodies.len(),
+                        placement.iterations
+                    )),
+                    Err(error) => Err(format!(
+                        "ERR after {:.1}s in snap: {error}",
+                        started.elapsed().as_secs_f64()
+                    )),
+                },
+                Err(error) => Err(format!(
+                    "ERR after {:.1}s in relax: {error}",
+                    started.elapsed().as_secs_f64()
+                )),
+            };
+
+            let started = Instant::now();
+            let (route, candidate) = match &place {
+                Err(_) => ("NOT REACHED".to_string(), None),
+                Ok(_) => match plan_from_netlist(&case.netlist, &PortPlacements::default()) {
+                    Ok(candidate) => (
+                        format!("Ok {:.1}s", started.elapsed().as_secs_f64()),
+                        Some(candidate),
+                    ),
+                    Err(error) => (
+                        format!("ERR after {:.1}s: {error}", started.elapsed().as_secs_f64()),
+                        None,
+                    ),
+                },
+            };
+
+            let started = Instant::now();
+            let verify = match &candidate {
+                None => "NOT REACHED".to_string(),
+                Some(candidate) => match verify_candidate(candidate, &case.netlist) {
+                    Ok(()) => format!("Ok {:.1}s", started.elapsed().as_secs_f64()),
+                    Err(error) => {
+                        format!("ERR after {:.1}s: {error}", started.elapsed().as_secs_f64())
+                    }
+                },
+            };
+
+            let started = Instant::now();
+            let truth = if candidate.is_none() || verify.starts_with("ERR") {
+                "NOT REACHED".to_string()
+            } else {
+                match compile::compile_planned(&case.netlist, &PortPlacements::default()) {
+                    Err(error) => format!(
+                        "ERR after {:.1}s in compile_planned: {error}",
+                        started.elapsed().as_secs_f64()
+                    ),
+                    Ok(compiled) => match simulated_truth_table(
+                        &compiled,
+                        case.inputs,
+                        &case.outputs,
+                        case.expected,
+                    ) {
+                        Ok(vectors) => format!(
+                            "Ok {:.1}s ({vectors} vectors)",
+                            started.elapsed().as_secs_f64()
+                        ),
+                        Err(error) => {
+                            format!("ERR after {:.1}s: {error}", started.elapsed().as_secs_f64())
+                        }
+                    },
+                }
+            };
+
+            let place = match place {
+                Ok(text) | Err(text) => text,
+            };
+            eprintln!(
+                "{}: {gates} lowered gates\n  place  {place}\n  route  {route}\n  verify {verify}\n  truth  {truth}",
+                case.name
+            );
+        }
+    }
+
+    /// The shape that deadlocks the projection, reduced to the smallest
+    /// netlist that shows it, with the reference circuits beside it as the
+    /// evidence for why nothing found it until now.
+    ///
+    /// ```bash
+    /// cargo test --release --lib \
+    ///   compile::planner::tests::the_smallest_netlist_that_deadlocks_the_projection \
+    ///   -- --ignored --nocapture
+    /// ```
+    ///
+    /// `the_six_condition_circuits_stage_by_stage` above found that
+    /// `verilog:seven_segment` does not place: `projection deadlocked: bodies
+    /// 2 and 3 cannot be 1.250 further apart and stay welded`. This is what
+    /// that turned out to be.
+    ///
+    /// # The shape
+    ///
+    /// A wire merge whose branch needs isolating gets a repeater welded into
+    /// the junction's socket for that branch ([`relax::Weld::AtSocket`], built
+    /// in `relax::build`). [`relax::project`] exempts a **welded pair** from
+    /// the separation rule, because a weld requires them to touch. Two
+    /// repeaters welded into the *same* junction's two sockets are each welded
+    /// to the junction and to nothing else, so `exempt` -- which asks only
+    /// whether a weld relates the two bodies it is handed -- does not exempt
+    /// them from each other. `satisfy` then puts them one cell either side of
+    /// the junction. Measured on the minimal netlist below: junction at
+    /// `[34, 1, 5]`, its two socket repeaters at `[33, 1, 5]` and `[35, 1, 5]`,
+    /// each with a required separation of 3.250, and
+    /// `worst_violation` reporting `{left: 3, right: 4, shortfall: 1.25}` --
+    /// 2.0 apart where 3.25 is required. Neither can move without breaking its
+    /// own weld. That is a contradiction, and `project` is right to report it
+    /// rather than spin on it.
+    ///
+    /// The failure is therefore **a merge with both branches isolated**, and
+    /// nothing about size. Measured on 2026-08-15 at this HEAD:
+    ///
+    /// | netlist | gates | merges | welds | junctions with both sockets welded | relax |
+    /// |---|---|---|---|---|---|
+    /// | and4 | 7 | 0 | 0 | 0 | Ok, 8 steps |
+    /// | full_adder | 22 | 0 | 0 | 0 | Ok, 9 steps |
+    /// | segment_a | 46 | 0 | 0 | 0 | Ok, 11 steps |
+    /// | seven_segment | 84 | 0 | 0 | 0 | Ok, 11 steps |
+    /// | verilog:and4 (`lower`) | 9 | 0 | 0 | 0 | Ok, 8 steps |
+    /// | verilog:and4 (`lower_optimised`) | 7 | 2 | 0 | 0 | Ok, 8 steps |
+    /// | verilog:seven_segment (`lower`) | 56 | 17 | 20 | 7 | **deadlocked at 14/15** |
+    /// | verilog:seven_segment (`lower_optimised`) | 47 | 17 | 23 | 9 | **deadlocked at 2/3** |
+    /// | minimal, below | 5 | 1 | 2 | 1 | **deadlocked at 3/4** |
+    /// | control, below | 4 | 1 | 1 | 0 | Ok, 8 steps |
+    ///
+    /// The row that makes the column the right one is `verilog:and4` under
+    /// `lower_optimised`: two merges, and it places. Merges are not the
+    /// trigger; **two isolating repeaters on one junction** is. In both
+    /// Verilog decoder lowerings the pair `project` names is the first
+    /// double-socket junction in its list, the minimal netlist reproduces it
+    /// at five gates, and the control -- the same netlist with one fan-out
+    /// removed, so the merge has one isolated branch instead of two -- has one
+    /// weld, no deadlock, and `compile_planned` Ok.
+    ///
+    /// # Why no test caught it
+    ///
+    /// Every hand-written circuit in this tree lowers to pure NOR -- look at
+    /// the histograms in the first four rows, there is not one `merge2` among
+    /// them -- and the only Verilog circuit whose lowering produces a merge
+    /// that needs *isolating* is the decoder. `project`'s own
+    /// `constraints_that_contradict_are_reported_rather_than_spun_on` builds
+    /// this exact two-weld shape by hand and forces it with a separation of
+    /// 9.0, so the *mechanism* was modelled from the start; what had never
+    /// been measured is that a circuit this project ships reaches it at the
+    /// real separation.
+    ///
+    /// # What it costs
+    ///
+    /// The minimal netlist compiles today: `compile()` takes the legacy
+    /// row/channel/track path, which has no projection to deadlock. So does
+    /// `verilog:seven_segment` -- `tests/verilog_frontend.rs`'s
+    /// `optimised_lowering_preserves_every_verilog_decoder_vector` passes at
+    /// this HEAD, 47 gates and 10,088 blocks and every vector. Pointing
+    /// `compile()` at the planner today would turn both of those from
+    /// compiling into not placing.
+    ///
+    /// Asserts nothing -- it is the method behind the two tables above, kept
+    /// in the tree so the numbers can be re-run rather than trusted.
+    #[test]
+    #[ignore = "measurement: prints the deadlock's shape, asserts nothing"]
+    fn the_smallest_netlist_that_deadlocks_the_projection() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+        use crate::compile::lowering::{lower, lower_optimised};
+
+        let circuit = crate::circuits::verilog::find("verilog:seven_segment").unwrap();
+        let (decoder_source, _) = circuit.baked_netlist();
+        let and4_circuit = crate::circuits::verilog::find("verilog:and4").unwrap();
+        let (and4_source, _) = and4_circuit.baked_netlist();
+
+        for (label, lowered) in [
+            ("and4", build_and4_netlist().0),
+            ("full_adder", build_full_adder_netlist().0),
+            ("segment_a", build_single_segment_netlist(0).0),
+            ("seven_segment", build_seven_segment_netlist().0),
+            ("verilog:and4 (lower)", lower(&and4_source).unwrap()),
+            (
+                "verilog:and4 (lower_optimised)",
+                lower_optimised(&and4_source).unwrap(),
+            ),
+            ("verilog:seven_segment (lower)", lower(&decoder_source).unwrap()),
+            (
+                "verilog:seven_segment (lower_optimised)",
+                lower_optimised(&decoder_source).unwrap(),
+            ),
+        ] {
+            eprintln!("=== {label}: {} gates ===", lowered.gates.len());
+            eprintln!(
+                "  histogram {}",
+                crate::compile::lowering::format_histogram(&lowered)
+            );
+            let graph = primitive_graph::expand(&lowered, &Library::default_library()).unwrap();
+            let start = starting_layout(&lowered, &PortPlacements::default()).unwrap();
+            let built = relax::build(&lowered, &graph, &start, &PortPlacements::default());
+            match built {
+                Ok(body_graph) => {
+                    let mut per_junction: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
+                    for weld in &body_graph.welds {
+                        if let relax::Weld::AtSocket { repeater, junction, .. } = weld {
+                            per_junction.entry(*junction).or_default().push(*repeater);
+                        }
+                    }
+                    let both: Vec<_> =
+                        per_junction.iter().filter(|(_, r)| r.len() >= 2).collect();
+                    eprintln!(
+                        "  {} bodies, {} welds over {} junctions, {} of them with BOTH sockets welded: {:?}",
+                        body_graph.bodies.len(),
+                        body_graph.welds.len(),
+                        per_junction.len(),
+                        both.len(),
+                        both,
+                    );
+                }
+                Err(error) => eprintln!("  build ERR: {error}"),
+            }
+            match relaxed_placement(&lowered, &PortPlacements::default(), SHIPPING_AXES) {
+                Ok(placement) => eprintln!(
+                    "  relax Ok: {} bodies, {} steps",
+                    placement.graph.bodies.len(),
+                    placement.iterations
+                ),
+                Err(error) => eprintln!("  relax ERR: {error}"),
+            }
+        }
+
+        // Minimal reproduction: one merge, both branches isolated because both
+        // its input signals fan out elsewhere.
+        let minimal = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec!["m".to_string(), "ka".to_string(), "kb".to_string()],
+            gates: vec![
+                Gate::nor("na", &["a"]),
+                Gate::nor("nb", &["b"]),
+                Gate {
+                    name: "m".to_string(),
+                    inputs: vec!["na".to_string(), "nb".to_string()],
+                    output: "m".to_string(),
+                    kind: crate::compile::topology::GateKind::Or(2),
+                },
+                Gate::nor("ka", &["na"]),
+                Gate::nor("kb", &["nb"]),
+            ],
+        };
+        eprintln!("=== minimal: one merge, both branches isolated ===");
+        let graph = primitive_graph::expand(&minimal, &Library::default_library()).unwrap();
+        let start = starting_layout(&minimal, &PortPlacements::default()).unwrap();
+        let built = relax::build(&minimal, &graph, &start, &PortPlacements::default()).unwrap();
+        eprintln!("  {} bodies, welds {:?}", built.bodies.len(), built.welds);
+        let required = relax::required_separations(&built);
+        for index in [2usize, 3, 4] {
+            eprintln!(
+                "    body {index}: {:?} at {:?}, required separation {:.3}",
+                built.bodies[index].what, built.bodies[index].position, required[index]
+            );
+        }
+        eprintln!("    worst violation as built: {:?}", relax::worst_violation(&built, &required));
+        match relaxed_placement(&minimal, &PortPlacements::default(), SHIPPING_AXES) {
+            Ok(placement) => eprintln!("  relax Ok: {} steps", placement.iterations),
+            Err(error) => eprintln!("  relax ERR: {error}"),
+        }
+        match compile::compile_planned(&minimal, &PortPlacements::default()) {
+            Ok(_) => eprintln!("  compile_planned Ok"),
+            Err(error) => eprintln!("  compile_planned ERR: {error}"),
+        }
+        match compile::compile(&minimal) {
+            Ok(_) => eprintln!("  legacy compile Ok"),
+            Err(error) => eprintln!("  legacy compile ERR: {error}"),
+        }
+
+        // And the control: the same merge with only ONE branch isolated.
+        let one_branch = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec!["m".to_string(), "ka".to_string()],
+            gates: vec![
+                Gate::nor("na", &["a"]),
+                Gate::nor("nb", &["b"]),
+                Gate {
+                    name: "m".to_string(),
+                    inputs: vec!["na".to_string(), "nb".to_string()],
+                    output: "m".to_string(),
+                    kind: crate::compile::topology::GateKind::Or(2),
+                },
+                Gate::nor("ka", &["na"]),
+            ],
+        };
+        eprintln!("=== control: one merge, one branch isolated ===");
+        let graph = primitive_graph::expand(&one_branch, &Library::default_library()).unwrap();
+        let start = starting_layout(&one_branch, &PortPlacements::default()).unwrap();
+        let built = relax::build(&one_branch, &graph, &start, &PortPlacements::default()).unwrap();
+        eprintln!("  {} bodies, welds {:?}", built.bodies.len(), built.welds);
+        match relaxed_placement(&one_branch, &PortPlacements::default(), SHIPPING_AXES) {
+            Ok(placement) => eprintln!("  relax Ok: {} steps", placement.iterations),
+            Err(error) => eprintln!("  relax ERR: {error}"),
+        }
+        match compile::compile_planned(&one_branch, &PortPlacements::default()) {
+            Ok(_) => eprintln!("  compile_planned Ok"),
+            Err(error) => eprintln!("  compile_planned ERR: {error}"),
+        }
+    }
+
     /// Corridors exist: a relaxed placement is not merely legal but routable.
     ///
     /// This is what the routing reservation claims, and it is the term with no
@@ -5689,6 +6283,69 @@ mod tests {
             };
             assert_eq!(read("sum"), count % 2 == 1, "sum for inputs {mask:03b}");
             assert_eq!(read("cout"), count >= 2, "cout for inputs {mask:03b}");
+        }
+    }
+
+    /// The same router, the same netlist, two placements: does the wall move?
+    ///
+    /// This is the experiment `2026-08-15-routing-at-scale.md` calls "the
+    /// single most load-bearing open question in the document, because it
+    /// decides whether the fix belongs in the router or is shared with the
+    /// placer" -- and the one neither diagnosis ran.
+    ///
+    /// Two diagnoses reached opposite conclusions from compatible data. One
+    /// ran a single pass with rip-up disabled, found `segment_a` refusing 23
+    /// branches from the relaxed *and* the legacy anchors alike, and concluded
+    /// the router "has never routed any circuit larger than `full_adder` on
+    /// **any** layout -- including the legacy emitter's own". The other ran the
+    /// full loop and concluded the relaxed placement is the input that breaks a
+    /// router legacy's placement does not.
+    ///
+    /// **Measured, and the second one is right.** The legacy emitter's own
+    /// anchors, with its routes thrown away and every net re-laid by this
+    /// router, route `segment_a` in about 110 seconds. The relaxed placement
+    /// never does, at 64 rounds or at 256. So the one-pass census was measuring
+    /// something real -- both placements are hard on pass one -- and drawing a
+    /// conclusion its own method could not support: rip-up *rescues* legacy and
+    /// does not rescue the relaxed layout.
+    ///
+    /// What that settles: the router is not independently broken at this size,
+    /// and the relaxation is not innocent. It halved the anchor box (`segment_a`
+    /// 29,435 -> 8,099) and the negotiation that sufficed at the old density
+    /// does not suffice at the new one. The fix is shared, which is why the
+    /// spec asks for a negotiating router rather than a looser placer -- but it
+    /// is now a measured reason rather than a preference.
+    ///
+    /// `segment_a` only, and deliberately: it is the smallest circuit that
+    /// separates the two hypotheses, and `seven_segment` at this cost would put
+    /// the harness past ten minutes.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, routes segment_a twice, takes about two minutes"]
+    fn measure_whether_the_legacy_placement_routes_through_this_router() {
+        use crate::circuits::seven_segment::build_single_segment_netlist;
+
+        let (netlist, _) = build_single_segment_netlist(0);
+
+        let compiled = compile::compile(&netlist).expect("segment_a compiles the legacy way");
+        let emission = compiled.legacy_emission().expect("legacy metadata");
+        let seed = seed_from_legacy_parts(&netlist, emission).expect("segment_a seeds");
+
+        // The legacy anchors with the legacy routes discarded, so what is
+        // measured is this router on that placement rather than the routes the
+        // emitter laid itself.
+        let bare = PlanCandidate::with_primitive_nodes(
+            seed.anchors().to_vec(),
+            seed.primitive_nodes().to_vec(),
+            Vec::new(),
+        );
+        match route_every_net(bare, &netlist) {
+            Ok(_) => eprintln!("legacy anchors: segment_a ROUTES through this router"),
+            Err(error) => eprintln!("legacy anchors: segment_a FAILS: {error}"),
+        }
+
+        match plan_from_netlist(&netlist, &PortPlacements::default()) {
+            Ok(_) => eprintln!("relaxed anchors: segment_a ROUTES"),
+            Err(error) => eprintln!("relaxed anchors: segment_a FAILS: {error}"),
         }
     }
 

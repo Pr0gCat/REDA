@@ -174,12 +174,37 @@ V's "never on any layout" is an over-claim from one-pass data, and S's "the
 negotiation that sufficed for legacy does not suffice for anything denser" is
 the compatible statement.
 
-**NOT MEASURED:** nobody re-ran the other's experiment. V never ran the rip-up
-loop on legacy `segment_a` anchors; S never ran a one-pass census. Both
-harnesses are gone (§9). **Whoever picks this up should run both before
-believing either.** This is the single most load-bearing open question in the
-document, because it decides whether the fix belongs in the router or is
-shared with the placer.
+**ANSWERED, 2026-08-15, after this document was first written.** The missing
+experiment -- the rip-up loop on legacy `segment_a` anchors -- was run, and S's
+reading is the correct one:
+
+```
+legacy anchors:  segment_a ROUTES through this router   (~110s)
+relaxed anchors: segment_a FAILS
+```
+
+The harness is in the tree, so this is re-runnable rather than reported:
+`planner::measure_whether_the_legacy_placement_routes_through_this_router`
+(`#[ignore]`d, about two minutes). It discards the emitter's own routes and
+re-lays every net with this router, so what it measures is this router on that
+placement.
+
+So **V's one-pass census was measuring something real and drawing a conclusion
+its own method could not support.** Both placements are hard on pass one -- 23
+refusals each, which is V's number and it reproduces -- but rip-up *rescues*
+legacy and never rescues the relaxed layout. "Never on any layout" is false.
+
+What that settles, and it is the question this section exists to answer: **the
+router is not independently broken at this size, and the relaxation is not
+innocent.** The relaxation halved the anchor box (`segment_a` 29,435 -> 8,099)
+and the negotiation that sufficed at the old density does not suffice at the
+new one. The fix is *shared*. §4 still asks for a negotiating router rather
+than a looser placer -- that recommendation is unchanged -- but it now rests on
+a measurement instead of on a preference, and anyone arguing for the placer
+side has to beat 110 seconds of evidence rather than an assumption.
+
+Still not measured: the same comparison on `seven_segment`, which the harness
+omits deliberately because it would put it past ten minutes.
 
 Note also that V's `segment_a` numbers are the case *against* the placement
 being the whole story, and V's `seven_segment` numbers are the case *for* it
