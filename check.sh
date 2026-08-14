@@ -75,17 +75,30 @@ echo "== viewer: clippy =="
 # The corollary, so the failure is not a mystery: a host-only test in that file
 # must be `#[ignore]`d (libtest counts it under `ignored`, not `passed`) or
 # `#[cfg(not(target_arch = "wasm32"))]`, and the one measurement harness there
-# is both. This does not catch a *new file* whose wasm tests never run -- that
-# would need its own host baseline, and no such file exists yet.
+# is both.
+#
+# **Filtered to that one file, and equal rather than at-least.** The first
+# version of this gate summed `wasm-pack`'s counts over every wasm target and
+# compared the total against one file's host count, which are not the same
+# quantity: a second wasm test file with N tests would raise the sum to 6+N
+# while the baseline stayed 6, and the guard would go slack by N -- exactly the
+# partial skip it was added to catch, hidden by an unrelated file's passes. So
+# the run is narrowed to the file the baseline came from and the counts must
+# match exactly.
+#
+# The cost is stated rather than hidden: **wasm tests in any other file are not
+# gated here at all.** A second such file needs its own baseline and its own
+# pair of lines. That is a limitation somebody has to act on when they add one,
+# which is better than a number that silently means less each time.
 echo "== viewer: wasm test =="
 (cd viewer &&
   host=$(cargo test --release --test placement_agrees_with_native 2>&1 |
     awk '/^test result/{print $4; exit}') &&
-  wasm-pack test --node --release 2>&1 |
+  wasm-pack test --node --release -- --test placement_agrees_with_native 2>&1 |
     grep -E "^test result" |
     awk -v host="$host" '{s+=$4; f+=$6} END {
       print "passed="s, "failed="f, "(host runs "host" in that file)"
-      if (s<1 || f>0 || s<host) exit 1
+      if (s<1 || f>0 || s!=host) exit 1
     }')
 
 # `wasm-pack`, not `cargo build --target wasm32`: the latter proves the crate
