@@ -5329,7 +5329,7 @@ that call and bind them:
     /// verifiers read the second to check what the first built.
     #[test]
     fn a_planned_circuit_reports_the_facings_it_was_built_at() {
-        let netlist = crate::verilog::and4_netlist();
+        let (netlist, _) = build_and4_netlist();
         let candidate = plan_from_netlist(&netlist, &PortPlacements::default())
             .expect("and4 places by relaxation");
         let compiled = crate::compile::compile_planned(&netlist, &PortPlacements::default())

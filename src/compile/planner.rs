@@ -4687,8 +4687,24 @@ mod tests {
         .expect("rows and barycentres place and4")
     }
 
+    /// The method behind every before/after number this branch cites for and4:
+    /// what rows and barycentres built, and what relaxation builds, measured
+    /// side by side on one run.
+    ///
+    /// Ignored because it asserts nothing, not because it is slow -- it takes a
+    /// second. It exists because the standard here is that a cited number has a
+    /// reproducible method, and its four `expect`s are real guards: that the
+    /// old placement still builds, that the new one still places, and that both
+    /// still realise and verify.
+    ///
+    /// Its settle column used to be a 32-mask sweep on one long-lived
+    /// simulator, and printed 24 against 28 -- a figure `8c0b70d` showed is not
+    /// a property of the circuit at all. It times what
+    /// `a_self_placed_and4_computes_and4` times now, so the two agree: every
+    /// ordered transition, each from a state that has settled, on a simulator
+    /// that has seen nothing else.
     #[test]
-    #[ignore]
+    #[ignore = "measurement harness: asserts nothing, prints the cited numbers"]
     fn measure_and4_both_ways() {
         use crate::redstone::simulator::Simulator;
         use crate::redstone::world::block::BlockKind;
@@ -4710,30 +4726,50 @@ mod tests {
                     realised.world.get(x, y, z).kind != BlockKind::Air
                 })
                 .count();
-            let mut simulator = Simulator::new(realised.world.clone());
-            simulator.run_until_stable(2000).expect("settles");
-            let mut worst = 0u64;
-            let sweep = (0u8..16).chain((0u8..16).map(|step| step ^ (step >> 1)));
-            for mask in sweep {
+
+            let set_inputs = |simulator: &mut Simulator, mask: u8| {
                 for (bit, port) in ["a", "b", "c", "d"].iter().enumerate() {
                     let at = realised.ports.input_positions[*port];
                     let mut state = simulator.world().get(at.0, at.1, at.2).clone();
                     state.lit = (mask >> bit) & 1 == 1;
                     simulator.world_mut().set(at.0, at.1, at.2, state);
                 }
-                worst = worst.max(simulator.run_until_stable(2000).expect("settles"));
+            };
+            let mut worst = 0u64;
+            let mut worst_at = (0u8, 0u8);
+            for from in 0u8..16 {
+                for to in 0u8..16 {
+                    if from == to {
+                        continue;
+                    }
+                    let mut simulator = Simulator::new(realised.world.clone());
+                    set_inputs(&mut simulator, from);
+                    simulator.run_until_stable(2000).expect("settles at from");
+                    set_inputs(&mut simulator, to);
+                    let ticks = simulator.run_until_stable(2000).expect("settles at to");
+                    if ticks > worst {
+                        worst = ticks;
+                        worst_at = (from, to);
+                    }
+                }
             }
+
             let cost = candidate.cost();
             eprintln!(
                 "{name}: {blocks} blocks | cost delay {} wire {} space {} turns {} | \
-                 simulated worst settle {worst}",
-                cost.delay, cost.wire, cost.space, cost.turns
+                 worst settle {worst} over 240 transitions, at {:04b} -> {:04b}",
+                cost.delay, cost.wire, cost.space, cost.turns, worst_at.0, worst_at.1
             );
         }
     }
 
+    /// What relaxation does to each reference circuit's anchor bounding box,
+    /// start against finish. The method behind the four before/after pairs the
+    /// ledger cites; like `measure_and4_both_ways` it asserts nothing, and it
+    /// swallows a `relax` failure rather than panicking so one circuit that
+    /// cannot place does not hide the other three.
     #[test]
-    #[ignore]
+    #[ignore = "measurement harness: asserts nothing, prints the cited numbers"]
     fn measure_anchor_boxes() {
         use crate::circuits::full_adder::build_full_adder_netlist;
         use crate::circuits::seven_segment::{
@@ -5258,8 +5294,11 @@ mod tests {
     }
 
     /// What optimisation costs and what it buys, per circuit.
+    ///
+    /// The one harness here whose ignore is paid for by its runtime: a minute,
+    /// against a second for the other two.
     #[test]
-    #[ignore]
+    #[ignore = "measurement harness: asserts nothing, and takes about a minute"]
     fn measure_optimisation_at_scale() {
         use crate::circuits::full_adder::build_full_adder_netlist;
         use crate::circuits::seven_segment::{
@@ -5495,6 +5534,11 @@ mod tests {
         // transition. Bounded rather than pinned: the point is that relaxation
         // did not make the circuit slower, which is what an earlier reading of
         // a different measure appeared to say.
+        //
+        // The 26 was first measured in a scratch worktree at `3c63495`, which
+        // is a method nobody can re-run. `measure_and4_both_ways` runs this
+        // same loop over both placements in the tree as it stands, and prints
+        // 572 blocks / 26 against 232 / 14.
         assert!(
             worst < 26,
             "relaxation settles in {worst}, no better than rows and barycentres"
