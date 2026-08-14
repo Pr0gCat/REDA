@@ -7,23 +7,28 @@
 //! bodies approach by at most one.
 //!
 //! **Horizontally.** [`required_separations`] adds [`SNAP_MARGIN`] to the
-//! horizontal requirement and to nothing else; the vertical gate is a bare
-//! `dy < CONDUCTOR_CLEARANCE` in `project::unseparated`, with no margin on it.
-//! Stage 1 pays nothing for that, because `Axes::IN_PLANE` never writes a
-//! fractional Y: every `dy` is an integer difference of starting storeys and
-//! rounding is the identity on it. Under `Axes::ALL` it becomes live, and this
-//! module is one of the two places it surfaces. The mechanism is narrower than
-//! it looks, and worth stating precisely so Task 11 does not chase the wrong
-//! one: a pair exempted at `dy = 2.0` can only round to `dy = 1.0` by losing
-//! exactly one whole cell, which needs one body at `+0.5` and the other at
-//! `-0.5` -- `f64::round` ties away from zero, so straddling `Y = 0` is the
-//! only way two half-integers move apart rather than in unison. A sweep over
-//! `[-3, 3]` in steps of 0.025 with cell offsets `-4..=4` found 72 such pairs,
-//! and every one of them straddles zero, which no starting storey in this tree
-//! produces. So the exposure is real but is the same coincidence the weld note
-//! below calls "code for a coincidence". Task 11 is where the vertical
-//! requirement grows its own margin, and the reason to give it one is that the
-//! asymmetry exists at all -- not that a circuit has hit it.
+//! horizontal requirement and to nothing else; the vertical target --
+//! `project::VERTICAL_CLEARANCE` -- carries none. Task 11 was briefed to give it
+//! one and measured instead that it needs none, which is the opposite of what
+//! this paragraph used to say.
+//!
+//! The requirement is a whole number of cells, and rounding shrinks a gap by
+//! *strictly* less than one: equality would need the lower body at a tie
+//! rounding up and the upper at a tie rounding down, and `f64::round` ties away
+//! from zero, which permits only the opposite pair -- a negative half-integer
+//! below a positive one, which moves the pair *apart*. A rounded gap is also an
+//! integer, so a gap of at least 2.0 lands on an integer above 1.0, which is at
+//! least 2. `a_vertical_gap_at_the_requirement_survives_rounding` is that
+//! argument swept over 1/64 of a cell across `[-6, 6]`.
+//!
+//! An earlier draft of this doc, and Task 11's brief after it, named the
+//! straddling half-integer pair as the mechanism that closes `dy = 2.0` to
+//! `dy = 1.0`. It is the mechanism that opens it. The horizontal requirement
+//! needs its margin for a different reason, which is why the asymmetry is
+//! derived rather than an oversight: `CONDUCTOR_CLEARANCE + reservation(d)` is a
+//! quarter-cell multiple, and an integer gap under a fractional requirement is a
+//! real loss -- up to 3/4 of a cell, which
+//! `a_pair_at_its_requirement_survives_rounding_toward_each_other` builds.
 
 use crate::compile::geometry::CellFacing;
 use crate::compile::planner::Anchor;
@@ -134,7 +139,7 @@ pub fn snap(placement: &ContinuousPlacement) -> Result<Vec<SnappedNode>, RelaxEr
     // does run end to end, through `plan_from_netlist`, and which
     // `relaxation_routes_everything_the_old_placement_could` places, routes and
     // verifies. Charge the margin twice and that test is what fails, at the
-    // `snap` inside `plan_from_netlist_shaped`, before a block is written.
+    // `snap` inside `plan_from_netlist`, before a block is written.
     let required: Vec<f64> = required_separations(&rounded)
         .into_iter()
         .map(|separation| separation - SNAP_MARGIN)
@@ -432,6 +437,69 @@ mod tests {
 
         let placement = ContinuousPlacement { graph: built, converged: true, iterations: 1 };
         snap(&placement).expect("what the projection guarantees has to survive rounding");
+    }
+
+    /// A vertical gap legal against the requirement is still legal after
+    /// rounding, which is why the vertical requirement carries no
+    /// [`SNAP_MARGIN`] and the horizontal one does.
+    ///
+    /// The argument, which this sweep is the measurement of: rounding shrinks a
+    /// gap by *strictly* less than one cell. Equality would need the lower body
+    /// at a tie rounding up and the upper at a tie rounding down, and
+    /// `f64::round` ties away from zero -- which permits only the opposite pair,
+    /// a negative half-integer below a positive one, and that pair moves *apart*
+    /// rather than together. A rounded gap is also an integer, so a gap of at
+    /// least [`CONDUCTOR_CLEARANCE`] lands on an integer strictly greater than
+    /// `CONDUCTOR_CLEARANCE - 1`, which is at least `CONDUCTOR_CLEARANCE`.
+    ///
+    /// Bodies rather than cells, and that loses nothing: a cell sits at its
+    /// body's position plus an integer offset, and rounding commutes with an
+    /// integer, so a cell pair's gap shrinks by exactly what its bodies' does.
+    ///
+    /// The task this belongs to was briefed to *add* a vertical margin, on the
+    /// argument that a pair sitting at 2.0 can round to 1.0. It cannot, and this
+    /// is what says so. The mechanism the brief and this module's own doc named
+    /// -- both bodies on half-cell boundaries straddling `Y = 0` -- moves the
+    /// pair apart. Adding the margin is not free: it makes every stack three
+    /// cells rather than two, which is a storey of height per crowded pair and a
+    /// longer climb for every route between them.
+    #[test]
+    fn a_vertical_gap_at_the_requirement_survives_rounding() {
+        use crate::compile::relax::CONDUCTOR_CLEARANCE;
+
+        // A 1/64 grid over [-6, 6], which lands exactly on every half-integer
+        // and every quarter -- the ties are the whole of the argument, so a grid
+        // that missed them would measure nothing.
+        let step = 1.0 / 64.0;
+        let steps = (12.0 / step) as i32;
+        let mut pairs = 0u64;
+        let mut worst_shrink = f64::NEG_INFINITY;
+        for below in 0..=steps {
+            let low = -6.0 + below as f64 * step;
+            for above in below..=steps {
+                let high = -6.0 + above as f64 * step;
+                if high - low < CONDUCTOR_CLEARANCE {
+                    continue;
+                }
+                pairs += 1;
+                let rounded = high.round() - low.round();
+                worst_shrink = worst_shrink.max((high - low) - rounded);
+                assert!(
+                    rounded >= CONDUCTOR_CLEARANCE,
+                    "{low} and {high} are {} apart and round to {rounded}",
+                    high - low
+                );
+            }
+        }
+        // Both pinned rather than bounded, so a change to the grid shows up as
+        // a failure here rather than as a quietly smaller sweep: 205,761 pairs,
+        // and the worst rounding can do to any of them is 0.984375 of a cell,
+        // at (-5.484375, -2.5). Strictly under one, which is the whole argument.
+        assert_eq!(pairs, 205_761, "the sweep did not sweep what its doc says");
+        assert_eq!(
+            worst_shrink, 0.984_375,
+            "rounding closed a gap by {worst_shrink}, and one whole cell is what the argument forbids"
+        );
     }
 
     /// And a placement tighter than the projection can produce does not

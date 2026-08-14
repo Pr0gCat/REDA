@@ -23,7 +23,107 @@ pub const CONDUCTOR_CLEARANCE: f64 = 2.0;
 /// Rounding moves a body by at most half a cell, so two bodies approach by at
 /// most one, and a continuous solution separated by the requirement plus one
 /// is still separated after.
+///
+/// **Horizontal only, and that asymmetry is derived rather than an oversight.**
+/// The vertical requirement is a whole number of cells, so a gap legal against
+/// it is legal after rounding too: rounding shrinks a gap by *strictly* less
+/// than one -- equality would need the lower body at a tie rounding up and the
+/// upper at a tie rounding down, and `f64::round` ties away from zero, which
+/// permits only the opposite pair -- and a rounded gap is an integer, so a gap
+/// of at least 2.0 lands on an integer greater than 1.0, which is at least 2.
+/// `snap.rs`'s `a_vertical_gap_at_the_requirement_survives_rounding` is that
+/// argument as a sweep. The horizontal requirement needs the margin because
+/// `CONDUCTOR_CLEARANCE + reservation(d)` is a quarter-cell multiple rather
+/// than an integer, and an integer gap below a fractional requirement is a real
+/// loss.
 pub const SNAP_MARGIN: f64 = 1.0;
+
+/// How far apart in Y two conductors of different signals must be.
+///
+/// [`CONDUCTOR_CLEARANCE`] applied to an axis, and no [`SNAP_MARGIN`] on top:
+/// the requirement is a whole number of cells, so a gap legal against it is
+/// legal after rounding too. `snap.rs`'s
+/// `a_vertical_gap_at_the_requirement_survives_rounding` is that argument as a
+/// sweep, and `SNAP_MARGIN`'s own doc is the argument.
+///
+/// **One constant rather than two sites, because two sites is a hazard.**
+/// [`unseparated`] decides whether a pair offends and [`offence`] decides what
+/// clearing it along Y costs. A margin added to one and not the other is a
+/// projection that moves a pair to a gap it still calls a violation, and before
+/// Task 11 the only thing holding the two together was a comment.
+/// `planner::two_bodies_in_one_column_are_left_where_they_are` pins both ends.
+///
+/// **This number is where "crowding buys height" lives, and Task 11 measured
+/// that it does not pay off yet.** The premise is that Y is cheaper than the
+/// plan because it carries no routing reservation, so [`cheapest_axis`] reaches
+/// for it when a body has nowhere to go sideways. It does reach for it -- and
+/// the stacks it then produces are only sometimes routable.
+///
+/// Measured on 2026-08-14 by `planner::measure_axes_all_against_the_reference_
+/// circuits`, which is the way to re-run every row: set this constant, run that
+/// harness. It reports both axis sets on all five circuits, because `segment_a`
+/// and `seven_segment` route from this planner's own placement under neither
+/// and would otherwise read as this task's doing.
+///
+/// | `VERTICAL_CLEARANCE` | six gates on one net | and4 | full_adder |
+/// |---|---|---|---|
+/// | (`Axes::IN_PLANE`) | 28x1x1, wire 64, legal | 45x1x23, legal | 33x1x105, legal |
+/// | 2 | **24x3x1**, wire 104, legal | 45x1x23, legal | **no route**, (38,1,124) to (40,3,124) |
+/// | 3 | 24x4x1, wire 100, legal | 45x1x23, legal | routes, **illegal**: `g3` never reaches `g4` |
+/// | 4 | **no route**, (55,5,7) to (62,2,7) | 45x1x23, legal | 33x1x105, legal -- flat |
+/// | 5 | 28x1x1 -- never stacks | 45x1x23, legal | 33x1x105, legal -- flat |
+///
+/// The two ends of that table are the finding. Below 4, stacking happens and
+/// full_adder stops being buildable: a climb needs a cell at the intervening
+/// level, every cell stands on a floor, and `planner::anchor_is_free_for`
+/// refuses a floor laid on a conductor -- so the column above a body is not
+/// climbable, and a body stacked over the gate plane cannot be reached from it.
+/// At 3 the climb exists and the signal dies on it instead, which is
+/// `planner::STOREY_PITCH`'s second bound: a staircase cell can hold no
+/// repeater, so a climb spends one strength per level with no refresh. At 4 and
+/// above nothing stacks at all, because [`cheapest_axis`] compares deficits and
+/// the horizontal requirement is `CONDUCTOR_CLEARANCE + reservation(d) +
+/// SNAP_MARGIN` = `3 + d/4`, under 4 for every degree in these circuits.
+///
+/// So the window where Y is both chosen and routable is empty at every value
+/// measured, and it is empty for a reason rather than by coincidence: **height
+/// is chosen only when it is cheaper than the plan, and it is routable only
+/// when it is dearer.** Note also that at 2 the one circuit that does stack
+/// trades 4 columns of width for 40 cells of wire -- the mechanism works and
+/// even there it is not obviously a win.
+///
+/// Charging Y a plan reservation as well -- a stacked pair required to be 1,
+/// 1.5 or 2 apart in plan on top of the two cells of height -- was built and
+/// measured too, and is *not* in the tree: at 1 six_gates and full_adder both
+/// stopped routing, at 1.5 `snap` refused three circuits because a fractional
+/// requirement needs the margin an integer one does not, and at 2 full_adder
+/// routed and died on signal strength again. Task 11's report states the
+/// variants; they are named here so nobody re-derives them as new.
+///
+/// Which is why `planner::plan_from_netlist` still passes [`Axes::IN_PLANE`].
+/// Everything else this axis needs is here and tested -- the ground plane, the
+/// amount guard, the rounding argument -- and what is missing is on the routing
+/// side: a climb needs a reserved column and a strength budget that pays for it
+/// in advance. `planner::crowding_produces_height` is the test waiting on that,
+/// and it is `#[ignore]`d rather than deleted for the same reason.
+pub const VERTICAL_CLEARANCE: f64 = CONDUCTOR_CLEARANCE;
+
+/// The lowest position a body may be placed at.
+///
+/// A body's own cells reach one level below its position -- a junction's floor,
+/// a lever's home and pin floors -- and the world's lowest level is 0, so 1 is
+/// the ground plane. `planner::PLANNER_Y` is the same number from the other
+/// side, and `planner::nothing_is_placed_below_the_ground_plane` is what holds
+/// the two together.
+///
+/// A hard constraint, not a preference. [`separate`] splits a move half each
+/// way, so the moment axis 1 is available the lower body of a stacked pair
+/// walks downward with nothing under it; a gate at `y = 0` writes its floor at
+/// `y = -1`, outside the world, and its socket reads as air however carefully a
+/// route reached it. `planner::claim_column` carries exactly this guard for X
+/// -- "never left of the first column" -- and Y had no counterpart until axis 1
+/// became reachable.
+pub const GROUND: f64 = 1.0;
 
 /// The pitch two parallel foreign routes need -- the same 2, for the same
 /// reason: a route is one cell of dust, and two foreign dust runs need a gap
@@ -164,9 +264,10 @@ struct Offence {
 /// `dust_reach` is the *join* mechanism, and power reaching a block from the
 /// dust above or below it is a different one nobody here has derived. Two is
 /// [`CONDUCTOR_CLEARANCE`] applied to an axis rather than a new claim, and it is
-/// already cheap enough to produce the stacking. Tightening it to one is worth
-/// a measurement and needs that derivation first; the spec's test 8 says the
-/// same.
+/// already cheap enough to produce the stacking -- measurably so, and
+/// measurably too cheap for the router, which is [`VERTICAL_CLEARANCE`]'s own
+/// doc. Tightening it to one is worth a measurement and needs that derivation
+/// first; the spec's test 8 says the same.
 ///
 /// Conservative in two ways the derivation would allow relaxing -- it forbids
 /// the horizontal diagonal, which `dust_reach` has no case for, and it ignores
@@ -188,11 +289,11 @@ fn offence(left: &[PlacedCell], right: &[PlacedCell], required: f64) -> Offence 
             found.shortfall = found.shortfall.max(required - apart[0].max(apart[2]));
             // The worst offending pair decides what a move along each axis
             // costs, because moving on one axis shifts every pair by the same
-            // amount. Y is charged [`CONDUCTOR_CLEARANCE`] and the horizontal
+            // amount. Y is charged [`VERTICAL_CLEARANCE`] and the horizontal
             // axes the pair's own requirement, which is the whole of "crowding
             // buys height".
             found.deficit[0] = found.deficit[0].max(required - apart[0]);
-            found.deficit[1] = found.deficit[1].max(CONDUCTOR_CLEARANCE - apart[1]);
+            found.deficit[1] = found.deficit[1].max(VERTICAL_CLEARANCE - apart[1]);
             found.deficit[2] = found.deficit[2].max(required - apart[2]);
         }
     }
@@ -240,7 +341,7 @@ fn unseparated(here: &PlacedCell, there: &PlacedCell, required: f64) -> bool {
     let dx = (here.at[0] - there.at[0]).abs();
     let dy = (here.at[1] - there.at[1]).abs();
     let dz = (here.at[2] - there.at[2]).abs();
-    dy < CONDUCTOR_CLEARANCE && dx.max(dz) < required
+    dy < VERTICAL_CLEARANCE && dx.max(dz) < required
 }
 
 /// The axis that clears this pair for the least movement, and how much.
@@ -251,11 +352,18 @@ fn unseparated(here: &PlacedCell, there: &PlacedCell, required: f64) -> bool {
 /// is the axis with the most room, because `starting_layout` lays gates in
 /// rows along it by depth.
 ///
-/// Y is charged [`CONDUCTOR_CLEARANCE`] flat rather than the pair's own
+/// Y is charged [`VERTICAL_CLEARANCE`] flat rather than the pair's own
 /// requirement, because height does not carry the routing reservation. That is
 /// the whole reason crowding buys height: a body with nowhere to go sideways
 /// has somewhere to go up, and it is cheaper. [`offence`] applies that charge;
 /// this only chooses between what it measured.
+///
+/// **And "cheaper" is the whole difficulty.** Task 11 measured that this
+/// comparison is what decides whether height is ever spent -- Y wins exactly
+/// when [`VERTICAL_CLEARANCE`] is under `CONDUCTOR_CLEARANCE + reservation(d) +
+/// SNAP_MARGIN`, which for every degree in the reference circuits is under 4 --
+/// and that the climb between the storeys it then produces is only routable at
+/// 4 and above. The table is on [`VERTICAL_CLEARANCE`].
 fn cheapest_axis(found: &Offence, axes: Axes) -> (usize, f64) {
     let mut best = (usize::MAX, f64::INFINITY);
     for axis in axes.iter() {
@@ -399,10 +507,32 @@ pub fn project(graph: &mut BodyGraph, required: &[f64], axes: Axes) -> Result<()
                     continue;
                 }
                 let (axis, amount) = cheapest_axis(&found, axes);
-                if amount <= SETTLED {
-                    continue;
-                }
-                separate(graph, left, right, axis, amount);
+                // No guard here, and the one that used to be here is the whole
+                // of landmine 1. It read `amount <= SETTLED` as "settled" and
+                // skipped the pair -- but `amount` is the *chosen axis's*
+                // deficit, not the pair's shortfall, and once axis 1 carries a
+                // different target the two can disagree by metres. A pair at
+                // `dy = 1.9999999` has a Y deficit of `1e-7` and a horizontal
+                // shortfall of nine cells; the guard skipped it, nothing else
+                // moved it, and `project` returned `Ok` over a live violation.
+                //
+                // `amount` is strictly positive whenever the shortfall is:
+                // every cell pair `offence` counted passed `unseparated`, so
+                // each of its three per-axis terms is strictly short of its own
+                // target, and each `deficit` is a maximum over those terms. So
+                // there is always a move available; what a sub-[`SETTLED`]
+                // amount means is that this axis is a hair from clear, and the
+                // answer is to clear it rather than to leave it. `max` because a
+                // move can otherwise be smaller than the coordinates it is added
+                // to can represent -- a deficit of 3e-14 against a position of
+                // 200 is not a move -- and overshooting by `SETTLED` is
+                // overshooting by less than anything rounding can express.
+                //
+                // Inert under `Axes::IN_PLANE`: both horizontal deficits are at
+                // least the Chebyshev shortfall, which is what got the pair
+                // here, so `max` never fires and no Stage 1 measurement moves.
+                debug_assert!(amount > 0.0, "an offending pair is short on every axis");
+                separate(graph, left, right, axis, amount.max(SETTLED));
                 moved = true;
             }
         }
@@ -429,9 +559,27 @@ pub fn project(graph: &mut BodyGraph, required: &[f64], axes: Axes) -> Result<()
 /// It chooses neither. [`cheapest_axis`] picked the axis and measured what
 /// clearing this pair along it costs, and that is the only place either
 /// decision is made -- including the one that makes stacking cheap, since Y is
-/// charged [`CONDUCTOR_CLEARANCE`] flat there and the horizontal axes are
+/// charged [`VERTICAL_CLEARANCE`] flat there and the horizontal axes are
 /// charged the pair's full requirement. What is left here is who moves --
 /// both by half, or the free one by the whole -- and which way.
+///
+/// **Y has a floor and no ceiling.** The half-each split assumes neither body
+/// has a reason to be the one that yields; on axis 1 the lower one does, when it
+/// is standing on [`GROUND`] and there is nothing underneath. A body there takes
+/// no downward share at all and the other one pays the whole move upward, which
+/// is exactly the arithmetic `pinned` already gets and for the same reason: the
+/// far side of it does not exist. A body that is *above* the ground can still be
+/// carried through it by its own half -- it is clamped, and the round after
+/// finds it on the floor and hands the whole move to its partner, so the pair
+/// clears in two rounds rather than one.
+///
+/// Its limit, stated rather than guarded: a body pinned directly above one on
+/// the ground cannot be separated along Y at all, and this does not fall through
+/// to the next axis. That pair spins out [`PROJECTION_ROUNDS`] and is reported
+/// by `worst_violation`, which is the same answer two pinned bodies have always
+/// had. Not seen in any reference circuit -- `plan_from_netlist` pins only what
+/// [`crate::compile::planner::PortPlacements`] was handed, and no test in this
+/// tree pins two ports within clearance of each other in Y.
 fn separate(graph: &mut BodyGraph, left: usize, right: usize, axis: usize, cost: f64) {
     // Which way each goes. Equal positions are a tie, broken by index so the
     // same input always produces the same layout.
@@ -439,13 +587,32 @@ fn separate(graph: &mut BodyGraph, left: usize, right: usize, axis: usize, cost:
     let left_goes_negative = if delta == 0.0 { true } else { delta < 0.0 };
     let sign = if left_goes_negative { -1.0 } else { 1.0 };
 
-    match (graph.bodies[left].pinned, graph.bodies[right].pinned) {
+    let grounded = |graph: &BodyGraph, body: usize, downward: bool| {
+        downward && axis == 1 && graph.bodies[body].position[1] <= GROUND
+    };
+    let left_held = graph.bodies[left].pinned || grounded(graph, left, left_goes_negative);
+    let right_held = graph.bodies[right].pinned || grounded(graph, right, !left_goes_negative);
+
+    match (left_held, right_held) {
         (true, true) => {}
         (true, false) => graph.bodies[right].position[axis] -= sign * cost,
         (false, true) => graph.bodies[left].position[axis] += sign * cost,
         (false, false) => {
             graph.bodies[left].position[axis] += sign * cost / 2.0;
             graph.bodies[right].position[axis] -= sign * cost / 2.0;
+        }
+    }
+
+    // The half-share above is taken before anyone asks whether there is that
+    // much floor under it: a body a fraction of a cell above [`GROUND`] is not
+    // held by the test above and is carried straight through. Clamping is what
+    // makes the two-round argument in this function's doc true -- the round
+    // after finds it exactly on the floor, where `grounded` does hold.
+    if axis == 1 {
+        for body in [left, right] {
+            if !graph.bodies[body].pinned && graph.bodies[body].position[1] < GROUND {
+                graph.bodies[body].position[1] = GROUND;
+            }
         }
     }
 }
@@ -657,6 +824,86 @@ mod tests {
 
         assert_eq!(graph.bodies[0].position, [0.0, 1.0, 0.0]);
         assert!((graph.bodies[1].position[0] - 3.0).abs() < 1e-9);
+    }
+
+    /// A pair with metres of horizontal shortfall is not left where it is
+    /// because the vertical axis happens to be a hair from clear.
+    ///
+    /// The cheapest axis is Y by a wide margin -- a deficit of `1e-7` against
+    /// nine cells on either horizontal axis -- and `1e-7` is below [`SETTLED`].
+    /// A projection that reads that as "settled" skips the pair, moves nothing
+    /// else, and reports the round as quiet.
+    ///
+    /// Unreachable under `Axes::IN_PLANE`, which is why Task 7 shipped it: every
+    /// axis in that set is charged the same target, so each axis's deficit is at
+    /// least the Chebyshev shortfall and a pair past the shortfall test cannot
+    /// fail an amount test. Axis 1 is charged [`CONDUCTOR_CLEARANCE`] instead,
+    /// and that is the whole of what breaks the proof.
+    #[test]
+    fn a_pair_nearly_clear_in_y_is_still_separated() {
+        let mut graph = graph_of(
+            vec![
+                body(0.0, 1.0, 0.0),
+                body(0.0, 1.0 + CONDUCTOR_CLEARANCE - 1e-7, 0.0),
+            ],
+            Vec::new(),
+        );
+        let required = vec![9.0, 9.0];
+        project(&mut graph, &required, Axes::ALL).expect("two bodies always fit");
+        assert!(
+            worst_violation(&graph, &required).is_none(),
+            "reported success over {:?}",
+            worst_violation(&graph, &required)
+        );
+    }
+
+    /// The projection may not push a body through the floor.
+    ///
+    /// [`separate`] splits every move half each way, so the moment axis 1 is
+    /// available the lower body of a stacked pair walks downward -- and there is
+    /// nothing under it. A body's own cells reach one level below its position
+    /// (a junction's floor, a lever's two), the world's lowest level is 0, and
+    /// so [`GROUND`] is 1: below it a gate writes blocks outside the world and
+    /// its socket reads as air however carefully a route reached it.
+    ///
+    /// Both halves. The pair has to end up separated *and* on or above the
+    /// ground, because a projection that refused to move anything would pass
+    /// the floor assertion on its own.
+    ///
+    /// **Two fixtures, because the floor is enforced in two places and one
+    /// fixture reaches only one of them.** The first pair starts with its lower
+    /// body exactly on the ground, which is the case `separate`'s `grounded`
+    /// test catches -- it takes no downward share and its partner pays the whole
+    /// move. The second starts a fraction of a cell *above* it, which `grounded`
+    /// does not hold and which the clamp does: the half-share is taken before
+    /// anyone asks whether there is that much floor under it. Deleting the clamp
+    /// leaves the first fixture green and the second at `y = 0.05`.
+    #[test]
+    fn separation_never_pushes_a_body_below_the_ground() {
+        for lift in [0.0, 0.4] {
+            let mut graph = graph_of(
+                vec![
+                    body(0.0, GROUND + lift, 0.0),
+                    body(0.0, GROUND + lift + 0.1, 0.0),
+                ],
+                Vec::new(),
+            );
+            let required = vec![9.0, 9.0];
+            project(&mut graph, &required, Axes::ALL).expect("two bodies always fit");
+
+            for (index, body) in graph.bodies.iter().enumerate() {
+                assert!(
+                    body.position[1] >= GROUND,
+                    "body {index} of the pair lifted {lift} was pushed to {}, below the ground",
+                    body.position[1]
+                );
+            }
+            let dy = (graph.bodies[0].position[1] - graph.bodies[1].position[1]).abs();
+            assert!(
+                dy >= VERTICAL_CLEARANCE - SETTLED,
+                "the pair has to be separated as well as above ground, and it is {dy} apart"
+            );
+        }
     }
 
     /// Three bodies that must each touch a fourth and each stay clear of the

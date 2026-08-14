@@ -5513,6 +5513,34 @@ moved.
 
 ### Task 11: Crowding buys height, and `Shape::Tall` stops asking for it
 
+> **What shipped is not what this section describes, and the difference is a
+> measurement.** Read `relax::VERTICAL_CLEARANCE`'s doc and
+> `.superpowers/sdd/task-11-report.md` before this text. Three corrections:
+>
+> 1. **`plan_from_netlist` still passes `Axes::IN_PLANE`.** The flip is
+>    implemented and measured -- `measure_axes_all_against_the_reference_
+>    circuits` is the harness -- and at every vertical requirement measured
+>    either the stacks it produces do not route (2 and 3 break full_adder) or
+>    nothing stacks at all (4 and 5). Height is chosen only when it is cheaper
+>    than the plan and routable only when it is dearer, and the window between
+>    is empty. `crowding_produces_height` is `#[ignore]`d, waiting on a routing
+>    side that can pay for a climb.
+> 2. **The vertical rounding margin below is wrong and was not added.** A gap
+>    legal at `>= 2.0` cannot round below `2.0`: rounding shrinks a gap by
+>    strictly less than one, and a rounded gap is an integer.
+>    `the_vertical_requirement_carries_a_rounding_margin` was replaced by
+>    `snap.rs`'s `a_vertical_gap_at_the_requirement_survives_rounding`, which
+>    measures the refutation over 205,761 pairs.
+> 3. **Nothing here bounds Y from below, and that is what breaks first.**
+>    `separate` splits every move half each way, so under `Axes::ALL` bodies
+>    walk below the ground plane and write blocks outside the world. A `GROUND`
+>    constraint is shipped; no step of this task asked for one.
+>
+> Everything else landed as written: `Shape`, `TALL_COLUMN_LIMIT` and
+> `plan_from_netlist_shaped` are deleted, `starting_layout` lays one storey, and
+> the amount guard is repaired. Every line number in the Files section below is
+> stale by 130-900 lines.
+
 One word changes: `Axes::IN_PLANE` becomes `Axes::ALL`. Everything else in this
 task is removing the hand-made rule that was standing in for it.
 

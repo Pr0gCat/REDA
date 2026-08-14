@@ -1899,39 +1899,6 @@ impl PortPlacements {
     }
 }
 
-/// How much floor area the caller is willing to spend before spending height.
-///
-/// Redstone has a dimension a circuit board does not, and nothing in this
-/// planner used it for logic until now: everything sat on one plane and grew
-/// sideways for ever, so a circuit's footprint was whatever its widest level
-/// of logic happened to need. This is the knob that says otherwise.
-///
-/// Since Task 10 it decides only [`starting_layout`]'s storeys; relaxation
-/// decides everything after, and under `Axes::IN_PLANE` it keeps each body on
-/// the storey it was handed. `Tall` therefore still produces storeys and no
-/// longer produces routable ones -- see
-/// `a_tall_preference_uses_height_where_a_wide_one_uses_floor`, which measures
-/// why. Task 11 deletes this enum and lets separation choose the axis instead,
-/// which is the answer this knob was standing in for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Shape {
-    /// One level, as wide as it needs to be.
-    Wide,
-    /// Spend height instead of floor: a level of logic wider than
-    /// `TALL_COLUMN_LIMIT` continues on the storey above.
-    Tall,
-}
-
-impl Default for Shape {
-    /// Wide, because it is what every existing measurement was taken with.
-    fn default() -> Self {
-        Self::Wide
-    }
-}
-
-/// How many gates a `Tall` layout puts on one storey before starting another.
-const TALL_COLUMN_LIMIT: usize = 3;
-
 /// Storeys are far enough apart that one's routing cannot reach the next, and
 /// close enough that a route can climb between them on one staircase.
 ///
@@ -1981,21 +1948,33 @@ const PLANNER_Y: i32 = 1;
 /// still runs afterwards on whatever this produces. What this buys, measured on
 /// 2026-08-14 (`measure_and4_both_ways`, `measure_anchor_boxes`): and4's anchor
 /// box 4,095 -> 1,035 cells, 572 -> 232 blocks, delay term 22 -> 10;
-/// full_adder's box 10,143 -> 3,465.
+/// full_adder's box 10,143 -> 3,465. All of it under `Axes::IN_PLANE`, which is
+/// still what this passes -- see the comment on the `relax` call, and
+/// `relax::VERTICAL_CLEARANCE` for what `Axes::ALL` was measured to cost.
 pub fn plan_from_netlist(
     netlist: &Netlist,
     placements: &PortPlacements,
 ) -> Result<PlanCandidate, PlannerError> {
-    plan_from_netlist_shaped(netlist, placements, Shape::default())
+    // Not `Axes::ALL`, and Task 11 measured why rather than assuming it. The
+    // projection can reach for height -- the ground plane and the amount guard
+    // that made that safe are both shipped -- but the stacks it produces are
+    // not routable at any vertical requirement that also gets chosen.
+    // `relax::VERTICAL_CLEARANCE`'s doc carries the four-row table and the
+    // reason the window is empty, and
+    // `measure_axes_all_against_the_reference_circuits` is how to re-run it.
+    //
+    // The axis set is a parameter of the function below and not of this one:
+    // it is this design's decision, not a caller's, and a `pub` knob for it is
+    // the `Shape` this task deleted all over again.
+    plan_with_axes(netlist, placements, relax::Axes::IN_PLANE)
 }
 
-/// [`plan_from_netlist`], told whether to spend floor area or height.
-pub fn plan_from_netlist_shaped(
+fn plan_with_axes(
     netlist: &Netlist,
     placements: &PortPlacements,
-    shape: Shape,
+    axes: relax::Axes,
 ) -> Result<PlanCandidate, PlannerError> {
-    let start = starting_layout(netlist, placements, shape)?;
+    let start = starting_layout(netlist, placements)?;
     let graph = primitive_graph::expand(netlist, &Library::default_library()).map_err(|error| {
         PlannerError::UnrealisableNode {
             id: "netlist".to_string(),
@@ -2008,7 +1987,7 @@ pub fn plan_from_netlist_shaped(
         &graph,
         &start,
         placements,
-        relax::Axes::IN_PLANE,
+        axes,
         relax::RelaxEffort::default(),
     )
     .map_err(PlannerError::Relaxation)?;
@@ -2083,7 +2062,10 @@ pub fn plan_from_netlist_shaped(
 /// changes the answer. Measured on 2026-08-14 by `measure_anchor_boxes`, which
 /// states the metric it uses: the X extent times the Z extent of the node
 /// anchors, inclusive, before and after `relax` plus `snap` under
-/// `Axes::IN_PLANE` with nothing pinned and `RelaxEffort::default()`.
+/// `Axes::IN_PLANE` with nothing pinned and `RelaxEffort::default()`. Since
+/// Task 11 this function lays exactly one storey -- `Shape` and its
+/// `TALL_COLUMN_LIMIT` are deleted -- so a gate is off the ground plane only
+/// when a pin puts it there, which is what `STOREY_PITCH` still measures.
 ///
 /// | | from this layout | relaxed | steps |
 /// |---|---|---|---|
@@ -2111,7 +2093,6 @@ pub fn plan_from_netlist_shaped(
 pub(crate) fn starting_layout(
     netlist: &Netlist,
     placements: &PortPlacements,
-    shape: Shape,
 ) -> Result<Vec<Anchor>, PlannerError> {
     let depths = gate_depths(netlist)?;
     let deepest = depths.iter().copied().max().unwrap_or(0);
@@ -2139,9 +2120,11 @@ pub(crate) fn starting_layout(
     // -- which is what made seven_segment unroutable rather than merely
     // large.
     let mut gate_x: Vec<i32> = vec![0; netlist.gates.len()];
+    // Only a pinned gate is ever off the ground plane now: this function lays
+    // one storey and separation decides whether anything leaves it.
     let mut gate_storey: Vec<i32> = vec![0; netlist.gates.len()];
     // A storey's columns are its own: two gates on different storeys may share
-    // an x, which is the whole point of stacking.
+    // an x, and a pin is what puts one there.
     let mut taken: BTreeMap<(usize, i32), BTreeSet<i32>> = BTreeMap::new();
     let mut by_depth: Vec<Vec<usize>> = vec![Vec::new(); deepest + 1];
     for (index, &depth) in depths.iter().enumerate() {
@@ -2150,13 +2133,7 @@ pub(crate) fn starting_layout(
 
     for (depth, row_gates) in by_depth.iter().enumerate() {
         let row = deepest - depth;
-        for (position, &gate) in row_gates.iter().enumerate() {
-            let storey = match shape {
-                Shape::Wide => 0,
-                Shape::Tall => (position / TALL_COLUMN_LIMIT) as i32,
-            };
-            gate_storey[gate] = storey;
-
+        for &gate in row_gates {
             if let Some(anchor) = placements.get(&netlist.gates[gate].output) {
                 gate_x[gate] = anchor.x;
                 gate_storey[gate] = (anchor.y - PLANNER_Y) / STOREY_PITCH;
@@ -2181,7 +2158,7 @@ pub(crate) fn starting_layout(
             } else {
                 sources.iter().sum::<i32>() / sources.len() as i32
             };
-            gate_x[gate] = claim_column(taken.entry((row, storey)).or_default(), wanted);
+            gate_x[gate] = claim_column(taken.entry((row, 0)).or_default(), wanted);
         }
     }
 
@@ -4642,8 +4619,7 @@ mod tests {
     /// The row-and-barycentre candidate this task replaced, rebuilt so the
     /// two can be measured against each other on the same day.
     fn rows_and_barycentres(netlist: &Netlist) -> PlanCandidate {
-        let anchors =
-            starting_layout(netlist, &PortPlacements::default(), Shape::default()).expect("lays");
+        let anchors = starting_layout(netlist, &PortPlacements::default()).expect("lays");
         let mut nodes = Vec::new();
         for (index, gate) in netlist.gates.iter().enumerate() {
             let anchor = anchors[index];
@@ -4794,8 +4770,7 @@ mod tests {
             ("segment_a", build_single_segment_netlist(0).0),
             ("seven_segment", build_seven_segment_netlist().0),
         ] {
-            let start =
-                starting_layout(&netlist, &PortPlacements::default(), Shape::default()).unwrap();
+            let start = starting_layout(&netlist, &PortPlacements::default()).unwrap();
             let (sw, sd, sa) = box_of(&start);
             let graph = expand(&netlist, &Library::default_library()).unwrap();
             let placement = relax::relax(
@@ -4823,6 +4798,68 @@ mod tests {
                     );
                 }
                 Err(error) => eprintln!("{name}: start {sw}x{sd}={sa} -> relax failed: {error}"),
+            }
+        }
+    }
+
+    /// What `Axes::ALL` does to every reference circuit, end to end: whether it
+    /// places, whether the placement is legal, how many storeys it spent, and
+    /// what it cost.
+    ///
+    /// **The way to re-run `relax::VERTICAL_CLEARANCE`'s table.** Set that one
+    /// constant and run this; each row of the table is one value of it. It goes
+    /// through `plan_with_axes`, which is `plan_from_netlist`'s whole body --
+    /// not a copy of it, because a copy is a thing that drifts and this harness
+    /// exists to say what the shipping path would do.
+    ///
+    /// Both axis sets on every circuit, so a failure under `ALL` can be read
+    /// against what the shipping path does with the same netlist -- otherwise
+    /// `segment_a` and `seven_segment`, which have never routed from this
+    /// planner's own placement either way, read as regressions of this task.
+    ///
+    /// Like the other two harnesses it asserts nothing and swallows failures,
+    /// so one circuit that cannot place does not hide the rest. `six_gates` is
+    /// `six_independent_gates` itself -- the netlist `crowding_produces_height`
+    /// is written against -- so the row above and the ignored test cannot drift
+    /// apart about what "crowded" means.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, prints the cited numbers, and takes about 75 seconds"]
+    fn measure_axes_all_against_the_reference_circuits() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+
+        eprintln!(
+            "VERTICAL_CLEARANCE = {}, GROUND = {}",
+            relax::VERTICAL_CLEARANCE,
+            relax::GROUND
+        );
+        for (name, netlist) in [
+            ("six_gates", six_independent_gates()),
+            ("and4", build_and4_netlist().0),
+            ("full_adder", build_full_adder_netlist().0),
+            ("segment_a", build_single_segment_netlist(0).0),
+            ("seven_segment", build_seven_segment_netlist().0),
+        ] {
+            for (axes, label) in
+                [(relax::Axes::IN_PLANE, "IN_PLANE"), (relax::Axes::ALL, "ALL     ")]
+            {
+                match plan_with_axes(&netlist, &PortPlacements::default(), axes) {
+                    Ok(candidate) => {
+                        let (x, y, z) = extent(&candidate);
+                        let legal = match verify_candidate(&candidate, &netlist) {
+                            Ok(()) => "legal".to_string(),
+                            Err(error) => format!("ILLEGAL {error}"),
+                        };
+                        let cost = candidate.cost();
+                        eprintln!(
+                            "{label} {name}: placed {x}x{y}x{z}, delay {} wire {} -- {legal}",
+                            cost.delay, cost.wire
+                        );
+                    }
+                    Err(error) => eprintln!("{label} {name}: FAILED {error}"),
+                }
             }
         }
     }
@@ -5167,8 +5204,8 @@ mod tests {
         assert_eq!(best.port_anchor("a"), Some(where_it_went));
     }
 
-    /// Six independent gates: enough that the shape preference has something
-    /// to decide.
+    /// Six independent gates: six bodies with every reason to sit on one
+    /// signal and no room to.
     fn six_independent_gates() -> Netlist {
         Netlist {
             inputs: vec!["a".to_string()],
@@ -5189,63 +5226,156 @@ mod tests {
         (max.0 - min.0 + 1, max.1 - min.1 + 1, max.2 - min.2 + 1)
     }
 
-    /// The caller says whether to spend floor area or height, and the planner
-    /// spends it.
+    /// A pair a storey apart in Y is already separated, and the projection
+    /// moves neither -- while a pair any closer is pushed to exactly that.
     ///
-    /// Everything before this laid one plane and grew sideways for ever, so a
-    /// circuit's footprint was whatever its widest level of logic happened to
-    /// need. Stacking is the thing redstone has that a circuit board does not.
+    /// Two cells, not the safety condition's one. That condition has no
+    /// pure-vertical case -- every case of `dust_reach` takes a horizontal
+    /// cardinal step -- but `dust_reach` is the join mechanism, and power
+    /// arriving from the dust above a block is a different one nobody has
+    /// derived here. So the vertical requirement is `CONDUCTOR_CLEARANCE`
+    /// applied to an axis, which is what `offence` enforces and what the spec's
+    /// test 8 asks for.
     ///
-    /// Six gates that `Wide` puts in one row of six become two storeys of
-    /// three, at the same coordinates in X and Z, five levels apart.
+    /// **Both halves, because the requirement is read in two places.**
+    /// `unseparated` decides whether a pair offends and `offence` decides what
+    /// clearing it along Y costs, and a projection is only safe if those are
+    /// the same number. Since Task 11 they are the same *constant* --
+    /// `relax::VERTICAL_CLEARANCE` -- which makes the hazard structural rather
+    /// than a comment, and these two assertions are what would catch a
+    /// re-introduced second number: the exempt half reads `unseparated`'s test,
+    /// the pushed half reads `offence`'s charge, and a margin added to one and
+    /// not the other moves a pair to a gap it still calls a violation.
     ///
-    /// **Ignored since Task 10, and the reason is a measurement rather than a
-    /// suspicion.** `Shape` decides only the starting layout now; relaxation
-    /// decides the rest, and under `Axes::IN_PLANE` a body keeps the storey
-    /// that layout gave it -- so `tall_y > 1` still holds and it is *routing*
-    /// that fails. `project::unseparated` exempts a pair outright once its
-    /// `dy` reaches `CONDUCTOR_CLEARANCE`, which is correct for clearance --
-    /// two runs five levels apart cannot short -- and leaves every inter-storey
-    /// pair with no horizontal requirement at all. Measured 2026-08-14 on this
-    /// very netlist: the starting layout puts `g0` at (14, 1, 5) and `g3` at
-    /// (14, 6, 5); relaxation converges in 7 steps with `g0` at (26, 1, 8) and
-    /// `g3` at **(26, 6, 8)** -- the same column -- and `g2`/`g5` likewise at
-    /// (36, 1, 8) and (36, 6, 8). The lever lands at (30, 1, 9), and its route
-    /// to `g3`'s socket has to climb five levels through that column:
-    /// `NoLocalRoute { from: (30, 1, 8), to: (28, 6, 8) }`, after all 64 rip-up
-    /// rounds.
-    ///
-    /// Not fixed here, because the fix is a design decision this stage does not
-    /// get to make: `cheapest_axis`'s own doc says Y is charged
-    /// `CONDUCTOR_CLEARANCE` flat "because height does not carry the routing
-    /// reservation", and that asymmetry is the whole mechanism Task 11 spends
-    /// to buy height. Task 11 deletes `Shape`, `TALL_COLUMN_LIMIT` and this
-    /// test, and replaces it with `crowding_produces_height` -- which asks for
-    /// height from crowding rather than from a knob, and whose Step 6 re-runs
-    /// the corridor test precisely because routing between storeys is what can
-    /// regress.
+    /// It is still far cheaper than the horizontal requirement, which carries
+    /// the routing reservation *and* [`relax::SNAP_MARGIN`] on top -- and that
+    /// gap is the mechanism `crowding_produces_height` spends, tested here
+    /// where it can be seen rather than inferred from a layout. Why the
+    /// vertical requirement carries no margin of its own is
+    /// `a_vertical_gap_at_the_requirement_survives_rounding`, in `snap.rs`; what
+    /// the cheapness costs the router is `relax::VERTICAL_CLEARANCE`.
     #[test]
-    #[ignore = "known: relaxation stacks storeys into one column, and Task 11 deletes Shape"]
-    fn a_tall_preference_uses_height_where_a_wide_one_uses_floor() {
-        let netlist = six_independent_gates();
+    fn two_bodies_in_one_column_are_left_where_they_are() {
+        use crate::compile::relax::{project, project_for_test, Axes, SETTLED, VERTICAL_CLEARANCE};
 
-        let wide = plan_from_netlist_shaped(&netlist, &PortPlacements::default(), Shape::Wide)
-            .expect("wide must place");
-        let tall = plan_from_netlist_shaped(&netlist, &PortPlacements::default(), Shape::Tall)
-            .expect("tall must place");
+        let storey = VERTICAL_CLEARANCE;
+        let required = vec![9.0, 9.0];
 
-        verify_candidate(&wide, &netlist).expect("wide must be legal");
-        verify_candidate(&tall, &netlist).expect("tall must be legal");
+        let mut clear =
+            project_for_test::two_free_bodies([10.0, 1.0, 10.0], [10.0, 1.0 + storey, 10.0]);
+        project(&mut clear, &required, Axes::ALL).expect("already separated");
+        assert_eq!(clear.bodies[0].position, [10.0, 1.0, 10.0]);
+        assert_eq!(clear.bodies[1].position, [10.0, 1.0 + storey, 10.0]);
 
-        let (wide_x, wide_y, _) = extent(&wide);
-        let (tall_x, tall_y, _) = extent(&tall);
-
-        assert_eq!(wide_y, 1, "a wide layout stays on one level");
-        assert!(tall_y > 1, "a tall layout uses more than one level");
+        // Half a storey apart, so `unseparated` sees it and `offence` has to
+        // charge the same number the exempt case above was let through at.
+        let mut crowded =
+            project_for_test::two_free_bodies([10.0, 1.0, 10.0], [10.0, 1.0 + storey / 2.0, 10.0]);
+        project(&mut crowded, &required, Axes::ALL).expect("two bodies always fit");
+        let dy = (crowded.bodies[0].position[1] - crowded.bodies[1].position[1]).abs();
         assert!(
-            tall_x < wide_x,
-            "height is spent instead of floor: {tall_x} wide against {wide_x}"
+            (dy - storey).abs() <= SETTLED,
+            "a crowded pair is pushed to the vertical requirement, and this is {dy}"
         );
+    }
+
+    /// Height is earned by crowding rather than requested.
+    ///
+    /// Six gates that all consume one signal have every reason to sit near it
+    /// and no room to. Spreading sideways costs the full horizontal
+    /// requirement, reservations and all; stacking costs `VERTICAL_CLEARANCE`.
+    /// So they stack -- and under `Axes::ALL` they measurably do: three storeys
+    /// in a 24 by 1 footprint, routed and legal.
+    ///
+    /// **Ignored, and the reason is a measurement rather than a suspicion.**
+    /// `plan_from_netlist` passes `Axes::IN_PLANE`, so this fails as written --
+    /// on its own assertion, with `height` of 1. What it is waiting for is not
+    /// this test getting better but the routing side getting a climb it can
+    /// pay for. The full argument and its four-row table are on
+    /// `relax::VERTICAL_CLEARANCE`; the short version is that height is chosen
+    /// only when it is cheaper than the plan and routable only when it is
+    /// dearer, so at every vertical requirement measured either this netlist
+    /// stacks and full_adder stops routing, or nothing stacks at all.
+    ///
+    /// This replaces `a_tall_preference_uses_height_where_a_wide_one_uses_floor`
+    /// and claims less than it did: not "ask for tall and get tall", but "crowd
+    /// it and it stacks". Task 11 deleted `Shape`, `TALL_COLUMN_LIMIT` and
+    /// `plan_from_netlist_shaped`, so there is no longer a knob standing in for
+    /// the answer -- only the answer, and a measurement of what it costs.
+    #[test]
+    #[ignore = "known: Axes::ALL stacks and the climb between storeys does not route -- see relax::VERTICAL_CLEARANCE"]
+    fn crowding_produces_height() {
+        let netlist = six_independent_gates();
+        let candidate = plan_from_netlist(&netlist, &PortPlacements::default())
+            .expect("six gates on one signal must place");
+        verify_candidate(&candidate, &netlist).expect("must be legal");
+
+        let (_, height, _) = extent(&candidate);
+        assert!(height > 1, "six crowded gates stayed on one level");
+    }
+
+    /// Nothing is placed below the ground plane, however hard separation is
+    /// asked to spend height.
+    ///
+    /// `separate` splits a move half each way, so the moment axis 1 is
+    /// available the lower body of every stacked pair walks *down*. There is no
+    /// ground under it: `PLANNER_Y` is 1 because a cell stands on a floor one
+    /// level below and the world's lowest level is 0, so a gate at `y = 0`
+    /// writes its floor outside the world and its socket reads as air however
+    /// carefully a route reached it. `claim_column` already carries this guard
+    /// for X -- "never left of the first column" -- and Y had no counterpart
+    /// until Task 11 gave it one.
+    ///
+    /// **Driven at `Axes::ALL` rather than through `plan_from_netlist`**, which
+    /// passes `Axes::IN_PLANE` and so never writes a Y at all: read through the
+    /// shipping entry point this test could not fail against the defect it is
+    /// named for. Measured on 2026-08-14 with the floor removed: this netlist
+    /// puts a gate at `y = 0` and full_adder puts two there, and
+    /// `verify_candidate` refuses both with "realised sink block Air at
+    /// (55, -1, 7)".
+    #[test]
+    fn nothing_is_placed_below_the_ground_plane() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+
+        assert_eq!(
+            f64::from(PLANNER_Y),
+            relax::GROUND,
+            "the planner's storey and the projection's floor are one number"
+        );
+
+        for (name, netlist) in [
+            ("six_independent_gates", six_independent_gates()),
+            ("full_adder", build_full_adder_netlist().0),
+        ] {
+            let start = starting_layout(&netlist, &PortPlacements::default())
+                .unwrap_or_else(|error| panic!("{name} lays out: {error}"));
+            let graph = primitive_graph::expand(&netlist, &Library::default_library())
+                .unwrap_or_else(|error| panic!("{name} expands: {error}"));
+            let placement = relax::relax(
+                &netlist,
+                &graph,
+                &start,
+                &PortPlacements::default(),
+                relax::Axes::ALL,
+                relax::RelaxEffort::default(),
+            )
+            .unwrap_or_else(|error| panic!("{name} relaxes: {error}"));
+            let snapped = relax::snap(&placement)
+                .unwrap_or_else(|error| panic!("{name} snaps: {error}"));
+
+            assert!(
+                snapped.iter().any(|node| node.anchor.y > PLANNER_Y),
+                "{name} never left the ground, so the floor was never asked about"
+            );
+            for node in &snapped {
+                assert!(
+                    node.anchor.y >= PLANNER_Y,
+                    "{name} put node {} at {:?}, below the ground plane",
+                    node.node,
+                    node.anchor
+                );
+            }
+        }
     }
 
     /// full_adder, placed and routed by the planner alone, computes a full
@@ -5709,3 +5839,4 @@ mod tests {
         rejection(&candidate, &netlist);
     }
 }
+

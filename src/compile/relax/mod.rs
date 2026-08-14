@@ -10,11 +10,13 @@ mod snap;
 
 // Re-exported rather than kept private: `relax` and `snap` below reach some of
 // these, and the four submodules are named by nobody outside this directory at
-// all. Since Task 10 there is one outside caller, `planner`, and it reaches
-// exactly five of the names below -- `relax`, `snap`, `Axes`, `RelaxEffort`
-// and `RelaxError`. Everything else here is reached from inside. A `pub` item
-// in a private module that nobody reaches is `dead_code` -- an error under
-// `check.sh`'s `cargo clippy --all-targets -- -D warnings`.
+// all. Since Task 10 there is one outside caller, `planner`; Task 11's tests
+// added `project`, `project_for_test`, `CONDUCTOR_CLEARANCE`, `GROUND`,
+// `SETTLED` and `VERTICAL_CLEARANCE` to what it reaches, so the list is no
+// longer worth enumerating here -- `grep -n "relax::" src/compile/planner.rs`
+// is. Everything else is reached from inside. A `pub` item in a private module
+// that nobody reaches is `dead_code` -- an error under `check.sh`'s
+// `cargo clippy --all-targets -- -D warnings`.
 pub use build::{
     attach_offset, build, cells, pin_hops, Attach, Body, BodyGraph, BodyKind, Cell, Pull, Weld,
     SIGNAL_STIFFNESS,
@@ -22,9 +24,47 @@ pub use build::{
 pub use linear::{Factorisation, NotPositiveDefinite};
 pub use project::{
     placed_cells, project, required_separations, reservation, worst_violation, Axes, PlacedCell,
-    Violation, CONDUCTOR_CLEARANCE, PROJECTION_ROUNDS, ROUTE_PITCH, SETTLED, SNAP_MARGIN,
+    Violation, CONDUCTOR_CLEARANCE, GROUND, PROJECTION_ROUNDS, ROUTE_PITCH, SETTLED, SNAP_MARGIN,
+    VERTICAL_CLEARANCE,
 };
 pub use snap::{snap, SnappedNode};
+
+/// One fixture, for a test that lives in `planner`.
+///
+/// `project.rs` has this graph already, as its own `graph_of(vec![body(..),
+/// body(..)], Vec::new())`, but a test module is not reachable from another
+/// crate module -- and what `planner`'s test needs is to state a body graph in
+/// two coordinates rather than to build six `Body` fields by hand. `#[cfg(test)]`
+/// because a fixture is not something the shipping crate should offer.
+#[cfg(test)]
+pub(crate) mod project_for_test {
+    use super::{Body, BodyGraph, BodyKind};
+    use crate::compile::geometry::CellFacing;
+    use crate::compile::topology::Primitive;
+
+    /// Two unwelded, unpinned bodies, each on its own net.
+    ///
+    /// Its own net, because two cells carrying the same signal are exempt from
+    /// separation -- the route between them is what makes them one thing -- and
+    /// a fixture that shared a name would be testing the exemption instead.
+    pub fn two_free_bodies(a: [f64; 3], b: [f64; 3]) -> BodyGraph {
+        let body = |position: [f64; 3]| Body {
+            what: BodyKind::Primitive { node: 0, kind: Primitive::Torch },
+            position,
+            inputs: vec![format!("net{}{}{}", position[0], position[1], position[2])],
+            output: None,
+            facing: CellFacing::NORTH,
+            pinned: false,
+        };
+        BodyGraph {
+            bodies: vec![body(a), body(b)],
+            pulls: Vec::new(),
+            welds: Vec::new(),
+            nodes: vec![vec![0], vec![1]],
+            anchor_body: vec![0, 1],
+        }
+    }
+}
 
 use crate::compile::planner::{Anchor, PortPlacements};
 use crate::compile::primitive_graph::PrimitiveGraph;
@@ -67,8 +107,8 @@ pub const ANCHOR_STIFFNESS: f64 = 1.0;
 /// **Area here is one stated metric**, not a word: round every cell centre of
 /// [`placed_cells`] to the nearest lattice column, count the columns spanned on
 /// X and on Z inclusive, and multiply. Both reference circuits are started from
-/// `planner::starting_layout(netlist, &PortPlacements::default(),
-/// Shape::default())` -- rows and barycentres -- with `Axes::IN_PLANE`, nothing
+/// `planner::starting_layout(netlist, &PortPlacements::default())` -- rows and
+/// barycentres -- with `Axes::IN_PLANE`, nothing
 /// pinned, and `RelaxEffort::default()`. Re-measured on 2026-08-14, after
 /// `settled` joined the convergence test -- an earlier draft of this table
 /// named a metric it did not state and could not be reproduced from the tree.
@@ -485,8 +525,8 @@ pub fn relax(
         // Only the axes this stage may move on. An earlier draft solved all
         // three and restricted only the projection, which does not hold a body
         // on its storey: springs have zero rest length, so the Y solve pulls
-        // every unpinned body onto its neighbours' plane and the storeys
-        // `Shape::Tall` laid out collapse.
+        // every unpinned body onto its neighbours' plane and the storeys a
+        // pinned anchor put there collapse.
         for axis in axes.iter() {
             let mut rhs = right_hand_side(&bodies, &free, order, axis, anchor, &legal);
             factorisation.solve(&mut rhs);
@@ -659,12 +699,8 @@ mod tests {
     /// here claims and not what the `k = 1024` corner of [`ANCHOR_GROWTH`]'s
     /// sweep would be caught by.
     fn starting_layout(netlist: &Netlist, pinned: &PortPlacements) -> Result<Vec<Anchor>, String> {
-        crate::compile::planner::starting_layout(
-            netlist,
-            pinned,
-            crate::compile::planner::Shape::default(),
-        )
-        .map_err(|error| error.to_string())
+        crate::compile::planner::starting_layout(netlist, pinned)
+            .map_err(|error| error.to_string())
     }
 
     fn relaxed(netlist: &Netlist, effort: RelaxEffort) -> ContinuousPlacement {

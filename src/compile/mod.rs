@@ -3823,7 +3823,7 @@ fn emit(
     //   * `planner::emit_primitives` -- now binds `candidate.facing_of(index)`
     //     once per node and builds the merge, the NOR, both output pins and
     //     the lever to it.
-    //   * `planner::plan_from_netlist_shaped`'s `gate_footprint` call -- the
+    //   * `planner::plan_from_netlist`'s `gate_footprint` call -- the
     //     facing is now `snap`'s answer for that node, which exists before the
     //     footprint is recorded because relaxation chose it first.
     //
