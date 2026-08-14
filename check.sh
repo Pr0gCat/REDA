@@ -49,14 +49,44 @@ echo "== viewer: clippy =="
 # `--release`, because the stanza below ships a release bundle and that is the
 # wasm the page actually loads -- a debug-only gate would miss exactly the
 # class of divergence this exists to catch, an `f64` expression the optimiser
-# reassociates on one backend. It is also the cheaper of the two here, since it
-# shares its build with the bundle instead of adding a second debug one. All
-# four combinations were measured on 2026-08-15 and all four agree bit for
-# bit: native debug, native release, wasm debug, wasm release.
+# reassociates on one backend. It is also much the cheaper of the two, since it
+# shares its build with the bundle instead of adding a second debug one:
+# measured 2026-08-15, the six tests take 3.02s under `--release` and 41.45s
+# without it, and the whole `wasm-pack` invocation 11.1s against 48.7s.
+#
+# **passed=6, and what the six are.** Four reference circuits compared bit for
+# bit before rounding -- and4, full_adder, segment_a, seven_segment: 174 bodies,
+# 522 `f64`s -- plus the two circuits that also *route* from this placement
+# compared after it. segment_a and seven_segment have no snapped test because
+# `plan_from_netlist` cannot route them at all; the addresses are in
+# `viewer/tests/placement_agrees_with_native.rs`. All four build combinations
+# were measured on 2026-08-15 and all four agree bit for bit on all four
+# circuits: native debug, native release, wasm debug, wasm release.
+#
+# **`s<1` is not enough, measured 2026-08-15.** Delete the wasm attribute from
+# *one* of the six and the run reports `passed=5 failed=0` and exits 0 -- the
+# skip trap one level up: a partial skip, where the count is read and still
+# says green. So the wasm sum is checked against the number of tests the host
+# runs in the same file, which is a number nobody has to remember to bump. Add
+# a seventh test with both attributes and both sides go to 7; add one with only
+# the host attribute and the wasm side stays at 6 and this goes red, which is
+# the whole point of a file whose premise is that every test in it runs twice.
+#
+# The corollary, so the failure is not a mystery: a host-only test in that file
+# must be `#[ignore]`d (libtest counts it under `ignored`, not `passed`) or
+# `#[cfg(not(target_arch = "wasm32"))]`, and the one measurement harness there
+# is both. This does not catch a *new file* whose wasm tests never run -- that
+# would need its own host baseline, and no such file exists yet.
 echo "== viewer: wasm test =="
-(cd viewer && wasm-pack test --node --release 2>&1 |
-  grep -E "^test result" |
-  awk '{s+=$4; f+=$6} END {print "passed="s, "failed="f; if (s<1 || f>0) exit 1}')
+(cd viewer &&
+  host=$(cargo test --release --test placement_agrees_with_native 2>&1 |
+    awk '/^test result/{print $4; exit}') &&
+  wasm-pack test --node --release 2>&1 |
+    grep -E "^test result" |
+    awk -v host="$host" '{s+=$4; f+=$6} END {
+      print "passed="s, "failed="f, "(host runs "host" in that file)"
+      if (s<1 || f>0 || s<host) exit 1
+    }')
 
 # `wasm-pack`, not `cargo build --target wasm32`: the latter proves the crate
 # compiles and leaves `viewer/pkg/` exactly as stale as it was. The page loads

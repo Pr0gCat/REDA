@@ -2187,6 +2187,14 @@ fn plan_with_axes(
 /// routing has not been measured either way here. Both were already the case
 /// before this function was a starting layout rather than the whole answer.
 ///
+/// **seven_segment has since been measured, and it does not route either.**
+/// `viewer/tests/placement_agrees_with_native.rs`'s
+/// `which_reference_circuits_place_and_which_also_route` swallows failures
+/// instead of panicking on the first, so it reports all four rather than
+/// stopping at segment_a. On 2026-08-15 at this HEAD: seven_segment fails with
+/// `no safe local route from (83, 1, 106) to (83, 1, 96)`. See that test for
+/// the segment_a address, which has moved since the run above.
+///
 /// Whoever replaces this function is changing what relaxation finds, not just
 /// where it begins.
 ///
@@ -4607,6 +4615,24 @@ mod tests {
     /// 29,435 cells to 8,099 and the search still cannot fill it. What did
     /// change is the wait: the whole run now fails in 77 seconds, where a
     /// single round used to be minutes.
+    ///
+    /// **Re-measured 2026-08-15 at this HEAD: the verdict holds and the
+    /// address has moved.** segment_a now fails at `no safe local route from
+    /// (99, 1, 97) to (122, 1, 89)`, reproducible run to run. Task 11 changed
+    /// the placement between the two dates -- the ground plane, and the amount
+    /// guard repaired by deletion -- so a different route being the one that
+    /// cannot be found is what a moved placement looks like rather than a new
+    /// defect. **NOT MEASURED:** that Task 11 is the cause. Nobody has re-run
+    /// this against the pre-Task-11 tree; what is measured is the two
+    /// addresses and their dates.
+    ///
+    /// This test panics on the first failure, so it stops here and has never
+    /// reported seven_segment. `viewer`'s
+    /// `which_reference_circuits_place_and_which_also_route` is the survey that
+    /// does not stop, and it says seven_segment fails too --
+    /// `no safe local route from (83, 1, 106) to (83, 1, 96)`. That is why two
+    /// of the four circuits fingerprinted under wasm carry only the continuous
+    /// fixture: `plan_from_netlist` never returns for them to snap.
     #[test]
     #[ignore = "known: segment_a needs a better search, not a looser rule"]
     fn how_far_the_planners_own_placement_carries() {
