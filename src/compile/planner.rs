@@ -4563,14 +4563,20 @@ mod tests {
     /// it is supposed to beat, which is a test that cannot fail against the
     /// defect it is named for; bounded at 22 it fails against it by 12.
     ///
-    /// **On the simulated number, relaxation lost: 24 game ticks became 28.**
-    /// Recorded here rather than quietly dropped, because it is the one metric
-    /// where this task did not beat what it replaced. Its own test's doc says
-    /// why it is not the number to gate on -- it is not the circuit's worst
-    /// case, only the worst of two particular sweeps, and driving the levers by
-    /// hand in the viewer has already found a slower transition than either
-    /// visits. The comparable figure is `timing::summarize_worst_case`, and
-    /// neither layout has been through it.
+    /// **On the simulated number, relaxation appeared to lose: 24 game ticks
+    /// became 28.** It did not. That reading was an artefact of the sweep it
+    /// came from, and re-measuring settled it the other way: over every ordered
+    /// transition, each timed from a state that has actually settled, rows and
+    /// barycentres take **26** and relaxation takes **14**, both at the same
+    /// transition. `a_self_placed_and4_computes_and4` measures that now and its
+    /// doc carries the working; the short version is that chaining transitions
+    /// on one long-lived simulator reports a number the circuit does not have,
+    /// and the pair the chained run called 38 takes 4 when timed properly.
+    ///
+    /// So the simulated figure agrees in direction with `cost().delay`'s 22 to
+    /// 10 rather than contradicting it. This is still not
+    /// `timing::summarize_worst_case`, which also reports glitches and which
+    /// neither layout has been through.
     #[test]
     fn relaxation_places_and4_smaller_and_faster_than_rows_and_barycentres() {
         // planner.rs imports `BlockState`, not `BlockKind`; the two existing tests
@@ -5256,29 +5262,38 @@ mod tests {
     /// what it was asked to.
     ///
     /// and4 is the first real circuit this places end to end without the
-    /// legacy emitter. Re-measured on 2026-08-14, after placement became a
-    /// relaxation: **232 blocks against that emitter's 472, and 28 game ticks
-    /// against 18.** Under rows and barycentres it was 572 and 24.
+    /// legacy emitter. Measured on 2026-08-14, after placement became a
+    /// relaxation: **232 blocks and 14 game ticks, against rows and
+    /// barycentres' 572 and 26.**
     ///
-    /// So the block count halved and this figure went the other way, and the
-    /// paragraph below is why that is not the contradiction it looks like: it
-    /// is the worst of two particular sweeps rather than the circuit's worst
-    /// case, and the plan's own critical-path term -- the one `optimise`
-    /// scores, and what
-    /// `relaxation_places_and4_smaller_and_faster_than_rows_and_barycentres`
-    /// bounds -- moved 22 to 10 over the same change.
+    /// Both halves of that took correcting, and the second one twice.
+    ///
+    /// An earlier reading had the settle going the *wrong* way, 24 to 28, and
+    /// it was an artefact of how it was measured. The old figure came from a
+    /// 32-mask sweep driven on one long-lived simulator, and a settle measured
+    /// that way is not a property of the circuit: the same 240 ordered
+    /// transitions give 38 on a shared simulator and 14 on a fresh one, and the
+    /// pair the shared run called 38 (`1001` to `0101`) takes 4 when timed from
+    /// a state that has actually settled -- confirmed by a second
+    /// `run_until_stable` at `from` returning 0.
+    ///
+    /// So the loop below times every ordered transition from a settled state,
+    /// which is 240 of them rather than 32, and reports the real worst. On that
+    /// measure relaxation nearly halves the circuit's critical transition
+    /// rather than lengthening it, and both layouts find their worst at the
+    /// same one, `0100` to `1011`. The cost model's own delay term moved 22 to
+    /// 10 over the same change, which now agrees in direction with what the
+    /// simulator says instead of contradicting it.
     ///
     /// It was 656 blocks when first measured, then 572. Nothing set out to
     /// shrink it -- the routing fixes that followed, floors a route owns and
     /// staircases it cannot break, each removed cells that were being wasted on
     /// repair.
     ///
-    /// The settle figure printed here is the worst over the two sweeps below,
-    /// which is **not** the circuit's worst case: driving the levers by hand
-    /// in the viewer found a slower transition than either sweep visits. The
-    /// comparable number is what `timing::summarize_worst_case` reports, the
-    /// way `reference_circuits` measures the emitter's own layouts, and this
-    /// circuit has not been through it.
+    /// This is still not `timing::summarize_worst_case`, which is how
+    /// `reference_circuits` measures the emitter's own layouts and which
+    /// reports glitches as well as ticks. What it is, is a number two layouts
+    /// can be compared on.
     ///
     /// It took the routing to become three-dimensional. Everything before this
     /// searched one plane, where the nets simply block each other; a staircase
@@ -5301,31 +5316,59 @@ mod tests {
             })
             .count();
 
-        let mut simulator = Simulator::new(realised.world.clone());
-        simulator.run_until_stable(2000).expect("settles");
-        let mut worst = 0u64;
-        // Both orders. Counting up flips several inputs at once; Gray code
-        // flips exactly one. They settle differently, and taking only the
-        // first understates the worst case -- which is how this circuit came
-        // to be reported at 18 ticks when a single-input change costs more.
-        let sweep = (0u8..16).chain((0u8..16).map(|step| step ^ (step >> 1)));
-        for mask in sweep {
+        let set_inputs = |simulator: &mut Simulator, mask: u8| {
             for (bit, name) in ["a", "b", "c", "d"].iter().enumerate() {
                 let at = realised.ports.input_positions[*name];
                 let mut state = simulator.world().get(at.0, at.1, at.2).clone();
                 state.lit = (mask >> bit) & 1 == 1;
                 simulator.world_mut().set(at.0, at.1, at.2, state);
             }
-            worst = worst.max(simulator.run_until_stable(2000).expect("settles"));
-            let out = realised.ports.output_positions[&netlist.outputs[0]];
-            assert_eq!(
-                simulator.world().get(out.0, out.1, out.2).lit,
-                mask == 0b1111,
-                "self-placed and4 is wrong for inputs {mask:04b}"
-            );
+        };
+
+        // Every ordered transition, each timed from a state that has settled,
+        // on a simulator that has seen nothing else. All three of those matter:
+        // a sweep visits 32 of the 240, chaining them on one simulator reports
+        // a number the circuit does not have, and timing from an unsettled
+        // state charges the previous transition to this one.
+        let out = realised.ports.output_positions[&netlist.outputs[0]];
+        let mut worst = 0u64;
+        let mut worst_at = (0u8, 0u8);
+        for from in 0u8..16 {
+            for to in 0u8..16 {
+                if from == to {
+                    continue;
+                }
+                let mut simulator = Simulator::new(realised.world.clone());
+                set_inputs(&mut simulator, from);
+                simulator.run_until_stable(2000).expect("settles at from");
+                set_inputs(&mut simulator, to);
+                let ticks = simulator.run_until_stable(2000).expect("settles at to");
+                if ticks > worst {
+                    worst = ticks;
+                    worst_at = (from, to);
+                }
+                assert_eq!(
+                    simulator.world().get(out.0, out.1, out.2).lit,
+                    to == 0b1111,
+                    "self-placed and4 is wrong for inputs {to:04b}, reached from {from:04b}"
+                );
+            }
         }
 
-        eprintln!("self-placed and4: {blocks} blocks, worst settle {worst} game ticks");
+        // Rows and barycentres measure 26 here, on this same loop, at this same
+        // transition. Bounded rather than pinned: the point is that relaxation
+        // did not make the circuit slower, which is what an earlier reading of
+        // a different measure appeared to say.
+        assert!(
+            worst < 26,
+            "relaxation settles in {worst}, no better than rows and barycentres"
+        );
+
+        eprintln!(
+            "self-placed and4: {blocks} blocks, worst settle {worst} game ticks \
+             over 240 transitions, at {:04b} -> {:04b}",
+            worst_at.0, worst_at.1
+        );
     }
 
     /// The point of the whole optimiser: a candidate it produced must be
