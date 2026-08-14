@@ -6715,6 +6715,63 @@ pub(crate) fn gate_footprint(
     (cells, conductors, output_pin)
 }
 
+/// Every cell a primary input's lever occupies -- the lever, the pin dust it
+/// drives, and the cell directly above it -- with the pin returned separately.
+/// All three conduct, so there is one list rather than the two `gate_footprint`
+/// returns.
+///
+/// This exists because the same three lines had been written out at all three
+/// places that build a lever node, and the third cell was missing from every
+/// one of them.
+///
+/// **The cell above.** It is the hazard `gate_footprint` claims above a torch,
+/// and it was found the same way: by measuring. A lit lever is
+/// `BlockPower::Strong` on each neighbouring block (`rules::taxonomy`), a
+/// strongly powered block drives every dust beside it, and realisation writes a
+/// route's floor as stone. So a route flying one storey over a lever stands on
+/// a cell nobody claims and reads 15 out of an input it never connected to.
+/// Nothing else keeps it out: `verify_spacing` proves ownership of *routed*
+/// cells, and a floor is not a route anchor.
+///
+/// Measured on 2026-08-14. Pinning `full_adder`'s `cin` at (37, 1, 126) put
+/// `g12`'s route over a lever; every physical invariant passed and one of the
+/// sixteen output readings was wrong. Swapping only that floor block from stone
+/// to glass -- which carries dust but does not conduct -- made the same circuit
+/// right, which is what says the lever was the cause rather than the placement.
+/// It is not an artefact of pinning either: in one of the cases the leaking
+/// lever was `cin`, which nothing had pinned, and relaxation had put it under a
+/// raised route on its own.
+///
+/// **What this is not.** Vanilla Minecraft does not have this short. A floor
+/// lever there strongly powers only the block it is attached to, the one
+/// *below*. `taxonomy::power_emitted_toward` says in its own comment that these
+/// components' directionality "is not yet modelled" and falls through to a
+/// six-directional `full`, so the cell above is dangerous under this crate's
+/// rules and inert under Minecraft's. Claimed anyway, because this simulator is
+/// what every circuit here is verified against, and a circuit its own verifier
+/// calls wrong is wrong. Teaching the taxonomy a lever's `face` would delete
+/// this hazard and promote the one below the lever, which is the vanilla one;
+/// that is a change to the oracle every reference circuit is measured by, and
+/// it wants its own measurement rather than a rider on this.
+///
+/// The cell *below* is left unclaimed. Every lever this planner places sits at
+/// `PLANNER_Y = 1` and relaxation never moves Y, so that cell is the world
+/// floor and no dust can reach it -- but `PortPlacements::pin` accepts any `y`,
+/// and a lever pinned off the ground plane has a hazard below it that this does
+/// not close. Claiming it would not close it either: the dangerous conductor
+/// would then be *above* the route's cell, and `anchor_is_free_for` never looks
+/// up.
+pub(crate) fn lever_footprint(
+    anchor: Anchor,
+    facing: geometry::CellFacing,
+) -> (Vec<Anchor>, Anchor) {
+    let stepped = Position::new(anchor.x, anchor.y, anchor.z)
+        .offset(geometry::output_direction(facing));
+    let pin = Anchor { x: stepped.x, y: stepped.y, z: stepped.z };
+    let above = Anchor { y: anchor.y + 1, ..anchor };
+    (vec![anchor, pin, above], pin)
+}
+
 fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<PrimitiveNode> {
     let mut nodes = Vec::with_capacity(anchors.len());
     for (gate, anchor) in netlist.gates.iter().zip(anchors.iter().copied()) {
@@ -6753,16 +6810,18 @@ fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<Primitiv
         .iter()
         .zip(anchors.iter().skip(netlist.gates.len()).copied())
     {
+        // North, and a literal, for the same reason the gates above are: these
+        // nodes describe cells `emit` already placed, and `emit` places every
+        // one north.
+        let (cells, pin) = lever_footprint(anchor, geometry::CellFacing::NORTH);
         nodes.push(PrimitiveNode {
             id: format!("input:{input}"),
             anchor,
             realisation: NodeRealisation::Primitive(Primitive::Lever),
-            // A lever is its own cell plus the pin dust one step north, and
-            // both of them conduct.
-            footprint: vec![anchor, Anchor { z: anchor.z - 1, ..anchor }],
-            conductors: vec![anchor, Anchor { z: anchor.z - 1, ..anchor }],
+            footprint: cells.clone(),
+            conductors: cells,
             pinned: false,
-            output_pin: Some(Anchor { z: anchor.z - 1, ..anchor }),
+            output_pin: Some(pin),
         });
     }
     nodes

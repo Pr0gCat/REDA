@@ -1159,18 +1159,32 @@ impl PlanCandidate {
     }
 
     fn live_reservation(&self, incident: &[bool]) -> Reservation {
-        let mut reservation = Reservation::new();
-        for (index, anchor) in self.anchors.iter().copied().enumerate() {
-            reservation.insert(anchor, &format!("primitive:{index}"), Occupancy::Solid);
-        }
         // A primitive keeps other nets out of every cell it occupies, not
         // just the one its anchor names -- but only the cells that conduct
         // keep them out of the cells *beside* it.
-        for (index, node) in self.primitive_nodes.iter().enumerate() {
-            let owner = format!("primitive:{index}");
-            for &cell in node.occupied() {
-                reservation.insert(cell, &owner, node.occupancy_of(cell));
-            }
+        //
+        // The nodes go in first, and that ordering is the whole of it.
+        // `Reservation::insert` is `or_insert_with`, so the first writer of a
+        // cell decides its occupancy and no later one can upgrade it. With the
+        // anchor sweep below running first, every anchor a node declares
+        // `Conductor` was already down as `Solid` -- measured: 11 of and4's 11
+        // and 25 of full_adder's 25, every NOR support and every lever, against
+        // 0 of each under `route_in_order`'s reservation, which never had the
+        // pre-seed. An inert claim survives `owner` and dies at
+        // `conductor_owner`, which is what `anchor_is_free_for`'s floor test and
+        // `keep_out` both ask, so `try_move` was offered 20 cells in and4 and 26
+        // in full_adder that the router itself refuses -- among them dust laid
+        // directly beside a lit lever, reading 15.
+        //
+        // Latent rather than shipped: `optimise`/`try_move` is the only caller,
+        // and `compile_planned` routes through `route_in_order`. It dates from
+        // `6dfbe56`, the commit that introduced `Occupancy` and left this one
+        // call site writing the old flat `Solid`.
+        let mut reservation = reserve_primitives(&self.primitive_nodes);
+        // Anything with an anchor but no node -- nothing builds one today, and
+        // it stays because an unclaimed anchor is worse than an inert one.
+        for (index, anchor) in self.anchors.iter().copied().enumerate() {
+            reservation.insert(anchor, &format!("primitive:{index}"), Occupancy::Solid);
         }
         for (index, route) in self.routes.iter().enumerate() {
             if !incident[index] {
@@ -1652,6 +1666,26 @@ fn keep_out(anchor: Anchor) -> Vec<Anchor> {
     cells
 }
 
+/// Every cell every primitive occupies, at the occupancy the primitive itself
+/// declares.
+///
+/// One function because there were two copies of it and they had drifted:
+/// `route_in_order`'s and `PlanCandidate::live_reservation`'s were the same
+/// five lines, except that the second ran after a sweep that had already
+/// written every anchor as `Solid`, and `Reservation::insert` cannot upgrade
+/// what is already there. The two disagreed about every support and every
+/// lever in the tree. Neither copy was wrong to read; the pair was.
+fn reserve_primitives(nodes: &[PrimitiveNode]) -> Reservation {
+    let mut reservation = Reservation::new();
+    for (index, node) in nodes.iter().enumerate() {
+        let owner = format!("primitive:{index}");
+        for &cell in node.occupied() {
+            reservation.insert(cell, &owner, node.occupancy_of(cell));
+        }
+    }
+    reservation
+}
+
 fn reserve_path(reservation: &mut Reservation, owner: &str, path: &[Anchor]) {
     let guard = stair_guard(owner);
     for window in path.windows(2) {
@@ -2018,13 +2052,13 @@ pub fn plan_from_netlist_shaped(
     for (index, input) in netlist.inputs.iter().enumerate() {
         let node = netlist.gates.len() + index;
         let anchor = anchors[node];
-        let pin = step(anchor, compile::geometry::output_direction(facings[node]));
+        let (cells, pin) = compile::lever_footprint(anchor, facings[node]);
         primitive_nodes.push(PrimitiveNode {
             id: format!("input:{input}"),
             anchor,
             realisation: NodeRealisation::Primitive(Primitive::Lever),
-            footprint: vec![anchor, pin],
-            conductors: vec![anchor, pin],
+            footprint: cells.clone(),
+            conductors: cells,
             pinned: placements.get(input).is_some(),
             output_pin: Some(pin),
         });
@@ -2316,13 +2350,7 @@ fn route_in_order(
     order: &[String],
     congestion: &Congestion,
 ) -> Result<PlanCandidate, Box<RoutingFailure>> {
-    let mut reservation = Reservation::new();
-    for (index, node) in candidate.primitive_nodes.iter().enumerate() {
-        let owner = format!("primitive:{index}");
-        for &cell in node.occupied() {
-            reservation.insert(cell, &owner, node.occupancy_of(cell));
-        }
-    }
+    let mut reservation = reserve_primitives(&candidate.primitive_nodes);
 
     let sinks = net_sinks(netlist);
 
@@ -4640,13 +4668,14 @@ mod tests {
         }
         for (index, input) in netlist.inputs.iter().enumerate() {
             let anchor = anchors[netlist.gates.len() + index];
-            let pin = Anchor { z: anchor.z - 1, ..anchor };
+            let (cells, pin) =
+                compile::lever_footprint(anchor, compile::geometry::CellFacing::NORTH);
             nodes.push(PrimitiveNode {
                 id: format!("input:{input}"),
                 anchor,
                 realisation: NodeRealisation::Primitive(Primitive::Lever),
-                footprint: vec![anchor, pin],
-                conductors: vec![anchor, pin],
+                footprint: cells.clone(),
+                conductors: cells,
                 pinned: false,
                 output_pin: Some(pin),
             });
@@ -4913,6 +4942,113 @@ mod tests {
                 "{facing:?}: {above:?} is claimed but inert, so a route may still stand on it"
             );
         }
+    }
+
+    /// And a lever owns the cell above it, for the same reason and by the same
+    /// measurement -- see `compile::lever_footprint`, which also records why
+    /// this is a claim against *this* simulator's rules rather than Minecraft's.
+    ///
+    /// Asserted on the three builders together rather than on the helper alone,
+    /// because the defect this replaced was not a wrong helper: it was the same
+    /// three lines written out three times with the cell missing from all of
+    /// them. A test that only opened `lever_footprint` would go on passing the
+    /// day somebody writes a fourth.
+    #[test]
+    fn a_lever_owns_the_cell_above_it() {
+        for index in 0..4u8 {
+            let facing = geometry::CellFacing::from_index(index).expect("0..4 is horizontal");
+            let anchor = Anchor { x: 20, y: 1, z: 20 };
+            let (cells, pin) = compile::lever_footprint(anchor, facing);
+            let above = Anchor { y: anchor.y + 1, ..anchor };
+            assert!(
+                cells.contains(&above),
+                "{facing:?}: nothing claims {above:?}, the cell above the lever at {anchor:?}"
+            );
+            assert_eq!(pin, step(anchor, geometry::output_direction(facing)));
+        }
+
+        // Every builder, not just the helper. `conductors` and not merely
+        // `footprint`: an inert claim passes `owner` and fails
+        // `conductor_owner`, which is what `anchor_is_free_for`'s floor test
+        // asks, so a route would still stand on it.
+        let (netlist, _) = build_and4_netlist();
+        let planned = plan_from_netlist(&netlist, &PortPlacements::default())
+            .expect("and4 places by relaxation");
+        let compiled = crate::compile::compile(&netlist).expect("and4 compiles the legacy way");
+        let legacy = seed_from_legacy(&netlist, &compiled).expect("and4 seeds from legacy");
+        let rows = rows_and_barycentres(&netlist);
+
+        for (what, candidate) in [
+            ("relaxation", &planned),
+            ("legacy seed", &legacy),
+            ("rows and barycentres", &rows),
+        ] {
+            let mut levers = 0;
+            for node in candidate.primitive_nodes() {
+                if node.realisation != NodeRealisation::Primitive(Primitive::Lever) {
+                    continue;
+                }
+                let above = Anchor { y: node.anchor.y + 1, ..node.anchor };
+                assert!(
+                    node.occupied().contains(&above),
+                    "{what}: {} does not claim {above:?}, the cell above its lever",
+                    node.id
+                );
+                assert_eq!(
+                    node.occupancy_of(above),
+                    Occupancy::Conductor,
+                    "{what}: {} claims {above:?} but inertly, so a route may still stand on it",
+                    node.id
+                );
+                levers += 1;
+            }
+            assert_eq!(levers, netlist.inputs.len(), "{what}: not every input is a lever");
+        }
+    }
+
+    /// Every cell a node calls a conductor conducts in `live_reservation` too.
+    ///
+    /// It did not. An anchor sweep ran first and wrote `Occupancy::Solid`, and
+    /// `Reservation::insert` is `or_insert_with`, so the node's own declaration
+    /// arrived at a cell already spoken for and was dropped. Every NOR support
+    /// and every lever -- the two things here that conduct *and* have an anchor
+    /// -- read as inert to the only caller, `try_move`: 11 of and4's 11 and 25
+    /// of full_adder's 25.
+    ///
+    /// An inert claim is not a harmless one. `owner` still answers, so nothing
+    /// gets written on top; `conductor_owner` does not, and that is what
+    /// `anchor_is_free_for`'s floor test and `keep_out` ask. So `try_move` was
+    /// offered cells the router itself refuses -- among them dust laid directly
+    /// beside a lit lever, reading 15, which is a hazard vanilla Minecraft has
+    /// too and not an artefact of this simulator's isotropic lever.
+    ///
+    /// Asserted on the *node's own* declaration rather than on a list of cells,
+    /// so this keeps holding when a node starts claiming something new -- which
+    /// is exactly what `lever_footprint` just did.
+    #[test]
+    fn live_reservation_keeps_every_conductor_conducting() {
+        let (netlist, _) = build_and4_netlist();
+        let candidate = plan_from_netlist(&netlist, &PortPlacements::default())
+            .expect("and4 places by relaxation");
+
+        let idle = vec![false; candidate.routes().len()];
+        let live = candidate.live_reservation(&idle);
+
+        let mut checked = 0;
+        for node in candidate.primitive_nodes() {
+            for &cell in node.occupied() {
+                if node.occupancy_of(cell) != Occupancy::Conductor {
+                    continue;
+                }
+                assert!(
+                    live.conductor_owner(&cell).is_some(),
+                    "{} calls {cell:?} a conductor and live_reservation calls it inert",
+                    node.id
+                );
+                checked += 1;
+            }
+        }
+        assert!(checked > 0, "no conductor cells, so nothing was checked");
     }
 
     /// The two records of a gate's facing -- the candidate's `variant_indices`
