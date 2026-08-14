@@ -45,8 +45,16 @@ echo "== viewer: clippy =="
 # the stanza above's job) and a `Doc-tests reda_viewer` summary of zero. Neither
 # matches `^test result` with a non-zero count, so the sum below is the wasm
 # count and nothing else.
+#
+# `--release`, because the stanza below ships a release bundle and that is the
+# wasm the page actually loads -- a debug-only gate would miss exactly the
+# class of divergence this exists to catch, an `f64` expression the optimiser
+# reassociates on one backend. It is also the cheaper of the two here, since it
+# shares its build with the bundle instead of adding a second debug one. All
+# four combinations were measured on 2026-08-15 and all four agree bit for
+# bit: native debug, native release, wasm debug, wasm release.
 echo "== viewer: wasm test =="
-(cd viewer && wasm-pack test --node 2>&1 |
+(cd viewer && wasm-pack test --node --release 2>&1 |
   grep -E "^test result" |
   awk '{s+=$4; f+=$6} END {print "passed="s, "failed="f; if (s<1 || f>0) exit 1}')
 
