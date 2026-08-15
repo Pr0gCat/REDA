@@ -498,7 +498,60 @@ pub fn relax(
     let mut bodies = build::build(netlist, graph, start, pinned)
         .map_err(|reason| RelaxError::CannotBuild { reason })?;
     perturb(&mut bodies, effort.seed);
+    let required = project::required_separations(&bodies);
+    settle(bodies, &required, axes, effort)
+}
 
+/// [`relax`], with the separation table handed in rather than derived.
+///
+/// This exists for one probe and is not a second way to place a circuit. The
+/// §5.7 experiment of `docs/superpowers/specs/2026-08-15-routing-at-scale.md`
+/// asks whether *congestion-driven* placement routes `segment_a`: trial-route,
+/// measure where the router fought, inflate the bodies in the hot regions, and
+/// relax again. Inflating an entry of the per-body requirement is the whole of
+/// the intervention -- [`required_separations`] already returns a `Vec<f64>` and
+/// [`project`] already takes one as a parameter -- so the only thing missing was
+/// a way in.
+///
+/// `#[cfg(test)]`, so nothing on the shipping path can reach it: [`relax`] above
+/// is the same function with `required_separations(&bodies)` in place of the
+/// argument, and it is the only caller `plan_from_netlist` has.
+///
+/// The probe is `planner::measure_whether_congestion_driven_placement_routes_
+/// segment_a`.
+#[cfg(test)]
+pub(crate) fn relax_with_required(
+    netlist: &Netlist,
+    graph: &PrimitiveGraph,
+    start: &[Anchor],
+    pinned: &PortPlacements,
+    axes: Axes,
+    effort: RelaxEffort,
+    required: &[f64],
+) -> Result<ContinuousPlacement, RelaxError> {
+    let mut bodies = build::build(netlist, graph, start, pinned)
+        .map_err(|reason| RelaxError::CannotBuild { reason })?;
+    perturb(&mut bodies, effort.seed);
+    assert_eq!(
+        required.len(),
+        bodies.bodies.len(),
+        "the requirement table is indexed by body"
+    );
+    settle(bodies, required, axes, effort)
+}
+
+/// Solve, turn, project, tighten -- the loop [`relax`]'s own doc describes.
+///
+/// Split from [`relax`] so the separation table can be a parameter rather than
+/// a local. Nothing else moved: the body of this function is `relax`'s from the
+/// `free` sweep down, and the four bit-for-bit placement fixtures in
+/// `viewer/tests/placement_agrees_with_native.rs` are what holds it to that.
+fn settle(
+    mut bodies: BodyGraph,
+    required: &[f64],
+    axes: Axes,
+    effort: RelaxEffort,
+) -> Result<ContinuousPlacement, RelaxError> {
     let mut free = vec![None; bodies.bodies.len()];
     let mut order = 0;
     for (index, body) in bodies.bodies.iter().enumerate() {
@@ -507,8 +560,6 @@ pub fn relax(
             order += 1;
         }
     }
-
-    let required = project::required_separations(&bodies);
 
     // The upper bound: the thing the anchor pulls toward, and from the end of
     // the first step a configuration that is legal.
@@ -557,7 +608,7 @@ pub fn relax(
 
         let turned = choose_facings(&mut bodies);
 
-        if let Err(worst) = project::project(&mut bodies, &required, axes) {
+        if let Err(worst) = project::project(&mut bodies, required, axes) {
             return Err(RelaxError::Deadlocked { worst });
         }
         let previous = std::mem::replace(
@@ -652,7 +703,7 @@ pub fn relax(
         anchor = (anchor * ANCHOR_GROWTH).min(ANCHOR_CEILING);
     }
 
-    let worst = project::worst_violation(&bodies, &required).unwrap_or(Violation {
+    let worst = project::worst_violation(&bodies, required).unwrap_or(Violation {
         left: 0,
         right: 0,
         shortfall: 0.0,

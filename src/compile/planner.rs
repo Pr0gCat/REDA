@@ -2098,7 +2098,22 @@ fn plan_with_axes(
 ) -> Result<PlanCandidate, PlannerError> {
     let placement = relaxed_placement(netlist, placements, axes)?;
     let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation)?;
+    let candidate = candidate_from_snapped(netlist, placements, &snapped);
+    route_every_net(candidate, netlist)
+}
 
+/// A rounded placement, as the unrouted candidate the router is handed.
+///
+/// Split from [`plan_with_axes`] so a probe can place a circuit some other way
+/// and still hand the router exactly what the shipping path hands it. A copy of
+/// these thirty lines living in a test module would answer a question about the
+/// copy the first time one of them was edited -- which is the same reason
+/// [`relaxed_placement`] is split out for the fingerprint.
+fn candidate_from_snapped(
+    netlist: &Netlist,
+    placements: &PortPlacements,
+    snapped: &[relax::SnappedNode],
+) -> PlanCandidate {
     let mut anchors = Vec::with_capacity(snapped.len());
     let mut facings = Vec::with_capacity(snapped.len());
     let mut primitive_nodes = Vec::with_capacity(snapped.len());
@@ -2110,7 +2125,7 @@ fn plan_with_axes(
     // `anchors` and `facings` by node, so a `snap` that answered in body order
     // would give every gate after a merge's welded repeater somebody else's
     // anchor.
-    for node in &snapped {
+    for node in snapped {
         anchors.push(node.anchor);
         facings.push(node.facing);
     }
@@ -2149,8 +2164,7 @@ fn plan_with_axes(
         });
     }
 
-    let candidate = PlanCandidate::with_facings(anchors, primitive_nodes, Vec::new(), facings);
-    route_every_net(candidate, netlist)
+    PlanCandidate::with_facings(anchors, primitive_nodes, Vec::new(), facings)
 }
 
 /// Gates in rows by depth, one signal per column, primary inputs one row past
@@ -6763,6 +6777,656 @@ mod tests {
         route.terminals.pop();
 
         rejection(&candidate, &netlist);
+    }
+
+    // ---------------------------------------------------------------------
+    // §5.7 of `docs/superpowers/specs/2026-08-15-routing-at-scale.md`:
+    // congestion-driven placement, as a probe.
+    // ---------------------------------------------------------------------
+
+    /// What one instrumented run of the shipping rip-up loop found.
+    ///
+    /// [`route_every_net`] keeps none of this. It returns the **last** round's
+    /// error and drops the congestion map on the floor, which is why §1.1 of the
+    /// spec had to establish the recurring-failure tally by hand. Everything
+    /// here is a counter around that same loop.
+    struct Harvest {
+        /// The routed candidate, if a round ever finished.
+        routed: Option<PlanCandidate>,
+        /// How many rip-up rounds the loop actually spent.
+        rounds: usize,
+        /// The most nets any one round laid before it was blocked, out of
+        /// [`Harvest::nets`]. The same quantity the spec cites as "deepest round
+        /// laid 36 of 47".
+        deepest_laid: usize,
+        nets: usize,
+        /// The congestion price map as the loop left it: which cells were
+        /// charged, and how many times. This is the router's own record of
+        /// where nets fought, and it is the whole input to the inflation below.
+        charged: BTreeMap<Anchor, u64>,
+        /// Which `(net, corridor)` was blocked how often -- §5.4's fix, as a
+        /// measurement rather than a code change.
+        tally: BTreeMap<(String, (Anchor, Anchor)), usize>,
+        /// Who was standing where the search died, cell by cell, summed over
+        /// every failed round. See [`refusal_heat`] -- this is the sharper of
+        /// the two signals and the one §5.7 asks for by name.
+        refused: BTreeMap<Anchor, u64>,
+        /// What the shipping error would have printed.
+        last: Option<PlannerError>,
+    }
+
+    impl Harvest {
+        /// Distinct cells ever charged, and the total charge over them.
+        fn contention(&self) -> (usize, u64) {
+            (self.charged.len(), self.charged.values().sum())
+        }
+
+        /// The cell map a given heat source reads.
+        fn map_for(&self, source: HeatSource) -> &BTreeMap<Anchor, u64> {
+            match source {
+                HeatSource::Charge => &self.charged,
+                HeatSource::Refusal => &self.refused,
+            }
+        }
+
+        /// The `(net, corridor)` that recurred most, which §1.1 measured is not
+        /// the one [`route_every_net`] reports.
+        fn recurring(&self) -> Option<(&str, (Anchor, Anchor), usize)> {
+            self.tally
+                .iter()
+                .max_by_key(|(_, count)| **count)
+                .map(|((net, corridor), count)| (net.as_str(), *corridor, *count))
+        }
+    }
+
+    fn address(corridor: (Anchor, Anchor)) -> String {
+        format!(
+            "({}, {}, {})->({}, {}, {})",
+            corridor.0.x, corridor.0.y, corridor.0.z, corridor.1.x, corridor.1.y, corridor.1.z
+        )
+    }
+
+    /// [`route_every_net`], with the counters kept.
+    ///
+    /// **This is that function line for line**, including the `!charged &&
+    /// !reordered && !charged_air` stop and the promotion order, because a probe
+    /// that measures a different router measures nothing. The two have to be
+    /// edited together; the check is that `rounds = RIP_UP_ROUNDS` and no
+    /// inflation reproduces `plan_from_netlist`'s own answer, which iteration 1
+    /// of every table below is.
+    fn harvest_routing(candidate: PlanCandidate, netlist: &Netlist, rounds: usize) -> Harvest {
+        let mut order: Vec<String> = net_sinks(netlist).into_keys().collect();
+        let nets = order.len();
+        let mut congestion = Congestion::default();
+        let mut harvest = Harvest {
+            routed: None,
+            rounds: 0,
+            deepest_laid: 0,
+            nets,
+            charged: BTreeMap::new(),
+            tally: BTreeMap::new(),
+            refused: BTreeMap::new(),
+            last: None,
+        };
+
+        for round in 0..rounds {
+            harvest.rounds = round + 1;
+            match route_in_order(candidate.clone(), netlist, &order, &congestion) {
+                Ok(routed) => {
+                    harvest.deepest_laid = nets;
+                    harvest.routed = Some(routed);
+                    break;
+                }
+                Err(failure) => {
+                    let RoutingFailure {
+                        blocked,
+                        corridor,
+                        reservation,
+                        charge_outright,
+                        error,
+                    } = *failure;
+                    // Where in the order the blocked net sits *is* how many nets
+                    // this round laid before it stopped: `route_in_order` walks
+                    // `order` and returns on the first refusal.
+                    let laid = order.iter().position(|name| *name == blocked).unwrap_or(0);
+                    harvest.deepest_laid = harvest.deepest_laid.max(laid);
+                    *harvest.tally.entry((blocked.clone(), corridor)).or_insert(0) += 1;
+                    harvest.last = Some(error);
+
+                    // The reservation is the plane as it stood when the search
+                    // gave up, so the frontier can be replayed against it.
+                    for (cell, blame) in
+                        refusal_heat(corridor.0, corridor.1, &blocked, &reservation)
+                    {
+                        *harvest.refused.entry(cell).or_insert(0) += blame;
+                    }
+
+                    let charged_air = congestion.charge_cells(&charge_outright);
+                    let charged =
+                        congestion.charge(&reservation, corridor.0, corridor.1, &blocked);
+                    let mut promoted: Vec<String> = vec![blocked.clone()];
+                    promoted.extend(order.iter().filter(|name| **name != blocked).cloned());
+                    let reordered = promoted != order;
+                    order = promoted;
+
+                    if !charged && !reordered && !charged_air {
+                        break;
+                    }
+                }
+            }
+        }
+
+        harvest.charged = congestion.charged.clone();
+        harvest
+    }
+
+    /// Which cell map the inflation reads.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum HeatSource {
+        /// [`Congestion::charged`] -- the router's own record, and the blunt
+        /// one. [`Congestion::charge`] prices every foreign-owned cell in the
+        /// failed corridor's **bounding box**, cells that were never in the way
+        /// included, and `Reservation::cells_within` filters on x and z only so
+        /// a charge covers the whole column. §2 of the spec says as much.
+        Charge,
+        /// [`refusal_heat`] -- who was actually standing where the search died.
+        Refusal,
+    }
+
+    /// Where the frontier died, and who was standing there.
+    ///
+    /// §5.7 asks for "which cells were refused and for whom, where the A\*
+    /// frontier died". [`Congestion`] does not know: it prices a bounding box.
+    /// This replays the blocked branch against the reservation as it stood when
+    /// the search gave up, floods outward from the source under the router's own
+    /// rules -- [`neighbours`], [`within_bounds`], [`anchor_is_free_for`],
+    /// [`staircase_clearance`] -- and for every step the flood could not take,
+    /// blames **the cell that refused it** rather than the cell it wanted. That
+    /// is a per-cell contention record: the wall around the pocket, weighted by
+    /// how many times it was pushed against.
+    ///
+    /// **Three deliberate departures from [`deterministic_astar`], each of which
+    /// makes this flood reach at least as far as the real search:**
+    ///
+    /// 1. `self_obstructs` is not consulted. It reads the search's single global
+    ///    `previous` map, and a flood has no one path; skipping it means the
+    ///    flood never refuses itself, so every cell it blames is blamed on
+    ///    somebody else's account.
+    /// 2. Congestion pricing is ignored. A price is not a refusal -- it changes
+    ///    which way the search goes, not where it may go -- and this is asking
+    ///    where it *may* go.
+    /// 3. `terminal_support` is passed as `goal`. The real value is the socket
+    ///    one cell further in, which `route_in_order` has and `RoutingFailure`
+    ///    does not carry. It costs one exemption at the goal cell only.
+    ///
+    /// So this over-states reach and therefore under-states the wall. It is a
+    /// diagnostic, and it is not the router.
+    fn refusal_heat(
+        start: Anchor,
+        goal: Anchor,
+        owner: &str,
+        reservation: &Reservation,
+    ) -> BTreeMap<Anchor, u64> {
+        // The same box `deterministic_astar` bounds itself with.
+        let margin = manhattan_distance(start, goal).saturating_add(2) as i32;
+        const CLIMB: i32 = 3;
+        let min = Anchor {
+            x: start.x.min(goal.x).saturating_sub(margin),
+            y: start.y.min(goal.y),
+            z: start.z.min(goal.z).saturating_sub(margin),
+        };
+        let max = Anchor {
+            x: start.x.max(goal.x).saturating_add(margin),
+            y: start.y.max(goal.y).saturating_add(CLIMB),
+            z: start.z.max(goal.z).saturating_add(margin),
+        };
+
+        let mut blamed: BTreeMap<Anchor, u64> = BTreeMap::new();
+        let mut reached = BTreeSet::from([start]);
+        let mut queue = std::collections::VecDeque::from([start]);
+
+        while let Some(at) = queue.pop_front() {
+            for next in neighbours(at) {
+                if !within_bounds(next, min, max) || reached.contains(&next) {
+                    continue;
+                }
+                let free = anchor_is_free_for(next, start, goal, goal, owner, reservation);
+                let stairs: Vec<Anchor> = staircase_clearance(at, next)
+                    .into_iter()
+                    .filter(|cell| {
+                        let is_riser = next.y > at.y && cell.y == at.y;
+                        if is_riser {
+                            let foreign = reservation.owner(cell).is_some_and(|by| {
+                                by != owner && by != stair_guard(owner)
+                            });
+                            foreign || reservation.conductor_owner(cell).is_some()
+                        } else {
+                            reservation.owner(cell).is_some()
+                        }
+                    })
+                    .collect();
+
+                if free && stairs.is_empty() {
+                    reached.insert(next);
+                    queue.push_back(next);
+                    continue;
+                }
+
+                // Who refused it. Every arm of `anchor_is_free_for`, asked
+                // again so the answer names a cell rather than a boolean.
+                if next != start
+                    && next != goal
+                    && reservation.owner(&next).is_some_and(|by| by != owner)
+                {
+                    *blamed.entry(next).or_insert(0) += 1;
+                }
+                let below = Anchor { y: next.y - 1, ..next };
+                if reservation.conductor_owner(&below).is_some() {
+                    *blamed.entry(below).or_insert(0) += 1;
+                }
+                for neighbour in keep_out(next) {
+                    if neighbour == start || neighbour == goal {
+                        continue;
+                    }
+                    if reservation
+                        .conductor_owner(&neighbour)
+                        .is_some_and(|by| by != owner)
+                    {
+                        *blamed.entry(neighbour).or_insert(0) += 1;
+                    }
+                }
+                for cell in stairs {
+                    *blamed.entry(cell).or_insert(0) += 1;
+                }
+            }
+        }
+
+        blamed
+    }
+
+    /// How a measured congestion map is turned back into per-body room.
+    ///
+    /// Every rule below is **cumulative**: the requirement vector carries
+    /// forward between iterations, so a body in a region that stays hot keeps
+    /// growing. None of them ever shrinks a requirement, so the placement's area
+    /// is monotone in the iteration -- which is what makes the area column
+    /// readable as a price.
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    enum Inflation {
+        /// Nothing. Iteration 1 of every run is this, and it is exactly
+        /// `plan_from_netlist`; a run *entirely* of this is the do-nothing
+        /// control that says the loop's repetition alone changes nothing.
+        Nothing,
+        /// The hottest `share` of nodes get their body's requirement multiplied
+        /// by `growth`.
+        HotShare { share: f64, growth: f64 },
+        /// Every node's body gains `gain * heat / hottest`.
+        Proportional { gain: f64 },
+        /// Every body gains `gain`, hot or not.
+        ///
+        /// **The control that decides what the answer means.** Uniform 2x
+        /// scaling of the anchors is already refuted (§3.2), but uniform
+        /// *separation* is the thing an inflation rule has to beat: if this does
+        /// as well as `HotShare` at the same area, nothing about the measurement
+        /// was congestion-driven.
+        Uniform { gain: f64 },
+    }
+
+    impl Inflation {
+        fn parse(text: &str) -> Option<Inflation> {
+            let (head, rest) = text.split_once(':').unwrap_or((text, ""));
+            let numbers: Vec<f64> = rest
+                .split(',')
+                .filter(|piece| !piece.is_empty())
+                .map(|piece| piece.parse().expect("an inflation parameter is a number"))
+                .collect();
+            match (head, numbers.as_slice()) {
+                ("nothing", []) => Some(Inflation::Nothing),
+                ("hot", [share, growth]) => {
+                    Some(Inflation::HotShare { share: *share, growth: *growth })
+                }
+                ("proportional", [gain]) => Some(Inflation::Proportional { gain: *gain }),
+                ("uniform", [gain]) => Some(Inflation::Uniform { gain: *gain }),
+                _ => None,
+            }
+        }
+
+        fn label(&self) -> String {
+            match self {
+                Inflation::Nothing => "nothing".to_string(),
+                Inflation::HotShare { share, growth } => {
+                    format!("hot:{share},{growth}")
+                }
+                Inflation::Proportional { gain } => format!("proportional:{gain}"),
+                Inflation::Uniform { gain } => format!("uniform:{gain}"),
+            }
+        }
+
+        /// Apply this rule to `required`, in place.
+        ///
+        /// `heat` is indexed by candidate node and `required` by body, so
+        /// `anchor_body` is the map between them. A body no node anchors -- a
+        /// merge's welded repeater -- is reachable only by [`Inflation::Uniform`]
+        /// and is left alone by the other two. Neither `segment_a` nor
+        /// `seven_segment` has one (§7's table: 0 merges, 0 welds in both), so
+        /// nothing measured here depends on that choice; the harness prints the
+        /// body and node counts so a reader can see it for themselves.
+        fn apply(&self, required: &mut [f64], heat: &[u64], anchor_body: &[usize]) {
+            match *self {
+                Inflation::Nothing => {}
+                Inflation::HotShare { share, growth } => {
+                    let mut ranked: Vec<usize> = (0..heat.len()).filter(|n| heat[*n] > 0).collect();
+                    // Hottest first, ties by node index so the same map always
+                    // inflates the same bodies.
+                    ranked.sort_by(|left, right| {
+                        heat[*right].cmp(&heat[*left]).then(left.cmp(right))
+                    });
+                    let take = ((heat.len() as f64) * share).ceil() as usize;
+                    for node in ranked.into_iter().take(take) {
+                        required[anchor_body[node]] *= growth;
+                    }
+                }
+                Inflation::Proportional { gain } => {
+                    let hottest = heat.iter().copied().max().unwrap_or(0);
+                    if hottest == 0 {
+                        return;
+                    }
+                    for (node, &here) in heat.iter().enumerate() {
+                        required[anchor_body[node]] += gain * here as f64 / hottest as f64;
+                    }
+                }
+                Inflation::Uniform { gain } => {
+                    for entry in required.iter_mut() {
+                        *entry += gain;
+                    }
+                }
+            }
+        }
+    }
+
+    /// The X by Z bounding box of a set of node anchors, inclusive -- the metric
+    /// `measure_anchor_boxes` states and the one every area in the spec is in
+    /// (relaxed `segment_a` 8,099; legacy 23,220).
+    fn anchor_box(anchors: &[Anchor]) -> (i32, i32, i64) {
+        let mut min = (i32::MAX, i32::MAX);
+        let mut max = (i32::MIN, i32::MIN);
+        for anchor in anchors {
+            min = (min.0.min(anchor.x), min.1.min(anchor.z));
+            max = (max.0.max(anchor.x), max.1.max(anchor.z));
+        }
+        let (width, depth) = (max.0 - min.0 + 1, max.1 - min.1 + 1);
+        (width, depth, width as i64 * depth as i64)
+    }
+
+    /// One circuit, one inflation rule, N iterations of trial-route → measure →
+    /// inflate → re-place.
+    ///
+    /// **It does not stop at the first iteration that routes**, and the first
+    /// version of it did. That version reported `segment_a` ROUTED at iteration
+    /// 6 and returned -- over a candidate that fails [`verify_candidate`] with
+    /// `signal-strength violation: net g4 never delivers a non-zero signal to
+    /// gate g23`. Routing is not the acceptance condition (§10: "and4 and
+    /// full_adder must keep routing **and verifying**"), and a harness that
+    /// stops on the weaker of the two would have reported a win that is not one.
+    /// So it runs the whole budget and reports the first iteration that routes
+    /// and, separately, the first that also verifies.
+    fn congestion_driven_placement(
+        name: &str,
+        netlist: &Netlist,
+        rule: Inflation,
+        source: HeatSource,
+        iterations: usize,
+        rounds: usize,
+        radius: i32,
+    ) {
+        use crate::compile::primitive_graph::expand;
+        use std::time::Instant;
+
+        let placements = PortPlacements::default();
+        let start = starting_layout(netlist, &placements).expect("lays out");
+        let graph = expand(netlist, &Library::default_library()).expect("expands");
+        let bodies = relax::build(netlist, &graph, &start, &placements).expect("builds bodies");
+        let anchor_body = bodies.anchor_body.clone();
+        let mut required = relax::required_separations(&bodies);
+
+        eprintln!(
+            "== {name}: {} gates, {} bodies, {} nodes | rule {} | heat {source:?} | \
+             radius {radius} | {rounds} rip-up rounds ==",
+            netlist.gates.len(),
+            required.len(),
+            anchor_body.len(),
+            rule.label(),
+        );
+
+        let mut first_routed: Option<(usize, i64)> = None;
+        let mut first_verified: Option<(usize, i64)> = None;
+
+        for iteration in 1..=iterations {
+            let started = Instant::now();
+            let placement = match relax::relax_with_required(
+                netlist,
+                &graph,
+                &start,
+                &placements,
+                relax::Axes::IN_PLANE,
+                relax::RelaxEffort::default(),
+                &required,
+            ) {
+                Ok(placement) => placement,
+                Err(error) => {
+                    eprintln!("  iter {iteration:2}: RELAX FAILED: {error}");
+                    break;
+                }
+            };
+            let snapped = match relax::snap(&placement) {
+                Ok(snapped) => snapped,
+                Err(error) => {
+                    eprintln!("  iter {iteration:2}: SNAP FAILED: {error}");
+                    break;
+                }
+            };
+            let anchors: Vec<Anchor> = snapped.iter().map(|node| node.anchor).collect();
+            let (width, depth, area) = anchor_box(&anchors);
+
+            let candidate = candidate_from_snapped(netlist, &placements, &snapped);
+            let harvest = harvest_routing(candidate, netlist, rounds);
+            let (cells, charge) = harvest.contention();
+
+            let lowest = required.iter().copied().fold(f64::INFINITY, f64::min);
+            let highest = required.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+            let mean = required.iter().sum::<f64>() / required.len() as f64;
+
+            let recurring = match harvest.recurring() {
+                Some((net, corridor, count)) => {
+                    format!("{net} x{count} {}", address(corridor))
+                }
+                None => "-".to_string(),
+            };
+            let last = match &harvest.last {
+                Some(error) => error.to_string(),
+                None => "-".to_string(),
+            };
+
+            eprintln!(
+                "  iter {iteration:2}: box {width}x{depth}={area} | laid {}/{} | \
+                 {cells} contested cells, charge {charge} | {} refused cells, blame {} | \
+                 rounds {} | req {lowest:.2}..{highest:.2} mean {mean:.2} | {:.1}s",
+                harvest.deepest_laid,
+                harvest.nets,
+                harvest.refused.len(),
+                harvest.refused.values().sum::<u64>(),
+                harvest.rounds,
+                started.elapsed().as_secs_f64(),
+            );
+            eprintln!("            recurring: {recurring}");
+            eprintln!("            last:      {last}");
+
+            if let Some(routed) = &harvest.routed {
+                // Routing is not the acceptance condition. A candidate that
+                // routes and does not verify has bought nothing, and two
+                // placement prototypes on this branch turned route failures into
+                // signal-strength and torch-merge violations -- so the probe
+                // asks the same question §10 asks, and keeps going either way.
+                let cost = routed.cost();
+                first_routed.get_or_insert((iteration, area));
+                match verify_candidate(routed, netlist) {
+                    Ok(()) => {
+                        first_verified.get_or_insert((iteration, area));
+                        eprintln!(
+                            "            ROUTED and VERIFIES | wire {} delay {} turns {}",
+                            cost.wire, cost.delay, cost.turns
+                        );
+                    }
+                    Err(error) => eprintln!("            ROUTED, DOES NOT VERIFY: {error}"),
+                }
+            }
+
+            // Heat: the charge on every cell within `radius` of a node's anchor,
+            // Chebyshev in plan. A body's "region" is the ground it and the
+            // corridors reaching it stand on, and the relaxed layout's
+            // nearest-neighbour anchor distance is a median 7 (§3.2), so a
+            // radius near that is one body's neighbourhood rather than the whole
+            // plane. It is a guess; the harness sweeps it.
+            let mut heat = vec![0u64; anchors.len()];
+            for (cell, charge) in harvest.map_for(source) {
+                for (node, anchor) in anchors.iter().enumerate() {
+                    if (cell.x - anchor.x).abs() <= radius && (cell.z - anchor.z).abs() <= radius {
+                        heat[node] += charge;
+                    }
+                }
+            }
+            let hot = heat.iter().filter(|value| **value > 0).count();
+            eprintln!(
+                "            heat: {hot}/{} nodes touched, hottest {}",
+                heat.len(),
+                heat.iter().copied().max().unwrap_or(0)
+            );
+
+            rule.apply(&mut required, &heat, &anchor_body);
+        }
+
+        // Completed after the probe was interrupted mid-edit: the body had
+        // accumulated `first_routed`/`first_verified` and then reported "never
+        // routed" unconditionally, which would have called a success a failure.
+        // Area is carried alongside because routing at a size larger than the
+        // legacy placement's 23,220 is not a win, and the headline has to say so.
+        match (first_routed, first_verified) {
+            (None, _) => eprintln!("  {name}: {iterations} iterations, never routed"),
+            (Some((round, area)), None) => eprintln!(
+                "  {name}: routed at iteration {round}, anchor box {area} -- NEVER VERIFIED"
+            ),
+            (Some((round, area)), Some((ok, verified_area))) => eprintln!(
+                "  {name}: routed at iteration {round} (box {area}), \
+                 verified at {ok} (box {verified_area}); legacy routes at 23,220"
+            ),
+        }
+    }
+
+    /// **§5.7.** Does congestion-driven placement route `segment_a`?
+    ///
+    /// The idea this tests, in the spec's own words: the relaxation already *is*
+    /// a router -- `pulls` are the nets and minimising spring energy is the
+    /// continuous relaxation of "make the wires short" -- and it already models
+    /// routing space, since `required_separations` charges every body
+    /// `CONDUCTOR_CLEARANCE + reservation(d) + SNAP_MARGIN`. What it gets wrong
+    /// is the *shape* of that allowance: an isotropic ring per body, which
+    /// cannot see that two nets' corridors cross. So rather than replace the
+    /// router, make the placer hear it.
+    ///
+    /// The loop, which is textbook congestion-driven analytical placement:
+    ///
+    /// 1. relax, snap, and hand the result to the shipping `route_every_net`;
+    /// 2. on failure, harvest the router's own congestion map;
+    /// 3. inflate `required[body]` for the bodies in the hot regions;
+    /// 4. re-relax against the inflated vector, and repeat.
+    ///
+    /// Step 3 needs no new mechanism: [`relax::required_separations`] already
+    /// returns a per-body `Vec<f64>` and [`relax::project`] already takes one as
+    /// a parameter. The one thing missing was a way to hand `relax` a vector it
+    /// did not derive, which is [`relax::relax_with_required`] and is
+    /// `#[cfg(test)]`.
+    ///
+    /// **Iteration 1 is the control, in every run.** It relaxes against
+    /// `required_separations` unmodified, so it *is* `plan_from_netlist`: if its
+    /// row does not read `box 89x91=8099 | laid 36/47` for `segment_a`, the
+    /// probe has stopped measuring the shipping path and nothing below it means
+    /// anything.
+    ///
+    /// # What it measured
+    ///
+    /// Run on 2026-08-15 at this HEAD, `--release`. See the ledger for the
+    /// table; the summary is that **no rule tried routes `segment_a`**, and the
+    /// one that gets furthest does so by growing the plane.
+    ///
+    /// # Re-running it, and sweeping it
+    ///
+    /// ```bash
+    /// cargo test --release --lib \
+    ///   compile::planner::tests::measure_whether_congestion_driven_placement_routes \
+    ///   -- --ignored --nocapture
+    /// ```
+    ///
+    /// Five environment variables, each with the default that produced the
+    /// reported numbers, so the default run is the reproduction and an override
+    /// is a sweep:
+    ///
+    /// | variable | default | what it is |
+    /// |---|---|---|
+    /// | `REDA_PROBE_CIRCUIT` | `segment_a` | `and4`, `full_adder`, `segment_a`, `seven_segment`, or `all` |
+    /// | `REDA_PROBE_RULES` | `hot:0.25,1.4 proportional:2 uniform:0.5` | space-separated; `nothing` is the do-nothing control |
+    /// | `REDA_PROBE_ITERATIONS` | `10` | §5.7 asks for 8-12 |
+    /// | `REDA_PROBE_ROUNDS` | `64` | rip-up rounds, `RIP_UP_ROUNDS` |
+    /// | `REDA_PROBE_RADIUS` | `6` | the Chebyshev plan radius a node collects charge over |
+    ///
+    /// Asserts nothing. A probe that gates something is a probe somebody will
+    /// tune until it goes green.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, re-places and re-routes segment_a ten times, takes many minutes"]
+    fn measure_whether_congestion_driven_placement_routes() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+
+        let setting = |name: &str, fallback: &str| -> String {
+            std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+        };
+
+        let wanted = setting("REDA_PROBE_CIRCUIT", "segment_a");
+        let rules: Vec<Inflation> = setting(
+            "REDA_PROBE_RULES",
+            "hot:0.25,1.4 proportional:2 uniform:0.5",
+        )
+        .split_whitespace()
+        .map(|text| Inflation::parse(text).expect("an inflation rule this harness knows"))
+        .collect();
+        let iterations: usize = setting("REDA_PROBE_ITERATIONS", "12").parse().expect("a count");
+        let rounds: usize = setting("REDA_PROBE_ROUNDS", "64").parse().expect("a count");
+        let radius: i32 = setting("REDA_PROBE_RADIUS", "6").parse().expect("a radius");
+        let source = match setting("REDA_PROBE_HEAT", "charge").as_str() {
+            "charge" => HeatSource::Charge,
+            "refusal" => HeatSource::Refusal,
+            other => panic!("REDA_PROBE_HEAT is charge or refusal, not {other}"),
+        };
+
+        let circuits: Vec<(&str, Netlist)> = [
+            ("and4", build_and4_netlist().0),
+            ("full_adder", build_full_adder_netlist().0),
+            ("segment_a", build_single_segment_netlist(0).0),
+            ("seven_segment", build_seven_segment_netlist().0),
+        ]
+        .into_iter()
+        .filter(|(name, _)| wanted == "all" || wanted == *name)
+        .collect();
+        assert!(!circuits.is_empty(), "REDA_PROBE_CIRCUIT names no circuit");
+
+        for (name, netlist) in &circuits {
+            for rule in &rules {
+                congestion_driven_placement(
+                    name, netlist, *rule, source, iterations, rounds, radius,
+                );
+            }
+        }
     }
 }
 

@@ -450,11 +450,67 @@ next person.
 
 ---
 
+### 5.7 Congestion-driven placement — feed measured congestion back into the springs
+
+**Untried, and the reason it is untried is a flaw in how this document was
+assembled rather than a judgement about the idea.**
+
+Every fix above is on the router side. The placement side was tried exactly
+once, as **uniform 2x scaling** (§3.2, Disagreement 2), which is the crudest
+possible version of it and does not test the idea at all. So §6's preference
+was formed by comparing a good router experiment against a bad placer
+experiment. That is not a fair comparison and the recommendation should not be
+read as if it were.
+
+The sharper framing, which nobody wrote down while the plan was running: **the
+relaxation already *is* a router.** `pulls` are the nets, and minimising spring
+energy is the continuous relaxation of "make the wires short". It even models
+routing *space*: `required_separations` charges each body
+`CONDUCTOR_CLEARANCE + reservation(d) + SNAP_MARGIN`, and `reservation(d) =
+d/4` is a per-body area allowance proportional to routed degree.
+
+What that model gets wrong is the *shape* of the allowance, not its absence:
+
+- It is an **isotropic ring** around each body -- "this body has `d` wires, so
+  give it `d/4` in every direction". A real wire is directional and needs room
+  along the source-to-sink corridor, not in a ring.
+- It is **per-body**, so it cannot see that two nets' corridors *cross*. Ring
+  demand is a density estimate; the failures are congestion, which is where
+  density estimates are weakest.
+
+That also explains the measurement that otherwise looks strange -- uniform
+scaling helps only marginally (36/47 to 43/47) even at an area *larger* than
+legacy's. Scaling widens the channels but lengthens every route by the same
+factor, so cells-demanded rises with area and the density ratio is roughly
+scale-invariant. **(INFERENCE, not measured: nobody has instrumented
+demand-versus-capacity across a scale sweep.)**
+
+**The experiment.** This is standard congestion-driven analytical placement --
+trial-route, build a congestion map, inflate the cells in hot regions, re-place
+-- and the plumbing for the inflation step already exists:
+`required_separations` returns a **per-body `Vec<f64>`** and `project` takes it
+as a parameter. So a prototype needs no new mechanism in the projection at all:
+
+1. Relax, snap, attempt `route_every_net`.
+2. On failure, collect per-region contention from the router (which cells were
+   refused, for whom, and where the frontier died).
+3. Inflate `required[body]` for bodies in or adjacent to hot regions.
+4. Re-relax with the inflated vector and repeat, a handful of iterations.
+
+**What would settle it:** does `segment_a` route after N iterations, and at
+what area? If it does, the fix is shared in a much more concrete sense than §6
+currently claims, and the two sides can be traded off. If it does not, §6's
+preference is right and it will then be right *for a measured reason*.
+
 ## 6. Recommendation
 
 **Do 5.4 first** (cheap, makes everything after it legible), **then 5.1**, with
 5.2 as the fallback if 5.1's strength-budget interaction proves worse than its
 convergence is good.
+
+**Caveat added after this section was written: run 5.7 before treating this
+ordering as settled.** 5.1 is preferred over the placement side on evidence
+that does not support the comparison -- see 5.7.
 
 5.1 is the only candidate with a measurement showing `segment_a` reaching zero
 contested cells. That measurement is a probe with four constraints dropped, so
