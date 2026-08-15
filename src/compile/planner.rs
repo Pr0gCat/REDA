@@ -7464,6 +7464,30 @@ mod tests {
     /// The offset every footprint this probe measures is taken about.
     const GROWTH_ORIGIN: Anchor = Anchor { x: 0, y: 0, z: 0 };
 
+    /// SplitMix64's finaliser over `(seed, index)`: a deterministic scramble
+    /// with no crate behind it and no state to thread.
+    ///
+    /// The order sweep needs ~20 *different* orders that are the same on every
+    /// machine and every re-run. Anything drawn from a real RNG would make the
+    /// completion rate a number nobody else can reproduce, which rule 4 refuses.
+    fn scrambled(seed: u64, index: u64) -> u64 {
+        let mut z = seed
+            .wrapping_mul(0x9E37_79B9_7F4A_7C15)
+            .wrapping_add(index.wrapping_mul(0xBF58_476D_1CE4_E5B9));
+        z ^= z >> 30;
+        z = z.wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z ^= z >> 27;
+        z = z.wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// Every cell the reservation has a claim on. The diff of this before and
+    /// after a branch is laid is exactly what that branch added, which is what
+    /// makes rip-up remove what it put down and nothing else.
+    fn claimed_cells(reservation: &Reservation) -> BTreeSet<Anchor> {
+        reservation.cells.keys().copied().collect()
+    }
+
     /// One net's dust tree as it grows, plus what a later branch of the same
     /// net needs to know about the cells earlier ones laid.
     ///
@@ -7794,6 +7818,43 @@ mod tests {
             self.escape == 0 || self.escapes(reservation) >= self.escape
         }
 
+        /// The occupied cells that made [`allowed`](Self::allowed) say no.
+        ///
+        /// Same three arms in the same order, reporting instead of returning.
+        /// Rip-up needs the cell, not the verdict: "this landing does not fit"
+        /// is the uninformative address again, one level down.
+        fn blockers(&self, reservation: &Reservation, into: &mut BTreeSet<Anchor>) {
+            for offset in self.cells {
+                let cell = shifted(self.origin, *offset);
+                if reservation.is_taken(&cell) {
+                    into.insert(cell);
+                }
+            }
+            for (index, approach) in self.approaches.iter().enumerate() {
+                let mine = match reservation.owner(approach) {
+                    None => true,
+                    Some(occupied_by) => occupied_by == self.drivers[index],
+                } || *approach == self.pins[index];
+                if !mine {
+                    into.insert(*approach);
+                }
+            }
+            for offset in self.conductors {
+                let conductor = shifted(self.origin, *offset);
+                for neighbour in keep_out(conductor) {
+                    if reservation.conductor_owner(&neighbour).is_none() {
+                        continue;
+                    }
+                    let arriving = self.sockets.iter().enumerate().any(|(index, socket)| {
+                        conductor == *socket && neighbour == self.approaches[index]
+                    });
+                    if !arriving {
+                        into.insert(neighbour);
+                    }
+                }
+            }
+        }
+
         /// How many legal first steps this body's own output net would have out
         /// of its pin, once the body is standing here.
         ///
@@ -7851,6 +7912,9 @@ mod tests {
         fields: Vec<(String, usize)>,
         seals: Vec<Seal>,
         refusals: Vec<String>,
+        /// Every occupied cell measured to be standing in this gate's way, so
+        /// rip-up has something to aim at that is not a guess.
+        blame: BTreeSet<Anchor>,
     }
 
     /// A net whose field adds nothing to what it has already laid: it cannot
@@ -7887,6 +7951,63 @@ mod tests {
         seed_pitch: i32,
         verbose: bool,
         settle: bool,
+        /// Rip-up budget: how many times a wedged gate may tear out the
+        /// youngest wire standing in its way and try again. `0` is v1 -- the
+        /// paradigm as briefed, which has no rip-up at all -- and is the
+        /// default so the committed baseline stays the reproduction.
+        rip: usize,
+        /// A deterministic growth-order seed, or `0` for the `order` policy.
+        /// Non-zero replaces the ready queue's key with a seeded permutation,
+        /// which is the growth-side analogue of the 120-net-ordering shuffle.
+        seed: u64,
+        /// Rip the victim's whole net rather than the youngest branch and what
+        /// hangs off it. Strictly more destructive, and it exists to separate
+        /// two explanations of a rip-up that completes and then fails verify:
+        /// a re-laid branch reading a stale carried strength off a trunk, or
+        /// the geometry. A whole net is re-grown from its pin at full
+        /// strength, so there is no trunk left to read.
+        rip_whole: bool,
+    }
+
+    /// One branch of one net, as laid: everything needed to tear it out again
+    /// and everything needed to put it back.
+    ///
+    /// `path` is the whole walk including its root, so a surviving branch can
+    /// be replayed through [`reserve_path`] verbatim rather than through a
+    /// second, differently-wrong reconstruction of what it claimed. `claimed`
+    /// is the exact set of reservation keys this branch's laying *added*,
+    /// diffed rather than predicted, because [`Reservation::insert`] is
+    /// first-writer-wins and a branch running beside an older one claims fewer
+    /// cells than its path has.
+    #[derive(Debug, Clone)]
+    struct Laid {
+        serial: u64,
+        signal: String,
+        consumer: usize,
+        input: usize,
+        socket: Anchor,
+        predecessor: Anchor,
+        /// The cell this branch grew off. Always a cell the net already had --
+        /// under plain Dijkstra from cost-0 seeds only a seed lacks a parent,
+        /// so `path[0]` is the one laid cell any branch touches.
+        root: Anchor,
+        path: Vec<Anchor>,
+        added: Vec<Anchor>,
+        claimed: Vec<Anchor>,
+    }
+
+    /// One entry in the chronological claim log, replayed in order to rebuild
+    /// the reservation after a rip-up.
+    ///
+    /// Rebuilding rather than un-inserting is what makes rip-up safe here:
+    /// `insert` is first-writer-wins, so a cell two things wanted is recorded
+    /// against the first, and removing that first thing would silently leave
+    /// the second's block standing on an unclaimed cell for a later net to take.
+    #[derive(Debug, Clone, Copy)]
+    enum Claim {
+        Body(usize),
+        Approaches(usize),
+        Branch(u64),
     }
 
     /// The growing world: one reservation, one dust tree per net, and the
@@ -7905,6 +8026,21 @@ mod tests {
         nodes: Vec<Option<PrimitiveNode>>,
         placed: Vec<bool>,
         wedge: Option<Wedge>,
+        /// Every branch standing, youngest last.
+        laid: Vec<Laid>,
+        /// The chronological claim log the reservation is rebuilt from.
+        log: Vec<Claim>,
+        serial: u64,
+        /// Rip-ups spent, and what each one tore out.
+        ripped: usize,
+        /// Branches torn out and successfully re-grown. `ripped` without this
+        /// is a demolition count; the pair is the loop.
+        relaid: usize,
+        rip_log: Vec<String>,
+        /// Branches torn out and not yet put back. A plan that finishes with
+        /// this non-empty has a gate reading from nothing, so it is reported
+        /// rather than handed to `candidate`.
+        orphans: BTreeSet<(usize, usize)>,
     }
 
     impl<'a> Growth<'a> {
@@ -7929,6 +8065,13 @@ mod tests {
                 nodes: vec![None; nodes],
                 placed: vec![false; gates],
                 wedge: None,
+                laid: Vec::new(),
+                log: Vec::new(),
+                serial: 0,
+                ripped: 0,
+                relaid: 0,
+                rip_log: Vec::new(),
+                orphans: BTreeSet::new(),
             };
 
             for (index, input) in netlist.inputs.iter().enumerate() {
@@ -7966,6 +8109,7 @@ mod tests {
                 growth.facings[node] = facing;
                 growth.nodes[node] = Some(primitive);
                 growth.pins.insert(input.clone(), pin);
+                growth.log.push(Claim::Body(node));
             }
 
             Ok(growth)
@@ -7976,6 +8120,13 @@ mod tests {
         fn key(&self, gate: usize) -> (i64, i64, usize) {
             let depth = self.depths[gate] as i64;
             let arity = self.netlist.gates[gate].inputs.len() as i64;
+            // A seed replaces the policy outright rather than breaking its
+            // ties, because a tie-break inside `(depth, -arity)` moves almost
+            // nothing: it is the growth-side twin of the 120 net-order
+            // shuffles, and those permuted the whole order.
+            if self.settings.seed != 0 {
+                return (scrambled(self.settings.seed, gate as u64) as i64, 0, gate);
+            }
             match self.settings.order.as_str() {
                 "arity" => (-arity, depth, gate),
                 "index" => (gate as i64, 0, gate),
@@ -8002,21 +8153,324 @@ mod tests {
             while let Some(&entry) = queue.iter().next() {
                 queue.remove(&entry);
                 let gate = entry.2;
-                match self.land(gate) {
-                    Ok(()) => {
-                        self.placed[gate] = true;
-                        for consumer in 0..self.netlist.gates.len() {
-                            if !self.placed[consumer] && self.ready(consumer) {
-                                queue.insert(self.key(consumer));
+                loop {
+                    match self.land(gate) {
+                        Ok(()) => {
+                            self.placed[gate] = true;
+                            for consumer in 0..self.netlist.gates.len() {
+                                if !self.placed[consumer] && self.ready(consumer) {
+                                    queue.insert(self.key(consumer));
+                                }
                             }
+                            break;
+                        }
+                        Err(wedge) => {
+                            // v1 as briefed has no rip-up and stops here. With a
+                            // budget, the wedge is a request: tear out the
+                            // youngest wire standing in this gate's way and ask
+                            // again. What is torn out goes on the re-lay list,
+                            // so nothing is quietly lost.
+                            if self.ripped >= self.settings.rip {
+                                self.wedge = Some(*wedge);
+                                return;
+                            }
+                            let torn = self.rip_youngest(&wedge.blame, &wedge.gate);
+                            if torn.is_empty() {
+                                // Nothing in the way belongs to a wire. Rip-up
+                                // cannot reach a gate body, so this is a wedge
+                                // the budget does not address, and saying so is
+                                // the measurement.
+                                self.wedge = Some(*wedge);
+                                return;
+                            }
+                            self.ripped += 1;
+                            self.orphans.extend(torn);
                         }
                     }
-                    Err(wedge) => {
-                        self.wedge = Some(*wedge);
-                        return;
+                }
+                self.settle_orphans();
+            }
+        }
+
+        /// Rebuild the reservation from the claim log.
+        ///
+        /// Not "remove what the ripped branch inserted": [`Reservation::insert`]
+        /// is first-writer-wins, so a cell two owners wanted is recorded against
+        /// the first, and removing that first owner would leave the second's
+        /// block standing on a cell the next net is free to take. Replaying the
+        /// log gives every surviving claim its original chance in its original
+        /// order, and the holes that open are exactly the ripped branch's.
+        fn reseat(&mut self) {
+            let mut fresh = Reservation::new();
+            let log = self.log.clone();
+            // Recomputed rather than carried, because first-writer-wins means a
+            // cell two branches wanted changes hands when the first is torn
+            // out, and a stale `claimed` set would then hide a blocking cell
+            // from rip-up.
+            //
+            // **Measured inert, and recorded as such.** Disabling this
+            // recompute left `full_adder` bit for bit identical on seeds 4, 6,
+            // 8, 12 and 24 -- including the two 64-of-64 runs that re-lay 62
+            // and 122 branches. It is kept because it is the correct
+            // bookkeeping and costs one map per rip, not because anything
+            // measured needed it. The run that first looked like its work --
+            // `full_adder` stopping at 2 rip-ups of 64 with `(14, 1, 160)`
+            // still blamed and no branch admitting to it -- has a different
+            // cause: that cell is a placed gate's `socket-approach`, which is
+            // not a wire and cannot be ripped at all.
+            let mut owned: BTreeMap<u64, Vec<Anchor>> = BTreeMap::new();
+            for claim in &log {
+                match *claim {
+                    Claim::Body(node) => {
+                        let Some(primitive) = self.nodes[node].as_ref() else {
+                            continue;
+                        };
+                        let owner = format!("primitive:{node}");
+                        for &cell in primitive.occupied() {
+                            fresh.insert(cell, &owner, primitive.occupancy_of(cell));
+                        }
+                    }
+                    Claim::Approaches(gate) => {
+                        for (input, driver) in
+                            self.netlist.gates[gate].inputs.iter().enumerate()
+                        {
+                            let (_, approach) = socket_and_approach(
+                                self.anchors[gate],
+                                self.facings[gate],
+                                input,
+                            );
+                            fresh.insert(approach, driver, Occupancy::Conductor);
+                        }
+                    }
+                    Claim::Branch(serial) => {
+                        let Some(branch) =
+                            self.laid.iter().find(|laid| laid.serial == serial)
+                        else {
+                            continue;
+                        };
+                        let before = claimed_cells(&fresh);
+                        reserve_path(&mut fresh, &branch.signal, &branch.path);
+                        let guard = format!(
+                            "terminal:{}.in[{}]",
+                            self.netlist.gates[branch.consumer].output, branch.input
+                        );
+                        for neighbour in horizontal_neighbours(branch.socket) {
+                            if neighbour != branch.predecessor
+                                && neighbour != self.anchors[branch.consumer]
+                            {
+                                fresh.insert(neighbour, &guard, Occupancy::Solid);
+                            }
+                        }
+                        owned.insert(
+                            serial,
+                            claimed_cells(&fresh).difference(&before).copied().collect(),
+                        );
                     }
                 }
             }
+            for laid in &mut self.laid {
+                if let Some(cells) = owned.remove(&laid.serial) {
+                    laid.claimed = cells;
+                }
+            }
+            self.reservation = fresh;
+        }
+
+        /// Tear out the youngest wire standing in a wedged gate's way, and
+        /// every younger branch of that same net hanging off it.
+        ///
+        /// **Youngest, and not most-blamed.** A blame count says which cell is
+        /// most in the way; age says which cell had the least right to be
+        /// there. The wedge measured here is a gate's output pin closed in by
+        /// nets routed *after* it was placed, so age is the axis that names the
+        /// culprit -- and it is also the only axis that cannot cycle, since
+        /// what is torn out is re-laid younger than everything that displaced
+        /// it.
+        ///
+        /// Returns the `(gate, input)` pairs left without a feed.
+        fn rip_youngest(
+            &mut self,
+            blame: &BTreeSet<Anchor>,
+            wedged: &str,
+        ) -> BTreeSet<(usize, usize)> {
+            let Some(victim) = self
+                .laid
+                .iter()
+                .filter(|laid| laid.claimed.iter().any(|cell| blame.contains(cell)))
+                .map(|laid| laid.serial)
+                .max()
+            else {
+                return BTreeSet::new();
+            };
+
+            // A younger branch of the same net may have grown off a cell this
+            // one laid. Ripping the trunk and leaving the twig would leave a
+            // route rooted in nothing, so the twigs come out too, transitively.
+            let signal = self
+                .laid
+                .iter()
+                .find(|laid| laid.serial == victim)
+                .expect("the victim was just chosen from this list")
+                .signal
+                .clone();
+            let mut doomed: BTreeSet<u64> = if self.settings.rip_whole {
+                self.laid
+                    .iter()
+                    .filter(|laid| laid.signal == signal)
+                    .map(|laid| laid.serial)
+                    .collect()
+            } else {
+                BTreeSet::from([victim])
+            };
+            loop {
+                let held: BTreeSet<Anchor> = self
+                    .laid
+                    .iter()
+                    .filter(|laid| doomed.contains(&laid.serial))
+                    .flat_map(|laid| laid.added.iter().copied())
+                    .collect();
+                let more: BTreeSet<u64> = self
+                    .laid
+                    .iter()
+                    .filter(|laid| {
+                        laid.signal == signal
+                            && !doomed.contains(&laid.serial)
+                            && held.contains(&laid.root)
+                    })
+                    .map(|laid| laid.serial)
+                    .collect();
+                if more.is_empty() {
+                    break;
+                }
+                doomed.extend(more);
+            }
+
+            let torn: Vec<Laid> = self
+                .laid
+                .iter()
+                .filter(|laid| doomed.contains(&laid.serial))
+                .cloned()
+                .collect();
+            self.laid.retain(|laid| !doomed.contains(&laid.serial));
+            self.log
+                .retain(|claim| !matches!(claim, Claim::Branch(serial) if doomed.contains(serial)));
+
+            let gone: BTreeSet<Anchor> =
+                torn.iter().flat_map(|laid| laid.added.iter().copied()).collect();
+            if let Some(tree) = self.trees.get_mut(&signal) {
+                let mut anchors = Vec::with_capacity(tree.anchors.len());
+                let mut realisation = Vec::with_capacity(tree.anchors.len());
+                let mut floors = Vec::with_capacity(tree.anchors.len());
+                for index in 0..tree.anchors.len() {
+                    if gone.contains(&tree.anchors[index]) {
+                        continue;
+                    }
+                    anchors.push(tree.anchors[index]);
+                    realisation.push(tree.realisation[index].clone());
+                    floors.push(tree.floors[index].clone());
+                }
+                tree.anchors = anchors;
+                tree.realisation = realisation;
+                tree.floors = floors;
+                for cell in &gone {
+                    tree.strength.remove(cell);
+                    tree.repeaters.remove(cell);
+                }
+                for laid in &torn {
+                    let sink = self.netlist.gates[laid.consumer].output.clone();
+                    tree.terminals.retain(|terminal| {
+                        !(terminal.sink.gate == sink && terminal.sink.input_index == laid.input)
+                    });
+                }
+            }
+
+            self.rip_log.push(format!(
+                "{wedged}: ripped {} branch(es) of net {signal} ({} cells) -- {}",
+                torn.len(),
+                gone.len(),
+                torn.iter()
+                    .map(|laid| format!(
+                        "{}.in[{}]",
+                        self.netlist.gates[laid.consumer].output, laid.input
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ));
+            self.reseat();
+            torn.into_iter().map(|laid| (laid.consumer, laid.input)).collect()
+        }
+
+        /// Put every torn-out branch back, ripping again for whatever refuses
+        /// it, until the budget runs out.
+        fn settle_orphans(&mut self) {
+            while let Some(&(consumer, input)) = self.orphans.iter().next() {
+                match self.relay(consumer, input) {
+                    Ok(()) => {
+                        self.orphans.remove(&(consumer, input));
+                        self.relaid += 1;
+                        self.rip_log.push(format!(
+                            "re-laid {}.in[{input}]",
+                            self.netlist.gates[consumer].output
+                        ));
+                    }
+                    Err(blame) => {
+                        if self.ripped >= self.settings.rip || blame.is_empty() {
+                            return;
+                        }
+                        let name =
+                            format!("{}.in[{input}]", self.netlist.gates[consumer].output);
+                        let torn = self.rip_youngest(&blame, &name);
+                        if torn.is_empty() {
+                            return;
+                        }
+                        self.ripped += 1;
+                        self.orphans.extend(torn);
+                    }
+                }
+            }
+        }
+
+        /// Re-grow one branch into a socket whose gate is already standing.
+        ///
+        /// The error is the blame set, so a failed re-lay feeds the same
+        /// rip-up the wedge does rather than a second, differently-informed one.
+        fn relay(&mut self, consumer: usize, input: usize) -> Result<(), BTreeSet<Anchor>> {
+            let signal = self.netlist.gates[consumer].inputs[input].clone();
+            let pin = self.pins[&signal];
+            let anchor = self.anchors[consumer];
+            let facing = self.facings[consumer];
+            let (socket, approach) = socket_and_approach(anchor, facing, input);
+            let mut tree = self.trees.get(&signal).cloned().unwrap_or_default();
+            let seeds: Vec<Anchor> =
+                tree.seeds(pin).into_iter().chain([approach, socket]).collect();
+
+            for &margin in &self.settings.windows {
+                let window = growth_window(&seeds, margin);
+                let mut reservation = self.reservation.clone();
+                let mut attempt = tree.clone();
+                if let Ok(mut branch) = self.branch(
+                    consumer,
+                    anchor,
+                    input,
+                    &signal,
+                    pin,
+                    socket,
+                    approach,
+                    &mut attempt,
+                    &mut reservation,
+                    window,
+                ) {
+                    branch.serial = self.serial;
+                    self.serial += 1;
+                    self.log.push(Claim::Branch(branch.serial));
+                    self.laid.push(branch);
+                    self.reservation = reservation;
+                    tree = attempt;
+                    self.trees.insert(signal, tree);
+                    return Ok(());
+                }
+            }
+            Err(refusal_heat(pin, approach, &signal, &self.reservation).into_keys().collect())
         }
 
         /// Land one gate: flood its input nets, rank the places its sockets
@@ -8046,6 +8500,7 @@ mod tests {
             let mut fields_seen: Vec<(String, usize)> = Vec::new();
             let mut seals: Vec<Seal> = Vec::new();
             let mut refusals: Vec<String> = Vec::new();
+            let mut blame: BTreeSet<Anchor> = BTreeSet::new();
 
             for &margin in &windows {
                 let window = growth_window(&all, margin);
@@ -8085,7 +8540,7 @@ mod tests {
                                 .owner(&cell)
                                 .unwrap_or("unclaimed")
                                 .to_string();
-                            (cell, owner, blame)
+                            (cell, format!("{owner} [{}]", self.what_stands_at(cell)), blame)
                         })
                         .collect();
                         blamed.sort_by(|left, right| {
@@ -8095,8 +8550,20 @@ mod tests {
                         Seal { signal: drivers[input].clone(), pin: pins[input], blamed }
                     })
                     .collect();
+                // A sealed net's blame is the whole ring around its pin, not
+                // the six printed: rip-up needs every cell that could be torn
+                // out, and the truncation above is for a human reader.
+                for input in 0..drivers.len() {
+                    if fields[input].travelled.len() != seeds[input].len() {
+                        continue;
+                    }
+                    blame.extend(
+                        refusal_heat(pins[input], pins[input], &drivers[input], &self.reservation)
+                            .into_keys(),
+                    );
+                }
 
-                let (ranked, this) = self.landings(gate, &fields, &drivers, &pins);
+                let (ranked, this) = self.landings(gate, &fields, &drivers, &pins, &mut blame);
                 funnel = this;
 
                 for landing in ranked.iter().take(tries) {
@@ -8111,7 +8578,7 @@ mod tests {
                         &mut reservation,
                         window,
                     ) {
-                        Ok(node) => {
+                        Ok((node, laid)) => {
                             if verbose {
                                 eprintln!(
                                     "    {} <- [{}] at ({}, {}, {}) facing {} | arrival {} \
@@ -8148,17 +8615,48 @@ mod tests {
                                 node.output_pin.expect("a gate node records its pin"),
                             );
                             self.nodes[gate] = Some(node);
+                            // Chronological, and in exactly the order `lay`
+                            // wrote them: body, then the four socket
+                            // pre-claims, then the branches cheapest-first.
+                            self.log.push(Claim::Body(gate));
+                            self.log.push(Claim::Approaches(gate));
+                            for mut branch in laid {
+                                branch.serial = self.serial;
+                                self.serial += 1;
+                                self.log.push(Claim::Branch(branch.serial));
+                                self.laid.push(branch);
+                            }
                             return Ok(());
                         }
-                        Err(refusal) => refusals.push(format!(
-                            "({}, {}, {}) f{}: {} at input {}",
-                            landing.anchor.x,
-                            landing.anchor.y,
-                            landing.anchor.z,
-                            landing.facing.index(),
-                            refusal.why,
-                            refusal.input
-                        )),
+                        Err(refusal) => {
+                            // A landing that ranked but could not be laid
+                            // blames whatever the branch search was refused by,
+                            // measured the same way the seal report measures a
+                            // pin's ring.
+                            let (_, approach) = socket_and_approach(
+                                landing.anchor,
+                                landing.facing,
+                                refusal.input,
+                            );
+                            blame.extend(
+                                refusal_heat(
+                                    pins[refusal.input],
+                                    approach,
+                                    &drivers[refusal.input],
+                                    &self.reservation,
+                                )
+                                .into_keys(),
+                            );
+                            refusals.push(format!(
+                                "({}, {}, {}) f{}: {} at input {}",
+                                landing.anchor.x,
+                                landing.anchor.y,
+                                landing.anchor.z,
+                                landing.facing.index(),
+                                refusal.why,
+                                refusal.input
+                            ));
+                        }
                     }
                 }
             }
@@ -8172,6 +8670,7 @@ mod tests {
                 fields: fields_seen,
                 seals,
                 refusals,
+                blame,
             }))
         }
 
@@ -8188,6 +8687,7 @@ mod tests {
             fields: &[Flood],
             drivers: &[String],
             pins: &[Anchor],
+            blame: &mut BTreeSet<Anchor>,
         ) -> (Vec<Landing>, Funnel) {
             let definition = &self.netlist.gates[gate];
             let arity = drivers.len();
@@ -8275,6 +8775,15 @@ mod tests {
                         escape: self.settings.escape,
                     };
                     if !fit.allowed(&self.reservation) {
+                        // Capped, because a gate whose fields are wide open
+                        // offers tens of thousands of landings and rip-up needs
+                        // a target list, not a census. Every landing that got
+                        // this far already met all its approaches, so the cells
+                        // named here are the ones a body could not stand on.
+                        const BLAME_CAP: usize = 4096;
+                        if blame.len() < BLAME_CAP {
+                            fit.blockers(&self.reservation, blame);
+                        }
                         continue;
                     }
                     funnel.body_fits += 1;
@@ -8308,6 +8817,45 @@ mod tests {
                     .then(left.facing.index().cmp(&right.facing.index()))
             });
             (landings, funnel)
+        }
+
+        /// What kind of thing is standing on a cell, which is the difference
+        /// between a wedge rip-up can address and one it cannot.
+        ///
+        /// The owner string alone does not say: a cell owned by net `g4` is a
+        /// wire if some branch laid it and a **socket approach** if a placed
+        /// gate reserved it, and only the first can be torn out. Without this
+        /// the central claim of the rip-up measurement -- that what remains in
+        /// `segment_a`'s way is geometry and not congestion -- would be a
+        /// deduction from the source rather than something the run printed.
+        fn what_stands_at(&self, cell: Anchor) -> &'static str {
+            if self
+                .nodes
+                .iter()
+                .flatten()
+                .any(|body| body.occupied().contains(&cell))
+            {
+                return "body";
+            }
+            for gate in 0..self.netlist.gates.len() {
+                if !self.placed[gate] {
+                    continue;
+                }
+                for input in 0..self.netlist.gates[gate].inputs.len() {
+                    let (socket, approach) =
+                        socket_and_approach(self.anchors[gate], self.facings[gate], input);
+                    if cell == approach {
+                        return "socket-approach";
+                    }
+                    if cell == socket {
+                        return "socket";
+                    }
+                }
+            }
+            if self.laid.iter().any(|laid| laid.claimed.contains(&cell)) {
+                return "wire";
+            }
+            "guard-or-floor"
         }
 
         /// The mean pin of the drivers, already placed, of everything that will
@@ -8350,7 +8898,7 @@ mod tests {
             trees: &mut [NetTree],
             reservation: &mut Reservation,
             window: (Anchor, Anchor),
-        ) -> Result<PrimitiveNode, LayRefusal> {
+        ) -> Result<(PrimitiveNode, Vec<Laid>), LayRefusal> {
             let definition = &self.netlist.gates[gate];
             let (footprint, conductors, output_pin) = compile::gate_footprint(
                 (landing.anchor.x, landing.anchor.y, landing.anchor.z),
@@ -8391,135 +8939,180 @@ mod tests {
             let mut cheapest: Vec<usize> = (0..drivers.len()).collect();
             cheapest.sort_by_key(|&input| (landing.arrival[input], input));
 
+            let mut laid: Vec<Laid> = Vec::with_capacity(drivers.len());
             for input in cheapest {
-                let signal = &drivers[input];
-                let pin = pins[input];
-                let (socket, approach) = (sockets[input], approaches[input]);
-                let field = flood_from(
-                    &trees[input].seeds(pin),
-                    pin,
-                    Some((approach, socket)),
-                    signal,
+                laid.push(self.branch(
+                    gate,
+                    landing.anchor,
+                    input,
+                    &drivers[input],
+                    pins[input],
+                    sockets[input],
+                    approaches[input],
+                    &mut trees[input],
                     reservation,
                     window,
-                );
-                let Some(mut path) = field.path_to(approach) else {
-                    return Err(LayRefusal { input, why: "no branch reaches the approach" });
-                };
-                path.push(socket);
-                reserve_path(reservation, signal, &path);
-
-                // Where this branch hangs off, and what the signal is worth when
-                // it gets there. The first branch of a net is the one case
-                // `route_in_order` also has: it starts at the producer's pin, at
-                // full strength, with the pin itself the first cell of dust.
-                let root = path[0];
-                let fresh = trees[input].anchors.is_empty();
-                let (previous_cell, incoming, cells) = if fresh {
-                    (pin, crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH, &path[..])
-                } else {
-                    let carried = *trees[input]
-                        .strength
-                        .get(&root)
-                        .expect("a branch grows off a cell this net laid");
-                    (root, carried, &path[1..])
-                };
-                let trunk_repeaters = if fresh {
-                    0
-                } else {
-                    *trees[input].repeaters.get(&root).unwrap_or(&0)
-                };
-
-                let laid = realise_branch_from(previous_cell, incoming, cells);
-                if !laid.carries {
-                    return Err(LayRefusal { input, why: "the branch decays before it arrives" });
-                }
-                let budget_needs_repeater = laid.blocks.last().is_some_and(|block| {
-                    block.kind == crate::redstone::world::block::BlockKind::Repeater
-                });
-                let strength_before_terminal = laid.strength_before_terminal;
-                let branch_repeaters = laid.repeaters;
-
-                let mut carried = incoming;
-                let mut counted = trunk_repeaters;
-                for ((anchor, block), floor) in cells.iter().zip(laid.blocks).zip(laid.floors) {
-                    if block.kind == crate::redstone::world::block::BlockKind::Repeater {
-                        carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
-                        counted += 1;
-                    } else {
-                        carried = carried.saturating_sub(1);
-                    }
-                    if trees[input].anchors.contains(anchor) {
-                        continue;
-                    }
-                    trees[input].anchors.push(*anchor);
-                    trees[input].realisation.push(block);
-                    trees[input].floors.push(floor);
-                    trees[input].strength.insert(*anchor, carried);
-                    trees[input].repeaters.insert(*anchor, counted);
-                }
-
-                let predecessor = path.get(path.len().saturating_sub(2)).copied().unwrap_or(pin);
-
-                let consumers = self.sinks.get(signal).map(Vec::as_slice).unwrap_or(&[]);
-                let bare_merge =
-                    definition.is_merge() && consumers.iter().all(|&(sink, _)| sink == gate);
-
-                let kind = if bare_merge {
-                    RouteTerminalKind::BareMergeDust
-                } else {
-                    let style = if budget_needs_repeater {
-                        TerminalStyle::RepeaterIntoSupport
-                    } else {
-                        terminal_style(&TerminalApproach::new(
-                            predecessor,
-                            socket,
-                            landing.anchor,
-                            strength_before_terminal,
-                            terminal_is_isolated(
-                                reservation,
-                                signal,
-                                predecessor,
-                                socket,
-                                landing.anchor,
-                            ),
-                        ))
-                    };
-                    if let Some(index) =
-                        trees[input].anchors.iter().position(|anchor| *anchor == socket)
-                    {
-                        trees[input].realisation[index] = match style {
-                            TerminalStyle::RepeaterIntoSupport => {
-                                compile::repeater(compile::direction_from(
-                                    Position::new(predecessor.x, predecessor.y, predecessor.z),
-                                    Position::new(socket.x, socket.y, socket.z),
-                                ))
-                            }
-                            TerminalStyle::DirectedDustIntoSupport => compile::dust(),
-                        };
-                    }
-                    style.into()
-                };
-
-                let guard = format!("terminal:{}.in[{input}]", definition.output);
-                for neighbour in horizontal_neighbours(socket) {
-                    if neighbour != predecessor && neighbour != landing.anchor {
-                        reservation.insert(neighbour, &guard, Occupancy::Solid);
-                    }
-                }
-
-                trees[input].terminals.push(RouteTerminal {
-                    sink: RouteSink {
-                        gate: definition.output.clone(),
-                        input_index: input,
-                        anchor: socket,
-                    },
-                    kind,
-                    repeaters: trunk_repeaters + branch_repeaters,
-                });
+                )?);
             }
 
-            Ok(node)
+            Ok((node, laid))
+        }
+
+        /// Grow one net into one socket, and record what that cost the world.
+        ///
+        /// Lifted out of [`lay`](Self::lay) unchanged so that rip-up can put a
+        /// branch back by the same route it was laid by. A second, separately
+        /// written re-router would be a second strength model and a second
+        /// terminal model to be wrong about -- which is the reason this probe
+        /// reaches through the shipping functions in the first place.
+        #[allow(clippy::too_many_arguments)]
+        fn branch(
+            &self,
+            gate: usize,
+            anchor: Anchor,
+            input: usize,
+            signal: &str,
+            pin: Anchor,
+            socket: Anchor,
+            approach: Anchor,
+            tree: &mut NetTree,
+            reservation: &mut Reservation,
+            window: (Anchor, Anchor),
+        ) -> Result<Laid, LayRefusal> {
+            let definition = &self.netlist.gates[gate];
+            let before = claimed_cells(reservation);
+            let mut added: Vec<Anchor> = Vec::new();
+
+            let field = flood_from(
+                &tree.seeds(pin),
+                pin,
+                Some((approach, socket)),
+                signal,
+                reservation,
+                window,
+            );
+            let Some(mut path) = field.path_to(approach) else {
+                return Err(LayRefusal { input, why: "no branch reaches the approach" });
+            };
+            path.push(socket);
+            reserve_path(reservation, signal, &path);
+
+            // Where this branch hangs off, and what the signal is worth when
+            // it gets there. The first branch of a net is the one case
+            // `route_in_order` also has: it starts at the producer's pin, at
+            // full strength, with the pin itself the first cell of dust.
+            let root = path[0];
+            let fresh = tree.anchors.is_empty();
+            let (previous_cell, incoming, cells) = if fresh {
+                (pin, crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH, &path[..])
+            } else {
+                let carried = *tree
+                    .strength
+                    .get(&root)
+                    .expect("a branch grows off a cell this net laid");
+                (root, carried, &path[1..])
+            };
+            let trunk_repeaters = if fresh {
+                0
+            } else {
+                *tree.repeaters.get(&root).unwrap_or(&0)
+            };
+
+            let run = realise_branch_from(previous_cell, incoming, cells);
+            if !run.carries {
+                return Err(LayRefusal { input, why: "the branch decays before it arrives" });
+            }
+            let budget_needs_repeater = run.blocks.last().is_some_and(|block| {
+                block.kind == crate::redstone::world::block::BlockKind::Repeater
+            });
+            let strength_before_terminal = run.strength_before_terminal;
+            let branch_repeaters = run.repeaters;
+
+            let mut carried = incoming;
+            let mut counted = trunk_repeaters;
+            for ((cell, block), floor) in cells.iter().zip(run.blocks).zip(run.floors) {
+                if block.kind == crate::redstone::world::block::BlockKind::Repeater {
+                    carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+                    counted += 1;
+                } else {
+                    carried = carried.saturating_sub(1);
+                }
+                if tree.anchors.contains(cell) {
+                    continue;
+                }
+                tree.anchors.push(*cell);
+                tree.realisation.push(block);
+                tree.floors.push(floor);
+                tree.strength.insert(*cell, carried);
+                tree.repeaters.insert(*cell, counted);
+                added.push(*cell);
+            }
+
+            let predecessor = path.get(path.len().saturating_sub(2)).copied().unwrap_or(pin);
+
+            let consumers = self.sinks.get(signal).map(Vec::as_slice).unwrap_or(&[]);
+            let bare_merge =
+                definition.is_merge() && consumers.iter().all(|&(sink, _)| sink == gate);
+
+            let kind = if bare_merge {
+                RouteTerminalKind::BareMergeDust
+            } else {
+                let style = if budget_needs_repeater {
+                    TerminalStyle::RepeaterIntoSupport
+                } else {
+                    terminal_style(&TerminalApproach::new(
+                        predecessor,
+                        socket,
+                        anchor,
+                        strength_before_terminal,
+                        terminal_is_isolated(reservation, signal, predecessor, socket, anchor),
+                    ))
+                };
+                if let Some(index) = tree.anchors.iter().position(|cell| *cell == socket) {
+                    tree.realisation[index] = match style {
+                        TerminalStyle::RepeaterIntoSupport => {
+                            compile::repeater(compile::direction_from(
+                                Position::new(predecessor.x, predecessor.y, predecessor.z),
+                                Position::new(socket.x, socket.y, socket.z),
+                            ))
+                        }
+                        TerminalStyle::DirectedDustIntoSupport => compile::dust(),
+                    };
+                }
+                style.into()
+            };
+
+            let guard = format!("terminal:{}.in[{input}]", definition.output);
+            for neighbour in horizontal_neighbours(socket) {
+                if neighbour != predecessor && neighbour != anchor {
+                    reservation.insert(neighbour, &guard, Occupancy::Solid);
+                }
+            }
+
+            tree.terminals.push(RouteTerminal {
+                sink: RouteSink {
+                    gate: definition.output.clone(),
+                    input_index: input,
+                    anchor: socket,
+                },
+                kind,
+                repeaters: trunk_repeaters + branch_repeaters,
+            });
+
+            let claimed: Vec<Anchor> =
+                claimed_cells(reservation).difference(&before).copied().collect();
+            Ok(Laid {
+                serial: 0,
+                signal: signal.to_string(),
+                consumer: gate,
+                input,
+                socket,
+                predecessor,
+                root,
+                path,
+                added,
+                claimed,
+            })
         }
 
         /// The candidate this growth built, or `None` if anything is unplaced.
@@ -8652,6 +9245,56 @@ mod tests {
         Ok((worst, worst_at, seen))
     }
 
+    /// The shipping placer and router on the same circuit, reported in the
+    /// same units.
+    ///
+    /// Growth's `236 blocks / 18 ticks` means nothing without the number it is
+    /// being compared to, and until this existed the only such number in the
+    /// tree was and4's, in a different test, printed on a different day.
+    /// `a_self_placed_full_adder_computes_a_full_adder` proves `full_adder`
+    /// places, routes and computes through `plan_from_netlist`, and prints
+    /// neither its size nor its delay.
+    fn shipping_baseline(case: &ConditionCircuit) {
+        use std::time::Instant;
+
+        let started = Instant::now();
+        let candidate = match plan_from_netlist(&case.netlist, &PortPlacements::default()) {
+            Ok(candidate) => candidate,
+            Err(error) => {
+                eprintln!("  {} SHIPPING: does not plan: {error}", case.name);
+                return;
+            }
+        };
+        let (width, depth, area) = anchor_box(&candidate.anchors);
+        let realised =
+            match realise_and_verify(&candidate, &case.netlist, candidate_world_size(&candidate)) {
+                Ok(realised) => realised,
+                Err(error) => {
+                    eprintln!("  {} SHIPPING: plans, DOES NOT VERIFY: {error}", case.name);
+                    return;
+                }
+            };
+        let blocks = (0..realised.world.cells().len())
+            .filter(|&flat| {
+                let (x, y, z) = realised.world.decode(flat);
+                realised.world.get(x, y, z).kind
+                    != crate::redstone::world::block::BlockKind::Air
+            })
+            .count();
+        eprintln!(
+            "  {} SHIPPING: plans and verifies in {:.1}s | anchor box {width}x{depth}={area}              | {blocks} blocks",
+            case.name,
+            started.elapsed().as_secs_f64()
+        );
+        match worst_settle_and_truth(&realised, case.inputs, &case.outputs, case.expected) {
+            Ok((worst, at, transitions)) => eprintln!(
+                "  {} SHIPPING: truth table Ok over {transitions} ordered transitions,                  worst settle {worst} game ticks at {at}",
+                case.name
+            ),
+            Err(error) => eprintln!("  {} SHIPPING: TRUTH TABLE WRONG: {error}", case.name),
+        }
+    }
+
     /// Grow one circuit and report every number the paradigm has to be judged
     /// on: where each gate landed, how big the result is, what wedged, whether
     /// it verifies, and -- only if it does -- what it costs in game ticks.
@@ -8660,15 +9303,21 @@ mod tests {
 
         eprintln!(
             "== growth {}: {} gates, {} inputs | order {} | lambda {} | windows {:?} \
-             | tries {} | escape {} | seed {} ==",
+             | tries {} | escape {} | rip {}{} | levers {} ==",
             case.name,
             case.netlist.gates.len(),
             case.netlist.inputs.len(),
-            settings.order,
+            if settings.seed == 0 {
+                settings.order.clone()
+            } else {
+                format!("seed {}", settings.seed)
+            },
             settings.lambda,
             settings.windows,
             settings.tries,
             settings.escape,
+            settings.rip,
+            if settings.rip_whole { " whole-net" } else { "" },
             if settings.seed_pitch > 0 {
                 format!("pitch {}", settings.seed_pitch)
             } else {
@@ -8735,10 +9384,34 @@ mod tests {
             for refusal in wedge.refusals.iter().take(6) {
                 eprintln!("    refused: {refusal}");
             }
+            for line in &growth.rip_log {
+                eprintln!("    rip: {line}");
+            }
             eprintln!(
                 "  {}: WEDGED at {placed}/{gates} gates -- anchor box \
-                 {width}x{depth}={area}, {wire} cells of wire",
-                case.name
+                 {width}x{depth}={area}, {wire} cells of wire, {} rip-up(s) of {} spent,                  {} re-laid",
+                case.name, growth.ripped, settings.rip, growth.relaid
+            );
+            return;
+        }
+
+        if !growth.orphans.is_empty() {
+            eprintln!(
+                "  {}: RIP-UP LOST {} branch(es) it could not put back after {} rip-up(s) \
+                 of {}: {}",
+                case.name,
+                growth.orphans.len(),
+                growth.ripped,
+                settings.rip,
+                growth
+                    .orphans
+                    .iter()
+                    .map(|&(consumer, input)| format!(
+                        "{}.in[{input}]",
+                        growth.netlist.gates[consumer].output
+                    ))
+                    .collect::<Vec<_>>()
+                    .join(" ")
             );
             return;
         }
@@ -8760,9 +9433,20 @@ mod tests {
         let cost = candidate.cost();
         eprintln!(
             "  {}: grew {placed}/{gates} gates in {grew:.1}s | anchor box \
-             {width}x{depth}={area} | {wire} cells of wire | cost wire {} delay {} turns {}",
-            case.name, cost.wire, cost.delay, cost.turns
+             {width}x{depth}={area} | {wire} cells of wire | cost wire {} delay {} turns {} \
+             | {} rip-up(s) of {}, {} branch(es) re-laid",
+            case.name,
+            cost.wire,
+            cost.delay,
+            cost.turns,
+            growth.ripped,
+            settings.rip,
+            growth.relaid
         );
+
+        for line in &growth.rip_log {
+            eprintln!("    rip: {line}");
+        }
 
         let started = Instant::now();
         let realised =
@@ -8860,6 +9544,10 @@ mod tests {
     /// | `REDA_GROWTH_SEED_PITCH` | `0` | lever column pitch; `0` is `starting_layout`'s own row |
     /// | `REDA_GROWTH_VERBOSE` | `1` | print a line per gate landed |
     /// | `REDA_GROWTH_SETTLE` | `1` | truth table and settle sweep on anything that verifies |
+    /// | `REDA_GROWTH_RIP` | `0` | rip-up budget; `0` is v1, the paradigm with no rip-up at all |
+    /// | `REDA_GROWTH_RIP_WHOLE` | `0` | rip the victim's whole net, not the youngest branch and its twigs |
+    /// | `REDA_GROWTH_SEED` | `0` | deterministic growth-order seed; replaces `ORDER` when non-zero |
+    /// | `REDA_GROWTH_BASELINE` | `0` | also run `plan_from_netlist` on the same circuit, same units |
     ///
     /// # What it measured
     ///
@@ -8937,6 +9625,187 @@ mod tests {
     ///   and4 verifying is evidence that the pipeline is wired, and **not**
     ///   evidence that those three rules are right; the circuit that would test
     ///   them is one that grows past a wedge.
+    ///
+    /// # The pre-registered kill criteria, run (2026-08-16, `--release`)
+    ///
+    /// Three criteria were written down before any of this was measured, each
+    /// of which kills the paradigm on its own. **Two fired.** What follows is
+    /// the run that decided each, and every number is a line one of them
+    /// printed.
+    ///
+    /// ## The parity floor, and the baseline it is measured against
+    ///
+    /// `REDA_GROWTH_BASELINE=1` runs `plan_from_netlist` on the same netlist
+    /// through the same `realise_and_verify` and the same settle sweep, so the
+    /// comparison is one run rather than two days.
+    /// `a_self_placed_full_adder_computes_a_full_adder` has always proved
+    /// `full_adder` places, routes and computes on the shipping path; it has
+    /// never printed its size or its delay.
+    ///
+    /// | circuit | shipping box | shipping blocks | shipping ticks | growth, default order |
+    /// |---|---|---|---|---|
+    /// | and4 | 45x23 = 1,035 | 232 | 14 | **7/7, verifies, 236 blocks, 18 ticks** |
+    /// | full_adder | 33x105 = 3,465 | 1,065 | 46 | **WEDGE `g9` at 7/22** |
+    /// | segment_a | does not plan | — | — | **WEDGE `g8` at 18/46** |
+    /// | seven_segment | does not plan | — | — | **WEDGE `g8` at 18/84** |
+    ///
+    /// The same run confirms the premise it is being judged against, in one
+    /// place instead of two: `segment_a SHIPPING: does not plan: no safe local
+    /// route from (99, 1, 97) to (122, 1, 89)` and `seven_segment ... from
+    /// (83, 1, 106) to (83, 1, 96)` -- the two addresses the ledger has always
+    /// quoted. and4's 232 blocks and 14 ticks match the relaxation numbers this
+    /// harness was already comparing itself to.
+    ///
+    /// **and4 holds, and holds robustly.** 40 of 40 growth-order seeds grow
+    /// 7/7, verify, and are right on all 240 ordered transitions, at **18 game
+    /// ticks in every one of the 40** and 236 blocks in 35 of them, 252 in the
+    /// other 5.
+    ///
+    /// **full_adder does not.** The default order wedges at 7/22. Over seeds
+    /// 1..120 with rip-up off, **7 of 120 complete and 2 of those verify** --
+    /// seed 3 at 570 blocks / 42 ticks, seed 69 at 582 blocks / 28 ticks. The
+    /// other five complete and fail `verify_candidate`: three torch-merge
+    /// violations (a net reaching a gate's support block), two signal-strength
+    /// violations. **Those are growth's, not the rip-up's** -- rip-up was off
+    /// in every one of the 120.
+    ///
+    /// ## (1) HARD WEDGING -- **fires**
+    ///
+    /// ```text
+    /// segment_a, default order, rip 0:    WEDGE g8 at 18/46, all four windows,
+    ///                                     offered 4 -> approaches met 4 -> body fits 0
+    /// segment_a, default order, rip 64:   WEDGE g8 at 18/46, 5 rip-ups spent,
+    ///                                     12 branches torn out, 347 -> 143 wire cells
+    /// segment_a, default order, rip 1000: WEDGE g8 at 18/46, 5 rip-ups spent
+    /// segment_a, whole-net rip 64:        WEDGE g8 at 18/46, 3 rip-ups spent,
+    ///                                     19 branches torn out, 347 -> 139 wire cells
+    /// ```
+    ///
+    /// The budget is not what binds -- a thousand buys exactly what 64 does,
+    /// because rip-up runs out of *rippable wire*, not out of tries. What is
+    /// left standing on `g7`'s pin is measured rather than deduced, by
+    /// [`Growth::what_stands_at`], which separates the two things an owner
+    /// string alone cannot:
+    ///
+    /// ```text
+    /// rip 0:  (26,1,147) primitive:7 [body]   (24,1,146) g4 [socket-approach]
+    ///         (25,3,145) g5 [wire]            (26,1,144) g2 [socket-approach]
+    ///         (26,1,148) primitive:7 [body]   (28,1,146) primitive:5 [body]
+    /// rip 64: (26,1,147) primitive:7 [body]   (24,1,146) g4 [socket-approach]
+    ///         (26,1,144) g2 [socket-approach] (26,1,148) primitive:7 [body]
+    ///         (28,1,146) primitive:5 [body]   (26,2,147) primitive:7 [body]
+    /// ```
+    ///
+    /// Rip-up tore out the **one** wire in the ring and the pin is still
+    /// sealed. Everything else is a gate body or the input socket of a gate
+    /// already standing -- geometry fixed by a placement decision, which no
+    /// amount of wire rip-up can move. `full_adder`'s wedge is the same shape:
+    /// five bodies and one `socket-approach`, 2 rip-ups of 64 spent.
+    ///
+    /// So the escape hatch the criterion allows was built, it fires, it works
+    /// -- 64 of 64 rip-ups and 126 re-lays on some seeds -- and **it does not
+    /// address this failure**, because this failure is not congestion.
+    ///
+    /// The obvious pairing is refuted too. `REDA_GROWTH_ESCAPE=3` reserves a
+    /// gate's way out *at landing*, which is the half rip-up cannot supply, and
+    /// `REDA_GROWTH_ESCAPE=3 REDA_GROWTH_RIP=64` together still wedge at `g8`
+    /// after 18/46, 5 rip-ups spent, on the same pin with the same six
+    /// blockers. `seven_segment` wedges identically at `g8` after 18/84 -- same
+    /// cell `(26, 1, 146)`, same taxonomy, 5 rip-ups -- which is what it should
+    /// do, since the two circuits share `segment_a`'s first eighteen gates.
+    ///
+    /// ## (2) DOMINATED -- **not decidable as written, and not the reason**
+    ///
+    /// The criterion asks whether `segment_a` completes only above legacy's
+    /// 23,220. It never completes, at any setting tried, so it has no area.
+    /// Where growth *does* verify it is not dominated at all: and4 is 236
+    /// blocks against 232 (+1.7%) at 18 ticks against 14, and full_adder's two
+    /// verified seeds are 570 and 582 blocks against the shipping path's
+    /// **1,065** (-46%) at 42 and 28 ticks against 46. Growth's output quality
+    /// is not the problem. Its reliability is.
+    ///
+    /// ## (3) ORDER FRAGILITY -- **fires**
+    ///
+    /// Twenty deterministic growth-order seeds (`REDA_GROWTH_SEED=1..20`,
+    /// [`scrambled`] permuting the ready queue outright, which is the
+    /// growth-side twin of the 120 net-order shuffles):
+    ///
+    /// | | completes | best reached | spread |
+    /// |---|---|---|---|
+    /// | `segment_a`, rip 0 | **0 of 20** | 25/46 | 9/46 .. 25/46 |
+    /// | `segment_a`, rip 64 | **0 of 20** | 37/46 | 13/46 .. 37/46 |
+    ///
+    /// The rip-up run is the generous one and it is where the rip-up gets its
+    /// hardest workout on this branch: **1,056 rip-ups and 1,150 branch
+    /// re-lays across the twenty seeds**, 16 of the 20 exhausting the whole
+    /// budget. It buys reach -- the best seed goes from 25/46 to 37/46 -- and
+    /// it buys **no completions**.
+    ///
+    /// The nine named `(order, lambda)` combinations the earlier sweep used on
+    /// `full_adder` say the same thing about `segment_a`, and none of them is a
+    /// seed: `{depth, arity, index}` x `{0, 0.5, 2}` all wedge, at 18, 18, 19,
+    /// 18, 18, 8, 11, 15 and 19 of 46. **Twenty-nine orderings, no
+    /// completion.**
+    ///
+    /// That is the shuffle experiment's shape, not an area/delay spread over
+    /// completions. `segment_a` has no completion to spread over.
+    ///
+    /// ## The blind spot, filled
+    ///
+    /// Worst settle over every ordered transition from a settled state on a
+    /// fresh simulator, for everything that verifies: and4 **18** ticks
+    /// (shipping 14, legacy 26), full_adder **42** ticks at seed 3 and **28**
+    /// at seed 69 (shipping 46). Nothing else growth produced ever verified,
+    /// so nothing else has a tick count.
+    ///
+    /// # Rule 2 on the rip-up itself
+    ///
+    /// The rip-up is new code, and "it still wedges" is worthless coming from
+    /// machinery that cannot succeed. What it does, measured:
+    ///
+    /// - **It fires and re-lays, at volume.** `full_adder` seed 6 spends all 64
+    ///   rip-ups and re-lays 122 branches; seed 4, 62; seed 8, 63. The
+    ///   `segment_a` seed sweep alone spends 1,056 rip-ups and re-lays 1,150
+    ///   branches.
+    /// - **It changes outcomes.** `full_adder` completes 22/22 at seeds 12, 18
+    ///   and 24 with rip-up and wedges at all three without it.
+    /// - **And every one of those three then fails `verify_candidate`** -- two
+    ///   signal-strength, one torch-merge. Under rule 6 that is worth nothing,
+    ///   and it is reported rather than rounded off.
+    /// - **The failures are not the rip-up's.** Two hypotheses, one experiment
+    ///   each. A re-laid branch reading a stale carried strength off a trunk:
+    ///   refuted -- `REDA_GROWTH_RIP_WHOLE=1` re-grows the whole net from its
+    ///   pin at full strength, and seeds 12, 18 and 24 fail *identically*, same
+    ///   gate, same message. The rip-up introducing a class of violation growth
+    ///   does not have: refuted -- with rip-up **off**, 5 of the 7 `full_adder`
+    ///   completions over seeds 1..120 fail with the same two classes.
+    /// - **One claim about it was wrong and is corrected rather than deleted.**
+    ///   [`Growth::reseat`]'s recompute of each branch's claimed cells was
+    ///   first written up as the fix for `full_adder` stopping at 2 rip-ups of
+    ///   64. Disabling it leaves seeds 4, 6, 8, 12 and 24 bit for bit
+    ///   identical, so it is **measured inert**; the real cause of that stop is
+    ///   the taxonomy above.
+    ///
+    /// # What is still NOT MEASURED
+    ///
+    /// - `verilog:and4` and `verilog:seven_segment` -- this harness takes the
+    ///   four hand-written circuits, and the projection deadlock that stops
+    ///   `verilog:seven_segment` is upstream of anything here.
+    /// - **Why** growth's torch-merge and signal-strength violations happen.
+    ///   An instrument for it was written and **thrown away rather than
+    ///   believed**: it looked for a foreign conductor within [`keep_out`] of a
+    ///   placed gate's support block and found *none* on any of the five
+    ///   failing completions, which does not mean there is none -- it means it
+    ///   was asking the wrong question. Reading `compile::net_reach` says why:
+    ///   the relation that fires is `dust_powers_block_toward`, a directional
+    ///   rule about a dust cell's connection *shape*, and that file's own
+    ///   comment says "nothing else in the compiler models that adjacency --
+    ///   `dust_reach` and `verify_connectivity` are both strictly
+    ///   dust-reaches-dust". So the step legality this probe reaches through
+    ///   verbatim cannot see the thing that fails. That is a reading of the
+    ///   source, not a measurement, and is labelled as one.
+    /// - `seven_segment` past its wedge, at any setting.
+    /// - Rip-up above 64 on anything but `segment_a`'s default order.
     #[test]
     #[ignore = "measurement harness: asserts nothing, grows a circuit gate by gate, minutes on the larger ones"]
     fn measure_whether_growth_places_and_routes() {
@@ -8961,6 +9830,9 @@ mod tests {
             seed_pitch: setting("REDA_GROWTH_SEED_PITCH", "0").parse().expect("a pitch"),
             verbose: setting("REDA_GROWTH_VERBOSE", "1") != "0",
             settle: setting("REDA_GROWTH_SETTLE", "1") != "0",
+            rip: setting("REDA_GROWTH_RIP", "0").parse().expect("a budget"),
+            seed: setting("REDA_GROWTH_SEED", "0").parse().expect("a seed"),
+            rip_whole: setting("REDA_GROWTH_RIP_WHOLE", "0") != "0",
         };
 
         let (and4, and4_output) = build_and4_netlist();
@@ -9006,7 +9878,11 @@ mod tests {
             .collect();
         assert!(!chosen.is_empty(), "REDA_GROWTH_CIRCUIT names no circuit");
 
+        let baseline = setting("REDA_GROWTH_BASELINE", "0") != "0";
         for case in chosen {
+            if baseline {
+                shipping_baseline(case);
+            }
             grow_and_report(case, &settings);
         }
     }
