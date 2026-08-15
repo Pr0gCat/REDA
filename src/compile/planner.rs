@@ -7428,5 +7428,1586 @@ mod tests {
             }
         }
     }
-}
 
+    // ---------------------------------------------------------------------
+    // The growth probe: wire-first constructive compilation.
+    //
+    // Not a section of `docs/superpowers/specs/2026-08-15-routing-at-scale.md`.
+    // Every candidate in there moves the router or the placer while keeping the
+    // other's shape; this moves the boundary between them. Wires are ~45% of
+    // the blocks and gates 3%, so wires are the primary state here and gate
+    // positions are derived: nets grow as real dust trees in topological order,
+    // and a gate lands at the argmin of its input nets' arrival-cost fields.
+    //
+    // What that is meant to delete is a measured failure, not a suspected one.
+    // `segment_a`'s `g32` dies walled into a 256-cell pocket 24 manhattan from a
+    // goal 31 away, and 0 of 120 net orderings escape it -- because the goal is
+    // FIXED. Here the goal is an output, so "no route to the socket" cannot be
+    // said: the socket goes where a route already is.
+    //
+    // Under the ruling that only game mechanics are hard rules, growth needs no
+    // `relax::project::reservation` ring -- wires are laid before the gate
+    // exists, so nothing needs room saved for it -- and no `SNAP_MARGIN`, since
+    // everything is born on the lattice. What remains is the game's: conductor
+    // clearance (`keep_out`), a floor under every cell, the climb rules
+    // (`staircase_clearance`, `self_obstructs`), and 15-cell decay
+    // (`realise_branch_from`). Every one of those is reached through the
+    // shipping router's own function rather than restated.
+    //
+    // **The paragraph above is the premise, not a finding.** What this harness
+    // measured is in `measure_whether_growth_places_and_routes`'s own doc, and
+    // on the output side it goes the other way: every wedge measured is a
+    // gate's *output* pin sealed by gates placed after it, which is the same
+    // ring asked for from the other direction.
+    // ---------------------------------------------------------------------
+
+    /// The offset every footprint this probe measures is taken about.
+    const GROWTH_ORIGIN: Anchor = Anchor { x: 0, y: 0, z: 0 };
+
+    /// One net's dust tree as it grows, plus what a later branch of the same
+    /// net needs to know about the cells earlier ones laid.
+    ///
+    /// `route_in_order` needs neither map: a star's every branch starts at the
+    /// source, so it recovers the carried strength by walking the shared prefix
+    /// from full strength. A tree has no single prefix to walk, which is what
+    /// §5.2 calls "the real work" of routing a net as a tree.
+    #[derive(Debug, Clone, Default)]
+    struct NetTree {
+        anchors: Vec<Anchor>,
+        realisation: Vec<BlockState>,
+        floors: Vec<BlockState>,
+        /// Strength carried *out of* each laid cell.
+        strength: BTreeMap<Anchor, u8>,
+        /// Repeaters between the producer's pin and each laid cell, inclusive.
+        /// [`RouteTerminal::repeaters`] is this at the branch point plus
+        /// whatever the branch itself lays -- the sum `route_in_order` spells
+        /// `trunk_repeaters + laid.repeaters`.
+        repeaters: BTreeMap<Anchor, u64>,
+        terminals: Vec<RouteTerminal>,
+    }
+
+    impl NetTree {
+        /// Every cell a new branch of this net may start from: everything laid,
+        /// plus the producer's pin, which the first branch lays and every later
+        /// one finds already there.
+        fn seeds(&self, pin: Anchor) -> BTreeSet<Anchor> {
+            let mut seeds: BTreeSet<Anchor> = self.anchors.iter().copied().collect();
+            seeds.insert(pin);
+            seeds
+        }
+    }
+
+    /// A multi-source Dijkstra over free space: what one net can reach from
+    /// everything it has already laid, and by which parent.
+    struct Flood {
+        travelled: BTreeMap<Anchor, u64>,
+        previous: BTreeMap<Anchor, Anchor>,
+    }
+
+    impl Flood {
+        fn cost(&self, at: Anchor) -> Option<u64> {
+            self.travelled.get(&at).copied()
+        }
+
+        /// The cheapest path to `goal`, ending there and beginning at whichever
+        /// laid cell it grew from.
+        ///
+        /// [`reconstruct_path`] verbatim, and it needs no adapting: a seed is
+        /// entered at `travelled = 0` and every step costs at least one, so the
+        /// relaxation test never gives a seed a parent, and the walk stops at
+        /// exactly the cell this branch hangs off.
+        fn path_to(&self, goal: Anchor) -> Option<Vec<Anchor>> {
+            self.travelled
+                .contains_key(&goal)
+                .then(|| reconstruct_path(self.previous.clone(), goal))
+        }
+    }
+
+    /// Flood outward from everything a net has laid, under the shipping
+    /// router's own step legality.
+    ///
+    /// **Every refusal below is `deterministic_astar`'s, arm for arm**:
+    /// [`self_obstructs`] against this flood's own parent map (the same kind of
+    /// object the search keeps -- one global `previous`), [`within_bounds`],
+    /// [`anchor_is_free_for`], and the [`staircase_clearance`] riser rule with
+    /// [`stair_guard`]. Three things differ and each is stated rather than
+    /// absorbed:
+    ///
+    /// 1. **Many sources, one cost map.** §5.2's proposal, which growth needs
+    ///    anyway: a branch grows off the trunk wherever the trunk is nearest.
+    /// 2. **No congestion price.** There is no rip-up loop here to charge
+    ///    anything, and a price nothing reads is a number that cannot be wrong
+    ///    in an interesting way.
+    /// 3. **No heuristic**, so `estimate == travelled`. A field has no goal to
+    ///    estimate towards, and the branch search is the same function so the
+    ///    path it finds is the one the field priced. That is also what makes
+    ///    stopping when `aim`'s goal is popped exact rather than a cutoff:
+    ///    under plain Dijkstra a popped cell's cost is already final.
+    ///
+    /// `aim` is `Some((approach, socket))` when a particular socket is being
+    /// reached for, and it is passed straight through to `anchor_is_free_for`
+    /// as its `goal` and `terminal_support` -- the two exemptions
+    /// `route_in_order` relies on to let a branch land one cell out from a
+    /// gate's input. `None` is a field: no exemption, so a field is never
+    /// cheerier than the search that follows it.
+    fn flood_from(
+        seeds: &BTreeSet<Anchor>,
+        pin: Anchor,
+        aim: Option<(Anchor, Anchor)>,
+        owner: &str,
+        reservation: &Reservation,
+        window: (Anchor, Anchor),
+    ) -> Flood {
+        let (min, max) = window;
+        let (goal, support) = aim.unwrap_or((pin, pin));
+        let mut travelled: BTreeMap<Anchor, u64> =
+            seeds.iter().map(|&anchor| (anchor, 0)).collect();
+        let mut previous: BTreeMap<Anchor, Anchor> = BTreeMap::new();
+        let mut frontier: BTreeSet<SearchState> = seeds
+            .iter()
+            .map(|&anchor| SearchState { estimate: 0, travelled: 0, anchor })
+            .collect();
+
+        while let Some(state) = frontier.iter().next().copied() {
+            frontier.remove(&state);
+            if travelled.get(&state.anchor) != Some(&state.travelled) {
+                continue;
+            }
+            if aim.is_some() && state.anchor == goal {
+                break;
+            }
+            for next in neighbours(state.anchor) {
+                if self_obstructs(&previous, state.anchor, next) {
+                    continue;
+                }
+                if !within_bounds(next, min, max)
+                    || !anchor_is_free_for(next, pin, goal, support, owner, reservation)
+                    || staircase_clearance(state.anchor, next).into_iter().any(|cell| {
+                        let foreign = reservation.owner(&cell).is_some_and(|occupied_by| {
+                            occupied_by != owner && occupied_by != stair_guard(owner)
+                        });
+                        let is_riser = next.y > state.anchor.y && cell.y == state.anchor.y;
+                        if is_riser {
+                            return foreign || reservation.conductor_owner(&cell).is_some();
+                        }
+                        reservation.owner(&cell).is_some()
+                    })
+                {
+                    continue;
+                }
+                // `deterministic_astar`'s own step cost with its `goal.y` read
+                // as [`PLANNER_Y`]: every landing this probe considers is on the
+                // gate plane, so "closer in y" is "coming back down", which is
+                // what that arm means there too.
+                const CLIMB_COST: u64 = 3;
+                let closer_in_y =
+                    (next.y - PLANNER_Y).abs() < (state.anchor.y - PLANNER_Y).abs();
+                let step_cost = if next.y == state.anchor.y || closer_in_y {
+                    1
+                } else {
+                    CLIMB_COST
+                };
+                let next_travelled = state.travelled.saturating_add(step_cost);
+                if travelled
+                    .get(&next)
+                    .is_some_and(|&known| known <= next_travelled)
+                {
+                    continue;
+                }
+                travelled.insert(next, next_travelled);
+                previous.insert(next, state.anchor);
+                frontier.insert(SearchState {
+                    estimate: next_travelled,
+                    travelled: next_travelled,
+                    anchor: next,
+                });
+            }
+        }
+
+        Flood { travelled, previous }
+    }
+
+    /// The socket a declared input arrives in, and the one cell it may arrive
+    /// from.
+    ///
+    /// `route_in_order` states this twice; said once here. A terminal only
+    /// reads from directly behind itself, so the approach is collinear with
+    /// socket and support -- which is also what makes the enumeration below
+    /// invertible.
+    fn socket_and_approach(
+        anchor: Anchor,
+        facing: geometry::CellFacing,
+        input_index: usize,
+    ) -> (Anchor, Anchor) {
+        let socket = step(anchor, geometry::input_directions(facing)[input_index]);
+        let approach = Anchor {
+            x: socket.x + (socket.x - anchor.x),
+            y: socket.y + (socket.y - anchor.y),
+            z: socket.z + (socket.z - anchor.z),
+        };
+        (socket, approach)
+    }
+
+    fn shifted(origin: Anchor, offset: Anchor) -> Anchor {
+        Anchor {
+            x: origin.x + offset.x,
+            y: origin.y + offset.y,
+            z: origin.z + offset.z,
+        }
+    }
+
+    /// The box a gate's growth is searched in: everything its input nets have
+    /// laid, grown by `margin` in plan and by `deterministic_astar`'s own
+    /// `CLIMB` above.
+    ///
+    /// One window for all of a gate's input nets rather than one each, because
+    /// what has to be non-empty is their *intersection*: a landing needs every
+    /// socket's approach reachable by its own net.
+    fn growth_window(seeds: &[Anchor], margin: i32) -> (Anchor, Anchor) {
+        const CLIMB: i32 = 3;
+        let mut min = Anchor { x: i32::MAX, y: i32::MAX, z: i32::MAX };
+        let mut max = Anchor { x: i32::MIN, y: i32::MIN, z: i32::MIN };
+        for cell in seeds {
+            min = Anchor {
+                x: min.x.min(cell.x),
+                y: min.y.min(cell.y),
+                z: min.z.min(cell.z),
+            };
+            max = Anchor {
+                x: max.x.max(cell.x),
+                y: max.y.max(cell.y),
+                z: max.z.max(cell.z),
+            };
+        }
+        (
+            Anchor {
+                // Never left of or before the origin. A gate at `x = -6` has its
+                // blocks written outside the world and its socket reads as air
+                // however carefully a route reached it, which is the hazard
+                // `claim_column` guards on the placement side.
+                x: (min.x - margin).max(0),
+                y: min.y.max(PLANNER_Y),
+                z: (min.z - margin).max(0),
+            },
+            Anchor {
+                x: max.x + margin,
+                y: max.y + CLIMB,
+                z: max.z + margin,
+            },
+        )
+    }
+
+    /// Where a gate could land, which way it would face, and what that costs.
+    struct Landing {
+        anchor: Anchor,
+        facing: geometry::CellFacing,
+        /// Arrival cost at each declared input's approach cell, in declared
+        /// input order.
+        arrival: Vec<u64>,
+        pull: f64,
+        score: f64,
+    }
+
+    /// How many landings survived each stage of the enumeration.
+    ///
+    /// The wedge report's whole content: "no landing" without saying which test
+    /// removed them all is the uninformative address §1.1 is about, one level
+    /// up.
+    #[derive(Debug, Clone, Copy, Default)]
+    struct Funnel {
+        offered: usize,
+        approaches_met: usize,
+        body_fits: usize,
+    }
+
+    /// Whether a gate body may stand at `origin`, given everything already
+    /// laid.
+    ///
+    /// This is the rule `route_in_order` gets for free and growth has to ask
+    /// for. There the gates are placed first and `keep_out` keeps the wires off
+    /// them; here the wires are laid first, so the same clearance has to be
+    /// asked from the gate's side -- no cell of the body over anything, and no
+    /// foreign conductor within `keep_out` of anything of the body that
+    /// conducts.
+    ///
+    /// The one exemption is the one the router already makes from the other
+    /// direction: a socket is *meant* to have its own net's dust one cell out,
+    /// which is `anchor_is_free_for`'s `anchor == goal && neighbour ==
+    /// terminal_support` read backwards.
+    ///
+    /// `cells` and `conductors` are offsets about [`GROWTH_ORIGIN`], not
+    /// positions. [`compile::gate_footprint`] realises a gate into a 64x8x64
+    /// scratch world and scans all 32,768 cells of it, and this is asked of
+    /// every cell of a field times four facings -- so it is asked once per
+    /// facing and translated, which the function's own arithmetic permits: its
+    /// answer is `origin` plus an offset that depends on nothing but arity,
+    /// merge-ness and facing.
+    struct BodyFit<'a> {
+        origin: Anchor,
+        cells: &'a [Anchor],
+        conductors: &'a [Anchor],
+        sockets: &'a [Anchor],
+        approaches: &'a [Anchor],
+        drivers: &'a [String],
+        pins: &'a [Anchor],
+        /// Where this body's own output net will start.
+        pin: Anchor,
+        /// How many legal first steps that net must be left, or `0` to ask for
+        /// none -- which is the sketch as briefed, and the default, so the
+        /// reported baseline is the paradigm and not a repair of it.
+        escape: usize,
+    }
+
+    impl BodyFit<'_> {
+        fn allowed(&self, reservation: &Reservation) -> bool {
+            for offset in self.cells {
+                if reservation.is_taken(&shifted(self.origin, *offset)) {
+                    return false;
+                }
+            }
+            // The approach has to be free, already this net's, or the
+            // producer's own pin -- the last of which is the paradigm's whole
+            // point, a socket landing directly on dust that is already there.
+            for (index, approach) in self.approaches.iter().enumerate() {
+                let mine = match reservation.owner(approach) {
+                    None => true,
+                    Some(occupied_by) => occupied_by == self.drivers[index],
+                } || *approach == self.pins[index];
+                if !mine {
+                    return false;
+                }
+            }
+            for offset in self.conductors {
+                let conductor = shifted(self.origin, *offset);
+                for neighbour in keep_out(conductor) {
+                    if reservation.conductor_owner(&neighbour).is_none() {
+                        continue;
+                    }
+                    let arriving = self.sockets.iter().enumerate().any(|(index, socket)| {
+                        conductor == *socket && neighbour == self.approaches[index]
+                    });
+                    if !arriving {
+                        return false;
+                    }
+                }
+            }
+            self.escape == 0 || self.escapes(reservation) >= self.escape
+        }
+
+        /// How many legal first steps this body's own output net would have out
+        /// of its pin, once the body is standing here.
+        ///
+        /// `anchor_is_free_for` as it will answer a moment from now. The body is
+        /// not in the reservation yet, so its own cells are asked of the offset
+        /// lists instead of of the map, and the pin is that net's `start` --
+        /// therefore the one conductor a first step is allowed to sit beside.
+        ///
+        /// **Why this is a knob and not a rule.** The framing says growth needs
+        /// no reserved ring because "wires are laid before the gate exists, so
+        /// nothing needs room saved for it". That is true of a gate's *inputs*
+        /// and false of its *output*: the output net does not exist when the
+        /// gate lands, so nothing keeps the gates placed afterwards off it. Set
+        /// this above zero and the claim is under test rather than assumed.
+        fn escapes(&self, reservation: &Reservation) -> usize {
+            let mine = |cell: Anchor| {
+                self.cells.iter().any(|offset| shifted(self.origin, *offset) == cell)
+            };
+            let mine_conducts = |cell: Anchor| {
+                self.conductors.iter().any(|offset| shifted(self.origin, *offset) == cell)
+            };
+            neighbours(self.pin)
+                .into_iter()
+                .filter(|&next| {
+                    let below = Anchor { y: next.y - 1, ..next };
+                    next.y >= PLANNER_Y
+                        && !reservation.is_taken(&next)
+                        && !mine(next)
+                        && reservation.conductor_owner(&below).is_none()
+                        && !mine_conducts(below)
+                        && keep_out(next).into_iter().all(|neighbour| {
+                            neighbour == self.pin
+                                || (reservation.conductor_owner(&neighbour).is_none()
+                                    && !mine_conducts(neighbour))
+                        })
+                })
+                .count()
+        }
+    }
+
+    /// Why one landing could not be laid, kept so a wedge report says what was
+    /// tried rather than that something was.
+    struct LayRefusal {
+        input: usize,
+        why: &'static str,
+    }
+
+    /// A gate the growth could not place, and everything known about why.
+    struct Wedge {
+        gate: String,
+        depth: usize,
+        arity: usize,
+        windows: Vec<i32>,
+        funnel: Funnel,
+        fields: Vec<(String, usize)>,
+        seals: Vec<Seal>,
+        refusals: Vec<String>,
+    }
+
+    /// A net whose field adds nothing to what it has already laid: it cannot
+    /// leave its own producer, and these are the cells standing on it.
+    ///
+    /// The distinction this exists to make is the whole diagnosis. "No landing"
+    /// has two completely different causes -- **the fields could not meet**,
+    /// which is a congestion story and the one the paradigm predicts it has
+    /// deleted, and **a field is a single cell**, which is not about routing at
+    /// all: the driver was placed with nothing reserving its way out, and gates
+    /// placed afterwards closed around its output pin. Reporting only "0
+    /// landings" would let a reader pick whichever they already believed.
+    ///
+    /// The blame flood is [`refusal_heat`], started at the producer's **pin**,
+    /// so for a net that has already laid cells elsewhere this names the ring
+    /// around the pin and not the whole tree's boundary. Every seal measured so
+    /// far is a net whose tree is the bare pin, where the two are the same.
+    struct Seal {
+        signal: String,
+        pin: Anchor,
+        blamed: Vec<(Anchor, String, u64)>,
+    }
+
+    /// How a growth run is tuned. Every field is an environment variable with
+    /// the default that produced this harness's own reported numbers, so the
+    /// default run is the reproduction and an override is a sweep.
+    #[derive(Debug, Clone)]
+    struct GrowthSettings {
+        order: String,
+        lambda: f64,
+        windows: Vec<i32>,
+        tries: usize,
+        escape: usize,
+        seed_pitch: i32,
+        verbose: bool,
+        settle: bool,
+    }
+
+    /// The growing world: one reservation, one dust tree per net, and the
+    /// candidate being assembled underneath them.
+    struct Growth<'a> {
+        netlist: &'a Netlist,
+        settings: &'a GrowthSettings,
+        reservation: Reservation,
+        trees: BTreeMap<String, NetTree>,
+        /// Where each signal's dust leaves its producer.
+        pins: BTreeMap<String, Anchor>,
+        sinks: BTreeMap<String, Vec<(usize, usize)>>,
+        depths: Vec<usize>,
+        anchors: Vec<Anchor>,
+        facings: Vec<geometry::CellFacing>,
+        nodes: Vec<Option<PrimitiveNode>>,
+        placed: Vec<bool>,
+        wedge: Option<Wedge>,
+    }
+
+    impl<'a> Growth<'a> {
+        /// Seed: every primary input's lever, and nothing else. Every gate is
+        /// unplaced, which is what makes the ready queue mean something.
+        fn seeded(netlist: &'a Netlist, settings: &'a GrowthSettings) -> Result<Self, String> {
+            let placements = PortPlacements::default();
+            let start = starting_layout(netlist, &placements).map_err(|error| error.to_string())?;
+            let gates = netlist.gates.len();
+            let nodes = gates + netlist.inputs.len();
+
+            let mut growth = Growth {
+                netlist,
+                settings,
+                reservation: Reservation::new(),
+                trees: BTreeMap::new(),
+                pins: BTreeMap::new(),
+                sinks: net_sinks(netlist),
+                depths: gate_depths(netlist).map_err(|error| error.to_string())?,
+                anchors: vec![Anchor { x: 0, y: PLANNER_Y, z: 0 }; nodes],
+                facings: vec![geometry::CellFacing::NORTH; nodes],
+                nodes: vec![None; nodes],
+                placed: vec![false; gates],
+                wedge: None,
+            };
+
+            for (index, input) in netlist.inputs.iter().enumerate() {
+                let node = gates + index;
+                // `starting_layout`'s own input row, or a pitch this harness was
+                // told to use instead. The row is **not** growth's answer --
+                // nothing has grown yet when the levers go down -- so it is a
+                // knob, and the anchor box below inherits whatever it says.
+                let anchor = if settings.seed_pitch > 0 {
+                    Anchor {
+                        x: INPUT_COLUMN_X + index as i32 * settings.seed_pitch,
+                        ..start[node]
+                    }
+                } else {
+                    start[node]
+                };
+                let facing = geometry::CellFacing::NORTH;
+                let (cells, pin) = compile::lever_footprint(anchor, facing);
+                let primitive = PrimitiveNode {
+                    id: format!("input:{input}"),
+                    anchor,
+                    realisation: NodeRealisation::Primitive(Primitive::Lever),
+                    footprint: cells.clone(),
+                    conductors: cells,
+                    pinned: placements.get(input).is_some(),
+                    output_pin: Some(pin),
+                };
+                let owner = format!("primitive:{node}");
+                for &cell in primitive.occupied() {
+                    growth
+                        .reservation
+                        .insert(cell, &owner, primitive.occupancy_of(cell));
+                }
+                growth.anchors[node] = anchor;
+                growth.facings[node] = facing;
+                growth.nodes[node] = Some(primitive);
+                growth.pins.insert(input.clone(), pin);
+            }
+
+            Ok(growth)
+        }
+
+        /// The ready queue's key for a gate: most-constrained-first, with a
+        /// deterministic tail so the same netlist always grows the same way.
+        fn key(&self, gate: usize) -> (i64, i64, usize) {
+            let depth = self.depths[gate] as i64;
+            let arity = self.netlist.gates[gate].inputs.len() as i64;
+            match self.settings.order.as_str() {
+                "arity" => (-arity, depth, gate),
+                "index" => (gate as i64, 0, gate),
+                _ => (depth, -arity, gate),
+            }
+        }
+
+        /// Whether every gate driving this one has been placed. Primary inputs
+        /// are placed by the seed, so they never hold anything back.
+        fn ready(&self, gate: usize) -> bool {
+            self.netlist.gates[gate]
+                .inputs
+                .iter()
+                .all(|signal| self.pins.contains_key(signal))
+        }
+
+        /// Grow the whole circuit, or stop at the first wedge.
+        fn grow(&mut self) {
+            let mut queue: BTreeSet<(i64, i64, usize)> = (0..self.netlist.gates.len())
+                .filter(|&gate| self.ready(gate))
+                .map(|gate| self.key(gate))
+                .collect();
+
+            while let Some(&entry) = queue.iter().next() {
+                queue.remove(&entry);
+                let gate = entry.2;
+                match self.land(gate) {
+                    Ok(()) => {
+                        self.placed[gate] = true;
+                        for consumer in 0..self.netlist.gates.len() {
+                            if !self.placed[consumer] && self.ready(consumer) {
+                                queue.insert(self.key(consumer));
+                            }
+                        }
+                    }
+                    Err(wedge) => {
+                        self.wedge = Some(*wedge);
+                        return;
+                    }
+                }
+            }
+        }
+
+        /// Land one gate: flood its input nets, rank the places its sockets
+        /// could go, and lay the first one that survives being laid.
+        /// `Box`ed for the same reason `route_in_order` boxes its own
+        /// [`RoutingFailure`]: the error is the rare arm and much the larger,
+        /// and every landing pays for it otherwise.
+        fn land(&mut self, gate: usize) -> Result<(), Box<Wedge>> {
+            let definition = self.netlist.gates[gate].clone();
+            let drivers = definition.inputs.clone();
+            let pins: Vec<Anchor> = drivers.iter().map(|signal| self.pins[signal]).collect();
+            let trees: Vec<NetTree> = drivers
+                .iter()
+                .map(|signal| self.trees.get(signal).cloned().unwrap_or_default())
+                .collect();
+            let seeds: Vec<BTreeSet<Anchor>> = trees
+                .iter()
+                .zip(&pins)
+                .map(|(tree, &pin)| tree.seeds(pin))
+                .collect();
+            let all: Vec<Anchor> = seeds.iter().flatten().copied().collect();
+            let windows = self.settings.windows.clone();
+            let tries = self.settings.tries;
+            let verbose = self.settings.verbose;
+
+            let mut funnel = Funnel::default();
+            let mut fields_seen: Vec<(String, usize)> = Vec::new();
+            let mut seals: Vec<Seal> = Vec::new();
+            let mut refusals: Vec<String> = Vec::new();
+
+            for &margin in &windows {
+                let window = growth_window(&all, margin);
+                let fields: Vec<Flood> = (0..drivers.len())
+                    .map(|input| {
+                        flood_from(
+                            &seeds[input],
+                            pins[input],
+                            None,
+                            &drivers[input],
+                            &self.reservation,
+                            window,
+                        )
+                    })
+                    .collect();
+                fields_seen = drivers
+                    .iter()
+                    .zip(&fields)
+                    .map(|(signal, field)| (signal.clone(), field.travelled.len()))
+                    .collect();
+                // A field that adds nothing to the seeds it started from is a
+                // net that cannot leave its producer -- a different failure
+                // from "the fields could not meet", and the one worth naming.
+                seals = (0..drivers.len())
+                    .filter(|&input| fields[input].travelled.len() == seeds[input].len())
+                    .map(|input| {
+                        let mut blamed: Vec<(Anchor, String, u64)> = refusal_heat(
+                            pins[input],
+                            pins[input],
+                            &drivers[input],
+                            &self.reservation,
+                        )
+                        .into_iter()
+                        .map(|(cell, blame)| {
+                            let owner = self
+                                .reservation
+                                .owner(&cell)
+                                .unwrap_or("unclaimed")
+                                .to_string();
+                            (cell, owner, blame)
+                        })
+                        .collect();
+                        blamed.sort_by(|left, right| {
+                            right.2.cmp(&left.2).then(left.0.cmp(&right.0))
+                        });
+                        blamed.truncate(6);
+                        Seal { signal: drivers[input].clone(), pin: pins[input], blamed }
+                    })
+                    .collect();
+
+                let (ranked, this) = self.landings(gate, &fields, &drivers, &pins);
+                funnel = this;
+
+                for landing in ranked.iter().take(tries) {
+                    let mut reservation = self.reservation.clone();
+                    let mut branch = trees.clone();
+                    match self.lay(
+                        gate,
+                        landing,
+                        &drivers,
+                        &pins,
+                        &mut branch,
+                        &mut reservation,
+                        window,
+                    ) {
+                        Ok(node) => {
+                            if verbose {
+                                eprintln!(
+                                    "    {} <- [{}] at ({}, {}, {}) facing {} | arrival {} \
+                                     | pull {:.1} | score {:.1} | window {margin} | fields {}",
+                                    definition.output,
+                                    drivers.join(" "),
+                                    landing.anchor.x,
+                                    landing.anchor.y,
+                                    landing.anchor.z,
+                                    landing.facing.index(),
+                                    landing
+                                        .arrival
+                                        .iter()
+                                        .map(u64::to_string)
+                                        .collect::<Vec<_>>()
+                                        .join("+"),
+                                    landing.pull,
+                                    landing.score,
+                                    fields_seen
+                                        .iter()
+                                        .map(|(_, size)| size.to_string())
+                                        .collect::<Vec<_>>()
+                                        .join("/"),
+                                );
+                            }
+                            self.reservation = reservation;
+                            for (signal, tree) in drivers.iter().zip(branch) {
+                                self.trees.insert(signal.clone(), tree);
+                            }
+                            self.anchors[gate] = landing.anchor;
+                            self.facings[gate] = landing.facing;
+                            self.pins.insert(
+                                definition.output.clone(),
+                                node.output_pin.expect("a gate node records its pin"),
+                            );
+                            self.nodes[gate] = Some(node);
+                            return Ok(());
+                        }
+                        Err(refusal) => refusals.push(format!(
+                            "({}, {}, {}) f{}: {} at input {}",
+                            landing.anchor.x,
+                            landing.anchor.y,
+                            landing.anchor.z,
+                            landing.facing.index(),
+                            refusal.why,
+                            refusal.input
+                        )),
+                    }
+                }
+            }
+
+            Err(Box::new(Wedge {
+                gate: definition.output.clone(),
+                depth: self.depths[gate],
+                arity: drivers.len(),
+                windows,
+                funnel,
+                fields: fields_seen,
+                seals,
+                refusals,
+            }))
+        }
+
+        /// Every place this gate's sockets could meet its input nets, ranked.
+        ///
+        /// The enumeration inverts the socket geometry rather than scanning a
+        /// box: for each facing, every cell of input 0's field is a candidate
+        /// approach, and a candidate approach names exactly one anchor -- so the
+        /// offered set is "wherever a route already is", stated literally, and
+        /// no position is ever considered that no wire can reach.
+        fn landings(
+            &self,
+            gate: usize,
+            fields: &[Flood],
+            drivers: &[String],
+            pins: &[Anchor],
+        ) -> (Vec<Landing>, Funnel) {
+            let definition = &self.netlist.gates[gate];
+            let arity = drivers.len();
+            let mut funnel = Funnel::default();
+            let mut landings: Vec<Landing> = Vec::new();
+            // Generate from the *smallest* field. The offered set is the same
+            // whichever input generates it -- a landing has to satisfy every
+            // input, so the enumeration is a filter over an intersection and the
+            // order of the intersection does not change it -- but the work is
+            // not: a gate with one sealed input and one wide-open one is
+            // enumerated over the sealed one's handful of cells instead of the
+            // open one's thousands. That is also the honest denominator for the
+            // wedge funnel, which is the most-constrained net's count.
+            let Some(generator) = (0..arity).min_by_key(|&input| {
+                (fields[input].travelled.len(), input)
+            }) else {
+                return (landings, funnel);
+            };
+
+            // Where the gates that will read this one's output already have
+            // their *other* drivers. The only forward-looking term there is: a
+            // gate placed at the argmin of arrival cost alone walks away from
+            // everything that has yet to consume it.
+            let pull_to = self.consumer_barycentre(gate);
+
+            for index in 0..4u8 {
+                let facing = geometry::CellFacing::from_index(index).expect("0..4 is horizontal");
+                let (body, conductors, pin_offset) =
+                    compile::gate_footprint((0, 0, 0), definition, facing);
+                let unit =
+                    step(GROWTH_ORIGIN, geometry::input_directions(facing)[generator]);
+
+                for (&cell, &cost) in &fields[generator].travelled {
+                    // A gate stands on the gate plane. Growth chooses where in
+                    // the plane, never which plane: `starting_layout` lays one
+                    // storey and every route's floor is written one below it.
+                    if cell.y != PLANNER_Y {
+                        continue;
+                    }
+                    let anchor = Anchor {
+                        x: cell.x - 2 * unit.x,
+                        y: cell.y - 2 * unit.y,
+                        z: cell.z - 2 * unit.z,
+                    };
+                    funnel.offered += 1;
+
+                    // Three is the hardware maximum fan-in -- see
+                    // `geometry::input_directions`, whose fourth face is the
+                    // output's -- so no landing ever needs a fourth slot.
+                    let mut arrival = [0u64; 3];
+                    let mut sockets = [GROWTH_ORIGIN; 3];
+                    let mut approaches = [GROWTH_ORIGIN; 3];
+                    let mut met = true;
+                    for input in 0..arity {
+                        let (socket, approach) = socket_and_approach(anchor, facing, input);
+                        let reached = if input == generator {
+                            Some(cost)
+                        } else {
+                            fields[input].cost(approach)
+                        };
+                        match reached {
+                            Some(cost) => arrival[input] = cost,
+                            None => {
+                                met = false;
+                                break;
+                            }
+                        }
+                        sockets[input] = socket;
+                        approaches[input] = approach;
+                    }
+                    if !met {
+                        continue;
+                    }
+                    funnel.approaches_met += 1;
+
+                    let fit = BodyFit {
+                        origin: anchor,
+                        cells: &body,
+                        conductors: &conductors,
+                        sockets: &sockets[..arity],
+                        approaches: &approaches[..arity],
+                        drivers,
+                        pins,
+                        pin: shifted(anchor, pin_offset),
+                        escape: self.settings.escape,
+                    };
+                    if !fit.allowed(&self.reservation) {
+                        continue;
+                    }
+                    funnel.body_fits += 1;
+
+                    let pull = match pull_to {
+                        Some((x, z)) => {
+                            (f64::from(anchor.x) - x).abs() + (f64::from(anchor.z) - z).abs()
+                        }
+                        None => 0.0,
+                    };
+                    let summed: u64 = arrival[..arity].iter().sum();
+                    landings.push(Landing {
+                        anchor,
+                        facing,
+                        arrival: arrival[..arity].to_vec(),
+                        pull,
+                        score: summed as f64 + self.settings.lambda * pull,
+                    });
+                }
+            }
+
+            // Argmin, ties by (y, z, x, facing) -- a total order over the `f64`,
+            // so two runs of the same netlist rank identically rather than
+            // nearly.
+            landings.sort_by(|left, right| {
+                left.score
+                    .total_cmp(&right.score)
+                    .then(left.anchor.y.cmp(&right.anchor.y))
+                    .then(left.anchor.z.cmp(&right.anchor.z))
+                    .then(left.anchor.x.cmp(&right.anchor.x))
+                    .then(left.facing.index().cmp(&right.facing.index()))
+            });
+            (landings, funnel)
+        }
+
+        /// The mean pin of the drivers, already placed, of everything that will
+        /// consume this gate's output.
+        fn consumer_barycentre(&self, gate: usize) -> Option<(f64, f64)> {
+            let signal = &self.netlist.gates[gate].output;
+            let mut sum = (0.0, 0.0);
+            let mut count = 0usize;
+            for &(consumer, _) in self.sinks.get(signal).map(Vec::as_slice).unwrap_or(&[]) {
+                for driver in &self.netlist.gates[consumer].inputs {
+                    if driver == signal {
+                        continue;
+                    }
+                    let Some(&pin) = self.pins.get(driver) else {
+                        continue;
+                    };
+                    sum = (sum.0 + f64::from(pin.x), sum.1 + f64::from(pin.z));
+                    count += 1;
+                }
+            }
+            (count > 0).then(|| (sum.0 / count as f64, sum.1 / count as f64))
+        }
+
+        /// Put the gate down and grow each of its input nets into it, cheapest
+        /// branch first.
+        ///
+        /// Everything from `reserve_path` onwards is `route_in_order`'s body,
+        /// because a branch laid any other way would be a second strength model
+        /// to be wrong about: the same repeater plan, the same `carries` refusal
+        /// for a run that decays, the same terminal style, the same guard cells
+        /// around the socket, the same block written back over the socket when
+        /// the style says repeater.
+        #[allow(clippy::too_many_arguments)]
+        fn lay(
+            &self,
+            gate: usize,
+            landing: &Landing,
+            drivers: &[String],
+            pins: &[Anchor],
+            trees: &mut [NetTree],
+            reservation: &mut Reservation,
+            window: (Anchor, Anchor),
+        ) -> Result<PrimitiveNode, LayRefusal> {
+            let definition = &self.netlist.gates[gate];
+            let (footprint, conductors, output_pin) = compile::gate_footprint(
+                (landing.anchor.x, landing.anchor.y, landing.anchor.z),
+                definition,
+                landing.facing,
+            );
+            let node = PrimitiveNode {
+                id: format!("gate:{}", definition.output),
+                anchor: landing.anchor,
+                realisation: if definition.is_merge() {
+                    NodeRealisation::WireMerge
+                } else {
+                    NodeRealisation::Primitive(Primitive::Torch)
+                },
+                footprint,
+                conductors,
+                pinned: false,
+                output_pin: Some(output_pin),
+            };
+            let owner = format!("primitive:{gate}");
+            for &cell in node.occupied() {
+                reservation.insert(cell, &owner, node.occupancy_of(cell));
+            }
+
+            // The socket pre-claim `route_in_order` makes for every gate before
+            // it routes anything, made here for this gate alone -- because here
+            // the gate did not exist a moment ago. It is what stops one of this
+            // gate's own input nets taking another's only way in.
+            let mut sockets = Vec::with_capacity(drivers.len());
+            let mut approaches = Vec::with_capacity(drivers.len());
+            for (input, driver) in drivers.iter().enumerate() {
+                let (socket, approach) = socket_and_approach(landing.anchor, landing.facing, input);
+                reservation.insert(approach, driver, Occupancy::Conductor);
+                sockets.push(socket);
+                approaches.push(approach);
+            }
+
+            let mut cheapest: Vec<usize> = (0..drivers.len()).collect();
+            cheapest.sort_by_key(|&input| (landing.arrival[input], input));
+
+            for input in cheapest {
+                let signal = &drivers[input];
+                let pin = pins[input];
+                let (socket, approach) = (sockets[input], approaches[input]);
+                let field = flood_from(
+                    &trees[input].seeds(pin),
+                    pin,
+                    Some((approach, socket)),
+                    signal,
+                    reservation,
+                    window,
+                );
+                let Some(mut path) = field.path_to(approach) else {
+                    return Err(LayRefusal { input, why: "no branch reaches the approach" });
+                };
+                path.push(socket);
+                reserve_path(reservation, signal, &path);
+
+                // Where this branch hangs off, and what the signal is worth when
+                // it gets there. The first branch of a net is the one case
+                // `route_in_order` also has: it starts at the producer's pin, at
+                // full strength, with the pin itself the first cell of dust.
+                let root = path[0];
+                let fresh = trees[input].anchors.is_empty();
+                let (previous_cell, incoming, cells) = if fresh {
+                    (pin, crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH, &path[..])
+                } else {
+                    let carried = *trees[input]
+                        .strength
+                        .get(&root)
+                        .expect("a branch grows off a cell this net laid");
+                    (root, carried, &path[1..])
+                };
+                let trunk_repeaters = if fresh {
+                    0
+                } else {
+                    *trees[input].repeaters.get(&root).unwrap_or(&0)
+                };
+
+                let laid = realise_branch_from(previous_cell, incoming, cells);
+                if !laid.carries {
+                    return Err(LayRefusal { input, why: "the branch decays before it arrives" });
+                }
+                let budget_needs_repeater = laid.blocks.last().is_some_and(|block| {
+                    block.kind == crate::redstone::world::block::BlockKind::Repeater
+                });
+                let strength_before_terminal = laid.strength_before_terminal;
+                let branch_repeaters = laid.repeaters;
+
+                let mut carried = incoming;
+                let mut counted = trunk_repeaters;
+                for ((anchor, block), floor) in cells.iter().zip(laid.blocks).zip(laid.floors) {
+                    if block.kind == crate::redstone::world::block::BlockKind::Repeater {
+                        carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+                        counted += 1;
+                    } else {
+                        carried = carried.saturating_sub(1);
+                    }
+                    if trees[input].anchors.contains(anchor) {
+                        continue;
+                    }
+                    trees[input].anchors.push(*anchor);
+                    trees[input].realisation.push(block);
+                    trees[input].floors.push(floor);
+                    trees[input].strength.insert(*anchor, carried);
+                    trees[input].repeaters.insert(*anchor, counted);
+                }
+
+                let predecessor = path.get(path.len().saturating_sub(2)).copied().unwrap_or(pin);
+
+                let consumers = self.sinks.get(signal).map(Vec::as_slice).unwrap_or(&[]);
+                let bare_merge =
+                    definition.is_merge() && consumers.iter().all(|&(sink, _)| sink == gate);
+
+                let kind = if bare_merge {
+                    RouteTerminalKind::BareMergeDust
+                } else {
+                    let style = if budget_needs_repeater {
+                        TerminalStyle::RepeaterIntoSupport
+                    } else {
+                        terminal_style(&TerminalApproach::new(
+                            predecessor,
+                            socket,
+                            landing.anchor,
+                            strength_before_terminal,
+                            terminal_is_isolated(
+                                reservation,
+                                signal,
+                                predecessor,
+                                socket,
+                                landing.anchor,
+                            ),
+                        ))
+                    };
+                    if let Some(index) =
+                        trees[input].anchors.iter().position(|anchor| *anchor == socket)
+                    {
+                        trees[input].realisation[index] = match style {
+                            TerminalStyle::RepeaterIntoSupport => {
+                                compile::repeater(compile::direction_from(
+                                    Position::new(predecessor.x, predecessor.y, predecessor.z),
+                                    Position::new(socket.x, socket.y, socket.z),
+                                ))
+                            }
+                            TerminalStyle::DirectedDustIntoSupport => compile::dust(),
+                        };
+                    }
+                    style.into()
+                };
+
+                let guard = format!("terminal:{}.in[{input}]", definition.output);
+                for neighbour in horizontal_neighbours(socket) {
+                    if neighbour != predecessor && neighbour != landing.anchor {
+                        reservation.insert(neighbour, &guard, Occupancy::Solid);
+                    }
+                }
+
+                trees[input].terminals.push(RouteTerminal {
+                    sink: RouteSink {
+                        gate: definition.output.clone(),
+                        input_index: input,
+                        anchor: socket,
+                    },
+                    kind,
+                    repeaters: trunk_repeaters + branch_repeaters,
+                });
+            }
+
+            Ok(node)
+        }
+
+        /// The candidate this growth built, or `None` if anything is unplaced.
+        fn candidate(&self) -> Option<PlanCandidate> {
+            if self.nodes.iter().any(Option::is_none) {
+                return None;
+            }
+            let nodes: Vec<PrimitiveNode> = self.nodes.iter().flatten().cloned().collect();
+            // `BTreeMap` order is `net_sinks`' order, which is the order
+            // `route_in_order` pushes its routes in.
+            let routes: Vec<Route> = self
+                .trees
+                .iter()
+                .filter(|(_, tree)| !tree.anchors.is_empty())
+                .map(|(signal, tree)| {
+                    let mut route = Route::new(signal.clone(), Vec::new());
+                    route.owner = Some(signal.clone());
+                    route.anchors = tree.anchors.clone();
+                    route.realisation = tree.realisation.clone();
+                    route.floors = tree.floors.clone();
+                    route.terminals = tree.terminals.clone();
+                    route
+                })
+                .collect();
+            Some(PlanCandidate::with_facings(
+                self.anchors.clone(),
+                nodes,
+                routes,
+                self.facings.clone(),
+            ))
+        }
+    }
+
+    /// Every ordered transition between input states, timed from a settled
+    /// state, with every output read at each one.
+    ///
+    /// `a_self_placed_and4_computes_and4`'s loop over an arbitrary circuit's
+    /// input list. All three of its properties are kept and each matters: a
+    /// sweep visits `2^n` of the `2^n (2^n - 1)` transitions, chaining them on
+    /// one simulator reports a number the circuit does not have, and timing from
+    /// an unsettled state charges the previous transition to this one.
+    ///
+    /// **The panel's shared blind spot was that nobody measured delay.** A
+    /// layout that routes, verifies, and settles in 300 ticks is not a win over
+    /// one that does not route, and no measurement on this branch would have
+    /// said so.
+    fn worst_settle_and_truth(
+        realised: &RealisedCandidate,
+        inputs: &[&str],
+        outputs: &[String],
+        expected: fn(&[bool]) -> Vec<bool>,
+    ) -> Result<(u64, String, usize), String> {
+        use crate::redstone::simulator::Simulator;
+
+        let width = inputs.len();
+        let mut levers = Vec::with_capacity(width);
+        for name in inputs {
+            match realised.ports.input_positions.get(*name) {
+                Some(at) => levers.push(*at),
+                None => return Err(format!("no lever for input `{name}`")),
+            }
+        }
+        let mut sinks = Vec::with_capacity(outputs.len());
+        for signal in outputs {
+            match realised.ports.output_positions.get(signal) {
+                Some(at) => sinks.push(*at),
+                None => return Err(format!("no output `{signal}`")),
+            }
+        }
+
+        // Most-significant bit first, which is what `INPUT_NAMES` means
+        // everywhere else in this module and what lets `decoder_digit` read a
+        // BCD digit off the vector.
+        let bits_of = |mask: usize| -> Vec<bool> {
+            (0..width)
+                .map(|index| (mask >> (width - 1 - index)) & 1 == 1)
+                .collect()
+        };
+        let states = 1usize << width;
+        let mut worst = 0u64;
+        // Zero-padded to the input width, because `{:b}` alone prints the
+        // transition `2 -> 13` as `10 -> 1101`, and a reader has no way to tell
+        // that first number from a four-bit `1010`.
+        let mut worst_at = String::new();
+        let mut seen = 0usize;
+
+        for from in 0..states {
+            let before = bits_of(from);
+            for to in 0..states {
+                if from == to {
+                    continue;
+                }
+                let after = bits_of(to);
+                let mut simulator = Simulator::new(realised.world.clone());
+                for (at, &bit) in levers.iter().zip(before.iter()) {
+                    let mut state = simulator.world().get(at.0, at.1, at.2).clone();
+                    state.lit = bit;
+                    simulator.world_mut().set(at.0, at.1, at.2, state);
+                }
+                simulator
+                    .run_until_stable(2000)
+                    .map_err(|error| format!("did not settle at {before:?}: {error:?}"))?;
+                for (at, &bit) in levers.iter().zip(after.iter()) {
+                    let mut state = simulator.world().get(at.0, at.1, at.2).clone();
+                    state.lit = bit;
+                    simulator.world_mut().set(at.0, at.1, at.2, state);
+                }
+                let ticks = simulator
+                    .run_until_stable(2000)
+                    .map_err(|error| format!("did not settle at {after:?}: {error:?}"))?;
+                if ticks > worst {
+                    worst = ticks;
+                    worst_at = format!("{from:0width$b} -> {to:0width$b}");
+                }
+
+                let want = expected(&after);
+                for (index, at) in sinks.iter().enumerate() {
+                    let got = simulator.world().get(at.0, at.1, at.2).lit;
+                    if got != want[index] {
+                        return Err(format!(
+                            "{after:?} -> `{}` expected {}, got {got}, reached from {before:?}",
+                            outputs[index], want[index]
+                        ));
+                    }
+                }
+                seen += 1;
+            }
+        }
+
+        Ok((worst, worst_at, seen))
+    }
+
+    /// Grow one circuit and report every number the paradigm has to be judged
+    /// on: where each gate landed, how big the result is, what wedged, whether
+    /// it verifies, and -- only if it does -- what it costs in game ticks.
+    fn grow_and_report(case: &ConditionCircuit, settings: &GrowthSettings) {
+        use std::time::Instant;
+
+        eprintln!(
+            "== growth {}: {} gates, {} inputs | order {} | lambda {} | windows {:?} \
+             | tries {} | escape {} | seed {} ==",
+            case.name,
+            case.netlist.gates.len(),
+            case.netlist.inputs.len(),
+            settings.order,
+            settings.lambda,
+            settings.windows,
+            settings.tries,
+            settings.escape,
+            if settings.seed_pitch > 0 {
+                format!("pitch {}", settings.seed_pitch)
+            } else {
+                "starting_layout".to_string()
+            },
+        );
+
+        let started = Instant::now();
+        let mut growth = match Growth::seeded(&case.netlist, settings) {
+            Ok(growth) => growth,
+            Err(error) => {
+                eprintln!("  {}: SEED FAILED: {error}", case.name);
+                return;
+            }
+        };
+        growth.grow();
+        let grew = started.elapsed().as_secs_f64();
+
+        let gates = case.netlist.gates.len();
+        let placed = growth.placed.iter().filter(|done| **done).count();
+        let standing: Vec<Anchor> =
+            growth.nodes.iter().flatten().map(|node| node.anchor).collect();
+        let (width, depth, area) = anchor_box(&standing);
+        let wire: usize = growth.trees.values().map(|tree| tree.anchors.len()).sum();
+
+        if let Some(wedge) = &growth.wedge {
+            eprintln!(
+                "  WEDGE at {} (depth {}, {} input(s)) after {placed}/{gates} gates, {grew:.1}s",
+                wedge.gate, wedge.depth, wedge.arity
+            );
+            eprintln!(
+                "    windows {:?} | offered {} -> approaches met {} -> body fits {}",
+                wedge.windows,
+                wedge.funnel.offered,
+                wedge.funnel.approaches_met,
+                wedge.funnel.body_fits
+            );
+            eprintln!(
+                "    fields: {}",
+                wedge
+                    .fields
+                    .iter()
+                    .map(|(signal, cells)| format!("{signal} {cells} cells"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+            for seal in &wedge.seals {
+                eprintln!(
+                    "    SEALED: net {} cannot leave its pin ({}, {}, {}); blamed: {}",
+                    seal.signal,
+                    seal.pin.x,
+                    seal.pin.y,
+                    seal.pin.z,
+                    seal.blamed
+                        .iter()
+                        .map(|(cell, owner, blame)| format!(
+                            "({}, {}, {}) {owner} x{blame}",
+                            cell.x, cell.y, cell.z
+                        ))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            for refusal in wedge.refusals.iter().take(6) {
+                eprintln!("    refused: {refusal}");
+            }
+            eprintln!(
+                "  {}: WEDGED at {placed}/{gates} gates -- anchor box \
+                 {width}x{depth}={area}, {wire} cells of wire",
+                case.name
+            );
+            return;
+        }
+
+        if placed < gates {
+            eprintln!(
+                "  {}: STARVED at {placed}/{gates} gates with no wedge -- {} gate(s) never \
+                 became ready, so some input is driven by nothing",
+                case.name,
+                gates - placed
+            );
+            return;
+        }
+
+        let Some(candidate) = growth.candidate() else {
+            eprintln!("  {}: grew every gate and built no candidate", case.name);
+            return;
+        };
+        let cost = candidate.cost();
+        eprintln!(
+            "  {}: grew {placed}/{gates} gates in {grew:.1}s | anchor box \
+             {width}x{depth}={area} | {wire} cells of wire | cost wire {} delay {} turns {}",
+            case.name, cost.wire, cost.delay, cost.turns
+        );
+
+        let started = Instant::now();
+        let realised =
+            match realise_and_verify(&candidate, &case.netlist, candidate_world_size(&candidate)) {
+                Ok(realised) => realised,
+                Err(error) => {
+                    eprintln!(
+                        "  {}: GREW, DOES NOT VERIFY after {:.1}s: {error}",
+                        case.name,
+                        started.elapsed().as_secs_f64()
+                    );
+                    return;
+                }
+            };
+        let blocks = (0..realised.world.cells().len())
+            .filter(|&flat| {
+                let (x, y, z) = realised.world.decode(flat);
+                realised.world.get(x, y, z).kind
+                    != crate::redstone::world::block::BlockKind::Air
+            })
+            .count();
+        eprintln!(
+            "  {}: VERIFIES in {:.1}s, {blocks} blocks",
+            case.name,
+            started.elapsed().as_secs_f64()
+        );
+
+        if !settings.settle {
+            eprintln!("  {}: truth table and settle NOT MEASURED (REDA_GROWTH_SETTLE=0)", case.name);
+            return;
+        }
+        let started = Instant::now();
+        match worst_settle_and_truth(&realised, case.inputs, &case.outputs, case.expected) {
+            Ok((worst, at, transitions)) => eprintln!(
+                "  {}: truth table Ok over {transitions} ordered transitions, worst settle \
+                 {worst} game ticks at {at}, {:.1}s",
+                case.name,
+                started.elapsed().as_secs_f64()
+            ),
+            Err(error) => eprintln!("  {}: TRUTH TABLE WRONG: {error}", case.name),
+        }
+    }
+
+    /// **The growth probe.** Does wire-first constructive compilation place and
+    /// route what the shipping placer plus the shipping router cannot?
+    ///
+    /// The paradigm, in the operator's framing: wires are ~45% of the blocks and
+    /// gates 3%, so wires should be the primary state and gate positions
+    /// derived. Nets grow as real dust trees through the world in topological
+    /// order; a gate becomes placeable when its drivers are placed; its input
+    /// nets flood outward through free space under the router's own legality
+    /// rules; and the gate lands at the argmin of summed arrival cost. The
+    /// measured failure this is meant to delete is `segment_a`'s `g32`, walled
+    /// into a 256-cell pocket that **no net ordering escapes** -- because the
+    /// goal is fixed. Here it is an output.
+    ///
+    /// # What this is not
+    ///
+    /// A measurement harness, not a router. It asserts nothing -- a probe that
+    /// gates something is a probe somebody tunes until it goes green -- and it
+    /// has **no wedge escape**: the first gate with no landing stops the
+    /// circuit and the wedge is reported. Wedge frequency is a result.
+    ///
+    /// Three things it keeps from the shipping path rather than re-deriving,
+    /// because a probe measuring a different physics measures nothing: step
+    /// legality ([`anchor_is_free_for`], [`keep_out`], [`staircase_clearance`],
+    /// [`self_obstructs`], [`neighbours`]), the strength budget
+    /// ([`realise_branch_from`] -- repeaters every <= 15 cells and a refresh
+    /// before every climb), and the terminal machinery ([`terminal_style`],
+    /// [`terminal_is_isolated`], the guard cells).
+    ///
+    /// **Routes without verifies is worth nothing.** The congestion probe
+    /// routed `segment_a` at anchor box 11,342 and failed `verify_candidate`
+    /// with a torch-merge violation. So this one runs `realise_and_verify` on
+    /// whatever it builds and, for anything that survives that, the truth table
+    /// and the worst settle over every ordered transition -- the number nobody
+    /// on the panel measured.
+    ///
+    /// # Re-running it, and sweeping it
+    ///
+    /// ```bash
+    /// cargo test --release --lib \
+    ///   compile::planner::tests::measure_whether_growth_places_and_routes \
+    ///   -- --ignored --nocapture
+    /// ```
+    ///
+    /// | variable | default | what it is |
+    /// |---|---|---|
+    /// | `REDA_GROWTH_CIRCUIT` | `and4` | `and4`, `full_adder`, `segment_a`, `seven_segment`, or `all` |
+    /// | `REDA_GROWTH_ORDER` | `depth` | ready-queue policy: `depth` (then widest gate), `arity`, `index` |
+    /// | `REDA_GROWTH_LAMBDA` | `0.5` | weight on the pull toward future consumers' placed drivers |
+    /// | `REDA_GROWTH_WINDOWS` | `8,16,32,64` | plan margins tried around the input nets, in order |
+    /// | `REDA_GROWTH_TRIES` | `8` | landings attempted per window before the next one |
+    /// | `REDA_GROWTH_ESCAPE` | `0` | legal first steps a landing must leave its own output pin; `0` is the sketch |
+    /// | `REDA_GROWTH_SEED_PITCH` | `0` | lever column pitch; `0` is `starting_layout`'s own row |
+    /// | `REDA_GROWTH_VERBOSE` | `1` | print a line per gate landed |
+    /// | `REDA_GROWTH_SETTLE` | `1` | truth table and settle sweep on anything that verifies |
+    ///
+    /// # What it measured
+    ///
+    /// `REDA_GROWTH_CIRCUIT=all`, defaults otherwise, `--release`, whole run
+    /// 7.3s. Every number below is one line of that run's output.
+    ///
+    /// | circuit | gates grown | anchor box | wire cells | verify | truth table | worst settle |
+    /// |---|---|---|---|---|---|---|
+    /// | and4 | **7/7** | 61x10 = 610 | 106 | **Ok**, 236 blocks | **Ok**, 240 transitions | 18 ticks, `0010 -> 1101` |
+    /// | full_adder | 7/22 | 41x10 = 410 | 86 | WEDGE `g9` | — | — |
+    /// | segment_a | 18/46 | 63x19 = 1,197 | 347 | WEDGE `g8` | — | — |
+    /// | seven_segment | 18/84 | 63x19 = 1,197 | 347 | WEDGE `g8` | — | — |
+    ///
+    /// **and4 is a real end-to-end result**: grown, verified, and right on all
+    /// 240 ordered transitions. Read the box with care, though -- 61 of its 610
+    /// is `starting_layout`'s lever row, which growth never moves and
+    /// relaxation does, so it is not comparable to relaxation's 45x23 = 1,035
+    /// cell for cell. The comparable numbers are the ones that do not depend on
+    /// where the levers went: **236 blocks against relaxation's 232 and
+    /// legacy's 572**, and **18 game ticks against relaxation's 14 and legacy's
+    /// 26** (`a_self_placed_and4_computes_and4`, same loop, same day). Growth
+    /// is level with relaxation on size and a quarter slower.
+    ///
+    /// # The one failure mode, and it is not the one the paradigm predicts
+    ///
+    /// **Every wedge is a sealed source pin, and none is "the fields could not
+    /// meet".** The funnel says so in each case: `offered 4 -> approaches met 4
+    /// -> body fits 0`, over a field of **one** cell. A one-input gate's only
+    /// driver could not leave its own output pin, so the four offered landings
+    /// are the four facings of a socket sitting directly on that pin, and all
+    /// four collide with the gate that owns it. `segment_a`'s is `g7` at
+    /// `(26, 1, 146)`, walled by `g4`'s dust at `(24, 1, 146)`, `g5`'s at
+    /// `(25, 3, 145)`, `g2`'s at `(26, 1, 144)` and `primitive:5`'s body at
+    /// `(28, 1, 146)`.
+    ///
+    /// The mechanism is the exact dual of the ring the framing deletes. "Wires
+    /// are laid before the gate exists, so nothing needs room saved for it" is
+    /// true of a gate's **inputs** and false of its **output**: a gate's output
+    /// net does not exist when the gate lands, so nothing keeps the gates placed
+    /// afterwards off it, and they close around it.
+    ///
+    /// **Measured, not argued.** Nine `(order, lambda)` combinations --
+    /// `{depth, arity, index}` x `{0, 0.5, 2}` -- all wedge on `full_adder`,
+    /// and seven of the nine on the same gate `g9` over the same sealed pin:
+    /// `depth` reaches 7/22, `arity` 8/22, `index` 9/22. The two exceptions are
+    /// `depth` and `arity` at `lambda = 2`, which stop *earlier*, at 6/22 on the
+    /// two-input `g5`.
+    /// `REDA_GROWTH_ESCAPE`, which refuses a landing that does not leave its own
+    /// pin `N` legal first steps, was added to test the obvious repair and
+    /// **does not work**: at 1, 2 and 3 `full_adder` still wedges at `g9` on
+    /// `g8`'s pin, in the same cell, because `g8` had four escapes when it
+    /// landed and lost them to gates placed later. The knob is live rather than
+    /// inert -- at 3 the plan changes (87 wire cells against 86, a different
+    /// blamed owner at `(16, 1, 162)`) -- it just cannot reach the cause.
+    /// Nothing short of reserving a gate's exit *before* its consumers are
+    /// placed addresses this, and that is the `reservation(d)` ring again.
+    ///
+    /// # What this harness's own numbers do not cover
+    ///
+    /// Falsification, by injection, reverted (2026-08-16, `--release`, and4):
+    ///
+    /// - **The verify arm is live.** Moving one cell of every route one step in
+    ///   x: `GREW, DOES NOT VERIFY: cannot realise node g3: cell (29, 1, 62) is
+    ///   listed twice by this route`.
+    /// - **The truth-table arm is live**, and catches what the invariants pass:
+    ///   replacing one dust cell of the first route with stone *after*
+    ///   `realise_and_verify` returned still prints `VERIFIES in 0.0s, 236
+    ///   blocks`, then `TRUTH TABLE WRONG: [true, true, true, true] -> g6
+    ///   expected true, got false`.
+    /// - **and4 does not exercise three of the rules this harness adds.**
+    ///   Disabling [`BodyFit`]'s `keep_out` arm, disabling its `is_taken` arm,
+    ///   and forcing every terminal to claim directed dust each left and4's plan
+    ///   *bit for bit identical* -- same box, same 106 wire cells, same 236
+    ///   blocks, same 18 ticks. The argmin landing never sat on any of them. So
+    ///   and4 verifying is evidence that the pipeline is wired, and **not**
+    ///   evidence that those three rules are right; the circuit that would test
+    ///   them is one that grows past a wedge.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, grows a circuit gate by gate, minutes on the larger ones"]
+    fn measure_whether_growth_places_and_routes() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist, SEGMENT_NAMES,
+        };
+
+        let setting = |name: &str, fallback: &str| -> String {
+            std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+        };
+
+        let settings = GrowthSettings {
+            order: setting("REDA_GROWTH_ORDER", "depth"),
+            lambda: setting("REDA_GROWTH_LAMBDA", "0.5").parse().expect("a weight"),
+            windows: setting("REDA_GROWTH_WINDOWS", "8,16,32,64")
+                .split(',')
+                .map(|piece| piece.trim().parse().expect("a margin"))
+                .collect(),
+            tries: setting("REDA_GROWTH_TRIES", "8").parse().expect("a count"),
+            escape: setting("REDA_GROWTH_ESCAPE", "0").parse().expect("a count"),
+            seed_pitch: setting("REDA_GROWTH_SEED_PITCH", "0").parse().expect("a pitch"),
+            verbose: setting("REDA_GROWTH_VERBOSE", "1") != "0",
+            settle: setting("REDA_GROWTH_SETTLE", "1") != "0",
+        };
+
+        let (and4, and4_output) = build_and4_netlist();
+        let (adder, adder_outputs) = build_full_adder_netlist();
+        let (segment_a, segment_a_output) = build_single_segment_netlist(0);
+        let (decoder, decoder_outputs) = build_seven_segment_netlist();
+
+        let cases = [
+            ConditionCircuit {
+                name: "and4",
+                netlist: and4,
+                inputs: &crate::circuits::and4::INPUT_NAMES[..],
+                outputs: vec![and4_output],
+                expected: and4_expected,
+            },
+            ConditionCircuit {
+                name: "full_adder",
+                netlist: adder,
+                inputs: &crate::circuits::full_adder::INPUT_NAMES[..],
+                outputs: vec![adder_outputs["sum"].clone(), adder_outputs["cout"].clone()],
+                expected: full_adder_expected,
+            },
+            ConditionCircuit {
+                name: "segment_a",
+                netlist: segment_a,
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: vec![segment_a_output],
+                expected: segment_a_expected,
+            },
+            ConditionCircuit {
+                name: "seven_segment",
+                netlist: decoder,
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: SEGMENT_NAMES.iter().map(|name| decoder_outputs[name].clone()).collect(),
+                expected: seven_segment_expected,
+            },
+        ];
+
+        let wanted = setting("REDA_GROWTH_CIRCUIT", "and4");
+        let chosen: Vec<&ConditionCircuit> = cases
+            .iter()
+            .filter(|case| wanted == "all" || wanted == case.name)
+            .collect();
+        assert!(!chosen.is_empty(), "REDA_GROWTH_CIRCUIT names no circuit");
+
+        for case in chosen {
+            grow_and_report(case, &settings);
+        }
+    }
+}
