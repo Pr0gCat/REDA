@@ -53,6 +53,13 @@ use self::planner::{
 };
 use self::topology::Primitive;
 
+/// The realised world's **complete** electrical graph, compared against the
+/// graph the netlist intends. Measurement only, and `#[cfg(test)]` for the same
+/// reason `satcnf` below is: it ships in nothing, so "this phase only measures"
+/// is a property of the build rather than a promise in a comment. See the
+/// module's own doc comment for what it is for.
+#[cfg(test)]
+pub mod coupling;
 pub mod equivalence;
 pub mod geometry;
 pub mod lowering;
@@ -5171,6 +5178,24 @@ fn merge_gate_body_owners(
 /// function's own doc comment). Every hand-built test below that declares
 /// no merge passes an empty map, which makes the fallback a no-op and this
 /// exactly the check it always was.
+///
+/// # What it does **not** see, and where that is measured
+///
+/// `dust_connections` is one edge type out of four. `docs/derived/coupling-
+/// mechanisms.md` measured the others by running the simulator: a component
+/// drives adjacent dust; a component strongly powers a conductive block and
+/// that block re-drives dust on every face it has left; and a block powered
+/// even *weakly* is read by a torch attached to it or by a diode whose rear it
+/// is. No dust-to-dust edge exists in any of those, so none of them can appear
+/// in this walk -- which is structural, not an implementation slip. Both bugs
+/// that shipped on this branch were the second of them.
+///
+/// The module `compile::coupling` (`#[cfg(test)]`) keeps this function's
+/// granularity and widens the relation to all four, and
+/// `docs/derived/realised-graph-extras.md` is what it finds on every circuit
+/// this project builds, on both compile paths. Three tests in this file's own
+/// test module record what this walk cannot see, and are written so that
+/// closing a gap turns its test red.
 fn verify_connectivity(
     world: &World,
     reservation: &Reservation,

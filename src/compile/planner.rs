@@ -3109,6 +3109,51 @@ pub fn realise_and_verify(
     netlist: &Netlist,
     size: (i32, i32, i32),
 ) -> Result<RealisedCandidate, PlannerError> {
+    verified_parts(candidate, netlist, size).map(|(realised, _reservation, _nets)| realised)
+}
+
+/// Everything [`realise_and_verify`] proved, including the two things it
+/// normally consumes and drops: the ownership `verify_spacing` established and
+/// the nets rebuilt from the candidate's own routes.
+///
+/// This exists so a **measurement** can ask its question against exactly what
+/// the four invariants ran against, rather than against a second reservation
+/// derived some other way -- which for this project would mean guessing
+/// ownership by scanning block kinds, the one thing `Footprint`'s own doc
+/// comment says must never happen. `compile::coupling` is the only consumer, and
+/// like it this is `#[cfg(test)]`: what ships is [`realise_and_verify`],
+/// unchanged in behaviour and now one line long.
+#[cfg(test)]
+pub(crate) struct VerifiedRealisation {
+    pub realised: RealisedCandidate,
+    pub reservation: compile::Reservation,
+    pub nets: Vec<compile::Net>,
+}
+
+/// [`realise_and_verify`], keeping the ownership and nets it proved.
+#[cfg(test)]
+pub(crate) fn verify_and_expose(
+    candidate: &PlanCandidate,
+    netlist: &Netlist,
+    size: (i32, i32, i32),
+) -> Result<VerifiedRealisation, PlannerError> {
+    verified_parts(candidate, netlist, size).map(|(realised, reservation, nets)| {
+        VerifiedRealisation {
+            realised,
+            reservation,
+            nets,
+        }
+    })
+}
+
+/// The body [`realise_and_verify`] always had, returning the two values it used
+/// to drop on the floor. A tuple rather than the struct above so that the
+/// shipping build has no field it never reads.
+fn verified_parts(
+    candidate: &PlanCandidate,
+    netlist: &Netlist,
+    size: (i32, i32, i32),
+) -> Result<(RealisedCandidate, compile::Reservation, Vec<compile::Net>), PlannerError> {
     let reservation = verify_spacing(candidate)?;
     let nets = verification_nets(candidate, netlist)?;
 
@@ -3143,7 +3188,7 @@ pub fn realise_and_verify(
     )
     .map_err(PlannerError::PhysicalInvariant)?;
 
-    Ok(realised)
+    Ok((realised, reservation, nets))
 }
 
 /// The spacing invariant, stated over the plan rather than over blocks: every
