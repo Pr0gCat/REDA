@@ -10183,6 +10183,12 @@ mod tests {
         /// Landings whose body could not stand against the fixed world at all,
         /// so they never became variables.
         body_rejected: usize,
+        /// *Which* landings those were. Bookkeeping only -- pushed in the same
+        /// arm that increments `body_rejected`, read by nothing that builds a
+        /// clause -- and it exists because on a wedge the interesting landings
+        /// are precisely the ones that never became variables and so can never
+        /// appear in a core. See [`why_the_body_would_not_stand`].
+        body_rejected_at: Vec<(Anchor, geometry::CellFacing)>,
         offered: usize,
         aliased_inputs: bool,
     }
@@ -10501,6 +10507,7 @@ mod tests {
         let mut landings: Vec<SolvedLanding> = Vec::new();
         let mut offered = 0usize;
         let mut body_rejected = 0usize;
+        let mut body_rejected_at: Vec<(Anchor, geometry::CellFacing)> = Vec::new();
         let pins: Vec<Anchor> = nets.iter().map(|net| net.pin).collect();
         for index in 0..4u8 {
             let facing = geometry::CellFacing::from_index(index).expect("0..4 is horizontal");
@@ -10554,6 +10561,7 @@ mod tests {
                     };
                     if !fit.allowed(&growth.reservation) {
                         body_rejected += 1;
+                        body_rejected_at.push((anchor, facing));
                         continue;
                     }
 
@@ -10621,6 +10629,7 @@ mod tests {
             cnf,
             group_reach,
             body_rejected,
+            body_rejected_at,
             offered,
             aliased_inputs,
         }
@@ -12136,5 +12145,923 @@ mod tests {
             admitted > 0,
             "every window was out of the model's scope, so nothing here measures the encoding"
         );
+    }
+
+    // =====================================================================
+    // The calibrated model, pointed at the two wedges it was calibrated to be
+    // believed on.
+    // =====================================================================
+
+    /// Which arm of [`BodyFit::allowed`] refused a landing, and at which cell.
+    ///
+    /// "The body does not fit" is the uninformative address one level down
+    /// again, and on a wedge it is the *only* address that matters: a landing
+    /// whose body is refused never becomes a variable, so it can never appear
+    /// in a core. The cells come from [`BodyFit::blockers`], which is the
+    /// shipping reporter for the shipping predicate -- the three arms in the
+    /// same order. All this adds is which arm a reported cell came from, by
+    /// asking whether it is one of the body's own cells or one of the sockets'
+    /// approaches, both of which are inputs to the fit rather than rules of the
+    /// game.
+    ///
+    /// Returns whether at least one blocker is the **first** arm -- a cell of
+    /// this gate's own body landing where a block already stands. That
+    /// distinction decides how much a refusal is worth. Arm three is
+    /// [`keep_out`], the *conservative plan-time shape* of `dust_reach`, and the
+    /// spec's own open question is whether it is too strict; arm one is two
+    /// blocks in one cell, which no relaxation of any clearance rule can permit.
+    /// A wedge whose landings all fail on arm one is not a wedge that a looser
+    /// clearance rule would open.
+    fn why_the_body_would_not_stand(
+        growth: &Growth,
+        gate: usize,
+        anchor: Anchor,
+        facing: geometry::CellFacing,
+    ) -> (bool, String) {
+        let definition = growth.netlist.gates[gate].clone();
+        let drivers = definition.inputs.clone();
+        let pins: Vec<Anchor> = drivers.iter().map(|signal| growth.pins[signal]).collect();
+        let (body_offsets, conductor_offsets, pin_offset) =
+            compile::gate_footprint((0, 0, 0), &definition, facing);
+        let mut sockets = Vec::with_capacity(drivers.len());
+        let mut approaches = Vec::with_capacity(drivers.len());
+        for input in 0..drivers.len() {
+            let (socket, approach) = socket_and_approach(anchor, facing, input);
+            sockets.push(socket);
+            approaches.push(approach);
+        }
+        let fit = BodyFit {
+            origin: anchor,
+            cells: &body_offsets,
+            conductors: &conductor_offsets,
+            sockets: &sockets,
+            approaches: &approaches,
+            drivers: &drivers,
+            pins: &pins,
+            pin: shifted(anchor, pin_offset),
+            escape: 0,
+        };
+        if fit.allowed(&growth.reservation) {
+            return (false, "it stands -- this landing was not refused".to_string());
+        }
+        let mut blockers: BTreeSet<Anchor> = BTreeSet::new();
+        fit.blockers(&growth.reservation, &mut blockers);
+        if blockers.is_empty() {
+            return (
+                false,
+                "refused with no blocking cell, which can only be the escape budget".to_string(),
+            );
+        }
+        let body: BTreeSet<Anchor> =
+            body_offsets.iter().map(|offset| shifted(anchor, *offset)).collect();
+        let overlaps = blockers.iter().any(|cell| body.contains(cell));
+        let said = blockers
+            .iter()
+            .map(|cell| {
+                format!(
+                    "({}, {}, {}) `{}` [{}] -- {}",
+                    cell.x,
+                    cell.y,
+                    cell.z,
+                    growth.reservation.owner(cell).unwrap_or("unclaimed"),
+                    growth.what_stands_at(*cell),
+                    if body.contains(cell) {
+                        "BLOCK OVERLAP: a block of this gate's own body would have to land on it"
+                    } else if approaches.contains(cell) {
+                        "it is a socket's approach and it belongs to somebody else"
+                    } else {
+                        "keep_out: a foreign conductor beside one of this gate's conductors"
+                    }
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n            ");
+        (overlaps, said)
+    }
+
+    /// **The two measured wedges, put to the windowed solver.**
+    ///
+    /// [`calibrate_the_windowed_solver`] establishes that the model's answers
+    /// are worth believing, on `and4`, the one circuit whose growth completes,
+    /// verifies and computes correctly. This is what that was for. Every method
+    /// tried on this branch reports the wedges as "no landing" or "no safe local
+    /// route", which says only *I did not find one*; the question the spec puts
+    /// first is whether there is one.
+    ///
+    /// # Re-running it
+    ///
+    /// ```bash
+    /// cargo test --release --lib \
+    ///   compile::planner::tests::put_the_measured_wedges_to_the_windowed_solver \
+    ///   -- --ignored --nocapture
+    /// ```
+    ///
+    /// | variable | default | meaning |
+    /// |---|---|---|
+    /// | `REDA_WEDGE_CIRCUIT` | `all` | `segment_a`, `full_adder`, or `all` |
+    /// | `REDA_WEDGE_MARGINS` | `3,8,16,32,64` | the window sweep, in cells |
+    /// | `REDA_WEDGE_REACH` | `96` | reachability depth cap; `0` asks for the exact bound |
+    /// | `REDA_WEDGE_BUDGET` | `300000` | conflicts before a solve reports `Unknown` |
+    ///
+    /// The window is [`growth_window`] over the input nets' own seeds --
+    /// **growth's own box, the one [`Growth::land`] searches in** -- so the
+    /// sweep is over the same margins growth itself sweeps (`8,16,32,64`) with a
+    /// tighter one added below them.
+    ///
+    /// # What it asserts
+    ///
+    /// Two things, and neither of them is the answer:
+    ///
+    /// 1. **The wedge is the documented one.** Gate and gate count are pinned
+    ///    against the growth probe's own record, so a run that measures a
+    ///    *different* state fails rather than quietly reporting about it.
+    /// 2. **The control window comes back SAT and lays.** A model that says
+    ///    UNSAT everywhere -- because a rule is over-strict, or because the
+    ///    landing enumeration is broken -- would "prove" every wedge infeasible.
+    ///    So the same construction is run on a gate this circuit's growth *did*
+    ///    land, and it must find a landing, decode it and lay it through
+    ///    [`Growth::land_solved`]. That is the rule-2 hook: it is what an UNSAT
+    ///    at the wedge is worth anything against.
+    ///
+    /// The verdict itself is printed, never asserted. A harness that asserts its
+    /// own conclusion is one somebody tunes until it agrees.
+    ///
+    /// # What an UNSAT here does and does not mean
+    ///
+    /// Stated before the numbers, because it is the whole reading of them.
+    /// **Everything already laid is fixed.** The model re-decides one gate's
+    /// placement and its input nets' wire, against a world of placed bodies and
+    /// laid wire it may not move. So an UNSAT is a proof about *this state*: no
+    /// legal placement of this gate exists anywhere in the window, at any
+    /// orientation, with any route -- not a proof that the circuit is
+    /// unroutable. Those are different claims and only the first is measured
+    /// here.
+    ///
+    /// # What it measured
+    ///
+    /// `--release`, every default, whole run 12s. **Both wedges are UNSAT at
+    /// every window size, and the UNSAT does not depend on the depth cap.**
+    ///
+    /// | circuit | wedge | margin 3 | 8 | 16 | 32 | 64 |
+    /// |---|---|---|---|---|---|---|
+    /// | `full_adder` | `g9` after 7/22 | UNSAT 0.00s | 0.00s | 0.01s | 0.03s | 0.10s |
+    /// | `segment_a` | `g8` after 18/46 | UNSAT 0.00s | 0.00s | 0.00s | 0.03s | 0.11s |
+    ///
+    /// At margin 64 `segment_a`'s window is 91x129 cells: 97,924 variables,
+    /// 1,142,945 clauses, built in 0.29s, decided in 0.11s, core minimised in
+    /// 1.31s. Growth's own window sweep is `8,16,32,64`, so every margin growth
+    /// searches at is covered and one below it.
+    ///
+    /// ## The core, and it is two groups
+    ///
+    /// At margins 8 and above, on both circuits:
+    ///
+    /// ```text
+    /// `gate g8 stands in exactly one place`
+    ///     + `every socket's approach is reached by its own net`
+    /// ```
+    ///
+    /// At margin 3 the core is **one** group -- the window is smaller than the
+    /// gate's own reach, every landing is refused before becoming a variable,
+    /// and what is left is an empty at-least-one clause. That is the right
+    /// answer with the uninformative core [`window_model`] warns about, and it
+    /// is reported as its own row rather than averaged in.
+    ///
+    /// ## What the two groups mean at `(26, 1, 146)`, in cells
+    ///
+    /// Three facts, each measured separately and none of them needing the
+    /// solver to be believed:
+    ///
+    /// 1. **The pin cannot be left.** Every in-plane step out of it is refused,
+    ///    and the harness names the rule per cell -- for `segment_a`, `keep_out`
+    ///    sees `g4` at `(24, 1, 146)`, `primitive:5` at `(28, 1, 146)` and `g2`
+    ///    at `(26, 1, 144)`, and `(26, 1, 147)` is owned outright by
+    ///    `primitive:7`. The **shipping 3D flood** ([`flood_from`], twelve
+    ///    neighbours) reaches **1 cell of 1** at every margin, so this is not
+    ///    the flat restriction: no climbing route exists to be missed.
+    /// 2. **So only four landings could ever be served** -- the ones whose
+    ///    socket approach *is* the pin, one per facing.
+    /// 3. **All four are refused, and all four by BLOCK OVERLAP** -- a cell of
+    ///    the new gate's body landing where another gate's block already stands
+    ///    (`(28, 1, 146)` `primitive:5`, `(26, 1, 147)` and `(26, 1, 148)`
+    ///    `primitive:7`, `(24, 1, 144)` `primitive:14`, `(24, 1, 146)` `g4`'s
+    ///    socket approach). 4 of 4 on `segment_a` and 4 of 4 on `full_adder`.
+    ///    **Not** by [`keep_out`], the conservative plan-time rule the spec's
+    ///    section 8 keeps open against `dust_reach`: relaxing that rule would
+    ///    not open either wedge.
+    ///
+    /// Growth's own funnel says the same thing from the other side -- `offered 4
+    /// -> approaches met 4 -> body fits 0` -- so the solver and the shipping
+    /// enumeration agree on the four, and what the solver adds is the *rest of
+    /// the window*: 43,436 further landings at margin 64, every one of them
+    /// refuted rather than untried.
+    ///
+    /// ## The controls
+    ///
+    /// Same model, same window function, margin 8, on gates of the same circuit
+    /// that growth landed: `full_adder` **6 of 6 SAT and laid**, 3 of them
+    /// laying wire (13, 59 and 65 cells); `segment_a` **8 of 8 SAT and laid**,
+    /// including `g7`, a **three-net** window solved in 0.20s with routes
+    /// 1+47+59 -- which is the first three-contending-net window measured
+    /// anywhere on this branch.
+    ///
+    /// ## Rule 2, on this harness
+    ///
+    /// Injected, confirmed, reverted (2026-08-16, `--release`):
+    ///
+    /// - **Too loose: delete the domain filter's `keep_out` arm.** Control `g2`
+    ///   of `full_adder` goes **red** -- `g2's answer would not lay, which is an
+    ///   encoding bug: input 1: supplied route: (17, 1, 161) is refused by
+    ///   `anchor_is_free_for``. This is the assertion that stops a too-permissive
+    ///   model from "unwedging" anything.
+    /// - **Over-strict: delete the domain filter's `neighbour == pin`
+    ///   exemption.** Control `g2` goes UNSAT, and **nothing goes red**: `g4` and
+    ///   `g5` still find 34- and 66-cell routes, because their nets have trees
+    ///   to start from and do not need the exemption. So that exemption is
+    ///   **not** under test here, and this null result is recorded rather than
+    ///   claimed as coverage.
+    /// - The wedges' own answer did **not** move under either injection. For the
+    ///   too-loose one that is a null result too, and it is consistent with the
+    ///   three facts above: the wedge does not turn on the domain filter.
+    ///
+    /// ## What was tried and did not unwedge
+    ///
+    /// `REDA_WEDGE_GATE=g8` re-decides `full_adder`'s **driver** -- the gate
+    /// whose output pin is the one that ends up sealed -- rather than the
+    /// consumer. SAT at margins 8, 16 and 32 (0.07s / 0.18s / 0.44s), landing it
+    /// at `(14, 1, 164)` facing 0 with a 17-cell route, and it lays; growth then
+    /// wedges at `g9` **again**. That is what the model should be expected to
+    /// do: [`BodyFit`]'s `escape` is `0` here, exactly as it is in growth, so
+    /// nothing in the model asks a gate to leave its own output net a way out
+    /// either. The core points at placement, and this is the measurement that
+    /// the model as built reproduces the same placement mistake.
+    ///
+    /// # What this does NOT establish
+    ///
+    /// - **That `segment_a` is infeasible.** Everything already laid is fixed.
+    ///   The natural next model lets the window re-decide what is inside it, and
+    ///   it is not built.
+    /// - **That growth can be repaired by this.** No landing was found, so there
+    ///   is no completion, no area against legacy's 23,220, and **no settle tick
+    ///   count** -- `segment_a` still has no verified candidate to measure one
+    ///   on.
+    /// - **Anything about `seven_segment`**, whose wedge the growth probe
+    ///   records as the same cell and taxonomy but which is not run here.
+    #[test]
+    #[ignore = "measurement harness: builds a CNF per window per margin on the two wedges"]
+    fn put_the_measured_wedges_to_the_windowed_solver() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::build_single_segment_netlist;
+        use std::time::Instant;
+
+        let setting = |name: &str, fallback: &str| -> String {
+            std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+        };
+        let margins: Vec<i32> = setting("REDA_WEDGE_MARGINS", "3,8,16,32,64")
+            .split(',')
+            .map(|piece| piece.trim().parse().expect("a margin"))
+            .collect();
+        let reach_cap: usize = setting("REDA_WEDGE_REACH", "96").parse().expect("a depth");
+        let budget: u64 = setting("REDA_WEDGE_BUDGET", "300000").parse().expect("a budget");
+        let wanted = setting("REDA_WEDGE_CIRCUIT", "all");
+        let control_cap: usize =
+            setting("REDA_WEDGE_CONTROLS", "6").parse().expect("a count");
+        // 8, because 8 is the smallest margin `Growth::land` itself ever
+        // searches at (`windows` defaults to `8,16,32,64`). A control run
+        // *tighter* than anything growth uses measures the margin and not the
+        // instrument, and the first version of this used `margins[0]` -- 3 --
+        // where `full_adder`'s `g5` came back UNSAT. At 8 the same window is SAT
+        // in 0.10s with a 65-cell route that lays. That null result is recorded
+        // rather than deleted: a margin below growth's own is a different
+        // question, and asking it of a control answers nothing about the wedge.
+        let control_margin: i32 =
+            setting("REDA_WEDGE_CONTROL_MARGIN", "8").parse().expect("a margin");
+
+        // Growth's own defaults, so the state being windowed is the state the
+        // growth probe reports and not a variant of it.
+        let growth_settings = GrowthSettings {
+            order: "depth".to_string(),
+            lambda: 0.5,
+            windows: vec![8, 16, 32, 64],
+            tries: 8,
+            escape: 0,
+            seed_pitch: 0,
+            verbose: false,
+            settle: true,
+            rip: 0,
+            seed: 0,
+            rip_whole: false,
+        };
+
+        let (adder, adder_outputs) = build_full_adder_netlist();
+        let (segment_a, segment_a_output) = build_single_segment_netlist(0);
+        let cases = [
+            ConditionCircuit {
+                name: "full_adder",
+                netlist: adder,
+                inputs: &crate::circuits::full_adder::INPUT_NAMES[..],
+                outputs: vec![adder_outputs["sum"].clone(), adder_outputs["cout"].clone()],
+                expected: full_adder_expected,
+            },
+            ConditionCircuit {
+                name: "segment_a",
+                netlist: segment_a,
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: vec![segment_a_output],
+                expected: segment_a_expected,
+            },
+        ];
+        // The growth probe's own record, pinned so a moved baseline fails here
+        // rather than being silently measured instead.
+        let documented: BTreeMap<&str, (&str, usize)> =
+            [("full_adder", ("g9", 7)), ("segment_a", ("g8", 18))].into_iter().collect();
+
+        let chosen: Vec<&ConditionCircuit> =
+            cases.iter().filter(|case| wanted == "all" || wanted == case.name).collect();
+        assert!(!chosen.is_empty(), "REDA_WEDGE_CIRCUIT names no circuit");
+
+        eprintln!(
+            "== the windowed solver on the measured wedges | margins {margins:?} \
+             | depth cap {} | budget {budget} ==",
+            if reach_cap == 0 { "exact".to_string() } else { reach_cap.to_string() }
+        );
+        eprintln!(
+            "   everything already laid is FIXED. An UNSAT below is a proof about this \
+             growth state, not about the circuit."
+        );
+
+        let mut verdicts: Vec<String> = Vec::new();
+        for case in chosen {
+            // --- what growth does, which is the state being asked about ---
+            let mut oracle =
+                Growth::seeded(&case.netlist, &growth_settings).expect("the seed layout");
+            oracle.grow();
+            let Some(wedge) = oracle.wedge.as_ref() else {
+                panic!("{} did not wedge, so there is nothing here to attack", case.name)
+            };
+            let wedged_at = wedge.gate.clone();
+            let placed = oracle.placed.iter().filter(|done| **done).count();
+            let (expected_gate, expected_placed) = documented[case.name];
+            assert_eq!(
+                (wedged_at.as_str(), placed),
+                (expected_gate, expected_placed),
+                "{}'s wedge moved: the growth probe records {expected_gate} after \
+                 {expected_placed}, and this run found {wedged_at} after {placed}. The \
+                 measurement below would be about a different state.",
+                case.name
+            );
+            eprintln!(
+                "\n== {} : growth WEDGES at {wedged_at} ({} input(s)) after {placed}/{} gates ==",
+                case.name,
+                wedge.arity,
+                case.netlist.gates.len()
+            );
+            eprintln!(
+                "   growth's own funnel over windows {:?}: offered {} -> approaches met {} \
+                 -> body fits {}",
+                wedge.windows,
+                wedge.funnel.offered,
+                wedge.funnel.approaches_met,
+                wedge.funnel.body_fits
+            );
+
+            // --- the same state again, with the wedged gate still unplaced ---
+            //
+            // `REDA_WEDGE_GATE` points the whole apparatus at a *different*
+            // gate of the same circuit. It exists so the SAT arm below -- decode,
+            // lay, grow the rest, verify, truth table -- can be exercised on
+            // these circuits at all: on the wedge itself that arm never runs,
+            // and an arm that never runs is an arm nobody has seen work.
+            let target = match setting("REDA_WEDGE_GATE", "") {
+                empty if empty.is_empty() => wedged_at.clone(),
+                named => {
+                    eprintln!(
+                        "   REDA_WEDGE_GATE={named}: windowing {named} INSTEAD of the wedged \
+                         {wedged_at}. Nothing below is about the wedge."
+                    );
+                    named
+                }
+            };
+            let (growth, gate) =
+                growth_paused_before(&case.netlist, &growth_settings, &target)
+                    .unwrap_or_else(|why| panic!("could not pause before {}: {why}", wedge.gate));
+            let drivers = case.netlist.gates[gate].inputs.clone();
+            let seeds: Vec<BTreeSet<Anchor>> = drivers
+                .iter()
+                .map(|signal| {
+                    let pin = growth.pins[signal];
+                    growth.trees.get(signal).cloned().unwrap_or_default().seeds(pin)
+                })
+                .collect();
+            let all: Vec<Anchor> = seeds.iter().flatten().copied().collect();
+
+            // --- the seal, named rule by rule ---
+            //
+            // `why_not_in_domain` asks the model's domain filter one arm at a
+            // time, and each arm of it is an arm of `anchor_is_free_for`. This
+            // is the readable half of a core: the core says *which two groups*
+            // cannot hold together, and this says *which cell and which rule*
+            // underneath.
+            let widest = growth_window(&all, *margins.iter().max().expect("a margin"));
+            for (input, signal) in drivers.iter().enumerate() {
+                let pin = growth.pins[signal];
+                eprintln!(
+                    "   net {signal} drives input {input}; its pin is ({}, {}, {}) and it \
+                     holds {} cell(s) on the gate plane",
+                    pin.x,
+                    pin.y,
+                    pin.z,
+                    seeds[input].iter().filter(|cell| cell.y == PLANNER_Y).count()
+                );
+                for step_to in plane_neighbours(pin) {
+                    eprintln!(
+                        "     ({}, {}, {}): {}",
+                        step_to.x,
+                        step_to.y,
+                        step_to.z,
+                        why_not_in_domain(&growth, signal, pin, step_to, widest)
+                    );
+                }
+            }
+
+            // --- the sweep ---
+            let mut answers: Vec<String> = Vec::new();
+            for &margin in &margins {
+                let window = growth_window(&all, margin);
+                eprintln!(
+                    "   -- margin {margin}: window ({}, {}, {})..({}, {}, {}) --",
+                    window.0.x, window.0.y, window.0.z, window.1.x, window.1.y, window.1.z
+                );
+
+                // **The flat restriction, closed for this window rather than
+                // declared.** The model gives new wire the gate plane only, so
+                // one reading of an UNSAT is "the answer climbs". The shipping
+                // flood is 3D -- `neighbours` is twelve cells -- so running it
+                // here says whether a climbing route exists to be missed. It is
+                // a call into the same function `Growth::land` floods with.
+                for (input, signal) in drivers.iter().enumerate() {
+                    let pin = growth.pins[signal];
+                    let field = flood_from(
+                        &seeds[input],
+                        pin,
+                        None,
+                        signal,
+                        &growth.reservation,
+                        window,
+                    );
+                    eprintln!(
+                        "      the shipping 3D flood for net {signal} reaches {} cell(s) from \
+                         the {} it starts with{}",
+                        field.travelled.len(),
+                        seeds[input].len(),
+                        if field.travelled.len() == seeds[input].len() {
+                            " -- it cannot take ONE legal step, climbing or flat, so the \
+                             flat restriction costs this window nothing"
+                        } else {
+                            ""
+                        }
+                    );
+                }
+
+                let started = Instant::now();
+                let model = window_model(&growth, gate, window, reach_cap);
+                let built = started.elapsed().as_secs_f64();
+                eprintln!("      built in {built:.2}s | {}", model.summary());
+
+                let started = Instant::now();
+                let outcome = model.cnf.solve(budget);
+                let solved = started.elapsed().as_secs_f64();
+                report_solve(&format!("margin {margin}"), &model, &outcome, solved);
+
+                match &outcome {
+                    Outcome::Unknown => {
+                        answers.push(format!("margin {margin}: UNKNOWN in {solved:.2}s"));
+                        eprintln!(
+                            "      the search did not decide this window inside {budget} \
+                             conflicts. **That is a budget, not an infeasibility.**"
+                        );
+                    }
+                    Outcome::Unsat => {
+                        // **What this UNSAT is bounded by, said once and
+                        // plainly.** `report_solve` prints "bounded: capped path
+                        // length" whenever the depth cap is below the exact
+                        // bound, which is the right default. It is too weak
+                        // here: when every input net can reach no cell of the
+                        // window *at any* path length, the cap is not what
+                        // decided anything, and that distinction is the whole
+                        // difference between a budget and an answer.
+                        let capless = model.nets.iter().all(NetWindow::stranded_entirely);
+                        if capless {
+                            eprintln!(
+                                "      this UNSAT does NOT depend on the depth cap: every input \
+                                 net is stranded outright, so raising the cap changes nothing"
+                            );
+                        }
+                        let started = Instant::now();
+                        let core = model.cnf.core(budget);
+                        let cored = started.elapsed().as_secs_f64();
+                        match &core {
+                            Some(groups) => {
+                                eprintln!(
+                                    "      CORE ({} group(s), minimised by deletion in \
+                                     {cored:.2}s): {}",
+                                    groups.len(),
+                                    groups
+                                        .iter()
+                                        .map(|&group| format!(
+                                            "`{}`",
+                                            model.cnf.group_name(group)
+                                        ))
+                                        .collect::<Vec<_>>()
+                                        .join(" + ")
+                                );
+                                answers.push(format!(
+                                    "margin {margin}: UNSAT in {solved:.2}s, {} group core{}",
+                                    groups.len(),
+                                    if capless { ", cap-independent" } else { ", CAPPED" }
+                                ));
+                            }
+                            None => {
+                                eprintln!(
+                                    "      no core: a solve inside the deletion loop exceeded \
+                                     its budget, so nothing minimal is claimed"
+                                );
+                                answers.push(format!(
+                                    "margin {margin}: UNSAT in {solved:.2}s, no core"
+                                ));
+                            }
+                        }
+                        eprintln!(
+                            "      landings: {} offered, {} refused by BodyFit before becoming \
+                             variables, {} became variables",
+                            model.offered,
+                            model.body_rejected,
+                            model.landings.len()
+                        );
+                        // The landings a core can never mention: the ones whose
+                        // socket approach is a sealed net's own pin -- the only
+                        // ones any route could serve -- and which never became
+                        // variables because the body was refused.
+                        for (input, signal) in drivers.iter().enumerate() {
+                            let pin = growth.pins[signal];
+                            let refused: Vec<(Anchor, geometry::CellFacing)> = model
+                                .body_rejected_at
+                                .iter()
+                                .copied()
+                                .filter(|&(anchor, facing)| {
+                                    socket_and_approach(anchor, facing, input).1 == pin
+                                })
+                                .collect();
+                            if refused.is_empty() {
+                                continue;
+                            }
+                            eprintln!(
+                                "      the {} landing(s) that would put input {input}'s socket \
+                                 approach ON net {signal}'s pin ({}, {}, {}) -- the only ones a \
+                                 net that cannot move could be served by -- and why each body \
+                                 was refused:",
+                                refused.len(),
+                                pin.x,
+                                pin.y,
+                                pin.z
+                            );
+                            let mut overlapping = 0usize;
+                            let total = refused.len();
+                            for (anchor, facing) in refused {
+                                let (overlaps, why) =
+                                    why_the_body_would_not_stand(&growth, gate, anchor, facing);
+                                overlapping += usize::from(overlaps);
+                                eprintln!(
+                                    "        anchor ({}, {}, {}) facing {}:\n            {why}",
+                                    anchor.x,
+                                    anchor.y,
+                                    anchor.z,
+                                    facing.index()
+                                );
+                            }
+                            // **How much this wedge owes to the conservative
+                            // rule, and how much to the geometry.** `keep_out`
+                            // is `dust_reach`'s conservative plan-time shape and
+                            // the spec's section 8 keeps open whether it is too
+                            // strict. A landing refused because a block of this
+                            // gate would be written where another gate's block
+                            // already stands owes nothing to that question.
+                            eprintln!(
+                                "      of those {total}, **{overlapping} are refused by BLOCK \
+                                 OVERLAP** -- a cell of this gate's body landing where a block \
+                                 already stands{}",
+                                if overlapping == total {
+                                    ". Every one of them. Relaxing `keep_out`, the conservative \
+                                     rule the spec keeps open, would not open this wedge."
+                                } else {
+                                    ", and the rest only by the conservative clearance rules."
+                                }
+                            );
+                        }
+                    }
+                    Outcome::Sat(assignment) => {
+                        // Rule 6: routes without verifies is worth nothing. A
+                        // SAT here is only an answer once it has been decoded,
+                        // laid by `Growth::lay`, grown out, verified and put
+                        // through the truth table.
+                        let solution = decode(&model, assignment)
+                            .unwrap_or_else(|why| panic!("SAT that will not decode: {why}"));
+                        eprintln!(
+                            "      decoded: ({}, {}, {}) facing {} | routes {} | {} stranded",
+                            solution.anchor.x,
+                            solution.anchor.y,
+                            solution.anchor.z,
+                            solution.facing.index(),
+                            solution
+                                .routes
+                                .values()
+                                .map(|path| path.len().to_string())
+                                .collect::<Vec<_>>()
+                                .join("+"),
+                            solution.stranded
+                        );
+                        let (mut fresh, gate_again) =
+                            growth_paused_before(&case.netlist, &growth_settings, &target)
+                                .expect("the same pause again");
+                        assert_eq!(gate, gate_again, "the same gate on the same state");
+                        match fresh.land_solved(
+                            gate_again,
+                            solution.anchor,
+                            solution.facing,
+                            &solution.routes,
+                            window,
+                        ) {
+                            Err(why) => {
+                                eprintln!(
+                                    "      **the answer would not lay: {why}** -- a solver \
+                                     answer `Growth::lay` refuses is an encoding bug in the \
+                                     model, not a result"
+                                );
+                                answers.push(format!(
+                                    "margin {margin}: SAT in {solved:.2}s but WOULD NOT LAY"
+                                ));
+                            }
+                            Ok(()) => {
+                                fresh.grow_stopping_before(None);
+                                let after =
+                                    fresh.placed.iter().filter(|done| **done).count();
+                                let gates = case.netlist.gates.len();
+                                let standing: Vec<Anchor> = fresh
+                                    .nodes
+                                    .iter()
+                                    .flatten()
+                                    .map(|node| node.anchor)
+                                    .collect();
+                                let (width, depth, area) = anchor_box(&standing);
+                                eprintln!(
+                                    "      the answer LAYS, and growth carries on from it to \
+                                     {after}/{gates} gates | anchor box {width}x{depth}={area}"
+                                );
+                                if let Some(next) = &fresh.wedge {
+                                    eprintln!(
+                                        "      and then wedges at {} -- so this is a landing, \
+                                         not a finished circuit",
+                                        next.gate
+                                    );
+                                    answers.push(format!(
+                                        "margin {margin}: SAT in {solved:.2}s, laid, \
+                                         {after}/{gates} then wedged at {}",
+                                        next.gate
+                                    ));
+                                    continue;
+                                }
+                                let Some(candidate) = fresh.candidate() else {
+                                    eprintln!("      grew every gate and built no candidate");
+                                    answers.push(format!(
+                                        "margin {margin}: SAT, grew out, no candidate"
+                                    ));
+                                    continue;
+                                };
+                                match realise_and_verify(
+                                    &candidate,
+                                    &case.netlist,
+                                    candidate_world_size(&candidate),
+                                ) {
+                                    Err(error) => {
+                                        eprintln!(
+                                            "      COMPLETES AND DOES NOT VERIFY: {error}"
+                                        );
+                                        answers.push(format!(
+                                            "margin {margin}: SAT, completed, FAILS \
+                                             verify_candidate"
+                                        ));
+                                    }
+                                    Ok(realised) => {
+                                        let blocks = (0..realised.world.cells().len())
+                                            .filter(|&flat| {
+                                                let (x, y, z) = realised.world.decode(flat);
+                                                realised.world.get(x, y, z).kind
+                                                    != crate::redstone::world::block::BlockKind::Air
+                                            })
+                                            .count();
+                                        match worst_settle_and_truth(
+                                            &realised,
+                                            case.inputs,
+                                            &case.outputs,
+                                            case.expected,
+                                        ) {
+                                            Err(error) => {
+                                                eprintln!(
+                                                    "      VERIFIES and COMPUTES THE WRONG \
+                                                     FUNCTION: {error}"
+                                                );
+                                                answers.push(format!(
+                                                    "margin {margin}: SAT, verifies, WRONG \
+                                                     truth table"
+                                                ));
+                                            }
+                                            Ok((worst, at, transitions)) => {
+                                                eprintln!(
+                                                    "      VERIFIES, {blocks} blocks | truth \
+                                                     table Ok over {transitions} ordered \
+                                                     transitions | worst settle {worst} ticks \
+                                                     at {at} | anchor box {area}"
+                                                );
+                                                answers.push(format!(
+                                                    "margin {margin}: SAT, COMPLETE, verifies, \
+                                                     {blocks} blocks, {worst} ticks, area {area}"
+                                                ));
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // --- the controls: the same construction on gates growth landed ---
+            //
+            // Without these, "UNSAT" is a word this harness could produce with a
+            // broken landing enumeration or one over-strict rule, on every
+            // window it was ever pointed at. So the same model, the same window
+            // function and the same margin are run on gates of this same circuit
+            // whose landing growth *found*, and at least one has to come back
+            // SAT and lay through `Growth::lay`.
+            //
+            // **The scope filter is declared, not discovered.** The model gives
+            // new wire the gate plane only ([`window_model`]), so a gate whose
+            // input nets already hold cells off that plane has no flat answer to
+            // find and is out of scope by the restriction rather than by any
+            // property of the wedge. It is skipped with its off-plane count
+            // printed, because "skipped" and "failed" must not look alike.
+            //
+            // The first control this harness ever ran was a single gate -- the
+            // last one in netlist order that growth placed -- and it came back
+            // **UNSAT**, on `segment_a`'s `g35`, whose nets `g5` and `g6` hold
+            // 28 and 21 seed cells off the plane. That is the restriction
+            // biting, and it is recorded here rather than deleted: a control
+            // chosen without the scope filter measures the flat restriction and
+            // not the instrument.
+            let controls: Vec<String> = (0..case.netlist.gates.len())
+                .filter(|&other| oracle.placed[other])
+                .map(|other| case.netlist.gates[other].output.clone())
+                .collect();
+            eprintln!(
+                "   -- controls: gates this growth landed, in netlist order, at margin \
+                 {control_margin} (growth's own smallest), capped at {control_cap} in-scope --"
+            );
+            let mut in_scope = 0usize;
+            let mut control_sat = 0usize;
+            let mut control_laid = 0usize;
+            let mut control_wired = 0usize;
+            let mut control_lines: Vec<String> = Vec::new();
+            for control in &controls {
+                // The stopping rule, stated rather than tuned: `control_cap`
+                // in-scope windows, **and at least one of them a window that
+                // needed wire**. A gate whose socket lands straight onto its
+                // driver's pin decides no route at all, so a control set made
+                // only of those exercises the landing enumeration and nothing
+                // of the connectivity encoding -- and `segment_a`'s first six
+                // landed gates are all of that shape.
+                if in_scope >= control_cap && control_wired > 0 {
+                    break;
+                }
+                let (control_growth, control_gate) =
+                    growth_paused_before(&case.netlist, &growth_settings, control)
+                        .unwrap_or_else(|why| panic!("could not pause before {control}: {why}"));
+                let mut off_plane = 0usize;
+                let control_all: Vec<Anchor> = case.netlist.gates[control_gate]
+                    .inputs
+                    .iter()
+                    .flat_map(|signal| {
+                        let pin = control_growth.pins[signal];
+                        control_growth
+                            .trees
+                            .get(signal)
+                            .cloned()
+                            .unwrap_or_default()
+                            .seeds(pin)
+                    })
+                    .inspect(|cell| off_plane += usize::from(cell.y != PLANNER_Y))
+                    .collect();
+                if off_plane > 0 {
+                    eprintln!(
+                        "      {control}: OUT OF SCOPE -- its input nets hold {off_plane} \
+                         cell(s) off the gate plane, which this model cannot grow from"
+                    );
+                    continue;
+                }
+                in_scope += 1;
+                let control_window = growth_window(&control_all, control_margin);
+                let control_model =
+                    window_model(&control_growth, control_gate, control_window, reach_cap);
+                let started = Instant::now();
+                let control_outcome = control_model.cnf.solve(budget);
+                let control_time = started.elapsed().as_secs_f64();
+                let Outcome::Sat(assignment) = &control_outcome else {
+                    eprintln!(
+                        "      {control}: {} in {control_time:.2}s | {}",
+                        match control_outcome {
+                            Outcome::Unsat => "UNSAT",
+                            _ => "UNKNOWN",
+                        },
+                        control_model.summary()
+                    );
+                    control_lines.push(format!("{control} {control_outcome:?}"));
+                    continue;
+                };
+                control_sat += 1;
+                let solution = decode(&control_model, assignment)
+                    .unwrap_or_else(|why| panic!("{control}'s SAT will not decode: {why}"));
+                let (mut control_growth, control_gate) =
+                    growth_paused_before(&case.netlist, &growth_settings, control)
+                        .expect("the same pause again");
+                match control_growth.land_solved(
+                    control_gate,
+                    solution.anchor,
+                    solution.facing,
+                    &solution.routes,
+                    control_window,
+                ) {
+                    Ok(()) => {
+                        control_laid += 1;
+                        let wired =
+                            solution.routes.values().any(|path| path.len() > 1);
+                        control_wired += usize::from(wired);
+                        eprintln!(
+                            "      {control}: SAT in {control_time:.2}s, decoded ({}, {}, {}) \
+                             facing {}, routes {}, and it LAYS through `Growth::lay`",
+                            solution.anchor.x,
+                            solution.anchor.y,
+                            solution.anchor.z,
+                            solution.facing.index(),
+                            solution
+                                .routes
+                                .values()
+                                .map(|path| path.len().to_string())
+                                .collect::<Vec<_>>()
+                                .join("+")
+                        );
+                        control_lines.push(format!("{control} SAT+laid"));
+                    }
+                    Err(why) => {
+                        // Not a soft failure. A model answer the shipping `lay`
+                        // refuses is an encoding bug, and it is the exact defect
+                        // that would make an UNSAT at the wedge worthless.
+                        panic!("{control}'s answer would not lay, which is an encoding bug: {why}")
+                    }
+                }
+            }
+            eprintln!(
+                "      controls: {in_scope} in scope of {} landed, {control_sat} SAT, \
+                 {control_laid} laid, {control_wired} of those needed wire",
+                controls.len()
+            );
+            assert!(
+                control_laid > 0,
+                "not one control window on {} came back SAT and laid ({}). This model cannot \
+                 find a landing on a gate growth itself landed, so its UNSAT on the wedge is \
+                 worth nothing.",
+                case.name,
+                control_lines.join(", ")
+            );
+            assert!(
+                control_wired > 0,
+                "every control window on {} was decided without laying a single cell of wire \
+                 ({}), so the connectivity encoding -- the half an UNSAT at a sealed pin turns \
+                 on -- was never exercised on this circuit at all.",
+                case.name,
+                control_lines.join(", ")
+            );
+
+            verdicts.push(format!(
+                "{}: {} || controls {control_laid}/{in_scope} SAT and laid, {control_wired} \
+                 with wire",
+                case.name,
+                answers.join(" | ")
+            ));
+        }
+
+        eprintln!("\n== what the windowed solver concluded ==");
+        for verdict in &verdicts {
+            eprintln!("   {verdict}");
+        }
     }
 }
