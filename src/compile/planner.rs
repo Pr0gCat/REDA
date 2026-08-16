@@ -9675,7 +9675,7 @@ mod tests {
     /// segment_a, default order, rip 0:    WEDGE g8 at 18/46, all four windows,
     ///                                     offered 4 -> approaches met 4 -> body fits 0
     /// segment_a, default order, rip 64:   WEDGE g8 at 18/46, 5 rip-ups spent,
-    ///                                     12 branches torn out, 347 -> 143 wire cells
+    ///                                     17 branches torn out, 347 -> 143 wire cells
     /// segment_a, default order, rip 1000: WEDGE g8 at 18/46, 5 rip-ups spent
     /// segment_a, whole-net rip 64:        WEDGE g8 at 18/46, 3 rip-ups spent,
     ///                                     19 branches torn out, 347 -> 139 wire cells
