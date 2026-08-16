@@ -649,8 +649,11 @@ answer.
      that is a full cube without conducting. Nothing this compiler writes is
      such a block, so no compiled circuit can have hit it.
 
-   **The exactness is not reachable from the reservation, which is why the
-   conservatism is load-bearing.** See §8.16.
+   **The exactness IS now reachable from the reservation (§8.16, built
+   2026-08-16) and the conservatism is load-bearing anyway (§8.17): the join
+   relation is not the only rule those twelve cells enforce, and the one that
+   refuted it — a repeater powering the other cell's floor block — has no lid
+   in it at all.**
 7. **Whether `deterministic_astar` can miss a legal path.** `self_obstructs`
    (1488) consults `previous` (1363), a single global parent map rather than
    the path actually taken to a cell, so feasibility is path-dependent and the
@@ -686,39 +689,117 @@ answer.
     reproduced in isolation, so it is recorded rather than reported as a router
     defect.
 16. **Whether an exact `keep_out` is even expressible at plan time.**
-    **Answered for the reading half, open for the committing half** (added
-    2026-08-16 with §8.6's measurement).
+    **ANSWERED 2026-08-16 by building it: yes for the reading, and the answer
+    does not matter, because the join relation is not the only rule those
+    twelve cells enforce.** See §8.17 for what that costs.
 
     The exact rule needs to classify one cell — the one above the lower
     conductor — into three states: *conductor*, *opaque and step-supporting*
     (a stone floor), and *neither* (air, and every component that is not a
-    full cube). `Occupancy` has **two** values, and `Solid` is the catch-all
-    for "occupied, not a conductor". Two measured consequences, both in
-    `src/compile/planner.rs`'s test module:
+    full cube). `Occupancy` had **two** values, and `Solid` was the catch-all
+    for "occupied, not a conductor". That is now a solved problem, and both
+    tests that recorded it unsolved were rewritten to record the opposite:
 
-    - `the_reservation_writes_a_stone_riser_and_a_mandatory_air_cell_identically`
-      — `reserve_path` writes *both* cells of a climb's `staircase_clearance`
-      as `Occupancy::Solid` under the same `stair:` owner, and one of them has
-      to become stone while the other has to stay air. And the one that must
-      stay air is `from.up()`, which for a route climbing out of `from` is
-      exactly the lid cell the join rule reads. Two opposite futures, one
-      indelible entry: no function of the reservation alone can tell them
-      apart.
-    - `the_lid_cell_can_be_open_when_asked_and_solid_one_net_later` — the lid
-      cell is frequently **not in the reservation at all** when
-      `anchor_is_free_for` is asked, and `reserve_path` claims a floor under
-      every cell of every route, so whether it ends up stone depends on a net
-      that has not been routed yet. The answer is routing-order-dependent,
-      which is what "not decidable at the time of the query" means.
+    - `the_reservation_tells_a_stone_riser_from_a_mandatory_air_cell` (was
+      `..._identically`) — `reserve_path` used to write *both* cells of a
+      climb's `staircase_clearance` as `Occupancy::Solid` under the same
+      `stair:` owner, and one of them has to become stone while the other has
+      to stay air. It now writes the riser `Occupancy::Stone` and the
+      headroom `Occupancy::Solid`. The obstacle was the type, not the world.
+    - `the_lid_cell_can_be_open_when_asked_and_stone_one_net_later` (was
+      `..._solid_one_net_later`) — the lid cell is still frequently **not in
+      the reservation at all** when `anchor_is_free_for` is asked, and
+      whether it ends up stone still depends on a net that has not been
+      routed yet. **This half survives, and it is survivable**: unclaimed
+      reads as "not sealed", which *refuses*, so a lid that becomes stone
+      later costs a route and cannot cause a short.
 
-    So **the conservatism is load-bearing as long as the rule is a *read*.**
-    The remaining, unmeasured option is to make it a *write*: allow the
-    vertical neighbour and simultaneously reserve the lid cell as a mandatory
-    conductive block, the way `staircase_clearance` already reserves a riser.
-    That converts an undecidable query into a decidable commitment, at the cost
-    of a cell and of a third `Occupancy` state to say which kind of block it
-    must be. Nobody has built it and nobody has measured whether it opens
-    either wedge. **NOT MEASURED.**
+    The commitment the third state implies is held rather than assumed:
+    `anchor_is_free_for` now refuses a cell reserved `Occupancy::Stone` to
+    **every** owner, this net's own included, so nothing routed later can turn
+    a lid back into air. `wire_may_not_be_laid_where_the_plan_committed_stone`
+    asserts it; deleting the guard turns it red. That is also a defect fix in
+    its own right — `emit_routes` writes floor-then-block per anchor in route
+    order, so an anchor landing on an earlier anchor's floor silently
+    overwrote it and left the cell above standing on dust, and
+    `Reservation::insert` being `or_insert` meant the reservation went on
+    reporting a floor.
+
+    The rule itself is `keep_out_against`, and it is checked against the
+    simulator rather than against another plan-time rule:
+    `the_exact_rule_matches_the_simulator_on_every_keep_out_offset` builds the
+    world each reservation implies and compares the rule's verdict against
+    `dust_connections` — the walk `verify_connectivity` itself makes — over 28
+    rows: four same-layer offsets, and eight vertical ones in each of three
+    lid states (unclaimed, claimed-but-not-stone, stone). Refused must mean
+    joined and admitted must mean apart. It fails in **both** directions on
+    injection: reverting the rule to all twelve prints `offset (-1, 1, 0) with
+    the lid stone: the rule says refuse, the simulator says apart`; letting the
+    lid test accept `Solid` as well as `Stone` prints `offset (-1, 1, 0) with
+    the lid claimed, not stone: the rule says admit, the simulator says
+    joined`.
+
+17. **What the twelve cells enforce that is not the join relation.**
+    **NEW 2026-08-16, and it is why §8.16's answer did not ship.**
+
+    `keep_out_against` is exact about `dust_connections`, and
+    `dust_connections` is dust against dust. The vertical cells carry at least
+    one other hazard, and the lid is irrelevant to it. Measured, electrically,
+    against controls, in
+    `a_stone_lid_seals_a_dust_pair_and_does_not_seal_a_repeater`:
+
+    | lower cell | lid | upper dust reads |
+    |---|---|---|
+    | dust | air | 11 |
+    | dust | **stone** | **0** — the derivation is right |
+    | repeater aimed at the upper cell's floor | air | 15 |
+    | repeater aimed at the upper cell's floor | **stone** | **15** — the lid does nothing |
+
+    A repeater strongly powers the block in front of it; that block is the
+    floor the other cell stands on; a powered floor drives the dust standing on
+    it. No lid appears anywhere in that path. And `Occupancy::Wire` covers both
+    materials, because `realise_branch_from` decides which cells of a laid path
+    become repeaters from a strength budget computed **after** `reserve_path`
+    has written the reservation the rule reads. So the query is asked before
+    the answer exists — decidable in principle, undecided in fact, and in the
+    unsafe direction.
+
+    Wiring it in anyway was measured end to end and refused by the invariants.
+    On `plan_from_netlist`'s full_adder the rule permitted exactly two vertical
+    pairs — `(37,2,124)`/`(37,1,125)` and `(43,2,118)`/`(42,1,118)` — and both
+    were then confirmed **electrically clean in isolation**, so the two
+    adjacencies themselves were not the defect. The circuit still came out with
+    **2 of 8 truth-table rows wrong** (`011`, `101`) and
+    `realise_and_verify` refused it:
+
+    ```
+    TorchMergeViolation { gate: "g2", reason: ForeignNetReachesSupport {
+        torch: (40, 1, 131), support: (40, 1, 132), net: "g3" } }
+    ```
+
+    Traced through `net_reach`'s own walk: g3's terminal repeater at
+    `(40,1,124)` strongly powers the block in front of it, and g0's dust at
+    `(40,1,126)` sits on the far side of that block, so g3 drives g0's whole
+    wire and g0 legitimately reaches g2's support. That is a hazard of the
+    **terminal** model, exposed by the reroute rather than caused by it.
+    **NOT MEASURED: whether any other perturbation of this router would also
+    expose it** — no control reroute was constructed.
+
+    Two things follow, and they point in opposite directions:
+
+    - The function is kept, tested and `#[cfg(test)]`, not deleted. The
+      derivation is right; it is the *premise set* that is short. The same
+      function becomes shippable the moment the reservation also records which
+      routed cells realise as repeaters — which `Growth::branch` and
+      `route_in_order` both have in hand one line after they call
+      `reserve_path`. **NOT BUILT, NOT MEASURED.**
+    - It would still buy nothing today. With the rule active, growth's outcome
+      is **unchanged on all four hand-written circuits** — and4 7/7 verifying
+      at 236 blocks and 18 ticks, full_adder wedged at `g9` after 7/22,
+      `segment_a` and `seven_segment` at `g8` after 18 — and the windowed
+      solver still returns **UNSAT at every margin, cap-independent, with the
+      same two-group core** on both wedges. The wedge does not depend on the
+      vertical arms in the direction the loosening moves them.
 
 ---
 

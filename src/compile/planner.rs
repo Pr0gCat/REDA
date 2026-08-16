@@ -71,7 +71,7 @@ impl PrimitiveNode {
     /// Whether `cell` conducts, for a cell this node occupies.
     pub fn occupancy_of(&self, cell: Anchor) -> Occupancy {
         if self.conductors.contains(&cell) {
-            Occupancy::Conductor
+            Occupancy::GateConductor
         } else {
             Occupancy::Solid
         }
@@ -1624,6 +1624,16 @@ fn anchor_is_free_for(
     {
         return false;
     }
+    // A cell the plan has already committed to stone stays stone -- for every
+    // owner, this net's own included. Two things stand on that commitment: the
+    // routed cell one storey up, whose floor it is, and the two nets it holds
+    // apart, because `keep_out_against` now reads exactly this entry to decide
+    // a vertical pair. Dust here deletes both at once, and `emit_routes` would
+    // let it: it writes floor-then-block per anchor in route order, so a later
+    // anchor lands on top of an earlier floor without a word.
+    if reservation.stone_owner(&anchor).is_some() {
+        return false;
+    }
     // Every cell stands on a floor, and realisation writes that floor as
     // stone. Laying one over another net's conductor deletes it -- which is
     // exactly what a route climbing to the storey above did to the trunk
@@ -1666,6 +1676,135 @@ fn keep_out(anchor: Anchor) -> Vec<Anchor> {
     cells
 }
 
+/// The one cell whose material decides a vertical [`keep_out`] pair -- and
+/// `None` for a same-layer pair, which is joined unconditionally and has no
+/// such cell.
+///
+/// `docs/derived/dust-join-relation.md`, closed form, with P the higher of the
+/// two dust cells and Q the lower, `S = P.down()` the step and `C = Q.up()`
+/// the lid:
+///
+/// ```text
+/// same layer       joined, unconditionally, both ways
+/// Q -> P (climb)   supports_dust_step(S) && !is_conductive(C)
+/// P -> Q (descend) !supports_dust_step(C)
+/// ```
+///
+/// Either direction merges two nets, so the pair is apart only when both are
+/// false. **`S` drops out of that conjunction here, and the reason is the
+/// router's own invariant, not an approximation**: realisation lays a stone
+/// floor under every routed cell (`realise_branch_from`'s `floors`,
+/// `emit_routes`), and `S` is exactly the floor under P -- so
+/// `supports_dust_step(S)` is true whenever the upper conductor exists at all.
+/// What is left is `supports_dust_step(C) && is_conductive(C)`, and in this
+/// compiler's write vocabulary the second implies the first. Hence: **a
+/// vertical pair is apart iff the lid is a conductive full block**, which is
+/// what [`Occupancy::Stone`] records.
+///
+/// Only [`keep_out_against`] reads this, and that function is not wired into
+/// the router -- see its doc comment for the two measurements that stopped it.
+#[cfg(test)]
+fn join_lid(anchor: Anchor, neighbour: Anchor) -> Option<Anchor> {
+    match neighbour.y.cmp(&anchor.y) {
+        std::cmp::Ordering::Equal => None,
+        // `neighbour` is the higher one, so `anchor` is Q and the lid is
+        // `anchor`'s own ceiling.
+        std::cmp::Ordering::Greater => Some(Anchor {
+            y: anchor.y + 1,
+            ..anchor
+        }),
+        // `anchor` is the higher one, so `neighbour` is Q and the lid is the
+        // cell over it -- a same-layer horizontal neighbour of `anchor`.
+        std::cmp::Ordering::Less => Some(Anchor {
+            y: anchor.y,
+            ..neighbour
+        }),
+    }
+}
+
+/// [`keep_out`]'s twelve cells as asked **from a cell that will hold wire**,
+/// less the vertical ones this reservation has already sealed.
+///
+/// A cell leaves the list only when both halves of the derivation hold:
+///
+/// 1. the offender is this plan's own [`Occupancy::Wire`], which is what the
+///    join relation was measured over -- a [`Occupancy::GateConductor`] is
+///    kept clear by up to four different rules and only one of them is the
+///    join relation, so it never leaves; and
+/// 2. [`join_lid`]'s cell is committed [`Occupancy::Stone`].
+///
+/// The four same-layer cells never leave either: `dust_connections`'
+/// same-layer arm has no gate to open, measured over all ten blocks the
+/// compiler can write (`tests/dust_join_relation.rs`).
+///
+/// **What this is and is not exact about.** As a predicate on the reservation
+/// it is given it is exact: a cell nobody claims is air in the emitted world,
+/// air is neither conductive nor step-supporting, and every other value the
+/// reservation can hold is a non-lid too. What it cannot be is prescient --
+/// asked mid-search, the lid may be claimed as some later net's floor and
+/// become stone after this cell was refused. That residue is the search's
+/// order-dependence, not a gap between the rule and the game; and it errs
+/// towards refusing, so it can cost a route and cannot cause a short.
+///
+/// **Asked from a gate's side, use [`keep_out`] instead.** There the cell
+/// under test is a gate conductor, so premise 1 fails on the *other* side of
+/// the pair and there is nothing to harvest.
+///
+/// ---
+///
+/// # THIS IS NOT WIRED INTO THE ROUTER, AND THE REASON IS MEASURED
+///
+/// `anchor_is_free_for` still asks [`keep_out`] for all twelve. Wiring this in
+/// was tried on 2026-08-16 and is refused by two independent measurements,
+/// both reproducible in this module:
+///
+/// 1. **The lid seals dust and does nothing at all for a repeater.**
+///    `a_stone_lid_seals_a_dust_pair_and_does_not_seal_a_repeater` puts a
+///    repeater in Q's cell aimed at P's floor and reads P at **15** with the
+///    lid stone -- against **0** for dust in the same cell, same lid. The
+///    derived relation is `dust_connections`, and `dust_connections` is
+///    dust-against-dust; a repeater reaches P by strongly powering the floor
+///    block P stands on, which no lid touches. [`Occupancy::Wire`] covers
+///    both, because `realise_branch_from` decides which cells of a laid path
+///    become repeaters from a strength budget computed **after**
+///    [`reserve_path`] has already written the reservation this rule reads.
+///    So the query is asked before the answer exists -- decidable in
+///    principle, undecided in fact, and in the unsafe direction.
+/// 2. **Even where the pair itself is clean, the reroute is not.** With this
+///    active -- and with the `Wire`/`GateConductor` split already in place, so
+///    this is not the conflation -- `plan_from_netlist`'s full_adder permitted
+///    exactly two vertical pairs, `(37,2,124)`/`(37,1,125)` and
+///    `(43,2,118)`/`(42,1,118)`, and both were then confirmed electrically
+///    clean in isolation against controls. The circuit still came out with
+///    **2 of 8 truth-table rows wrong** (`011` and `101`), and
+///    `verify_realised_world` refused it: `TorchMergeViolation { gate: "g2",
+///    ForeignNetReachesSupport { torch: (40, 1, 131), support: (40, 1, 132),
+///    net: "g3" } }`. Traced through `net_reach`'s own walk: g3's terminal
+///    repeater at `(40,1,124)` strongly powers the block in front of it, and
+///    g0's dust at `(40,1,126)` sits on the far side of that block, so g3
+///    drives g0's whole wire and g0 reaches g2's support. That is a hazard of
+///    the *terminal* model, exposed by the reroute rather than caused by it --
+///    **whether any other perturbation of this router would also expose it is
+///    NOT MEASURED** -- but it is what "everything that verified still
+///    verifies" cost, so it is recorded here rather than downstream.
+///
+/// Kept, tested and `#[cfg(test)]` rather than deleted, because the derivation
+/// is right and it is the *premise set* that is short: the same function
+/// becomes shippable the moment the reservation records which routed cells
+/// realise as repeaters. See §8.17 of `2026-08-15-routing-at-scale.md`.
+#[cfg(test)]
+fn keep_out_against(anchor: Anchor, reservation: &Reservation) -> Vec<Anchor> {
+    keep_out(anchor)
+        .into_iter()
+        .filter(|neighbour| {
+            let sealed = reservation.wire_owner(neighbour).is_some()
+                && join_lid(anchor, *neighbour)
+                    .is_some_and(|lid| reservation.stone_owner(&lid).is_some());
+            !sealed
+        })
+        .collect()
+}
+
 /// Every cell every primitive occupies, at the occupancy the primitive itself
 /// declares.
 ///
@@ -1695,20 +1834,41 @@ fn reserve_path(reservation: &mut Reservation, owner: &str, path: &[Anchor]) {
             // block and a descent has to stay air; a branch that runs through
             // either one destroys the staircase that depends on it, and a net
             // is otherwise free to run through its own cells.
-            reservation.insert(cell, &guard, Occupancy::Solid);
+            //
+            // **The two are no longer the same entry.** A climb's riser is the
+            // block the upper cell stands on, so realisation writes stone into
+            // it -- it is that cell's own floor, written by the loop below as
+            // well. The cell over the climber's head, and the cell a descent
+            // needs left empty, both have to stay AIR. `Occupancy::Solid` is
+            // what "claimed, and not stone" means, and the join rule reads the
+            // difference: see [`join_lid`].
+            let is_riser = window[1].y > window[0].y && cell.y == window[0].y;
+            reservation.insert(
+                cell,
+                &guard,
+                if is_riser {
+                    Occupancy::Stone
+                } else {
+                    Occupancy::Solid
+                },
+            );
         }
     }
     for &anchor in path {
-        reservation.insert(anchor, owner, Occupancy::Conductor);
-        // The floor this cell stands on is this route's too. Solid, because a
+        reservation.insert(anchor, owner, Occupancy::Wire);
+        // The floor this cell stands on is this route's too. Inert, because a
         // floor is inert: another net may run beside it, just not through it.
+        // `Stone` rather than `Solid` because that is what realisation puts
+        // there -- `realise_branch_from` fills `floors` with
+        // `compile::stone()` and `emit_routes` writes it -- and because the
+        // join rule needs to know.
         reservation.insert(
             Anchor {
                 y: anchor.y - 1,
                 ..anchor
             },
             owner,
-            Occupancy::Solid,
+            Occupancy::Stone,
         );
     }
 }
@@ -1804,9 +1964,67 @@ fn unit_horizontal_direction(from: Anchor, to: Anchor) -> Option<(i32, i32, i32)
 /// *conductor* cells of different nets that need clearance. A support block or
 /// a floor is occupied -- nothing else may be written there -- but a route may
 /// pass beside it, which is what the cell in front of every gate is.
+/// **Four values, not two, and two of the three splits are load-bearing.**
+///
+/// `docs/derived/dust-join-relation.md` derives that a vertical pair of dust
+/// cells is joined *unless* the cell directly above the lower one is a
+/// conductive full block. Acting on that derivation needs two distinctions the
+/// old pair could not make:
+///
+/// 1. **`Stone` out of `Solid`** -- which occupied cells are conductive full
+///    blocks. `Solid` was the catch-all for "occupied and not a conductor",
+///    and [`reserve_path`] wrote a climb's stone riser and the cell over the
+///    climber's head -- which has to stay **air** -- under the same value.
+/// 2. **`Wire` out of `GateConductor`** -- which cells the derivation is
+///    actually *about*. It is about dust against dust; `gate_footprint` marks
+///    three things conductors that are not dust and are kept clear for three
+///    other reasons entirely. Deciding those by the join relation produced a
+///    measurably wrong circuit; see [`Occupancy::GateConductor`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Occupancy {
-    Conductor,
+    /// Redstone wire this plan will lay: dust, or the repeater the strength
+    /// budget puts in the middle of a run. The derived join relation is
+    /// measured for exactly this against exactly this, so this is the only
+    /// value the exact vertical rule acts on.
+    Wire,
+    /// A cell of a primitive that keeps foreign wire out.
+    ///
+    /// **Not a synonym for `Wire`, and the split is about the *scope of the
+    /// derivation*.** `compile::gate_footprint` calls a cell a conductor when
+    /// any of at least four different physical rules needs foreign dust kept
+    /// away from it:
+    ///
+    /// - a NOR's support block, which is **stone** -- dust laid against it
+    ///   powers it and turns the torch off;
+    /// - the **air** cell above a torch -- a lit torch strongly powers it and
+    ///   a strongly powered block drives every dust beside it;
+    /// - the input sockets, stone placeholders for whatever the router lands;
+    /// - and the genuinely dusty parts, the output pin and a lever's cell.
+    ///
+    /// Only the last of those is the dust-join relation, so only the last is
+    /// something that relation may be allowed to decide.
+    ///
+    /// **NOT MEASURED: whether letting the exact rule decide this value too
+    /// breaks anything.** The wrong circuit that stopped the exact rule
+    /// (`keep_out_against`'s doc comment) reproduced with this split already in
+    /// place, so it is not evidence about the split; and with the rule out of
+    /// the router there is no configuration left in which the question is
+    /// asked. The split stands on the derivation's scope, not on a measurement.
+    GateConductor,
+    /// A cell realisation writes as **stone**, and the plan is bound to it.
+    ///
+    /// [`reserve_path`] writes this for the floor under every routed cell and
+    /// for a climb's riser; `emit_routes` writes `compile::stone()` into
+    /// exactly those cells (`realise_branch_from`'s `floors` is
+    /// `vec![compile::stone(); ..]` and nothing else ever fills it). It is a
+    /// commitment because [`anchor_is_free_for`] refuses to lay wire in such a
+    /// cell for **every** owner, this net's own included -- so nothing routed
+    /// later can turn it back into air.
+    Stone,
+    /// Occupied, and *not* known to be a conductive full block: a gate's torch
+    /// or lever, a terminal guard, the cell over a climber's head, and the
+    /// cell a descent needs to stay empty. For the join rule this reads the
+    /// same as air, which is the safe reading -- it refuses.
     Solid,
 }
 
@@ -1839,7 +2057,37 @@ impl Reservation {
     /// holding nothing but solid material.
     fn conductor_owner(&self, anchor: &Anchor) -> Option<&str> {
         self.cells.get(anchor).and_then(|(owner, occupancy)| {
-            matches!(occupancy, Occupancy::Conductor).then_some(owner.as_str())
+            matches!(occupancy, Occupancy::Wire | Occupancy::GateConductor)
+                .then_some(owner.as_str())
+        })
+    }
+
+    /// The owner of a cell that will hold this plan's own **wire** -- dust or
+    /// a repeater -- as opposed to a primitive's cell that merely keeps wire
+    /// out. The exact vertical rule acts on this and not on
+    /// [`Reservation::conductor_owner`], because the derived join relation is
+    /// about wire against wire and a gate's "conductors" are mostly not wire.
+    ///
+    /// `#[cfg(test)]` for the same reason [`keep_out_against`] is: its only
+    /// caller is that rule, and that rule is not in the router. The
+    /// *distinction* it reads is not test-only -- [`reserve_path`] writes
+    /// `Wire` on the shipping path -- only this query is.
+    #[cfg(test)]
+    fn wire_owner(&self, anchor: &Anchor) -> Option<&str> {
+        self.cells.get(anchor).and_then(|(owner, occupancy)| {
+            matches!(occupancy, Occupancy::Wire).then_some(owner.as_str())
+        })
+    }
+
+    /// The owner of a cell the plan has committed to **stone**.
+    ///
+    /// The one query the exact vertical keep-out rule makes. `None` means
+    /// "will not be a conductive full block" -- air, dust, a torch, a lever,
+    /// or a cell nobody has claimed at all -- and every one of those leaves a
+    /// vertical pair joined, so `None` is a refusal.
+    fn stone_owner(&self, anchor: &Anchor) -> Option<&str> {
+        self.cells.get(anchor).and_then(|(owner, occupancy)| {
+            matches!(occupancy, Occupancy::Stone).then_some(owner.as_str())
         })
     }
 
@@ -2476,7 +2724,7 @@ fn route_in_order(
                 y: socket.y + (socket.y - support.y),
                 z: socket.z + (socket.z - support.z),
             };
-            reservation.insert(approach, driver, Occupancy::Conductor);
+            reservation.insert(approach, driver, Occupancy::Wire);
         }
     }
 
@@ -5943,7 +6191,7 @@ mod tests {
                 );
                 assert_eq!(
                     node.occupancy_of(above),
-                    Occupancy::Conductor,
+                    Occupancy::GateConductor,
                     "{what}: {} claims {above:?} but inertly, so a route may still stand on it",
                     node.id
                 );
@@ -5984,7 +6232,7 @@ mod tests {
         let mut checked = 0;
         for node in candidate.primitive_nodes() {
             for &cell in node.occupied() {
-                if node.occupancy_of(cell) != Occupancy::Conductor {
+                if node.occupancy_of(cell) != Occupancy::GateConductor {
                     continue;
                 }
                 assert!(
@@ -6264,6 +6512,7 @@ mod tests {
     /// in Y either drops past a gap its own floor has filled or lands a floor
     /// on the head of a cell it climbed out of. Both were silent -- the
     /// circuit was structurally connected and electrically dead.
+
     #[test]
     fn a_self_placed_full_adder_computes_a_full_adder() {
         use crate::circuits::full_adder::build_full_adder_netlist;
@@ -6440,7 +6689,7 @@ mod tests {
         );
 
         let mut dust_below = Reservation::new();
-        dust_below.insert(Anchor { y: 0, ..neighbour }, "other", Occupancy::Conductor);
+        dust_below.insert(Anchor { y: 0, ..neighbour }, "other", Occupancy::Wire);
         assert!(
             !anchor_is_free_for(cell, cell, cell, cell, "mine", &dust_below),
             "another net's dust one level down is exactly what keep-out is for"
@@ -6483,28 +6732,28 @@ mod tests {
         assert_eq!(keep_out(anchor).len(), 12, "and with no duplicates");
     }
 
-    /// **The crux, measured: the exact rule needs to classify a cell that the
-    /// `Reservation` cannot classify.**
+    /// **The crux, resolved: the reservation can now tell a stone riser from a
+    /// cell that has to stay air.**
     ///
-    /// `docs/derived/dust-join-relation.md` derives that a vertical pair joins
-    /// or not according to one cell -- the one directly above the lower
-    /// conductor -- and specifically according to two of its properties,
-    /// `supports_dust_step` and `is_conductive`. Both are false for air and both
-    /// are true for stone, so the exact rule needs to know which of the two that
-    /// cell will hold.
+    /// This test used to assert the opposite, and was right to. `docs/derived/
+    /// dust-join-relation.md` derives that a vertical pair joins or not
+    /// according to one cell -- the one directly above the lower conductor --
+    /// and specifically according to `supports_dust_step` and `is_conductive`,
+    /// both false for air and both true for stone. [`Occupancy`] had two values
+    /// and [`reserve_path`] wrote **both** cells of a climb's
+    /// [`staircase_clearance`] as `Solid` under the same owner: one is the
+    /// stone riser `to` stands on, the other is the cell over the climber's
+    /// head, which has to stay air or the climb does not happen. Two opposite
+    /// futures, one indelible entry -- so no function of the reservation alone
+    /// could decide the join rule's question.
     ///
-    /// [`Occupancy`] has two values and neither answers it. [`reserve_path`]
-    /// writes **both** cells of a climb's [`staircase_clearance`] as
-    /// `Occupancy::Solid` under the same owner -- and one of them is a stone
-    /// riser while the other is a cell that must stay *air*, or the climb it
-    /// exists to protect does not happen. Two opposite futures, one indelible
-    /// reservation entry.
-    ///
-    /// And the headroom cell is not some unrelated corner: it is
-    /// `from.up()`, which for a route climbing out of `from` is exactly the lid
-    /// cell the join rule reads.
+    /// [`Occupancy::Stone`] is that missing third value, and this asserts the
+    /// two cells now differ. **What it does not say is that the exact rule is
+    /// therefore shippable** -- it is not, for a reason that has nothing to do
+    /// with this one; see [`keep_out_against`] and
+    /// `a_stone_lid_seals_a_dust_pair_and_does_not_seal_a_repeater`.
     #[test]
-    fn the_reservation_writes_a_stone_riser_and_a_mandatory_air_cell_identically() {
+    fn the_reservation_tells_a_stone_riser_from_a_mandatory_air_cell() {
         let from = Anchor { x: 10, y: 1, z: 10 };
         let to = Anchor { x: 11, y: 2, z: 10 };
         let clearance = staircase_clearance(from, to);
@@ -6519,38 +6768,57 @@ mod tests {
         let mut reservation = Reservation::new();
         reserve_path(&mut reservation, "net", &[from, to]);
 
-        // The riser has to become stone -- it is what `to` stands on. The
-        // headroom has to stay air -- a solid block there is exactly what
-        // `dust_connections`' climb rule refuses to climb past. The reservation
-        // says the same thing about both.
+        // Both are still claimed under a name nobody routes as, and neither
+        // conducts -- that part is unchanged.
         assert_eq!(reservation.owner(&riser), Some("stair:net"));
         assert_eq!(reservation.owner(&headroom), Some("stair:net"));
         assert_eq!(reservation.conductor_owner(&riser), None);
         assert_eq!(reservation.conductor_owner(&headroom), None);
+
+        // What changed: the riser is committed stone and the headroom is not.
         assert_eq!(
             reservation.cells.get(&riser).map(|(_, o)| *o),
-            reservation.cells.get(&headroom).map(|(_, o)| *o),
-            "the two cells are indistinguishable in the reservation, so no \
-             function of the reservation alone can decide the join rule's \
-             `supports_dust_step`/`is_conductive` question about them"
+            Some(Occupancy::Stone),
+            "the riser is what `to` stands on, so realisation writes stone there"
         );
         assert_eq!(
             reservation.cells.get(&headroom).map(|(_, o)| *o),
             Some(Occupancy::Solid),
-            "and the value they share is the one that reads as 'a block'"
+            "the cell over the climber's head has to stay air, and `Solid` is \
+             what 'claimed, and not stone' means"
+        );
+        assert_ne!(
+            reservation.cells.get(&riser).map(|(_, o)| *o),
+            reservation.cells.get(&headroom).map(|(_, o)| *o),
+            "the two opposite futures are no longer one indelible entry"
+        );
+        // And the headroom is exactly case-1's lid cell, so this is the cell
+        // the join rule most needs classified.
+        assert_eq!(headroom, join_lid(from, to).expect("a climb has a lid"));
+        assert_eq!(
+            reservation.stone_owner(&headroom),
+            None,
+            "so the exact rule reads `not sealed` there, which is the truth"
         );
     }
 
-    /// The other half of the crux: the lid cell is frequently not in the
-    /// reservation *at all* when [`anchor_is_free_for`] is asked, and whether it
-    /// ever gets filled depends on a net that has not been routed yet.
+    /// The half of the old crux that survives: the lid cell is frequently not
+    /// in the reservation *at all* when [`anchor_is_free_for`] is asked, and
+    /// whether it ever gets filled depends on a net that has not been routed
+    /// yet.
     ///
     /// [`reserve_path`] claims a floor under every cell of every route, so a
-    /// cell that is open when net A is routed can be a solid floor once net B
-    /// is. The answer an exact rule would give therefore depends on routing
-    /// order, which is the definition of not decidable at the time of the query.
+    /// cell that is open when net A is routed can be committed stone once net B
+    /// is. The answer an exact rule gives therefore depends on routing order.
+    ///
+    /// **This one is survivable, and the direction is why.** Open reads as "not
+    /// sealed", which refuses; a lid that becomes stone later only means a
+    /// route was refused that need not have been. That is incompleteness of the
+    /// search, not a short. It is the *other* order-dependence -- the one in
+    /// `a_stone_lid_seals_a_dust_pair_and_does_not_seal_a_repeater` -- that
+    /// runs the unsafe way.
     #[test]
-    fn the_lid_cell_can_be_open_when_asked_and_solid_one_net_later() {
+    fn the_lid_cell_can_be_open_when_asked_and_stone_one_net_later() {
         // `mine` wants to climb from (10,1,10) to (11,2,10). Its lid cell --
         // the cell above the lower conductor -- is (10,2,10).
         let lower = Anchor { x: 10, y: 1, z: 10 };
@@ -6561,8 +6829,12 @@ mod tests {
         assert_eq!(
             reservation.owner(&lid),
             None,
-            "nothing in the plan mentions the lid cell yet -- an exact rule \
-             asked now has nothing to read"
+            "nothing in the plan mentions the lid cell yet"
+        );
+        assert_eq!(
+            reservation.stone_owner(&lid),
+            None,
+            "so the exact rule reads `not sealed`, and refuses"
         );
 
         // Some later net runs one storey up, straight over it. Its floor lands
@@ -6575,11 +6847,320 @@ mod tests {
             "the same cell is a floor once a second net is routed"
         );
         assert_eq!(
+            reservation.stone_owner(&lid),
+            Some("later"),
+            "and the reservation can now say it is stone -- which the two-value \
+             `Occupancy` could not, so the same query answered `None` before \
+             and after"
+        );
+        assert_eq!(
             reservation.conductor_owner(&lid),
             None,
-            "a floor is Solid, so the *conductor* query -- the only one \
-             `anchor_is_free_for` makes -- reports nothing either way, before or \
-             after"
+            "a floor still does not conduct, so `keep_out`'s own query is \
+             unaffected either way"
+        );
+    }
+
+    /// The world a reservation implies, written out so a plan-time rule can be
+    /// judged by the simulator rather than by another plan-time rule.
+    ///
+    /// Nothing here guesses: [`Occupancy::Wire`] is what `emit_routes` writes
+    /// as dust, [`Occupancy::Stone`] is what it writes as `compile::stone()`,
+    /// and every wire cell gets the stone floor `realise_branch_from` gives it.
+    /// `Solid` and unclaimed cells are air, which is the whole point -- a cell
+    /// nobody claims is air in the emitted world.
+    fn world_the_reservation_implies(
+        reservation: &Reservation,
+        size: (i32, i32, i32),
+    ) -> crate::redstone::world::storage::World {
+        let mut world = crate::redstone::world::storage::World::new(size.0, size.1, size.2);
+        for (cell, (_, occupancy)) in &reservation.cells {
+            if matches!(occupancy, Occupancy::Stone) {
+                world.set(cell.x, cell.y, cell.z, compile::stone());
+            }
+        }
+        for (cell, (_, occupancy)) in &reservation.cells {
+            if matches!(occupancy, Occupancy::Wire) {
+                world.set(cell.x, cell.y - 1, cell.z, compile::stone());
+                world.set(cell.x, cell.y, cell.z, compile::dust());
+            }
+        }
+        world
+    }
+
+    /// Are two dust cells joined, by the same walk `verify_connectivity` makes?
+    fn the_simulator_joins(
+        world: &crate::redstone::world::storage::World,
+        a: Anchor,
+        b: Anchor,
+    ) -> bool {
+        use crate::redstone::simulator::connectivity::dust_connections;
+        use crate::redstone::simulator::position::HORIZONTAL;
+        let reaches = |from: Anchor, to: Anchor| {
+            HORIZONTAL.into_iter().any(|direction| {
+                dust_connections(world, Position::new(from.x, from.y, from.z), direction)
+                    .iter()
+                    .any(|cell| (cell.x, cell.y, cell.z) == (to.x, to.y, to.z))
+            })
+        };
+        // Either direction merges two nets: `verify_connectivity` walks
+        // `dust_connections` forward from every dust cell, so a one-way edge is
+        // still a short.
+        reaches(a, b) || reaches(b, a)
+    }
+
+    /// **The exact rule, judged by the simulator, on all twelve offsets and
+    /// both states of the lid.**
+    ///
+    /// For each cell [`keep_out`] refuses, the reservation is built the way
+    /// [`reserve_path`] builds it, the world it implies is written out, and
+    /// [`keep_out_against`]'s verdict is compared against what
+    /// `dust_connections` -- the walk `verify_connectivity` itself makes --
+    /// says about the pair. Refused must mean joined and admitted must mean
+    /// apart, on every row.
+    ///
+    /// This is what "exact" is allowed to mean here, and it is a real
+    /// constraint in both directions: keeping a cell the simulator leaves apart
+    /// is the over-claim the routing spec suspected, and dropping one the
+    /// simulator joins is a cross-net short.
+    ///
+    /// **Three lid states, and the middle one is the whole reason
+    /// [`Occupancy::Stone`] exists.** Unclaimed is air. `Stone` is a
+    /// commitment. `Solid` is "claimed by something that is not stone" -- a
+    /// gate's torch, a terminal guard, and above all the cell over a climber's
+    /// head, which has to stay *air*. The two-value `Occupancy` could not tell
+    /// the last two apart, and a rule that admitted a pair on a `Solid` lid
+    /// would be admitting one the simulator joins.
+    #[test]
+    fn the_exact_rule_matches_the_simulator_on_every_keep_out_offset() {
+        #[derive(Clone, Copy)]
+        enum Lid {
+            Unclaimed,
+            ClaimedNotStone,
+            Stone,
+        }
+        let anchor = Anchor { x: 10, y: 2, z: 10 };
+        let mut rows = 0usize;
+        let mut admitted = 0usize;
+        for neighbour in keep_out(anchor) {
+            for lid in [Lid::Unclaimed, Lid::ClaimedNotStone, Lid::Stone] {
+                let held = join_lid(anchor, neighbour);
+                if held.is_none() && !matches!(lid, Lid::Unclaimed) {
+                    // A same-layer pair has no lid; its row runs once.
+                    continue;
+                }
+                let mut reservation = Reservation::new();
+                // The two conductors, each with the floor realisation gives it.
+                reserve_path(&mut reservation, "mine", &[anchor]);
+                reserve_path(&mut reservation, "other", &[neighbour]);
+                if let Some(cell) = held {
+                    match lid {
+                        Lid::Unclaimed => {}
+                        Lid::ClaimedNotStone => {
+                            reservation.insert(cell, "third", Occupancy::Solid)
+                        }
+                        Lid::Stone => reservation.insert(cell, "third", Occupancy::Stone),
+                    }
+                }
+
+                let refused = keep_out_against(anchor, &reservation).contains(&neighbour);
+                let world = world_the_reservation_implies(&reservation, (24, 8, 24));
+                let joined = the_simulator_joins(&world, anchor, neighbour);
+                assert_eq!(
+                    refused,
+                    joined,
+                    "offset ({}, {}, {}) with the lid {}: the rule says {}, the \
+                     simulator says {}",
+                    neighbour.x - anchor.x,
+                    neighbour.y - anchor.y,
+                    neighbour.z - anchor.z,
+                    match lid {
+                        Lid::Unclaimed => "unclaimed",
+                        Lid::ClaimedNotStone => "claimed, not stone",
+                        Lid::Stone => "stone",
+                    },
+                    if refused { "refuse" } else { "admit" },
+                    if joined { "joined" } else { "apart" },
+                );
+                rows += 1;
+                if !refused {
+                    admitted += 1;
+                }
+            }
+        }
+        assert_eq!(
+            rows, 28,
+            "four same-layer offsets once, and eight vertical ones in each of \
+             the three lid states"
+        );
+        assert_eq!(
+            admitted, 8,
+            "exactly the eight vertical cells are admitted, and only on their \
+             stone-lid row -- without this count the rule could stop doing \
+             anything at all and every row assertion would still pass"
+        );
+    }
+
+    /// **Why [`keep_out_against`] is not wired into the router: the lid seals
+    /// dust and does nothing whatever for a repeater.**
+    ///
+    /// The derived relation is `dust_connections`, and `dust_connections` is
+    /// dust against dust. A repeater is wire too -- `realise_branch_from` puts
+    /// one wherever the strength budget asks -- and it reaches the cell one
+    /// step across and one level up by a route the join relation never
+    /// describes: it *strongly powers the block in front of it*, and that block
+    /// is the floor the other cell stands on. A stone lid over the repeater is
+    /// irrelevant to that path.
+    ///
+    /// Measured here electrically, differenced against a control with the
+    /// driver removed, in the exact shape the planner realises. Both halves are
+    /// asserted, so this cannot pass by being blind:
+    ///
+    /// * with **dust** in the lower cell the stone lid really does seal it --
+    ///   the derivation is not wrong; and
+    /// * with a **repeater** in the same cell, aimed at the upper cell's floor,
+    ///   the upper cell reads full strength through the lid.
+    ///
+    /// The last assertion is the one that ties it to the shipping code:
+    /// [`anchor_is_free_for`] refuses that cell. Wire [`keep_out_against`] into
+    /// it and this test goes red on a configuration whose truth table is wrong.
+    #[test]
+    fn a_stone_lid_seals_a_dust_pair_and_does_not_seal_a_repeater() {
+        use crate::redstone::simulator::Simulator;
+        use crate::redstone::world::block::{BlockKind, BlockState};
+        use crate::redstone::world::storage::World;
+
+        // Q, the lower conductor, at (10,1,10); P, dust, at (11,2,10) on its
+        // own stone floor (11,1,10). The lid over Q is (10,2,10).
+        let q = Anchor { x: 10, y: 1, z: 10 };
+        let p = Anchor { x: 11, y: 2, z: 10 };
+        let lid = join_lid(p, q).expect("a vertical pair has a lid");
+        assert_eq!(lid, Anchor { x: 10, y: 2, z: 10 });
+
+        let read_p = |lid_is_stone: bool, q_is_repeater: bool, driven: bool| -> u8 {
+            let mut world = World::new(24, 8, 24);
+            world.set(q.x, q.y - 1, q.z, compile::stone());
+            world.set(p.x, p.y - 1, p.z, compile::stone());
+            world.set(p.x, p.y, p.z, compile::dust());
+            if lid_is_stone {
+                world.set(lid.x, lid.y, lid.z, compile::stone());
+            }
+            if q_is_repeater {
+                // Pointing straight at P's floor block, which is the one thing
+                // the lid cannot do anything about.
+                world.set(
+                    q.x,
+                    q.y,
+                    q.z,
+                    compile::repeater(compile::direction_from(
+                        Position::new(q.x - 1, q.y, q.z),
+                        Position::new(q.x, q.y, q.z),
+                    )),
+                );
+            } else {
+                world.set(q.x, q.y, q.z, compile::dust());
+            }
+            if driven {
+                // A three-cell feed run heading away from P, ending on a
+                // redstone block -- the one source with no block power of its
+                // own, so nothing leaks through the shared floor.
+                for step in 1..4 {
+                    world.set(q.x - step, q.y - 1, q.z, compile::stone());
+                    world.set(q.x - step, q.y, q.z, compile::dust());
+                }
+                let mut source = BlockState::air();
+                source.kind = BlockKind::RedstoneBlock;
+                source.name = "minecraft:redstone_block".to_string();
+                world.set(q.x - 4, q.y, q.z, source);
+            }
+            let mut simulator = Simulator::new(world);
+            simulator.run_until_stable(400).expect("settles");
+            simulator.world().get(p.x, p.y, p.z).power
+        };
+
+        // Every reading is differenced against the same world with the driver
+        // gone, so a stray light is a contaminated rig and not a join.
+        for q_is_repeater in [false, true] {
+            for lid_is_stone in [false, true] {
+                assert_eq!(
+                    read_p(lid_is_stone, q_is_repeater, false),
+                    0,
+                    "control: nothing drives P when the source is removed \
+                     (repeater {q_is_repeater}, stone lid {lid_is_stone})"
+                );
+            }
+        }
+
+        assert_eq!(
+            read_p(false, false, true),
+            11,
+            "positive control: dust at Q, no lid -- the climb is open and P lights"
+        );
+        assert_eq!(
+            read_p(true, false, true),
+            0,
+            "the derivation is right about DUST: a stone lid seals the pair"
+        );
+        assert_eq!(
+            read_p(true, true, true),
+            15,
+            "and it is silent about the same cell holding a REPEATER: that \
+             powers P's floor block, and a powered floor drives the dust \
+             standing on it -- a path with no lid in it at all"
+        );
+
+        // The shipping rule refuses it, which is the only reason this
+        // configuration is not reachable.
+        let mut reservation = Reservation::new();
+        reserve_path(&mut reservation, "other", &[q]);
+        reservation.insert(lid, "third", Occupancy::Stone);
+        assert!(
+            !keep_out_against(p, &reservation).contains(&q),
+            "the exact rule would admit it -- that is the defect this names"
+        );
+        assert!(
+            !anchor_is_free_for(p, p, p, p, "mine", &reservation),
+            "and `anchor_is_free_for` refuses it, because it asks `keep_out` \
+             for all twelve; wire `keep_out_against` in and this goes red"
+        );
+    }
+
+    /// A cell the plan has committed to stone may not later hold wire -- not
+    /// even the wire of the net that committed it.
+    ///
+    /// `emit_routes` writes floor-then-block per anchor, in route order, so an
+    /// anchor that lands on an earlier anchor's floor simply overwrites it: the
+    /// cell one storey up is left standing on dust. Nothing caught that before,
+    /// because `Reservation::insert` is `or_insert` -- the second claim on the
+    /// cell is silently dropped, so the reservation goes on reporting a floor
+    /// while the world would get wire.
+    #[test]
+    fn wire_may_not_be_laid_where_the_plan_committed_stone() {
+        let upper = Anchor { x: 10, y: 2, z: 10 };
+        let floor = Anchor { x: 10, y: 1, z: 10 };
+
+        let mut reservation = Reservation::new();
+        reserve_path(&mut reservation, "mine", &[upper]);
+        assert_eq!(
+            reservation.stone_owner(&floor),
+            Some("mine"),
+            "the floor under a routed cell is committed stone"
+        );
+
+        for owner in ["mine", "stranger"] {
+            assert!(
+                !anchor_is_free_for(floor, floor, floor, floor, owner, &reservation),
+                "`{owner}` must not be offered a cell committed to stone: the \
+                 cell above stands on it, and the join rule reads it"
+            );
+        }
+
+        // A cell one step over at the same level is still free, so the refusal
+        // is about the commitment and not about the whole storey.
+        let beside = Anchor { x: 12, y: 1, z: 10 };
+        assert!(
+            anchor_is_free_for(beside, beside, beside, beside, "stranger", &reservation),
+            "nothing else moved"
         );
     }
 
@@ -7939,6 +8520,9 @@ mod tests {
             }
             for offset in self.conductors {
                 let conductor = shifted(self.origin, *offset);
+                // `keep_out`, not `keep_out_against`: the cell under test is this
+                // gate's conductor, and the derived join relation is about wire
+                // against wire. See [`Occupancy::GateConductor`].
                 for neighbour in keep_out(conductor) {
                     if reservation.conductor_owner(&neighbour).is_none() {
                         continue;
@@ -7977,6 +8561,9 @@ mod tests {
             }
             for offset in self.conductors {
                 let conductor = shifted(self.origin, *offset);
+                // `keep_out`, not `keep_out_against`: the cell under test is this
+                // gate's conductor, and the derived join relation is about wire
+                // against wire. See [`Occupancy::GateConductor`].
                 for neighbour in keep_out(conductor) {
                     if reservation.conductor_owner(&neighbour).is_none() {
                         continue;
@@ -8398,7 +8985,7 @@ mod tests {
                                 self.facings[gate],
                                 input,
                             );
-                            fresh.insert(approach, driver, Occupancy::Conductor);
+                            fresh.insert(approach, driver, Occupancy::Wire);
                         }
                     }
                     Claim::Branch(serial) => {
@@ -9176,7 +9763,7 @@ mod tests {
             let mut approaches = Vec::with_capacity(drivers.len());
             for (input, driver) in drivers.iter().enumerate() {
                 let (socket, approach) = socket_and_approach(landing.anchor, landing.facing, input);
-                reservation.insert(approach, driver, Occupancy::Conductor);
+                reservation.insert(approach, driver, Occupancy::Wire);
                 sockets.push(socket);
                 approaches.push(approach);
             }
@@ -10724,7 +11311,9 @@ mod tests {
                                 cnf.add([-place, -net.used[at]], group_body);
                             }
                         }
-                        for neighbour in keep_out(*conductor) {
+                        // Asked from the gate's side, so conservative by construction --
+                            // [`keep_out`], the same as `BodyFit`.
+                            for neighbour in keep_out(*conductor) {
                             // `BodyFit`'s own exemption, verbatim: a socket is
                             // meant to have the arriving net's dust one cell out.
                             let arriving = sockets
@@ -10952,7 +11541,7 @@ mod tests {
         let owner = format!("primitive:{gate}");
         for &cell in &body {
             let occupancy = if conductors.contains(&cell) {
-                Occupancy::Conductor
+                Occupancy::GateConductor
             } else {
                 Occupancy::Solid
             };
@@ -11776,7 +12365,7 @@ mod tests {
         let signal = growth.netlist.gates[gate].inputs[0].clone();
         let pin = growth.pins[&signal];
         for cell in neighbours(pin) {
-            growth.reservation.insert(cell, "sealant", Occupancy::Conductor);
+            growth.reservation.insert(cell, "sealant", Occupancy::GateConductor);
         }
         eprintln!(
             "    sealed net {signal}'s pin at ({}, {}, {}) with {} foreign conductor(s)",
