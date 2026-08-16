@@ -12751,8 +12751,22 @@ mod tests {
                                  OVERLAP** -- a cell of this gate's body landing where a block \
                                  already stands{}",
                                 if overlapping == total {
-                                    ". Every one of them. Relaxing `keep_out`, the conservative \
-                                     rule the spec keeps open, would not open this wedge."
+                                    ". Every one of them, and on both circuits the ANCHOR CELL \
+                                     ITSELF is already occupied by another gate's block. But \
+                                     that does NOT make the wedge independent of `keep_out`: \
+                                     the four landings are exhaustive only *given* the pin is \
+                                     sealed, and the seal is exact in-plane and conservative \
+                                     out of it -- the three flat steps out are refused by \
+                                     same-layer offenders `dust_reach` joins unconditionally, \
+                                     the three climbing steps only by climb/descend arms. \
+                                     Measured: loosening `keep_out` to the unconditional arm \
+                                     grows full_adder 22/22 -- and that circuit FAILS \
+                                     verification with a cross-net short (dust at (36,2,161) \
+                                     on net g16 electrically joined to g20's network), which \
+                                     is the hazard the climb arm exists to prevent. So the \
+                                     honest statement is that the wedge depends on the \
+                                     conservatism, and the one relaxation measurable today \
+                                     trades the wedge for a wrong circuit."
                                 } else {
                                     ", and the rest only by the conservative clearance rules."
                                 }
