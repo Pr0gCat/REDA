@@ -22,7 +22,8 @@
 //! constructed on the host target at all.
 
 use reda::circuits::and4::{build_and4_netlist, INPUT_NAMES};
-use reda::compile::compile;
+use reda::circuits::full_adder::{build_full_adder_netlist, INPUT_NAMES as ADDER_INPUT_NAMES};
+use reda::compile::{compile, Netlist};
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use reda_viewer::Session;
@@ -95,10 +96,38 @@ fn expected_delay(state: &BlockState) -> u8 {
     state.delay
 }
 
+/// and4 and full_adder, both through the shipping `compile`.
+///
+/// **Two circuits, and the second one is load-bearing.** This checked and4
+/// alone until the hybrid `compile` landed. Relaxation places and4 with
+/// **one** repeater where the emitter placed eleven, so the varied-facing
+/// guard below -- the thing that catches a defaulted `facing` field, which
+/// would look plausible on screen and be wrong for most repeaters -- had
+/// nothing left to see. full_adder supplies it and supplies more of it than
+/// and4 ever did: 28 repeaters across all four horizontal facings, where the
+/// emitter's and4 had 11 across three. Measured 2026-08-16.
+///
+/// and4 stays, because dropping a fixture that still exercises every other
+/// claim here to replace it with a bigger one would be trading coverage for
+/// tidiness.
 #[test]
 fn geometry_and_strengths_agree_with_world_get_in_order() {
-    let (netlist, _output_signal) = build_and4_netlist();
-    let compiled = compile(&netlist).expect("and4 is acyclic and fully driven");
+    let (and4, _) = build_and4_netlist();
+    check_geometry_against_the_world("and4", &and4, &INPUT_NAMES, false);
+
+    let (adder, _) = build_full_adder_netlist();
+    check_geometry_against_the_world("full_adder", &adder, &ADDER_INPUT_NAMES, true);
+}
+
+/// `require_varied_repeater_facings` says this circuit is the one carrying the
+/// defaulted-`facing` guard; see the caller for which and why.
+fn check_geometry_against_the_world(
+    circuit: &str,
+    netlist: &Netlist,
+    input_names: &[&str],
+    require_varied_repeater_facings: bool,
+) {
+    let compiled = compile(netlist).expect("the reference circuits are acyclic and fully driven");
     let input_positions = compiled.input_positions.clone();
 
     let mut ground_truth = Simulator::new(compiled.world);
@@ -106,8 +135,8 @@ fn geometry_and_strengths_agree_with_world_get_in_order() {
     // value, several coordinates would happen to read as the same byte pair
     // regardless of a transposition bug, hiding exactly the kind of ordering
     // mistake this test exists to catch.
-    let pattern = [true, false, true, true];
-    for (&name, &on) in INPUT_NAMES.iter().zip(pattern.iter()) {
+    let pattern: Vec<bool> = (0..input_names.len()).map(|i| i % 3 != 1).collect();
+    for (&name, &on) in input_names.iter().zip(pattern.iter()) {
         let position = input_positions[name];
         let mut state = ground_truth.world().get(position.0, position.1, position.2).clone();
         state.lit = on;
@@ -115,13 +144,16 @@ fn geometry_and_strengths_agree_with_world_get_in_order() {
     }
     ground_truth
         .run_until_stable(MAX_TICKS)
-        .expect("and4 must settle for this ground-truth simulator");
+        .unwrap_or_else(|_| panic!("{circuit} must settle for this ground-truth simulator"));
 
-    let mut session = Session::new("and4").expect("and4 must be a valid circuit name");
-    for (&name, &on) in INPUT_NAMES.iter().zip(pattern.iter()) {
+    let mut session =
+        Session::new(circuit).unwrap_or_else(|_| panic!("{circuit} must be a valid circuit name"));
+    for (&name, &on) in input_names.iter().zip(pattern.iter()) {
         session.set_lever(name, on).unwrap_or_else(|_| panic!("`{name}` must be a valid input"));
     }
-    session.run_until_stable().expect("and4 must settle through the wasm API too");
+    session
+        .run_until_stable()
+        .unwrap_or_else(|_| panic!("{circuit} must settle through the wasm API too"));
 
     let geometry = session.geometry();
     let strengths = session.strengths();
@@ -138,7 +170,7 @@ fn geometry_and_strengths_agree_with_world_get_in_order() {
         strengths.len(),
         "geometry() and strengths() must report the same number of cells"
     );
-    assert!(cell_count > 0, "and4 must have at least one non-air block");
+    assert!(cell_count > 0, "{circuit} must have at least one non-air block");
 
     let (size_x, size_y, size_z) = ground_truth.world().size();
 
@@ -233,17 +265,19 @@ fn geometry_and_strengths_agree_with_world_get_in_order() {
         }
     }
 
-    assert!(
-        repeater_facings_seen.len() > 1,
-        "and4's repeaters must point in more than one direction (router turns corners) -- only \
-         saw facing byte(s) {repeater_facings_seen:?}. A single value here is exactly what a \
-         defaulted `facing` field would produce, and would look plausible on screen while being \
-         wrong for most repeaters."
-    );
+    if require_varied_repeater_facings {
+        assert!(
+            repeater_facings_seen.len() > 1,
+            "{circuit}'s repeaters must point in more than one direction (the router turns \
+             corners) -- only saw facing byte(s) {repeater_facings_seen:?}. A single value here \
+             is exactly what a defaulted `facing` field would produce, and would look plausible \
+             on screen while being wrong for most repeaters."
+        );
+    }
 
     assert!(
         mismatches.is_empty(),
-        "geometry()/strengths() disagreed with World::get ({} mismatches):\n{}",
+        "{circuit}: geometry()/strengths() disagreed with World::get ({} mismatches):\n{}",
         mismatches.len(),
         mismatches.join("\n")
     );

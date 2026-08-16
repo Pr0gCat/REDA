@@ -29,7 +29,7 @@ use reda::circuits::and4::build_and4_netlist;
 use reda::circuits::seven_segment::{build_seven_segment_netlist, TRUTH_TABLE};
 use reda::circuits::verilog;
 use reda::compile::lowering::{format_histogram, lower, lower_optimised, LowerError};
-use reda::compile::{compile, CompiledCircuit, Netlist};
+use reda::compile::{compile, CompiledCircuit, Netlist, PlannerKind};
 use reda::frontend::synthesize_verilog;
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::BlockKind;
@@ -121,19 +121,45 @@ fn report_timing(
         game_ticks_to_redstone_ticks(summary.worst_settle_game_ticks),
         game_ticks_to_seconds(summary.worst_settle_game_ticks),
     );
-    eprintln!(
-        "{label} timing: critical-path settle model (this layout) = {} gates + {} repeaters -> \
-         {} game ticks predicted, {} measured",
-        summary.critical_path_gate_count,
-        summary.critical_path_repeater_count,
-        summary.critical_path_model_game_ticks,
-        summary.worst_settle_game_ticks,
-    );
-    if require_exact_path_model {
-        assert_eq!(
-            summary.critical_path_model_game_ticks, summary.worst_settle_game_ticks,
-            "{label}: the critical-path settle model must exactly reconstruct the measured settle time"
-        );
+    match (summary.critical_path_repeater_count, summary.critical_path_model_game_ticks) {
+        (Some(repeaters), Some(model)) => {
+            eprintln!(
+                "{label} timing: critical-path settle model (this layout) = {} gates + \
+                 {repeaters} repeaters -> {model} game ticks predicted, {} measured",
+                summary.critical_path_gate_count, summary.worst_settle_game_ticks,
+            );
+            if require_exact_path_model {
+                assert_eq!(
+                    model, summary.worst_settle_game_ticks,
+                    "{label}: the critical-path settle model must exactly reconstruct the measured settle time"
+                );
+            }
+        }
+        _ => {
+            // The model's repeater term comes from `routing_stats`, which
+            // recomputes the row/channel/track emitter's geometry and reads
+            // the world along it. A relaxation-placed circuit has no such
+            // geometry, and its routes are not in the `CompiledCircuit` at
+            // all -- realisation consumed the `PlanCandidate` that held them.
+            // So there is no number, and an invented zero would produce a
+            // prediction that agrees with nothing while looking like one.
+            //
+            // This arm asserts rather than merely printing, so that it states
+            // *why* the model is missing instead of silently skipping the
+            // check: a circuit the emitter laid out must always have one, and
+            // if one stops having one this goes red.
+            assert_eq!(
+                compiled.planner_kind(),
+                PlannerKind::Unified3d,
+                "{label}: only a relaxation-placed layout may be without a settle model"
+            );
+            eprintln!(
+                "{label} timing: critical-path settle model unavailable -- relaxation placed this \
+                 layout and `routing_stats` describes the emitter's; {} gates on the path, \
+                 {} game ticks measured",
+                summary.critical_path_gate_count, summary.worst_settle_game_ticks,
+            );
+        }
     }
     summary.worst_settle_game_ticks
 }

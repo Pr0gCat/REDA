@@ -19,7 +19,7 @@ use reda::circuits::seven_segment::{
     build_seven_segment_netlist, build_single_segment_netlist,
     INPUT_NAMES as DECODER_INPUT_NAMES, TRUTH_TABLE,
 };
-use reda::compile::{compile, CompiledCircuit, Netlist, PlannerKind};
+use reda::compile::{compile, compile_legacy, CompiledCircuit, Netlist, PlannerKind};
 use reda::redstone::rules::taxonomy::flags_of;
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::{BlockKind, Face, Facing};
@@ -83,18 +83,48 @@ fn report_timing(
          ratio (measured/bound) = {:.2}x",
         summary.logic_depth, summary.logic_depth_bound_game_ticks, summary.ratio,
     );
-    eprintln!(
-        "{label} timing: critical-path settle model (this layout) = {} gates + {} repeaters -> \
-         {} game ticks predicted, {} measured",
-        summary.critical_path_gate_count,
-        summary.critical_path_repeater_count,
-        summary.critical_path_model_game_ticks,
-        summary.worst_settle_game_ticks,
-    );
-    assert_eq!(
-        summary.critical_path_model_game_ticks, summary.worst_settle_game_ticks,
-        "{label}: the critical-path settle model must exactly reconstruct the measured settle time"
-    );
+    // The model's repeater term is read out of `compile::routing_stats`, which
+    // recomputes the row/channel/track emitter's own geometry and reads the
+    // world along it. Since the hybrid `compile` landed, the world may instead
+    // have been placed by relaxation, and then there is no such geometry and no
+    // per-edge route in the `CompiledCircuit` to count -- realisation consumed
+    // the `PlanCandidate` that held the routes.
+    //
+    // **Both arms assert.** Which one runs is decided by an observable property
+    // of the circuit rather than by a flag, so this is not a check that can be
+    // switched off: a circuit the emitter laid out must reconstruct its settle
+    // time exactly, and a circuit relaxation laid out must have no model at
+    // all. `the_settle_model_is_exact_on_the_emitters_layout` below keeps the
+    // exactness assertion running for the two circuits that moved to the
+    // planner, on the layout it describes.
+    match summary.critical_path_model_game_ticks {
+        Some(model) => {
+            eprintln!(
+                "{label} timing: critical-path settle model (this layout) = {} gates + {:?} \
+                 repeaters -> {model} game ticks predicted, {} measured",
+                summary.critical_path_gate_count,
+                summary.critical_path_repeater_count,
+                summary.worst_settle_game_ticks,
+            );
+            assert_eq!(
+                model, summary.worst_settle_game_ticks,
+                "{label}: the critical-path settle model must exactly reconstruct the measured settle time"
+            );
+        }
+        None => {
+            assert_eq!(
+                compiled.planner_kind(),
+                PlannerKind::Unified3d,
+                "{label}: only a relaxation-placed layout may be without a settle model"
+            );
+            eprintln!(
+                "{label} timing: critical-path settle model unavailable -- relaxation placed this \
+                 layout and `routing_stats` describes the emitter's; {} gates on the path, \
+                 {} game ticks measured",
+                summary.critical_path_gate_count, summary.worst_settle_game_ticks,
+            );
+        }
+    }
     eprintln!(
         "{label} timing: critical path to worst output `{}`: {}",
         summary.critical_output,
@@ -274,30 +304,133 @@ fn the_compiled_segment_a_matches_its_truth_table() {
 
 /// Where the neighbour a lever with this `face` × `facing` must attach to
 /// lives, in world coordinates.
-/// Every reference circuit ships the world the planner realised.
+/// The critical-path settle model still reconstructs the measured settle time
+/// exactly -- on the layout it describes.
 ///
-/// The unified-3d-planner plan's own acceptance step, and it was the one thing
-/// nothing asserted: `compile` produces its candidate with the row/channel
-/// router and then builds, checks and returns the planner's realisation of it.
-/// Reading the code says so; this says so when the code changes.
+/// **This is coverage moved, not coverage dropped.** Before the hybrid,
+/// `report_timing` asserted this for and4, full_adder and segment_a, on worlds
+/// the row/channel/track emitter had laid out. Two of those three now compile
+/// through the planner, and `routing_stats` -- which is where the model's
+/// repeater term comes from -- can only read the emitter's geometry, so
+/// `report_timing`'s assertion no longer runs for them. This runs it, over the
+/// same three circuits, against `compile_legacy`.
 ///
-/// The four invariants run inside that realisation, so a green truth table
-/// here is a truth table for a world the planner built.
+/// segment_a is included even though it still falls back and is therefore
+/// still covered by `report_timing`: a circuit that starts routing through the
+/// planner would silently drop out of that check, and the whole point of this
+/// test is that the model's exactness stops depending on which path `compile`
+/// happens to take.
+///
+/// The sweep is the truth-table sweep without the truth table -- only the
+/// timing matters here, and the correctness of these three worlds is asserted
+/// three times over already.
 #[test]
-fn every_reference_circuit_ships_the_planners_realisation() {
-    let circuits: [(&str, Netlist); 4] = [
-        ("and4", build_and4_netlist().0),
-        ("full_adder", build_full_adder_netlist().0),
-        ("segment_a", build_single_segment_netlist(0).0),
-        ("seven_segment", build_seven_segment_netlist().0),
+fn the_settle_model_is_exact_on_the_emitters_layout() {
+    let circuits: [(&str, Netlist, &[&str], Vec<String>); 3] = [
+        {
+            let (netlist, output) = build_and4_netlist();
+            ("and4", netlist, &AND4_INPUT_NAMES[..], vec![output])
+        },
+        {
+            let (netlist, outputs) = build_full_adder_netlist();
+            (
+                "full_adder",
+                netlist,
+                &ADDER_INPUT_NAMES[..],
+                vec![outputs["sum"].clone(), outputs["cout"].clone()],
+            )
+        },
+        {
+            let (netlist, output) = build_single_segment_netlist(0);
+            ("segment_a", netlist, &DECODER_INPUT_NAMES[..], vec![output])
+        },
     ];
 
-    for (name, netlist) in circuits {
+    for (name, netlist, input_names, outputs) in circuits {
+        let compiled = compile_legacy(&netlist).expect("every reference circuit compiles");
+        assert_eq!(
+            compiled.planner_kind(),
+            PlannerKind::Legacy,
+            "{name}: `compile_legacy` must produce the emitter's layout"
+        );
+
+        let lever_positions: Vec<(i32, i32, i32)> = input_names
+            .iter()
+            .map(|&input| *compiled.input_positions.get(input).unwrap())
+            .collect();
+        let watched = watch_all_nets(&compiled);
+        let mut simulator = Simulator::new(compiled.world.clone());
+        simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+        simulator.attach_observer(watched);
+
+        let mut transitions: Vec<TransitionResult> = Vec::new();
+        for combination in 0u32..(1 << input_names.len()) {
+            for (index, &position) in lever_positions.iter().enumerate() {
+                let bit = (combination >> (input_names.len() - 1 - index)) & 1;
+                set_lever_and_record(&mut simulator, position, bit == 1, &mut transitions);
+            }
+        }
+
+        let summary = summarize_worst_case(&netlist, &compiled, &outputs, &transitions);
+        let model = summary.critical_path_model_game_ticks.unwrap_or_else(|| {
+            panic!("{name}: the emitter's own layout must have a settle model")
+        });
+        eprintln!(
+            "{name} (emitter layout): {} gates + {:?} repeaters -> {model} predicted, \
+             {} measured",
+            summary.critical_path_gate_count,
+            summary.critical_path_repeater_count,
+            summary.worst_settle_game_ticks,
+        );
+        assert_eq!(
+            model, summary.worst_settle_game_ticks,
+            "{name}: the critical-path settle model must exactly reconstruct the measured settle time"
+        );
+    }
+}
+
+/// Which of `compile`'s two paths each reference circuit takes, pinned.
+///
+/// `compile` is a hybrid: it tries relaxation placement with A* routing first
+/// and falls back to the row/channel/track emitter on any failure -- placement,
+/// routing or verification. The fallback is deliberately silent, because a
+/// trial that failed is not a compile that failed; `planner_kind` is what keeps
+/// it from being *invisible*, and this is what makes it audited.
+///
+/// **This replaces an assertion that could not fail.** Before the hybrid the
+/// same test asserted `Unified3d` for all four -- but `compile` stamped
+/// `Unified3d` on every circuit it ever returned, so the assertion held no
+/// matter what the compiler did. `PlannerKind` now names the **placer**, and
+/// these four values are four different measured facts:
+///
+/// | circuit | gates | path | why |
+/// |---|---|---|---|
+/// | and4 | 7 | `Unified3d` | routes on rip-up round 1 |
+/// | full_adder | 22 | `Unified3d` | routes on rip-up round 5 |
+/// | segment_a | 46 | `Legacy` | never routes -- `no safe local route`, at 8 rounds or at 64 |
+/// | seven_segment | 84 | `Legacy` | never routes, same failure |
+///
+/// The two frontiers behind the last two rows are recorded in
+/// `docs/superpowers/specs/2026-08-15-routing-at-scale.md`. A row that changes
+/// is either routing having been fixed -- in which case the block count in
+/// `the_hand_written_circuits_keep_their_measured_size` moves with it -- or a
+/// circuit having quietly stopped taking the better placer, which is the thing
+/// this exists to catch.
+#[test]
+fn every_reference_circuit_records_which_path_produced_it() {
+    let circuits: [(&str, Netlist, PlannerKind); 4] = [
+        ("and4", build_and4_netlist().0, PlannerKind::Unified3d),
+        ("full_adder", build_full_adder_netlist().0, PlannerKind::Unified3d),
+        ("segment_a", build_single_segment_netlist(0).0, PlannerKind::Legacy),
+        ("seven_segment", build_seven_segment_netlist().0, PlannerKind::Legacy),
+    ];
+
+    for (name, netlist, expected) in circuits {
         let compiled = compile(&netlist).expect("every reference circuit compiles");
         assert_eq!(
             compiled.planner_kind(),
-            PlannerKind::Unified3d,
-            "{name} must ship the planner's world, not the emitter's"
+            expected,
+            "{name} took the other path -- if that is intended, its block count moved too"
         );
     }
 }
@@ -311,12 +444,39 @@ fn every_reference_circuit_ships_the_planners_realisation() {
 /// These four are pure NOR and no lowering touches them, which is exactly why
 /// a change here means something moved that should not have.
 ///
-/// The numbers printed alongside are what `README.md`'s table reports.
+/// # Re-pinned at the hybrid switchover, 2026-08-16
+///
+/// Two of the four moved, and that movement **is** the change: `compile` now
+/// tries relaxation placement first and falls back to the row/channel/track
+/// emitter only where the planner cannot deliver a verified circuit.
+///
+/// | circuit | emitter | today | path | change |
+/// |---|---|---|---|---|
+/// | and4 | 472 | **232** | `Unified3d` | -50.8% |
+/// | full_adder | 1,784 | **1,065** | `Unified3d` | -40.3% |
+/// | segment_a | 6,416 | 6,416 | `Legacy` | unmoved -- fell back |
+/// | seven_segment | 16,244 | 16,244 | `Legacy` | unmoved -- fell back |
+///
+/// **A number that did not move is a circuit that fell back**, and that is
+/// what the fourth column is here to make legible: segment_a and seven_segment
+/// place by relaxation and then fail to route (`no safe local route`, at the
+/// trial's 8 rip-up rounds and at the router's full 64 alike), so `compile`
+/// returns the emitter's world for them, byte for byte what it always
+/// returned. Nothing regressed; two things improved.
+/// `every_reference_circuit_records_which_path_produced_it` above is where the
+/// path itself is asserted rather than merely described.
+///
+/// This test's meaning moves from "these must not change" to "these were
+/// measured here, and changing them again needs an explanation" -- which is
+/// what it was always for. The numbers printed alongside are what
+/// `README.md`'s table reports.
 #[test]
 fn the_hand_written_circuits_keep_their_measured_size() {
+    // Blocks as measured at the hybrid switchover. The emitter's own numbers
+    // are in the doc table above, beside the path each circuit takes.
     let circuits: [(&str, Netlist, usize, usize); 4] = [
-        ("and4", build_and4_netlist().0, 7, 472),
-        ("full_adder", build_full_adder_netlist().0, 22, 1784),
+        ("and4", build_and4_netlist().0, 7, 232),
+        ("full_adder", build_full_adder_netlist().0, 22, 1065),
         ("segment_a", build_single_segment_netlist(0).0, 46, 6416),
         ("seven_segment", build_seven_segment_netlist().0, 84, 16244),
     ];

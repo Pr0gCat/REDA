@@ -873,3 +873,203 @@ Non-negotiable regressions to watch, each already observed once while probing:
   caller.
 - **Teaching the simulator a lever's `face`.** Recorded in the ledger as its
   own task; it changes the oracle every circuit here is verified against.
+
+---
+
+## 12. What shipped instead: a hybrid `compile` (2026-08-16)
+
+**§10's condition is still unmet, and the compiler switched over anyway --
+without weakening it.** Both walls are still standing: §5's routing failure and
+§7's projection deadlock. `the_six_condition_circuits_stage_by_stage` still
+prints three rows of `Ok` and three of `ERR`.
+
+What changed is that `compile` stopped being one compiler.
+
+### 12.1 The policy
+
+1. Refuse the netlists neither compiler can build, by name, up front --
+   `checked_topological_order`, shared by both paths.
+2. Refuse to *try* the planner on a netlist whose plan it cannot represent
+   (§12.4).
+3. Otherwise try the planner: relaxation places, A* with a bounded rip-up
+   budget routes, `realise_and_verify` puts the four physical invariants on the
+   world that would ship. Return it if all of that succeeds.
+4. On any failure -- placement, routing, verification -- fall back to the
+   row/channel/track emitter, unchanged.
+
+Deterministic: same netlist, same path, every time. Nothing on this path reads
+a clock, a random number or an environment variable.
+`CompiledCircuit::planner_kind` records which path ran, so a fallback is
+visible rather than invisible, and
+`tests/reference_circuits.rs::every_reference_circuit_records_which_path_produced_it`
+pins the answer per circuit.
+
+### 12.2 What it produced
+
+| circuit | gates | path | blocks | settle |
+|---|---|---|---|---|
+| and4 | 7 | relaxation | 472 -> **232** | 18 -> **14** |
+| full_adder | 22 | relaxation | 1,784 -> **1,065** | 42 -> **46** |
+| segment_a | 46 | emitter | 6,416 | 68 |
+| seven_segment | 84 | emitter | 16,244 | 98 |
+| verilog:and4 | 9 | relaxation | 480 -> **290** | 22 -> **14** |
+| verilog:seven_segment | 47 | emitter | 10,088 | 80 |
+
+The three emitter rows fall back for two different reasons: `segment_a` and
+`seven_segment` are tried and fail in the router; `verilog:seven_segment` is
+never tried, because §12.4's gate refuses it first.
+
+Nothing regressed in area. **`full_adder` settles four game ticks slower**, at
+40% fewer blocks -- recorded rather than smoothed over: the springs minimise
+wirelength and nothing on this path weights one by criticality.
+
+### 12.3 The cost of trying, which is the thing that nearly sank it
+
+`compile` tries the planner on **every** netlist, so every circuit that falls
+back pays the trial's failure before the path that works even starts. At the
+router's full `RIP_UP_ROUNDS = 64` that is 36.7s for `segment_a` and 21.0s for
+`seven_segment`, against a whole-suite budget where all six circuits used to
+compile in 0.17s together.
+
+`planner::TRIAL_RIP_UP_ROUNDS = 8` is what makes it affordable, and it is
+chosen from a measurement rather than from taste
+(`planner::tests::what_a_rip_up_budget_buys_and_what_it_costs`, in the tree):
+
+| budget | and4 | full_adder | verilog:and4 | segment_a | seven_segment |
+|---|---|---|---|---|---|
+| rounds spent | 1 | **5** | 1 | never routes | never routes |
+| 5 | ok | ok 0.32s | ok | fails 0.65s | fails 0.26s |
+| **8** | ok | ok 0.33s | ok | fails **1.27s** | fails **0.33s** |
+| 16 | ok | ok 0.32s | ok | fails 3.91s | fails 1.25s |
+| 32 | ok | ok 0.32s | ok | fails 10.88s | fails 4.40s |
+| 64 | ok | ok 0.34s | ok | fails **36.71s** | fails **20.97s** |
+
+Every circuit that routes at all routes within five rounds, and the loop
+returns on the first round that finishes, so a bigger budget buys those
+circuits nothing and changes their answer not at all. Only the circuits that
+never finish spend the whole budget, at a cost that grows faster than the
+budget does. So the budget is the smallest power of two above the worst
+measured need: eight.
+
+`compile`'s wall clock, all six circuits, `--release`
+(`compile::tests::what_compile_costs_on_the_six_condition_circuits`):
+
+| circuit | before | after | path | pays for a trial? |
+|---|---|---|---|---|
+| and4 | 0.00s | 0.00s | relaxation | it succeeds |
+| full_adder | 0.01s | 0.32s | relaxation | it succeeds |
+| segment_a | 0.03s | 1.54s | **emitter** | yes, **+1.51s** |
+| seven_segment | 0.08s | 1.51s | **emitter** | yes, **+1.43s** |
+| verilog:and4 | 0.00s | 0.00s | relaxation | it succeeds |
+| verilog:seven_segment | 0.05s | 0.05s | **emitter** | **no** -- §12.4's gate |
+| **total** | **0.17s** | **3.42s** | | |
+
+Two circuits pay 2.94s between them for a trial that produces nothing; the
+third pays nothing at all, because the merge gate is a read over the netlist
+and refuses before any placement runs. At the unbounded budget the two would
+have paid about 58s. That cost is real and is not hidden: it is the price of
+trying, and `TRIAL_RIP_UP_ROUNDS`'s doc is where to change it.
+
+`check.sh`'s root suite is unchanged in wall clock to the second.
+
+### 12.4 A third wall, found by shipping: the planner cannot isolate a shared merge branch
+
+`primitive_graph::expand` gives a merge branch whose producer has another
+consumer an `IsolatingRepeater` node -- the one block standing between a shared
+producer and the junction. **A `PlanCandidate` carries one anchor per gate and
+per primary input, not one per primitive**, so relaxation has nowhere to stand
+it. Measured on `tests/or_merge.rs`'s shared-branch fixture, the smallest
+netlist with the shape (a lever feeding both a NOT and a two-input merge):
+
+| | junction | shared branch's socket | repeaters in the world |
+|---|---|---|---|
+| `compile_legacy` | (28,1,5) | **Repeater** | 4 |
+| `compile_planned` | (33,1,11) | RedstoneWire | **0** |
+
+Nothing downstream catches it. `verify_terminal_style` sorts a dust terminal on
+a non-bare branch into `DirectedDustIntoSupport`, a legal style; and
+`MergeGroups` unions all of a merge's declared inputs, so the other branch
+reaching the shared consumer is same-group and permitted. That fixture does
+compute the right function through the planner, and the reason is **distance,
+not design**: the junction is fourteen cells from the sentinel's torch, so the
+backflow decays to nothing before it arrives.
+
+This is not a new defect. `compile_planned` has behaved this way since Task 10;
+what is new is that `compile` could have started using it. So `compile` does
+not: `planner_can_express` refuses the planner for any netlist with a shared
+merge branch, before the trial rather than after it, because a failure the
+planner can see becomes a fallback while a difference it cannot see would
+become a silently wrong circuit.
+
+**The gate is free.** Of the six condition circuits, five contain no merge at
+all; the sixth, `verilog:seven_segment`, has 17 merges and 23 shared branches
+and would fall back on §7's deadlock in any case. Not one block moves.
+
+Worth stating precisely, because it was written the other way round first and
+measured to be wrong: for `verilog:seven_segment` **this gate is what fires**,
+not the deadlock. Two independent reasons to fall back, and the cheap one comes
+first, so that circuit never reaches the projection at all through `compile`.
+`compile_planned` still shows the deadlock if asked.
+
+`compile::tests::the_relaxation_path_cannot_isolate_a_shared_merge_branch` pins
+all three claims -- the planner loses the repeater, `compile` refuses to use
+it, and the same merge with nothing else consuming its input goes through the
+planner.
+
+### 12.5 A hang, not a wrong answer: `routing_stats` on a foreign layout
+
+`compile::routing_stats` recomputes the emitter's own geometry from the netlist
+and reads the compiled world along the coordinates that geometry implies. On a
+relaxation-placed world those coordinates address a layout that is not there,
+and `scan_dust_run` walks a straight line from a start toward a stop that is no
+longer on it: **it does not terminate.** Measured 2026-08-16, before the fix --
+`and4_actually_uses_the_bypass_on_at_least_one_edge`,
+`every_edge_has_a_positive_total_length_even_when_dust_terminates_it`,
+`ramp_length_matches_the_bands_each_edge_actually_climbed` and
+`distinct_totals_matches_the_world_for_every_reference_circuit` all hung
+indefinitely. Not one of them failed, and a hung suite reports nothing at all.
+
+Latent since Task 10 -- `compile_planned` has produced such worlds all along
+and `analyze` is `pub` -- and reachable through the front door the moment
+`compile` started placing and4 by relaxation.
+
+Two guards, deliberately both: `analyze` and `distinct_totals_by_part` refuse a
+circuit whose `planner_kind` is not `Legacy`
+(`CompileError::NotALegacyLayout`), and `scan_dust_run` stops at the world's
+edge as well as at its target, so the *next* way of reaching it is a wrong
+number rather than a hang.
+
+The consequence upward: `timing::critical_path_repeaters` returns `Option`, and
+`TimingSummary`'s `critical_path_repeater_count` and
+`critical_path_model_game_ticks` are `Option` with it. A relaxation-placed
+circuit's routes are not in the `CompiledCircuit` at all -- realisation
+consumed the `PlanCandidate` that held them -- so there is no number, and an
+invented zero would produce a prediction that agrees with nothing while looking
+like one. The exactness check is **moved, not dropped**:
+`tests/reference_circuits.rs::the_settle_model_is_exact_on_the_emitters_layout`
+runs it for and4, full_adder and segment_a against `compile_legacy`, and
+`report_timing`'s two arms both assert -- a circuit the emitter laid out must
+reconstruct its settle time exactly, and a circuit relaxation laid out must
+have no model at all.
+
+### 12.6 What this does not do
+
+- **It does not close §5 or §7.** `segment_a` and `seven_segment` still do not
+  route; `verilog:seven_segment` still does not place. §10's condition is unmet
+  and no assertion, test or circuit set was weakened to say otherwise.
+- **It does not make the planner path safe for merges.** §12.4 gates them out;
+  it does not fix them. Fixing them means widening `PlanCandidate` to one
+  anchor per primitive, which is the same seam the DFF needs and which the
+  spring-placement plan lists as out of scope.
+- **NOT MEASURED:** whether a circuit exists that routes between rounds 9 and
+  64 and therefore now falls back where an unbounded trial would have placed it
+  by relaxation. Nothing in this tree has ever routed past round 5, and the
+  64-round runs above end with the same failure the 8-round runs do, but "not
+  observed" is not "cannot exist".
+- **NOT MEASURED:** whether the shared-merge-branch hazard would fire on a
+  circuit whose junction is close enough to the other consumer. The one fixture
+  measured is fourteen cells away and comes out correct; no closer case was
+  constructed, because the gate makes it unreachable through `compile`.
+- **NOT MEASURED:** whether `optimise` / `try_move` behave on a
+  relaxation-placed circuit reached through `compile`. They remain off the
+  shipping path, as §11 already records.

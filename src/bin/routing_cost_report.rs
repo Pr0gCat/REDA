@@ -7,6 +7,14 @@
 //! this binary's output feeds directly into. This is a measurement tool, not
 //! part of the library's public surface -- it is fine for it to panic on
 //! anything unexpected in a reference circuit.
+//!
+//! **Reports the emitter's layout, and says so by calling `compile_legacy`.**
+//! Column, ramp, track and gate entry are the row/channel/track emitter's own
+//! structural parts; a relaxation-placed circuit has none of them, and
+//! `routing_stats` refuses it rather than inventing them. Since the hybrid
+//! `compile` landed, `compile` is no longer guaranteed to return a layout this
+//! report can read, so naming the path is what keeps the report meaning what
+//! it has always meant.
 
 use std::collections::BTreeMap;
 
@@ -16,7 +24,7 @@ use reda::circuits::seven_segment::{
     build_seven_segment_netlist, build_single_segment_netlist, INPUT_NAMES as DECODER_INPUTS,
 };
 use reda::compile::routing_stats::{analyze, distinct_totals_by_part, EdgeRoute, PartTotals, RoutePart, ALL_PARTS};
-use reda::compile::{compile, Netlist};
+use reda::compile::{compile_legacy, Netlist};
 use reda::redstone::simulator::Simulator;
 use reda::timing::{observations_to_result, summarize_worst_case, watch_all_nets, TransitionResult};
 
@@ -133,7 +141,7 @@ fn critical_edges<'a>(netlist: &Netlist, edges: &'a [EdgeRoute], critical_path: 
 fn run_and_report(label: &str, netlist: &Netlist, input_names: &[&str], outputs: &[String]) {
     println!("\n================ {label} ================");
 
-    let compiled = compile(netlist).expect("reference circuits must compile");
+    let compiled = compile_legacy(netlist).expect("reference circuits must compile");
     let report = analyze(netlist, &compiled).expect("reference circuits must analyze");
     let by_part = distinct_totals_by_part(netlist, &compiled).expect("reference circuits must analyze");
 
@@ -186,13 +194,21 @@ fn run_and_report(label: &str, netlist: &Netlist, input_names: &[&str], outputs:
         "\nWorst-case settle: {} game ticks; logic-depth bound: {} game ticks; ratio: {:.2}x",
         summary.worst_settle_game_ticks, summary.logic_depth_bound_game_ticks, summary.ratio
     );
-    println!(
-        "Critical-path settle model: {} gates + {} repeaters -> {} game ticks predicted ({} measured)",
-        summary.critical_path_gate_count,
-        summary.critical_path_repeater_count,
-        summary.critical_path_model_game_ticks,
-        summary.worst_settle_game_ticks,
-    );
+    // Both terms are `Some` here by construction -- this compiles through the
+    // emitter, which is the layout `routing_stats` can read -- but they are
+    // printed through the `Option` rather than unwrapped, so that pointing
+    // this binary at another path degrades to a printed "unavailable" instead
+    // of a panic in a measurement tool.
+    match (summary.critical_path_repeater_count, summary.critical_path_model_game_ticks) {
+        (Some(repeaters), Some(model)) => println!(
+            "Critical-path settle model: {} gates + {repeaters} repeaters -> {model} game ticks predicted ({} measured)",
+            summary.critical_path_gate_count, summary.worst_settle_game_ticks,
+        ),
+        _ => println!(
+            "Critical-path settle model: {} gates, repeaters unavailable (this layout has no              row/channel/track geometry to read) -- {} game ticks measured",
+            summary.critical_path_gate_count, summary.worst_settle_game_ticks,
+        ),
+    }
     println!("Critical path: {}", summary.critical_path.join(" -> "));
 
     let crit_edges = critical_edges(netlist, &report.edges, &summary.critical_path);

@@ -36,7 +36,8 @@ use std::collections::{BTreeMap, HashMap};
 use super::{
     approach_column, band_ramp_length, band_y, bent_path_cells, build_floorplan, build_nets,
     cell_geometry_by_input_count, effective_band, geometry, reserve_columns, resolve_bypass_and_geometry,
-    CompileError, CompiledCircuit, Exit, Floorplan, Net, Netlist, Source, BYPASS_QUERY_MAX_DISTANCE, GATE_Y,
+    CompileError, CompiledCircuit, Exit, Floorplan, Net, Netlist, PlannerKind, Source,
+    BYPASS_QUERY_MAX_DISTANCE, GATE_Y,
     RAMP_REST_INTERVAL,
 };
 use crate::redstone::simulator::position::Position;
@@ -216,10 +217,32 @@ fn classify(world: &World, pos: Position) -> PartTotals {
 
 /// Mirrors `lay_dust_run`'s loop bounds exactly (same `start`, `direction`,
 /// `stop_before`), so it visits precisely the cells that call wrote.
+/// Walk from `start` toward `stop_before` one cell at a time, classifying each.
+///
+/// **The loop stops at the world's edge as well as at `stop_before`.** The two
+/// are the same stop whenever `stop_before` is on `start`'s own line in
+/// `direction`, which is what the emitter's geometry guarantees and what every
+/// caller here relies on. When it is not -- a geometry recomputed from the
+/// netlist read against a world some other placer built -- the walk marches
+/// past it forever, and a compiler that hangs is strictly worse than one that
+/// answers wrongly, because a hang reports nothing at all.
+///
+/// [`refuse_a_foreign_layout`] is what stops such a call reaching here; this
+/// bound is what stops the *next* way of reaching it from being a hang.
 fn scan_dust_run(world: &World, start: Position, direction: Facing, stop_before: Position) -> PartTotals {
+    let (size_x, size_y, size_z) = world.size();
     let mut totals = PartTotals::default();
     let mut pos = start.offset(direction);
     while pos != stop_before {
+        if pos.x < 0
+            || pos.y < 0
+            || pos.z < 0
+            || pos.x >= size_x
+            || pos.y >= size_y
+            || pos.z >= size_z
+        {
+            break;
+        }
         totals += classify(world, pos);
         pos = pos.offset(direction);
     }
@@ -404,10 +427,46 @@ fn source_pin(
 // Per-edge report
 // ---------------------------------------------------------------------
 
+/// Refuse a circuit this module cannot describe.
+///
+/// Everything here recomputes the emitter's own geometry from the netlist and
+/// then reads the compiled world along the coordinates that geometry implies.
+/// That is only a measurement of the world if the world was laid out by the
+/// emitter. Since the hybrid `compile` landed it may not have been, and the
+/// failure mode is worse than a wrong number: [`scan_dust_run`] walks in a
+/// straight line from a start toward a stop, and on a relaxation-placed world
+/// the two are no longer on the same line, so it **never terminates**.
+///
+/// Measured 2026-08-16, before this existed: pointing `compile` at the planner
+/// hung `and4_actually_uses_the_bypass_on_at_least_one_edge`,
+/// `every_edge_has_a_positive_total_length_even_when_dust_terminates_it`,
+/// `ramp_length_matches_the_bands_each_edge_actually_climbed` and
+/// `distinct_totals_matches_the_world_for_every_reference_circuit`
+/// indefinitely -- not one of them failed, and a hung suite reports nothing at
+/// all.
+///
+/// `scan_dust_run` carries its own bound as well, for the reason that function
+/// gives: one of these two guards has to be the one that is wrong before a
+/// hang comes back, not both at once.
+fn refuse_a_foreign_layout(
+    compiled: &CompiledCircuit,
+    report: &str,
+) -> Result<(), CompileError> {
+    if compiled.planner_kind() == PlannerKind::Legacy {
+        return Ok(());
+    }
+    Err(CompileError::NotALegacyLayout { report: report.to_string() })
+}
+
 /// Decompose every real netlist edge of a compiled circuit into its physical
-/// route. `compiled` must be the result of calling `compile(netlist)` --
-/// this only reads its `World`, it never rebuilds one.
+/// route. `compiled` must be the result of calling `compile_legacy(netlist)`
+/// -- this only reads its `World`, it never rebuilds one.
+///
+/// Refuses anything the emitter did not lay out; see
+/// [`refuse_a_foreign_layout`] for why that refusal is load-bearing rather
+/// than tidy.
 pub fn analyze(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<RoutingReport, CompileError> {
+    refuse_a_foreign_layout(compiled, "`routing_stats::analyze`")?;
     let (plan, nets, row_z, track_z, track_count, bypass) = recompute_geometry(netlist)?;
     let cell_of_count = cell_geometry_by_input_count(netlist);
     let world = &compiled.world;
@@ -532,6 +591,7 @@ pub fn distinct_totals_by_part(
     netlist: &Netlist,
     compiled: &CompiledCircuit,
 ) -> Result<BTreeMap<RoutePart, PartTotals>, CompileError> {
+    refuse_a_foreign_layout(compiled, "`routing_stats::distinct_totals_by_part`")?;
     let (plan, nets, row_z, track_z, track_count, bypass) = recompute_geometry(netlist)?;
     let cell_of_count = cell_geometry_by_input_count(netlist);
     let world = &compiled.world;
@@ -612,15 +672,22 @@ mod tests {
     use crate::circuits::and4::build_and4_netlist;
     use crate::circuits::full_adder::build_full_adder_netlist;
     use crate::circuits::seven_segment::{build_seven_segment_netlist, build_single_segment_netlist};
-    use crate::compile::compile;
+    use crate::compile::{compile, compile_legacy};
 
     /// The one load-bearing check for this whole module: `distinct_totals`'s
-    /// repeater count must equal the number of repeater blocks `compile`
+    /// repeater count must equal the number of repeater blocks the emitter
     /// actually placed in the world, for every reference circuit. If the
     /// scanning helpers above visited the wrong cells, or missed a segment
     /// kind, or double-counted one, this is where it would show up.
+    ///
+    /// `compile_legacy` and not `compile`, in every test in this module: this
+    /// module measures the emitter's geometry, and since the hybrid landed
+    /// `compile` may hand back a world relaxation placed, which has no such
+    /// geometry to measure. Naming the path keeps every assertion below
+    /// exactly as strong as it was; leaving it at `compile` would have made
+    /// two of the four circuits measure something else and two hang.
     fn assert_repeater_count_matches_world(netlist: &Netlist, label: &str) {
-        let compiled = compile(netlist).expect("reference circuits must compile");
+        let compiled = compile_legacy(netlist).expect("reference circuits must compile");
         let (sx, sy, sz) = compiled.world.size();
         let mut world_repeaters = 0usize;
         for x in 0..sx {
@@ -638,6 +705,81 @@ mod tests {
             totals.repeaters, world_repeaters,
             "{label}: distinct_totals's repeater count must match the world's actual repeater count"
         );
+    }
+
+    /// This module refuses a layout it cannot describe, rather than describing
+    /// it wrongly or hanging.
+    ///
+    /// `compile` places and4 by relaxation, so what comes back has no row,
+    /// no channel and no track. Before the refusal existed, `analyze` on this
+    /// exact circuit did not return: `scan_dust_run` walks a straight line from
+    /// a start toward a stop that is no longer on it. Four tests in this module
+    /// hung, and a hung suite reports nothing at all.
+    ///
+    /// Verified by injection: deleting the `refuse_a_foreign_layout` call from
+    /// `analyze` turns this red on the first assertion (it returns `Ok`), and
+    /// deleting `scan_dust_run`'s bounds check as well restores the hang.
+    #[test]
+    fn a_report_refuses_a_layout_the_emitter_did_not_lay_out() {
+        let (and4, _) = build_and4_netlist();
+        let planned = compile(&and4).expect("and4 must compile");
+        assert_eq!(
+            planned.planner_kind(),
+            PlannerKind::Unified3d,
+            "this test needs a circuit the emitter did not place; if and4 stopped taking the \
+             planner path, the fixture is wrong, not the rule"
+        );
+
+        assert_eq!(
+            analyze(&and4, &planned).err(),
+            Some(CompileError::NotALegacyLayout {
+                report: "`routing_stats::analyze`".to_string()
+            })
+        );
+        assert_eq!(
+            distinct_totals(&and4, &planned),
+            Err(CompileError::NotALegacyLayout {
+                report: "`routing_stats::distinct_totals_by_part`".to_string()
+            })
+        );
+
+        // And the control, so the refusal is known to be about the layout and
+        // not about and4: the same netlist through the emitter analyses.
+        let legacy = compile_legacy(&and4).expect("and4 must compile the legacy way");
+        assert!(analyze(&and4, &legacy).is_ok());
+    }
+
+    /// `scan_dust_run` terminates even when its stop is not on its own line.
+    ///
+    /// The straight-line walk is correct for every caller above, because the
+    /// emitter's geometry puts start and stop on one axis. This asserts what
+    /// happens when that premise is false -- which is the shape a foreign
+    /// layout presents -- and the assertion is simply that the call *returns*.
+    ///
+    /// Verified by injection: with the bounds check deleted, this test does not
+    /// terminate. That is a hang rather than a red, which is exactly the
+    /// failure mode being removed: the four tests this bug took out on
+    /// 2026-08-16 did not fail either.
+    #[test]
+    fn a_dust_scan_whose_stop_is_off_its_line_still_terminates() {
+        let mut world = World::new(8, 4, 8);
+        // Dust on every cell of the walk, so the returned totals say how far
+        // it actually got and not merely that it came back: air classifies as
+        // nothing, and a `PartTotals::default()` would also be what a walk of
+        // length zero returns.
+        for z in 0..6 {
+            world.set(2, 1, z, crate::compile::dust());
+        }
+        // North decreases z; the stop sits at a z the walk passes through, on
+        // another x entirely, so `pos != stop_before` holds at every step and
+        // only the bounds check ends the loop.
+        let totals = scan_dust_run(
+            &world,
+            Position::new(2, 1, 6),
+            Facing::North,
+            Position::new(5, 1, 2),
+        );
+        assert_eq!(totals, PartTotals { length: 6, repeaters: 0 });
     }
 
     #[test]
@@ -662,7 +804,7 @@ mod tests {
         // repeaters. Length remains the topology-independent sanity check:
         // every declared edge must still occupy a real route.
         let (and4, _) = build_and4_netlist();
-        let compiled = compile(&and4).expect("and4 must compile");
+        let compiled = compile_legacy(&and4).expect("and4 must compile");
         let report = analyze(&and4, &compiled).expect("and4 must analyze");
         assert!(!report.edges.is_empty());
         for edge in &report.edges {
@@ -685,7 +827,7 @@ mod tests {
     #[test]
     fn ramp_length_matches_the_bands_each_edge_actually_climbed() {
         let (and4, _) = build_and4_netlist();
-        let compiled = compile(&and4).expect("and4 must compile");
+        let compiled = compile_legacy(&and4).expect("and4 must compile");
         let report = analyze(&and4, &compiled).expect("and4 must analyze");
         let (_plan, nets, _row_z, _track_z, track_count, bypass) =
             recompute_geometry(&and4).expect("and4 must recompute geometry");
@@ -743,7 +885,7 @@ mod tests {
     #[test]
     fn and4_actually_uses_the_bypass_on_at_least_one_edge() {
         let (and4, _) = build_and4_netlist();
-        let compiled = compile(&and4).expect("and4 must compile");
+        let compiled = compile_legacy(&and4).expect("and4 must compile");
         let report = analyze(&and4, &compiled).expect("and4 must analyze");
         let bypassed = report.edges.iter().filter(|e| e.part(RoutePart::Bypass).length > 0).count();
         assert!(bypassed > 0, "expected at least one bypassed edge on and4, got 0 of {}", report.edges.len());

@@ -15,7 +15,7 @@ use reda::compile::planner::{
 use reda::compile::topology::Primitive;
 use reda::redstone::world::block::BlockKind;
 use reda::redstone::world::storage::World;
-use reda::compile::{compile, CompileError, CompiledCircuit, Gate, Netlist};
+use reda::compile::{compile, compile_legacy, CompileError, CompiledCircuit, Gate, Netlist};
 use reda::formats::litematic;
 use reda::redstone::simulator::Simulator;
 
@@ -104,9 +104,19 @@ fn fanout_netlist() -> Netlist {
     }
 }
 
+/// and4 through the **emitter**, which is the only path that carries a
+/// `LegacyEmission` for `seed_from_legacy` to extract.
+///
+/// `compile_legacy` and not `compile`: since the hybrid landed, `compile`
+/// places and4 by relaxation and returns a circuit with no legacy emission at
+/// all, so every test below would fail on `seed_from_legacy` returning `None`.
+/// The fix is to name the path these tests are about rather than to soften
+/// what they assert -- every one of them is a claim about what the emitter
+/// records and what a seed extracted from it reproduces, and none of them is a
+/// claim about `compile`'s choice of path.
 fn compiled_and4() -> (Netlist, CompiledCircuit) {
     let (netlist, _) = build_and4_netlist();
-    let compiled = compile(&netlist).expect("and4 is acyclic and fully driven");
+    let compiled = compile_legacy(&netlist).expect("and4 is acyclic and fully driven");
     (netlist, compiled)
 }
 
@@ -202,7 +212,9 @@ fn a_legacy_seed_re_emits_the_exact_world_the_legacy_compiler_built() {
     ];
 
     for (name, netlist) in circuits {
-        let compiled = compile(&netlist).expect("every fixture compiles");
+        // See `compiled_and4` for why this names the emitter's path: the
+        // world being reproduced here is the emitter's own.
+        let compiled = compile_legacy(&netlist).expect("every fixture compiles");
         let seed =
             seed_from_legacy(&netlist, &compiled).expect("legacy output must be extractable");
         let realised = emit_candidate(&seed, &netlist, compiled.world.size())
@@ -381,7 +393,7 @@ fn extracted_candidate_preserves_each_primitive_anchor_and_route_owner() {
 #[test]
 fn extracted_bare_merge_routes_identify_their_merge_sink_and_terminal_style() {
     let netlist = bare_merge_netlist();
-    let compiled = compile(&netlist).expect("private merge branches must compile");
+    let compiled = compile_legacy(&netlist).expect("private merge branches must compile");
     let seed = seed_from_legacy(&netlist, &compiled).expect("compiled merge must seed");
 
     assert_eq!(
@@ -400,7 +412,7 @@ fn extracted_bare_merge_routes_identify_their_merge_sink_and_terminal_style() {
 #[test]
 fn extracted_fanout_terminal_metadata_keeps_each_sink_identity() {
     let netlist = fanout_netlist();
-    let compiled = compile(&netlist).expect("fanout fixture must compile");
+    let compiled = compile_legacy(&netlist).expect("fanout fixture must compile");
     let seed = seed_from_legacy(&netlist, &compiled).expect("compiled fanout must seed");
     let route = seed
         .routes()

@@ -2323,7 +2323,23 @@ pub fn plan_from_netlist(
     // it is the `Shape` Task 11 deleted all over again. What it is *here* is
     // the private [`SHIPPING_AXES`], because Task 12 gave it a second reader
     // and a literal written out twice is a thing that can be flipped once.
-    plan_with_axes(netlist, placements, SHIPPING_AXES)
+    plan_with_axes(netlist, placements, SHIPPING_AXES, RIP_UP_ROUNDS)
+}
+
+/// [`plan_from_netlist`], with the router's rip-up budget as a parameter.
+///
+/// `compile` runs the planner as a *trial* it can abandon, so it buys a
+/// cheaper failure with [`TRIAL_RIP_UP_ROUNDS`]. Nothing else does; see that
+/// constant for what the two budgets admit and what they cost.
+///
+/// `pub(crate)` and not `pub`: how hard to try is the compiler's decision, and
+/// a public knob for it is the `Shape` Task 11 deleted all over again.
+pub(crate) fn plan_from_netlist_within(
+    netlist: &Netlist,
+    placements: &PortPlacements,
+    rip_up_rounds: usize,
+) -> Result<PlanCandidate, PlannerError> {
+    plan_with_axes(netlist, placements, SHIPPING_AXES, rip_up_rounds)
 }
 
 /// Build the body graph and run the springs. Everything `plan_with_axes` does
@@ -2361,11 +2377,12 @@ fn plan_with_axes(
     netlist: &Netlist,
     placements: &PortPlacements,
     axes: relax::Axes,
+    rip_up_rounds: usize,
 ) -> Result<PlanCandidate, PlannerError> {
     let placement = relaxed_placement(netlist, placements, axes)?;
     let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation)?;
     let candidate = candidate_from_snapped(netlist, placements, &snapped);
-    route_every_net(candidate, netlist)
+    route_every_net(candidate, netlist, rip_up_rounds)
 }
 
 /// A rounded placement, as the unrouted candidate the router is handed.
@@ -2636,17 +2653,62 @@ fn gate_depths(netlist: &Netlist) -> Result<Vec<usize>, PlannerError> {
 /// Each round removes every route that sits where a failed net needs to go and
 /// re-lays them afterwards, so a round is expensive; the point is to escape a
 /// corner an earlier net walked this one into, not to search.
-const RIP_UP_ROUNDS: usize = 64;
+pub(crate) const RIP_UP_ROUNDS: usize = 64;
+
+/// The budget [`compile::compile`] gives the planner **as a trial**, before it
+/// falls back to the emitter.
+///
+/// # Why a smaller number, and why this one
+///
+/// `compile` tries the planner on every circuit, so every circuit that falls
+/// back pays the trial's failure. Measured on 2026-08-16 by
+/// [`tests::what_a_rip_up_budget_buys_and_what_it_costs`], `--release`, on the
+/// six circuits the Stage 3 condition names:
+///
+/// | budget | and4 | full_adder | verilog:and4 | segment_a | seven_segment |
+/// |---|---|---|---|---|---|
+/// | rounds actually spent | 1 | **5** | 1 | never routes | never routes |
+/// | 5 | ok 0.00s | ok 0.32s | ok 0.00s | fails 0.65s | fails 0.26s |
+/// | 8 | ok 0.00s | ok 0.33s | ok 0.00s | fails **1.27s** | fails **0.33s** |
+/// | 16 | ok | ok 0.32s | ok | fails 3.91s | fails 1.25s |
+/// | 32 | ok | ok 0.32s | ok | fails 10.88s | fails 4.40s |
+/// | 64 (`RIP_UP_ROUNDS`) | ok | ok 0.34s | ok | fails **36.71s** | fails **20.97s** |
+///
+/// Two things decide the value. Every circuit that routes at all routes within
+/// **five** rounds, and its cost is flat from there up -- the loop returns on
+/// the first round that finishes, so a bigger budget buys those circuits
+/// nothing and changes their answer not at all. And a circuit that never routes
+/// spends the whole budget, at a cost that grows faster than the budget does,
+/// because each round starts from a more congested map than the last.
+///
+/// So the budget is the smallest power of two strictly above the worst
+/// measured need: **8**, five rounds plus three of headroom. It admits every
+/// circuit the full budget admits, bit for bit, and cuts what the three
+/// fallbacks pay from 57.7s to 1.6s.
+///
+/// # What it costs, stated rather than hidden
+///
+/// A circuit that would have routed at round 9 through 64 now falls back
+/// instead. No such circuit is known -- nothing in this tree has ever routed
+/// past round 5, and the 64-round runs above end with the same failure the
+/// 8-round runs do -- but "not known" is not "cannot exist", and raising this
+/// is a one-line change whose cost the table above prices.
+///
+/// [`compile_planned`](compile::compile_planned) is deliberately *not* bounded
+/// this way: it has no fallback, so a caller asking for the planner
+/// specifically gets the router trying as hard as it can.
+pub(crate) const TRIAL_RIP_UP_ROUNDS: usize = 8;
 
 fn route_every_net(
     candidate: PlanCandidate,
     netlist: &Netlist,
+    rip_up_rounds: usize,
 ) -> Result<PlanCandidate, PlannerError> {
     let mut order: Vec<String> = net_sinks(netlist).into_keys().collect();
     let mut congestion = Congestion::default();
     let mut last: Option<PlannerError> = None;
 
-    for _ in 0..RIP_UP_ROUNDS {
+    for _ in 0..rip_up_rounds {
         match route_in_order(candidate.clone(), netlist, &order, &congestion) {
             Ok(routed) => return Ok(routed),
             Err(failure) => {
@@ -4614,7 +4676,7 @@ mod tests {
 
     fn legacy_and4_seed_with_netlist() -> (PlanCandidate, Netlist) {
         let (netlist, _) = build_and4_netlist();
-        let compiled = compile::compile(&netlist).expect("and4 fixture must compile");
+        let compiled = compile::compile_legacy(&netlist).expect("and4 fixture must compile");
         let seed = seed_from_legacy(&netlist, &compiled).expect("compiled fixture must seed");
         (seed, netlist)
     }
@@ -4625,7 +4687,7 @@ mod tests {
             outputs: vec!["left".to_string(), "right".to_string()],
             gates: vec![Gate::nor("left", &["a"]), Gate::nor("right", &["a"])],
         };
-        let compiled = compile::compile(&netlist).expect("fanout fixture must compile");
+        let compiled = compile::compile_legacy(&netlist).expect("fanout fixture must compile");
         seed_from_legacy(&netlist, &compiled).expect("fanout fixture must seed")
     }
 
@@ -4666,7 +4728,7 @@ mod tests {
         ];
 
         for (name, netlist) in circuits {
-            let compiled = compile::compile(&netlist).expect("reference circuits compile");
+            let compiled = compile::compile_legacy(&netlist).expect("reference circuits compile");
             let seed = seed_from_legacy_parts(&netlist, compiled.legacy_emission().unwrap())
                 .expect("compiled output must seed");
             let realised = emit_candidate(&seed, &netlist, compiled.world.size())
@@ -4699,7 +4761,7 @@ mod tests {
         use crate::circuits::full_adder::build_full_adder_netlist;
 
         let (netlist, _) = build_full_adder_netlist();
-        let compiled = compile::compile(&netlist).expect("full_adder compiles");
+        let compiled = compile::compile_legacy(&netlist).expect("full_adder compiles");
         let seed = seed_from_legacy_parts(&netlist, compiled.legacy_emission().unwrap())
             .expect("compiled output must seed");
 
@@ -4725,7 +4787,7 @@ mod tests {
         use crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS;
 
         let (netlist, _) = build_and4_netlist();
-        let compiled = compile::compile(&netlist).expect("and4 compiles");
+        let compiled = compile::compile_legacy(&netlist).expect("and4 compiles");
         let seed = seed_from_legacy_parts(&netlist, compiled.legacy_emission().unwrap())
             .expect("compiled output must seed");
 
@@ -4755,7 +4817,7 @@ mod tests {
         use crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS;
 
         let (netlist, _) = build_full_adder_netlist();
-        let compiled = compile::compile(&netlist).expect("full_adder compiles");
+        let compiled = compile::compile_legacy(&netlist).expect("full_adder compiles");
         let seed = seed_from_legacy_parts(&netlist, compiled.legacy_emission().unwrap())
             .expect("compiled output must seed");
 
@@ -4782,7 +4844,7 @@ mod tests {
         use crate::redstone::world::block::BlockKind;
 
         let (netlist, _) = build_and4_netlist();
-        let compiled = compile::compile(&netlist).expect("and4 compiles");
+        let compiled = compile::compile_legacy(&netlist).expect("and4 compiles");
         let seed = seed_from_legacy_parts(&netlist, compiled.legacy_emission().unwrap())
             .expect("compiled output must seed");
         let best = optimise(
@@ -5492,7 +5554,11 @@ mod tests {
             Ok(_) => eprintln!("  compile_planned Ok"),
             Err(error) => eprintln!("  compile_planned ERR: {error}"),
         }
-        match compile::compile(&minimal) {
+        // `compile_legacy` and not `compile`: this line is here to say that the
+        // emitter builds what the planner deadlocks on, and since the hybrid
+        // landed `compile` would answer that question by falling back to the
+        // emitter and reporting Ok either way.
+        match compile::compile_legacy(&minimal) {
             Ok(_) => eprintln!("  legacy compile Ok"),
             Err(error) => eprintln!("  legacy compile ERR: {error}"),
         }
@@ -5665,6 +5731,7 @@ mod tests {
         route_every_net(
             PlanCandidate::with_primitive_nodes(anchors, nodes, Vec::new()),
             netlist,
+            RIP_UP_ROUNDS,
         )
         .expect("rows and barycentres place and4")
     }
@@ -5962,7 +6029,7 @@ mod tests {
             for (axes, label) in
                 [(relax::Axes::IN_PLANE, "IN_PLANE"), (relax::Axes::ALL, "ALL     ")]
             {
-                match plan_with_axes(&netlist, &PortPlacements::default(), axes) {
+                match plan_with_axes(&netlist, &PortPlacements::default(), axes, RIP_UP_ROUNDS) {
                     Ok(candidate) => {
                         let (x, y, z) = extent(&candidate);
                         let legal = match verify_candidate(&candidate, &netlist) {
@@ -6187,7 +6254,7 @@ mod tests {
         let (netlist, _) = build_and4_netlist();
         let planned = plan_from_netlist(&netlist, &PortPlacements::default())
             .expect("and4 places by relaxation");
-        let compiled = crate::compile::compile(&netlist).expect("and4 compiles the legacy way");
+        let compiled = crate::compile::compile_legacy(&netlist).expect("and4 compiles the legacy way");
         let legacy = seed_from_legacy(&netlist, &compiled).expect("and4 seeds from legacy");
         let rows = rows_and_barycentres(&netlist);
 
@@ -6607,7 +6674,7 @@ mod tests {
 
         let (netlist, _) = build_single_segment_netlist(0);
 
-        let compiled = compile::compile(&netlist).expect("segment_a compiles the legacy way");
+        let compiled = compile::compile_legacy(&netlist).expect("segment_a compiles the legacy way");
         let emission = compiled.legacy_emission().expect("legacy metadata");
         let seed = seed_from_legacy_parts(&netlist, emission).expect("segment_a seeds");
 
@@ -6619,7 +6686,7 @@ mod tests {
             seed.primitive_nodes().to_vec(),
             Vec::new(),
         );
-        match route_every_net(bare, &netlist) {
+        match route_every_net(bare, &netlist, RIP_UP_ROUNDS) {
             Ok(_) => eprintln!("legacy anchors: segment_a ROUTES through this router"),
             Err(error) => eprintln!("legacy anchors: segment_a FAILS: {error}"),
         }
@@ -6691,7 +6758,7 @@ mod tests {
             ("segment_a", build_single_segment_netlist(0).0),
             ("seven_segment", build_seven_segment_netlist().0),
         ] {
-            let compiled = compile::compile(&netlist).expect("compiles");
+            let compiled = compile::compile_legacy(&netlist).expect("compiles");
             let seed = seed_from_legacy_parts(&netlist, compiled.legacy_emission().unwrap())
                 .expect("seeds");
 
@@ -7451,8 +7518,22 @@ mod tests {
         panic!("and4 must admit at least one legal local move");
     }
 
+    /// and4 comes out of the hybrid `compile` placed by relaxation, and
+    /// `planner_kind` says so.
+    ///
+    /// This asserted `Unified3d` before the hybrid as well -- but back then
+    /// `compile` stamped `Unified3d` on every circuit it ever returned, so the
+    /// assertion was a constant dressed as an observation. Now the enum names
+    /// the **placer**, and this can be false: if relaxation stops placing and4,
+    /// or the router stops routing it inside [`TRIAL_RIP_UP_ROUNDS`], or
+    /// `realise_and_verify` starts refusing the result, `compile` falls back to
+    /// the emitter without saying a word and this goes red.
+    ///
+    /// The other half -- that a fallback still ships a world the planner
+    /// realised and verified -- is
+    /// `compile::tests::the_fallback_ships_the_planners_realisation_too`.
     #[test]
-    fn compile_ships_the_world_the_planner_realised() {
+    fn compile_places_and4_by_relaxation() {
         let (netlist, _) = build_and4_netlist();
         let compiled = compile::compile(&netlist).expect("and4 compiles");
 
@@ -7512,7 +7593,7 @@ mod tests {
             outputs: vec!["y".to_string()],
             gates: vec![Gate::merge("y", &["a", "b"])],
         };
-        let compiled = compile::compile(&netlist).expect("merge fixture must compile");
+        let compiled = compile::compile_legacy(&netlist).expect("merge fixture must compile");
         let mut candidate = seed_from_legacy(&netlist, &compiled).expect("merge fixture must seed");
         candidate.routes[0].terminals[0].kind = RouteTerminalKind::RepeaterIntoSupport;
 
@@ -13862,6 +13943,80 @@ mod tests {
         eprintln!("\n== what the windowed solver concluded ==");
         for verdict in &verdicts {
             eprintln!("   {verdict}");
+        }
+    }
+
+    /// What a rip-up budget buys, and what it costs the circuits it buys
+    /// nothing for.
+    ///
+    /// ```bash
+    /// cargo test --release --lib \
+    ///   compile::planner::tests::what_a_rip_up_budget_buys_and_what_it_costs \
+    ///   -- --ignored --nocapture
+    /// ```
+    ///
+    /// This is the measurement behind [`TRIAL_RIP_UP_ROUNDS`]. `compile` tries
+    /// the planner on every netlist, so the price of the trial is paid by every
+    /// circuit that ends up falling back, and picking that budget by taste
+    /// rather than by measurement is how a compiler gets half a minute slower
+    /// on the circuits that gain nothing from the change.
+    ///
+    /// It reports, per circuit: how long relaxation and `snap` take, then --
+    /// at each budget -- whether the router finished, how many rounds it
+    /// actually spent, and how long it took. **Rounds spent is the load-bearing
+    /// column.** `route_every_net` returns on the first round that finishes, so
+    /// a circuit that routes gets a bit-identical answer from every budget at
+    /// or above what it spends; only the circuits that never finish care how
+    /// big the budget is, and they are exactly the ones paying for it.
+    ///
+    /// Uses [`harvest_routing`], which is `route_every_net` line for line with
+    /// counters around it, for the reason that function's own doc gives: a
+    /// probe that measures a different router measures nothing.
+    ///
+    /// Asserts nothing. Wall clock is machine- and load-dependent, and a test
+    /// that goes red when the machine is busy is a test people learn to ignore.
+    /// What it produces is a table somebody re-runs before changing the
+    /// constant.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, six circuits at six budgets, minutes"]
+    fn what_a_rip_up_budget_buys_and_what_it_costs() {
+        use std::time::Instant;
+
+        for (name, netlist) in crate::compile::tests::the_six_condition_netlists() {
+            let started = Instant::now();
+            let placed = match relaxed_placement(&netlist, &PortPlacements::default(), SHIPPING_AXES)
+            {
+                Ok(placement) => placement,
+                Err(error) => {
+                    // A placement failure is not a routing failure, and no
+                    // budget touches it. `verilog:seven_segment` lands here.
+                    eprintln!(
+                        "{name}: place ERR after {:.2}s -- no rip-up budget reaches this: {error}",
+                        started.elapsed().as_secs_f64()
+                    );
+                    continue;
+                }
+            };
+            let snapped = match relax::snap(&placed) {
+                Ok(snapped) => snapped,
+                Err(error) => {
+                    eprintln!("{name}: snap ERR {error}");
+                    continue;
+                }
+            };
+            let candidate = candidate_from_snapped(&netlist, &PortPlacements::default(), &snapped);
+            let mut line = format!("{name}: place {:.2}s", started.elapsed().as_secs_f64());
+            for rounds in [5usize, TRIAL_RIP_UP_ROUNDS, 16, 32, RIP_UP_ROUNDS] {
+                let started = Instant::now();
+                let harvest = harvest_routing(candidate.clone(), &netlist, rounds);
+                line.push_str(&format!(
+                    " | {rounds}r {} spent={} {:.2}s",
+                    if harvest.routed.is_some() { "ok" } else { "--" },
+                    harvest.rounds,
+                    started.elapsed().as_secs_f64()
+                ));
+            }
+            eprintln!("{line}");
         }
     }
 }

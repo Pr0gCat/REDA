@@ -1236,6 +1236,23 @@ pub enum CompileError {
     /// replay target. This distinguishes an identity/style mismatch from a
     /// legal circuit that merely fails a redstone invariant.
     CandidateMetadataViolation { item: String, reason: String },
+    /// A report that reads the row/channel/track emitter's geometry was asked
+    /// about a circuit that emitter did not lay out.
+    ///
+    /// `compile::routing_stats` recomputes `build_floorplan`, `build_nets` and
+    /// `resolve_bypass_and_geometry` from the netlist and then reads the
+    /// compiled world *along the coordinates that geometry implies*. On a
+    /// relaxation-placed world those coordinates address a layout that is not
+    /// there, and the answer is not merely wrong: `scan_dust_run` walks in a
+    /// straight line from a start toward a stop that is no longer on the same
+    /// line, so before this refusal existed it **did not terminate**. Measured
+    /// 2026-08-16: four `routing_stats` tests hung indefinitely the moment
+    /// `compile` started placing and4 by relaxation.
+    ///
+    /// A latent trap rather than a new one -- `compile_planned` has produced
+    /// such worlds since Task 10, and `analyze` is `pub` -- but the hybrid is
+    /// what put it on the front path.
+    NotALegacyLayout { report: String },
     /// Two nets' routed dust physically joined into one electrical network --
     /// the connectivity invariant `compile` checks right before it would
     /// otherwise return a circuit (see `verify_connectivity`). This is the
@@ -1418,6 +1435,11 @@ impl std::fmt::Display for CompileError {
                      connected but the real, decayed signal dies out before it arrives"
                 ),
             },
+            CompileError::NotALegacyLayout { report } => write!(
+                f,
+                "{report} reads the row/channel/track emitter's geometry, and this circuit was \
+                 not laid out by it -- see `CompiledCircuit::planner_kind`"
+            ),
         }
     }
 }
@@ -6351,6 +6373,117 @@ fn merge_output_group_root(
 /// forever.) Requiring the caller to lower makes holding the wrong netlist
 /// impossible rather than merely discouraged.
 pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
+    // Both compilers refuse the same netlists for the same reasons, and this
+    // says so once rather than leaving it a property of the fallback happening
+    // to duplicate it. It also keeps the trial below from being spent on a
+    // netlist neither compiler can build.
+    //
+    // What it is *not*, measured rather than assumed: the thing that keeps
+    // `CompileError::CyclicNetlist` reaching the caller. Deleting this line
+    // leaves `an_unbuildable_netlist_is_refused_by_name_and_not_by_the_trial`
+    // green, because `compile_legacy` runs the same checks and the fallback
+    // reports the same error. What guards the caller's error is the fallback
+    // itself; see that test.
+    let _ = checked_topological_order(netlist)?;
+
+    // The policy, and it is exactly this so it is predictable:
+    //
+    // 1. Try the planner: relaxation places, A* with a **bounded** rip-up
+    //    budget routes, and `realise_and_verify` puts the four physical
+    //    invariants on the world that would ship.
+    // 2. If that succeeds, return it. `planner_kind()` says `Unified3d`.
+    // 3. On any failure -- placement, routing, verification -- fall back to
+    //    the row/channel/track emitter, which is what `compile` was before
+    //    today and is unchanged. `planner_kind()` says `Legacy`.
+    // 4. Same netlist, same path, every time. Nothing here reads a clock, a
+    //    random number, or an environment variable.
+    //
+    // Why bounded: measured on 2026-08-16 (`planner::tests::
+    // what_a_rip_up_budget_buys_and_what_it_costs`), the full 64-round budget
+    // costs segment_a 36.7s and seven_segment 21.0s *to fail*, and neither
+    // ever routes. That is time paid by every circuit that gains nothing.
+    // `TRIAL_RIP_UP_ROUNDS` is what makes the trial affordable; the constant's
+    // own doc carries the cost curve and why 8.
+    //
+    // The planner's error is discarded rather than reported, because a trial
+    // that failed is not a compile that failed -- the circuit below is. What
+    // is *not* discarded is the fact that it happened: `planner_kind` records
+    // which path produced the world, so a circuit that quietly stopped taking
+    // the planner shows up as a changed enum and a changed block count rather
+    // than as nothing at all.
+    //
+    // The one thing that is refused *before* the trial rather than after it is
+    // a netlist whose plan the planner cannot express at all. A failure it can
+    // see becomes a fallback; a difference it cannot see would become a
+    // silently wrong circuit, and no amount of trying harder finds it. See
+    // `planner_can_express`.
+    if planner_can_express(netlist) {
+        if let Ok(planned) = compile_planned_within(
+            netlist,
+            &planner::PortPlacements::default(),
+            planner::TRIAL_RIP_UP_ROUNDS,
+        ) {
+            return Ok(planned);
+        }
+    }
+    compile_legacy(netlist)
+}
+
+/// Whether the planner's `PlanCandidate` can represent everything this netlist
+/// needs built.
+///
+/// **This is a correctness gate, not a cost one.** Everything else `compile`
+/// does about the planner is "try it and fall back if it says no"; this covers
+/// the case where it would say yes and be wrong.
+///
+/// One condition today: a **merge branch whose producer signal has another
+/// consumer**. `primitive_graph::expand` gives such a branch an
+/// `IsolatingRepeater` node -- the one block standing between a shared producer
+/// and the junction, without which the merge's other branches drive the
+/// producer's other consumer backwards. But a `PlanCandidate` carries one
+/// anchor per gate and per primary input, not one per primitive (the seam Task
+/// 9 worked around and the spring-placement plan lists as out of scope), so
+/// relaxation has nowhere to stand it and the branch realises as a bare join.
+///
+/// Measured 2026-08-16 on `tests/or_merge.rs`'s shared-branch fixture -- a
+/// lever `a` feeding both a NOT and a two-input merge, which is the smallest
+/// circuit with the shape:
+///
+/// | | junction | shared branch's socket | repeaters in the world |
+/// |---|---|---|---|
+/// | `compile_legacy` | (28,1,5) | **Repeater** | 4 |
+/// | `compile_planned` | (33,1,11) | RedstoneWire | **0** |
+///
+/// Nothing catches it downstream: `verify_terminal_style` sorts a dust
+/// terminal on a non-bare branch into `DirectedDustIntoSupport`, which is a
+/// legal style, and `MergeGroups` unions all of a merge's declared inputs, so
+/// the other branch reaching the shared consumer is same-group and permitted.
+/// That fixture does come out computing the right function, and the reason is
+/// distance rather than design: the junction is fourteen cells from the
+/// sentinel's torch, so the backflow decays to nothing before it arrives.
+/// `the_relaxation_path_cannot_isolate_a_shared_merge_branch` pins all of it.
+///
+/// **This gate is free on every circuit that matters, which is why it is a
+/// gate and not a project.** Of the six circuits the Stage 3 condition names,
+/// five contain no merge at all, and the sixth (`verilog:seven_segment`, 17
+/// merges and 23 shared branches) already falls back because the projection
+/// deadlocks on it. Not one block moves.
+fn planner_can_express(netlist: &Netlist) -> bool {
+    primitive_graph::shared_merge_branches(netlist).is_empty()
+}
+
+/// Every check `compile` made before it started building, and the topological
+/// order that proves the last of them.
+///
+/// Shared rather than duplicated, because both compilers want it: the emitter
+/// still has to refuse an unrealisable gate, and the planner path never had
+/// these at all -- it relied on `plan_from_netlist` failing later, with a worse
+/// message, and since today it relies on a failure being *swallowed*.
+///
+/// The order comes back rather than being recomputed by the caller. Proving one
+/// exists **is** the acyclicity check, and `build_floorplan` needs the order
+/// itself.
+fn checked_topological_order(netlist: &Netlist) -> Result<Vec<usize>, CompileError> {
     for gate in &netlist.gates {
         let realisable = gate.kind.is_realisable() && gate.kind.accepts_arity(gate.inputs.len());
         if !realisable {
@@ -6373,9 +6506,27 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         }
     }
 
-    let order = netlist
+    netlist
         .topological_order()
-        .ok_or(CompileError::CyclicNetlist)?;
+        .ok_or(CompileError::CyclicNetlist)
+}
+
+/// Compile by the row/channel/track emitter, which places the gates and hands
+/// the planner a seed to realise.
+///
+/// This is what `compile` was before the hybrid landed, line for line, and it
+/// is still what `compile` returns for every circuit the planner cannot handle.
+/// It is kept **and public** for two reasons that are not the same reason:
+///
+/// * `compile` falls back to it, so it is production code, not a museum piece.
+/// * "is relaxation better" is a question somebody will ask again, and a
+///   comparison nobody can run is a claim nobody can check. `seed_from_legacy`
+///   is `pub` and needs a circuit carrying a `LegacyEmission` to extract from;
+///   since `compile` may not produce one, this is the only way to get one.
+///
+/// Stamps `PlannerKind::Legacy`, which nothing constructed before today.
+pub fn compile_legacy(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
+    let order = checked_topological_order(netlist)?;
 
     let mut producer_of: HashMap<&str, usize> = HashMap::new();
     for (index, gate) in netlist.gates.iter().enumerate() {
@@ -6546,24 +6697,45 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
         output_positions: realised.ports.output_positions,
         gate_output_positions: realised.ports.gate_output_positions,
         gate_facings: vec![geometry::CellFacing::NORTH; netlist.gates.len()],
-        planner_kind: PlannerKind::Unified3d,
+        planner_kind: PlannerKind::Legacy,
         legacy_emission: Some(legacy_emission),
     })
 }
 
 /// Compile without the legacy emitter at all: the planner places and routes.
 ///
-/// `compile` still uses the row/channel/track path to produce its seed, so
-/// what it ships is that layout, realised and checked by the planner. This
-/// places from the netlist alone, which is the only way to lay out something
-/// the old emitter has no way to express.
+/// `compile` tries this first and falls back to `compile_legacy` when it
+/// fails. This is the same path with **no fallback and no budget cut**: it
+/// gets the router's full `RIP_UP_ROUNDS`, and a failure is returned rather
+/// than swallowed. That is what makes it the right entry point for a
+/// measurement or a probe -- `compile` cannot tell you *why* the planner
+/// declined a circuit, and this can.
+///
+/// It is also the only way to place from pinned ports, which `compile` has no
+/// parameter for.
 ///
 /// The result carries no `LegacyEmission`, because there was none.
 pub fn compile_planned(
     netlist: &Netlist,
     placements: &planner::PortPlacements,
 ) -> Result<CompiledCircuit, CompileError> {
-    let candidate = planner::plan_from_netlist(netlist, placements).map_err(planner_error)?;
+    compile_planned_within(netlist, placements, planner::RIP_UP_ROUNDS)
+}
+
+/// [`compile_planned`], with the router's rip-up budget as a parameter.
+///
+/// Private, and a parameter rather than a `pub` knob, for the reason Task 11
+/// deleted `Shape` for: how hard to try is this compiler's decision, not a
+/// caller's. `compile` spends [`planner::TRIAL_RIP_UP_ROUNDS`] because it has
+/// somewhere to fall back to; `compile_planned` spends
+/// [`planner::RIP_UP_ROUNDS`] because it does not.
+fn compile_planned_within(
+    netlist: &Netlist,
+    placements: &planner::PortPlacements,
+    rip_up_rounds: usize,
+) -> Result<CompiledCircuit, CompileError> {
+    let candidate =
+        planner::plan_from_netlist_within(netlist, placements, rip_up_rounds).map_err(planner_error)?;
     // Read before `candidate` is moved into `realise_and_verify`, and read off
     // the candidate rather than assumed: since Task 10 `plan_from_netlist`
     // places by relaxation and relaxation turns gates, so a verifier handed
@@ -6597,12 +6769,26 @@ fn planner_error(error: planner::PlannerError) -> CompileError {
     }
 }
 
-/// Which stage produced the world a `CompiledCircuit` carries.
+/// Which of `compile`'s two paths produced the world a `CompiledCircuit`
+/// carries.
+///
+/// **This names the placer, not the realiser.** Both paths end in
+/// `planner::realise_and_verify`, so the world is the planner's realisation
+/// either way and the four physical invariants ran on it either way; what
+/// differs is where the anchors came from and who routed between them.
+///
+/// It exists so a fallback is visible. `compile` swallows the planner's error
+/// by design -- a trial that failed is not a compile that failed -- and
+/// without a record of the choice, a circuit that quietly stopped taking the
+/// planner would look exactly like a circuit that never took it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlannerKind {
-    /// Emitted by the row/channel/track router.
+    /// Placed and routed by the row/channel/track emitter, then realised and
+    /// verified by `compile::planner` from that seed. `compile_legacy`, and
+    /// `compile` for every circuit the planner declined.
     Legacy,
-    /// Realised from a `PlanCandidate` by `compile::planner`.
+    /// Placed by spring relaxation and routed by A* with rip-up, both in
+    /// `compile::planner`. `compile_planned`, and `compile` where it works.
     Unified3d,
 }
 
@@ -6916,33 +7102,34 @@ mod tests {
         }
     }
 
-    /// Every compiled circuit says which way it built each gate, and for
-    /// `compile` the answer is still north for all of them.
+    /// Every compiled circuit says which way it built each gate, and on the
+    /// **emitter's** path the answer is still north for all of them.
     ///
-    /// Still, and truthfully: since Task 10 `compile_planned` reports the
-    /// facings relaxation chose, but `compile` is a different path -- it seeds
-    /// the planner from this emitter's own output through
-    /// `seed_from_legacy_parts`, never calls `plan_from_netlist`, and
-    /// `from_legacy` zero-fills `variant_indices`. Task 13 is where that
-    /// changes. `planner::a_planned_circuit_reports_the_facings_it_was_built_at`
-    /// is the same assertion for the path that does turn gates.
+    /// `compile_legacy` and not `compile`, and the change of name is the whole
+    /// point: the emitter builds north and reports north, and it now has to
+    /// keep doing that while the hybrid's other path turns gates freely. This
+    /// was written against `compile` when `compile` *was* the emitter; pointing
+    /// it at `compile` today would assert that and4 comes back north, which is
+    /// false, and weakening it to "some facing" would assert nothing.
+    /// `planner::a_planned_circuit_reports_the_facings_it_was_built_at` is the
+    /// same assertion for the path that does turn gates.
     ///
     /// The value is dull; having somewhere to put it is not. Three modules verify
     /// a world by recomputing where a gate's sockets must be, and once relaxation
     /// turns gates they need to be told rather than to assume -- and a merge's
     /// junction is dust, which cannot be asked.
     #[test]
-    fn a_compiled_circuit_records_a_facing_for_every_gate() {
+    fn a_legacy_compiled_circuit_records_a_facing_for_every_gate() {
         use crate::circuits::and4::build_and4_netlist;
         use crate::compile::geometry::CellFacing;
 
         let (netlist, _) = build_and4_netlist();
-        let compiled = compile(&netlist).expect("and4 compiles");
+        let compiled = compile_legacy(&netlist).expect("and4 compiles");
 
         assert_eq!(compiled.gate_facings.len(), netlist.gates.len());
         assert!(
             compiled.gate_facings.iter().all(|&facing| facing == CellFacing::NORTH),
-            "`compile` seeds from the legacy emitter, so every gate must still be north"
+            "`compile_legacy` seeds from the legacy emitter, so every gate must still be north"
         );
     }
 
@@ -7494,7 +7681,13 @@ mod tests {
     #[test]
     fn directed_dust_terminal_is_live_and_powers_a_nor_support() {
         let netlist = directed_dust_terminal_netlist();
-        let compiled = compile(&netlist).expect("a one-input NOR must compile");
+        // `compile_legacy`, because `resolve_directed_dust_terminals` is the
+        // emitter's own pass and the socket this reads is derived from a
+        // north-facing gate. The hybrid `compile` would place this by
+        // relaxation, which turns gates and chooses its terminals in
+        // `realise_branch_from` instead -- a different mechanism, covered by
+        // `planner::tests::a_planned_terminal_style_is_what_the_world_holds`.
+        let compiled = compile_legacy(&netlist).expect("a one-input NOR must compile");
 
         let (torch_x, torch_y, torch_z) = *compiled
             .gate_output_positions
@@ -7551,7 +7744,11 @@ mod tests {
         let (gate_level, _) = circuit.baked_netlist();
         let netlist = crate::compile::lowering::lower_optimised(&gate_level)
             .expect("the shipped netlist must lower");
-        let compiled = compile(&netlist).expect("the lowered circuit must compile");
+        // `compile_legacy` for the same reason as the test above: the claim
+        // being made is about `resolve_directed_dust_terminals` replacing the
+        // emitter's mandatory terminal repeaters, and that pass runs only on
+        // the emitter's path.
+        let compiled = compile_legacy(&netlist).expect("the lowered circuit must compile");
 
         let direct_terminal_count = netlist
             .gates
@@ -8504,5 +8701,364 @@ mod tests {
             message.contains("out") && message.contains("(2, 0, 1)"),
             "message: {message}"
         );
+    }
+
+    /// The six circuits the Stage 3 condition names, lowered exactly the way
+    /// their own acceptance tests lower them.
+    ///
+    /// The four hand-written ones are pure NOR and need no lowering. The two
+    /// Verilog ones arrive by `baked_netlist` rather than by synthesis, so this
+    /// needs no Yosys and gives the same answer on every machine, and each is
+    /// lowered by the function that ships it -- `lower` for `verilog:and4`,
+    /// `lower_optimised` for `verilog:seven_segment`. Compiling through a
+    /// lowering nothing ships would answer a question nobody asked.
+    ///
+    /// Shared by every measurement below rather than written out per test:
+    /// `planner::tests::the_six_condition_circuits_stage_by_stage` carries the
+    /// same list, and two lists that are meant to be the same list drift.
+    pub(crate) fn the_six_condition_netlists() -> Vec<(&'static str, Netlist)> {
+        use crate::circuits::and4::build_and4_netlist;
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+        use crate::compile::lowering::{lower, lower_optimised};
+
+        let lowered = |name: &str, optimised: bool| -> Netlist {
+            let circuit = crate::circuits::verilog::find(name)
+                .unwrap_or_else(|| panic!("{name} must be in the catalog"));
+            let (netlist, _) = circuit.baked_netlist();
+            if optimised { lower_optimised(&netlist) } else { lower(&netlist) }
+                .unwrap_or_else(|error| panic!("{name} must lower: {error}"))
+        };
+
+        vec![
+            ("and4", build_and4_netlist().0),
+            ("full_adder", build_full_adder_netlist().0),
+            ("segment_a", build_single_segment_netlist(0).0),
+            ("seven_segment", build_seven_segment_netlist().0),
+            ("verilog:and4", lowered("verilog:and4", false)),
+            ("verilog:seven_segment", lowered("verilog:seven_segment", true)),
+        ]
+    }
+
+    /// Which of `compile`'s two paths each of the six condition circuits
+    /// takes, pinned.
+    ///
+    /// `tests/reference_circuits.rs` pins the same thing for the four
+    /// hand-written circuits; this is here because the two Verilog ones need
+    /// `lowering`, and because the third *kind* of fallback only appears among
+    /// them. The three that fall back fail in three different places:
+    ///
+    /// | circuit | gates | path | why |
+    /// |---|---|---|---|
+    /// | and4 | 7 | `Unified3d` | routes on rip-up round 1 |
+    /// | full_adder | 22 | `Unified3d` | routes on rip-up round 5 |
+    /// | segment_a | 46 | `Legacy` | tried and failed: `no safe local route` |
+    /// | seven_segment | 84 | `Legacy` | tried and failed: `no safe local route` |
+    /// | verilog:and4 | 9 | `Unified3d` | routes on rip-up round 1 |
+    /// | verilog:seven_segment | 47 | `Legacy` | **never tried**: 23 shared merge branches |
+    ///
+    /// The last row is the one worth having, and the reason it falls back is
+    /// not the obvious one. It is the only circuit here with a merge at all,
+    /// so `planner_can_express` refuses it **before** the trial -- it never
+    /// reaches the projection deadlock that
+    /// `planner::tests::the_smallest_netlist_that_deadlocks_the_projection`
+    /// reduces to five gates, though `compile_planned` still shows that
+    /// deadlock if asked. Two independent reasons to fall back, and this
+    /// circuit has both; the gate is the one that fires.
+    #[test]
+    fn which_path_compile_takes_on_each_of_the_six_condition_circuits() {
+        let expected = [
+            ("and4", PlannerKind::Unified3d),
+            ("full_adder", PlannerKind::Unified3d),
+            ("segment_a", PlannerKind::Legacy),
+            ("seven_segment", PlannerKind::Legacy),
+            ("verilog:and4", PlannerKind::Unified3d),
+            ("verilog:seven_segment", PlannerKind::Legacy),
+        ];
+
+        for ((name, netlist), (expected_name, expected_kind)) in
+            the_six_condition_netlists().into_iter().zip(expected)
+        {
+            assert_eq!(name, expected_name, "the two lists must stay in the same order");
+            let compiled = compile(&netlist)
+                .unwrap_or_else(|error| panic!("{name} must compile by one path or the other: {error}"));
+            assert_eq!(
+                compiled.planner_kind(),
+                expected_kind,
+                "{name} took the other path"
+            );
+        }
+    }
+
+    /// A netlist the planner tries and cannot route still compiles, through
+    /// the emitter. This is the policy's fallback clause, on the smallest
+    /// circuit in the tree that actually exercises it.
+    ///
+    /// **`segment_a` and not the projection-deadlock netlist**, which is where
+    /// this was pointed first and which turned out to prove something else:
+    /// the deadlock shape is a merge with *both* branches isolated, so
+    /// `planner_can_express` refuses it before the trial ever runs and the
+    /// fallback is never reached. Verified by injection -- deleting the
+    /// fallback entirely left that version **green**. `segment_a` has no merge
+    /// at all, so the only way it reaches the emitter is by being tried and
+    /// failing.
+    ///
+    /// **The pairing is the test.** That the trial really does fail is
+    /// asserted here too, at the budget `compile` actually spends, because
+    /// without it the other assertion could pass for the boring reason. If
+    /// routing is ever fixed, this goes red on the first assertion and says
+    /// so, which is the right way to find out.
+    #[test]
+    fn compile_falls_back_when_the_planner_cannot_route() {
+        use crate::circuits::seven_segment::build_single_segment_netlist;
+
+        let (netlist, _) = build_single_segment_netlist(0);
+        assert!(
+            planner_can_express(&netlist),
+            "segment_a must be a netlist the planner is willing to try"
+        );
+
+        let refusal = compile_planned_within(
+            &netlist,
+            &planner::PortPlacements::default(),
+            planner::TRIAL_RIP_UP_ROUNDS,
+        )
+        .err()
+        .expect("the router must still fail on segment_a at the trial budget");
+        assert!(
+            refusal.to_string().contains("no safe local route"),
+            "the planner must fail in the router, not somewhere else: {refusal}"
+        );
+
+        let compiled = compile(&netlist).expect("the emitter must pick this up");
+        assert_eq!(compiled.planner_kind(), PlannerKind::Legacy);
+    }
+
+    /// The planner leaves a shared merge branch unisolated, `compile` refuses
+    /// to use it for such a netlist, and every number here is measured.
+    ///
+    /// This is the whole of [`planner_can_express`]'s justification, pinned so
+    /// the gate cannot become decorative. Three claims, each of which can fail
+    /// independently:
+    ///
+    /// 1. **The planner really does lose the repeater.** `compile_planned` on
+    ///    the smallest netlist with the shape -- a lever feeding both a NOT and
+    ///    a two-input merge -- returns a world with *no repeater anywhere*, and
+    ///    the shared branch's own socket holding plain dust. If somebody
+    ///    teaches `PlanCandidate` one anchor per primitive, this goes red and
+    ///    the gate can go with it.
+    /// 2. **`compile` does not use it.** The circuit comes back `Legacy`, with
+    ///    the isolating repeater in the shared branch's socket, which is what
+    ///    `tests/or_merge.rs`'s
+    ///    `compile_places_the_isolating_repeater_on_exactly_the_shared_branch`
+    ///    asserts about the shipping path.
+    /// 3. **The gate is about the shape and not about the circuit.** Dropping
+    ///    the second consumer makes both branches bare, and the same netlist
+    ///    then goes through the planner.
+    ///
+    /// Not asserted, and worth saying: the planner's world for (1) computes
+    /// the right function anyway. The junction is fourteen cells from the
+    /// sentinel's torch, so the backflow decays before it arrives. That is
+    /// distance, not isolation, and it is exactly why this is gated rather
+    /// than left to a truth table to notice.
+    #[test]
+    fn the_relaxation_path_cannot_isolate_a_shared_merge_branch() {
+        use crate::compile::geometry::input_directions;
+
+        // `a` drives the merge *and* the sentinel NOR, so the merge's first
+        // branch is not bare. `b` drives only the merge, so its branch is.
+        let shared = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec!["s".to_string(), "m".to_string()],
+            gates: vec![
+                Gate::nor("s", &["a"]),
+                Gate {
+                    name: "m".to_string(),
+                    inputs: vec!["a".to_string(), "b".to_string()],
+                    output: "m".to_string(),
+                    kind: GateKind::Or(2),
+                },
+            ],
+        };
+        assert_eq!(
+            primitive_graph::shared_merge_branches(&shared),
+            vec![(1usize, 0usize)],
+            "the merge's first branch shares its producer with the sentinel"
+        );
+
+        // (1) What the planner builds for it, on its own.
+        let planned = compile_planned(&shared, &planner::PortPlacements::default())
+            .expect("the planner places and routes this fixture");
+        let socket = |compiled: &CompiledCircuit| {
+            let &(jx, jy, jz) = compiled.gate_output_positions.get("m").expect("the merge");
+            let facing = compiled.gate_facings[1];
+            Position::new(jx, jy, jz).offset(input_directions(facing)[0])
+        };
+        let planned_socket = socket(&planned);
+        assert_eq!(
+            planned
+                .world
+                .get(planned_socket.x, planned_socket.y, planned_socket.z)
+                .kind,
+            BlockKind::RedstoneWire,
+            "the planner joins the shared branch bare"
+        );
+        assert_eq!(
+            count_kind(&planned.world, BlockKind::Repeater),
+            0,
+            "and it places no repeater anywhere at all, so the isolation is not merely moved"
+        );
+
+        // (2) What `compile` therefore does about it.
+        let shipped = compile(&shared).expect("the emitter picks this up");
+        assert_eq!(shipped.planner_kind(), PlannerKind::Legacy);
+        let shipped_socket = socket(&shipped);
+        assert_eq!(
+            shipped
+                .world
+                .get(shipped_socket.x, shipped_socket.y, shipped_socket.z)
+                .kind,
+            BlockKind::Repeater,
+            "the emitter isolates the shared branch in its own socket"
+        );
+
+        // (3) The control: the same merge with nothing else consuming `a`.
+        let private = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec!["m".to_string()],
+            gates: vec![Gate {
+                name: "m".to_string(),
+                inputs: vec!["a".to_string(), "b".to_string()],
+                output: "m".to_string(),
+                kind: GateKind::Or(2),
+            }],
+        };
+        assert!(primitive_graph::shared_merge_branches(&private).is_empty());
+        assert_eq!(
+            compile(&private).expect("a private merge compiles").planner_kind(),
+            PlannerKind::Unified3d,
+            "the gate is about the shape, not about merges as such"
+        );
+    }
+
+    /// Blocks of one kind, counted the way every size measurement in this tree
+    /// counts them.
+    fn count_kind(world: &World, kind: BlockKind) -> usize {
+        let (size_x, size_y, size_z) = world.size();
+        let mut count = 0usize;
+        for x in 0..size_x {
+            for y in 0..size_y {
+                for z in 0..size_z {
+                    if world.get(x, y, z).kind == kind {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
+    }
+
+    /// A netlist neither compiler can build is refused **by name**, not by
+    /// whatever the planner made of it.
+    ///
+    /// The failure this guards against is the trial's error escaping: the
+    /// planner wraps a bad netlist in `CandidateMetadataViolation { item:
+    /// "candidate", reason: "cannot realise node netlist: signal `nobody` is
+    /// never driven" }`, which names the planner's own bookkeeping where
+    /// `UndrivenSignal("nobody")` names the netlist. Verified by injection:
+    /// returning the trial's `Err` instead of falling back turns this red with
+    /// exactly that message.
+    ///
+    /// **What it does not prove, and this is a correction of an earlier
+    /// claim.** It was written asserting that the up-front
+    /// `checked_topological_order` call is what keeps the right error
+    /// reaching the caller. Measured: deleting that call alone leaves this
+    /// test **green**, because `compile_legacy` runs the very same checks and
+    /// the fallback therefore reports the very same error. So the up-front
+    /// call buys two other things -- the trial is not run at all on a netlist
+    /// neither compiler can build, and the shared contract is stated in one
+    /// place instead of being a property of the fallback happening to
+    /// duplicate it -- and this test cannot see either. It is named for what
+    /// it can see.
+    #[test]
+    fn an_unbuildable_netlist_is_refused_by_name_and_not_by_the_trial() {
+        let cyclic = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["x".to_string()],
+            gates: vec![Gate::nor("x", &["y"]), Gate::nor("y", &["x"])],
+        };
+        assert_eq!(compile(&cyclic).err(), Some(CompileError::CyclicNetlist));
+
+        let undriven = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["x".to_string()],
+            gates: vec![Gate::nor("x", &["nobody"])],
+        };
+        assert_eq!(
+            compile(&undriven).err(),
+            Some(CompileError::UndrivenSignal("nobody".to_string()))
+        );
+    }
+
+    /// What `compile` costs on every circuit the condition names, in seconds.
+    ///
+    /// ```bash
+    /// cargo test --release --lib \
+    ///   compile::tests::what_compile_costs_on_the_six_condition_circuits \
+    ///   -- --ignored --nocapture
+    /// ```
+    ///
+    /// This exists because the hybrid's one real risk is a time regression, not
+    /// a correctness one: `compile` tries the planner first, so every circuit
+    /// that falls back pays the trial's failure before the path that works even
+    /// starts. A number nobody can reproduce is not a measurement, so the
+    /// harness that produced the before/after table lives here rather than in a
+    /// commit message.
+    ///
+    /// Asserts nothing. Wall clock is machine- and load-dependent, and a test
+    /// that fails when the machine is busy is a test people learn to ignore.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, wall-clock timing of all six circuits"]
+    fn what_compile_costs_on_the_six_condition_circuits() {
+        use std::time::Instant;
+
+        for (name, netlist) in the_six_condition_netlists() {
+            let started = Instant::now();
+            let result = compile(&netlist);
+            let elapsed = started.elapsed().as_secs_f64();
+            match result {
+                Ok(compiled) => eprintln!(
+                    "{name}: {} gates, {:.2}s, {:?}, {} blocks",
+                    netlist.gates.len(),
+                    elapsed,
+                    compiled.planner_kind(),
+                    occupied(&compiled.world),
+                ),
+                Err(error) => eprintln!(
+                    "{name}: {} gates, {:.2}s, ERR {error}",
+                    netlist.gates.len(),
+                    elapsed
+                ),
+            }
+        }
+    }
+
+    /// Non-air cells, counted the way every size measurement in this tree
+    /// counts them.
+    fn occupied(world: &World) -> usize {
+        let (size_x, size_y, size_z) = world.size();
+        let mut count = 0usize;
+        for x in 0..size_x {
+            for y in 0..size_y {
+                for z in 0..size_z {
+                    if world.get(x, y, z).kind != BlockKind::Air {
+                        count += 1;
+                    }
+                }
+            }
+        }
+        count
     }
 }

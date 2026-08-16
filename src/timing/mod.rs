@@ -272,22 +272,36 @@ fn critical_path_non_merge_gate_count(netlist: &Netlist, path: &[String]) -> usi
 /// path shorter than two signals (a primary input with no gates behind it)
 /// has no edges and so no repeaters.
 ///
+/// `None` when the layout has no per-edge route breakdown to read.
+///
+/// `routing_stats` recomputes the row/channel/track emitter's own geometry and
+/// reads the world along it, so it can only describe a circuit that emitter
+/// laid out. Since the hybrid `compile` landed, a circuit may instead have
+/// been placed by relaxation and routed by A*, and its routes are not in the
+/// `CompiledCircuit` at all -- they live in the `PlanCandidate`, which
+/// realisation consumes. There is no number to return, so this returns none
+/// rather than an invented one; `TimingSummary`'s model term is `Option` for
+/// the same reason, and the exactness check that reads it is skipped rather
+/// than softened.
+///
 /// Panics if `compiled` is not really the result of compiling `netlist`, or
 /// if `critical_path` was not produced by walking `netlist` (both are
 /// programming errors in the caller, not something a valid circuit can
-/// trigger -- `compile::routing_stats`'s own tests already establish that
-/// `analyze` succeeds on every reference circuit `compile` accepts).
-pub fn critical_path_repeaters(netlist: &Netlist, compiled: &CompiledCircuit, critical_path: &[String]) -> usize {
+/// trigger).
+pub fn critical_path_repeaters(
+    netlist: &Netlist,
+    compiled: &CompiledCircuit,
+    critical_path: &[String],
+) -> Option<usize> {
     if critical_path.len() < 2 {
-        return 0;
+        return Some(0);
     }
 
     let producer_of: HashMap<&str, usize> =
         netlist.gates.iter().enumerate().map(|(i, gate)| (gate.output.as_str(), i)).collect();
-    let report = routing_stats::analyze(netlist, compiled)
-        .expect("a netlist that has already compiled must also analyze");
+    let report = routing_stats::analyze(netlist, compiled).ok()?;
 
-    critical_path
+    Some(critical_path
         .windows(2)
         .map(|hop| {
             let (source, sink_output) = (&hop[0], &hop[1]);
@@ -309,7 +323,7 @@ pub fn critical_path_repeaters(netlist: &Netlist, compiled: &CompiledCircuit, cr
                 .total()
                 .repeaters
         })
-        .sum()
+        .sum())
 }
 
 /// The corrected settle-time model: predicts settle time from the *actual
@@ -416,13 +430,21 @@ pub struct TimingSummary {
     pub critical_path_gate_count: usize,
     /// Repeaters physically routed along the actual measured critical path's
     /// edges, read back from the compiled world.
-    pub critical_path_repeater_count: usize,
+    ///
+    /// `None` for a layout `compile::routing_stats` cannot describe -- see
+    /// [`critical_path_repeaters`].
+    pub critical_path_repeater_count: Option<usize>,
     /// The corrected settle-time model's prediction **for this layout**:
     /// reconstructed from `critical_path_gate_count` and
     /// `critical_path_repeater_count`. Exact agreement with
     /// `worst_settle_game_ticks` is the exactness check this project runs on
     /// every reference circuit -- see `critical_path_settle_model_game_ticks`.
-    pub critical_path_model_game_ticks: u64,
+    ///
+    /// `None` exactly when `critical_path_repeater_count` is: the model is a
+    /// function of the repeater count, so without one there is no prediction
+    /// to compare against, and a prediction with the repeater term silently
+    /// taken as zero would agree with nothing and look like a real number.
+    pub critical_path_model_game_ticks: Option<u64>,
     /// output name -> number of transitions in which it glitched.
     pub glitch_counts: BTreeMap<String, usize>,
 }
@@ -496,8 +518,9 @@ pub fn summarize_worst_case(
         .and_then(|timing| timing.changes().last())
         .map(|&(_, value)| value)
         .unwrap_or(true);
-    let critical_path_model_game_ticks =
-        critical_path_settle_model_game_ticks(critical_path_gate_count, critical_path_repeater_count, lamp_turns_on);
+    let critical_path_model_game_ticks = critical_path_repeater_count.map(|repeaters| {
+        critical_path_settle_model_game_ticks(critical_path_gate_count, repeaters, lamp_turns_on)
+    });
 
     TimingSummary {
         worst_settle_game_ticks: worst_ticks,

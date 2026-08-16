@@ -483,6 +483,65 @@ pub fn expand(netlist: &Netlist, library: &Library) -> Result<PrimitiveGraph, Ex
     expand_with_selection(netlist, library, &EntrySelection::new())
 }
 
+/// signal name -> every gate index it feeds an input of, repeated once per
+/// input if it feeds the same gate more than once.
+fn consumers_of(netlist: &Netlist) -> HashMap<&str, Vec<usize>> {
+    let mut consumers: HashMap<&str, Vec<usize>> = HashMap::new();
+    for (g, gate) in netlist.gates.iter().enumerate() {
+        for input in &gate.inputs {
+            consumers.entry(input.as_str()).or_default().push(g);
+        }
+    }
+    consumers
+}
+
+/// The fanout rule, stated once: a merge branch is **bare** iff its own
+/// producer signal drives nothing besides this merge.
+///
+/// A bare branch may join the junction directly. A branch that is not bare
+/// needs an [`TemplateNode::IsolatingRepeater`] between the shared producer
+/// and the junction, or the other consumer reads whatever the merge's *other*
+/// branches are driving.
+fn branch_is_bare_given(
+    consumers_of: &HashMap<&str, Vec<usize>>,
+    signal: &str,
+    into_gate: usize,
+) -> bool {
+    consumers_of
+        .get(signal)
+        .is_some_and(|gates| gates.iter().all(|&g| g == into_gate))
+}
+
+/// Every merge branch that needs an isolating repeater, as
+/// `(gate index, input index)`.
+///
+/// The same rule [`expand`] applies, over the same function, so the two cannot
+/// drift: this is `expand`'s own loop with the graph-building removed.
+///
+/// `compile` reads this **before** it tries the planner. An isolating repeater
+/// is a primitive with no gate and no primary input of its own, and a
+/// `PlanCandidate` carries one anchor per gate and per primary input -- so
+/// relaxation has nowhere to stand it, and the branch realises as a bare join.
+/// Measured on 2026-08-16 on the smallest circuit that shows it
+/// (`tests/or_merge.rs`'s shared-branch fixture): through the planner the
+/// junction's two sockets are both dust and the world holds **no repeater at
+/// all**, where the emitter puts one in the shared branch's socket.
+pub(crate) fn shared_merge_branches(netlist: &Netlist) -> Vec<(usize, usize)> {
+    let consumers = consumers_of(netlist);
+    let mut shared = Vec::new();
+    for (g, gate) in netlist.gates.iter().enumerate() {
+        if !gate.is_merge() {
+            continue;
+        }
+        for (index, input) in gate.inputs.iter().enumerate() {
+            if !branch_is_bare_given(&consumers, input, g) {
+                shared.push((g, index));
+            }
+        }
+    }
+    shared
+}
+
 /// Rebuild the graph after changing one gate's library entry.  The caller
 /// keeps the prior selections; all other gates retain their chosen/default
 /// entry.  This deliberately validates topology only and never invokes the
@@ -525,16 +584,9 @@ fn expand_with_selection(
     // signal name -> every gate index it feeds an input of (repeated once
     // per input, if it feeds the same gate more than once) -- `branch_is_
     // bare`'s whole basis, and nothing else in this function needs it.
-    let mut consumers_of: HashMap<&str, Vec<usize>> = HashMap::new();
-    for (g, gate) in netlist.gates.iter().enumerate() {
-        for input in &gate.inputs {
-            consumers_of.entry(input.as_str()).or_default().push(g);
-        }
-    }
+    let consumers_of = consumers_of(netlist);
     let branch_is_bare = |signal: &str, into_gate: usize| {
-        consumers_of
-            .get(signal)
-            .is_some_and(|gs| gs.iter().all(|&g| g == into_gate))
+        branch_is_bare_given(&consumers_of, signal, into_gate)
     };
 
     let order = netlist

@@ -37,30 +37,56 @@ Four hand-written reference circuits, built gate by gate, plus the same two
 functions written in Verilog and synthesised. `verilog:and4` and `and4` compute
 the same thing and are entirely different circuits, which is the point.
 
-Measured at `0c2c710` with `cargo test --release --test reference_circuits --
---nocapture` and `cargo test --release --test verilog_frontend -- --nocapture`
-(settle is worst-case game ticks over a full input sweep; the bounding box is
-the occupied extent, not the world the compiler allocates around it):
+Measured at the hybrid switchover with `cargo test --release --test
+reference_circuits -- --nocapture` and `cargo test --release --test
+verilog_frontend -- --nocapture` (settle is worst-case game ticks over a full
+input sweep; the bounding box is the occupied extent, not the world the
+compiler allocates around it). **`path` is which of `compile`'s two placers
+produced the row** -- see "Two placers, one entry point" below:
 
-| circuit | gates | blocks | settle | bounding box |
-|---|---|---|---|---|
-| and4 | 7 | 472 | 18 | 49x4x47 |
-| full_adder | 22 | 1784 | 42 | 53x6x125 |
-| segment_a | 46 | 6416 | 68 | 137x6x182 |
-| seven_segment | 84 | 16244 | 98 | 219x6x251 |
-| verilog:and4 | 9 | 480 | 22 | 47x4x47 |
-| verilog:seven_segment | 47 | 10088 | 80 | 151x6x236 |
+| circuit | gates | blocks | settle | bounding box | path |
+|---|---|---|---|---|---|
+| and4 | 7 | 232 | 14 | 45x4x25 | relaxation |
+| full_adder | 22 | 1065 | 46 | 35x5x107 | relaxation |
+| segment_a | 46 | 6416 | 68 | 137x6x182 | emitter |
+| seven_segment | 84 | 16244 | 98 | 219x6x251 | emitter |
+| verilog:and4 | 9 | 290 | 14 | 50x4x29 | relaxation |
+| verilog:seven_segment | 47 | 10088 | 80 | 151x6x236 | emitter |
 
 The hand-written four are pinned by
 `the_hand_written_circuits_keep_their_measured_size`: no lowering touches pure
-NOR, so a change there means something moved that should not have.
+NOR, so a change there means something moved that should not have. Which path
+each takes is pinned separately, by
+`every_reference_circuit_records_which_path_produced_it`.
 
-Two things moved since the last table and neither was recorded at the time.
-Every settle time fell, hand-written circuits included, when the router learnt
-to terminate a legal gate input with directed dust instead of a repeater --
-`and4` 24 to 18, `seven_segment` 112 to 98. And the Verilog decoder went from
-56 gates and 12,348 blocks to 47 and 10,088 when lowering began choosing gate
-polarities globally.
+### Two placers, one entry point
+
+`compile` tries relaxation placement with A* routing first, and falls back to
+the row/channel/track emitter on any failure -- placement, routing or
+verification. The same netlist always takes the same path; nothing here reads a
+clock or a random number. `CompiledCircuit::planner_kind` records which one ran,
+so a circuit that quietly stops taking the better placer is visible rather than
+invisible.
+
+What that bought, against the emitter's own numbers:
+
+| circuit | blocks | settle |
+|---|---|---|
+| and4 | 472 -> **232** | 18 -> **14** |
+| full_adder | 1,784 -> **1,065** | 42 -> **46** |
+| verilog:and4 | 480 -> **290** | 22 -> **14** |
+| the other three | unchanged -- they fall back | unchanged |
+
+**`full_adder` settles four game ticks slower** at 40% fewer blocks. Recorded
+rather than smoothed over: the relaxation is placed for wirelength, and nothing
+on this path weights a spring by criticality yet.
+
+Two other things moved earlier and neither was recorded at the time. Every
+settle time fell, hand-written circuits included, when the router learnt to
+terminate a legal gate input with directed dust instead of a repeater -- `and4`
+24 to 18, `seven_segment` 112 to 98. And the Verilog decoder went from 56 gates
+and 12,348 blocks to 47 and 10,088 when lowering began choosing gate polarities
+globally.
 
 The two Verilog rows are the only ones a tool chooses the structure of, so they
 are the only ones that move. They are still short of the 31 gates, 7,888 blocks

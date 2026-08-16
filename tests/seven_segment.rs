@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use std::time::Instant;
 
 use reda::circuits::seven_segment::{build_seven_segment_netlist, INPUT_NAMES, SEGMENT_NAMES, TRUTH_TABLE};
-use reda::compile::{compile, CompiledCircuit, Netlist};
+use reda::compile::{compile, CompiledCircuit, Netlist, PlannerKind};
 use reda::formats::litematic;
 use reda::redstone::simulator::Simulator;
 use reda::timing::{
@@ -154,18 +154,38 @@ fn report_timing(
          ratio (measured/bound) = {:.2}x",
         summary.logic_depth, summary.logic_depth_bound_game_ticks, summary.ratio,
     );
-    eprintln!(
-        "{label} timing: critical-path settle model (this layout) = {} gates + {} repeaters -> \
-         {} game ticks predicted, {} measured",
-        summary.critical_path_gate_count,
-        summary.critical_path_repeater_count,
-        summary.critical_path_model_game_ticks,
-        summary.worst_settle_game_ticks,
-    );
-    assert_eq!(
-        summary.critical_path_model_game_ticks, summary.worst_settle_game_ticks,
-        "{label}: the critical-path settle model must exactly reconstruct the measured settle time"
-    );
+    // See `tests/reference_circuits.rs`'s copy for why the model is an
+    // `Option` and why both arms assert. The decoder falls back to the
+    // emitter, so the `Some` arm is the one that runs here today -- which is
+    // exactly why the `None` arm must still say something rather than pass.
+    match summary.critical_path_model_game_ticks {
+        Some(model) => {
+            eprintln!(
+                "{label} timing: critical-path settle model (this layout) = {} gates + {:?} \
+                 repeaters -> {model} game ticks predicted, {} measured",
+                summary.critical_path_gate_count,
+                summary.critical_path_repeater_count,
+                summary.worst_settle_game_ticks,
+            );
+            assert_eq!(
+                model, summary.worst_settle_game_ticks,
+                "{label}: the critical-path settle model must exactly reconstruct the measured settle time"
+            );
+        }
+        None => {
+            assert_eq!(
+                compiled.planner_kind(),
+                PlannerKind::Unified3d,
+                "{label}: only a relaxation-placed layout may be without a settle model"
+            );
+            eprintln!(
+                "{label} timing: critical-path settle model unavailable -- relaxation placed this \
+                 layout and `routing_stats` describes the emitter's; {} gates on the path, \
+                 {} game ticks measured",
+                summary.critical_path_gate_count, summary.worst_settle_game_ticks,
+            );
+        }
+    }
     eprintln!(
         "{label} timing: critical path to worst output `{}`: {}",
         summary.critical_output,
