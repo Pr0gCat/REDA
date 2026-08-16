@@ -2016,10 +2016,28 @@ pub enum Occupancy {
     /// [`reserve_path`] writes this for the floor under every routed cell and
     /// for a climb's riser; `emit_routes` writes `compile::stone()` into
     /// exactly those cells (`realise_branch_from`'s `floors` is
-    /// `vec![compile::stone(); ..]` and nothing else ever fills it). It is a
-    /// commitment because [`anchor_is_free_for`] refuses to lay wire in such a
-    /// cell for **every** owner, this net's own included -- so nothing routed
-    /// later can turn it back into air.
+    /// `vec![compile::stone(); ..]` and nothing else ever fills it).
+    ///
+    /// **It is NOT the commitment this comment used to claim it was.** The
+    /// original wording said nothing routed later can turn it back into air,
+    /// because [`anchor_is_free_for`] refuses wire in such a cell for every
+    /// owner including its own. The guard is real and it is live, but it can
+    /// only see the reservation, and [`reserve_path`] runs *after* a whole path
+    /// is chosen -- so a route never sees its own floors while it is searching.
+    /// A path that visits `(x, y+1, z)` at one index and `(x, y, z)` at a later
+    /// one writes floor-`Stone` first and anchor-`Wire` second, and
+    /// [`Reservation::insert`] is `or_insert`, so the entry stays `Stone` while
+    /// `emit_routes` writes dust over it.
+    ///
+    /// Measured on `full_adder` through the shipping `plan_from_netlist`, and
+    /// every one of them is a route clashing with *itself*:
+    /// route `b` at `(40, 1, 137)`, `g11` at `(58, 1, 98)`, `g14` at
+    /// `(57, 1, 83)`. `a_route_lays_dust_on_its_own_committed_stone` pins them.
+    ///
+    /// So `stone_owner` is sound across nets and **lies within one**. Anything
+    /// that reasons from it -- the exact lid rule above is the first thing that
+    /// does -- is reasoning about a world that will not exist at those three
+    /// cells. That is why the exact rule is not wired into the shipping router.
     Stone,
     /// Occupied, and *not* known to be a conductive full block: a gate's torch
     /// or lever, a terminal guard, the cell over a climber's head, and the
@@ -6610,6 +6628,49 @@ mod tests {
             Ok(_) => eprintln!("relaxed anchors: segment_a ROUTES"),
             Err(error) => eprintln!("relaxed anchors: segment_a FAILS: {error}"),
         }
+    }
+
+    /// A route lays dust where the plan committed stone -- three times on
+    /// `full_adder`, and each time over stone it committed itself.
+    ///
+    /// This documents a defect rather than asserting correctness, which is why
+    /// it pins the exact cells: if the count moves, either the defect spread or
+    /// somebody fixed it, and both deserve to be read rather than absorbed.
+    /// `Occupancy::Stone`'s doc carries the mechanism -- `reserve_path` runs
+    /// after a path is chosen, so a route cannot see its own floors while it
+    /// searches, and `Reservation::insert` is `or_insert`.
+    ///
+    /// It matters because `stone_owner` is what the exact lid rule consults.
+    /// Sound across nets, wrong within one.
+    #[test]
+    fn a_route_lays_dust_on_its_own_committed_stone() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+
+        let (netlist, _) = build_full_adder_netlist();
+        let candidate =
+            plan_from_netlist(&netlist, &PortPlacements::default()).expect("full_adder routes");
+
+        let mut reservation = reserve_primitives(candidate.primitive_nodes());
+        for route in candidate.routes() {
+            reserve_path(&mut reservation, &route.id, &route.anchors);
+        }
+
+        let mut clashes = 0usize;
+        for route in candidate.routes() {
+            for anchor in &route.anchors {
+                if let Some(owner) = reservation.stone_owner(anchor) {
+                    clashes += 1;
+                    eprintln!(
+                        "dust of route {} at {anchor:?} sits on committed stone of {owner}",
+                        route.id
+                    );
+                }
+            }
+        }
+        assert_eq!(
+            clashes, 3,
+            "full_adder lays dust on committed stone at exactly three cells;              this moved, so read the list above rather than re-pinning the number"
+        );
     }
 
     /// What optimisation costs and what it buys, per circuit.
