@@ -7268,6 +7268,275 @@ mod tests {
     }
 
     // -----------------------------------------------------------------
+    // What `verify_connectivity` does not see
+    // -----------------------------------------------------------------
+    //
+    // The three tests below are **records of gaps, not endorsements**. Each
+    // builds a world in which two nets really are one electrically -- proved
+    // in the same test by running the `Simulator` and flipping one net's
+    // source -- and then asserts that `verify_connectivity` returns `Ok`.
+    //
+    // They are written this way round on purpose. Closing any of these gaps
+    // must turn its test red, and whoever closes one should delete the
+    // recording and put the `expect_err` in its place; a gap nobody can
+    // notice closing is how the first two shipped twice.
+    //
+    // Every coupling mechanism they use is derived by experiment in
+    // `tests/coupling_mechanisms.rs` and tabulated in
+    // `docs/derived/coupling-mechanisms.md`.
+
+    /// Two nets, one net-a lever, one stone block, and net b's wire on top of
+    /// it. **The first shipped bug's exact geometry**, reduced to two nets.
+    ///
+    /// `verify_connectivity` starts from every dust cell and follows
+    /// `dust_connections`, which only ever returns dust neighbours. The two
+    /// wires here are two cells apart with a block between, so no edge
+    /// `dust_connections` can produce joins them -- and the invariant is
+    /// silent while net b's wire tracks net a's lever exactly.
+    #[test]
+    fn verify_connectivity_cannot_see_two_nets_coupled_by_a_lever_through_a_block() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: Vec::new(),
+            gates: Vec::new(),
+        };
+        let nets = vec![
+            nameless_net(Source::Lever(0)),
+            nameless_net(Source::Lever(1)),
+        ];
+
+        let mut world = World::new(8, 8, 8);
+        let lever_cell = Position::new(3, 1, 3);
+        // Net a: the lever on its floor, and net a's own wire beside it.
+        world.set(lever_cell.x, lever_cell.y - 1, lever_cell.z, stone());
+        world.set(lever_cell.x, lever_cell.y, lever_cell.z, lever(true));
+        let net_a_wire = Position::new(3, 1, 2);
+        world.set(net_a_wire.x, net_a_wire.y - 1, net_a_wire.z, stone());
+        world.set(net_a_wire.x, net_a_wire.y, net_a_wire.z, dust());
+        // Net b: a route whose floor happens to be the block above the lever.
+        let net_b_floor = Position::new(3, 2, 3);
+        let net_b_wire = Position::new(3, 3, 3);
+        world.set(net_b_floor.x, net_b_floor.y, net_b_floor.z, stone());
+        world.set(net_b_wire.x, net_b_wire.y, net_b_wire.z, dust());
+
+        let mut reservation = Reservation::new();
+        reservation.insert(lever_cell, 0);
+        reservation.insert(net_a_wire, 0);
+        reservation.insert(net_b_wire, 1);
+
+        // The two nets are one node, proved by driving one and reading both.
+        let mut simulator = Simulator::new(world.clone());
+        simulator.run_until_stable(50).expect("settles");
+        assert_eq!(
+            simulator.world().get(net_a_wire.x, net_a_wire.y, net_a_wire.z).power,
+            15
+        );
+        assert_eq!(
+            simulator.world().get(net_b_wire.x, net_b_wire.y, net_b_wire.z).power,
+            15,
+            "net b's wire reads 15 from a lever it is not connected to"
+        );
+        simulator
+            .world_mut()
+            .set(lever_cell.x, lever_cell.y, lever_cell.z, lever(false));
+        simulator.run_until_stable(50).expect("settles again");
+        assert_eq!(
+            simulator.world().get(net_b_wire.x, net_b_wire.y, net_b_wire.z).power,
+            0,
+            "and it follows that lever, which is what makes this a merge"
+        );
+
+        assert_eq!(
+            verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()),
+            Ok(()),
+            "RECORDED GAP: block-mediated coupling is outside the relation this \
+             invariant walks. See docs/derived/coupling-mechanisms.md, mechanism 3."
+        );
+    }
+
+    /// The same gap with a lit torch in place of the lever -- **the second
+    /// shipped bug's geometry**, in which `full_adder` routed over a gate's
+    /// output torch and eight of its 22 gates came out wrong.
+    ///
+    /// Kept separate from the lever case rather than parameterised, because
+    /// the two reach the block by different arms of
+    /// `taxonomy::power_emitted_toward`: a lever is isotropic-strong through
+    /// its `_ => full` fallback, a torch is strong upward only. A single test
+    /// would pass with either arm broken.
+    #[test]
+    fn verify_connectivity_cannot_see_two_nets_coupled_by_a_torch_through_a_block() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: Vec::new(),
+            gates: Vec::new(),
+        };
+        let nets = vec![
+            nameless_net(Source::Lever(0)),
+            nameless_net(Source::Lever(1)),
+        ];
+
+        let mut world = World::new(8, 8, 8);
+        // Net a's gate: a support block with a wall torch on it, lit because
+        // the support is unpowered.
+        let support = Position::new(3, 1, 3);
+        let torch_cell = Position::new(3, 1, 4);
+        world.set(support.x, support.y, support.z, stone());
+        world.set(torch_cell.x, torch_cell.y, torch_cell.z, wall_torch(Facing::South));
+        // Net a's own wire, driven by that torch directly.
+        let net_a_wire = Position::new(4, 1, 4);
+        world.set(net_a_wire.x, net_a_wire.y - 1, net_a_wire.z, stone());
+        world.set(net_a_wire.x, net_a_wire.y, net_a_wire.z, dust());
+        // Net b: a route laid straight over the torch.
+        let net_b_floor = Position::new(3, 2, 4);
+        let net_b_wire = Position::new(3, 3, 4);
+        world.set(net_b_floor.x, net_b_floor.y, net_b_floor.z, stone());
+        world.set(net_b_wire.x, net_b_wire.y, net_b_wire.z, dust());
+
+        let mut reservation = Reservation::new();
+        reservation.insert(net_a_wire, 0);
+        reservation.insert(net_b_wire, 1);
+
+        let mut simulator = Simulator::new(world.clone());
+        simulator.run_until_stable(50).expect("settles");
+        assert!(
+            simulator.world().get(torch_cell.x, torch_cell.y, torch_cell.z).lit,
+            "the torch must be lit, or this test measures nothing"
+        );
+        assert_eq!(
+            simulator.world().get(net_b_wire.x, net_b_wire.y, net_b_wire.z).power,
+            15,
+            "net b's wire reads 15 from a gate torch it is not connected to"
+        );
+        // Put the torch out by powering its support, and net b follows.
+        simulator
+            .world_mut()
+            .set(support.x, support.y - 1, support.z, lever(true));
+        simulator.run_until_stable(50).expect("settles again");
+        assert!(!simulator.world().get(torch_cell.x, torch_cell.y, torch_cell.z).lit);
+        assert_eq!(
+            simulator.world().get(net_b_wire.x, net_b_wire.y, net_b_wire.z).power,
+            0,
+            "and it inverts with that gate, which is what makes this a merge"
+        );
+
+        assert_eq!(
+            verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()),
+            Ok(()),
+            "RECORDED GAP: block-mediated coupling is outside the relation this \
+             invariant walks. See docs/derived/coupling-mechanisms.md, mechanism 3."
+        );
+    }
+
+    /// A gap inside the one relation this invariant *does* walk: a **one-way**
+    /// `dust_connections` edge whose direction runs against the walk's seed
+    /// order.
+    ///
+    /// Seeds arrive in `World::positions_of` order, which is flat-index order,
+    /// which is lowest `y` first; and `visited` is shared across seeds, so a
+    /// cell already claimed by an earlier component is skipped with `continue`
+    /// before its owner is ever compared. When the only edge runs downward --
+    /// the upper wire descends into the lower one and the lower one cannot
+    /// climb back -- the lower cell is walked first, finds nothing, and the
+    /// upper cell then forms a component of its own that never meets it.
+    ///
+    /// The climb comes back the moment the upper wire has a floor to be
+    /// climbed onto, and the control at the end of this test is that same
+    /// world with one stone added: the invariant then catches it. So this is a
+    /// demonstration of the mechanism, not an assertion about a rule.
+    ///
+    /// **NOT MEASURED: whether any circuit this compiler builds contains such
+    /// a pair.** The condition is a routed wire with no floor beneath it.
+    #[test]
+    fn verify_connectivity_misses_a_one_way_dust_edge_that_runs_against_its_seed_order() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: Vec::new(),
+            gates: Vec::new(),
+        };
+        let nets = vec![
+            nameless_net(Source::Lever(0)),
+            nameless_net(Source::Lever(1)),
+        ];
+
+        let upper = Position::new(2, 2, 2);
+        let lower = Position::new(3, 1, 2);
+        let upper_floor = Position::new(2, 1, 2);
+
+        let build = |floored: bool| {
+            let mut world = World::new(8, 8, 8);
+            world.set(lower.x, lower.y - 1, lower.z, stone());
+            world.set(lower.x, lower.y, lower.z, dust());
+            world.set(upper.x, upper.y, upper.z, dust());
+            if floored {
+                world.set(upper_floor.x, upper_floor.y, upper_floor.z, stone());
+            }
+            // Drive the upper wire from the side away from the lower one. A
+            // redstone block, because it is the one source that drives dust
+            // while powering no block at all -- nothing can leak from it into
+            // the two cells whose relationship is under test.
+            let mut source = BlockState::air();
+            source.kind = BlockKind::RedstoneBlock;
+            source.name = "minecraft:redstone_block".to_string();
+            world.set(upper.x - 1, upper.y, upper.z, source);
+            world
+        };
+
+        let mut reservation = Reservation::new();
+        reservation.insert(upper, 0);
+        reservation.insert(lower, 1);
+
+        let world = build(false);
+
+        // The edge is real, and it is one-way.
+        assert!(
+            [Facing::North, Facing::South, Facing::East, Facing::West]
+                .iter()
+                .any(|&d| dust_connections(&world, upper, d).iter().any(|p| p == lower)),
+            "the upper wire must descend into the lower one"
+        );
+        assert!(
+            [Facing::North, Facing::South, Facing::East, Facing::West]
+                .iter()
+                .all(|&d| dust_connections(&world, lower, d).iter().all(|p| p != upper)),
+            "and the lower one must not climb back -- its step has no floor"
+        );
+
+        // And it carries a signal, so the two nets really are one node.
+        let mut simulator = Simulator::new(world.clone());
+        simulator.run_until_stable(50).expect("settles");
+        assert_eq!(simulator.world().get(upper.x, upper.y, upper.z).power, 15);
+        assert_eq!(
+            simulator.world().get(lower.x, lower.y, lower.z).power,
+            14,
+            "net b's wire carries net a's signal, one step decayed"
+        );
+
+        assert_eq!(
+            verify_connectivity(&world, &reservation, &netlist, &nets, &BTreeMap::new()),
+            Ok(()),
+            "RECORDED GAP: the walk shares one `visited` set across seeds, so a \
+             one-way edge into an already-claimed component is never compared. \
+             See docs/derived/coupling-mechanisms.md, Table 4."
+        );
+
+        // The control, one stone different: the climb returns, the edge becomes
+        // two-way, and the very same invariant catches the very same merge.
+        let floored = build(true);
+        assert!(
+            [Facing::North, Facing::South, Facing::East, Facing::West]
+                .iter()
+                .any(|&d| dust_connections(&floored, lower, d).iter().any(|p| p == upper)),
+            "with a floor under the upper wire the climb must fire"
+        );
+        let err = verify_connectivity(&floored, &reservation, &netlist, &nets, &BTreeMap::new())
+            .expect_err("a two-way edge between two nets must be rejected");
+        assert!(
+            matches!(err, CompileError::ConnectivityViolation { .. }),
+            "got {err:?}"
+        );
+    }
+
+    // -----------------------------------------------------------------
     // Declared wire merges: the same geometry must discriminate
     // -----------------------------------------------------------------
     //
