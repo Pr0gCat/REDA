@@ -7899,7 +7899,11 @@ mod tests {
     /// tried rather than that something was.
     struct LayRefusal {
         input: usize,
-        why: &'static str,
+        /// Owned rather than `&'static str`: a supplied route's refusal has to
+        /// name the cell and the rule, which is the difference between "the
+        /// model has an encoding gap" and "the model has an encoding gap at
+        /// (26, 1, 146), keep_out".
+        why: String,
     }
 
     /// A gate the growth could not place, and everything known about why.
@@ -8145,14 +8149,32 @@ mod tests {
 
         /// Grow the whole circuit, or stop at the first wedge.
         fn grow(&mut self) {
+            self.grow_stopping_before(None);
+        }
+
+        /// [`grow`](Self::grow), pausing just before it would land the gate
+        /// whose output signal is `stop` and returning that gate's index.
+        ///
+        /// The windowed solver needs a growth state, and the only honest way to
+        /// get one is to let growth build it: a state assembled by hand would be
+        /// a second statement of what growth does. With `stop` at `None` this is
+        /// `grow` verbatim -- the added line cannot fire -- which is why `grow`
+        /// delegates rather than keeping a second copy of the queue.
+        fn grow_stopping_before(&mut self, stop: Option<&str>) -> Option<usize> {
+            // `!placed` as well as `ready`, which is a no-op on a fresh growth
+            // -- nothing is placed when this first runs -- and is what lets a
+            // paused growth be resumed after something else landed a gate.
             let mut queue: BTreeSet<(i64, i64, usize)> = (0..self.netlist.gates.len())
-                .filter(|&gate| self.ready(gate))
+                .filter(|&gate| !self.placed[gate] && self.ready(gate))
                 .map(|gate| self.key(gate))
                 .collect();
 
             while let Some(&entry) = queue.iter().next() {
                 queue.remove(&entry);
                 let gate = entry.2;
+                if stop == Some(self.netlist.gates[gate].output.as_str()) {
+                    return Some(gate);
+                }
                 loop {
                     match self.land(gate) {
                         Ok(()) => {
@@ -8172,7 +8194,7 @@ mod tests {
                             // so nothing is quietly lost.
                             if self.ripped >= self.settings.rip {
                                 self.wedge = Some(*wedge);
-                                return;
+                                return None;
                             }
                             let torn = self.rip_youngest(&wedge.blame, &wedge.gate);
                             if torn.is_empty() {
@@ -8181,7 +8203,7 @@ mod tests {
                                 // the budget does not address, and saying so is
                                 // the measurement.
                                 self.wedge = Some(*wedge);
-                                return;
+                                return None;
                             }
                             self.ripped += 1;
                             self.orphans.extend(torn);
@@ -8190,6 +8212,7 @@ mod tests {
                 }
                 self.settle_orphans();
             }
+            None
         }
 
         /// Rebuild the reservation from the claim log.
@@ -8459,6 +8482,7 @@ mod tests {
                     &mut attempt,
                     &mut reservation,
                     window,
+                    None,
                 ) {
                     branch.serial = self.serial;
                     self.serial += 1;
@@ -8577,6 +8601,7 @@ mod tests {
                         &mut branch,
                         &mut reservation,
                         window,
+                        None,
                     ) {
                         Ok((node, laid)) => {
                             if verbose {
@@ -8604,28 +8629,16 @@ mod tests {
                                         .join("/"),
                                 );
                             }
-                            self.reservation = reservation;
-                            for (signal, tree) in drivers.iter().zip(branch) {
-                                self.trees.insert(signal.clone(), tree);
-                            }
-                            self.anchors[gate] = landing.anchor;
-                            self.facings[gate] = landing.facing;
-                            self.pins.insert(
-                                definition.output.clone(),
-                                node.output_pin.expect("a gate node records its pin"),
+                            self.commit(
+                                gate,
+                                landing.anchor,
+                                landing.facing,
+                                node,
+                                laid,
+                                &drivers,
+                                branch,
+                                reservation,
                             );
-                            self.nodes[gate] = Some(node);
-                            // Chronological, and in exactly the order `lay`
-                            // wrote them: body, then the four socket
-                            // pre-claims, then the branches cheapest-first.
-                            self.log.push(Claim::Body(gate));
-                            self.log.push(Claim::Approaches(gate));
-                            for mut branch in laid {
-                                branch.serial = self.serial;
-                                self.serial += 1;
-                                self.log.push(Claim::Branch(branch.serial));
-                                self.laid.push(branch);
-                            }
                             return Ok(());
                         }
                         Err(refusal) => {
@@ -8672,6 +8685,94 @@ mod tests {
                 refusals,
                 blame,
             }))
+        }
+
+        /// Record a landing that has already been laid: the reservation it
+        /// produced, the trees it grew, the body, and the chronological claim
+        /// log the rip-up rebuilds from.
+        ///
+        /// Lifted out of [`land`](Self::land)'s success arm unchanged, so that a
+        /// landing the windowed solver chose is written into the growth state by
+        /// exactly the code a grown one is. A second copy of this bookkeeping is
+        /// a second claim log to be wrong about, and `reseat` replays it.
+        #[allow(clippy::too_many_arguments)]
+        fn commit(
+            &mut self,
+            gate: usize,
+            anchor: Anchor,
+            facing: geometry::CellFacing,
+            node: PrimitiveNode,
+            laid: Vec<Laid>,
+            drivers: &[String],
+            trees: Vec<NetTree>,
+            reservation: Reservation,
+        ) {
+            let output = self.netlist.gates[gate].output.clone();
+            self.reservation = reservation;
+            for (signal, tree) in drivers.iter().zip(trees) {
+                self.trees.insert(signal.clone(), tree);
+            }
+            self.anchors[gate] = anchor;
+            self.facings[gate] = facing;
+            self.pins
+                .insert(output, node.output_pin.expect("a gate node records its pin"));
+            self.nodes[gate] = Some(node);
+            // Chronological, and in exactly the order `lay` wrote them: body,
+            // then the four socket pre-claims, then the branches cheapest-first.
+            self.log.push(Claim::Body(gate));
+            self.log.push(Claim::Approaches(gate));
+            for mut branch in laid {
+                branch.serial = self.serial;
+                self.serial += 1;
+                self.log.push(Claim::Branch(branch.serial));
+                self.laid.push(branch);
+            }
+        }
+
+        /// Land a gate at a position and along routes somebody else chose.
+        ///
+        /// The decode half of the windowed solver: everything from here down is
+        /// [`lay`](Self::lay), so a solved plan is realised by the same repeater
+        /// budget, the same terminal choice and the same guard cells as a grown
+        /// one -- and refuses on the same grounds. **A solver answer that this
+        /// refuses is an encoding bug in the model, not a result**, which is why
+        /// the refusal is returned rather than swallowed.
+        fn land_solved(
+            &mut self,
+            gate: usize,
+            anchor: Anchor,
+            facing: geometry::CellFacing,
+            routes: &BTreeMap<usize, Vec<Anchor>>,
+            window: (Anchor, Anchor),
+        ) -> Result<(), String> {
+            let drivers = self.netlist.gates[gate].inputs.clone();
+            let pins: Vec<Anchor> = drivers.iter().map(|signal| self.pins[signal]).collect();
+            let mut trees: Vec<NetTree> = drivers
+                .iter()
+                .map(|signal| self.trees.get(signal).cloned().unwrap_or_default())
+                .collect();
+            let arrival: Vec<u64> = (0..drivers.len())
+                .map(|input| routes.get(&input).map_or(0, |path| path.len() as u64))
+                .collect();
+            let landing = Landing { anchor, facing, arrival, pull: 0.0, score: 0.0 };
+            let mut reservation = self.reservation.clone();
+            match self.lay(
+                gate,
+                &landing,
+                &drivers,
+                &pins,
+                &mut trees,
+                &mut reservation,
+                window,
+                Some(routes),
+            ) {
+                Ok((node, laid)) => {
+                    self.commit(gate, anchor, facing, node, laid, &drivers, trees, reservation);
+                    self.placed[gate] = true;
+                    Ok(())
+                }
+                Err(refusal) => Err(format!("input {}: {}", refusal.input, refusal.why)),
+            }
         }
 
         /// Every place this gate's sockets could meet its input nets, ranked.
@@ -8888,6 +8989,13 @@ mod tests {
         /// for a run that decays, the same terminal style, the same guard cells
         /// around the socket, the same block written back over the socket when
         /// the style says repeater.
+        ///
+        /// `supplied` hands a route in rather than searching for one, keyed by
+        /// input index. That is how the windowed solver's answer is decoded: the
+        /// solver decides *which cells*, and everything that turns cells into
+        /// blocks -- the repeater plan, the terminal style, the guard cells --
+        /// stays this one function, so a solved plan and a grown plan are
+        /// realised by the same code. `None` is growth, unchanged.
         #[allow(clippy::too_many_arguments)]
         fn lay(
             &self,
@@ -8898,6 +9006,7 @@ mod tests {
             trees: &mut [NetTree],
             reservation: &mut Reservation,
             window: (Anchor, Anchor),
+            supplied: Option<&BTreeMap<usize, Vec<Anchor>>>,
         ) -> Result<(PrimitiveNode, Vec<Laid>), LayRefusal> {
             let definition = &self.netlist.gates[gate];
             let (footprint, conductors, output_pin) = compile::gate_footprint(
@@ -8952,6 +9061,7 @@ mod tests {
                     &mut trees[input],
                     reservation,
                     window,
+                    supplied.and_then(|routes| routes.get(&input)).map(Vec::as_slice),
                 )?);
             }
 
@@ -8978,21 +9088,85 @@ mod tests {
             tree: &mut NetTree,
             reservation: &mut Reservation,
             window: (Anchor, Anchor),
+            supplied: Option<&[Anchor]>,
         ) -> Result<Laid, LayRefusal> {
             let definition = &self.netlist.gates[gate];
             let before = claimed_cells(reservation);
             let mut added: Vec<Anchor> = Vec::new();
 
-            let field = flood_from(
-                &tree.seeds(pin),
-                pin,
-                Some((approach, socket)),
-                signal,
-                reservation,
-                window,
-            );
-            let Some(mut path) = field.path_to(approach) else {
-                return Err(LayRefusal { input, why: "no branch reaches the approach" });
+            let mut path = match supplied {
+                // A solved route arrives as the walk it is, root first, ending
+                // at the approach. Everything after this line is identical to
+                // the grown case on purpose: the strength budget, the terminal
+                // choice and the guard cells are the judges either way.
+                Some(cells) => {
+                    if cells.first().is_none_or(|root| !tree.seeds(pin).contains(root)) {
+                        return Err(LayRefusal { input, why: String::from("the supplied route starts nowhere this net has laid") });
+                    }
+                    if cells.last() != Some(&approach) {
+                        return Err(LayRefusal { input, why: String::from("the supplied route does not end at the approach") });
+                    }
+                    // The flood's own legality, replayed step by step over a
+                    // route the flood did not find. Every arm below is
+                    // `flood_from`'s, in its order, against the same reservation
+                    // it would have read -- so a supplied route is judged by the
+                    // shipping rules rather than trusted. What this catches is
+                    // exactly an encoding gap in whatever produced the route,
+                    // and it names the cell and the rule rather than the fact.
+                    let mut walked: BTreeMap<Anchor, Anchor> = BTreeMap::new();
+                    let refuse = |at: Anchor, why: &str| LayRefusal {
+                        input,
+                        why: format!("supplied route: ({}, {}, {}) {why}", at.x, at.y, at.z),
+                    };
+                    for pair in cells.windows(2) {
+                        let (at, next) = (pair[0], pair[1]);
+                        if !neighbours(at).contains(&next) {
+                            return Err(refuse(next, "is not a step dust can take"));
+                        }
+                        if self_obstructs(&walked, at, next) {
+                            return Err(refuse(next, "breaks a step this route already took"));
+                        }
+                        if !within_bounds(next, window.0, window.1) {
+                            return Err(refuse(next, "is outside the window"));
+                        }
+                        if !anchor_is_free_for(next, pin, approach, socket, signal, reservation) {
+                            return Err(refuse(next, "is refused by anchor_is_free_for"));
+                        }
+                        if staircase_clearance(at, next).into_iter().any(|cell| {
+                            let foreign = reservation.owner(&cell).is_some_and(|occupied_by| {
+                                occupied_by != signal && occupied_by != stair_guard(signal)
+                            });
+                            let is_riser = next.y > at.y && cell.y == at.y;
+                            if is_riser {
+                                return foreign || reservation.conductor_owner(&cell).is_some();
+                            }
+                            reservation.owner(&cell).is_some()
+                        }) {
+                            return Err(refuse(next, "has no staircase clearance"));
+                        }
+                        walked.insert(next, at);
+                    }
+                    cells.to_vec()
+                }
+                None => {
+                    let field = flood_from(
+                        &tree.seeds(pin),
+                        pin,
+                        Some((approach, socket)),
+                        signal,
+                        reservation,
+                        window,
+                    );
+                    match field.path_to(approach) {
+                        Some(path) => path,
+                        None => {
+                            return Err(LayRefusal {
+                                input,
+                                why: String::from("no branch reaches the approach"),
+                            })
+                        }
+                    }
+                }
             };
             path.push(socket);
             reserve_path(reservation, signal, &path);
@@ -9020,7 +9194,10 @@ mod tests {
 
             let run = realise_branch_from(previous_cell, incoming, cells);
             if !run.carries {
-                return Err(LayRefusal { input, why: "the branch decays before it arrives" });
+                return Err(LayRefusal {
+                    input,
+                    why: String::from("the branch decays before it arrives"),
+                });
             }
             let budget_needs_repeater = run.blocks.last().is_some_and(|block| {
                 block.kind == crate::redstone::world::block::BlockKind::Repeater
@@ -9806,6 +9983,16 @@ mod tests {
     ///   source, not a measurement, and is labelled as one.
     /// - `seven_segment` past its wedge, at any setting.
     /// - Rip-up above 64 on anything but `segment_a`'s default order.
+    ///
+    /// # The companion harness
+    ///
+    /// Every failure above is reported as "no landing" or "no safe local route",
+    /// which says only *I did not find one*.
+    /// [`calibrate_the_windowed_solver`] is the other half: a complete decision
+    /// procedure over a bounded box around one gate, calibrated against the
+    /// answers this probe already produced. It is **calibration only** -- it
+    /// runs on `and4`, the one circuit whose growth completes, verifies and
+    /// computes correctly, and it deliberately does not touch the wedges above.
     #[test]
     #[ignore = "measurement harness: asserts nothing, grows a circuit gate by gate, minutes on the larger ones"]
     fn measure_whether_growth_places_and_routes() {
@@ -9885,5 +10072,2069 @@ mod tests {
             }
             grow_and_report(case, &settings);
         }
+    }
+
+    // =====================================================================
+    // A windowed constraint model over growth's own state, and the
+    // calibration that makes its answers worth believing.
+    // =====================================================================
+
+    use crate::compile::satcnf::{self, Cnf, Lit, Outcome};
+
+    /// The shipping step relation, restricted to the gate plane.
+    ///
+    /// Derived rather than restated: [`neighbours`] is `dust_reach`'s twelve
+    /// cells, and this is a filter over it, so a change there is a change here.
+    fn plane_neighbours(cell: Anchor) -> Vec<Anchor> {
+        neighbours(cell).into_iter().filter(|next| next.y == cell.y).collect()
+    }
+
+    /// Whether a cell is reachable by a net's own wire within `d` steps.
+    ///
+    /// Three answers rather than a literal, because two of them are constants:
+    /// a cell the net already has is reachable at zero cost and needs no
+    /// variable, and a cell nearer than its own shortest possible approach is
+    /// unreachable and needs none either. Both cases delete clauses rather than
+    /// weaken them.
+    #[derive(Debug, Clone, Copy)]
+    enum Reach {
+        Always,
+        Never,
+        At(Lit),
+    }
+
+    /// One input net of the gate being placed, as the model sees it.
+    struct NetWindow {
+        signal: String,
+        pin: Anchor,
+        /// Cells this net already holds that a new branch may grow from, on the
+        /// gate plane. [`NetTree::seeds`] is the shipping definition; this is
+        /// that set filtered to `PLANNER_Y`.
+        seeds: BTreeSet<Anchor>,
+        /// Seeds the plane restriction dropped. Non-zero means the model is
+        /// answering a *narrower* question than the window admits, and the
+        /// report says so rather than rounding it off.
+        seeds_off_plane: usize,
+        domain: Vec<Anchor>,
+        index: BTreeMap<Anchor, usize>,
+        used: Vec<Lit>,
+        /// `reach[cell][d - first[cell]]`.
+        reach: Vec<Vec<Lit>>,
+        /// The shortest number of steps in which this net could possibly arrive
+        /// at each domain cell, ignoring every constraint but the window's own
+        /// free space. Below it the cell is provably unreachable, so no variable
+        /// exists.
+        first: Vec<usize>,
+        depth: usize,
+        /// Whether `depth` is the exact bound (`|domain|`, which no simple path
+        /// can exceed) rather than a cap. **An UNSAT from a capped model is
+        /// bounded by path length and is not a proof of infeasibility**, and the
+        /// report never prints it as one.
+        exact: bool,
+    }
+
+    impl NetWindow {
+        /// Whether this net can reach no cell of the window at all, at any path
+        /// length -- as opposed to none within the depth cap.
+        ///
+        /// The distinction decides what an UNSAT is worth. A capped model's
+        /// UNSAT is bounded by path length; a net that cannot take a single
+        /// legal first step out of what it already holds is stranded outright,
+        /// and an UNSAT that turns on that fact does not depend on the cap.
+        fn stranded_entirely(&self) -> bool {
+            self.first.iter().all(|&steps| steps == usize::MAX)
+        }
+
+        fn reach_at(&self, cell: Anchor, steps: usize) -> Reach {
+            if self.seeds.contains(&cell) {
+                return Reach::Always;
+            }
+            let Some(&cell_index) = self.index.get(&cell) else {
+                return Reach::Never;
+            };
+            if self.first[cell_index] > self.depth
+                || steps < self.first[cell_index]
+                || steps > self.depth
+            {
+                return Reach::Never;
+            }
+            Reach::At(self.reach[cell_index][steps - self.first[cell_index]])
+        }
+    }
+
+    /// A candidate landing: where the gate would stand, and the literal that
+    /// says it does.
+    struct SolvedLanding {
+        anchor: Anchor,
+        facing: geometry::CellFacing,
+        approaches: Vec<Anchor>,
+        place: Lit,
+    }
+
+    /// The windowed model: the CNF, the objects its variables mean, and the
+    /// numbers a report needs.
+    struct WindowModel {
+        nets: Vec<NetWindow>,
+        landings: Vec<SolvedLanding>,
+        cnf: Cnf,
+        /// The connectivity ladder's group, kept so the calibration can take it
+        /// out and watch the wire disappear.
+        group_reach: satcnf::Group,
+        /// Landings whose body could not stand against the fixed world at all,
+        /// so they never became variables.
+        body_rejected: usize,
+        offered: usize,
+        aliased_inputs: bool,
+    }
+
+    impl WindowModel {
+        fn exact(&self) -> bool {
+            self.nets.iter().all(|net| net.exact) && !self.aliased_inputs
+        }
+
+        /// Every group but the connectivity ladder.
+        fn without_connectivity(&self) -> BTreeSet<satcnf::Group> {
+            (0..self.cnf.group_count()).filter(|&group| group != self.group_reach).collect()
+        }
+
+        fn summary(&self) -> String {
+            format!(
+                "{} vars, {} clauses, {} groups | landings {} of {} offered ({} body-rejected) \
+                 | {} | depth {}",
+                self.cnf.vars(),
+                self.cnf.clause_count(),
+                self.cnf.group_count(),
+                self.landings.len(),
+                self.offered,
+                self.body_rejected,
+                self.nets
+                    .iter()
+                    .map(|net| format!("{} {} cells", net.signal, net.domain.len()))
+                    .collect::<Vec<_>>()
+                    .join(", "),
+                self.nets
+                    .iter()
+                    .map(|net| format!(
+                        "{}{}",
+                        net.depth,
+                        if net.exact { "" } else { "*" }
+                    ))
+                    .collect::<Vec<_>>()
+                    .join("/"),
+            )
+        }
+    }
+
+    /// Build the windowed model for one gate, against one growth state.
+    ///
+    /// # What is modelled, and where each rule comes from
+    ///
+    /// Nothing below states a rule of the game twice. Every constraint is either
+    /// a call into the shipping predicate or a filter over what one returned:
+    ///
+    /// | rule | shipping source |
+    /// |---|---|
+    /// | one owner per cell | [`anchor_is_free_for`]'s owner arm (1619) |
+    /// | dust needs a floor, and the floor may be no conductor | its `below` arm (1631) |
+    /// | two nets' conductors need clearance | its `keep_out` arm (1642), which is `dust_reach`'s conservative plan-time shape |
+    /// | where a gate's blocks go | [`compile::gate_footprint`], realised into a scratch world |
+    /// | a gate body may stand here | [`BodyFit::allowed`], which is the growth probe's own reading of the two above from the gate's side |
+    /// | where a socket is and what may enter it | [`socket_and_approach`] |
+    /// | which cells a step may go to | [`neighbours`] |
+    /// | repeaters, decay, and what a run carries | **not modelled** -- [`realise_branch_from`] decides it at decode, and refuses |
+    ///
+    /// # The single-plane restriction, stated once
+    ///
+    /// New wire is given cells at [`PLANNER_Y`] only. That restricts the
+    /// *answer*, not the world: everything already laid is read in full 3D, so a
+    /// route at `y = 3` still keeps new dust out through [`keep_out`] and still
+    /// forbids a floor over itself. What it costs is completeness -- a window
+    /// whose only solution climbs comes back UNSAT. What it buys is that three
+    /// rules are discharged **exactly** rather than approximated:
+    ///
+    /// * [`staircase_clearance`] returns nothing when `to.y == from.y`, so a
+    ///   flat route needs no stair guard and the model omits none;
+    /// * [`self_obstructs`] has two arms and each requires a step in `y`, so a
+    ///   flat path cannot obstruct itself;
+    /// * [`anchor_is_free_for`]'s floor arm asks about `y - 1`, which for a flat
+    ///   answer is always a *fixed* cell, so it is discharged by the domain
+    ///   filter and never becomes a clause.
+    ///
+    /// Those three are derivations from the shipping predicates, not
+    /// assumptions, and
+    /// `the_flat_restriction_discharges_exactly_the_three_rules_it_claims` runs
+    /// them.
+    ///
+    /// # Connectivity
+    ///
+    /// The hard one, and the place SAT routing is normally won or lost. Each net
+    /// gets a bounded-reachability ladder: `reach[c][d]` implies either
+    /// `reach[c][d-1]` or (`c` is used **and** some neighbour is reachable at
+    /// `d-1`), with the ladder's floor being "is a cell this net already has".
+    /// Asserting `reach[approach][depth]` therefore forces a connected walk of
+    /// used cells from the net's existing tree to the socket's approach. Only
+    /// the downward implication is stated, which is why a spuriously-true
+    /// `reach` cannot satisfy anything: it can only create an obligation.
+    ///
+    /// `depth` defaults to `|domain|`, which **no simple path can exceed**, so
+    /// the ladder is not a bound at all unless it is capped on purpose. When it
+    /// is capped, [`WindowModel::exact`] goes false and every report of an UNSAT
+    /// says the answer is bounded by path length.
+    fn window_model(
+        growth: &Growth,
+        gate: usize,
+        window: (Anchor, Anchor),
+        reach_cap: usize,
+    ) -> WindowModel {
+        let definition = growth.netlist.gates[gate].clone();
+        let drivers = definition.inputs.clone();
+        let arity = drivers.len();
+
+        let mut cnf = Cnf::new();
+        let group_place =
+            cnf.group(format!("gate {} stands in exactly one place", definition.output));
+        let group_body = cnf.group("a gate's own cells hold no wire");
+        let group_body_clear =
+            cnf.group("a gate's conductors keep foreign wire out (keep_out)");
+        let group_one = cnf.group("one net per cell");
+        let group_clear = cnf.group("two nets' conductors keep clear of each other (keep_out)");
+        let group_reach = cnf.group("a net's wire is connected to what it has already laid");
+        let group_goal = cnf.group("every socket's approach is reached by its own net");
+
+        let mut aliased_inputs = false;
+        for left in 0..arity {
+            for right in left + 1..arity {
+                if drivers[left] == drivers[right] {
+                    aliased_inputs = true;
+                }
+            }
+        }
+
+        // ---- the per-net cell domains -----------------------------------
+        let mut nets: Vec<NetWindow> = Vec::with_capacity(arity);
+        for signal in &drivers {
+            let pin = growth.pins[signal];
+            let tree = growth.trees.get(signal).cloned().unwrap_or_default();
+            let every_seed = tree.seeds(pin);
+            let seeds: BTreeSet<Anchor> =
+                every_seed.iter().copied().filter(|cell| cell.y == PLANNER_Y).collect();
+            let seeds_off_plane = every_seed.len() - seeds.len();
+
+            let mut domain: Vec<Anchor> = Vec::new();
+            for x in window.0.x..=window.1.x {
+                for z in window.0.z..=window.1.z {
+                    let cell = Anchor { x, y: PLANNER_Y, z };
+                    if seeds.contains(&cell) {
+                        continue;
+                    }
+                    // `anchor_is_free_for`'s owner arm. A cell this net already
+                    // owns is a seed and was taken above; anything else owned is
+                    // out.
+                    if growth.reservation.owner(&cell).is_some() {
+                        continue;
+                    }
+                    // Its floor arm: laying a floor over a conductor deletes it,
+                    // and that holds against this net's own conductors too.
+                    let below = Anchor { y: cell.y - 1, ..cell };
+                    if growth.reservation.conductor_owner(&below).is_some() {
+                        continue;
+                    }
+                    // Its keep_out arm, with the one exemption the shipping
+                    // search makes for a route leaving its own producer:
+                    // `neighbour == start`.
+                    let clear = keep_out(cell).into_iter().all(|neighbour| {
+                        neighbour == pin
+                            || growth
+                                .reservation
+                                .conductor_owner(&neighbour)
+                                .is_none_or(|occupied_by| occupied_by == signal.as_str())
+                    });
+                    if !clear {
+                        continue;
+                    }
+                    domain.push(cell);
+                }
+            }
+
+            let index: BTreeMap<Anchor, usize> =
+                domain.iter().enumerate().map(|(at, &cell)| (cell, at)).collect();
+
+            // The shortest walk that could possibly reach each cell, through
+            // free space alone. A cell nearer than this is provably unreachable,
+            // which deletes variables rather than adding constraints.
+            let mut first: Vec<usize> = vec![usize::MAX; domain.len()];
+            let mut frontier: BTreeSet<Anchor> = seeds.clone();
+            let mut steps = 0usize;
+            while !frontier.is_empty() {
+                steps += 1;
+                let mut next: BTreeSet<Anchor> = BTreeSet::new();
+                for cell in &frontier {
+                    for neighbour in plane_neighbours(*cell) {
+                        if let Some(&at) = index.get(&neighbour) {
+                            if first[at] == usize::MAX {
+                                first[at] = steps;
+                                next.insert(neighbour);
+                            }
+                        }
+                    }
+                }
+                frontier = next;
+            }
+
+            let exact_bound = domain.len();
+            let depth = if reach_cap == 0 {
+                exact_bound
+            } else {
+                reach_cap.min(exact_bound)
+            };
+            let exact = depth == exact_bound;
+
+            // A cell no walk of `depth` steps could reach keeps its `use`
+            // variable -- the model may still put wire there, uselessly -- and
+            // gets no reach ladder, because every rung of one would be a
+            // variable that can only ever be false. `first == usize::MAX` is
+            // that case, and [`NetWindow::reach_at`] reads it as `Never`.
+            //
+            // **Deleting such a cell outright was tried and is worse.** With the
+            // sealed-pin calibration it emptied the domain, which emptied the
+            // landing set, which made the model unsatisfiable through an empty
+            // at-least-one clause -- the right answer with an uninformative
+            // core. Keeping the cells leaves the contradiction where it belongs:
+            // between "the gate stands somewhere" and "its sockets are reached".
+            let used: Vec<Lit> = domain.iter().map(|_| cnf.var()).collect();
+            let reach: Vec<Vec<Lit>> = (0..domain.len())
+                .map(|at| {
+                    if first[at] > depth {
+                        return Vec::new();
+                    }
+                    (first[at]..=depth).map(|_| cnf.var()).collect()
+                })
+                .collect();
+
+            nets.push(NetWindow {
+                signal: signal.clone(),
+                pin,
+                seeds,
+                seeds_off_plane,
+                domain,
+                index,
+                used,
+                reach,
+                first,
+                depth,
+                exact,
+            });
+        }
+
+        // ---- connectivity ------------------------------------------------
+        for net in &nets {
+            for (at, &cell) in net.domain.iter().enumerate() {
+                if net.first[at] > net.depth {
+                    continue;
+                }
+                for steps in net.first[at]..=net.depth {
+                    let here = net.reach[at][steps - net.first[at]];
+                    let earlier = (steps > net.first[at])
+                        .then(|| net.reach[at][steps - 1 - net.first[at]]);
+
+                    // Reaching a cell means occupying it.
+                    let mut arm = vec![-here, net.used[at]];
+                    arm.extend(earlier);
+                    cnf.add(arm, group_reach);
+
+                    // ... and arriving from somewhere this net reached sooner.
+                    let mut arm = vec![-here];
+                    arm.extend(earlier);
+                    let mut already_there = false;
+                    for neighbour in plane_neighbours(cell) {
+                        match net.reach_at(neighbour, steps - 1) {
+                            Reach::Always => {
+                                already_there = true;
+                                break;
+                            }
+                            Reach::Never => {}
+                            Reach::At(literal) => arm.push(literal),
+                        }
+                    }
+                    if !already_there {
+                        cnf.add(arm, group_reach);
+                    }
+                }
+            }
+        }
+
+        // ---- wire against wire -------------------------------------------
+        for left in 0..nets.len() {
+            for right in left + 1..nets.len() {
+                // Two inputs driven by one signal are one net, and a net is free
+                // to run beside itself. Modelling them as strangers would forbid
+                // legal layouts, so the pair is skipped and the model declares
+                // itself inexact.
+                if nets[left].signal == nets[right].signal {
+                    continue;
+                }
+                for (at, &cell) in nets[left].domain.iter().enumerate() {
+                    if let Some(&other) = nets[right].index.get(&cell) {
+                        cnf.add(
+                            [-nets[left].used[at], -nets[right].used[other]],
+                            group_one,
+                        );
+                    }
+                    for neighbour in keep_out(cell) {
+                        if let Some(&other) = nets[right].index.get(&neighbour) {
+                            cnf.add(
+                                [-nets[left].used[at], -nets[right].used[other]],
+                                group_clear,
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        // ---- where the gate may stand ------------------------------------
+        //
+        // Enumerated over the window grown by the two cells a socket's approach
+        // stands out from its anchor, so that every landing whose approaches
+        // fall inside the window is offered even when its own anchor does not.
+        const APPROACH_REACH: i32 = 2;
+        let mut landings: Vec<SolvedLanding> = Vec::new();
+        let mut offered = 0usize;
+        let mut body_rejected = 0usize;
+        let pins: Vec<Anchor> = nets.iter().map(|net| net.pin).collect();
+        for index in 0..4u8 {
+            let facing = geometry::CellFacing::from_index(index).expect("0..4 is horizontal");
+            // Once per facing and translated, which is what [`BodyFit`]'s own
+            // doc asks for and what its offsets permit: `gate_footprint`
+            // realises the gate into a 64x8x64 scratch world and scans all
+            // 32,768 cells of it, and a window offers thousands of candidate
+            // anchors. Calling it per candidate was measured at minutes per
+            // window before this line moved out of the loop.
+            let (body_offsets, conductor_offsets, pin_offset) =
+                compile::gate_footprint((0, 0, 0), &definition, facing);
+            for x in window.0.x - APPROACH_REACH..=window.1.x + APPROACH_REACH {
+                for z in window.0.z - APPROACH_REACH..=window.1.z + APPROACH_REACH {
+                    let anchor = Anchor { x, y: PLANNER_Y, z };
+                    let mut sockets = Vec::with_capacity(arity);
+                    let mut approaches = Vec::with_capacity(arity);
+                    // A landing whose socket wants dust in a cell this window
+                    // does not contain is outside the question being asked, and
+                    // is dropped rather than answered. A landing whose approach
+                    // is *in* the window and cannot be reached is a different
+                    // thing entirely -- an answer -- and becomes a clause below,
+                    // so that an unsatisfiable window's core says which of the
+                    // two it was.
+                    let mut in_window = true;
+                    for (input, net) in nets.iter().enumerate().take(arity) {
+                        let (socket, approach) = socket_and_approach(anchor, facing, input);
+                        sockets.push(socket);
+                        approaches.push(approach);
+                        if !net.seeds.contains(&approach) && !net.index.contains_key(&approach) {
+                            in_window = false;
+                        }
+                    }
+                    if !in_window {
+                        continue;
+                    }
+                    offered += 1;
+
+                    let fit = BodyFit {
+                        origin: anchor,
+                        cells: &body_offsets,
+                        conductors: &conductor_offsets,
+                        sockets: &sockets,
+                        approaches: &approaches,
+                        drivers: &drivers,
+                        pins: &pins,
+                        pin: shifted(anchor, pin_offset),
+                        // The escape knob is growth's, and it is off here for the
+                        // same reason it is off there: the default run is the
+                        // paradigm, not a repair of it.
+                        escape: 0,
+                    };
+                    if !fit.allowed(&growth.reservation) {
+                        body_rejected += 1;
+                        continue;
+                    }
+
+                    let place = cnf.var();
+                    let body: Vec<Anchor> =
+                        body_offsets.iter().map(|offset| shifted(anchor, *offset)).collect();
+                    let conductors: Vec<Anchor> =
+                        conductor_offsets.iter().map(|offset| shifted(anchor, *offset)).collect();
+
+                    for cell in &body {
+                        for net in &nets {
+                            if let Some(&at) = net.index.get(cell) {
+                                cnf.add([-place, -net.used[at]], group_body);
+                            }
+                        }
+                    }
+                    for conductor in &conductors {
+                        // A wire may not stand on a gate's conductor: its floor
+                        // would be written over it. `anchor_is_free_for`'s below
+                        // arm, asked from the gate's side.
+                        let above = Anchor { y: conductor.y + 1, ..*conductor };
+                        for net in &nets {
+                            if let Some(&at) = net.index.get(&above) {
+                                cnf.add([-place, -net.used[at]], group_body);
+                            }
+                        }
+                        for neighbour in keep_out(*conductor) {
+                            // `BodyFit`'s own exemption, verbatim: a socket is
+                            // meant to have the arriving net's dust one cell out.
+                            let arriving = sockets
+                                .iter()
+                                .enumerate()
+                                .any(|(input, socket)| {
+                                    *conductor == *socket && neighbour == approaches[input]
+                                });
+                            if arriving {
+                                continue;
+                            }
+                            for net in &nets {
+                                if let Some(&at) = net.index.get(&neighbour) {
+                                    cnf.add([-place, -net.used[at]], group_body_clear);
+                                }
+                            }
+                        }
+                    }
+                    for (input, net) in nets.iter().enumerate() {
+                        match net.reach_at(approaches[input], net.depth) {
+                            Reach::Always => {}
+                            Reach::At(literal) => cnf.add([-place, literal], group_goal),
+                            Reach::Never => cnf.add([-place], group_goal),
+                        }
+                    }
+
+                    landings.push(SolvedLanding { anchor, facing, approaches, place });
+                }
+            }
+        }
+
+        let place_literals: Vec<Lit> = landings.iter().map(|landing| landing.place).collect();
+        cnf.exactly_one(&place_literals, group_place);
+
+        WindowModel {
+            nets,
+            landings,
+            cnf,
+            group_reach,
+            body_rejected,
+            offered,
+            aliased_inputs,
+        }
+    }
+
+    /// Why the model has no variable for a cell: the domain filter's arms,
+    /// asked one at a time.
+    ///
+    /// "The window model has no variable for (26, 1, 146)" is the uninformative
+    /// address one level down again. When the answer growth itself produced
+    /// falls outside the model's domain, the useful output is **which rule
+    /// excluded it** -- because one of the two is true and they need different
+    /// work: either the model states a rule the router does not, which is an
+    /// encoding bug, or the flat restriction bit, which is a known limit.
+    fn why_not_in_domain(
+        growth: &Growth,
+        signal: &str,
+        pin: Anchor,
+        cell: Anchor,
+        window: (Anchor, Anchor),
+    ) -> String {
+        if cell.y != PLANNER_Y {
+            return format!("it is at y = {}, and this model gives new wire the gate plane only", cell.y);
+        }
+        if !within_bounds(cell, window.0, window.1) {
+            return "it is outside the window".to_string();
+        }
+        if let Some(owner) = growth.reservation.owner(&cell) {
+            return format!("the reservation already gives it to `{owner}`");
+        }
+        let below = Anchor { y: cell.y - 1, ..cell };
+        if let Some(owner) = growth.reservation.conductor_owner(&below) {
+            return format!("its floor at y = {} conducts for `{owner}`", below.y);
+        }
+        for neighbour in keep_out(cell) {
+            if neighbour == pin {
+                continue;
+            }
+            if let Some(owner) = growth.reservation.conductor_owner(&neighbour) {
+                if owner != signal {
+                    return format!(
+                        "keep_out sees `{owner}`'s conductor at ({}, {}, {})",
+                        neighbour.x, neighbour.y, neighbour.z
+                    );
+                }
+            }
+        }
+        "no arm of the domain filter refuses it, so this is a bookkeeping defect".to_string()
+    }
+
+    /// The model, with the answer growth itself produced asserted into it.
+    ///
+    /// **This is the load-bearing half of the KNOWN SAT calibration and the
+    /// free solve is not.** Asking the solver to *find* a landing measures the
+    /// search; asserting a landing we already know is legal and asking whether
+    /// the constraints permit it measures the **encoding**, which is the thing
+    /// that can be silently wrong. A window the search cannot crack in its
+    /// budget is a scale limit; a window whose constraints reject a plan that
+    /// verifies is a wrong-answer generator.
+    ///
+    /// Every domain cell not on one of growth's own walks is forced *false*, so
+    /// what is being asked is whether that exact configuration satisfies every
+    /// clause -- not whether some superset of it does.
+    #[allow(clippy::too_many_arguments)]
+    fn with_known_answer(
+        model: &WindowModel,
+        growth: &Growth,
+        gate: usize,
+        anchor: Anchor,
+        facing: geometry::CellFacing,
+        routes: &[Vec<Anchor>],
+        window: (Anchor, Anchor),
+        intruder: Option<(usize, Anchor)>,
+    ) -> Result<Cnf, String> {
+        let mut cnf = model.cnf.clone();
+        let group = cnf.group("the landing growth itself produced");
+
+        let landing = model
+            .landings
+            .iter()
+            .find(|landing| landing.anchor == anchor && landing.facing == facing)
+            .ok_or_else(|| {
+                format!(
+                    "the model offers no landing at ({}, {}, {}) facing {}, which is where \
+                     growth put this gate",
+                    anchor.x,
+                    anchor.y,
+                    anchor.z,
+                    facing.index()
+                )
+            })?;
+        cnf.add([landing.place], group);
+
+        for (input, net) in model.nets.iter().enumerate() {
+            let walk = routes.get(input).map(Vec::as_slice).unwrap_or(&[]);
+            let mut wanted: BTreeSet<usize> = BTreeSet::new();
+            if let Some((into, cell)) = intruder {
+                if into == input {
+                    match net.index.get(&cell) {
+                        Some(&at) => {
+                            wanted.insert(at);
+                        }
+                        None => {
+                            return Err(format!(
+                                "the intruder cell ({}, {}, {}) is not in net {}'s domain",
+                                cell.x, cell.y, cell.z, net.signal
+                            ))
+                        }
+                    }
+                }
+            }
+            for &cell in walk {
+                if net.seeds.contains(&cell) {
+                    continue;
+                }
+                match net.index.get(&cell) {
+                    Some(&at) => {
+                        wanted.insert(at);
+                    }
+                    None => {
+                        return Err(format!(
+                            "growth laid net {} through ({}, {}, {}) and the model has no \
+                             variable for it: {}",
+                            net.signal,
+                            cell.x,
+                            cell.y,
+                            cell.z,
+                            why_not_in_domain(growth, &net.signal, net.pin, cell, window)
+                        ))
+                    }
+                }
+            }
+            for at in 0..net.domain.len() {
+                if wanted.contains(&at) {
+                    cnf.add([net.used[at]], group);
+                } else {
+                    cnf.add([-net.used[at]], group);
+                }
+            }
+        }
+
+        // A structural read of the same question, so an UNSAT here arrives as a
+        // cell and a rule rather than as a group name. "The encoding rejects the
+        // known answer" is the uninformative address one last time; what the
+        // next person needs is which body cell, which neighbour, and which of
+        // the shipping predicates the model thought it was quoting.
+        if intruder.is_none() {
+            if let Some(clash) = body_clash(growth, gate, anchor, facing, routes) {
+                return Err(clash);
+            }
+        }
+        Ok(cnf)
+    }
+
+    /// The body-against-wire clauses, re-derived and compared against the
+    /// shipping predicate that is supposed to be their source.
+    ///
+    /// [`anchor_is_free_for`] is asked the same question about the same cell
+    /// against a reservation that has the gate standing in it. Where the two
+    /// disagree, the model states a rule the router does not -- and that is the
+    /// failure this whole phase exists to catch, so it is reported with both
+    /// answers rather than with one.
+    fn body_clash(
+        growth: &Growth,
+        gate: usize,
+        anchor: Anchor,
+        facing: geometry::CellFacing,
+        routes: &[Vec<Anchor>],
+    ) -> Option<String> {
+        let definition = &growth.netlist.gates[gate];
+        let (body, conductors, _) =
+            compile::gate_footprint((anchor.x, anchor.y, anchor.z), definition, facing);
+        let mut sockets = Vec::new();
+        let mut approaches = Vec::new();
+        for input in 0..definition.inputs.len() {
+            let (socket, approach) = socket_and_approach(anchor, facing, input);
+            sockets.push(socket);
+            approaches.push(approach);
+        }
+
+        // What the router sees when it lays these routes: the body claimed,
+        // then the approaches, exactly as `lay` writes them.
+        let mut reservation = growth.reservation.clone();
+        let owner = format!("primitive:{gate}");
+        for &cell in &body {
+            let occupancy = if conductors.contains(&cell) {
+                Occupancy::Conductor
+            } else {
+                Occupancy::Solid
+            };
+            reservation.insert(cell, &owner, occupancy);
+        }
+
+        for (input, walk) in routes.iter().enumerate() {
+            let signal = &definition.inputs[input];
+            let pin = growth.pins[signal];
+            for &cell in walk.iter().skip(1) {
+                for conductor in &conductors {
+                    if !keep_out(*conductor).contains(&cell) {
+                        continue;
+                    }
+                    let arriving = *conductor == sockets[input] && cell == approaches[input];
+                    if arriving {
+                        continue;
+                    }
+                    // The model forbids this pairing. Does the router?
+                    let router_allows = anchor_is_free_for(
+                        cell,
+                        pin,
+                        approaches[input],
+                        sockets[input],
+                        signal,
+                        &reservation,
+                    );
+                    return Some(format!(
+                        "the model forbids net {signal}'s cell ({}, {}, {}) because the gate's \
+                         conductor at ({}, {}, {}) is within keep_out of it, and \
+                         `anchor_is_free_for` {} the same cell against the same reservation. \
+                         The exemptions the router makes and the model's `arriving` test does \
+                         not: start = the driver's pin ({}, {}, {}), goal = the approach \
+                         ({}, {}, {}), terminal_support = the socket ({}, {}, {})",
+                        cell.x,
+                        cell.y,
+                        cell.z,
+                        conductor.x,
+                        conductor.y,
+                        conductor.z,
+                        if router_allows { "ALLOWS" } else { "also refuses" },
+                        pin.x,
+                        pin.y,
+                        pin.z,
+                        approaches[input].x,
+                        approaches[input].y,
+                        approaches[input].z,
+                        sockets[input].x,
+                        sockets[input].y,
+                        sockets[input].z,
+                    ));
+                }
+            }
+        }
+        None
+    }
+
+    /// The walk a solved cell set makes from the net's existing tree to the
+    /// approach.
+    ///
+    /// A breadth-first search *inside the answer*: the model decides which cells
+    /// the net gets, and this reads a route out of them. Deterministic --
+    /// `BTreeSet` frontier, `Anchor` order -- and it reuses
+    /// [`reconstruct_path`], which is what makes `path[0]` the laid cell the
+    /// branch hangs off, exactly as `flood_from` leaves it.
+    fn path_through(net: &NetWindow, used: &BTreeSet<Anchor>, goal: Anchor) -> Option<Vec<Anchor>> {
+        if net.seeds.contains(&goal) {
+            return Some(vec![goal]);
+        }
+        let mut previous: BTreeMap<Anchor, Anchor> = BTreeMap::new();
+        let mut seen: BTreeSet<Anchor> = net.seeds.clone();
+        let mut frontier: BTreeSet<Anchor> = net.seeds.clone();
+        while !frontier.is_empty() {
+            let mut next: BTreeSet<Anchor> = BTreeSet::new();
+            for &cell in &frontier {
+                for neighbour in plane_neighbours(cell) {
+                    if seen.contains(&neighbour) || !used.contains(&neighbour) {
+                        continue;
+                    }
+                    seen.insert(neighbour);
+                    previous.insert(neighbour, cell);
+                    if neighbour == goal {
+                        return Some(reconstruct_path(previous, goal));
+                    }
+                    next.insert(neighbour);
+                }
+            }
+            frontier = next;
+        }
+        None
+    }
+
+    /// What a solve concluded, decoded into things the planner speaks.
+    struct SolvedWindow {
+        anchor: Anchor,
+        facing: geometry::CellFacing,
+        routes: BTreeMap<usize, Vec<Anchor>>,
+        /// Cells the model gave each net but the extracted walk did not use.
+        /// Never zero by construction, but worth reporting: a large number means
+        /// the model is buying connectivity it does not need.
+        stranded: usize,
+    }
+
+    fn decode(model: &WindowModel, assignment: &[bool]) -> Result<SolvedWindow, String> {
+        let chosen: Vec<&SolvedLanding> = model
+            .landings
+            .iter()
+            .filter(|landing| satcnf::value(assignment, landing.place))
+            .collect();
+        if chosen.len() != 1 {
+            return Err(format!("{} landings are true; exactly one must be", chosen.len()));
+        }
+        let landing = chosen[0];
+
+        let mut routes: BTreeMap<usize, Vec<Anchor>> = BTreeMap::new();
+        let mut stranded = 0usize;
+        for (input, net) in model.nets.iter().enumerate() {
+            let used: BTreeSet<Anchor> = net
+                .domain
+                .iter()
+                .enumerate()
+                .filter(|(at, _)| satcnf::value(assignment, net.used[*at]))
+                .map(|(_, &cell)| cell)
+                .collect();
+            let Some(path) = path_through(net, &used, landing.approaches[input]) else {
+                return Err(format!(
+                    "net {} has no walk through its own solved cells to ({}, {}, {})",
+                    net.signal,
+                    landing.approaches[input].x,
+                    landing.approaches[input].y,
+                    landing.approaches[input].z
+                ));
+            };
+            stranded += used.len() + 1 - path.len().min(used.len() + 1);
+            routes.insert(input, path);
+        }
+
+        Ok(SolvedWindow { anchor: landing.anchor, facing: landing.facing, routes, stranded })
+    }
+
+
+    /// The three rules the single-plane restriction claims to discharge, run
+    /// rather than asserted in prose.
+    ///
+    /// Each is a property of a *shipping* predicate, and the model leans on all
+    /// three: if any one of them stopped holding, the flat model would be
+    /// silently missing a constraint, which is the encoding-gap failure this
+    /// whole phase exists to guard against. So they are pinned here, in the
+    /// suite rather than in a harness, where a change to the router breaks them.
+    #[test]
+    fn the_flat_restriction_discharges_exactly_the_three_rules_it_claims() {
+        let here = Anchor { x: 20, y: PLANNER_Y, z: 30 };
+
+        // 1. A flat step needs no staircase clearance, and a step in y does.
+        for next in plane_neighbours(here) {
+            assert!(
+                staircase_clearance(here, next).is_empty(),
+                "a flat step to ({}, {}, {}) asked for stair cells",
+                next.x,
+                next.y,
+                next.z
+            );
+        }
+        let up = Anchor { x: here.x + 1, y: here.y + 1, z: here.z };
+        let down = Anchor { x: here.x + 1, y: here.y - 1, z: here.z };
+        assert_eq!(staircase_clearance(here, up).len(), 2, "a climb needs a riser and headroom");
+        assert_eq!(staircase_clearance(here, down).len(), 1, "a descent needs its riser empty");
+
+        // 2. A flat walk cannot obstruct itself, however it doubles back.
+        let walk = [
+            here,
+            Anchor { x: here.x + 1, ..here },
+            Anchor { x: here.x + 1, z: here.z + 1, ..here },
+            Anchor { x: here.x, z: here.z + 1, ..here },
+            Anchor { z: here.z + 2, ..here },
+            Anchor { x: here.x + 1, z: here.z + 2, ..here },
+        ];
+        let mut walked: BTreeMap<Anchor, Anchor> = BTreeMap::new();
+        for pair in walk.windows(2) {
+            assert!(
+                !self_obstructs(&walked, pair[0], pair[1]),
+                "a flat walk obstructed itself at ({}, {}, {})",
+                pair[1].x,
+                pair[1].y,
+                pair[1].z
+            );
+            walked.insert(pair[1], pair[0]);
+        }
+        // The controls: the same predicate does fire once the walk leaves the
+        // plane, so the assertions above are about flatness and not about
+        // `self_obstructs` being inert. One case per arm, and each step is one
+        // [`neighbours`] really offers -- the first draft of this used a step
+        // straight down, which dust cannot take, and asserted about a case the
+        // router can never reach.
+        //
+        // Arm one, the smothered climb: the walk leaves `here` upward, and a
+        // later step would land two levels directly above `here`, whose floor
+        // fills the cell that climb needed.
+        let mut climbed: BTreeMap<Anchor, Anchor> = BTreeMap::new();
+        let stepped_up = Anchor { x: here.x + 1, y: here.y + 1, z: here.z };
+        let two_above = Anchor { y: here.y + 2, ..here };
+        climbed.insert(stepped_up, here);
+        assert!(
+            neighbours(stepped_up).contains(&two_above),
+            "the control has to use a step dust can take"
+        );
+        assert!(
+            self_obstructs(&climbed, stepped_up, two_above),
+            "a step whose own floor smothers a cell this walk climbed out of has to be refused"
+        );
+
+        // Arm two, the blocked drop: the walk already passed through the cell a
+        // drop needs to fall past.
+        let mut dropped: BTreeMap<Anchor, Anchor> = BTreeMap::new();
+        let overhead = Anchor { x: here.x + 1, y: here.y + 2, z: here.z };
+        let across = Anchor { y: here.y + 2, ..here };
+        let below = Anchor { y: here.y + 1, ..here };
+        dropped.insert(across, overhead);
+        dropped.insert(below, across);
+        let falling = Anchor { x: here.x + 1, y: here.y, z: here.z };
+        assert!(
+            neighbours(below).contains(&falling),
+            "the control has to use a step dust can take"
+        );
+        assert!(
+            self_obstructs(&dropped, below, falling),
+            "a drop past a cell this walk already occupies has to be refused"
+        );
+
+        // 3. `neighbours` restricted to the plane is exactly the four
+        //    horizontal steps, so no in-plane step is lost by the filter.
+        assert_eq!(plane_neighbours(here).len(), 4);
+        assert_eq!(neighbours(here).len(), 12);
+        for next in plane_neighbours(here) {
+            assert!(horizontal_neighbours(here).contains(&next));
+        }
+    }
+
+    /// How a calibration run is tuned. Same shape as [`GrowthSettings`], for the
+    /// same reason: the default run is the reproduction and an override is a
+    /// sweep.
+    #[derive(Debug, Clone)]
+    struct SolveSettings {
+        circuit: String,
+        gates: String,
+        margin: i32,
+        reach_cap: usize,
+        budget: u64,
+    }
+
+    /// Grow `case` with growth's own defaults, pausing before `gate`.
+    fn growth_paused_before<'a>(
+        netlist: &'a Netlist,
+        settings: &'a GrowthSettings,
+        gate: &str,
+    ) -> Result<(Growth<'a>, usize), String> {
+        let mut growth = Growth::seeded(netlist, settings)?;
+        match growth.grow_stopping_before(Some(gate)) {
+            Some(index) => Ok((growth, index)),
+            None => Err(format!(
+                "growth never reached {gate}: it stopped at {}",
+                growth
+                    .wedge
+                    .as_ref()
+                    .map(|wedge| wedge.gate.clone())
+                    .unwrap_or_else(|| "the end of the circuit".to_string())
+            )),
+        }
+    }
+
+    /// The window a calibration case asks about: the box around what growth's
+    /// own answer occupies, grown by `margin`.
+    ///
+    /// **This is the honest shape of a known-answer test and it is worth being
+    /// explicit about.** The window is chosen so that the answer we already have
+    /// is inside it. That is the point -- a model that says UNSAT on a case we
+    /// can build by hand is wrong -- and it is *not* evidence that the model
+    /// finds answers nobody had. What it establishes is the direction that has
+    /// to hold first: the encoding admits the legal configurations it should.
+    fn window_around_answer(
+        growth: &Growth,
+        gate: usize,
+        anchor: Anchor,
+        facing: geometry::CellFacing,
+        routes: &[Vec<Anchor>],
+        margin: i32,
+    ) -> (Anchor, Anchor) {
+        let definition = &growth.netlist.gates[gate];
+        let (body, _, _) = compile::gate_footprint((anchor.x, anchor.y, anchor.z), definition, facing);
+        let mut cells: Vec<Anchor> = body;
+        for route in routes {
+            cells.extend(route.iter().copied());
+        }
+        for signal in &definition.inputs {
+            cells.push(growth.pins[signal]);
+        }
+        growth_window(&cells, margin)
+    }
+
+    /// Solve one window and say, in one line, exactly what was concluded.
+    fn report_solve(label: &str, model: &WindowModel, outcome: &Outcome, seconds: f64) {
+        let verdict = match outcome {
+            Outcome::Sat(_) => "SAT",
+            Outcome::Unsat if model.exact() => "UNSAT (exact for this window)",
+            Outcome::Unsat => "UNSAT (bounded: capped path length, NOT a proof of infeasibility)",
+            Outcome::Unknown => "UNKNOWN (budget exhausted -- this is not UNSAT)",
+        };
+        eprintln!("    {label}: {verdict} in {seconds:.2}s");
+        eprintln!("      {}", model.summary());
+        for net in &model.nets {
+            if net.stranded_entirely() && matches!(outcome, Outcome::Unsat) {
+                eprintln!(
+                    "      net {} can reach no cell of this window at all, at any path length \
+                     -- so this UNSAT does not depend on the depth cap",
+                    net.signal
+                );
+            }
+            if net.seeds_off_plane > 0 {
+                eprintln!(
+                    "      net {} has {} seed cell(s) off the gate plane, which this model \
+                     cannot grow from",
+                    net.signal, net.seeds_off_plane
+                );
+            }
+        }
+    }
+
+    /// What one gate's KNOWN SAT calibration concluded.
+    struct SatCase {
+        /// The finished circuit, with this gate's landing decided by the model.
+        candidate: PlanCandidate,
+        gate: usize,
+        /// Whether the *unaided* solve decided the window, as opposed to only
+        /// the encoding check passing.
+        searched: bool,
+        /// The cells this window's answer put down, so the injection below
+        /// perturbs something the model chose rather than something it merely
+        /// stood next to.
+        decided: Vec<Anchor>,
+        /// Whether the clearance calibration found a pair of nets to run on.
+        clearance: usize,
+        /// Whether the answer growth found is inside the model's declared scope
+        /// at all. `Some(cell)` names the cell that leaves the gate plane.
+        out_of_scope: Option<Anchor>,
+        route_cells: usize,
+    }
+
+    /// **Calibration 1: KNOWN SAT**, in two halves that measure different
+    /// things and must not be confused with each other.
+    ///
+    /// **(a) The encoding admits the known answer.** Growth's own landing and
+    /// its own walks are asserted into the model and the constraints are asked
+    /// whether that exact configuration is permitted. This is the check that
+    /// matters: it cannot time out into a false negative, and a failure names
+    /// the group -- or the cell and the rule -- that rejected a plan which
+    /// `verify_candidate` accepts. **An UNSAT here is a wrong-answer
+    /// generator.**
+    ///
+    /// **(b) The search finds an answer unaided.** The same model with nothing
+    /// assumed. A SAT answer is decoded, laid through `Growth::lay` and
+    /// verified. An `Unknown` here is a statement about this solver's budget on
+    /// this window, not about the window -- and it is reported as one rather
+    /// than rounded into either of the other two answers.
+    fn calibrate_known_sat(
+        case: &ConditionCircuit,
+        gate_name: &str,
+        settings: &SolveSettings,
+        growth_settings: &GrowthSettings,
+    ) -> Result<SatCase, String> {
+        use std::time::Instant;
+        let mut clearance = 0usize;
+
+        // --- what growth itself did, which is the answer being reproduced ---
+        let (mut oracle, gate) = growth_paused_before(&case.netlist, growth_settings, gate_name)?;
+        let before = oracle.laid.len();
+        oracle
+            .land(gate)
+            .map_err(|wedge| format!("growth wedged at {} rather than landing it", wedge.gate))?;
+        oracle.placed[gate] = true;
+        let grown_anchor = oracle.anchors[gate];
+        let grown_facing = oracle.facings[gate];
+        // Back into declared-input order: `lay` grows the cheapest branch first,
+        // so `laid` is not in socket order and the model is.
+        let mut grown_routes: Vec<Vec<Anchor>> =
+            vec![Vec::new(); case.netlist.gates[gate].inputs.len()];
+        for laid in &oracle.laid[before..] {
+            // `Laid::path` is the walk **plus the socket**: `branch` pushes the
+            // socket after the flood found the approach. What the model routes
+            // to, and what `land_solved` will hand back, is the walk that ends
+            // at the *approach*, so the socket comes off again here.
+            //
+            // Getting this backwards was the first thing the calibration caught,
+            // and it caught it the way it was meant to: as
+            // `anchor_is_free_for` refusing (12, 1, 67) -- the socket -- for a
+            // route that was never supposed to contain it.
+            let walk = &laid.path[..laid.path.len().saturating_sub(1)];
+            grown_routes[laid.input] = walk.to_vec();
+        }
+        let grown_cells: usize =
+            grown_routes.iter().map(|path| path.len().saturating_sub(1)).sum();
+
+        // --- the same state again, with the gate still unplaced ---
+        let (mut growth, gate) = growth_paused_before(&case.netlist, growth_settings, gate_name)?;
+        let window = window_around_answer(
+            &growth,
+            gate,
+            grown_anchor,
+            grown_facing,
+            &grown_routes,
+            settings.margin,
+        );
+
+        let started = Instant::now();
+        let model = window_model(&growth, gate, window, settings.reach_cap);
+        let built = started.elapsed().as_secs_f64();
+        eprintln!(
+            "    window ({}, {}, {})..({}, {}, {}) built in {built:.2}s | growth landed it at \
+             ({}, {}, {}) facing {} laying {grown_cells} cell(s) of wire",
+            window.0.x,
+            window.0.y,
+            window.0.z,
+            window.1.x,
+            window.1.y,
+            window.1.z,
+            grown_anchor.x,
+            grown_anchor.y,
+            grown_anchor.z,
+            grown_facing.index()
+        );
+        eprintln!("      {}", model.summary());
+
+        // --- (a) does the encoding admit the answer we already have? ---
+        //
+        // Only askable when that answer is inside the model's declared scope. A
+        // window whose known solution climbs is not a failure of the encoding
+        // and must not be reported as one -- the flat restriction is stated at
+        // [`window_model`] and this is where it bites. **Naming the cell is the
+        // result**, and it is the reason (a) exists at all: a search that came
+        // back `Unknown` on the same window would have said nothing about why.
+        let out_of_scope = grown_routes
+            .iter()
+            .flatten()
+            .copied()
+            .find(|cell| cell.y != PLANNER_Y);
+        match out_of_scope {
+            Some(cell) => eprintln!(
+                "      (a) OUT OF SCOPE: growth's own answer leaves the gate plane at \
+                 ({}, {}, {}), so this window's known answer is not one this model can \
+                 express. The encoding is not under test here; (b) still is.",
+                cell.x, cell.y, cell.z
+            ),
+            None => {
+                let assumed = with_known_answer(
+                    &model,
+                    &growth,
+                    gate,
+                    grown_anchor,
+                    grown_facing,
+                    &grown_routes,
+                    window,
+                    None,
+                )?;
+                let started = Instant::now();
+                let admitted = assumed.solve(settings.budget);
+                let admitted_in = started.elapsed().as_secs_f64();
+                match &admitted {
+                    Outcome::Sat(_) => {
+                        eprintln!(
+                            "      (a) the encoding ADMITS growth's own landing and walks, \
+                             {admitted_in:.2}s"
+                        );
+                        clearance += usize::from(calibrate_clearance(
+                            &model,
+                            &growth,
+                            gate,
+                            grown_anchor,
+                            grown_facing,
+                            &grown_routes,
+                            window,
+                            settings,
+                        )?);
+                    }
+                    Outcome::Unknown => {
+                        return Err(
+                            "the encoding check exhausted its budget, which it should never \
+                             do: everything added to it is a unit clause"
+                                .to_string(),
+                        )
+                    }
+                    Outcome::Unsat => {
+                        let core = assumed
+                            .core(settings.budget)
+                            .map(|groups| {
+                                groups
+                                    .iter()
+                                    .map(|&group| assumed.group_name(group).to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(" + ")
+                            })
+                            .unwrap_or_else(|| "no core".to_string());
+                        return Err(format!(
+                            "the encoding REJECTS a landing that growth laid and \
+                             `verify_candidate` accepts. That is an encoding bug, not a \
+                             result. Core: {core}"
+                        ));
+                    }
+                }
+            }
+        }
+
+        // --- (b) can the search find one on its own? ---
+        let started = Instant::now();
+        let outcome = model.cnf.solve(settings.budget);
+        let solved = started.elapsed().as_secs_f64();
+        report_solve(&format!("(b) {gate_name} unaided"), &model, &outcome, solved);
+
+        let (anchor, facing, routes, searched) = match &outcome {
+            // UNSAT where the known answer is flat is a contradiction and an
+            // encoding bug. UNSAT where the known answer climbs is an *answer*:
+            // this window admits no flat solution at all, which is a real
+            // statement about the geometry and exactly the kind of thing a
+            // complete procedure can say and a search cannot.
+            Outcome::Unsat if out_of_scope.is_none() => {
+                return Err(format!(
+                    "the model says UNSAT on a window growth itself solved flat -- growth \
+                     landed {gate_name} at ({}, {}, {}) facing {}",
+                    grown_anchor.x,
+                    grown_anchor.y,
+                    grown_anchor.z,
+                    grown_facing.index()
+                ))
+            }
+            Outcome::Unsat => {
+                eprintln!(
+                    "      NO FLAT SOLUTION exists in this window{}. Growth's own answer \
+                     climbs, so this agrees with it rather than contradicting it.",
+                    if model.exact() {
+                        ""
+                    } else {
+                        ", for any route within the depth cap"
+                    }
+                );
+                let mut routes: BTreeMap<usize, Vec<Anchor>> = BTreeMap::new();
+                for (input, path) in grown_routes.iter().enumerate() {
+                    routes.insert(input, path.clone());
+                }
+                (grown_anchor, grown_facing, routes, false)
+            }
+            Outcome::Unknown => {
+                eprintln!(
+                    "      the unaided search did not decide this window inside {} conflicts. \
+                     **That is a budget, not an infeasibility**, and it is reported as its \
+                     own answer rather than folded into either of the other two.{} The round \
+                     trip below runs on growth's own answer instead.",
+                    settings.budget,
+                    if out_of_scope.is_none() {
+                        " (a) above already showed the constraints permit a solution."
+                    } else {
+                        " (a) could not be asked here, because growth's own answer climbs."
+                    }
+                );
+                let mut routes: BTreeMap<usize, Vec<Anchor>> = BTreeMap::new();
+                for (input, path) in grown_routes.iter().enumerate() {
+                    routes.insert(input, path.clone());
+                }
+                (grown_anchor, grown_facing, routes, false)
+            }
+            Outcome::Sat(assignment) => {
+                let solution = decode(&model, assignment)?;
+                eprintln!(
+                    "      decoded: ({}, {}, {}) facing {} | routes {} | {} cell(s) solved but \
+                     unused | {}",
+                    solution.anchor.x,
+                    solution.anchor.y,
+                    solution.anchor.z,
+                    solution.facing.index(),
+                    solution
+                        .routes
+                        .values()
+                        .map(|path| path.len().to_string())
+                        .collect::<Vec<_>>()
+                        .join("+"),
+                    solution.stranded,
+                    if solution.anchor == grown_anchor && solution.facing == grown_facing {
+                        "the same place growth chose"
+                    } else {
+                        "a different place from growth, which is allowed: the question is \
+                         legality, not agreement"
+                    },
+                );
+
+                // **Rule 2, on the hardest part of the encoding.** Connectivity
+                // is where SAT routing is normally won or lost, and "the answer
+                // happened to be connected" is not evidence that anything forced
+                // it to be. So the ladder is taken out and the same window asked
+                // again: with it gone nothing anywhere makes a `use` variable
+                // true -- the goal clause only asks for a `reach` literal, and
+                // the ladder is what turns that into wire -- so the model comes
+                // back satisfiable with no route at all and the decode cannot
+                // find a walk.
+                //
+                // Skipped, loudly, when the window needed no wire: for a landing
+                // whose socket sits on its driver's pin there is nothing for the
+                // ladder to force, and a test that passes there proves nothing.
+                if solution.routes.values().any(|path| path.len() > 1) {
+                    let relaxed =
+                        model.cnf.solve_groups(&model.without_connectivity(), settings.budget);
+                    match &relaxed {
+                        Outcome::Sat(assignment) => match decode(&model, assignment) {
+                            Ok(_) => {
+                                return Err(
+                                    "with the connectivity ladder removed the model still \
+                                     produced a connected route, so nothing in this encoding is \
+                                     forcing connectivity"
+                                        .to_string(),
+                                )
+                            }
+                            Err(why) => {
+                                eprintln!("      without the connectivity ladder: {why}")
+                            }
+                        },
+                        other => {
+                            return Err(format!(
+                                "removing the connectivity ladder should only ever make a \
+                                 window easier, and it came back {other:?}"
+                            ))
+                        }
+                    }
+                } else {
+                    eprintln!(
+                        "      no wire needed here (every socket lands on its driver's pin), \
+                         so the connectivity ladder is NOT under test on this gate"
+                    );
+                }
+
+                (solution.anchor, solution.facing, solution.routes, true)
+            }
+        };
+
+        let route_cells: usize =
+            routes.values().map(|path| path.len().saturating_sub(1)).sum();
+        let decided: Vec<Anchor> =
+            routes.values().flat_map(|path| path.iter().skip(1).copied()).collect();
+        growth
+            .land_solved(gate, anchor, facing, &routes, window)
+            .map_err(|why| format!("the answer would not lay: {why}"))?;
+
+        // The rest of the circuit is grown normally, so what goes to
+        // `verify_candidate` is a whole circuit with one gate's landing decided
+        // by the model.
+        growth.grow_stopping_before(None);
+        if let Some(wedge) = &growth.wedge {
+            return Err(format!("growth wedged at {} after the landing", wedge.gate));
+        }
+        let candidate = growth
+            .candidate()
+            .ok_or_else(|| "growth built no candidate after the landing".to_string())?;
+        Ok(SatCase { candidate, gate, searched, out_of_scope, decided, route_cells, clearance })
+    }
+
+    /// **A known UNSAT that turns on clearance alone**, built by adding one
+    /// cell to an answer that is otherwise known good.
+    ///
+    /// This exists because the obvious calibration does not reach the rule the
+    /// spec cares most about. `and4`'s windows never make two nets *contend*:
+    /// six of its seven gates land a socket straight onto their driver's pin and
+    /// lay no wire at all, and the seventh -- `g3` -- is the one whose known
+    /// answer climbs. Deleting every between-net clearance clause was injected
+    /// and left `g6`'s calibration **green**, which is the honest measurement
+    /// that the group was untested and the reason this function exists.
+    ///
+    /// So the case is constructed rather than found: take growth's own answer,
+    /// which the model admits, and force one extra cell into a *different* net
+    /// -- a cell chosen to be within [`keep_out`] of the first net's wire and
+    /// clear of everything else. The window must go UNSAT, and the core must
+    /// name the clearance group and nothing else that would explain it away.
+    ///
+    /// Returns whether a pair of nets was available to run on at all, so the
+    /// report can say "not exercised" rather than imply it passed.
+    #[allow(clippy::too_many_arguments)]
+    fn calibrate_clearance(
+        model: &WindowModel,
+        growth: &Growth,
+        gate: usize,
+        anchor: Anchor,
+        facing: geometry::CellFacing,
+        routes: &[Vec<Anchor>],
+        window: (Anchor, Anchor),
+        settings: &SolveSettings,
+    ) -> Result<bool, String> {
+        let definition = &growth.netlist.gates[gate];
+        let (body, conductors, _) =
+            compile::gate_footprint((anchor.x, anchor.y, anchor.z), definition, facing);
+        let forbidden_by_body: BTreeSet<Anchor> = conductors
+            .iter()
+            .flat_map(|conductor| keep_out(*conductor))
+            .chain(conductors.iter().copied())
+            .chain(body.iter().copied())
+            .collect();
+
+        for (into, net) in model.nets.iter().enumerate() {
+            for (other, wire) in routes.iter().enumerate() {
+                if other == into || model.nets[other].signal == net.signal {
+                    continue;
+                }
+                // Skip the root: it is a cell the other net already held, so a
+                // clash with it is the *fixed* world's business and is settled
+                // by the domain filter rather than by a clause.
+                for &cell in wire.iter().skip(1) {
+                    for candidate in keep_out(cell) {
+                        if forbidden_by_body.contains(&candidate)
+                            || routes[into].contains(&candidate)
+                            || !net.index.contains_key(&candidate)
+                        {
+                            continue;
+                        }
+                        let intruded = with_known_answer(
+                            model,
+                            growth,
+                            gate,
+                            anchor,
+                            facing,
+                            routes,
+                            window,
+                            Some((into, candidate)),
+                        )?;
+                        match intruded.solve(settings.budget) {
+                            Outcome::Unsat => {}
+                            verdict => {
+                                return Err(format!(
+                                    "net {}'s wire at ({}, {}, {}) and net {}'s cell at \
+                                     ({}, {}, {}) are within keep_out of each other, which the \
+                                     shipping router refuses, and the model came back {verdict:?}",
+                                    growth.netlist.gates[gate].inputs[other],
+                                    cell.x,
+                                    cell.y,
+                                    cell.z,
+                                    net.signal,
+                                    candidate.x,
+                                    candidate.y,
+                                    candidate.z
+                                ))
+                            }
+                        }
+                        let core = intruded.core(settings.budget).ok_or_else(|| {
+                            "the clearance case is unsatisfiable and produced no core".to_string()
+                        })?;
+                        let named: Vec<String> = core
+                            .iter()
+                            .map(|&group| intruded.group_name(group).to_string())
+                            .collect();
+                        if !named.iter().any(|name| name.contains("keep clear of each other")) {
+                            return Err(format!(
+                                "the clearance case is UNSAT for the wrong reason: {named:?}"
+                            ));
+                        }
+                        eprintln!(
+                            "      (c) one cell of net {} moved to ({}, {}, {}), within \
+                             keep_out of net {}'s wire at ({}, {}, {}), makes the same window \
+                             UNSAT -- core: {}",
+                            net.signal,
+                            candidate.x,
+                            candidate.y,
+                            candidate.z,
+                            growth.netlist.gates[gate].inputs[other],
+                            cell.x,
+                            cell.y,
+                            cell.z,
+                            named.join(" + ")
+                        );
+                        return Ok(true);
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "      (c) no two nets of this gate both lay wire in this window, so the clearance \
+             rule is NOT under test here"
+        );
+        Ok(false)
+    }
+
+    /// **Calibration 2: KNOWN UNSAT.** Seal a driver's pin and the answer must
+    /// be UNSAT, with a core naming the constraints that conflict.
+    ///
+    /// The seal is not arbitrary: it is the shape every measured wedge on this
+    /// branch has. `segment_a` stops with net `g7` unable to leave `(26, 1,
+    /// 146)`, walled by four owners. Sealing a pin by hand builds the same
+    /// situation in a circuit small enough that the answer is not in doubt --
+    /// which is what makes it a calibration rather than an experiment.
+    fn calibrate_known_unsat(
+        case: &ConditionCircuit,
+        gate_name: &str,
+        settings: &SolveSettings,
+        growth_settings: &GrowthSettings,
+    ) -> Result<Vec<String>, String> {
+        // The seal is only the case it claims to be if it really strands the
+        // net; `stranded_entirely` is checked below rather than assumed.
+        use std::time::Instant;
+
+        let (mut oracle, gate) = growth_paused_before(&case.netlist, growth_settings, gate_name)?;
+        let before = oracle.laid.len();
+        oracle.land(gate).map_err(|wedge| format!("growth wedged at {}", wedge.gate))?;
+        let grown_anchor = oracle.anchors[gate];
+        let grown_facing = oracle.facings[gate];
+        let grown_routes: Vec<Vec<Anchor>> =
+            oracle.laid[before..].iter().map(|laid| laid.path.clone()).collect();
+
+        let (mut growth, gate) = growth_paused_before(&case.netlist, growth_settings, gate_name)?;
+        let window = window_around_answer(
+            &growth,
+            gate,
+            grown_anchor,
+            grown_facing,
+            &grown_routes,
+            settings.margin,
+        );
+
+        // Seal the first driver's pin: every cell dust could step to becomes a
+        // stranger's conductor. Nothing else in the window is touched.
+        let signal = growth.netlist.gates[gate].inputs[0].clone();
+        let pin = growth.pins[&signal];
+        for cell in neighbours(pin) {
+            growth.reservation.insert(cell, "sealant", Occupancy::Conductor);
+        }
+        eprintln!(
+            "    sealed net {signal}'s pin at ({}, {}, {}) with {} foreign conductor(s)",
+            pin.x,
+            pin.y,
+            pin.z,
+            neighbours(pin).len()
+        );
+
+        let model = window_model(&growth, gate, window, settings.reach_cap);
+        let started = Instant::now();
+        let outcome = model.cnf.solve(settings.budget);
+        let solved = started.elapsed().as_secs_f64();
+        report_solve(&format!("{gate_name} KNOWN UNSAT"), &model, &outcome, solved);
+
+        match outcome {
+            Outcome::Unsat => {
+                if !model.nets.iter().any(NetWindow::stranded_entirely) {
+                    return Err(
+                        "the sealed window came back UNSAT without stranding any net, so it is \
+                         not the case this calibration means to build"
+                            .to_string(),
+                    );
+                }
+            }
+            Outcome::Sat(assignment) => {
+                let decoded = decode(&model, &assignment)
+                    .map(|solution| {
+                        format!(
+                            "({}, {}, {}) facing {}",
+                            solution.anchor.x,
+                            solution.anchor.y,
+                            solution.anchor.z,
+                            solution.facing.index()
+                        )
+                    })
+                    .unwrap_or_else(|why| why);
+                return Err(format!(
+                    "the model found a landing for a gate whose only driver is sealed in: {decoded}"
+                ));
+            }
+            Outcome::Unknown => {
+                return Err("the sealed window exhausted its budget rather than deciding".into())
+            }
+        }
+
+        let core = model
+            .cnf
+            .core(settings.budget)
+            .ok_or_else(|| "no core came back from an unsatisfiable model".to_string())?;
+        let named: Vec<String> =
+            core.iter().map(|&group| model.cnf.group_name(group).to_string()).collect();
+        for name in &named {
+            eprintln!("      core: {name}");
+        }
+        Ok(named)
+    }
+
+    /// **The windowed solver, and the calibration that makes its answers worth
+    /// believing.**
+    ///
+    /// A companion to [`measure_whether_growth_places_and_routes`], not a
+    /// replacement for it. Growth's weakest component is wedge escape; a
+    /// complete solver's weakest deployment is whole-circuit scale. Windowed,
+    /// they cover each other -- and this harness is the half that has to come
+    /// first, because **an uncalibrated solver's UNSAT is worthless**.
+    ///
+    /// # What it does
+    ///
+    /// Growth is paused just before it lands a chosen gate. A box is drawn
+    /// around the region that gate's landing occupies, and inside that box a
+    /// CDCL solver is asked the joint question growth answers greedily: *where
+    /// does this gate stand, which way does it face, and how does each of its
+    /// input nets reach its socket, given everything already laid is fixed?* The
+    /// answer is decoded back into a `PlanCandidate` and put through
+    /// `verify_candidate` and the truth table, because a SAT answer the verifier
+    /// rejects is an encoding bug and not a result.
+    ///
+    /// The model is documented at [`window_model`], including the one
+    /// restriction it carries -- **new wire is flat** -- and the three shipping
+    /// predicates that restriction discharges exactly.
+    ///
+    /// # Re-running it
+    ///
+    /// ```bash
+    /// cargo test --release --lib \
+    ///   compile::planner::tests::calibrate_the_windowed_solver \
+    ///   -- --ignored --nocapture
+    /// ```
+    ///
+    /// | variable | default | meaning |
+    /// |---|---|---|
+    /// | `REDA_SOLVE_CIRCUIT` | `and4` | which circuit's growth state to window |
+    /// | `REDA_SOLVE_GATES` | `all` | gate output names, comma separated, or `all` |
+    /// | `REDA_SOLVE_MARGIN` | `3` | cells of slack around growth's own answer |
+    /// | `REDA_SOLVE_REACH` | `96` | reachability depth cap; `0` asks for the exact bound |
+    /// | `REDA_SOLVE_BUDGET` | `300000` | conflicts before a solve reports `Unknown` |
+    ///
+    /// # What it asserts, and why this one asserts where the growth probe does
+    /// not
+    ///
+    /// The growth probe deliberately asserts nothing, because a probe that gates
+    /// something is a probe somebody tunes until it goes green. Calibration is
+    /// the opposite: **the assertion is the calibration**. A model that cannot
+    /// reproduce answers we already know is not trustworthy on answers we do
+    /// not, so each case below fails the test rather than printing a number.
+    ///
+    /// 1. **(a) The encoding admits the known answer.** Growth's own landing and
+    ///    its own walks are asserted into the model and the constraints are
+    ///    asked whether that exact configuration is permitted. This is the check
+    ///    that matters: it cannot time out into a false negative.
+    /// 2. **(b) The search finds one unaided.** Same model, nothing assumed. SAT
+    ///    is decoded, laid through `Growth::lay`, and the finished circuit must
+    ///    pass `verify_candidate` **and** its truth table. `Unknown` is reported
+    ///    as its own answer and never as UNSAT.
+    /// 3. **(c) A clearance violation makes the same window UNSAT**, with the
+    ///    clearance group in the core -- see [`calibrate_clearance`] for why
+    ///    this had to be constructed rather than found.
+    /// 4. **KNOWN UNSAT.** A driver's pin sealed by twelve foreign
+    ///    conductors -- the measured shape of every wedge on this branch --
+    ///    must come back UNSAT with a core naming the placement and the goal.
+    /// 5. **DECODE ROUND TRIP.** A cell of the answer is torn out of the walk
+    ///    and `verify_candidate` must reject it, so "it verified" is a claim
+    ///    the test could have failed to make.
+    ///
+    /// # What it measured
+    ///
+    /// `--release`, every default, whole run 115s.
+    /// Every number below is a line of that run.
+    ///
+    /// | gate | window | model | (a) admits | (b) unaided | decoded | verifies |
+    /// |---|---|---|---|---|---|---|
+    /// | g0 | 9x9 | 6,052 vars / 15,409 clauses | **yes** | SAT 0.00s | (12,1,66) f3, no wire | 236 blocks, 240/240 |
+    /// | g1 | 9x9 | 6,052 / 15,409 | **yes** | SAT 0.00s | (32,1,66) f3, no wire | 236 blocks, 240/240 |
+    /// | g2 | 9x9 | 6,052 / 15,409 | **yes** | SAT 0.00s | (52,1,66) f3, no wire | 236 blocks, 240/240 |
+    /// | g3 | 47x12, 3 nets | 118,874 / 346,809 | **out of scope** | **UNKNOWN** 110s | growth's own | 236 blocks, 240/240 |
+    /// | g4 | 9x9 | 3,661 / 9,855 | **yes** | SAT 0.00s | (28,1,60) f3 -- *not* growth's (30,1,62) f0 | 252 blocks, 240/240 |
+    /// | g5 | 9x9 | 6,052 / 15,409 | **yes** | SAT 0.00s | (72,1,66) f3, no wire | 236 blocks, 240/240 |
+    /// | g6 | 47x15, 2 nets | 81,783 / 246,093 | **yes** | SAT 0.05s | (32,1,60) f0, 1+45 cells | 240 blocks, 240/240 |
+    ///
+    /// Six of seven windows are in scope and **every one of them admits the
+    /// answer growth found**; six are decided unaided; all seven decode, lay,
+    /// verify and compute `and4` correctly on all 240 ordered transitions.
+    ///
+    /// `g4` is the row worth looking at twice: the solver put the gate somewhere
+    /// growth did not, and the circuit still verifies and is still right -- at
+    /// 252 blocks against 236. Legality, not agreement, is what is being
+    /// checked.
+    ///
+    /// **The sealed window.** `g6` with net `g4`'s pin ringed by twelve foreign
+    /// conductors: **UNSAT in 0.02s**, on a core of two groups -- `gate g6
+    /// stands in exactly one place` together with `every socket's approach is
+    /// reached by its own net`. The run also prints that `g4` can reach no cell
+    /// of the window *at any path length*, so that UNSAT does not depend on the
+    /// depth cap.
+    ///
+    /// **The clearance case.** One cell of net `g4` placed at `(68, 1, 66)`,
+    /// within `keep_out` of net `g5`'s wire at `(69, 1, 66)`, makes `g6`'s
+    /// otherwise-admitted window UNSAT, core `two nets' conductors keep clear of
+    /// each other (keep_out)`. It runs on **one of the seven windows** and the
+    /// other six print `the clearance rule is NOT under test here`, because in
+    /// those six only one net lays any wire at all. That coverage number is in
+    /// the summary line rather than left to be inferred.
+    ///
+    /// # What calibration caught, which is the point of running it
+    ///
+    /// Three defects, each found by a case that then went green, and each of a
+    /// kind no amount of reading would have settled:
+    ///
+    /// 1. **A convention mismatch.** `Laid::path` ends at the *socket*; the
+    ///    model routes to the *approach*. The first run of (a) reported it as
+    ///    `anchor_is_free_for` refusing `(12, 1, 67)` -- naming the cell and the
+    ///    rule, which is exactly what a model is for.
+    /// 2. **`gate_footprint` in the inner loop.** It realises a gate into a
+    ///    64x8x64 scratch world and scans 32,768 cells, and a window offers
+    ///    thousands of anchors. Hoisting it out took window construction from
+    ///    minutes to 0.09s.
+    /// 3. **The flat restriction bites on `and4` itself.** `g3`'s known answer
+    ///    climbs to `(34, 2, 66)`. That is reported as OUT OF SCOPE rather than
+    ///    as a failure, because the restriction is declared at
+    ///    [`window_model`] -- but it means the very first circuit this model met
+    ///    already has a window it cannot express.
+    ///
+    /// # Rule 2, on the model itself
+    ///
+    /// Two defects injected, confirmed red, reverted (2026-08-16, `--release`,
+    /// `REDA_SOLVE_GATES=g6`):
+    ///
+    /// - **Delete every between-net clearance clause.** Case (c) goes red. It
+    ///   does **not** go red on (a), (b) or the round trip, and that null result
+    ///   is why (c) exists: `and4`'s windows never make two nets contend, so
+    ///   without a constructed case the rule the spec cares most about would
+    ///   have been shipped untested.
+    /// - **Delete the socket-arrival exemption** (`BodyFit`'s `arriving`), which
+    ///   makes the model over-strict rather than too loose. Case (a) goes red
+    ///   with `the encoding REJECTS a landing that growth laid and
+    ///   `verify_candidate` accepts`, core naming the body-clearance group.
+    ///
+    /// The solver underneath has its own known-answer tests in
+    /// [`crate::compile::satcnf`]: pigeonhole UNSAT, the same generator one
+    /// pigeon smaller SAT, an exhausted budget reporting `Unknown` and never
+    /// `Unsat`, and 200 random 3-SAT instances checked against exhaustive search
+    /// in both directions. Every SAT answer is additionally read back against
+    /// every clause before it leaves `Cnf::solve_groups`.
+    ///
+    /// # What this does NOT establish
+    ///
+    /// - **That the model finds answers nobody had.** Every window here is drawn
+    ///   around an answer growth already produced. That is what makes it a
+    ///   known-answer test and what stops it being evidence of anything else.
+    /// - **`and4`'s `g3`, at all.** Its known answer is out of scope (it climbs)
+    ///   and its unaided search is undecided at 300,000 conflicts. Raised to
+    ///   5,000,000 it was still searching after nine minutes and 3.3 GB of
+    ///   learnt clauses, and was killed rather than left to finish, so whether
+    ///   `g3`'s window has a flat solution is **NOT MEASURED** -- and note that
+    ///   "not measured" is the whole point of keeping `Unknown` a separate
+    ///   answer.
+    /// - **Any window with three contending nets.** `g3` is the only one in this
+    ///   circuit and it is the one that is undecided.
+    /// - **The strength budget.** [`realise_branch_from`] is not modelled at
+    ///   all; it judges at decode and can refuse. It never did on these seven
+    ///   windows, which is a fact about these windows.
+    /// - **Climbing routes**, staircase clearance and `self_obstructs` as
+    ///   *constraints*: the flat restriction discharges them exactly rather than
+    ///   encoding them, which is proved for flat answers by
+    ///   `the_flat_restriction_discharges_exactly_the_three_rules_it_claims` and
+    ///   says nothing about answers that climb.
+    /// - **`full_adder`, `segment_a`, `seven_segment` and the real wedges.**
+    ///   Deliberately out of scope for this phase: the point of calibrating is
+    ///   that the *next* phase's answer can be believed.
+    #[test]
+    #[ignore = "calibration harness: builds a CNF per gate and solves it; about two minutes at the default budget"]
+    fn calibrate_the_windowed_solver() {
+        let setting = |name: &str, fallback: &str| -> String {
+            std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+        };
+        let settings = SolveSettings {
+            circuit: setting("REDA_SOLVE_CIRCUIT", "and4"),
+            gates: setting("REDA_SOLVE_GATES", "all"),
+            margin: setting("REDA_SOLVE_MARGIN", "3").parse().expect("a margin"),
+            // 96, and the reason it is not `0` is measured. `0` asks for the
+            // exact bound, `|domain|`, which no simple path can exceed -- and
+            // for `and4`'s `g3`, whose three input nets each see a 400-plus-cell
+            // window, that is millions of ladder rungs: the run passed 1.2 GB
+            // and ten minutes of CPU without finishing and was killed. 96 is
+            // comfortably longer than any route in these windows (the longest
+            // growth lays is 45) and every report says out loud when a bound
+            // binds, because **an UNSAT under a cap is bounded by path length
+            // and is not a proof of infeasibility**.
+            reach_cap: setting("REDA_SOLVE_REACH", "96").parse().expect("a depth"),
+            // 300,000, which is the budget the report's numbers were taken at.
+            // Six of `and4`'s seven windows are decided in well under a second;
+            // the seventh, `g3`, is not decided at this budget, and raising it
+            // to 5,000,000 only bought nine minutes and 3.3 GB of learnt
+            // clauses before the run was killed. So what the harness says about
+            // `g3` is `Unknown` -- a budget, not an answer -- and raising this
+            // number is not the way to change that.
+            budget: setting("REDA_SOLVE_BUDGET", "300000").parse().expect("a budget"),
+        };
+        // Growth's own defaults, so the state being windowed is the one the
+        // growth probe reports and not a variant of it.
+        let growth_settings = GrowthSettings {
+            order: "depth".to_string(),
+            lambda: 0.5,
+            windows: vec![8, 16, 32, 64],
+            tries: 8,
+            escape: 0,
+            seed_pitch: 0,
+            verbose: false,
+            settle: true,
+            rip: 0,
+            seed: 0,
+            rip_whole: false,
+        };
+
+        let (and4, and4_output) = build_and4_netlist();
+        let case = ConditionCircuit {
+            name: "and4",
+            netlist: and4,
+            inputs: &crate::circuits::and4::INPUT_NAMES[..],
+            outputs: vec![and4_output],
+            expected: and4_expected,
+        };
+        assert_eq!(
+            settings.circuit, case.name,
+            "only `and4` has a growth run that completes, verifies and computes correctly, \
+             so it is the only circuit whose answers are known well enough to calibrate against"
+        );
+
+        let chosen: Vec<String> = if settings.gates == "all" {
+            case.netlist.gates.iter().map(|gate| gate.output.clone()).collect()
+        } else {
+            settings.gates.split(',').map(|piece| piece.trim().to_string()).collect()
+        };
+
+        eprintln!(
+            "== windowed solver calibration: {} | gates {:?} | margin {} | depth cap {} \
+             | budget {} ==",
+            case.name,
+            chosen,
+            settings.margin,
+            if settings.reach_cap == 0 {
+                "exact".to_string()
+            } else {
+                settings.reach_cap.to_string()
+            },
+            settings.budget
+        );
+
+        let mut verified = 0usize;
+        let mut injected = 0usize;
+        let mut searched = 0usize;
+        let mut admitted = 0usize;
+        let mut clearance = 0usize;
+        let mut undecided: Vec<String> = Vec::new();
+        let mut outside: Vec<String> = Vec::new();
+        for gate_name in &chosen {
+            eprintln!("  -- {gate_name} --");
+            let case_result =
+                match calibrate_known_sat(&case, gate_name, &settings, &growth_settings) {
+                    Ok(result) => result,
+                    Err(why) => panic!("KNOWN SAT calibration failed on {gate_name}: {why}"),
+                };
+            let SatCase {
+                candidate,
+                gate,
+                searched: found,
+                out_of_scope,
+                decided,
+                route_cells,
+                clearance: clearance_here,
+            } = case_result;
+            clearance += clearance_here;
+            if found {
+                searched += 1;
+            } else {
+                undecided.push(gate_name.clone());
+            }
+            if let Some(cell) = out_of_scope {
+                outside.push(format!("{gate_name}@({},{},{})", cell.x, cell.y, cell.z));
+            } else {
+                admitted += 1;
+            }
+
+            // Rule 6: routes without verifies is worth nothing.
+            let realised = realise_and_verify(
+                &candidate,
+                &case.netlist,
+                candidate_world_size(&candidate),
+            )
+            .unwrap_or_else(|error| {
+                panic!("the landing decided for {gate_name} verifies nothing: {error}")
+            });
+            let blocks = (0..realised.world.cells().len())
+                .filter(|&flat| {
+                    let (x, y, z) = realised.world.decode(flat);
+                    realised.world.get(x, y, z).kind
+                        != crate::redstone::world::block::BlockKind::Air
+                })
+                .count();
+            let (worst, at, transitions) =
+                worst_settle_and_truth(&realised, case.inputs, &case.outputs, case.expected)
+                    .unwrap_or_else(|error| {
+                        panic!("the solved landing for {gate_name} computes the wrong function: {error}")
+                    });
+            eprintln!(
+                "      VERIFIES, {blocks} blocks | truth table Ok over {transitions} ordered \
+                 transitions, worst settle {worst} ticks at {at} | {route_cells} cell(s) of \
+                 wire decoded"
+            );
+            verified += 1;
+
+            // Rule 2: the round trip has to be able to fail. One cell of the
+            // gate this window solved is moved, and the verifier must catch it.
+            let signal = case.netlist.gates[gate].inputs[0].clone();
+            let mut broken = candidate.clone();
+            let at = broken
+                .routes
+                .iter()
+                .position(|route| route.id == signal)
+                .expect("the gate's first input has a route");
+            let route = &broken.routes[at];
+            // A cell this window's answer actually put down, when it put any
+            // down. A landing whose socket sits on its driver's pin decides no
+            // wire at all, and the fallback says so rather than claiming a
+            // perturbation of something the model never chose.
+            let (moved, from_the_answer) = match route
+                .anchors
+                .iter()
+                .position(|cell| decided.contains(cell))
+            {
+                Some(at) => (at, true),
+                None => (route.anchors.len() / 2, false),
+            };
+            let was = route.anchors[moved];
+
+            // **One step is not always a defect, which is a measurement rather
+            // than an inconvenience.** A route cell displaced onto a free
+            // neighbour can be a perfectly legal *different* plan -- and it is,
+            // on `g3`: `(10, 1, 65)` moved one step in x leaves all four
+            // physical invariants happy. So the assertion is made with a
+            // displacement that certainly breaks the walk, and the one-step case
+            // is reported as an observation with nothing hanging on it.
+            let mut nudged = broken.clone();
+            nudged
+                .routes
+                .iter_mut()
+                .find(|route| route.id == signal)
+                .expect("the route was found a moment ago")
+                .anchors[moved] = Anchor { x: was.x + 1, ..was };
+            let one_step = verify_candidate(&nudged, &case.netlist);
+
+            broken.routes[at].anchors[moved] = Anchor { x: was.x + 8, ..was };
+            match verify_candidate(&broken, &case.netlist) {
+                Ok(()) => panic!(
+                    "net {signal}'s cell ({}, {}, {}) moved eight steps in x and every \
+                     invariant stayed happy, so the round trip proves nothing",
+                    was.x, was.y, was.z
+                ),
+                Err(error) => {
+                    eprintln!(
+                        "      injection: ({}, {}, {}){} torn out of the walk is caught -- \
+                         {error}",
+                        was.x,
+                        was.y,
+                        was.z,
+                        if from_the_answer {
+                            ", a cell this window's answer chose,"
+                        } else {
+                            ", which this window's answer did not choose (it decided no wire),"
+                        }
+                    );
+                    eprintln!(
+                        "      injection: the same cell moved *one* step {}",
+                        match one_step {
+                            Ok(()) =>
+                                "is NOT caught -- the perturbed plan is legal, just different"
+                                    .to_string(),
+                            Err(error) => format!("is caught too -- {error}"),
+                        }
+                    );
+                    injected += 1;
+                }
+            }
+
+        }
+
+        // KNOWN UNSAT, on the last gate of the list -- one is enough, and the
+        // seal is the same construction wherever it is applied.
+        let sealed = chosen.last().expect("at least one gate");
+        eprintln!("  -- {sealed}, sealed --");
+        let core = match calibrate_known_unsat(&case, sealed, &settings, &growth_settings) {
+            Ok(core) => core,
+            Err(why) => panic!("KNOWN UNSAT calibration failed on {sealed}: {why}"),
+        };
+        // **What the core is expected to name, and what it is not.** The
+        // contradiction is between "this gate stands somewhere" and "every
+        // socket's approach is reached by its own net": with the pin sealed,
+        // the free-space reachability precomputation proves no cell of the
+        // window is reachable at all, so the connectivity ladder is *empty* and
+        // its group contributes no clause to name. That is a stronger outcome
+        // than a searched one, not a weaker one -- the model decided it without
+        // a single conflict -- and the expectation says so rather than asking
+        // for a group that correctly has nothing in it.
+        for expected in [
+            "stands in exactly one place",
+            "every socket's approach is reached by its own net",
+        ] {
+            assert!(
+                core.iter().any(|name| name.contains(expected)),
+                "the core does not name `{expected}`; it names {core:?}"
+            );
+        }
+
+        eprintln!(
+            "== calibration over {} window(s): {admitted} in scope and every one of them \
+             ADMITS the answer growth found; {} out of scope (growth's own answer climbs): \
+             {}; {searched} decided unaided by the search{}; {verified} decoded, laid, \
+             verified and right on the truth table; {injected} injection(s) caught; 1 sealed \
+             window UNSAT with a {} group core; the clearance rule was itself put under \
+             test on {clearance} window(s) ==",
+            chosen.len(),
+            outside.len(),
+            if outside.is_empty() { "none".to_string() } else { outside.join(" ") },
+            if undecided.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    " ({} not decided inside the budget: {})",
+                    undecided.len(),
+                    undecided.join(" ")
+                )
+            },
+            core.len()
+        );
+        assert!(
+            searched > 0,
+            "not one window was decided by the search unaided, so nothing here measures the \
+             solver as a solver"
+        );
+        assert!(
+            admitted > 0,
+            "every window was out of the model's scope, so nothing here measures the encoding"
+        );
     }
 }

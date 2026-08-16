@@ -62,6 +62,10 @@ pub mod polarity;
 pub mod primitive_graph;
 pub mod relax;
 pub mod routing_stats;
+/// A CDCL SAT solver and a tagged CNF builder, used by `planner`'s windowed
+/// model. Test-only, so it ships in nothing and takes no dependency.
+#[cfg(test)]
+pub mod satcnf;
 pub mod topology;
 pub mod world_partition;
 
