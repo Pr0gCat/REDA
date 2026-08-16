@@ -240,6 +240,39 @@ in the same change.
 > `is_dust` and `verify_connectivity`'s BFS never starts from or walks
 > through one.
 
+**Amended 2026-08-16 — measured, and the amendment is a tightening of the
+*derivation*, not of the rule.** `docs/derived/dust-join-relation.md` derives
+the join relation by running the `Simulator` rather than by reading
+`dust_reach`, over every offset in `|dx|<=2, |dy|<=1, |dz|<=2` and over the
+whole block vocabulary. Three things it changes about the text above:
+
+1. **`CONDUCTOR_CLEARANCE`/`COLUMN_CLEARANCE = 2` is confirmed exactly**, and
+   so is the repeater firewall — this document tests the firewall at one
+   geometry, and `a_repeater_is_a_firewall_on_every_side_but_its_own_axis`
+   now tests it at all twelve. The rule as written down below stands; nothing
+   here loosens it.
+2. **"no case that depends on anything other than the immediate neighbour's
+   own support/conductivity" is wrong**, and the code block quoted three
+   paragraphs above it shows why: the climb arm also reads
+   `is_conductive(from.up())`, which is not the neighbour. There are **two**
+   cells in the vertical cases, not one. Stated as a pair rather than as a
+   direction of travel: with `P` the higher conductor and `Q` the lower one,
+   `S = P.down()` and `C = Q.up()`, `Q` climbs to `P` iff
+   `supports_dust_step(S) && !is_conductive(C)`, and `P` descends to `Q` iff
+   `!supports_dust_step(C)`.
+3. **At a Y-difference of 1 the condition is sufficient but not necessary.**
+   Both arms are gated on `C`, so a conductive block over the lower cell shuts
+   the pair in both directions. This document's rule refuses that geometry
+   anyway, which is safe and is what the router does; it is simply not the
+   tightest true statement. It also means the relation is **one-way** for any
+   block that is a full cube without conducting (glass, a redstone block):
+   `supports_dust_step` blocks the descent while `!is_conductive` permits the
+   climb, of the same cell. Nothing this compiler writes is such a block.
+
+Whether the tighter statement is usable inside the planner is a separate
+question with its own measured answer, and it is no: see
+`2026-08-15-routing-at-scale.md` §8.16.
+
 This is the fact both the `wired-or-genlib` bug and `BAND_HEIGHT = 2`
 (`layout_z`'s "skip-band edge" argument, already using exactly this
 distance-1-cannot-bridge property to justify letting two Y-bands share one Z

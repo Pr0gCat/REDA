@@ -6447,6 +6447,142 @@ mod tests {
         );
     }
 
+    /// [`keep_out`] is exactly the twelve offsets `docs/derived/
+    /// dust-join-relation.md` scores, and `tests/dust_join_relation.rs`
+    /// mirrors that list because this function is private to this module.
+    ///
+    /// Without this assertion the mirror could drift and the derived table
+    /// would silently start scoring a different rule than the one that ships.
+    #[test]
+    fn keep_out_is_exactly_the_twelve_offsets_the_derived_table_scores() {
+        const MIRRORED: [(i32, i32, i32); 12] = [
+            (0, -1, -1),
+            (0, 0, -1),
+            (0, 1, -1),
+            (0, -1, 1),
+            (0, 0, 1),
+            (0, 1, 1),
+            (1, -1, 0),
+            (1, 0, 0),
+            (1, 1, 0),
+            (-1, -1, 0),
+            (-1, 0, 0),
+            (-1, 1, 0),
+        ];
+        let anchor = Anchor { x: 40, y: 3, z: 40 };
+        let measured: BTreeSet<(i32, i32, i32)> = keep_out(anchor)
+            .into_iter()
+            .map(|cell| (cell.x - anchor.x, cell.y - anchor.y, cell.z - anchor.z))
+            .collect();
+        let mirrored: BTreeSet<(i32, i32, i32)> = MIRRORED.into_iter().collect();
+        assert_eq!(
+            measured, mirrored,
+            "tests/dust_join_relation.rs scores this exact list; update both or \
+             the derived table stops describing the shipping rule"
+        );
+        assert_eq!(keep_out(anchor).len(), 12, "and with no duplicates");
+    }
+
+    /// **The crux, measured: the exact rule needs to classify a cell that the
+    /// `Reservation` cannot classify.**
+    ///
+    /// `docs/derived/dust-join-relation.md` derives that a vertical pair joins
+    /// or not according to one cell -- the one directly above the lower
+    /// conductor -- and specifically according to two of its properties,
+    /// `supports_dust_step` and `is_conductive`. Both are false for air and both
+    /// are true for stone, so the exact rule needs to know which of the two that
+    /// cell will hold.
+    ///
+    /// [`Occupancy`] has two values and neither answers it. [`reserve_path`]
+    /// writes **both** cells of a climb's [`staircase_clearance`] as
+    /// `Occupancy::Solid` under the same owner -- and one of them is a stone
+    /// riser while the other is a cell that must stay *air*, or the climb it
+    /// exists to protect does not happen. Two opposite futures, one indelible
+    /// reservation entry.
+    ///
+    /// And the headroom cell is not some unrelated corner: it is
+    /// `from.up()`, which for a route climbing out of `from` is exactly the lid
+    /// cell the join rule reads.
+    #[test]
+    fn the_reservation_writes_a_stone_riser_and_a_mandatory_air_cell_identically() {
+        let from = Anchor { x: 10, y: 1, z: 10 };
+        let to = Anchor { x: 11, y: 2, z: 10 };
+        let clearance = staircase_clearance(from, to);
+        let riser = Anchor { y: from.y, ..to };
+        let headroom = Anchor { y: from.y + 1, ..from };
+        assert_eq!(
+            clearance,
+            vec![riser, headroom],
+            "a climb claims the block it steps onto and the cell over its own head"
+        );
+
+        let mut reservation = Reservation::new();
+        reserve_path(&mut reservation, "net", &[from, to]);
+
+        // The riser has to become stone -- it is what `to` stands on. The
+        // headroom has to stay air -- a solid block there is exactly what
+        // `dust_connections`' climb rule refuses to climb past. The reservation
+        // says the same thing about both.
+        assert_eq!(reservation.owner(&riser), Some("stair:net"));
+        assert_eq!(reservation.owner(&headroom), Some("stair:net"));
+        assert_eq!(reservation.conductor_owner(&riser), None);
+        assert_eq!(reservation.conductor_owner(&headroom), None);
+        assert_eq!(
+            reservation.cells.get(&riser).map(|(_, o)| *o),
+            reservation.cells.get(&headroom).map(|(_, o)| *o),
+            "the two cells are indistinguishable in the reservation, so no \
+             function of the reservation alone can decide the join rule's \
+             `supports_dust_step`/`is_conductive` question about them"
+        );
+        assert_eq!(
+            reservation.cells.get(&headroom).map(|(_, o)| *o),
+            Some(Occupancy::Solid),
+            "and the value they share is the one that reads as 'a block'"
+        );
+    }
+
+    /// The other half of the crux: the lid cell is frequently not in the
+    /// reservation *at all* when [`anchor_is_free_for`] is asked, and whether it
+    /// ever gets filled depends on a net that has not been routed yet.
+    ///
+    /// [`reserve_path`] claims a floor under every cell of every route, so a
+    /// cell that is open when net A is routed can be a solid floor once net B
+    /// is. The answer an exact rule would give therefore depends on routing
+    /// order, which is the definition of not decidable at the time of the query.
+    #[test]
+    fn the_lid_cell_can_be_open_when_asked_and_solid_one_net_later() {
+        // `mine` wants to climb from (10,1,10) to (11,2,10). Its lid cell --
+        // the cell above the lower conductor -- is (10,2,10).
+        let lower = Anchor { x: 10, y: 1, z: 10 };
+        let lid = Anchor { x: 10, y: 2, z: 10 };
+
+        let mut reservation = Reservation::new();
+        reserve_path(&mut reservation, "mine", &[lower, Anchor { x: 9, ..lower }]);
+        assert_eq!(
+            reservation.owner(&lid),
+            None,
+            "nothing in the plan mentions the lid cell yet -- an exact rule \
+             asked now has nothing to read"
+        );
+
+        // Some later net runs one storey up, straight over it. Its floor lands
+        // on the lid cell, and stone there kills both the climb and the descend.
+        let over = Anchor { x: 10, y: 3, z: 10 };
+        reserve_path(&mut reservation, "later", &[over, Anchor { x: 11, ..over }]);
+        assert_eq!(
+            reservation.owner(&lid),
+            Some("later"),
+            "the same cell is a floor once a second net is routed"
+        );
+        assert_eq!(
+            reservation.conductor_owner(&lid),
+            None,
+            "a floor is Solid, so the *conductor* query -- the only one \
+             `anchor_is_free_for` makes -- reports nothing either way, before or \
+             after"
+        );
+    }
+
     /// The planner has to be able to place a circuit itself, not only improve
     /// one the legacy router already placed.
     ///
