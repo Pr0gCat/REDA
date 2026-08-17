@@ -2109,6 +2109,16 @@ impl Reservation {
         })
     }
 
+    /// What this reservation calls a cell, whoever owns it.
+    ///
+    /// A read-only accessor, `#[cfg(test)]`, for the arithmetic harness: the
+    /// four typed queries above each collapse the value to a yes/no, and the
+    /// question "what did the plan think was here" needs the value itself.
+    #[cfg(test)]
+    fn occupancy(&self, anchor: &Anchor) -> Option<Occupancy> {
+        self.cells.get(anchor).map(|(_, occupancy)| *occupancy)
+    }
+
     /// Every reserved cell inside the box spanned by `from` and `to`.
     fn cells_within(&self, from: Anchor, to: Anchor) -> Vec<Anchor> {
         let (lo, hi) = (
@@ -14064,4 +14074,1525 @@ mod tests {
             eprintln!("{line}");
         }
     }
+    // =====================================================================
+    // The arithmetic of a component-aware keep-out: what it would cost, and
+    // what it would buy.
+    // =====================================================================
+    //
+    // `keep_out` takes a coordinate. `compile::energising::energises` takes a
+    // block kind and a facing, and answers out of the two derived artifacts.
+    // Everything below is the difference between those two answers, counted --
+    // on the two measured wedges, on the 41 recorded extra edges, per circuit
+    // and per component. **Nothing here changes what the router does**; the one
+    // function it would change, `anchor_is_free_for`, is not touched.
+    //
+    // Read the four numbers with the one artifact line that governs all of
+    // them: `docs/derived/dust-join-relation.md`'s summary says **12 of
+    // `keep_out`'s 12 cells really join** for a dust cell on a stone floor. So
+    // for dust -- which is most of what a route lays -- `keep_out` is not
+    // conservative, it is exact, and no amount of component-awareness can make
+    // it smaller. The whole saving, and the whole cost, is in the cells that
+    // are *not* dust.
+
+    use crate::compile::energising::{self, Offset};
+    use crate::redstone::world::block::{BlockKind, Facing};
+    use std::collections::HashMap;
+
+    const EXTRAS_ARTIFACT: &str = include_str!("../../docs/derived/realised-graph-extras.md");
+
+    /// What one cell's derived keep-out halo is, and where the answer came
+    /// from.
+    struct Derived {
+        /// Everything the artifacts measure this block to reach, both hops.
+        measured: BTreeSet<Offset>,
+        /// The same, plus every offset no rig in the artifact could ask about
+        /// -- a diode's rear, where the rig's own feed has to stand. This is
+        /// what a reservation would actually have to use.
+        conservative: BTreeSet<Offset>,
+        /// Which relation answered.
+        via: &'static str,
+    }
+
+    /// The derived halo of one realised block.
+    ///
+    /// Two relations, not one, and the split is the whole result. Dust against
+    /// dust has its own artifact and its own closed form; everything else is
+    /// the energising range. Asking `energises` about dust would be wrong in
+    /// the flattering direction -- Table 1's `dust` row reads `x` in the column
+    /// its own feed occupies, so it would answer three cells for something the
+    /// dust-join artifact measures at twelve.
+    fn derived_halo(state: &BlockState) -> Derived {
+        if state.kind == BlockKind::RedstoneWire {
+            let joins = energising::dust_join_offsets();
+            return Derived {
+                measured: joins.clone(),
+                conservative: joins,
+                via: "dust-join",
+            };
+        }
+        let range = energising::energises(state.kind, state.facing);
+        Derived {
+            measured: range.measured(),
+            conservative: range.conservative(),
+            via: "energises",
+        }
+    }
+
+    fn offset_between(from: Anchor, to: Anchor) -> Offset {
+        (to.x - from.x, to.y - from.y, to.z - from.z)
+    }
+
+    /// `keep_out`'s answer as offsets, so it can be differenced against a
+    /// derived halo. Taken from the function itself rather than written out,
+    /// so a change to `keep_out` moves every count below.
+    fn keep_out_offsets() -> BTreeSet<Offset> {
+        let origin = Anchor { x: 0, y: 0, z: 0 };
+        keep_out(origin)
+            .into_iter()
+            .map(|cell| offset_between(origin, cell))
+            .collect()
+    }
+
+    /// What each cell of a placed gate body actually holds.
+    ///
+    /// `compile::gate_footprint` answers which cells a body occupies and which
+    /// of them conduct; the question here is which *kind* of thing conducts,
+    /// which is exactly the axis `keep_out` cannot see. Same scratch world,
+    /// same three writes after it, so a cell this reports is a cell that one
+    /// reports.
+    fn body_states(
+        origin: Anchor,
+        gate: &Gate,
+        facing: geometry::CellFacing,
+    ) -> BTreeMap<Anchor, BlockState> {
+        let mut scratch = World::new(64, 8, 64);
+        let shifted_origin = (32, 1, 32);
+        let cell = if gate.is_merge() {
+            compile::place_merge_gate(&mut scratch, shifted_origin, gate.inputs.len(), facing)
+        } else {
+            compile::place_nor_gate(&mut scratch, shifted_origin, gate.inputs.len(), facing)
+        };
+        let torch = Position::new(
+            shifted_origin.0 + cell.output_offset.0,
+            shifted_origin.1 + cell.output_offset.1,
+            shifted_origin.2 + cell.output_offset.2,
+        );
+        let pin = torch.offset(geometry::output_direction(facing));
+        scratch.set(pin.x, pin.y, pin.z, compile::dust());
+        for direction in geometry::input_directions(facing)
+            .iter()
+            .take(gate.inputs.len())
+        {
+            let socket = Position::new(shifted_origin.0, shifted_origin.1, shifted_origin.2)
+                .offset(*direction);
+            scratch.set(socket.x, socket.y, socket.z, compile::stone());
+        }
+        let mut states = BTreeMap::new();
+        for flat in 0..scratch.cells().len() {
+            let (x, y, z) = scratch.decode(flat);
+            let state = scratch.get(x, y, z);
+            if state.kind == BlockKind::Air {
+                continue;
+            }
+            states.insert(
+                Anchor {
+                    x: origin.x + (x - shifted_origin.0),
+                    y: origin.y + (y - shifted_origin.1),
+                    z: origin.z + (z - shifted_origin.2),
+                },
+                state.clone(),
+            );
+        }
+        states
+    }
+
+    /// The same, for a primary input's lever, through the same writer the
+    /// emitter uses.
+    fn lever_states(anchor: Anchor, facing: geometry::CellFacing) -> BTreeMap<Anchor, BlockState> {
+        let mut scratch = World::new(16, 4, 16);
+        let home = Position::new(8, 1, 8);
+        compile::place_primary_input(&mut scratch, home, facing);
+        let mut states = BTreeMap::new();
+        for flat in 0..scratch.cells().len() {
+            let (x, y, z) = scratch.decode(flat);
+            let state = scratch.get(x, y, z);
+            if state.kind == BlockKind::Air {
+                continue;
+            }
+            states.insert(
+                Anchor {
+                    x: anchor.x + (x - home.x),
+                    y: anchor.y + (y - home.y),
+                    z: anchor.z + (z - home.z),
+                },
+                state.clone(),
+            );
+        }
+        states
+    }
+
+    /// What stands in every claimed cell of a growth state.
+    ///
+    /// Bodies and levers are exact -- they are written by the same functions
+    /// realisation writes them with. **Laid wire is not**: which cells of a
+    /// path become repeaters is decided by `realise_branch_from`'s strength
+    /// budget, which runs after `reserve_path` and therefore after the state
+    /// this reads. Every laid cell is recorded as dust, and
+    /// `the_energising_arithmetic` prints that as a caveat rather than
+    /// swallowing it.
+    fn growth_states(growth: &Growth) -> BTreeMap<Anchor, BlockState> {
+        let mut states = BTreeMap::new();
+        let gates = growth.netlist.gates.len();
+        for (index, node) in growth.nodes.iter().enumerate() {
+            let Some(node) = node else {
+                continue;
+            };
+            if index < gates {
+                states.extend(body_states(
+                    node.anchor,
+                    &growth.netlist.gates[index],
+                    growth.facings[index],
+                ));
+            } else {
+                states.extend(lever_states(node.anchor, growth.facings[index]));
+            }
+        }
+        for laid in &growth.laid {
+            for &cell in &laid.path {
+                states.entry(cell).or_insert_with(compile::dust);
+            }
+        }
+        states
+    }
+
+    /// How the derivation reads one ordered pair: an offender that already
+    /// stands at `offender`, and a cell `target` a route wants.
+    ///
+    /// Returns the reason the pair is refused, or `None` if the derivation has
+    /// nothing against it.
+    fn derived_verdict(
+        offender: Anchor,
+        state: &BlockState,
+        target: Anchor,
+        reservation: &Reservation,
+    ) -> Option<String> {
+        let halo = derived_halo(state);
+        let offset = offset_between(offender, target);
+        // **The reverse direction, and it comes first because an
+        // energising-only rule is blind to it.** A gate's support block and a
+        // gate's socket are inert stone: `energises` asked of them answers
+        // nothing, so a rule built from it alone would hand the cell back. What
+        // actually happens is measured in
+        // `energising::tests::a_powered_dust_against_a_gate_support_puts_its_
+        // torch_out`: a powered dust one cardinal step from a support turns
+        // that gate's torch off.
+        if state.kind == BlockKind::Solid
+            && matches!(
+                reservation.occupancy(&offender),
+                Some(Occupancy::GateConductor)
+            )
+        {
+            let cardinal = offset.1 == 0 && offset.0.abs() + offset.2.abs() == 1;
+            if cardinal && energising::BESIDE_A_SUPPORT_IS_READ {
+                return Some(
+                    "MECHANISM 4 (measured): a powered dust one cardinal step from a \
+                     gate's support block turns that gate's torch off. Not in the \
+                     energising range at all -- the offender is inert and the newcomer \
+                     is the emitter."
+                        .to_string(),
+                );
+            }
+            return Some(format!(
+                "NOT MEASURED at offset {offset:?}: an inert `GateConductor` cell, kept \
+                 clear by one of the four rules `Occupancy::GateConductor` names, none \
+                 of which the energising range expresses. Conservatively kept."
+            ));
+        }
+        if !halo.measured.contains(&offset) {
+            if halo.conservative.contains(&offset) {
+                return Some(format!(
+                    "UNMEASURABLE: the artifact's rig cannot ask a {:?} about {offset:?} \
+                     (its own feed stands there), so a safe rule keeps it",
+                    state.kind
+                ));
+            }
+            return None;
+        }
+        if state.kind != BlockKind::RedstoneWire {
+            return Some(format!(
+                "{:?} energises {offset:?} ({})",
+                state.kind, halo.via
+            ));
+        }
+        // Dust against dust. Same layer is unconditional; a vertical pair is
+        // apart only when the lid is committed stone, which is exactly
+        // `join_lid` plus `stone_owner` -- the rule this tree already has and
+        // already refuses to ship, for reasons that have nothing to do with
+        // component-awareness.
+        if energising::unconditional_dust_joins().contains(&offset) {
+            return Some(
+                "dust-join, SAME LAYER and UNCONDITIONAL: no content of any cell anywhere \
+                 separates this pair"
+                    .to_string(),
+            );
+        }
+        match join_lid(target, offender) {
+            Some(lid) if reservation.stone_owner(&lid).is_some() => None,
+            Some(lid) => Some(format!(
+                "dust-join, vertical: the lid at ({}, {}, {}) is not committed stone",
+                lid.x, lid.y, lid.z
+            )),
+            None => Some("dust-join".to_string()),
+        }
+    }
+
+    // ---------------------------------------------------------------
+    // 1 -- the wedges
+    // ---------------------------------------------------------------
+
+    /// One cell a sealed pin cannot step into, with both verdicts.
+    struct SealedStep {
+        cell: Anchor,
+        today: String,
+        derived: Vec<String>,
+        opens: bool,
+    }
+
+    /// Everything measured about one sealed pin.
+    fn seal_report(
+        growth: &Growth,
+        states: &BTreeMap<Anchor, BlockState>,
+        pin: Anchor,
+        signal: &str,
+    ) -> Vec<SealedStep> {
+        let mut steps = Vec::new();
+        for cell in neighbours(pin) {
+            let mut today = String::new();
+            let mut derived: Vec<String> = Vec::new();
+            let mut opens = true;
+
+            if let Some(owner) = growth.reservation.owner(&cell) {
+                today = format!(
+                    "OCCUPIED by `{owner}` [{}]",
+                    growth.what_stands_at(cell)
+                );
+                // A cell another block already stands in is not a clearance
+                // question at all. No relaxation of any keep-out rule puts two
+                // blocks in one cell.
+                derived.push("BLOCK OVERLAP -- outside every clearance rule".to_string());
+                opens = false;
+                steps.push(SealedStep { cell, today, derived, opens });
+                continue;
+            }
+            let below = Anchor { y: cell.y - 1, ..cell };
+            if let Some(owner) = growth.reservation.conductor_owner(&below) {
+                today = format!(
+                    "its floor at ({}, {}, {}) conducts for `{owner}`",
+                    below.x, below.y, below.z
+                );
+                if let Some(state) = states.get(&below) {
+                    if let Some(why) = derived_verdict(below, state, cell, &growth.reservation) {
+                        derived.push(format!("({}, {}, {}) {why}", below.x, below.y, below.z));
+                        opens = false;
+                    }
+                } else {
+                    derived.push("floor conductor with no realised state recorded".to_string());
+                    opens = false;
+                }
+            }
+            for neighbour in keep_out(cell) {
+                if neighbour == pin {
+                    continue;
+                }
+                let Some(owner) = growth.reservation.conductor_owner(&neighbour) else {
+                    continue;
+                };
+                if owner == signal {
+                    continue;
+                }
+                let offset = offset_between(cell, neighbour);
+                if today.is_empty() {
+                    today = format!(
+                        "keep_out sees `{owner}`'s conductor at ({}, {}, {}), offset {offset:?}",
+                        neighbour.x, neighbour.y, neighbour.z
+                    );
+                }
+                let Some(state) = states.get(&neighbour) else {
+                    derived.push(format!(
+                        "({}, {}, {}) `{owner}` -- conductor with no realised state recorded, \
+                         so no derived verdict",
+                        neighbour.x, neighbour.y, neighbour.z
+                    ));
+                    opens = false;
+                    continue;
+                };
+                let taxonomy = growth.what_stands_at(neighbour);
+                match derived_verdict(neighbour, state, cell, &growth.reservation) {
+                    Some(why) => {
+                        derived.push(format!(
+                            "({}, {}, {}) `{owner}` [{taxonomy}] {:?}: {why}",
+                            neighbour.x, neighbour.y, neighbour.z, state.kind
+                        ));
+                        opens = false;
+                    }
+                    None => derived.push(format!(
+                        "({}, {}, {}) `{owner}` [{taxonomy}] {:?}: the derivation has NOTHING \
+                         against this pair at offset {offset:?}",
+                        neighbour.x, neighbour.y, neighbour.z, state.kind
+                    )),
+                }
+            }
+            if today.is_empty() {
+                today = "no arm refuses it".to_string();
+            }
+            steps.push(SealedStep { cell, today, derived, opens });
+        }
+        steps
+    }
+
+    /// The four landings whose socket approach is `pin` -- the only landings a
+    /// net that cannot leave its own pin could ever be served by.
+    fn servable_landings(
+        growth: &Growth,
+        gate: usize,
+        input: usize,
+        pin: Anchor,
+    ) -> Vec<(Anchor, geometry::CellFacing)> {
+        let mut found = Vec::new();
+        for index in 0..4u8 {
+            let facing = geometry::CellFacing::from_index(index).expect("0..4 is horizontal");
+            for dx in -2..=2 {
+                for dy in -2..=2 {
+                    for dz in -2..=2 {
+                        let anchor = Anchor {
+                            x: pin.x + dx,
+                            y: pin.y + dy,
+                            z: pin.z + dz,
+                        };
+                        if socket_and_approach(anchor, facing, input).1 == pin {
+                            found.push((anchor, facing));
+                        }
+                    }
+                }
+            }
+            let _ = growth;
+            let _ = gate;
+        }
+        found
+    }
+
+
+    // ---------------------------------------------------------------
+    // 2 -- the 41 extra edges
+    // ---------------------------------------------------------------
+
+    /// One `EXTRA EDGE` line of `docs/derived/realised-graph-extras.md`.
+    #[derive(Debug, Clone)]
+    struct ExtraEdge {
+        circuit: String,
+        path: String,
+        ships: bool,
+        from_net: String,
+        from: Anchor,
+        to_net: String,
+        to: Anchor,
+        across: Anchor,
+    }
+
+    fn parse_anchor(text: &str) -> Anchor {
+        let inner = text.trim().trim_start_matches('(').trim_end_matches(')');
+        let parts: Vec<i32> = inner
+            .split(',')
+            .map(|piece| piece.trim().parse().expect("a coordinate"))
+            .collect();
+        assert_eq!(parts.len(), 3, "an address has three coordinates");
+        Anchor {
+            x: parts[0],
+            y: parts[1],
+            z: parts[2],
+        }
+    }
+
+    /// Every extra edge the artifact records, with the circuit and path each
+    /// was found on.
+    fn recorded_extra_edges() -> Vec<ExtraEdge> {
+        let mut edges = Vec::new();
+        let (mut circuit, mut path, mut ships) = (String::new(), String::new(), false);
+        for line in EXTRAS_ARTIFACT.lines() {
+            if let Some(heading) = line.strip_prefix("## ") {
+                let head = heading.replace('`', "");
+                let mut halves = head.split(" / ");
+                circuit = halves.next().unwrap_or_default().trim().to_string();
+                let tail = halves.next().unwrap_or_default();
+                ships = tail.contains("SHIPS TODAY");
+                path = tail
+                    .split("--")
+                    .next()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_string();
+                continue;
+            }
+            let Some(body) = line.trim().strip_prefix("EXTRA EDGE") else {
+                continue;
+            };
+            // `<net> at (a) -> <net> at (b) across (c), mechanism ...`
+            let body = body.trim();
+            let (lhs, rest) = body.split_once(" -> ").expect("an arrow");
+            let (from_net, from) = lhs.split_once(" at ").expect("`at`");
+            let (rhs, tail) = rest.split_once(" across ").expect("`across`");
+            let (to_net, to) = rhs.split_once(" at ").expect("`at`");
+            // Not `split(',')`: the address itself has two commas in it.
+            let across = &tail[..tail.find(')').expect("a closed address") + 1];
+            edges.push(ExtraEdge {
+                circuit: circuit.clone(),
+                path: path.clone(),
+                ships,
+                from_net: from_net.trim().to_string(),
+                from: parse_anchor(from),
+                to_net: to_net.trim().to_string(),
+                to: parse_anchor(to),
+                across: parse_anchor(across),
+            });
+        }
+        edges
+    }
+
+    /// A built circuit, on one path, with everything the counts need.
+    struct Built {
+        world: World,
+        /// Plan-time ownership and occupancy -- the map `keep_out` is asked
+        /// against.
+        plan: Reservation,
+        /// Realised ownership per cell, cell to net index. Kept because the
+        /// plan-time reservation and the realised one are different maps and a
+        /// count that conflated them would be a different measurement.
+        nets: HashMap<Position, usize>,
+    }
+
+    fn build_on(netlist: &Netlist, legacy: bool) -> Option<Built> {
+        let (candidate, size) = if legacy {
+            let compiled = compile::compile_legacy(netlist).ok()?;
+            let emission = compiled
+                .legacy_emission()
+                .expect("compile_legacy always keeps its emission");
+            let seed = seed_from_legacy_parts(netlist, emission).ok()?;
+            let size = compiled.world.size();
+            (seed, size)
+        } else {
+            let candidate =
+                plan_from_netlist_within(netlist, &PortPlacements::default(), TRIAL_RIP_UP_ROUNDS)
+                    .ok()?;
+            let size = candidate_world_size(&candidate);
+            (candidate, size)
+        };
+        let incident = vec![false; candidate.routes.len()];
+        let plan = candidate.live_reservation(&incident);
+        let verified = verify_and_expose(&candidate, netlist, size).ok()?;
+        Some(Built {
+            world: verified.realised.world,
+            plan,
+            nets: verified.reservation,
+        })
+    }
+
+    /// What one recorded extra edge would have looked like to a two-hop-aware
+    /// reservation, asked at plan time.
+    struct EdgeVerdict {
+        edge: ExtraEdge,
+        /// The block the artifact's source cell actually holds.
+        source: BlockState,
+        /// Whether today's twelve-cell halo covers the offset at all.
+        in_keep_out: bool,
+        /// Whether the derived range covers it.
+        in_derived: bool,
+        /// Whether the plan-time reservation gives the two cells to different
+        /// owners, which is what a reservation rule compares.
+        owners: Option<(String, String)>,
+        /// The same question at *net* granularity, from the realised ownership
+        /// the four physical invariants ran against. The two answers differ,
+        /// and the difference is the whole result for these edges.
+        nets: Option<(usize, usize)>,
+        /// Whether the source's realisation is decided before `reserve_path`
+        /// writes the entry the rule would read.
+        knowable_at_reserve_time: bool,
+        /// What the block in the middle is, and what the plan-time reservation
+        /// calls it. A two-hop rule has to reach *through* this cell, so what
+        /// it is decides whether the rule could have been asked about it.
+        mediator: String,
+    }
+
+    fn judge_extra_edges(edges: &[ExtraEdge], built: &Built) -> Vec<EdgeVerdict> {
+        let today = keep_out_offsets();
+        let mut verdicts = Vec::new();
+        for edge in edges {
+            let source = built
+                .world
+                .get(edge.from.x, edge.from.y, edge.from.z)
+                .clone();
+            let offset = offset_between(edge.from, edge.to);
+            let halo = derived_halo(&source);
+            let owners = match (
+                built.plan.owner(&edge.from).map(str::to_string),
+                built.plan.owner(&edge.to).map(str::to_string),
+            ) {
+                (Some(a), Some(b)) if a != b => Some((a, b)),
+                _ => None,
+            };
+            // A repeater in the middle of a route is chosen by
+            // `realise_branch_from`'s strength budget, which runs *after*
+            // `reserve_path` has written the entry a plan-time rule reads. A
+            // gate's own component is placed before any of it.
+            let knowable = !matches!(source.kind, BlockKind::Repeater | BlockKind::Comparator)
+                || built.plan.owner(&edge.from).is_none();
+            let across = built
+                .world
+                .get(edge.across.x, edge.across.y, edge.across.z)
+                .clone();
+            let mediator = format!(
+                "{:?} claimed as {}",
+                across.kind,
+                match built.plan.occupancy(&edge.across) {
+                    Some(occupancy) => format!("{occupancy:?}"),
+                    None => "nothing".to_string(),
+                }
+            );
+            let at = |cell: Anchor| Position::new(cell.x, cell.y, cell.z);
+            let nets = match (
+                built.nets.get(&at(edge.from)).copied(),
+                built.nets.get(&at(edge.to)).copied(),
+            ) {
+                (Some(a), Some(b)) if a != b => Some((a, b)),
+                _ => None,
+            };
+            verdicts.push(EdgeVerdict {
+                edge: edge.clone(),
+                mediator,
+                nets,
+                in_keep_out: today.contains(&offset),
+                in_derived: halo.measured.contains(&offset),
+                owners,
+                knowable_at_reserve_time: knowable,
+                source,
+            });
+        }
+        verdicts
+    }
+
+    // ---------------------------------------------------------------
+    // 3 and 4 -- per circuit, per component
+    // ---------------------------------------------------------------
+
+    /// The keep-out footprint of one circuit, today and derived.
+    #[derive(Default)]
+    struct Footprint {
+        /// Conductors the rule is asked about.
+        cells: usize,
+        /// `sum |keep_out(C)|` over them -- twelve each.
+        today: usize,
+        /// `sum |derived halo(C)|`, measured only.
+        derived: usize,
+        /// The same with unanswerable offsets kept.
+        conservative: usize,
+        removed: usize,
+        added: usize,
+        /// Of `removed`, the cells another component's derived range still
+        /// refuses -- the air cell above a torch, every one of whose twelve is
+        /// inside that torch's own hop 2. A real saving.
+        removed_recovered: usize,
+        /// Of `removed`, the cells nothing in the energising relation speaks
+        /// for: a gate's support block and its sockets, inert stone that
+        /// `energises` answers zero for and that mechanism 4 says must stay.
+        /// **Not** a saving; a hole.
+        removed_unspoken: usize,
+        /// Distinct cells no foreign conductor may enter, today and derived.
+        union_today: BTreeSet<Anchor>,
+        union_derived: BTreeSet<Anchor>,
+    }
+
+    fn footprint_of(built: &Built) -> (Footprint, BTreeMap<String, Footprint>) {
+        let today_offsets = keep_out_offsets();
+        let (size_x, size_y, size_z) = built.world.size();
+        let mut total = Footprint::default();
+        let mut by_kind: BTreeMap<String, Footprint> = BTreeMap::new();
+        let lo = Anchor { x: 0, y: 0, z: 0 };
+        let hi = Anchor {
+            x: size_x - 1,
+            y: size_y - 1,
+            z: size_z - 1,
+        };
+        for cell in built.plan.cells_within(lo, hi) {
+            if built.plan.conductor_owner(&cell).is_none() {
+                continue;
+            }
+            if cell.x < 0
+                || cell.y < 0
+                || cell.z < 0
+                || cell.x >= size_x
+                || cell.y >= size_y
+                || cell.z >= size_z
+            {
+                continue;
+            }
+            let state = built.world.get(cell.x, cell.y, cell.z);
+            let halo = derived_halo(state);
+            let occupancy = built.plan.occupancy(&cell);
+            let label = component_label(state, occupancy);
+            let dropped = today_offsets.difference(&halo.measured).count();
+            // Which of the two `keep_out`-only classes this cell is, if either.
+            // The air cell above a torch is re-covered: every cell of its
+            // twelve is a cell that torch's own hop 2 already refuses. A gate's
+            // support and its sockets are not covered by anything.
+            let recovered = state.kind == BlockKind::Air;
+            let unspoken = state.kind == BlockKind::Solid
+                && matches!(occupancy, Some(Occupancy::GateConductor));
+            let entry = by_kind.entry(label).or_default();
+            for slot in [&mut total, entry] {
+                slot.cells += 1;
+                slot.today += today_offsets.len();
+                slot.derived += halo.measured.len();
+                slot.conservative += halo.conservative.len();
+                slot.removed += dropped;
+                slot.added += halo.measured.difference(&today_offsets).count();
+                if recovered {
+                    slot.removed_recovered += dropped;
+                }
+                if unspoken {
+                    slot.removed_unspoken += dropped;
+                }
+                for offset in &today_offsets {
+                    slot.union_today.insert(Anchor {
+                        x: cell.x + offset.0,
+                        y: cell.y + offset.1,
+                        z: cell.z + offset.2,
+                    });
+                }
+                for offset in &halo.measured {
+                    slot.union_derived.insert(Anchor {
+                        x: cell.x + offset.0,
+                        y: cell.y + offset.1,
+                        z: cell.z + offset.2,
+                    });
+                }
+            }
+        }
+        (total, by_kind)
+    }
+
+    /// A block's name in the per-component table: kind, and facing where the
+    /// artifact prints one row per facing.
+    fn component_label(state: &BlockState, occupancy: Option<Occupancy>) -> String {
+        let name = energising::artifact_name(state.kind)
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("{:?}", state.kind).to_lowercase());
+        match (state.kind, state.facing) {
+            (BlockKind::Repeater | BlockKind::Comparator | BlockKind::WallTorch, Some(facing)) => {
+                format!("{name} {facing:?}")
+            }
+            // The two classes `keep_out` reserves for that hold no component at
+            // all. Named apart because the arithmetic reads completely
+            // differently for them -- see `Footprint::removed_recovered` and
+            // `removed_unspoken`.
+            (BlockKind::Air, _) => "air over a torch".to_string(),
+            (BlockKind::Solid, _) if matches!(occupancy, Some(Occupancy::GateConductor)) => {
+                "stone (gate support)".to_string()
+            }
+            _ => name,
+        }
+    }
+
+
+    // ---------------------------------------------------------------
+    // The run
+    // ---------------------------------------------------------------
+
+    /// The growth settings the wedge record was taken at, so the state this
+    /// measures is the state the growth probe reports.
+    fn wedge_settings() -> GrowthSettings {
+        GrowthSettings {
+            order: "depth".to_string(),
+            lambda: 0.5,
+            windows: vec![8, 16, 32, 64],
+            tries: 8,
+            escape: 0,
+            seed_pitch: 0,
+            verbose: false,
+            settle: false,
+            rip: 0,
+            seed: 0,
+            rip_whole: false,
+        }
+    }
+
+    /// What one wedge's arithmetic came to.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct SealCounts {
+        /// In-plane steps out of the sealed pin that the derived range would
+        /// hand back. **This is the number that decides the whole question.**
+        opens_in_plane: usize,
+        in_plane: usize,
+        /// The same over all twelve steps, climbing included.
+        opens_any: usize,
+        steps: usize,
+        /// Landings whose socket approach is that pin and that are refused by
+        /// a cell of the new body landing where a block already stands.
+        landings_overlapping: usize,
+        landings: usize,
+    }
+
+    /// One wedge, measured: which cells seal the pin, what refuses each of them
+    /// today, and what the derived range says about the same pair.
+    fn measure_one_wedge(
+        name: &str,
+        netlist: &Netlist,
+        expected: (&str, usize),
+    ) -> SealCounts {
+        let settings = wedge_settings();
+        let mut oracle = Growth::seeded(netlist, &settings).expect("the seed layout");
+        oracle.grow();
+        let wedge = oracle
+            .wedge
+            .as_ref()
+            .unwrap_or_else(|| panic!("{name} did not wedge, so there is nothing to measure"));
+        let placed = oracle.placed.iter().filter(|done| **done).count();
+        assert_eq!(
+            (wedge.gate.as_str(), placed),
+            expected,
+            "{name}'s wedge moved; every number below would be about a different state"
+        );
+        let gate = netlist
+            .gates
+            .iter()
+            .position(|g| g.output == wedge.gate)
+            .expect("the wedged gate is in the netlist");
+        let signal = netlist.gates[gate].inputs[0].clone();
+        let pin = oracle.pins[&signal];
+        let states = growth_states(&oracle);
+
+        eprintln!(
+            "\n== {name}: WEDGE `{}` after {placed}/{} gates, on net `{signal}`'s pin \
+             ({}, {}, {}) ==",
+            wedge.gate,
+            netlist.gates.len(),
+            pin.x,
+            pin.y,
+            pin.z
+        );
+
+        let steps = seal_report(&oracle, &states, pin, &signal);
+        let in_plane: Vec<&SealedStep> = steps.iter().filter(|step| step.cell.y == pin.y).collect();
+        eprintln!(
+            "   the four in-plane steps out of the pin -- the four cells that seal it:"
+        );
+        let mut opened_plane = 0usize;
+        for step in &in_plane {
+            eprintln!(
+                "     ({}, {}, {})\n       TODAY:   {}",
+                step.cell.x, step.cell.y, step.cell.z, step.today
+            );
+            for line in &step.derived {
+                eprintln!("       DERIVED: {line}");
+            }
+            if step.opens {
+                opened_plane += 1;
+                eprintln!("       => WOULD OPEN under the derived range");
+            } else {
+                eprintln!("       => still refused");
+            }
+        }
+        let opened_all = steps.iter().filter(|step| step.opens).count();
+        eprintln!(
+            "   in-plane: {opened_plane} of {} open. All twelve steps (climbing included): \
+             {opened_all} of {} open.",
+            in_plane.len(),
+            steps.len()
+        );
+
+        // The four landings whose socket approach is that pin.
+        let landings = servable_landings(&oracle, gate, 0, pin);
+        eprintln!(
+            "   the {} landing(s) whose socket approach IS that pin -- the only ones a net \
+             that cannot leave its pin could be served by:",
+            landings.len()
+        );
+        let mut overlapping = 0usize;
+        let mut stands = 0usize;
+        for (anchor, facing) in &landings {
+            let (overlaps, why) = why_the_body_would_not_stand(&oracle, gate, *anchor, *facing);
+            overlapping += usize::from(overlaps);
+            if why.starts_with("it stands") {
+                stands += 1;
+            }
+            eprintln!(
+                "     anchor ({}, {}, {}) facing {}: {}\n            {why}",
+                anchor.x,
+                anchor.y,
+                anchor.z,
+                facing.index(),
+                if overlaps { "BLOCK OVERLAP" } else { "clearance only" }
+            );
+        }
+        eprintln!(
+            "   => {overlapping} of {} refused by BLOCK OVERLAP, which no clearance rule of \
+             any kind can relax; {stands} stand today.",
+            landings.len()
+        );
+        SealCounts {
+            opens_in_plane: opened_plane,
+            in_plane: in_plane.len(),
+            opens_any: opened_all,
+            steps: steps.len(),
+            landings_overlapping: overlapping,
+            landings: landings.len(),
+        }
+    }
+
+    /// The 41 recorded extra edges, judged.
+    ///
+    /// Returned as counts rather than printed, so
+    /// `the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none`
+    /// asserts the same arithmetic
+    /// [`measure_the_energising_arithmetic`] reports rather than a second,
+    /// differently-wrong copy of it.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct ExtrasCounts {
+        /// How many the artifact records.
+        recorded: usize,
+        /// How many were rebuilt here and judged.
+        covered: usize,
+        /// How many the derived two-hop range covers the offset of.
+        seen: usize,
+        /// ...and today's twelve-cell halo covers.
+        seen_by_keep_out: usize,
+        /// ...and a rule keyed on the plan-time `Reservation::owner` refuses.
+        by_owner: usize,
+        /// ...and a rule keyed on net ownership refuses.
+        by_net: usize,
+        /// Of `by_net`, how many are in a world `compile` ships.
+        by_net_shipping: usize,
+        /// How many have an emitter whose realisation is decided after
+        /// `reserve_path` writes the entry such a rule reads.
+        undecided_source: usize,
+    }
+
+    fn extras_arithmetic(verbose: bool) -> ExtrasCounts {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+        macro_rules! say {
+            ($($arg:tt)*) => {
+                if verbose {
+                    eprintln!($($arg)*);
+                }
+            };
+        }
+        say!("\n== THE 41 EXTRA EDGES ==");
+        let edges = recorded_extra_edges();
+        say!("   the artifact records {} extra edge(s)", edges.len());
+        // The same six the extras record was taken over, with the same
+        // lowerings -- `crate::compile::coupling::tests::circuits`. Anything
+        // less would leave recorded edges uncounted, which is the one way this
+        // number could be quietly too small.
+        let mut all: Vec<(String, Netlist)> = vec![
+            ("and4".to_string(), build_and4_netlist().0),
+            ("full_adder".to_string(), build_full_adder_netlist().0),
+            ("segment_a".to_string(), build_single_segment_netlist(0).0),
+            ("seven_segment".to_string(), build_seven_segment_netlist().0),
+        ];
+        for circuit in crate::circuits::verilog::CIRCUITS {
+            let (gate_level, _labels) = circuit.baked_netlist();
+            let lowered = match circuit.name {
+                "verilog:seven_segment" => crate::compile::lowering::lower_optimised(&gate_level),
+                _ => crate::compile::lowering::lower(&gate_level),
+            }
+            .unwrap_or_else(|error| panic!("{} must lower: {error}", circuit.name));
+            all.push((circuit.name.to_string(), lowered));
+        }
+        // Three counts, not one, because "would a two-hop-aware reservation
+        // have refused it" has three different answers depending on what the
+        // reservation is allowed to know.
+        //
+        // * `seen` -- the offset is inside the derived range and outside
+        //   `keep_out`'s twelve. The *geometry* is caught.
+        // * `refused_by_owner` -- and the plan-time `Reservation::owner`
+        //   already gives the two cells to different owners, so today's map
+        //   suffices.
+        // * `refused_by_net` -- and *net* ownership, which the plan-time map
+        //   does not carry, gives them to different nets.
+        let mut seen = 0usize;
+        let mut seen_by_keep_out = 0usize;
+        let mut refused_by_owner = 0usize;
+        let mut refused_by_net = 0usize;
+        let mut refused_shipping = 0usize;
+        let mut undecided_source = 0usize;
+        let mut residue: Vec<String> = Vec::new();
+        let mut covered = 0usize;
+        for (name, netlist) in &all {
+            for legacy in [false, true] {
+                let mine: Vec<ExtraEdge> = edges
+                    .iter()
+                    .filter(|edge| {
+                        edge.circuit == *name
+                            && edge.path == if legacy { "legacy" } else { "relaxation" }
+                    })
+                    .cloned()
+                    .collect();
+                if mine.is_empty() {
+                    continue;
+                }
+                let Some(built) = build_on(netlist, legacy) else {
+                    residue.push(format!(
+                        "{name}/{}: {} edge(s) -- this path could not be rebuilt here",
+                        if legacy { "legacy" } else { "relaxation" },
+                        mine.len()
+                    ));
+                    continue;
+                };
+                covered += mine.len();
+                say!(
+                    "\n   -- {name} / {} --",
+                    if legacy { "legacy" } else { "relaxation" }
+                );
+                for verdict in judge_extra_edges(&mine, &built) {
+                    let edge = &verdict.edge;
+                    if verdict.in_derived {
+                        seen += 1;
+                    }
+                    if verdict.in_keep_out {
+                        seen_by_keep_out += 1;
+                    }
+                    if verdict.in_derived && verdict.owners.is_some() {
+                        refused_by_owner += 1;
+                    }
+                    if verdict.in_derived && verdict.nets.is_some() {
+                        refused_by_net += 1;
+                        if edge.ships {
+                            refused_shipping += 1;
+                        }
+                    }
+                    if !verdict.knowable_at_reserve_time {
+                        undecided_source += 1;
+                    }
+                    if !verdict.in_derived {
+                        residue.push(format!(
+                            "{name}/{}: {} at ({}, {}, {}) -> {}: the derived range does \
+                             NOT cover this offset",
+                            if legacy { "legacy" } else { "relaxation" },
+                            edge.from_net,
+                            edge.from.x,
+                            edge.from.y,
+                            edge.from.z,
+                            edge.to_net
+                        ));
+                    }
+                    say!(
+                        "     {} ({}, {}, {}) {:?} -> {} ({}, {}, {}) | keep_out {} | derived \
+                         {} | plan owner {} | net owner {} | knowable at reserve time {}",
+                        edge.from_net,
+                        edge.from.x,
+                        edge.from.y,
+                        edge.from.z,
+                        verdict.source.kind,
+                        edge.to_net,
+                        edge.to.x,
+                        edge.to.y,
+                        edge.to.z,
+                        if verdict.in_keep_out { "YES" } else { "no" },
+                        if verdict.in_derived { "YES" } else { "no" },
+                        match &verdict.owners {
+                            Some((a, b)) => format!("`{a}` vs `{b}`"),
+                            None => format!(
+                                "SAME ({})",
+                                built.plan.owner(&edge.from).unwrap_or("unclaimed")
+                            ),
+                        },
+                        match &verdict.nets {
+                            Some((a, b)) => format!("net {a} vs net {b}"),
+                            None => "same or unclaimed".to_string(),
+                        },
+                        if verdict.knowable_at_reserve_time {
+                            "yes"
+                        } else {
+                            "NO -- repeater chosen after reserve_path"
+                        }
+                    );
+                    say!(
+                        "        across ({}, {}, {}): {}",
+                        edge.across.x, edge.across.y, edge.across.z, verdict.mediator
+                    );
+                }
+            }
+        }
+        say!(
+            "\n   {covered} of {} recorded edges rebuilt here.\n   \
+             the derived two-hop range covers the offset in {seen} of them; today's \
+             `keep_out` covers 0.\n   \
+             a two-hop rule keyed on the plan-time `Reservation::owner` would have refused \
+             {refused_by_owner}: in the rest the two cells belong to the SAME reservation \
+             owner, because a gate's body and its input sockets are one owner and this \
+             whole mechanism happens inside one of them.\n   \
+             keyed on NET ownership -- which the plan-time reservation does not carry -- it \
+             would have refused {refused_by_net} ({refused_shipping} in a world `compile` \
+             ships).\n   \
+             and in {undecided_source} of them the emitting cell realises as a REPEATER, \
+             chosen by `realise_branch_from`'s strength budget AFTER `reserve_path` wrote \
+             the entry such a rule would read -- the same undecidability that stopped \
+             `keep_out_against`.",
+            edges.len()
+        );
+        for line in &residue {
+            say!("   RESIDUE: {line}");
+        }
+        ExtrasCounts {
+            recorded: edges.len(),
+            covered,
+            seen,
+            seen_by_keep_out,
+            by_owner: refused_by_owner,
+            by_net: refused_by_net,
+            by_net_shipping: refused_shipping,
+            undecided_source,
+        }
+    }
+
+    /// **The four numbers.** Everything above, run and printed.
+    ///
+    /// # Re-running it
+    ///
+    /// ```bash
+    /// cargo test --release --lib \
+    ///   compile::planner::tests::measure_the_energising_arithmetic \
+    ///   -- --ignored --nocapture
+    /// ```
+    ///
+    /// `#[ignore]` because it grows two circuits and builds six on both compile
+    /// paths; the assertions that keep its headline numbers honest are the four
+    /// tests below it, which are not ignored.
+    ///
+    /// # What it measured
+    ///
+    /// `--release`, whole run 4.7s, 2026-08-17. Every number below is one line
+    /// of that run's output.
+    ///
+    /// ## 1 -- the wedges. **Neither opens. 0 of 4, twice.**
+    ///
+    /// ```text
+    /// full_adder, g9 wedged on g8's pin (14,1,162)
+    ///   (13,1,162)  keep_out sees primitive:0 at (12,1,162)  -> that cell is a NOR's
+    ///               SUPPORT BLOCK. `energises` answers zero for inert stone; a powered
+    ///               dust one step from it turns the gate's torch off, measured.
+    ///   (15,1,162)  keep_out sees primitive:1's dust at (16,1,162), same layer
+    ///               -> joined UNCONDITIONALLY
+    ///   (14,1,161)  keep_out sees g1's dust at (15,1,161), same layer -> ditto
+    ///   (14,1,163)  OCCUPIED outright by primitive:8's body -> not a clearance question
+    /// segment_a, g8 wedged on g7's pin (26,1,146)
+    ///   (25,1,146)  g4's dust at (24,1,146), same layer -> UNCONDITIONAL
+    ///   (27,1,146)  primitive:5's SUPPORT BLOCK at (28,1,146) -> mechanism 4
+    ///   (26,1,145)  g2's dust at (26,1,144), same layer -> UNCONDITIONAL
+    ///   (26,1,147)  OCCUPIED outright by primitive:7's body
+    /// ```
+    ///
+    /// 0 of 4 in-plane steps open on each, and 0 of all twelve including the
+    /// climbing ones. The four servable landings stay 4-of-4 BLOCK OVERLAP.
+    ///
+    /// ## 2 -- the 41 extra edges. **The geometry is caught; the ownership is not.**
+    ///
+    /// 41 of 41 rebuilt and judged. `keep_out`'s twelve cells cover the offset
+    /// of **0**; the derived two-hop range covers **41**. But a rule keyed on
+    /// the plan-time [`Reservation::owner`] would have refused **0** -- in
+    /// every one of the 41 the emitting cell and the contaminated cell have the
+    /// *same* reservation owner, because a gate's body and its input sockets
+    /// are one owner and the whole mechanism happens inside one of them. Keyed
+    /// on **net** ownership, which the plan-time map does not carry: 41, of
+    /// which 37 in a world `compile` ships. And 41 of 41 are emitted by a
+    /// **repeater**, chosen by `realise_branch_from` after `reserve_path` wrote
+    /// the entry such a rule reads.
+    ///
+    /// ## 3 -- per circuit, cell-reservations (conductors x halo)
+    ///
+    /// | circuit | conductors | today | derived | removed | added | net |
+    /// |---|---|---|---|---|---|---|
+    /// | and4 (relaxation) | 134 | 1,608 | 1,420 | 260 | 72 | **-188** |
+    /// | full_adder (relaxation) | 578 | 6,936 | 6,196 | 926 | 186 | **-740** |
+    /// | segment_a (legacy) | 279 | 3,348 | 2,104 | 1,454 | 210 | **-1,244** |
+    ///
+    /// And the split that matters more than the total: of `segment_a`'s 1,454
+    /// removed, **600** are the air cell over a torch (re-covered by that
+    /// torch's own hop 2 -- a real saving), **552** are a gate's support or
+    /// socket (which the energising relation does not speak for at all, and
+    /// mechanism 4 keeps), and only **302** are a genuine narrowing of a real
+    /// component's halo. **Dust removes 0 and adds 0** on every circuit, and
+    /// dust is 478 of full_adder's 578 conductors.
+    ///
+    /// ## 4 -- per component
+    ///
+    /// | block | today | hop 1 | hop 2 | measured | conservative |
+    /// |---|---|---|---|---|---|
+    /// | dust | 12 | (12, from the join artifact) | 0 | **12** | 12 |
+    /// | repeater / comparator, any facing | 12 | 1 | 5 | **6** | 12 |
+    /// | torch, wall torch any facing | 12 | 5 | 5 | **10** | 10 |
+    /// | lever | 12 | 6 | 18 | **24** | 24 |
+    /// | redstone block | 12 | 6 | 0 | **6** | 6 |
+    /// | stone / glass / lamp | 12 | 0 | 0 | **0** | 0 |
+    #[test]
+    #[ignore = "measurement harness; run with --ignored --nocapture"]
+    fn measure_the_energising_arithmetic() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::build_single_segment_netlist;
+
+        eprintln!(
+            "\n===== what a component-aware, two-hop keep-out would cost and would buy =====\n\
+             `keep_out` reserves twelve cells for everything. The derived range is read out \
+             of docs/derived/coupling-mechanisms.md (both hops) and \
+             docs/derived/dust-join-relation.md (dust against dust), by \
+             compile::energising."
+        );
+
+        // --- 4: per component ---------------------------------------
+        eprintln!("\n== PER COMPONENT: twelve today, against what the derivation measures ==");
+        eprintln!(
+            "   {:<18} {:>6} {:>6} {:>6} {:>8} {:>8} {:>8}",
+            "block", "today", "hop1", "hop2", "measured", "conserv.", "net"
+        );
+        let mut components: Vec<(String, BlockKind, Option<Facing>)> = Vec::new();
+        for kind in [
+            BlockKind::RedstoneWire,
+            BlockKind::Repeater,
+            BlockKind::Comparator,
+            BlockKind::Torch,
+            BlockKind::WallTorch,
+            BlockKind::Lever,
+            BlockKind::RedstoneBlock,
+            BlockKind::Solid,
+            BlockKind::Glass,
+            BlockKind::Lamp,
+        ] {
+            let facings: Vec<Option<Facing>> = match kind {
+                BlockKind::Repeater | BlockKind::Comparator | BlockKind::WallTorch => {
+                    [Facing::North, Facing::South, Facing::East, Facing::West]
+                        .into_iter()
+                        .map(Some)
+                        .collect()
+                }
+                _ => vec![None],
+            };
+            for facing in facings {
+                let mut state = BlockState::air();
+                state.kind = kind;
+                state.facing = facing;
+                components.push((component_label(&state, None), kind, facing));
+            }
+        }
+        for (label, kind, facing) in &components {
+            let mut state = BlockState::air();
+            state.kind = *kind;
+            state.facing = *facing;
+            let halo = derived_halo(&state);
+            let range = energising::energises(*kind, *facing);
+            let (hop1, hop2) = if *kind == BlockKind::RedstoneWire {
+                ("12*".to_string(), "0".to_string())
+            } else {
+                (range.hop1.len().to_string(), range.hop2.len().to_string())
+            };
+            eprintln!(
+                "   {:<18} {:>6} {:>6} {:>6} {:>8} {:>8} {:>+8}",
+                label,
+                12,
+                hop1,
+                hop2,
+                halo.measured.len(),
+                halo.conservative.len(),
+                halo.measured.len() as i64 - 12
+            );
+        }
+        eprintln!(
+            "   * dust's row is the dust-join artifact, not `energises`: Table 1's `dust` \
+             row reads `x` where its own feed stands, and the join artifact's summary is \
+             that all twelve of `keep_out`'s cells really join."
+        );
+
+        // --- 1: the wedges ------------------------------------------
+        eprintln!("\n== THE WEDGES ==");
+        let (adder, _) = build_full_adder_netlist();
+        let (segment, _) = build_single_segment_netlist(0);
+        let adder_seal = measure_one_wedge("full_adder", &adder, ("g9", 7));
+        let segment_seal = measure_one_wedge("segment_a", &segment, ("g8", 18));
+
+        // --- 3 and 4: per circuit -----------------------------------
+        eprintln!("\n== PER CIRCUIT: the keep-out footprint, today and derived ==");
+        let mut builds: BTreeMap<(String, bool), Built> = BTreeMap::new();
+        let circuits: Vec<(&str, Netlist, bool)> = vec![
+            ("and4", build_and4_netlist().0, false),
+            ("full_adder", build_full_adder_netlist().0, false),
+            ("segment_a", build_single_segment_netlist(0).0, true),
+        ];
+        for (name, netlist, legacy) in &circuits {
+            let Some(built) = build_on(netlist, *legacy) else {
+                eprintln!("   {name}: this path cannot build it");
+                continue;
+            };
+            let (total, by_kind) = footprint_of(&built);
+            eprintln!(
+                "\n   -- {name} ({}) : {} conductor(s) --",
+                if *legacy { "legacy" } else { "relaxation" },
+                total.cells
+            );
+            eprintln!(
+                "      today {} cell-reservations ({} distinct cells) | derived {} ({} \
+                 distinct) | conservative {}",
+                total.today,
+                total.union_today.len(),
+                total.derived,
+                total.union_derived.len(),
+                total.conservative
+            );
+            eprintln!(
+                "      removed {} | added {} | net {:+}",
+                total.removed,
+                total.added,
+                total.derived as i64 - total.today as i64
+            );
+            eprintln!(
+                "      of the {} removed: {} are the air cell over a torch, RE-COVERED \
+                 by that torch's own hop 2; {} are a gate's support or socket, which \
+                 the energising relation does not speak for AT ALL (mechanism 4 keeps \
+                 them); {} are a genuine narrowing of a real component's halo.",
+                total.removed,
+                total.removed_recovered,
+                total.removed_unspoken,
+                total.removed - total.removed_recovered - total.removed_unspoken
+            );
+            eprintln!(
+                "      {:<18} {:>7} {:>8} {:>9} {:>8} {:>8}",
+                "block", "cells", "today", "derived", "removed", "added"
+            );
+            for (label, part) in &by_kind {
+                eprintln!(
+                    "      {:<18} {:>7} {:>8} {:>9} {:>8} {:>8}",
+                    label, part.cells, part.today, part.derived, part.removed, part.added
+                );
+            }
+            builds.insert(((*name).to_string(), *legacy), built);
+        }
+
+        // --- 2: the 41 extra edges ----------------------------------
+        eprintln!("
+== THE 41 EXTRA EDGES ==");
+        let extras = extras_arithmetic(true);
+        eprintln!("   {extras:#?}");
+
+        eprintln!(
+            "\n== VERDICT INPUTS ==\n   full_adder: {} of {} in-plane steps open, {} of {} \
+             landings BLOCK OVERLAP\n   segment_a:  {} of {} in-plane steps open, {} of {} \
+             landings BLOCK OVERLAP",
+            adder_seal.opens_in_plane,
+            adder_seal.in_plane,
+            adder_seal.landings_overlapping,
+            adder_seal.landings,
+            segment_seal.opens_in_plane,
+            segment_seal.in_plane,
+            segment_seal.landings_overlapping,
+            segment_seal.landings
+        );
+    }
+
+
+
+    /// **The decisive number, pinned so it cannot drift unnoticed.**
+    ///
+    /// The hypothesis this phase was sent to test is that `keep_out` is at once
+    /// too big and too small, and that the too-big half is what seals
+    /// `segment_a`'s `g7` pin and `full_adder`'s `g8` pin. It is not. Every
+    /// in-plane step out of both pins is refused by something the derived range
+    /// refuses too, and the reasons are measured one cell at a time by
+    /// [`measure_one_wedge`]:
+    ///
+    /// * a **same-layer dust** offender -- `docs/derived/dust-join-relation.md`
+    ///   joins those unconditionally, so no component-awareness reaches them;
+    /// * a **gate's support block** -- inert stone, which `energises` answers
+    ///   *nothing* for, and which
+    ///   `energising::tests::a_powered_dust_against_a_gate_support_puts_its_
+    ///   torch_out` measures to turn that gate's torch off anyway;
+    /// * or a cell **another block already stands in**, which is not a
+    ///   clearance question at all.
+    ///
+    /// Run under `--release`; it grows two circuits and takes about 3 seconds.
+    ///
+    /// # Rule 2: injected, confirmed red, reverted (`--release`)
+    ///
+    /// * **Delete [`derived_verdict`]'s inert-`GateConductor` arm** -- the one
+    ///   that keeps a gate's support block, which `energises` answers zero for.
+    ///   `full_adder` goes to **1 of 4 open** and this goes red. That arm is
+    ///   the difference between the honest answer and the flattering one.
+    /// * **Delete its unconditional same-layer dust arm as well**, and stop the
+    ///   vertical arm refusing a pair with no lid. `full_adder` goes to **2 of
+    ///   4 open** and this goes red again.
+    /// * Narrowing the mechanism-4 arm to nothing (`cardinal = false`) does
+    ///   **not** turn it red, and that null result is recorded rather than
+    ///   dropped: the cell is then kept by the `NOT MEASURED` arm instead, so
+    ///   what this test pins is that the cell stays refused, not which of the
+    ///   two sentences refuses it.
+    #[test]
+    fn neither_sealed_pin_opens_under_the_derived_range() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::build_single_segment_netlist;
+
+        let (adder, _) = build_full_adder_netlist();
+        let (segment, _) = build_single_segment_netlist(0);
+        for (name, netlist, expected) in [
+            ("full_adder", adder, ("g9", 7usize)),
+            ("segment_a", segment, ("g8", 18usize)),
+        ] {
+            let counts = measure_one_wedge(name, &netlist, expected);
+            assert_eq!(
+                counts.in_plane, 4,
+                "{name}: a pin has four in-plane steps and they are the four cells the \
+                 wedge report calls the seal"
+            );
+            assert_eq!(
+                counts.opens_in_plane, 0,
+                "{name}: NOT ONE of the four sealed cells is handed back by the derived \
+                 range. If this ever goes non-zero the verdict changes."
+            );
+            assert_eq!(
+                counts.opens_any, 0,
+                "{name}: nor any of the twelve steps including the climbing ones"
+            );
+            assert_eq!(
+                (counts.landings_overlapping, counts.landings),
+                (4, 4),
+                "{name}: and all four servable landings are refused by BLOCK OVERLAP, \
+                 which no clearance rule of any kind relaxes"
+            );
+        }
+    }
+
+    /// **The other side of the hypothesis, and this half holds.**
+    ///
+    /// Every one of the 41 recorded extra edges is at an offset today's twelve
+    /// cells do not cover and the derived two-hop range does. What that buys is
+    /// then bounded by two things this pins as well: the plan-time reservation's
+    /// ownership is per *gate body*, not per net, and every one of the 41 is
+    /// emitted by a repeater whose existence is decided after the entry such a
+    /// rule would read is written.
+    #[test]
+    fn the_derived_range_sees_every_recorded_extra_edge_and_keep_out_sees_none() {
+        let counts = extras_arithmetic(false);
+        let ExtrasCounts {
+            recorded,
+            covered,
+            seen,
+            seen_by_keep_out,
+            by_owner,
+            by_net,
+            by_net_shipping,
+            undecided_source,
+        } = counts;
+        assert_eq!(covered, recorded, "every recorded edge is rebuilt and judged");
+        assert_eq!(
+            seen, recorded,
+            "the derived two-hop range covers the offset of every recorded extra edge"
+        );
+        assert_eq!(
+            seen_by_keep_out, 0,
+            "and today's twelve-cell halo covers the offset of NONE of them -- every one 
+             of the 41 is two cells away, which is the hop `keep_out` does not have"
+        );
+        assert_eq!(
+            by_net_shipping, 37,
+            "37 of them are in a world `compile` ships, which is the artifact's own count"
+        );
+        assert_eq!(
+            by_owner, 0,
+            "and a rule keyed on the plan-time `Reservation::owner` would have refused \
+             NONE of them: in every one the emitting cell and the contaminated cell \
+             belong to the same owner, because a gate's body and its input sockets are \
+             one owner and the whole mechanism happens inside one of them"
+        );
+        assert_eq!(
+            by_net, recorded,
+            "keyed on net ownership -- which the plan-time map does not carry -- it \
+             would have refused all of them"
+        );
+        assert_eq!(
+            undecided_source, recorded,
+            "and in every one the emitter realises as a repeater, chosen after \
+             `reserve_path` wrote the entry the rule reads"
+        );
+    }
+
+    /// The per-circuit footprint, pinned. `check.sh`'s four block counts do not
+    /// move because nothing here is wired into the router; these are the numbers
+    /// that say what wiring it in would change.
+    #[test]
+    fn the_keep_out_footprint_per_circuit_is_what_is_recorded() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::build_single_segment_netlist;
+
+        let cases: Vec<(&str, Netlist, bool, [usize; 6])> = vec![
+            // conductors, today, derived, removed, added, removed-but-unspoken
+            ("and4", build_and4_netlist().0, false, [134, 1608, 1420, 260, 72, 84]),
+            (
+                "full_adder",
+                build_full_adder_netlist().0,
+                false,
+                [578, 6936, 6196, 926, 186, 264],
+            ),
+            (
+                "segment_a",
+                build_single_segment_netlist(0).0,
+                true,
+                [279, 3348, 2104, 1454, 210, 552],
+            ),
+        ];
+        for (name, netlist, legacy, expected) in cases {
+            let built = build_on(&netlist, legacy)
+                .unwrap_or_else(|| panic!("{name} must build on the path `compile` ships"));
+            let (total, _) = footprint_of(&built);
+            assert_eq!(
+                [
+                    total.cells,
+                    total.today,
+                    total.derived,
+                    total.removed,
+                    total.added,
+                    total.removed_unspoken,
+                ],
+                expected,
+                "{name}: the footprint arithmetic moved"
+            );
+            assert_eq!(
+                total.today,
+                total.cells * 12,
+                "{name}: today's rule is twelve cells per conductor, whatever stands there"
+            );
+        }
+    }
+
+    /// Dust is where the saving is not, and this is the one line of the whole
+    /// exercise that decides how big it could ever be.
+    #[test]
+    fn dust_is_most_of_what_a_route_lays_and_keep_out_is_exact_for_it() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+
+        let built = build_on(&build_full_adder_netlist().0, false).expect("full_adder builds");
+        let (_, by_kind) = footprint_of(&built);
+        let dust = by_kind.get("dust").expect("a full_adder is mostly dust");
+        assert_eq!(
+            (dust.removed, dust.added),
+            (0, 0),
+            "`docs/derived/dust-join-relation.md`: all twelve of `keep_out`'s cells really \
+             join for a dust cell on a stone floor, so component-awareness neither takes \
+             one away nor adds one"
+        );
+        let all: usize = by_kind.values().map(|part| part.cells).sum();
+        assert!(
+            dust.cells * 2 > all,
+            "and dust is the majority of the conductors the rule is asked about: {} of \
+             {all}",
+            dust.cells
+        );
+    }
+
 }

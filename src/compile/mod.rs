@@ -60,6 +60,11 @@ use self::topology::Primitive;
 /// module's own doc comment for what it is for.
 #[cfg(test)]
 pub mod coupling;
+/// The derived energising range of every block this compiler writes, read out
+/// of the derived artifacts. Measurement only, `#[cfg(test)]` for the same
+/// reason `coupling` above is. See the module's own doc comment.
+#[cfg(test)]
+pub mod energising;
 pub mod equivalence;
 pub mod geometry;
 pub mod lowering;
