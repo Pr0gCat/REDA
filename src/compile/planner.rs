@@ -6795,6 +6795,123 @@ mod tests {
         );
     }
 
+    /// Every plan-time promise against the block actually built.
+    ///
+    /// The reservation is a promise about a world that does not exist yet, and
+    /// until this harness nothing compared it to the world that got built. It
+    /// finds the three cells `a_route_lays_dust_on_its_own_committed_stone`
+    /// pins, and on the planner path it finds nothing else:
+    ///
+    /// ```text
+    /// and4:       232 built | 242 claimed | 188 checkable | 0 mismatched | 5 unclaimed (2%)
+    /// full_adder: 1065 built | 1127 claimed | 956 checkable | 3 mismatched | 5 unclaimed (0%)
+    /// ```
+    ///
+    /// **Two of the four `Occupancy` values make no checkable prediction.**
+    /// `GateConductor` may be realised as stone (a NOR support), as *air* (the
+    /// cell above a torch) or as dust (an output pin); `Solid` is the
+    /// catch-all. So 78% of and4's claims and 85% of full_adder's are
+    /// checkable, and the rest are unfalsifiable by construction. That is a
+    /// property of the type, not a gap in this harness.
+    ///
+    /// The unclaimed cells are lamps and a few floors -- **the coverage is not
+    /// where the risk lives.** The 41 couplings
+    /// `docs/derived/realised-graph-extras.md` records all cross through cells
+    /// the reservation *does* own; what was missing was a check of the
+    /// relation between them, not ownership of them.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, prints the reconciliation"]
+    fn measure_plan_promises_against_the_realised_world() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::build_single_segment_netlist;
+        use crate::redstone::world::block::BlockKind;
+
+        for (name, netlist) in [
+            ("and4", build_and4_netlist().0),
+            ("full_adder", build_full_adder_netlist().0),
+            ("segment_a", build_single_segment_netlist(0).0),
+        ] {
+            let Ok(candidate) = plan_from_netlist(&netlist, &PortPlacements::default()) else {
+                eprintln!("RECON {name}: planner path cannot build it, skipped");
+                continue;
+            };
+            let realised =
+                match realise_and_verify(&candidate, &netlist, candidate_world_size(&candidate)) {
+                    Ok(r) => r,
+                    Err(e) => {
+                        eprintln!("RECON {name}: does not realise: {e}");
+                        continue;
+                    }
+                };
+
+            let mut reservation = reserve_primitives(candidate.primitive_nodes());
+            for route in candidate.routes() {
+                reserve_path(&mut reservation, &route.id, &route.anchors);
+            }
+
+            let (sx, sy, sz) = realised.world.size();
+            let mut world_cells = 0usize;
+            for flat in 0..(sx * sy * sz) {
+                let (x, y, z) = realised.world.decode(flat as usize);
+                if realised.world.get(x, y, z).kind != BlockKind::Air {
+                    world_cells += 1;
+                }
+            }
+
+            let mut claimed = 0usize;
+            let mut checkable = 0usize;
+            let mut mismatched = 0usize;
+            let mut by_kind: std::collections::BTreeMap<String, usize> = Default::default();
+            for (cell, (owner, occ)) in reservation.cells.iter() {
+                claimed += 1;
+                let got = realised.world.get(cell.x, cell.y, cell.z).kind;
+                let ok = match occ {
+                    Occupancy::Wire => {
+                        checkable += 1;
+                        matches!(got, BlockKind::RedstoneWire | BlockKind::Repeater)
+                    }
+                    Occupancy::Stone => {
+                        checkable += 1;
+                        got == BlockKind::Solid
+                    }
+                    // Predicts nothing checkable: a GateConductor may be stone,
+                    // AIR (the cell above a torch), or dust.
+                    Occupancy::GateConductor | Occupancy::Solid => true,
+                };
+                if !ok {
+                    mismatched += 1;
+                    *by_kind.entry(format!("{occ:?} promised, {got:?} built")).or_default() += 1;
+                    if mismatched <= 6 {
+                        eprintln!("RECON {name}: {cell:?} owner={owner} {occ:?} -> {got:?}");
+                    }
+                }
+            }
+            // The other half, and the one the 41 extra edges lived in: how much
+            // of the built world did nobody promise anything about?
+            let mut unclaimed: std::collections::BTreeMap<String, usize> = Default::default();
+            let mut unclaimed_total = 0usize;
+            for flat in 0..(sx * sy * sz) {
+                let (x, y, z) = realised.world.decode(flat as usize);
+                let kind = realised.world.get(x, y, z).kind;
+                if kind == BlockKind::Air {
+                    continue;
+                }
+                if reservation.cells.contains_key(&Anchor { x, y, z }) {
+                    continue;
+                }
+                unclaimed_total += 1;
+                *unclaimed.entry(format!("{kind:?}")).or_default() += 1;
+            }
+            eprintln!(
+                "RECON {name}: world {world_cells} solid | claimed {claimed} |                  checkable {checkable} | MISMATCHED {mismatched} | {by_kind:?}"
+            );
+            eprintln!(
+                "RECON {name}: UNCLAIMED {unclaimed_total} of {world_cells} built cells                  ({:.0}%) {unclaimed:?}",
+                100.0 * unclaimed_total as f64 / world_cells as f64
+            );
+        }
+    }
+
     /// What optimisation costs and what it buys, per circuit.
     ///
     /// The one harness here whose ignore is paid for by its runtime: a minute,
