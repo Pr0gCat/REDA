@@ -17184,8 +17184,11 @@ mod tests {
     /// was the strength walk, so "the wall that has blocked this branch since
     /// Task 13 is not a routing wall".
     ///
-    /// It routes. It does not compute. Measured here, with the judge fixed:
-    /// **8 of 16 vectors wrong in the real `Simulator`**, starting at
+    /// It routes: **2,127 cells, 4,356 blocks, box 91x5x95, worst settle 42
+    /// game ticks** -- against the legacy emitter's 6,416 blocks and 68 ticks
+    /// for the same circuit, so it is smaller and faster than what ships. It
+    /// does not compute. Measured here, with the judge fixed: **8 of 16 vectors
+    /// wrong in the real `Simulator`**, starting at
     /// `[false, false, false, false]`, where segment `a` should be lit and is
     /// dark. The judge still refuses it, at `g0` -> `g32`'s support
     /// `(97, 1, 97)`, and refusing it is right.
@@ -17311,10 +17314,37 @@ mod tests {
             "**the claim under test**: the simulator says this plan computes `segment_a`. \
              It said {table:?}, and rings {rings:?} are still in the plan."
         );
+
+        // Everything the ship report quotes about this plan, printed here so it
+        // is reproducible rather than remembered: blocks against the legacy
+        // emitter's 6,416, the box, and the settle against legacy's 68.
+        let (sx, sy, sz) = compiled.world.size();
+        let mut blocks = 0usize;
+        let (mut low, mut high) = ((i32::MAX, i32::MAX, i32::MAX), (0, 0, 0));
+        for x in 0..sx {
+            for y in 0..sy {
+                for z in 0..sz {
+                    if compiled.world.get(x, y, z).kind
+                        == crate::redstone::world::block::BlockKind::Air
+                    {
+                        continue;
+                    }
+                    blocks += 1;
+                    low = (low.0.min(x), low.1.min(y), low.2.min(z));
+                    high = (high.0.max(x), high.1.max(y), high.2.max(z));
+                }
+            }
+        }
+        let ticks = worst_settle_game_ticks(&compiled, &INPUT_NAMES[..]);
         eprintln!(
-            "negotiated segment_a at PresentSchedule::starting_at(8): {cells} cells, \
-             {} ring(s) in `g0` {rings:?}, judge: {refusal}, simulator: {table:?}",
-            rings.len()
+            "negotiated segment_a at PresentSchedule::starting_at(8):\n  \
+             {cells} cells, {blocks} blocks (legacy ships 6416), box {}x{}x{}\n  \
+             worst settle {ticks:?} game ticks (legacy 68)\n  \
+             {} ring(s) in `g0` {rings:?}\n  judge: {refusal}\n  simulator: {table:?}",
+            high.0 - low.0 + 1,
+            high.1 - low.1 + 1,
+            high.2 - low.2 + 1,
+            rings.len(),
         );
     }
 
