@@ -2395,7 +2395,14 @@ pub fn plan_from_netlist(
     // it is the `Shape` Task 11 deleted all over again. What it is *here* is
     // the private [`SHIPPING_AXES`], because Task 12 gave it a second reader
     // and a literal written out twice is a thing that can be flipped once.
-    plan_with_axes(netlist, placements, SHIPPING_AXES, RIP_UP_ROUNDS, SHIPPING_ROUTER)
+    plan_with_axes(
+        netlist,
+        placements,
+        SHIPPING_AXES,
+        RIP_UP_ROUNDS,
+        SHIPPING_ROUTER,
+        PresentSchedule::SHIPPING,
+    )
 }
 
 /// [`plan_from_netlist`], with the router's rip-up budget as a parameter.
@@ -2411,7 +2418,14 @@ pub(crate) fn plan_from_netlist_within(
     placements: &PortPlacements,
     rip_up_rounds: usize,
 ) -> Result<PlanCandidate, PlannerError> {
-    plan_with_axes(netlist, placements, SHIPPING_AXES, rip_up_rounds, SHIPPING_ROUTER)
+    plan_with_axes(
+        netlist,
+        placements,
+        SHIPPING_AXES,
+        rip_up_rounds,
+        SHIPPING_ROUTER,
+        PresentSchedule::SHIPPING,
+    )
 }
 
 /// Build the body graph and run the springs. Everything `plan_with_axes` does
@@ -2459,7 +2473,37 @@ pub(crate) fn plan_from_netlist_with_router(
     budget: usize,
     router: RouterKind,
 ) -> Result<PlanCandidate, PlannerError> {
-    plan_with_axes(netlist, placements, SHIPPING_AXES, budget, router)
+    plan_with_axes(
+        netlist,
+        placements,
+        SHIPPING_AXES,
+        budget,
+        router,
+        PresentSchedule::SHIPPING,
+    )
+}
+
+/// [`plan_from_netlist_with_router`] on [`RouterKind::Negotiated`], with the
+/// present-term schedule named rather than assumed.
+///
+/// Exists so a measurement can say which schedule produced its numbers -- see
+/// [`PresentSchedule`]. Passing [`PresentSchedule::SHIPPING`] here is exactly
+/// [`plan_from_netlist_with_router`] with [`RouterKind::Negotiated`].
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn plan_negotiated_on_schedule(
+    netlist: &Netlist,
+    placements: &PortPlacements,
+    budget: usize,
+    schedule: PresentSchedule,
+) -> Result<PlanCandidate, PlannerError> {
+    plan_with_axes(
+        netlist,
+        placements,
+        SHIPPING_AXES,
+        budget,
+        RouterKind::Negotiated,
+        schedule,
+    )
 }
 
 /// `budget` is rip-up rounds for [`RouterKind::RipUp`] and negotiation
@@ -2471,13 +2515,14 @@ fn plan_with_axes(
     axes: relax::Axes,
     budget: usize,
     router: RouterKind,
+    schedule: PresentSchedule,
 ) -> Result<PlanCandidate, PlannerError> {
     let placement = relaxed_placement(netlist, placements, axes)?;
     let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation)?;
     let candidate = candidate_from_snapped(netlist, placements, &snapped);
     match router {
         RouterKind::RipUp => route_every_net(candidate, netlist, budget),
-        RouterKind::Negotiated => route_negotiated(candidate, netlist, budget),
+        RouterKind::Negotiated => route_negotiated(candidate, netlist, budget, schedule),
     }
 }
 
@@ -3247,9 +3292,11 @@ fn route_in_order(
 // One caveat, measured and not smoothed over: `realise_branch_from`'s `carries`
 // is the router's model of the strength budget and it is **not** the same
 // predicate as `compile::verify_signal_strength`. A negotiated `full_adder`
-// passes the first and is refused by the second, and the reason is a defect in
-// the second -- see
-// `the_strength_verifier_cannot_see_past_a_repeater_that_feeds_a_climb`.
+// used to pass the first and be refused by the second; that was a defect in the
+// second and it is fixed -- see
+// `the_strength_verifier_follows_a_repeater_that_feeds_a_climb`. The two
+// predicates are still not the same one, and nothing here says they agree in
+// general.
 //
 // The reason the priced list is safe is not that the prices get large. It is
 // that a plan with any of them non-zero is **never returned**:
@@ -3340,12 +3387,57 @@ struct Negotiation {
 /// From there it doubles. By iteration 12 a shared cell costs 4,096, which is
 /// more than any detour a circuit this size could want, so sharing has stopped
 /// being a bargain and is only a last resort.
-fn present_term(iteration: usize) -> u64 {
-    const CAP: u64 = 4096;
-    match iteration {
-        0 => 0,
-        k => (1u64 << (k - 1).min(20)).saturating_mul(2).min(CAP),
+///
+/// # Why the first term is a parameter and not a constant
+///
+/// It is the one number in this schedule that changes *which circuits route at
+/// all*, and by rule 4 of this branch's ledger a cited number needs a
+/// reproducible method in the tree. `segment_a` is the case: it does not
+/// converge at [`PresentSchedule::SHIPPING`] and does converge at
+/// `at_zero = 8`, and that difference had until now only ever been produced by
+/// editing this function and reverting it, which puts the number outside the
+/// tree entirely. [`PresentSchedule`] puts it back in -- and
+/// [`PresentSchedule::SHIPPING`] is what every existing caller passes, so
+/// nothing about what the router does today moves.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PresentSchedule {
+    /// What one shared cell costs on iteration 0.
+    at_zero: u64,
+}
+
+impl PresentSchedule {
+    /// Iteration 0 free -- the schedule every shipping and default caller uses,
+    /// and the one the paragraphs above describe.
+    pub(crate) const SHIPPING: Self = Self { at_zero: 0 };
+
+    /// A schedule that charges `at_zero` on iteration 0 and is otherwise
+    /// identical.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) const fn starting_at(at_zero: u64) -> Self {
+        Self { at_zero }
     }
+
+    /// The present term at iteration `k`.
+    fn term(self, iteration: usize) -> u64 {
+        const CAP: u64 = 4096;
+        match iteration {
+            0 => self.at_zero,
+            k => (1u64 << (k - 1).min(20)).saturating_mul(2).min(CAP),
+        }
+    }
+}
+
+impl Default for PresentSchedule {
+    fn default() -> Self {
+        Self::SHIPPING
+    }
+}
+
+/// [`PresentSchedule::SHIPPING`]'s term at `iteration`, for the reports that
+/// print the schedule they ran under.
+#[cfg_attr(not(test), allow(dead_code))]
+fn present_term(iteration: usize) -> u64 {
+    PresentSchedule::SHIPPING.term(iteration)
 }
 
 /// What one iteration of accumulated history adds to a cell's price.
@@ -3576,8 +3668,9 @@ fn route_negotiated(
     candidate: PlanCandidate,
     netlist: &Netlist,
     iterations: usize,
+    schedule: PresentSchedule,
 ) -> Result<PlanCandidate, PlannerError> {
-    negotiate(candidate, netlist, iterations, &mut Vec::new())
+    negotiate(candidate, netlist, iterations, schedule, &mut Vec::new())
 }
 
 /// What one iteration of [`negotiate`] ended with.
@@ -3603,6 +3696,7 @@ fn negotiate(
     mut candidate: PlanCandidate,
     netlist: &Netlist,
     iterations: usize,
+    schedule: PresentSchedule,
     trace: &mut Vec<NegotiationRound>,
 ) -> Result<PlanCandidate, PlannerError> {
     let sinks = net_sinks(netlist);
@@ -3613,7 +3707,7 @@ fn negotiate(
     let mut last: Option<PlannerError> = None;
 
     for iteration in 0..iterations {
-        table.present = present_term(iteration);
+        table.present = schedule.term(iteration);
         let mut laid: BTreeMap<String, Route> = BTreeMap::new();
         let mut every_net_laid = true;
 
@@ -3880,6 +3974,36 @@ pub(crate) fn verify_and_expose(
             reservation,
             nets,
         }
+    })
+}
+
+/// Exactly what [`verify_and_expose`] returns, produced **without running the
+/// world-scanning invariants at all**.
+///
+/// [`verify_and_expose`] can only answer for a plan that already passes, which
+/// makes it useless for the one question a *differential* has to ask: what does
+/// the judge claim about a plan it refuses? This runs the two things the
+/// invariants are given -- `verify_spacing`'s reservation and
+/// `verification_nets`' nets -- and realises the world, and stops there. Every
+/// caller is a measurement; `#[cfg(test)]` is what holds that to being a
+/// property of the build rather than a promise in a comment, the same way
+/// [`verify_and_expose`] is held to it.
+///
+/// Spacing is still enforced: a plan whose nets share a cell has no single
+/// owner per cell, and every walk downstream of this reads ownership.
+#[cfg(test)]
+pub(crate) fn realise_without_verifying(
+    candidate: &PlanCandidate,
+    netlist: &Netlist,
+    size: (i32, i32, i32),
+) -> Result<VerifiedRealisation, PlannerError> {
+    let reservation = verify_spacing(candidate)?;
+    let nets = verification_nets(candidate, netlist)?;
+    let realised = emit_candidate(candidate, netlist, size)?;
+    Ok(VerifiedRealisation {
+        realised,
+        reservation,
+        nets,
     })
 }
 
@@ -6817,6 +6941,7 @@ mod tests {
                     axes,
                     RIP_UP_ROUNDS,
                     SHIPPING_ROUTER,
+                    PresentSchedule::SHIPPING,
                 ) {
                     Ok(candidate) => {
                         let (x, y, z) = extent(&candidate);
@@ -16712,7 +16837,7 @@ mod tests {
         let bare = candidate_from_snapped(&netlist, &PortPlacements::default(), &snapped);
 
         let mut trace = Vec::new();
-        let one = negotiate(bare.clone(), &netlist, 1, &mut trace);
+        let one = negotiate(bare.clone(), &netlist, 1, PresentSchedule::SHIPPING, &mut trace);
         assert_eq!(
             trace.iter().map(|round| round.contested).collect::<Vec<_>>(),
             vec![8],
@@ -16724,7 +16849,7 @@ mod tests {
         );
 
         let mut trace = Vec::new();
-        negotiate(bare, &netlist, NEGOTIATION_ROUNDS, &mut trace)
+        negotiate(bare, &netlist, NEGOTIATION_ROUNDS, PresentSchedule::SHIPPING, &mut trace)
             .expect("four iterations is enough for verilog:and4");
         assert_eq!(
             trace.iter().map(|round| round.contested).collect::<Vec<_>>(),
@@ -16767,8 +16892,9 @@ mod tests {
     ///    already records that the schedule was never swept, and that caveat
     ///    now applies to this row as well as to the probe's `seven_segment`.
     /// 3. **`full_adder` computes `full_adder`, on all eight vectors, in the
-    ///    real `Simulator`, and `verify_signal_strength` refuses it anyway.**
-    ///    See `the_strength_verifier_cannot_see_past_a_repeater_that_feeds_a_climb`.
+    ///    real `Simulator`, and `verify_signal_strength` used to refuse it
+    ///    anyway.** That was a defect in the judge and it is fixed; see
+    ///    `the_strength_verifier_follows_a_repeater_that_feeds_a_climb`.
     #[test]
     #[ignore = "measurement harness: asserts nothing, routes six circuits twice, about four minutes"]
     fn what_the_two_routers_do_to_the_six_condition_circuits() {
@@ -16803,7 +16929,7 @@ mod tests {
 
             let started = Instant::now();
             let mut trace = Vec::new();
-            let negotiated = negotiate(bare, netlist, NEGOTIATION_ROUNDS, &mut trace);
+            let negotiated = negotiate(bare, netlist, NEGOTIATION_ROUNDS, PresentSchedule::SHIPPING, &mut trace);
             let negotiated_seconds = started.elapsed().as_secs_f64();
 
             let report = |plan: &Result<PlanCandidate, PlannerError>, seconds: f64| match plan {
@@ -16847,12 +16973,13 @@ mod tests {
         }
     }
 
-    /// A defect in the **verifier**, found by the negotiated router and left
-    /// where it was found.
+    /// A defect that **was** in the verifier, found by the negotiated router
+    /// and now fixed. This test is the record of both halves.
     ///
     /// `full_adder` routed by negotiation computes `full_adder` -- all eight
     /// vectors, in the real `Simulator`, which is the oracle every circuit in
-    /// this tree is judged against -- and `verify_signal_strength` refuses it:
+    /// this tree is judged against -- and `verify_signal_strength` used to
+    /// refuse it:
     ///
     /// ```text
     /// signal-strength violation: net `cin` never delivers a non-zero signal
@@ -16864,42 +16991,39 @@ mod tests {
     /// flat cell before every climb -- here a repeater at `(55, 1, 108)` facing
     /// `-z`. Its output lands on `(55, 1, 107)`, which is the **floor** of the
     /// climbing cell `(55, 2, 107)`, and a strongly powered floor drives the
-    /// dust standing on it. `compile::net_signal_strength` models exactly that
-    /// (its own comment describes this ramp case in detail) -- but its
-    /// `deliver` only *enqueues* a cell that is in `own_cells`, and `own_cells`
-    /// is `verify_spacing`'s reservation, which holds **route anchors only**.
-    /// A planner-laid floor is not a route anchor, so the walk records a
-    /// strength at the riser and stops there, and every cell of the branch past
-    /// the climb reads zero.
+    /// dust standing on it (`docs/derived/coupling-mechanisms.md` mechanism 3,
+    /// 31 measured couplings). `compile::net_signal_strength` had that rule
+    /// written into it and could never reach it: its `deliver` decided whether
+    /// to walk onward from a cell by asking `own_cells`, and `own_cells` is
+    /// `verify_spacing`'s reservation, which holds route **anchors** -- an
+    /// anchor holds dust or a repeater, never a block, and a route's floor is
+    /// not an anchor at all. So no conductive block was ever enqueued, the
+    /// radiate-from-a-block arm never fired, and every cell of the branch past
+    /// the climb read zero.
     ///
     /// Latent, not new: nothing about negotiation creates the geometry, and
     /// `plan_from_netlist` has been able to produce it since Task 10. What the
     /// negotiated router does is *reach* it, because it separates nets by going
     /// over them where the rip-up router separates them in the plane.
     ///
-    /// **The one-line change that removes it, measured rather than proposed.**
-    /// In `net_signal_strength`'s `deliver`, widening the enqueue test from
+    /// **The fix, and why it is not the one-line one.** The one-line change
+    /// that removes the symptom is `|| own_cells.contains(&target.up())` --
+    /// "or this is the floor of one of the route's own cells". What is actually
+    /// wrong is that `net_signal_strength` had a second, divergent copy of a
+    /// step relation `net_reach` twenty lines above it already gets right, so
+    /// the fix is that they now share it: `structural_output_in_world` is one
+    /// statement of the block half of the physics, and `deliver` decides
+    /// acceptance and continuation from **what stands at the target and which
+    /// of `PowerOutput`'s two channels arrived**, never from list membership.
+    /// `compile::strength_differential` is the measurement that says so, in both
+    /// directions, cell by cell.
     ///
-    /// ```text
-    /// if own_cells.contains(&target)
-    /// ```
-    ///
-    /// to `|| own_cells.contains(&target.up())` -- "or this is the floor of one
-    /// of the route's own cells" -- makes the refusal disappear entirely and
-    /// turns this test red. That injection is what establishes the trace above
-    /// as the cause rather than a story that fits.
-    ///
-    /// **NOT FIXED HERE, deliberately.** It is a change to the *judge*, and
-    /// changing the judge while changing the router leaves nothing to
-    /// attribute a regression to -- the same reason
-    /// `2026-08-15-routing-at-scale.md` §11 keeps placement out of the routing
-    /// work. A looser verifier also passes more, so "the suite is still green
-    /// under the injection" is not evidence that it is still sound. It wants
-    /// its own brief. **NOT MEASURED:** whether the same walk under-reports on
-    /// any circuit the shipping router lays today, and whether the widened test
-    /// admits anything it should refuse.
+    /// What the divergence had also cost, and what the one-liner would have
+    /// left: `net_reach` corrects the dust rule with `dust_powers_block_toward`
+    /// in all six directions and the strength walk looped `HORIZONTAL` only, so
+    /// the block a run **stands on** was invisible to one of the two.
     #[test]
-    fn the_strength_verifier_cannot_see_past_a_repeater_that_feeds_a_climb() {
+    fn the_strength_verifier_follows_a_repeater_that_feeds_a_climb() {
         use crate::circuits::full_adder::{build_full_adder_netlist, INPUT_NAMES};
 
         let (netlist, outputs) = build_full_adder_netlist();
@@ -16908,17 +17032,12 @@ mod tests {
             .expect("full_adder places");
         let snapped = relax::snap(&placement).expect("full_adder snaps");
         let bare = candidate_from_snapped(&netlist, &PortPlacements::default(), &snapped);
-        let plan = route_negotiated(bare, &netlist, NEGOTIATION_ROUNDS)
+        let plan = route_negotiated(bare, &netlist, NEGOTIATION_ROUNDS, PresentSchedule::SHIPPING)
             .expect("full_adder converges in three iterations");
 
-        let refusal = verify_candidate(&plan, &netlist)
-            .expect_err("this is the refusal the test is about");
-        assert!(
-            refusal.to_string().contains("signal-strength violation"),
-            "the refusal has to be the strength walk's, not some other invariant's: {refusal}"
-        );
-
-        // The repeater the walk cannot see past, named rather than described.
+        // The repeater the walk could not see past, named rather than
+        // described -- the geometry is still exactly the one the refusal was
+        // about, so this test cannot pass by the plan having changed shape.
         let cin = route_named(&plan, "cin");
         let climb_refresh = cin
             .anchors()
@@ -16926,8 +17045,7 @@ mod tests {
             .zip(cin.realisation().iter())
             .zip(cin.anchors().iter().skip(1))
             .find(|((_, block), next)| {
-                block.kind == crate::redstone::world::block::BlockKind::Repeater
-                    && next.y > 1
+                block.kind == crate::redstone::world::block::BlockKind::Repeater && next.y > 1
             })
             .map(|((anchor, _), next)| (*anchor, *next));
         assert!(
@@ -16936,10 +17054,13 @@ mod tests {
             cin.anchors()
         );
 
-        // And the circuit is right anyway, which is what makes this the
-        // verifier's finding and not the router's.
+        verify_candidate(&plan, &netlist)
+            .expect("the judge no longer refuses the plan it used to refuse at (57, 1, 91)");
+
+        // And the circuit is right, which is what made this the verifier's
+        // finding and not the router's.
         let realised = emit_candidate(&plan, &netlist, candidate_world_size(&plan))
-            .expect("the plan realises even though the walk refuses it");
+            .expect("a verified plan realises");
         let compiled = compile::CompiledCircuit {
             world: realised.world,
             input_positions: realised.ports.input_positions,
@@ -16956,6 +17077,148 @@ mod tests {
         );
     }
 
+    /// **What the fixed judge does not unblock, measured because the brief
+    /// claimed the opposite.**
+    ///
+    /// The case for fixing the judge included a claim: that a negotiated router
+    /// at `PresentSchedule::starting_at(8)` *routes* `segment_a` -- 2,127 cells,
+    /// all 47 nets laid, no shared cell -- and that the only thing refusing it
+    /// was the strength walk, so "the wall that has blocked this branch since
+    /// Task 13 is not a routing wall".
+    ///
+    /// It routes. It does not compute. Measured here, with the judge fixed:
+    /// **8 of 16 vectors wrong in the real `Simulator`**, starting at
+    /// `[false, false, false, false]`, where segment `a` should be lit and is
+    /// dark. The judge still refuses it, at `g0` -> `g32`'s support
+    /// `(97, 1, 97)`, and refusing it is right.
+    ///
+    /// **Why, traced.** `g0`'s route contains a **closed loop**:
+    /// `(93, 4, 110)` is a repeater whose output runs
+    /// `(94, 4, 110)` -> `(94, 4, 111)` -> `(93, 4, 111)` -> `(92, 4, 111)` ->
+    /// `(92, 4, 110)`, and `(92, 4, 110)` is that same repeater's own input
+    /// cell. `emit` places every repeater pre-lit -- `structural_output`'s own
+    /// doc comment records that, and it is why both static walks refuse to read
+    /// a fresh world's activation fields -- so the ring comes up latched and
+    /// stays latched: the repeater refreshes it to 15, five cells of dust decay
+    /// it to 11, and 11 arrives back at the repeater's input. It never needed
+    /// `g0`'s source, and it does not have it: the branch that should feed it
+    /// climbs at `(86, 1, 109)` -> `(87, 2, 109)` and dies there in the
+    /// simulator as well as in the walk.
+    ///
+    /// So the six cells `strength_differential` still reports as under-read on
+    /// this plan are cells a latched ring powers, not cells the net delivers
+    /// to, and widening the walk far enough to "reach" them would be widening
+    /// it to follow a loop no source drives. **The wall is a routing wall.**
+    /// What `route_negotiated` is missing is a check that a laid route is a
+    /// tree; `negotiation_left_nothing_shared` proves no two nets share a cell
+    /// and proves nothing about one net meeting itself.
+    ///
+    /// NOT MEASURED: whether the rip-up router can lay the same loop, and
+    /// whether any other schedule routes `segment_a` without one.
+    #[test]
+    #[ignore = "measurement: routes segment_a through 32 negotiation iterations and simulates 16 vectors, about 80 seconds"]
+    fn negotiated_segment_a_routes_and_still_does_not_compute() {
+        use crate::circuits::seven_segment::{build_single_segment_netlist, INPUT_NAMES};
+
+        let (netlist, output) = build_single_segment_netlist(0);
+        let plan = plan_negotiated_on_schedule(
+            &netlist,
+            &PortPlacements::default(),
+            NEGOTIATION_ROUNDS,
+            PresentSchedule::starting_at(8),
+        )
+        .expect("segment_a routes on this schedule -- that much of the claim holds");
+
+        let cells: usize = plan.routes().iter().map(|route| route.anchors().len()).sum();
+        assert!(
+            cells > 2_000,
+            "the routed plan is the one the claim is about; it laid {cells} cells"
+        );
+
+        // The loop, found from the plan rather than from the coordinates above:
+        // a repeater whose own input cell is reachable from its own output by
+        // steps within the same route.
+        let g0 = route_named(&plan, "g0");
+        let own: BTreeSet<Anchor> = g0.anchors().iter().copied().collect();
+        let mut rings = Vec::new();
+        for (anchor, block) in g0.anchors().iter().zip(g0.realisation().iter()) {
+            if block.kind != crate::redstone::world::block::BlockKind::Repeater {
+                continue;
+            }
+            let Some(facing) = block.facing else { continue };
+            // `facing` on a diode points at its own input side -- the same
+            // convention `net_signal_strength`'s `deliver` enforces -- so the
+            // rear is one step along `facing` and the output one step against.
+            let step_of = |cell: Anchor, direction: crate::redstone::world::block::Facing| {
+                let moved = Position::new(cell.x, cell.y, cell.z).offset(direction);
+                Anchor { x: moved.x, y: moved.y, z: moved.z }
+            };
+            let input = step_of(*anchor, facing);
+            let output = step_of(*anchor, facing.opposite());
+            if !own.contains(&input) || !own.contains(&output) {
+                continue;
+            }
+            // Flood from the output through this route's own cells, never
+            // through the repeater itself. Reaching its own input closes a ring.
+            let mut seen: BTreeSet<Anchor> = BTreeSet::from([*anchor]);
+            let mut frontier = vec![output];
+            let mut closed = false;
+            while let Some(cell) = frontier.pop() {
+                if !seen.insert(cell) {
+                    continue;
+                }
+                if cell == input {
+                    closed = true;
+                    break;
+                }
+                for direction in crate::redstone::simulator::position::ALL_SIX {
+                    let step = step_of(cell, direction);
+                    if own.contains(&step) && !seen.contains(&step) {
+                        frontier.push(step);
+                    }
+                }
+            }
+            if closed {
+                rings.push((*anchor, seen.len()));
+            }
+        }
+        assert!(
+            !rings.is_empty(),
+            "the finding is that `g0` closes a ring through one of its own repeaters; \
+             none was found, so either the plan changed or this test is now measuring nothing"
+        );
+
+        let refusal = verify_candidate(&plan, &netlist)
+            .expect_err("the judge refuses this plan, and this test is why that is right");
+        assert!(
+            refusal.to_string().contains("signal-strength violation"),
+            "the refusal is the strength walk's: {refusal}"
+        );
+
+        let realised = emit_candidate(&plan, &netlist, candidate_world_size(&plan))
+            .expect("the plan realises even though the judge refuses it");
+        let compiled = compile::CompiledCircuit {
+            world: realised.world,
+            input_positions: realised.ports.input_positions,
+            output_positions: realised.ports.output_positions,
+            gate_output_positions: realised.ports.gate_output_positions,
+            gate_facings: (0..netlist.gates.len()).map(|g| plan.facing_of(g)).collect(),
+            planner_kind: compile::PlannerKind::Unified3d,
+            legacy_emission: None,
+        };
+        let table =
+            simulated_truth_table(&compiled, &INPUT_NAMES[..], &[output], segment_a_expected);
+        assert!(
+            table.is_err(),
+            "**the claim under test**: the simulator says this plan computes `segment_a`. \
+             It said {table:?}, and rings {rings:?} are still in the plan."
+        );
+        eprintln!(
+            "negotiated segment_a at PresentSchedule::starting_at(8): {cells} cells, \
+             {} ring(s) in `g0` {rings:?}, judge: {refusal}, simulator: {table:?}",
+            rings.len()
+        );
+    }
 
     // -----------------------------------------------------------------------
     // Ship review of the negotiated router (2026-08-18)
@@ -17759,7 +18022,7 @@ mod tests {
 
             let mut trace = Vec::new();
             let started = std::time::Instant::now();
-            let outcome = negotiate(bare, netlist, NEGOTIATION_ROUNDS, &mut trace);
+            let outcome = negotiate(bare, netlist, NEGOTIATION_ROUNDS, PresentSchedule::SHIPPING, &mut trace);
             let contested: Vec<usize> = trace.iter().map(|round| round.contested).collect();
             match outcome {
                 Ok(plan) => {

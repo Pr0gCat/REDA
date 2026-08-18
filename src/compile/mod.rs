@@ -78,6 +78,10 @@ pub mod routing_stats;
 /// model. Test-only, so it ships in nothing and takes no dependency.
 #[cfg(test)]
 pub mod satcnf;
+/// The static strength walk against the running `Simulator`, cell by cell.
+/// Measurement only -- see the module doc.
+#[cfg(test)]
+pub mod strength_differential;
 pub mod topology;
 pub mod world_partition;
 
@@ -5371,6 +5375,42 @@ fn structural_output(state: &BlockState, direction: Facing) -> (bool, BlockPower
     }
 }
 
+/// [`structural_output`] with the one half of it that depends on the *world*
+/// filled in: which blocks a dust cell powers.
+///
+/// `structural_output` reads a `BlockState` and nothing else, so for
+/// `RedstoneWire` it can only answer the vertical case -- which blocks a dust
+/// cell powers horizontally depends on its connection shape, and that is a fact
+/// about the world. `connectivity::dust_powers_block_toward` is the measured
+/// rule (conformance category `dust-directionality`) and answers it in a
+/// geometry-only form, so asking it here keeps both walks' refusal to trust a
+/// freshly emitted world's placeholder `power` fields intact.
+///
+/// **Shared by [`net_reach`] and [`net_signal_strength`] on purpose.** Those two
+/// walks had a copy of this each, and the copies disagreed: `net_reach`'s
+/// covered `Down` -- the block a dust cell *stands on* -- and the strength
+/// walk's looped `HORIZONTAL` only, so a run ending on top of a gate's support
+/// was invisible to one of the two. One statement of the rule is what stops
+/// that happening again; see `net_signal_strength`'s own doc comment for what
+/// the divergence cost.
+fn structural_output_in_world(
+    world: &World,
+    pos: Position,
+    state: &BlockState,
+    direction: Facing,
+) -> (bool, BlockPower) {
+    let (drives_dust, block_power) = structural_output(state, direction);
+    if state.kind != BlockKind::RedstoneWire {
+        return (drives_dust, block_power);
+    }
+    let powers_block = if dust_powers_block_toward(world, pos, direction) {
+        BlockPower::Weak
+    } else {
+        BlockPower::None
+    };
+    (drives_dust, powers_block)
+}
+
 /// Add `pos` to the propagation frontier if it is not already in it.
 fn enqueue(pos: Position, in_network: &mut HashSet<Position>, queue: &mut VecDeque<Position>) {
     if in_network.insert(pos) {
@@ -5456,27 +5496,18 @@ fn net_reach(world: &World, cells: &[Position]) -> HashSet<Position> {
         }
 
         for direction in ALL_SIX {
-            let (drives_dust, mut block_power) = structural_output(state, direction);
-            // `structural_output` can only answer the vertical half of the
-            // dust rule, because which blocks a dust cell powers depends on
-            // its connection shape and that is a fact about the world, not
-            // about the `BlockState`. Correct it here, where the world is in
-            // hand -- `dust_powers_block_toward` is the same measured rule
-            // the simulator's `block_signal_at` uses, and asking it in its
-            // geometry-only form keeps this walk's refusal to trust the
-            // freshly emitted world's placeholder `power` fields intact.
+            // `structural_output_in_world` is `structural_output` with the
+            // half of the dust rule that depends on the world already filled
+            // in -- see its own doc comment, and note that
+            // `net_signal_strength` asks the same function for the same
+            // reason.
             //
             // This is what makes `ForeignNetReachesSupport` able to see a
             // foreign run that ends against a gate's support block. Nothing
             // else in the compiler models that adjacency: `dust_reach` and
             // `verify_connectivity` are both strictly dust-reaches-dust.
-            if state.kind == BlockKind::RedstoneWire {
-                block_power = if dust_powers_block_toward(world, pos, direction) {
-                    BlockPower::Weak
-                } else {
-                    BlockPower::None
-                };
-            }
+            let (drives_dust, block_power) =
+                structural_output_in_world(world, pos, state, direction);
             let neighbour = pos.offset(direction);
             if drives_dust
                 && world.get(neighbour.x, neighbour.y, neighbour.z).kind == BlockKind::RedstoneWire
@@ -5797,14 +5828,28 @@ fn verify_torch_merge(
 /// to that assumed-driven signal *after* it leaves its source is real
 /// physics, never assumed.
 ///
-/// The walk mixes two different propagation rules, applied by `pos`'s own
-/// kind once it is popped:
+/// The walk's **step relation is `net_reach`'s**, with a strength carried
+/// along it. That is not a coincidence and it is not a restatement: the two
+/// functions are asking different questions about the same physics, so the
+/// only defensible arrangement is that they take the same steps and differ in
+/// what they record. They did not, and the divergence is what
+/// `planner::the_strength_verifier_follows_a_repeater_that_feeds_a_climb`
+/// records -- see "The block-mediated step" below.
+///
+/// Applied by `pos`'s own kind once it is popped:
 ///
 /// - **Dust** decays by one per `dust_connections` edge (same-layer, climb,
 ///   descend -- whichever the geometry actually allows), *and* separately
 ///   drives any horizontally adjacent repeater directly, since
 ///   `dust_connections` only ever returns other dust cells and a repeater is
-///   never reached through it.
+///   never reached through it, *and* weakly powers the blocks
+///   `structural_output_in_world` says it powers -- which includes the block
+///   it **stands on**, `dust_powers_block_toward`'s always-true `Down` case.
+/// - **A conductive block** this walk has already found *strongly* powered
+///   re-drives the redstone wire touching any of its six faces, at the
+///   block's own strength (`coupling-mechanisms.md` mechanism 3; the
+///   simulator's own `recompute_dust_strengths` seeds a wire from a
+///   neighbouring `BlockPower::Strong` block without decay).
 /// - **A repeater** (the only kind this router ever places mid-route --
 ///   `lay_dust_run`, `lay_bent_path` and `move_between_layers`'s rest stops
 ///   all call `repeater(..)`, never a comparator or a torch) drives forward
@@ -5820,7 +5865,51 @@ fn verify_torch_merge(
 /// Either way, `deliver` is the single point that decides whether the
 /// receiving cell can actually accept what is being sent its way, so a
 /// repeater's own directionality is enforced identically regardless of
-/// which of the two rules produced the delivery.
+/// which of the three rules produced the delivery.
+///
+/// # The block-mediated step, and the defect that was in it
+///
+/// A signal leaves a conductor for a *block* twice in the physics, and the
+/// two are not the same edge (`docs/derived/coupling-mechanisms.md`):
+///
+/// * **Strong** -- a component's output face landing on a conductive block.
+///   That block then re-drives dust on **all six** of its faces (mechanism 3).
+///   Every ramp this router builds is made of this: `realise_branch_from` puts
+///   a mandatory refresh on the last flat cell before a climb, so the repeater
+///   outputs into the *floor* of the climbing cell and the floor is what
+///   lights the dust standing on it.
+/// * **Weak** -- a dust run's own end, or the block a dust cell stands on.
+///   That block powers a torch and feeds a diode's rear, and drives **no**
+///   dust at all (mechanism 5 does not exist -- `recompute_dust_strengths`
+///   seeds a wire from a block only on `BlockPower::Strong`).
+///
+/// So whether the walk may continue *from* a cell is decided by what stands
+/// there and what class of power arrived, and by nothing else:
+///
+/// | target | continue? |
+/// |---|---|
+/// | dust, repeater, comparator | only inside `own_cells` |
+/// | conductive block, strong power | yes |
+/// | anything else | no -- recorded, never walked |
+///
+/// `own_cells` gates **conductors only**, which is the one thing it was ever
+/// for: it stops this walk crossing into a different net's network where the
+/// two happen to physically touch. It was applied to every delivery instead,
+/// and a route reserves *anchors* -- a route anchor holds dust or a repeater,
+/// never a block, and a route's floor is not an anchor at all. So no
+/// conductive block was ever in `own_cells`, the strong arm below could never
+/// fire, and every cell past a ramp read zero: measured on negotiated
+/// `full_adder`, repeater `(55, 1, 108)` drives the floor `(55, 1, 107)`, the
+/// dust standing on it at `(55, 2, 107)` reads 15 with `cin`'s lever the only
+/// component emitting in the whole world, and the walk read 0 -- and so did
+/// the 24 cells behind it, including the support `(57, 1, 91)` the refusal
+/// named. Eight of eight vectors of that plan are a full adder in the real
+/// `Simulator`.
+///
+/// What this does **not** widen: weak block power still propagates nowhere, a
+/// conductor outside `own_cells` is still never walked from, and a repeater
+/// still only fires when its own declared input cell was itself reached with a
+/// non-zero strength. `strength_differential` measures all three.
 fn net_signal_strength(
     world: &World,
     own_cells: &HashSet<Position>,
@@ -5828,32 +5917,55 @@ fn net_signal_strength(
 ) -> HashMap<Position, u8> {
     let mut strength: HashMap<Position, u8> = HashMap::new();
     let mut queue: VecDeque<Position> = VecDeque::new();
+    let mut ever_queued: HashSet<Position> = HashSet::new();
 
     /// Record `value` arriving at `target` from `from_direction`, if `target`
-    /// is even capable of receiving it and it beats whatever is already
-    /// recorded there. A repeater or comparator only ever reads its one
-    /// declared input side (`facing`) -- a signal arriving from any other
-    /// side is exactly as inert as no signal at all, the same asymmetry
-    /// `power_emitted_toward`'s own direction gate enforces for output.
-    /// Every other kind (dust, a gate's support block, plain stone) does not
-    /// care which side it was reached from, so it always accepts.
+    /// is capable of receiving it at all, and enqueue `target` if the walk may
+    /// continue from it.
     ///
-    /// Only enqueues `target` for further propagation when it belongs to
-    /// this net's own reservation (`own_cells`) -- a gate's support block
-    /// never does (`place_nor_gate` places it outside the routing system
-    /// entirely), so recording its strength here is exactly what the sink
-    /// check below reads, without this walk ever trying to propagate
-    /// further from a cell nothing routes onward from.
+    /// `drives_dust` and `block_power` are the two independent channels
+    /// `taxonomy::PowerOutput` tracks and `structural_output_in_world` returns,
+    /// kept apart here because **the receiver decides which of them applies**
+    /// (`coupling-mechanisms.md` Table 5 is that fact, measured):
+    ///
+    /// | target | receives |
+    /// |---|---|
+    /// | dust, or a diode reached on its own input side | `drives_dust` only |
+    /// | a **conductive** block | `block_power` only |
+    /// | air, glass, anything non-conductive | nothing |
+    ///
+    /// That second row is `mark_powered`'s own conductivity gate, which is
+    /// `propagate::block_signal_at`'s, and the third is why a repeater
+    /// refreshing into thin air -- the descend rule's deliberately-open cell --
+    /// records nothing and radiates nothing, which is exactly the failure mode
+    /// this invariant exists to catch.
+    ///
+    /// A repeater or comparator only ever reads its one declared input side
+    /// (`facing`) -- a signal arriving from any other side is exactly as inert
+    /// as no signal at all, the same asymmetry `power_emitted_toward`'s own
+    /// direction gate enforces for output.
+    ///
+    /// Whether the walk may continue **from** `target` is a second, separate
+    /// question; see this function's own doc comment for the table and for
+    /// what deciding it by `own_cells` alone cost.
+    #[allow(clippy::too_many_arguments)]
     fn deliver(
         world: &World,
         own_cells: &HashSet<Position>,
         strength: &mut HashMap<Position, u8>,
         queue: &mut VecDeque<Position>,
+        ever_queued: &mut HashSet<Position>,
         target: Position,
         from_direction: Facing,
         value: u8,
+        drives_dust: bool,
+        block_power: BlockPower,
     ) {
         let target_state = world.get(target.x, target.y, target.z);
+        let conductor = matches!(
+            target_state.kind,
+            BlockKind::RedstoneWire | BlockKind::Repeater | BlockKind::Comparator
+        );
         if matches!(
             target_state.kind,
             BlockKind::Repeater | BlockKind::Comparator
@@ -5861,9 +5973,42 @@ fn net_signal_strength(
         {
             return;
         }
-        if value > strength.get(&target).copied().unwrap_or(0) {
+
+        let accepts = if conductor {
+            drives_dust
+        } else {
+            block_power != BlockPower::None && flags_of(target_state).is_conductive()
+        };
+        if !accepts {
+            return;
+        }
+
+        let onward = if conductor {
+            // `own_cells` gates conductors, and nothing else. It is what stops
+            // this walk crossing into a different net's network where the two
+            // happen to physically touch.
+            own_cells.contains(&target)
+        } else {
+            // A block re-drives dust exactly when the power that arrived is
+            // strong -- `mark_powered`'s own `BlockPower::Strong` arm, and
+            // `recompute_dust_strengths`' own seed condition. Weak power is
+            // recorded (a torch support reads it, and that is what makes a
+            // support a sink here) and walked from never.
+            block_power == BlockPower::Strong
+        };
+
+        let improved = value > strength.get(&target).copied().unwrap_or(0);
+        if improved {
             strength.insert(target, value);
-            if own_cells.contains(&target) {
+        }
+        if onward {
+            // `improved` alone is not enough: a block can be recorded first by
+            // a dust run's *weak* end at some value and reached afterwards by a
+            // repeater's *strong* output at the same value, and only the second
+            // of those may be walked from. `ever_queued` is what stops the
+            // first arrival shadowing the second.
+            let first = ever_queued.insert(target);
+            if improved || first {
                 queue.push_back(target);
             }
         }
@@ -5871,17 +6016,23 @@ fn net_signal_strength(
 
     for &(source, source_state) in sources {
         for direction in ALL_SIX {
-            if structural_output(source_state, direction).0 {
-                deliver(
-                    world,
-                    own_cells,
-                    &mut strength,
-                    &mut queue,
-                    source.offset(direction),
-                    direction,
-                    MAX_SIGNAL_STRENGTH,
-                );
+            let (drives_dust, block_power) =
+                structural_output_in_world(world, source, source_state, direction);
+            if !drives_dust && block_power == BlockPower::None {
+                continue;
             }
+            deliver(
+                world,
+                own_cells,
+                &mut strength,
+                &mut queue,
+                &mut ever_queued,
+                source.offset(direction),
+                direction,
+                MAX_SIGNAL_STRENGTH,
+                drives_dust,
+                block_power,
+            );
         }
     }
 
@@ -5908,9 +6059,12 @@ fn net_signal_strength(
                             own_cells,
                             &mut strength,
                             &mut queue,
+                            &mut ever_queued,
                             neighbour,
                             direction,
                             next,
+                            true,
+                            BlockPower::None,
                         );
                     }
                 }
@@ -5930,55 +6084,67 @@ fn net_signal_strength(
                         own_cells,
                         &mut strength,
                         &mut queue,
+                        &mut ever_queued,
                         neighbour,
                         direction,
                         MAX_SIGNAL_STRENGTH,
+                        true,
+                        BlockPower::None,
                     );
                 }
             }
-            // A straight dust run also weakly powers the conductive block it
-            // points into.  This is deliberately only a sink outside this
-            // route's own cells: weak block power must not be enqueued and
-            // radiated back into dust as if it were the strong repeater-to-
-            // block case below.  Gate supports are exactly such unclaimed
-            // sinks, so recording their arrival is enough for the invariant
-            // to prove a directed terminal live.
-            for direction in HORIZONTAL {
-                let neighbour = pos.offset(direction);
-                if !own_cells.contains(&neighbour)
-                    && flags_of(world.get(neighbour.x, neighbour.y, neighbour.z)).is_conductive()
-                    && dust_powers_block_toward(world, pos, direction)
-                {
-                    deliver(
-                        world,
-                        own_cells,
-                        &mut strength,
-                        &mut queue,
-                        neighbour,
-                        direction,
-                        here,
-                    );
+            // A dust run also *weakly* powers the blocks
+            // `dust_powers_block_toward` names -- both ends of a straight
+            // run's own axis, and, in every shape whatever, the block it
+            // stands on. Weak power drives no dust (mechanism 5 does not
+            // exist), so `deliver`'s own rule records these and walks from
+            // none of them; that is exactly what makes a gate support a
+            // *sink* here. `ALL_SIX` and not `HORIZONTAL`: the `Down` case is
+            // a real coupling -- a torch whose support a route happens to
+            // stand on goes out -- and looping horizontally was the second
+            // way this walk and `net_reach` had drifted apart.
+            for direction in ALL_SIX {
+                let (_, block_power) = structural_output_in_world(world, pos, state, direction);
+                if block_power == BlockPower::None {
+                    continue;
                 }
+                deliver(
+                    world,
+                    own_cells,
+                    &mut strength,
+                    &mut queue,
+                    &mut ever_queued,
+                    pos.offset(direction),
+                    direction,
+                    here,
+                    // Never `structural_output`'s own `drives_dust` for dust:
+                    // that arm reports `Down`, and dust-to-dust is
+                    // `dust_connections`' job, with a decay step this delivery
+                    // does not carry. Handing it on here wrote a run's own
+                    // undecayed strength into the next cell of the run and
+                    // stopped it decaying at all -- measured on negotiated
+                    // `segment_a`, where a run that dies at (120, 3, 85) in
+                    // the simulator read a flat 5 all the way along and lit a
+                    // repeater 2 cells past its own end.
+                    false,
+                    block_power,
+                );
             }
         } else if flags_of(state).is_conductive() {
-            // `pos` is a plain conductive block (never dust, never a
-            // repeater) that this walk has already found strongly powered --
-            // the only way such a block's own cell ends up in `strength` at
-            // all is as a repeater's direct output landing on it (a ramp's
-            // climbing riser, or an ordinary support/floor block). A
-            // strongly powered conductive block re-drives *every* redstone
-            // wire touching *any* of its six faces, not only the one
-            // direction the repeater's own output happened to arrive from --
-            // this is `propagate::recompute_dust_strengths`'s own
-            // "強充能的方塊也能驅動相鄰的紅石粉" rule (and `verify_torch_
-            // merge`'s `net_reach`/`mark_powered` equivalent), confirmed
-            // empirically against this exact geometry: a repeater climbing a
-            // ramp never touches the landing dust directly, it powers the
-            // riser underneath it, and the riser is what lights the dust
-            // sitting on its top face. Left out, a dust run that happens to
-            // need a mandatory repeater exactly at a ramp's entry would look
-            // stuck-at-zero one level up, even though the real simulator
-            // lights it fine.
+            // `pos` is a plain conductive block this walk has found
+            // **strongly** powered -- `deliver`'s own rule is what
+            // guarantees that, and it is the only way such a cell is ever
+            // queued. A strongly powered conductive block re-drives *every*
+            // redstone wire touching *any* of its six faces, not only the
+            // one direction the repeater's own output happened to arrive
+            // from -- this is `propagate::recompute_dust_strengths`'s own
+            // "強充能的方塊也能驅動相鄰的紅石粉" rule, `mark_powered`'s own
+            // `BlockPower::Strong` arm, and mechanism 3 of
+            // `docs/derived/coupling-mechanisms.md`, where it is 31 measured
+            // couplings rather than an argument. A repeater climbing a ramp
+            // never touches the landing dust directly: it powers the riser
+            // underneath it, and the riser is what lights the dust sitting
+            // on its top face.
             for direction in ALL_SIX {
                 let neighbour = pos.offset(direction);
                 if world.get(neighbour.x, neighbour.y, neighbour.z).kind == BlockKind::RedstoneWire
@@ -5988,9 +6154,12 @@ fn net_signal_strength(
                         own_cells,
                         &mut strength,
                         &mut queue,
+                        &mut ever_queued,
                         neighbour,
                         direction,
                         here,
+                        true,
+                        BlockPower::None,
                     );
                 }
             }
@@ -6001,27 +6170,31 @@ fn net_signal_strength(
             // whatever it drives -- ever ends up in `strength` at all): it
             // drives forward from itself along its one fixed output
             // direction, exactly as `structural_output` already models for
-            // `verify_torch_merge`, reused here unchanged. Note this does
-            // *not* cover a repeater's output landing on thin air (the
-            // descend rule's own deliberately-open cell): `deliver` still
-            // records that dead end, but nothing is there to radiate from,
-            // and unlike the climbing case above, a repeater's output does
-            // not diagonally reach descending dust the way genuine dust does
-            // (confirmed empirically the same way) -- which is exactly the
+            // `verify_torch_merge`, reused here unchanged. Its output is
+            // `BlockPower::Strong`, so a conductive block it lands on is
+            // walked from and a run continues past a ramp; landing on thin
+            // air (the descend rule's own deliberately-open cell) is still
+            // recorded and still radiates nothing, which is exactly the
             // "repeater refreshing into a cell nothing continues from"
             // failure mode this invariant exists to catch.
             for direction in ALL_SIX {
-                if structural_output(state, direction).0 {
-                    deliver(
-                        world,
-                        own_cells,
-                        &mut strength,
-                        &mut queue,
-                        pos.offset(direction),
-                        direction,
-                        MAX_SIGNAL_STRENGTH,
-                    );
+                let (drives_dust, block_power) =
+                    structural_output_in_world(world, pos, state, direction);
+                if !drives_dust && block_power == BlockPower::None {
+                    continue;
                 }
+                deliver(
+                    world,
+                    own_cells,
+                    &mut strength,
+                    &mut queue,
+                    &mut ever_queued,
+                    pos.offset(direction),
+                    direction,
+                    MAX_SIGNAL_STRENGTH,
+                    drives_dust,
+                    block_power,
+                );
             }
         }
     }
