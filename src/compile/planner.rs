@@ -16956,4 +16956,934 @@ mod tests {
         );
     }
 
+
+    // -----------------------------------------------------------------------
+    // Ship review of the negotiated router (2026-08-18)
+    //
+    // Written to decide GO/NO_GO against pre-registered criteria. Nothing here
+    // is tuned; everything asserts or prints what it measured.
+
+    /// **The shared-cell gate**, derived from [`anchor_is_free_for`] itself
+    /// rather than from [`exclusion_zone`].
+    ///
+    /// `negotiation_left_nothing_shared` re-derives contention from
+    /// `exclusion_zone`, which is the same set the price is charged over -- so
+    /// it cannot catch a zone that is wrong, only bookkeeping that is. This
+    /// asks the *rule* instead: for each route, lay every other net's wire and
+    /// the stone floor realisation puts under it into a bare `Reservation`
+    /// exactly as `reserve_path` would, and then ask `anchor_is_free_for`
+    /// whether this net's cells were ever free. Start, goal and terminal
+    /// support are pointed far away so none of the rule's three exemptions can
+    /// fire.
+    fn cells_the_rule_would_have_refused(candidate: &PlanCandidate) -> Vec<String> {
+        // A socket is a primitive's own cell: every net is kept out of it by
+        // `reserve_primitives` and the pre-claims, and both routers append it
+        // to the path after the search. It is not a negotiated cell, so it is
+        // out of scope here -- the same scoping
+        // `negotiation_left_nothing_shared` uses.
+        let sockets: BTreeSet<Anchor> = candidate
+            .routes
+            .iter()
+            .flat_map(|route| route.terminals.iter().map(|terminal| terminal.sink.anchor))
+            .collect();
+        let wire_of = |route: &Route| -> Vec<Anchor> {
+            route
+                .anchors
+                .iter()
+                .copied()
+                .filter(|anchor| !sockets.contains(anchor))
+                .collect()
+        };
+        let elsewhere = Anchor {
+            x: -10_000,
+            y: -10_000,
+            z: -10_000,
+        };
+
+        let mut faults = Vec::new();
+        for (mine, route) in candidate.routes.iter().enumerate() {
+            let mut theirs = Reservation::new();
+            for (other, foreign) in candidate.routes.iter().enumerate() {
+                if other == mine {
+                    continue;
+                }
+                for cell in wire_of(foreign) {
+                    theirs.insert(cell, &foreign.id, Occupancy::Wire);
+                    theirs.insert(
+                        Anchor {
+                            y: cell.y - 1,
+                            ..cell
+                        },
+                        &foreign.id,
+                        Occupancy::Stone,
+                    );
+                }
+            }
+            for cell in wire_of(route) {
+                if !anchor_is_free_for(cell, elsewhere, elsewhere, elsewhere, &route.id, &theirs) {
+                    let mut around = Vec::new();
+                    for neighbour in exclusion_zone(cell) {
+                        if let Some(owner) = theirs.owner(&neighbour) {
+                            around.push(format!(
+                                "`{owner}` at ({}, {}, {})",
+                                neighbour.x, neighbour.y, neighbour.z
+                            ));
+                        }
+                    }
+                    faults.push(format!(
+                        "({}, {}, {}) laid by `{}` against {}",
+                        cell.x,
+                        cell.y,
+                        cell.z,
+                        route.id,
+                        around.join(" + ")
+                    ));
+                }
+            }
+        }
+        faults
+    }
+
+    /// NO_GO criterion 1: **no returned plan may have a cell shared by two
+    /// nets** -- and "shared" is the router's own rule, not just identity.
+    #[test]
+    fn no_plan_either_router_returns_shares_a_cell() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+
+        let lowered = |name: &str| {
+            let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
+            let (gate_level, _) = circuit.baked_netlist();
+            crate::compile::lowering::lower(&gate_level).expect("it lowers")
+        };
+        let cases: Vec<(&str, Netlist)> = vec![
+            ("and4", build_and4_netlist().0),
+            ("full_adder", build_full_adder_netlist().0),
+            ("verilog:and4", lowered("verilog:and4")),
+        ];
+
+        for (name, netlist) in &cases {
+            for (label, router, budget) in [
+                ("rip-up", RouterKind::RipUp, RIP_UP_ROUNDS),
+                ("negotiated", RouterKind::Negotiated, NEGOTIATION_ROUNDS),
+            ] {
+                let plan =
+                    plan_from_netlist_with_router(netlist, &PortPlacements::default(), budget, router)
+                        .unwrap_or_else(|error| panic!("{name} must route through {label}: {error}"));
+                let faults = cells_the_rule_would_have_refused(&plan);
+                assert!(
+                    faults.is_empty(),
+                    "{name} via {label} returned a plan whose nets stand inside each other:\n  {}",
+                    faults.join("\n  ")
+                );
+            }
+        }
+    }
+
+    /// Rule 2: the gate above must be able to fail against the defect it names.
+    #[test]
+    fn the_shared_cell_gate_is_able_to_fail() {
+        let run = |x: i32| -> Vec<Anchor> { (0..6).map(|z| Anchor { x, y: 1, z }).collect() };
+
+        let apart = PlanCandidate::new(
+            Vec::new(),
+            vec![Route::new("a", run(10)), Route::new("b", run(13))],
+        );
+        assert_eq!(
+            cells_the_rule_would_have_refused(&apart),
+            Vec::<String>::new(),
+            "three cells apart is legal and the gate must admit it"
+        );
+
+        let beside = PlanCandidate::new(
+            Vec::new(),
+            vec![Route::new("a", run(10)), Route::new("b", run(11))],
+        );
+        assert_eq!(
+            cells_the_rule_would_have_refused(&beside).len(),
+            12,
+            "six cells of each net, each inside the other's keep_out: {:?}",
+            cells_the_rule_would_have_refused(&beside)
+        );
+
+        let same = PlanCandidate::new(
+            Vec::new(),
+            vec![Route::new("a", run(10)), Route::new("b", run(10))],
+        );
+        assert_eq!(
+            cells_the_rule_would_have_refused(&same).len(),
+            12,
+            "one cell, two nets, is the violation the whole design is about"
+        );
+
+        // And the same gate against a plan a real router produced, with one
+        // cell of one net handed to another. This is what says the gate would
+        // catch a negotiator that returned an overused cell, rather than only a
+        // hand-built fixture.
+        let circuit =
+            crate::circuits::verilog::find("verilog:and4").expect("the catalog ships verilog:and4");
+        let (gate_level, _) = circuit.baked_netlist();
+        let netlist = crate::compile::lowering::lower(&gate_level).expect("verilog:and4 lowers");
+        let mut plan = plan_from_netlist_with_router(
+            &netlist,
+            &PortPlacements::default(),
+            NEGOTIATION_ROUNDS,
+            RouterKind::Negotiated,
+        )
+        .expect("verilog:and4 routes through the negotiated router");
+        assert!(
+            cells_the_rule_would_have_refused(&plan).is_empty(),
+            "the plan is clean before the injection"
+        );
+        let stolen = plan.routes[1].anchors[0];
+        plan.routes[0].anchors.push(stolen);
+        assert!(
+            !cells_the_rule_would_have_refused(&plan).is_empty(),
+            "one cell given to two nets must be visible to the gate"
+        );
+    }
+
+    /// Worst-case settle, in game ticks, over the same sweep the truth table
+    /// runs: toggle every lever through every input combination and take the
+    /// longest single transition.
+    fn worst_settle_game_ticks(compiled: &CompiledCircuit, inputs: &[&str]) -> Result<u64, String> {
+        const MAX_TICKS: u64 = 2000;
+        let mut levers = Vec::with_capacity(inputs.len());
+        for name in inputs {
+            match compiled.input_positions.get(*name) {
+                Some(position) => levers.push(*position),
+                None => return Err(format!("no lever for input `{name}`")),
+            }
+        }
+        let mut simulator = crate::redstone::simulator::Simulator::new(compiled.world.clone());
+        simulator
+            .run_until_stable(MAX_TICKS)
+            .map_err(|error| format!("did not settle before the sweep: {error:?}"))?;
+
+        let mut worst = 0u64;
+        for combination in 0..(1usize << inputs.len()) {
+            let bits: Vec<bool> = (0..inputs.len())
+                .map(|index| (combination >> (inputs.len() - 1 - index)) & 1 == 1)
+                .collect();
+            for (position, &bit) in levers.iter().zip(bits.iter()) {
+                let mut state = simulator.world().get(position.0, position.1, position.2).clone();
+                if state.lit == bit {
+                    continue;
+                }
+                state.lit = bit;
+                simulator.world_mut().set(position.0, position.1, position.2, state);
+                let started = simulator.current_tick();
+                simulator
+                    .run_until_stable(MAX_TICKS)
+                    .map_err(|error| format!("did not settle at {bits:?}: {error:?}"))?;
+                worst = worst.max(simulator.current_tick() - started);
+            }
+        }
+        Ok(worst)
+    }
+
+    fn blocks_in(world: &crate::redstone::world::storage::World) -> usize {
+        let (sx, sy, sz) = world.size();
+        let mut blocks = 0usize;
+        for x in 0..sx {
+            for y in 0..sy {
+                for z in 0..sz {
+                    if world.get(x, y, z).kind != crate::redstone::world::block::BlockKind::Air {
+                        blocks += 1;
+                    }
+                }
+            }
+        }
+        blocks
+    }
+
+    /// The ship review's main panel: all six condition circuits through the
+    /// **real** `compile()`, whichever router [`SHIPPING_ROUTER`] names.
+    ///
+    /// Per circuit: what the planner path alone does (`plan_from_netlist` plus
+    /// `verify_candidate`, no fallback -- this is where a router regression is
+    /// visible), then what `compile` ships: which placer, blocks, the full
+    /// truth table through the real simulator, and worst settle in game ticks.
+    ///
+    /// Run once with `SHIPPING_ROUTER = RipUp` and once with `Negotiated`.
+    /// Asserts nothing; `--ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement harness: compiles and simulates all six condition circuits"]
+    fn the_ship_review_panel() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist, SEGMENT_NAMES,
+        };
+        use crate::compile::lowering::{lower, lower_optimised};
+        use std::time::Instant;
+
+        let (and4, and4_output) = build_and4_netlist();
+        let (adder, adder_outputs) = build_full_adder_netlist();
+        let (segment_a, segment_a_output) = build_single_segment_netlist(0);
+        let (decoder, decoder_outputs) = build_seven_segment_netlist();
+        let lowered_verilog = |name: &str, optimised: bool| -> (Netlist, Vec<String>) {
+            let circuit = crate::circuits::verilog::find(name).expect("in the catalog");
+            let (netlist, labels) = circuit.baked_netlist();
+            let lowered = if optimised { lower_optimised(&netlist) } else { lower(&netlist) }
+                .expect("it lowers");
+            (lowered, labels.into_iter().map(|(_, signal)| signal).collect())
+        };
+        let (verilog_and4, verilog_and4_outputs) = lowered_verilog("verilog:and4", false);
+        let (verilog_decoder, verilog_decoder_outputs) =
+            lowered_verilog("verilog:seven_segment", true);
+
+        let cases = [
+            ConditionCircuit {
+                name: "and4",
+                netlist: and4,
+                inputs: &crate::circuits::and4::INPUT_NAMES[..],
+                outputs: vec![and4_output],
+                expected: and4_expected,
+            },
+            ConditionCircuit {
+                name: "full_adder",
+                netlist: adder,
+                inputs: &crate::circuits::full_adder::INPUT_NAMES[..],
+                outputs: vec![adder_outputs["sum"].clone(), adder_outputs["cout"].clone()],
+                expected: full_adder_expected,
+            },
+            ConditionCircuit {
+                name: "segment_a",
+                netlist: segment_a,
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: vec![segment_a_output],
+                expected: segment_a_expected,
+            },
+            ConditionCircuit {
+                name: "seven_segment",
+                netlist: decoder,
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: SEGMENT_NAMES.iter().map(|name| decoder_outputs[name].clone()).collect(),
+                expected: seven_segment_expected,
+            },
+            ConditionCircuit {
+                name: "verilog:and4",
+                netlist: verilog_and4,
+                inputs: &crate::circuits::and4::INPUT_NAMES[..],
+                outputs: verilog_and4_outputs,
+                expected: and4_expected,
+            },
+            ConditionCircuit {
+                name: "verilog:seven_segment",
+                netlist: verilog_decoder,
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: verilog_decoder_outputs,
+                expected: seven_segment_expected,
+            },
+        ];
+
+        eprintln!("SHIPPING_ROUTER = {:?}", SHIPPING_ROUTER);
+        for case in &cases {
+            let started = Instant::now();
+            let planned = match plan_from_netlist(&case.netlist, &PortPlacements::default()) {
+                Err(error) => format!("ROUTE ERR {:.1}s: {error}", started.elapsed().as_secs_f64()),
+                Ok(candidate) => {
+                    let cells: usize =
+                        candidate.routes().iter().map(|route| route.anchors().len()).sum();
+                    let faults = cells_the_rule_would_have_refused(&candidate);
+                    let shared = if faults.is_empty() {
+                        "no shared cell".to_string()
+                    } else {
+                        format!("**{} SHARED CELLS** {}", faults.len(), faults.join("; "))
+                    };
+                    match verify_candidate(&candidate, &case.netlist) {
+                        Err(error) => format!(
+                            "routed {:.1}s {cells} cells, {shared}, VERIFY REFUSED: {error}",
+                            started.elapsed().as_secs_f64()
+                        ),
+                        Ok(()) => format!(
+                            "routed {:.1}s {cells} cells, {shared}, verifies",
+                            started.elapsed().as_secs_f64()
+                        ),
+                    }
+                }
+            };
+
+            let started = Instant::now();
+            let shipped = match compile::compile(&case.netlist) {
+                Err(error) => format!("ERR {:.1}s: {error}", started.elapsed().as_secs_f64()),
+                Ok(compiled) => {
+                    let seconds = started.elapsed().as_secs_f64();
+                    let blocks = blocks_in(&compiled.world);
+                    let truth = match simulated_truth_table(
+                        &compiled,
+                        case.inputs,
+                        &case.outputs,
+                        case.expected,
+                    ) {
+                        Ok(vectors) => format!("truth Ok ({vectors} vectors)"),
+                        Err(error) => format!("**TRUTH TABLE WRONG**: {error}"),
+                    };
+                    let settle = match worst_settle_game_ticks(&compiled, case.inputs) {
+                        Ok(ticks) => format!("worst settle {ticks} game ticks"),
+                        Err(error) => format!("settle unmeasured: {error}"),
+                    };
+                    format!(
+                        "{:?} {blocks} blocks, {truth}, {settle}, {seconds:.1}s",
+                        compiled.planner_kind()
+                    )
+                }
+            };
+
+            eprintln!("{}\n  planner  {planned}\n  compile  {shipped}", case.name);
+        }
+    }
+
+    /// `n1`, the smallest instance, printed rather than summarised.
+    #[test]
+    #[ignore = "measurement: prints both routers' n0 and n1"]
+    fn what_n1_actually_is() {
+        let (netlist, rip_up, negotiated) = verilog_and4_both_ways();
+        for (label, plan) in [("rip-up", &rip_up), ("negotiated", &negotiated)] {
+            for id in ["n0", "n1"] {
+                let route = route_named(plan, id);
+                eprintln!(
+                    "{label} {id}: {} cells {:?}",
+                    route.anchors().len(),
+                    route.anchors().iter().map(|a| (a.x, a.y, a.z)).collect::<Vec<_>>()
+                );
+            }
+            let cells: usize = plan.routes().iter().map(|r| r.anchors().len()).sum();
+            eprintln!(
+                "{label} whole circuit: {cells} cells, verify {:?}, shared {:?}",
+                verify_candidate(plan, &netlist).map(|_| "ok"),
+                cells_the_rule_would_have_refused(plan)
+            );
+        }
+    }
+
+
+    /// Criterion 3, the part the 125-row zone sweep does not answer: a
+    /// **staircase**'s mandatory-air cells are a physics rule the negotiated
+    /// router prices rather than refuses against foreign nets, and
+    /// `negotiation_left_nothing_shared` re-derives only the `exclusion_zone`
+    /// relation. So either the air relation is inside the zone relation, or the
+    /// final guard has a hole.
+    ///
+    /// It is inside it, and this is what says so rather than an argument. For
+    /// every staircase a route can take -- four horizontal directions by climb
+    /// and descend -- every cell `staircase_clearance` demands, **and** the cell
+    /// one above it whose floor would fill it, lies in the `exclusion_zone` of
+    /// one of the two anchors of that very step. A foreign net that broke a
+    /// staircase would therefore already be caught as a shared cell.
+    #[test]
+    fn every_staircase_clearance_cell_is_inside_the_zone_the_final_guard_sweeps() {
+        let from = Anchor { x: 40, y: 4, z: 40 };
+        let mut escapes = Vec::new();
+        for to in neighbours(from) {
+            if to.y == from.y {
+                continue;
+            }
+            let zone: BTreeSet<Anchor> = exclusion_zone(from)
+                .into_iter()
+                .chain(exclusion_zone(to))
+                .collect();
+            for cell in staircase_clearance(from, to) {
+                // The cell itself, taken by a foreign wire.
+                if !zone.contains(&cell) {
+                    escapes.push(format!("{to:?}: clearance cell {cell:?} is outside the zone"));
+                }
+                // And the cell a foreign wire would stand in to lay its floor
+                // into this one -- which is how a route passing overhead seals
+                // a climb without owning anything that conducts.
+                let overhead = Anchor { y: cell.y + 1, ..cell };
+                if !zone.contains(&overhead) {
+                    escapes.push(format!(
+                        "{to:?}: a wire at {overhead:?} lays its floor into clearance cell                          {cell:?} and is outside the zone"
+                    ));
+                }
+            }
+        }
+        assert!(
+            escapes.is_empty(),
+            "the final guard sweeps `exclusion_zone` only, so anything here is a hole in it:
+{}",
+            escapes.join("
+")
+        );
+    }
+
+
+    // =======================================================================
+    // ADVERSARIAL VERIFICATION HARNESS (2026-08-18, second reviewer).
+    //
+    // Deliberately shares NO code with the router or with the first reviewer's
+    // gate. `cells_the_rule_would_have_refused` asks `anchor_is_free_for`;
+    // `negotiation_left_nothing_shared` asks `exclusion_zone`. Both are the
+    // compiler's own statements of the physics. This one is written out by hand
+    // from `docs/derived/dust-join-relation.md` and from the two sentences the
+    // planner repeats everywhere -- "every cell stands on a stone floor one
+    // level below it" and "dust joins its four horizontal neighbours and each
+    // of those one level up or down" -- so that a wrong `keep_out`, a wrong
+    // `exclusion_zone` and a wrong `anchor_is_free_for` would all still be
+    // caught here.
+
+    /// One cell, as a bare triple -- deliberately not [`Anchor`], so this
+    /// harness cannot accidentally reuse a planner helper that takes one.
+    type ReviewCell = (i32, i32, i32);
+    /// Net name -> the wire cells it owns, sockets dropped.
+    type ReviewWires = Vec<(String, Vec<ReviewCell>)>;
+    /// Net name -> every cell it fills, wire and stone floor alike.
+    type ReviewFilled = Vec<(String, std::collections::BTreeSet<ReviewCell>)>;
+
+    /// Every way two nets can collide, spelled out rather than looked up.
+    ///
+    /// Returns one line per fault. Sockets are excluded on both sides for the
+    /// same reason the other two gates exclude them: a socket is a primitive's
+    /// cell, hard-reserved for every net in every iteration of both routers.
+    fn review_two_nets_on_one_cell(candidate: &PlanCandidate) -> Vec<String> {
+        let sockets: std::collections::BTreeSet<ReviewCell> = candidate
+            .routes
+            .iter()
+            .flat_map(|route| route.terminals.iter())
+            .map(|terminal| {
+                let a = terminal.sink.anchor;
+                (a.x, a.y, a.z)
+            })
+            .collect();
+        let wires: ReviewWires = candidate
+            .routes
+            .iter()
+            .map(|route| {
+                (
+                    route.id.clone(),
+                    route
+                        .anchors
+                        .iter()
+                        .map(|a| (a.x, a.y, a.z))
+                        .filter(|c| !sockets.contains(c))
+                        .collect(),
+                )
+            })
+            .collect();
+
+        // Hand-written physics.
+        let horizontally_adjacent =
+            |a: ReviewCell, b: ReviewCell| (a.0 - b.0).abs() + (a.2 - b.2).abs() == 1;
+        let floor_of = |c: ReviewCell| (c.0, c.1 - 1, c.2);
+
+        let mut faults = Vec::new();
+        for i in 0..wires.len() {
+            for j in 0..wires.len() {
+                if i == j {
+                    continue;
+                }
+                let (mine, my_cells) = &wires[i];
+                let (theirs, their_cells) = &wires[j];
+                let their_set: std::collections::BTreeSet<ReviewCell> =
+                    their_cells.iter().copied().collect();
+                for &a in my_cells {
+                    // 1. The literal violation: one cell, two nets' wire.
+                    if i < j && their_set.contains(&a) {
+                        faults.push(format!(
+                            "SAME CELL   {a:?} is wire for both {mine} and {theirs}"
+                        ));
+                    }
+                    // 2. My stone floor lands on their conductor and deletes it.
+                    if their_set.contains(&floor_of(a)) {
+                        faults.push(format!(
+                            "FLOOR KILLS {mine}'s wire at {a:?} floors {:?}, {theirs}'s wire",
+                            floor_of(a)
+                        ));
+                    }
+                    // 3. Dust joins its four horizontal neighbours and each of
+                    //    those one level up or down: two nets so placed are one
+                    //    net.
+                    if i < j {
+                        for &b in their_cells {
+                            if horizontally_adjacent(a, b) && (a.1 - b.1).abs() <= 1 {
+                                faults.push(format!(
+                                    "DUST JOIN   {mine} at {a:?} joins {theirs} at {b:?}"
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        faults.sort();
+        faults.dedup();
+        faults
+    }
+
+    /// The staircase half, also hand-written: a climb needs the cell over the
+    /// head of the cell it leaves to stay air, and a descent needs the cell it
+    /// falls past to stay air. "Air" means no foreign wire and no foreign
+    /// floor.
+    fn review_foreign_wire_in_a_staircase(candidate: &PlanCandidate) -> Vec<String> {
+        let sockets: std::collections::BTreeSet<ReviewCell> = candidate
+            .routes
+            .iter()
+            .flat_map(|route| route.terminals.iter())
+            .map(|t| (t.sink.anchor.x, t.sink.anchor.y, t.sink.anchor.z))
+            .collect();
+        let occupied: ReviewFilled = candidate
+            .routes
+            .iter()
+            .map(|route| {
+                let mut cells = std::collections::BTreeSet::new();
+                for a in &route.anchors {
+                    let c = (a.x, a.y, a.z);
+                    if sockets.contains(&c) {
+                        continue;
+                    }
+                    cells.insert(c);
+                    cells.insert((c.0, c.1 - 1, c.2)); // its stone floor
+                }
+                (route.id.clone(), cells)
+            })
+            .collect();
+
+        let mut faults = Vec::new();
+        for (index, route) in candidate.routes.iter().enumerate() {
+            for pair in route.anchors.windows(2) {
+                let (p, q) = (pair[0], pair[1]);
+                if q.y == p.y {
+                    continue;
+                }
+                // `route.anchors` is the concatenation of this route's
+                // branches, so consecutive entries are NOT always consecutive
+                // cells: the seam between one branch's last cell and the next
+                // branch's first is a pair that can differ in y while being
+                // nowhere near each other. Measured on `segment_a` at
+                // `present_term(0) = 8`, where three such seams were reported
+                // as staircase faults and none of them was a staircase. A real
+                // step is one cardinal move across and one level.
+                if (p.x - q.x).abs() + (p.z - q.z).abs() != 1 || (p.y - q.y).abs() != 1 {
+                    continue;
+                }
+                let must_be_air = if q.y > p.y {
+                    (p.x, p.y + 1, p.z) // headroom over the climb
+                } else {
+                    (q.x, p.y, q.z) // the cell the drop falls past
+                };
+                for (other, cells) in occupied.iter().enumerate().filter_map(|(k, v)| {
+                    if k == index {
+                        None
+                    } else {
+                        Some(v)
+                    }
+                }) {
+                    if cells.contains(&must_be_air) {
+                        faults.push(format!(
+                            "STAIR       {}'s step {:?}->{:?} needs {must_be_air:?} air, {other} fills it",
+                            route.id,
+                            (p.x, p.y, p.z),
+                            (q.x, q.y, q.z)
+                        ));
+                    }
+                }
+            }
+        }
+        faults.sort();
+        faults.dedup();
+        faults
+    }
+
+    /// Rule 2 for the harness above: it must go red against the defect it
+    /// names, on hand-built fixtures AND on a plan a real router produced.
+    #[test]
+    fn review_my_own_shared_cell_gate_can_fail() {
+        let run = |x: i32| -> Vec<Anchor> { (0..6).map(|z| Anchor { x, y: 1, z }).collect() };
+        let plan = |a: Vec<Anchor>, b: Vec<Anchor>| {
+            PlanCandidate::new(Vec::new(), vec![Route::new("a", a), Route::new("b", b)])
+        };
+
+        assert!(
+            review_two_nets_on_one_cell(&plan(run(10), run(13))).is_empty(),
+            "three cells apart is legal; a gate that always fires proves nothing"
+        );
+        let beside = review_two_nets_on_one_cell(&plan(run(10), run(11)));
+        assert!(
+            beside.iter().any(|f| f.starts_with("DUST JOIN")),
+            "one cell apart is a dust join: {beside:?}"
+        );
+        let same = review_two_nets_on_one_cell(&plan(run(10), run(10)));
+        assert!(
+            same.iter().any(|f| f.starts_with("SAME CELL")),
+            "the same six cells twice is the violation itself: {same:?}"
+        );
+        let over: Vec<Anchor> = (0..6).map(|z| Anchor { x: 10, y: 2, z }).collect();
+        let stacked = review_two_nets_on_one_cell(&plan(run(10), over));
+        assert!(
+            stacked.iter().any(|f| f.starts_with("FLOOR KILLS")),
+            "a wire directly over another net's wire floors it away: {stacked:?}"
+        );
+
+        // And against a plan the negotiated router really returned.
+        let circuit =
+            crate::circuits::verilog::find("verilog:and4").expect("the catalog ships verilog:and4");
+        let (gate_level, _) = circuit.baked_netlist();
+        let netlist = crate::compile::lowering::lower(&gate_level).expect("verilog:and4 lowers");
+        let mut real = plan_from_netlist_with_router(
+            &netlist,
+            &PortPlacements::default(),
+            NEGOTIATION_ROUNDS,
+            RouterKind::Negotiated,
+        )
+        .expect("verilog:and4 routes negotiated");
+        assert!(
+            review_two_nets_on_one_cell(&real).is_empty()
+                && review_foreign_wire_in_a_staircase(&real).is_empty(),
+            "the real plan is clean before the injection"
+        );
+        let stolen = real.routes[1].anchors[0];
+        real.routes[0].anchors.push(stolen);
+        assert!(
+            !review_two_nets_on_one_cell(&real).is_empty(),
+            "a cell handed to a second net must be visible"
+        );
+    }
+
+    /// **NO_GO criterion 1, verified independently.** Every plan the negotiated
+    /// router returns, on every circuit it can route, against a hand-written
+    /// statement of the physics.
+    #[test]
+    #[ignore = "review harness: routes every circuit through both routers"]
+    fn review_no_negotiated_plan_shares_a_cell() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+
+        let lowered = |name: &str| {
+            let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
+            let (gate_level, _) = circuit.baked_netlist();
+            match name {
+                "verilog:seven_segment" => {
+                    crate::compile::lowering::lower_optimised(&gate_level).expect("it lowers")
+                }
+                _ => crate::compile::lowering::lower(&gate_level).expect("it lowers"),
+            }
+        };
+        let cases: Vec<(String, Netlist)> = vec![
+            ("and4".to_string(), build_and4_netlist().0),
+            ("full_adder".to_string(), build_full_adder_netlist().0),
+            ("segment_a".to_string(), build_single_segment_netlist(0).0),
+            ("seven_segment".to_string(), build_seven_segment_netlist().0),
+            ("verilog:and4".to_string(), lowered("verilog:and4")),
+            (
+                "verilog:seven_segment".to_string(),
+                lowered("verilog:seven_segment"),
+            ),
+        ];
+
+        let mut any_plan = 0usize;
+        let mut faults_seen = 0usize;
+        for (name, netlist) in &cases {
+            for (label, router, budget) in [
+                ("rip-up    ", RouterKind::RipUp, RIP_UP_ROUNDS),
+                ("negotiated", RouterKind::Negotiated, RIP_UP_ROUNDS),
+                ("negotiated", RouterKind::Negotiated, TRIAL_RIP_UP_ROUNDS),
+            ] {
+                let started = std::time::Instant::now();
+                match plan_from_netlist_with_router(
+                    netlist,
+                    &PortPlacements::default(),
+                    budget,
+                    router,
+                ) {
+                    Ok(plan) => {
+                        any_plan += 1;
+                        let shared = review_two_nets_on_one_cell(&plan);
+                        let stairs = review_foreign_wire_in_a_staircase(&plan);
+                        faults_seen += shared.len() + stairs.len();
+                        let cells: usize = plan.routes.iter().map(|r| r.anchors.len()).sum();
+                        eprintln!(
+                            "{name:24} {label} budget {budget:3}  {cells:5} cells  {:3} shared-cell fault(s)  {:3} staircase fault(s)  {:.1}s",
+                            shared.len(),
+                            stairs.len(),
+                            started.elapsed().as_secs_f64()
+                        );
+                        for fault in shared.iter().chain(stairs.iter()) {
+                            eprintln!("      {fault}");
+                        }
+                    }
+                    Err(error) => eprintln!(
+                        "{name:24} {label} budget {budget:3}  NO PLAN  ({error})  {:.1}s",
+                        started.elapsed().as_secs_f64()
+                    ),
+                }
+            }
+        }
+        assert!(any_plan > 0, "the gate must have seen at least one plan");
+        eprintln!(
+            "review_no_negotiated_plan_shares_a_cell: {any_plan} plan(s) checked, {faults_seen} fault(s)"
+        );
+        assert_eq!(faults_seen, 0, "some returned plan is illegal");
+    }
+
+    /// **Criterion 4's fragility, swept rather than argued.**
+    ///
+    /// The negotiated router has three tuned numbers: `HISTORY_WEIGHT`,
+    /// `present_term`'s iteration-0 value, and `deterministic_astar`'s
+    /// `CLIMB_COST`. This prints, for whatever those constants currently are,
+    /// what the negotiated router does to four circuits -- so an outer script
+    /// can edit one constant, rebuild, and re-run.
+    ///
+    /// Run with `--ignored --nocapture`. Every line is `circuit | cells |
+    /// verify | contested trace`.
+    #[test]
+    #[ignore = "review harness: one row per circuit for the constant currently compiled in"]
+    fn review_tuning_probe() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::build_single_segment_netlist;
+
+        let lowered = |name: &str| {
+            let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
+            let (gate_level, _) = circuit.baked_netlist();
+            crate::compile::lowering::lower(&gate_level).expect("it lowers")
+        };
+        let cases: Vec<(String, Netlist)> = vec![
+            ("and4".to_string(), build_and4_netlist().0),
+            ("verilog:and4".to_string(), lowered("verilog:and4")),
+            ("full_adder".to_string(), build_full_adder_netlist().0),
+            ("segment_a".to_string(), build_single_segment_netlist(0).0),
+        ];
+
+        eprintln!(
+            "CONFIG HISTORY_WEIGHT={HISTORY_WEIGHT} present_term(0)={} present_term(1)={} present_term(2)={}",
+            present_term(0),
+            present_term(1),
+            present_term(2),
+        );
+        for (name, netlist) in &cases {
+            let placement = relaxed_placement(netlist, &PortPlacements::default(), SHIPPING_AXES)
+                .expect("it places");
+            let snapped = relax::snap(&placement).expect("it snaps");
+            let bare = candidate_from_snapped(netlist, &PortPlacements::default(), &snapped);
+
+            let mut trace = Vec::new();
+            let started = std::time::Instant::now();
+            let outcome = negotiate(bare, netlist, NEGOTIATION_ROUNDS, &mut trace);
+            let contested: Vec<usize> = trace.iter().map(|round| round.contested).collect();
+            match outcome {
+                Ok(plan) => {
+                    let cells: usize = plan.routes.iter().map(|r| r.anchors.len()).sum();
+                    let n1 = plan
+                        .routes
+                        .iter()
+                        .find(|r| r.id == "n1")
+                        .map(|r| r.anchors.len().to_string())
+                        .unwrap_or_else(|| "-".to_string());
+                    let cell_faults = review_two_nets_on_one_cell(&plan);
+                    let stair_faults = review_foreign_wire_in_a_staircase(&plan);
+                    let shared = format!(
+                        "{} cell / {} stair",
+                        cell_faults.len(),
+                        stair_faults.len()
+                    );
+                    for fault in cell_faults.iter().chain(stair_faults.iter()) {
+                        eprintln!("      FAULT {fault}");
+                    }
+                    // Is each "staircase" pair actually one step, or two
+                    // branches meeting end to end in `route.anchors`? Print the
+                    // adjacency so a false positive is visible as one.
+                    for route in &plan.routes {
+                        for pair in route.anchors.windows(2) {
+                            let (p, q) = (pair[0], pair[1]);
+                            if q.y != p.y && (p.x - q.x).abs() + (p.z - q.z).abs() != 1 {
+                                eprintln!(
+                                    "      NOT-A-STEP {} {:?} -> {:?} (branch boundary)",
+                                    route.id,
+                                    (p.x, p.y, p.z),
+                                    (q.x, q.y, q.z)
+                                );
+                            }
+                        }
+                    }
+                    // And the verifier's own verdict, in full.
+                    if let Err(error) = verify_candidate(&plan, netlist) {
+                        eprintln!("      VERIFY {error}");
+                    }
+                    eprintln!(
+                        "  {name:16} ROUTED {cells:5} cells  n1={n1:>3}  verify {:?}  shared {shared}  iters {}  {:.1}s  trace {contested:?}",
+                        verify_candidate(&plan, netlist).map(|_| "ok").map_err(|_| "REFUSED"),
+                        trace.len(),
+                        started.elapsed().as_secs_f64(),
+                    );
+                }
+                Err(error) => eprintln!(
+                    "  {name:16} NO PLAN after {} iters  {:.1}s  ({error})  trace {contested:?}",
+                    trace.len(),
+                    started.elapsed().as_secs_f64(),
+                ),
+            }
+        }
+    }
+
+    /// **The realised graph of a plan `compile` refuses.**
+    ///
+    /// `docs/derived/realised-graph-extras.md` is built from `realise()`, which
+    /// returns `None` the moment `verify_realised_world` refuses -- so the
+    /// negotiated `full_adder`, which the strength walk rejects, contributes
+    /// nothing to that record and its coupling has never been looked at. The
+    /// three inputs `extra_edges` wants all exist regardless of that refusal:
+    /// `verify_spacing` builds the reservation, `verification_nets` the nets,
+    /// `emit_candidate` the world. So extract it anyway.
+    #[test]
+    #[ignore = "review harness: coupling of the negotiated plans compile will not ship"]
+    fn review_extra_edges_of_the_plans_compile_refuses() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+
+        let lowered = |name: &str| {
+            let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
+            let (gate_level, _) = circuit.baked_netlist();
+            crate::compile::lowering::lower(&gate_level).expect("it lowers")
+        };
+        let cases: Vec<(String, Netlist)> = vec![
+            ("and4".to_string(), build_and4_netlist().0),
+            ("full_adder".to_string(), build_full_adder_netlist().0),
+            ("verilog:and4".to_string(), lowered("verilog:and4")),
+        ];
+
+        for (name, netlist) in &cases {
+            for (label, router, budget) in [
+                ("rip-up    ", RouterKind::RipUp, RIP_UP_ROUNDS),
+                ("negotiated", RouterKind::Negotiated, TRIAL_RIP_UP_ROUNDS),
+                ("negotiated", RouterKind::Negotiated, NEGOTIATION_ROUNDS),
+                ("negotiated", RouterKind::Negotiated, RIP_UP_ROUNDS),
+            ] {
+                let Ok(plan) = plan_from_netlist_with_router(
+                    netlist,
+                    &PortPlacements::default(),
+                    budget,
+                    router,
+                ) else {
+                    eprintln!("{name:16} {label} budget {budget:3}  NO PLAN");
+                    continue;
+                };
+                let verdict = verify_candidate(&plan, netlist);
+                let reservation = verify_spacing(&plan).expect("spacing holds on any returned plan");
+                let nets = verification_nets(&plan, netlist).expect("the nets derive");
+                let realised = emit_candidate(&plan, netlist, candidate_world_size(&plan))
+                    .expect("the plan realises");
+                let report = crate::compile::coupling::extra_edges(
+                    &realised.world,
+                    &reservation,
+                    netlist,
+                    &nets,
+                    &realised.ports.gate_output_positions,
+                    &realised.ports.input_positions,
+                );
+                eprintln!(
+                    "{name:16} {label} budget {budget:3}  verify {:8}  {:3} extra edge(s)  {:3} contaminated  {:2} foreign read(s)",
+                    if verdict.is_ok() { "ok" } else { "REFUSED" },
+                    report.extra_edges.len(),
+                    report.contaminated_cells,
+                    report.foreign_readers.len(),
+                );
+                for edge in &report.extra_edges {
+                    eprintln!("      {edge:?}");
+                }
+                for read in &report.foreign_readers {
+                    eprintln!("      {read:?}");
+                }
+            }
+        }
+    }
 }

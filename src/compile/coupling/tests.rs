@@ -1605,3 +1605,71 @@ fn report_offenders(offenders: &[String]) {
         offenders.join("\n")
     );
 }
+
+// ---------------------------------------------------------------------------
+// Ship-review harness (2026-08-18, adversarial verification of the negotiated
+// router). Not the builder's code and not the reviewer's: this runs the SAME
+// extraction the 41-edge record is built from, but against whatever
+// `SHIPPING_ROUTER` currently names, and dumps the whole report rather than the
+// first differing line -- because "more extra edges than the baseline" is the
+// question, and a byte-diff panic answers a different one.
+//
+//   $env:REDA_REVIEW_SWEEP = "<path>"
+//   cargo test --release --lib review_dump_the_realised_graph_sweep -- --ignored --nocapture
+
+/// Total extra edges and foreign reads over every circuit and both paths,
+/// re-derived from the same `extra_edges` the record uses.
+fn review_totals() -> (usize, usize, Vec<String>) {
+    let mut edges = 0usize;
+    let mut reads = 0usize;
+    let mut lines = Vec::new();
+    for (name, netlist) in circuits() {
+        for path in [Path::Relaxation, Path::Legacy] {
+            let Some(realisation) = realise(&netlist, path) else {
+                lines.push(format!("{name:24} {:11} UNBUILDABLE", path.label()));
+                continue;
+            };
+            let report = extra_edges(
+                &realisation.world,
+                &realisation.reservation,
+                &netlist,
+                &realisation.nets,
+                &realisation.ports.gate_output_positions,
+                &realisation.ports.input_positions,
+            );
+            lines.push(format!(
+                "{name:24} {:11} {:6} blocks  {:3} extra edge(s)  {:4} contaminated  {:2} foreign read(s)",
+                path.label(),
+                non_air(&realisation.world),
+                report.extra_edges.len(),
+                report.contaminated_cells,
+                report.foreign_readers.len(),
+            ));
+            for edge in &report.extra_edges {
+                lines.push(format!("      {edge:?}"));
+            }
+            for read in &report.foreign_readers {
+                lines.push(format!("      {read:?}"));
+            }
+            edges += report.extra_edges.len();
+            reads += report.foreign_readers.len();
+        }
+    }
+    (edges, reads, lines)
+}
+
+#[test]
+#[ignore = "review harness: full realised-graph sweep under the current SHIPPING_ROUTER"]
+fn review_dump_the_realised_graph_sweep() {
+    let (edges, reads, lines) = review_totals();
+    for line in &lines {
+        eprintln!("{line}");
+    }
+    eprintln!("REVIEW TOTAL extra edges = {edges}, foreign reads = {reads} (record baseline: 41 / 2)");
+    if let Ok(path) = std::env::var("REDA_REVIEW_SWEEP") {
+        let mut body = lines.join("\n");
+        body.push_str(&format!("\n\nTOTAL {edges} extra edge(s), {reads} foreign read(s)\n"));
+        std::fs::write(&path, body).expect("scratch path must be writable");
+        eprintln!("wrote {path}");
+    }
+}
