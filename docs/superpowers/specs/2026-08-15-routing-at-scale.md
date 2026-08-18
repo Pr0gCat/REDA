@@ -321,6 +321,66 @@ do. `seven_segment` stalling at 6–15 contested cells out of ~4,302 cells of
 wire is **an untuned schedule, not evidence that `seven_segment` is
 unroutable** — the schedule was never swept.
 
+**BUILT, 2026-08-18, behind a switch that is off, and the milestone answer is
+NO.** `planner::route_negotiated`, reached through
+`plan_from_netlist_with_router(.., RouterKind::Negotiated)`;
+`SHIPPING_ROUTER` is `RouterKind::RipUp`, so `compile()` and
+`plan_from_netlist` are byte for byte what they were and the four pinned counts
+(232 / 1,065 / 6,416 / 16,244) do not move. Harness in the tree:
+`planner::tests::what_the_two_routers_do_to_the_six_condition_circuits`.
+
+All four dropped constraints are back -- the strength budget
+(`realise_branch_from`, `carries`), staircase clearance, the terminal guard
+cells (now pre-claimed for every socket before any net is laid, which is
+*stricter* than the shipping router) and the socket pre-claim. With them back:
+
+| circuit | rip-up | negotiated | contested per iteration |
+|---|---|---|---|
+| and4 | 104 cells, 232 blocks, verifies | 106 cells, 236 blocks, verifies | 6 5 4 0 |
+| full_adder | 507 cells, 1,065 blocks, verifies | 522 cells, **verify refuses** | 108 43 15 0 |
+| verilog:and4 | 131 cells, 290 blocks, verifies | **129** cells, **286** blocks, verifies | 8 5 6 0 |
+| segment_a | ERR 34.7s | ERR 41.4s | 474 337 163 109 17 61 118 41 22 27 16 10 70 38 16 14 15 15 16 15 15 16 17 15 18 15 11 12 11 11 12 11 |
+| seven_segment | ERR 19.4s | ERR 184.9s | 1155 1013 600 ... 34 179 26 122 97 |
+
+**`segment_a` does not converge.** The probe above converged it at iteration 7,
+`260 -> 66 -> 37 -> 21 -> 9 -> 6 -> 2 -> 0`. With the four constraints restored
+it falls from 474 to about 11 by iteration 11 and then oscillates between 10 and
+18 for twenty more. §6 says in as many words that if it no longer converges,
+this document's recommendation is wrong and the answer is 5.3. **That is one
+schedule, not a swept one** -- §8 item 5's caveat now applies to this row too --
+so what is established is that the probe's result does not survive the
+constraints, not yet that no schedule does.
+
+**What did work, and it is the smallest instance in §5.1's own terms.**
+`verilog:and4`'s `n1` is laid in **12** cells where the rip-up router lays 14,
+and the whole circuit comes out 129 cells against 131 and 286 blocks against
+290, verified.
+`planner::tests::negotiation_shortens_the_route_the_rip_up_router_sent_over_the_top`
+pins it and goes red when the negotiated arm is pointed back at `route_every_net`.
+
+**A note on the brief's worked example**: it describes `n1` as `(58,1,36)` to
+`(58,1,30)`, a straight line, laid in 11 cells. At `9d0707d` relaxation puts
+`n1`'s source at `(61,1,49)` and its socket at `(65,1,44)` -- a diagonal, laid in
+14. Same circuit, same net, same mechanism, different placement; the numbers
+above are re-measured on this tree rather than quoted.
+
+**`full_adder` computes `full_adder` and the verifier refuses it, and the
+verifier is the one that is wrong.** All eight vectors pass in the real
+`Simulator`; `verify_signal_strength` reports `net cin never delivers a non-zero
+signal to gate g16's support block (57, 1, 91)`. Traced: `cin` climbs, and
+`realise_branch_from` forces a refresh on the last flat cell before every climb,
+so a repeater at `(55,1,108)` outputs into `(55,1,107)` -- the **floor** of the
+climbing cell `(55,2,107)`. `compile::net_signal_strength` models exactly that
+case in its own comment, but its `deliver` only enqueues a cell in `own_cells`,
+and `own_cells` is `verify_spacing`'s reservation, which holds route anchors and
+not their floors. Widening that one test to
+`own_cells.contains(&target) || own_cells.contains(&target.up())` removes the
+refusal entirely (measured by injection). **Not fixed here** -- it is a change
+to the judge, it wants its own brief, and a looser verifier passes more, so the
+suite staying green under the injection is not evidence that it stays sound.
+Latent since Task 10; negotiation reaches it because it separates nets by going
+over them where the rip-up router separates them in the plane.
+
 **Cost: largest of the options.** `anchor_is_free_for` (1611) splits into hard
 rules plus a cost function; `deterministic_astar` (1329) takes the cost;
 `route_every_net` (2361) and `Congestion` (1536–1571) are replaced;

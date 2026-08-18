@@ -855,7 +855,7 @@ pub fn try_move(
                 support,
                 &owner,
                 &reservation,
-                &Congestion::default(),
+                &Prices::RipUp(&Congestion::default()),
             )
             .ok_or(
                 PlannerError::NoLocalRoute {
@@ -1332,7 +1332,7 @@ fn deterministic_astar(
     terminal_support: Anchor,
     owner: &str,
     reservation: &Reservation,
-    congestion: &Congestion,
+    prices: &Prices,
 ) -> Option<Vec<Anchor>> {
     let margin = manhattan_distance(start, goal).saturating_add(2) as i32;
     // Y is widened by a couple of levels rather than by `margin`: a route may
@@ -1431,7 +1431,7 @@ fn deterministic_astar(
             let next_travelled = state
                 .travelled
                 .saturating_add(step_cost)
-                .saturating_add(congestion.price(&next));
+                .saturating_add(prices.price(&next));
             if travelled
                 .get(&next)
                 .is_some_and(|&known| known <= next_travelled)
@@ -1568,6 +1568,35 @@ impl Congestion {
             charged_any = true;
         }
         charged_any
+    }
+}
+
+/// What a cell costs a search beyond the step onto it.
+///
+/// Two routers, one search. [`deterministic_astar`] is identical under both;
+/// the whole of the difference between them is which of these it is handed and
+/// what the reservation it is handed contains.
+///
+/// * [`Prices::RipUp`] is the shipping router: the price is [`Congestion`]'s
+///   flat, never-decaying bounding-box charge, and every foreign cell is a
+///   *refusal* in [`anchor_is_free_for`] besides.
+/// * [`Prices::Negotiated`] is [`route_negotiated`]: foreign routed cells are
+///   absent from the reservation the search sees, so the price is the only
+///   thing that expresses them.
+enum Prices<'a> {
+    RipUp(&'a Congestion),
+    Negotiated {
+        table: &'a Negotiation,
+        mine: &'a str,
+    },
+}
+
+impl Prices<'_> {
+    fn price(&self, cell: &Anchor) -> u64 {
+        match self {
+            Prices::RipUp(congestion) => congestion.price(cell),
+            Prices::Negotiated { table, mine } => table.price(cell, mine),
+        }
     }
 }
 
@@ -2119,6 +2148,24 @@ impl Reservation {
         self.cells.get(anchor).map(|(_, occupancy)| *occupancy)
     }
 
+    /// The cells `owner` has claimed that must end up **air**.
+    ///
+    /// Asked of a `stair:` guard, this is [`staircase_clearance`]'s
+    /// mandatory-air half -- the cell over a climber's head and the one a
+    /// descent falls past -- read back out of what [`reserve_path`] wrote
+    /// rather than derived a second time. [`Occupancy::Solid`] is exactly
+    /// "claimed, and not stone", and a guard's other cell, the riser, is
+    /// [`Occupancy::Stone`].
+    fn mandatory_air_of(&self, owner: &str) -> Vec<Anchor> {
+        self.cells
+            .iter()
+            .filter(|(_, (held_by, occupancy))| {
+                held_by == owner && matches!(occupancy, Occupancy::Solid)
+            })
+            .map(|(cell, _)| *cell)
+            .collect()
+    }
+
     /// Every reserved cell inside the box spanned by `from` and `to`.
     fn cells_within(&self, from: Anchor, to: Anchor) -> Vec<Anchor> {
         let (lo, hi) = (
@@ -2288,6 +2335,21 @@ pub fn continuous_placement_fingerprint(
 /// again -- and see [`relax::VERTICAL_CLEARANCE`] for what `Axes::ALL` costs.
 const SHIPPING_AXES: relax::Axes = relax::Axes::IN_PLANE;
 
+/// Which router every shipping plan is routed by.
+///
+/// **`RipUp` in this commit, deliberately.** [`route_negotiated`] is built,
+/// measurable beside the old one through
+/// [`plan_from_netlist_with_router`], and does not ship until the Verify phase
+/// says so. While this says `RipUp`, `compile()` and [`plan_from_netlist`]
+/// behave exactly as they did before it existed, and the four pinned block
+/// counts (232 / 1,065 / 6,416 / 16,244) do not move.
+///
+/// A constant with one reader rather than a literal at each call site, for the
+/// same reason [`SHIPPING_AXES`] is: this is the one thing that decides which
+/// router runs, and a second `RouterKind::RipUp` written out by hand is a
+/// second thing to flip.
+const SHIPPING_ROUTER: RouterKind = RouterKind::RipUp;
+
 /// Place and route a netlist without the legacy emitter.
 ///
 /// Everything until now has come from `seed_from_legacy`, which bounds the
@@ -2333,7 +2395,7 @@ pub fn plan_from_netlist(
     // it is the `Shape` Task 11 deleted all over again. What it is *here* is
     // the private [`SHIPPING_AXES`], because Task 12 gave it a second reader
     // and a literal written out twice is a thing that can be flipped once.
-    plan_with_axes(netlist, placements, SHIPPING_AXES, RIP_UP_ROUNDS)
+    plan_with_axes(netlist, placements, SHIPPING_AXES, RIP_UP_ROUNDS, SHIPPING_ROUTER)
 }
 
 /// [`plan_from_netlist`], with the router's rip-up budget as a parameter.
@@ -2349,7 +2411,7 @@ pub(crate) fn plan_from_netlist_within(
     placements: &PortPlacements,
     rip_up_rounds: usize,
 ) -> Result<PlanCandidate, PlannerError> {
-    plan_with_axes(netlist, placements, SHIPPING_AXES, rip_up_rounds)
+    plan_with_axes(netlist, placements, SHIPPING_AXES, rip_up_rounds, SHIPPING_ROUTER)
 }
 
 /// Build the body graph and run the springs. Everything `plan_with_axes` does
@@ -2383,16 +2445,40 @@ fn relaxed_placement(
     .map_err(PlannerError::Relaxation)
 }
 
+/// [`plan_from_netlist`], with the router as a parameter.
+///
+/// The only way to reach [`route_negotiated`], and `pub(crate)` rather than
+/// `pub` for the same reason the rip-up budget is: which router lays the nets
+/// is the compiler's decision, not a caller's. It exists so the two routers can
+/// be measured side by side on the same placement -- see
+/// `what_negotiation_does_to_the_route_the_rip_up_router_detours`.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn plan_from_netlist_with_router(
+    netlist: &Netlist,
+    placements: &PortPlacements,
+    budget: usize,
+    router: RouterKind,
+) -> Result<PlanCandidate, PlannerError> {
+    plan_with_axes(netlist, placements, SHIPPING_AXES, budget, router)
+}
+
+/// `budget` is rip-up rounds for [`RouterKind::RipUp`] and negotiation
+/// iterations for [`RouterKind::Negotiated`]. Two different things counted with
+/// one parameter because they are the same thing to a caller: how hard to try.
 fn plan_with_axes(
     netlist: &Netlist,
     placements: &PortPlacements,
     axes: relax::Axes,
-    rip_up_rounds: usize,
+    budget: usize,
+    router: RouterKind,
 ) -> Result<PlanCandidate, PlannerError> {
     let placement = relaxed_placement(netlist, placements, axes)?;
     let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation)?;
     let candidate = candidate_from_snapped(netlist, placements, &snapped);
-    route_every_net(candidate, netlist, rip_up_rounds)
+    match router {
+        RouterKind::RipUp => route_every_net(candidate, netlist, budget),
+        RouterKind::Negotiated => route_negotiated(candidate, netlist, budget),
+    }
 }
 
 /// A rounded placement, as the unrouted candidate the router is handed.
@@ -2787,23 +2873,29 @@ struct RoutingFailure {
     error: PlannerError,
 }
 
-fn route_in_order(
-    mut candidate: PlanCandidate,
+/// Claim, for the net the netlist says drives it, the one cell every socket
+/// can be entered from.
+///
+/// Every socket has exactly one cell a signal can enter it from -- the one
+/// collinear with socket and support, because a terminal only reads from
+/// directly behind itself. Which net will use it is on the netlist, so it is
+/// claimed for that net now. Left free, it goes to whichever route is laid
+/// first, and the net that actually needs it can never reach its own gate:
+/// that is what made seven_segment unroutable, and no amount of spare room
+/// above the plane fixes it, because there is no second way in.
+///
+/// **FORBIDDEN, not priced.** A socket approach is a property of where the
+/// gate stands, not of which corridor a net chose, so no amount of negotiation
+/// can move it and a net that took a stranger's would be unroutable rather
+/// than expensive. [`route_negotiated`] keeps this claim hard for exactly that
+/// reason -- it is one of the four constraints
+/// `docs/superpowers/specs/2026-08-15-routing-at-scale.md` §5.1 names as
+/// dropped by the PathFinder probe and required back.
+fn preclaim_socket_approaches(
+    reservation: &mut Reservation,
+    candidate: &PlanCandidate,
     netlist: &Netlist,
-    order: &[String],
-    congestion: &Congestion,
-) -> Result<PlanCandidate, Box<RoutingFailure>> {
-    let mut reservation = reserve_primitives(&candidate.primitive_nodes);
-
-    let sinks = net_sinks(netlist);
-
-    // Every socket has exactly one cell a signal can enter it from -- the one
-    // collinear with socket and support, because a terminal only reads from
-    // directly behind itself. Which net will use it is on the netlist, so it
-    // is claimed for that net now. Left free, it goes to whichever route is
-    // laid first, and the net that actually needs it can never reach its own
-    // gate: that is what made seven_segment unroutable, and no amount of
-    // spare room above the plane fixes it, because there is no second way in.
+) {
     for (gate, definition) in netlist.gates.iter().enumerate() {
         let support = candidate.anchors[gate];
         let facing = candidate.facing_of(gate);
@@ -2817,223 +2909,858 @@ fn route_in_order(
             reservation.insert(approach, driver, Occupancy::Wire);
         }
     }
+}
 
+/// Where `signal` is driven from, or the failure that says nothing drives it.
+fn net_source(candidate: &PlanCandidate, signal: &str) -> Result<Anchor, Box<RoutingFailure>> {
+    candidate
+        .primitive_nodes
+        .iter()
+        .find(|node| node.id == format!("gate:{signal}") || node.id == format!("input:{signal}"))
+        .map(|node| node.source())
+        .ok_or_else(|| {
+            Box::new(RoutingFailure {
+                blocked: signal.to_string(),
+                corridor: (Anchor { x: 0, y: 0, z: 0 }, Anchor { x: 0, y: 0, z: 0 }),
+                reservation: Reservation::new(),
+                charge_outright: Vec::new(),
+                error: PlannerError::UnrealisableNode {
+                    id: signal.to_string(),
+                    reason: "no gate or primary input drives this signal".to_string(),
+                },
+            })
+        })
+}
+
+/// Lay one net: a branch per consumer, each searched from the net's source,
+/// each sharing whatever prefix an earlier branch already laid.
+///
+/// **This is the whole of what a router does to a net, and both routers call
+/// it unchanged.** It was [`route_in_order`]'s inner loop and is still line for
+/// line that loop; what a router chooses is only
+///
+/// * what `reservation` holds when it is called -- [`route_in_order`] passes
+///   the one reservation every net shares, so a foreign net's cells are
+///   refusals; [`route_negotiated`] passes a reservation holding the hard
+///   furniture and this net's own cells only, so a foreign net's cells are
+///   invisible here and priced instead; and
+/// * what `prices` charges.
+///
+/// Everything else -- the strength budget, the staircase guard, the terminal
+/// style, the terminal guard cells, `self_obstructs` -- is the same code
+/// running under both, which is the point: a difference between the two
+/// routers can only come from those two arguments.
+#[allow(clippy::too_many_arguments)]
+fn lay_net(
+    signal: &str,
+    source: Anchor,
+    consumers: &[(usize, usize)],
+    netlist: &Netlist,
+    candidate: &PlanCandidate,
+    reservation: &mut Reservation,
+    prices: &Prices,
+) -> Result<Route, Box<RoutingFailure>> {
+    let signal = signal.to_string();
+    let mut route = Route::new(signal.clone(), Vec::new());
+    route.owner = Some(signal.clone());
+    for &(gate, input_index) in consumers {
+        let support = candidate.anchors[gate];
+        let facing = candidate.facing_of(gate);
+        let socket = step(support, compile::geometry::input_directions(facing)[input_index]);
+        // A terminal component only drives the support it faces, and only
+        // reads from directly behind itself, so the last step into the
+        // socket has to be collinear with socket -> support. The legacy
+        // router guarantees that with a dedicated approach column; here
+        // the search is aimed one cell further out and the socket is
+        // appended, which is the same guarantee stated as geometry.
+        //
+        // `try_move` asks the same question the same way since Task 10:
+        // `route_endpoints` threads each branch's `RouteSink` out and
+        // `declared_socket` reads `input_directions(facing)[input_index]`
+        // off it. The geometric guess `terminal_socket` makes survives only
+        // for a route whose sink the netlist never declared.
+        let approach = Anchor {
+            x: socket.x + (socket.x - support.x),
+            y: socket.y + (socket.y - support.y),
+            z: socket.z + (socket.z - support.z),
+        };
+        let mut path = match deterministic_astar(
+            source,
+            approach,
+            socket,
+            &signal,
+            reservation,
+            prices,
+        ) {
+            Some(path) => path,
+            None => {
+                return Err(Box::new(RoutingFailure {
+                    blocked: signal.clone(),
+                    corridor: (source, approach),
+                    reservation: reservation.clone(),
+                    charge_outright: Vec::new(),
+                    error: PlannerError::NoLocalRoute {
+                        from: source,
+                        to: approach,
+                    },
+                }));
+            }
+        };
+        path.push(socket);
+        reserve_path(reservation, &signal, &path);
+
+        // How much of this branch the trunk already laid, and what the
+        // signal is worth by the time it gets there. Planning the whole
+        // path from full strength would put refreshes on trunk cells that
+        // keep the first branch's blocks, so they would be planned and
+        // never built.
+        let shared = path
+            .iter()
+            .take_while(|anchor| route.anchors.contains(anchor))
+            .count();
+        let mut carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+        let mut previous_cell = source;
+        let mut trunk_repeaters = 0u64;
+        for anchor in &path[..shared] {
+            let index = route
+                .anchors
+                .iter()
+                .position(|laid| laid == anchor)
+                .expect("the shared prefix is by definition already laid");
+            if route.realisation[index].kind
+                == crate::redstone::world::block::BlockKind::Repeater
+            {
+                carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+                trunk_repeaters += 1;
+            } else {
+                carried = carried.saturating_sub(1);
+            }
+            previous_cell = *anchor;
+        }
+
+        let laid = realise_branch_from(previous_cell, carried, &path[shared..]);
+        if !laid.carries {
+            return Err(Box::new(RoutingFailure {
+                blocked: signal.clone(),
+                corridor: (source, approach),
+                reservation: reservation.clone(),
+                // Every cell this branch put above the gate plane. Nothing
+                // else is at fault: the climb is what left the refreshes
+                // nowhere to stand.
+                charge_outright: path
+                    .iter()
+                    .copied()
+                    .filter(|cell| cell.y > PLANNER_Y)
+                    .collect(),
+                error: PlannerError::PhysicalInvariant(
+                    compile::CompileError::CandidateMetadataViolation {
+                        item: signal.clone(),
+                        reason: format!(
+                            "the route to {}.in[{input_index}] decays to nothing before it \
+                             arrives, and no cell along it can hold a refresh",
+                            netlist.gates[gate].output
+                        ),
+                    },
+                ),
+            }));
+        }
+        // Whether the strength budget already needs the socket cell to be
+        // a refresh. If it does, no terminal-style preference may take it
+        // away: dust that cannot reach is not a cheaper terminal, it is a
+        // dead one.
+        let budget_needs_repeater = laid
+            .blocks
+            .last()
+            .is_some_and(|block| block.kind == crate::redstone::world::block::BlockKind::Repeater);
+        for ((anchor, block), floor) in path[shared..].iter().zip(laid.blocks).zip(laid.floors)
+        {
+            if route.anchors.contains(anchor) {
+                continue;
+            }
+            route.anchors.push(*anchor);
+            route.realisation.push(block);
+            route.floors.push(floor);
+        }
+
+        let predecessor = path
+            .get(path.len().saturating_sub(2))
+            .copied()
+            .unwrap_or(source);
+
+        // A branch whose every sink is the same wire merge joins that
+        // merge's own dust, not a gate's support block: dust meets dust
+        // and nothing has to drive anything. The same condition
+        // `merge_branch_is_bare` states, read off the netlist.
+        let bare_merge = netlist.gates[gate].is_merge()
+            && consumers.iter().all(|&(sink, _)| sink == gate);
+
+        let kind = if bare_merge {
+            RouteTerminalKind::BareMergeDust
+        } else {
+            let style = if budget_needs_repeater {
+                TerminalStyle::RepeaterIntoSupport
+            } else {
+                terminal_style(&TerminalApproach::new(
+                    predecessor,
+                    socket,
+                    support,
+                    laid.strength_before_terminal,
+                    terminal_is_isolated(reservation, &signal, predecessor, socket, support),
+                ))
+            };
+            if let Some(index) = route.anchors.iter().position(|anchor| *anchor == socket) {
+                route.realisation[index] = match style {
+                    TerminalStyle::RepeaterIntoSupport => compile::repeater(
+                        compile::direction_from(
+                            Position::new(predecessor.x, predecessor.y, predecessor.z),
+                            Position::new(socket.x, socket.y, socket.z),
+                        ),
+                    ),
+                    TerminalStyle::DirectedDustIntoSupport => compile::dust(),
+                };
+            }
+            style.into()
+        };
+
+        // A terminal has to stay a straight line into its support, and a
+        // net is otherwise free to run alongside itself -- so the next
+        // branch of this very route would happily pass beside this
+        // terminal and turn it into a corner that drives nothing. Claim
+        // the cells around it under a name nobody routes as.
+        let guard = format!("terminal:{}.in[{input_index}]", netlist.gates[gate].output);
+        for neighbour in horizontal_neighbours(socket) {
+            if neighbour != predecessor && neighbour != support {
+                reservation.insert(neighbour, &guard, Occupancy::Solid);
+            }
+        }
+
+
+        route.terminals.push(RouteTerminal {
+            sink: RouteSink {
+                gate: netlist.gates[gate].output.clone(),
+                input_index,
+                anchor: socket,
+            },
+            kind,
+            repeaters: trunk_repeaters + laid.repeaters,
+        });
+    }
+    Ok(route)
+}
+
+fn route_in_order(
+    mut candidate: PlanCandidate,
+    netlist: &Netlist,
+    order: &[String],
+    congestion: &Congestion,
+) -> Result<PlanCandidate, Box<RoutingFailure>> {
+    let mut reservation = reserve_primitives(&candidate.primitive_nodes);
+
+    let sinks = net_sinks(netlist);
+
+    preclaim_socket_approaches(&mut reservation, &candidate, netlist);
+
+    let prices = Prices::RipUp(congestion);
     let mut routes = Vec::with_capacity(sinks.len());
     for signal in order {
-        let signal = signal.clone();
         let consumers = sinks
-            .get(&signal)
+            .get(signal)
             .cloned()
             .expect("the order is built from these very keys");
-        let source = candidate
-            .primitive_nodes
-            .iter()
-            .find(|node| {
-                node.id == format!("gate:{signal}") || node.id == format!("input:{signal}")
-            })
-            .map(|node| node.source())
-            .ok_or_else(|| {
-                Box::new(RoutingFailure {
-                    blocked: signal.clone(),
-                    corridor: (Anchor { x: 0, y: 0, z: 0 }, Anchor { x: 0, y: 0, z: 0 }),
-                    reservation: Reservation::new(),
-                    charge_outright: Vec::new(),
-                    error: PlannerError::UnrealisableNode {
-                        id: signal.clone(),
-                        reason: "no gate or primary input drives this signal".to_string(),
-                    },
-                })
-            })?;
+        let source = net_source(&candidate, signal)?;
+        routes.push(lay_net(
+            signal,
+            source,
+            &consumers,
+            netlist,
+            &candidate,
+            &mut reservation,
+            &prices,
+        )?);
+    }
 
-        let mut route = Route::new(signal.clone(), Vec::new());
-        route.owner = Some(signal.clone());
-        for &(gate, input_index) in &consumers {
-            let support = candidate.anchors[gate];
-            let facing = candidate.facing_of(gate);
+    candidate.routes = routes;
+    Ok(candidate)
+}
+
+// ---------------------------------------------------------------------------
+// Negotiated congestion (PathFinder)
+//
+// `docs/superpowers/specs/2026-08-15-routing-at-scale.md` §5.1. The rip-up loop
+// above lays each net once per round and never takes one back within a round;
+// `anchor_is_free_for` refuses a contested cell outright, so a blocked net
+// cannot say *which* cell it needed, and the only feedback is a flat charge on
+// every foreign cell in the failed corridor's bounding box -- cells that were
+// never in the way included.
+//
+// What follows replaces the refusal with a price and the round with an
+// iteration. Every net is laid every iteration against everyone else's current
+// choice; a cell two nets both want is *usable* and dear rather than forbidden;
+// the price of a cell rises with how many nets want it now and with how many
+// iterations it has been fought over. The loop ends when no cell is contested.
+//
+// # What is PRICED and what is FORBIDDEN
+//
+// This split is the whole of the design's safety, and getting it wrong is how a
+// negotiated router produces a fast, small, wrong circuit.
+//
+// **PRICED -- negotiable, because it is two nets wanting the same room and one
+// of them can move.** Every one of these is a relation between two *routed
+// nets*, and every one of them is zero in a plan this loop is allowed to
+// return:
+//
+// * both nets want the same cell;
+// * one net's wire is inside the other's `keep_out` halo;
+// * one net's floor would be laid on the other's conductor, and its mirror,
+//   one net's wire standing under the other's floor;
+// * one net's wire, or its floor, lands in a cell the other's staircase needs
+//   to stay air.
+//
+// **FORBIDDEN -- physics, or the plan's own commitments, and never a price.**
+// These are refusals inside `lay_net` in every iteration, exactly as they are
+// in the shipping router, because they are not relations between two nets and
+// no amount of negotiation can settle them:
+//
+// * gate footprints -- a primitive cannot move (`reserve_primitives`);
+// * the socket pre-claim (`preclaim_socket_approaches`);
+// * the terminal guard cells (`preclaim_terminal_guards`);
+// * `self_obstructs`, the search bounds, and staircase clearance -- its riser
+//   and its headroom -- *against this net's own cells and against every
+//   primitive* (`deterministic_astar`, unchanged);
+// * a route's floor over a conductor, the stone commitment, and `keep_out`,
+//   again *against this net's own cells and against every primitive*
+//   (`anchor_is_free_for`, unchanged);
+// * the strength budget -- `realise_branch_from`'s repeater every <= 15 cells
+//   and its refresh before every climb. A branch that decays is not a dear
+//   route, it is a dead one: the iteration is refused outright and the height
+//   it chose is charged, which is the one thing the rip-up loop already did
+//   right (`RoutingFailure::charge_outright`).
+//
+// The two "against this net's own cells" clauses are where the split actually
+// lives, and they are exact rather than approximate: `exclusion_zone` is the
+// set of cells a *foreign* net could occupy to make `anchor_is_free_for` refuse
+// this one, swept cell by cell against the rule itself in
+// `the_priced_zone_is_exactly_what_a_foreign_wire_makes_anchor_is_free_for_refuse`.
+// Priced is exactly the complement of forbidden; neither list is a judgement
+// call about which rules feel negotiable.
+//
+// One caveat, measured and not smoothed over: `realise_branch_from`'s `carries`
+// is the router's model of the strength budget and it is **not** the same
+// predicate as `compile::verify_signal_strength`. A negotiated `full_adder`
+// passes the first and is refused by the second, and the reason is a defect in
+// the second -- see
+// `the_strength_verifier_cannot_see_past_a_repeater_that_feeds_a_climb`.
+//
+// The reason the priced list is safe is not that the prices get large. It is
+// that a plan with any of them non-zero is **never returned**:
+// `Negotiation::contested` is the loop's exit condition, and
+// `negotiation_left_nothing_shared` re-derives it from the finished routes
+// before the plan leaves this function.
+
+/// How many of a net's cells bear on one cell.
+type ByNet = BTreeMap<String, u32>;
+
+/// Every cell a wire at `cell` puts beyond a *foreign* net's reach.
+///
+/// It is exactly the set of cells whose occupation by another net would make
+/// [`anchor_is_free_for`] refuse `cell` to this one, and nothing more:
+///
+/// * `cell` itself -- one owner per cell;
+/// * `keep_out(cell)`'s twelve -- the two-cell conductor clearance;
+/// * the cell below -- this wire's floor is laid there, and a floor over a
+///   conductor deletes it;
+/// * the cell above -- a wire there lays *its* floor here, which is the same
+///   deletion seen from the other side, and is what [`Occupancy::Stone`] and
+///   `anchor_is_free_for`'s stone arm record.
+///
+/// **Symmetric**, and deliberately: `b` is in `exclusion_zone(a)` exactly when
+/// `a` is in `exclusion_zone(b)`, which is what lets one stamp per wire cell
+/// answer both "what does this net cost others" and "what do others cost this
+/// net" from a single lookup at the cell being priced.
+fn exclusion_zone(cell: Anchor) -> Vec<Anchor> {
+    let mut cells = Vec::with_capacity(15);
+    cells.push(cell);
+    cells.push(Anchor { y: cell.y + 1, ..cell });
+    cells.push(Anchor { y: cell.y - 1, ..cell });
+    cells.extend(keep_out(cell));
+    cells
+}
+
+/// What one net currently occupies, in the terms the negotiation trades in.
+#[derive(Debug, Clone, Default)]
+struct NetClaim {
+    /// The cells that will hold this net's dust or repeaters. Terminal sockets
+    /// are **not** here: a socket is a primitive's cell, every other net is
+    /// already kept out of it and its halo by `reserve_primitives`, and nothing
+    /// about it is negotiable.
+    wire: Vec<Anchor>,
+    /// The cells this net's staircases need to stay **air** -- the cell over a
+    /// climber's head and the one a descent falls past. [`reserve_path`] writes
+    /// them [`Occupancy::Solid`] under a `stair:` owner; they are read back out
+    /// of the reservation rather than re-derived, so this cannot drift from
+    /// [`staircase_clearance`].
+    air: Vec<Anchor>,
+}
+
+/// The negotiation's two price terms and the bookkeeping that makes overuse
+/// measurable.
+///
+/// `shadow`, `wire` and `air` are indexed by cell so a price is one lookup;
+/// `claims` is indexed by net so a net can be ripped up and re-laid without
+/// rebuilding anything.
+#[derive(Debug, Default)]
+struct Negotiation {
+    /// Cell -> the nets whose [`exclusion_zone`] covers it.
+    shadow: BTreeMap<Anchor, ByNet>,
+    /// Cell -> the nets whose wire is literally here.
+    wire: BTreeMap<Anchor, ByNet>,
+    /// Cell -> the nets whose staircase needs this cell to stay air.
+    air: BTreeMap<Anchor, ByNet>,
+    /// What each net claims right now.
+    claims: BTreeMap<String, NetClaim>,
+    /// How many iterations each cell has ended contested. **Never decays**,
+    /// which is what makes a corridor that has been fought over repeatedly
+    /// unattractive to everything that has an alternative.
+    history: BTreeMap<Anchor, u64>,
+    /// The present term for the iteration now running.
+    present: u64,
+}
+
+/// The present term at iteration `k`: **zero, then doubling, capped**.
+///
+/// Iteration 0 is free on purpose. Every net takes the path it would take if it
+/// were the only net in the circuit, so what the first iteration measures is the
+/// circuit's *real* contention rather than a contention already distorted by
+/// whoever happened to be laid first -- which is the whole failure of the
+/// rip-up loop, and is what a schedule starting dear would reproduce. Measured:
+/// with iteration 0 priced at 4, `verilog:and4` reaches zero contested cells on
+/// iteration 0 without ever having contended, so nothing negotiates and the
+/// answer is the rip-up router's answer, detour and all.
+///
+/// From there it doubles. By iteration 12 a shared cell costs 4,096, which is
+/// more than any detour a circuit this size could want, so sharing has stopped
+/// being a bargain and is only a last resort.
+fn present_term(iteration: usize) -> u64 {
+    const CAP: u64 = 4096;
+    match iteration {
+        0 => 0,
+        k => (1u64 << (k - 1).min(20)).saturating_mul(2).min(CAP),
+    }
+}
+
+/// What one iteration of accumulated history adds to a cell's price.
+const HISTORY_WEIGHT: u64 = 8;
+
+impl Negotiation {
+    fn stamp(map: &mut BTreeMap<Anchor, ByNet>, cell: Anchor, net: &str) {
+        *map.entry(cell).or_default().entry(net.to_string()).or_insert(0) += 1;
+    }
+
+    fn unstamp(map: &mut BTreeMap<Anchor, ByNet>, cell: Anchor, net: &str) {
+        if let Some(by_net) = map.get_mut(&cell) {
+            let spent = by_net.get_mut(net).is_some_and(|count| {
+                *count -= 1;
+                *count == 0
+            });
+            if spent {
+                by_net.remove(net);
+            }
+            if by_net.is_empty() {
+                map.remove(&cell);
+            }
+        }
+    }
+
+    fn foreign(map: &BTreeMap<Anchor, ByNet>, cell: &Anchor, mine: &str) -> u64 {
+        map.get(cell)
+            .map(|by_net| by_net.keys().filter(|net| net.as_str() != mine).count() as u64)
+            .unwrap_or(0)
+    }
+
+    /// Take `net`'s cells back out of the shared occupancy, so the search that
+    /// re-lays it prices everyone else's choices and not its own last one.
+    ///
+    /// This is the rip-up half of "every net is routed every iteration", and it
+    /// happens per net rather than per iteration on purpose: a net laid late in
+    /// an iteration then sees what the nets laid before it did *this* time
+    /// round, not last.
+    fn release(&mut self, net: &str) {
+        let Some(claim) = self.claims.remove(net) else {
+            return;
+        };
+        for cell in &claim.wire {
+            Self::unstamp(&mut self.wire, *cell, net);
+            for zone in exclusion_zone(*cell) {
+                Self::unstamp(&mut self.shadow, zone, net);
+            }
+        }
+        for cell in &claim.air {
+            Self::unstamp(&mut self.air, *cell, net);
+        }
+    }
+
+    fn claim(&mut self, net: &str, claim: NetClaim) {
+        for cell in &claim.wire {
+            Self::stamp(&mut self.wire, *cell, net);
+            for zone in exclusion_zone(*cell) {
+                Self::stamp(&mut self.shadow, zone, net);
+            }
+        }
+        for cell in &claim.air {
+            Self::stamp(&mut self.air, *cell, net);
+        }
+        self.claims.insert(net.to_string(), claim);
+    }
+
+    /// What laying `mine`'s wire in `cell` costs beyond the step onto it.
+    ///
+    /// Two terms, and both are needed. The **present** term is what makes the
+    /// nets separate within an iteration -- it counts who wants this cell now,
+    /// so the net with an alternative moves and the net without one keeps the
+    /// cell. The **history** term is what stops them swapping places forever: a
+    /// cell that has been contested before stays dear even in an iteration
+    /// where it happens to be free, which is the difference between a
+    /// negotiation and an oscillation.
+    fn price(&self, cell: &Anchor, mine: &str) -> u64 {
+        let history = self.history.get(cell).copied().unwrap_or(0);
+        // Someone else's wire, or its halo, or its floor, is here.
+        let mut contenders = Self::foreign(&self.shadow, cell, mine);
+        // Someone else's staircase needs this cell to stay air -- and the cell
+        // below it, because this wire's own floor would fill that one.
+        contenders += Self::foreign(&self.air, cell, mine);
+        contenders += Self::foreign(&self.air, &Anchor { y: cell.y - 1, ..*cell }, mine);
+        history
+            .saturating_mul(HISTORY_WEIGHT)
+            .saturating_add(contenders.saturating_mul(self.present))
+    }
+
+    /// Every cell two nets want at once.
+    ///
+    /// **This is the loop's exit condition and the definition of a legal
+    /// plan.** Empty means no pair of nets shares a cell, stands inside the
+    /// other's `keep_out`, would lay a floor over the other's conductor, or
+    /// would fill a cell the other's staircase needs empty.
+    fn contested(&self) -> BTreeSet<Anchor> {
+        let mut out = BTreeSet::new();
+        for (net, claim) in &self.claims {
+            for cell in &claim.wire {
+                let floor = Anchor { y: cell.y - 1, ..*cell };
+                if Self::foreign(&self.shadow, cell, net) > 0
+                    || Self::foreign(&self.air, cell, net) > 0
+                    || Self::foreign(&self.air, &floor, net) > 0
+                {
+                    out.insert(*cell);
+                }
+            }
+            for cell in &claim.air {
+                let lid = Anchor { y: cell.y + 1, ..*cell };
+                if Self::foreign(&self.wire, cell, net) > 0
+                    || Self::foreign(&self.wire, &lid, net) > 0
+                {
+                    out.insert(*cell);
+                }
+            }
+        }
+        out
+    }
+
+    fn charge_history(&mut self, cells: impl IntoIterator<Item = Anchor>) {
+        for cell in cells {
+            *self.history.entry(cell).or_insert(0) += 1;
+        }
+    }
+}
+
+/// The furniture no negotiation can move: gate footprints, the socket
+/// pre-claims, and the terminal guard cells.
+///
+/// Every iteration starts from this and every net sees it whole. See the
+/// FORBIDDEN list at the head of this section.
+fn hard_furniture(candidate: &PlanCandidate, netlist: &Netlist) -> Reservation {
+    let mut reservation = reserve_primitives(&candidate.primitive_nodes);
+    preclaim_socket_approaches(&mut reservation, candidate, netlist);
+    preclaim_terminal_guards(&mut reservation, candidate, netlist);
+    reservation
+}
+
+/// Claim the cells beside every socket that have to stay clear of conductors.
+///
+/// A terminal has to be a straight line into its support, so a conductor beside
+/// it other than the cell it is entered from and the support it drives turns it
+/// into a corner that drives nothing. [`lay_net`] claims these one branch at a
+/// time, as the shipping router always has; this claims all of them before any
+/// net is laid.
+///
+/// **The difference is deliberate and it is a tightening.** A guard cell is
+/// `horizontal_neighbours(socket)` less the approach and the support, and all
+/// three of those are fixed by where the gate stands -- so a guard cell is
+/// furniture, and which net gets it is not a thing to negotiate about. Claiming
+/// them as they are laid leaves the answer depending on net order, and under
+/// negotiation the order is not a lever any more.
+fn preclaim_terminal_guards(
+    reservation: &mut Reservation,
+    candidate: &PlanCandidate,
+    netlist: &Netlist,
+) {
+    for (gate, definition) in netlist.gates.iter().enumerate() {
+        let support = candidate.anchors[gate];
+        let facing = candidate.facing_of(gate);
+        for input_index in 0..definition.inputs.len() {
             let socket = step(support, compile::geometry::input_directions(facing)[input_index]);
-            // A terminal component only drives the support it faces, and only
-            // reads from directly behind itself, so the last step into the
-            // socket has to be collinear with socket -> support. The legacy
-            // router guarantees that with a dedicated approach column; here
-            // the search is aimed one cell further out and the socket is
-            // appended, which is the same guarantee stated as geometry.
-            //
-            // `try_move` asks the same question the same way since Task 10:
-            // `route_endpoints` threads each branch's `RouteSink` out and
-            // `declared_socket` reads `input_directions(facing)[input_index]`
-            // off it. The geometric guess `terminal_socket` makes survives only
-            // for a route whose sink the netlist never declared.
             let approach = Anchor {
                 x: socket.x + (socket.x - support.x),
                 y: socket.y + (socket.y - support.y),
                 z: socket.z + (socket.z - support.z),
             };
-            let mut path = match deterministic_astar(
-                source,
-                approach,
-                socket,
-                &signal,
-                &reservation,
-                congestion,
-            ) {
-                Some(path) => path,
-                None => {
-                    return Err(Box::new(RoutingFailure {
-                        blocked: signal.clone(),
-                        corridor: (source, approach),
-                        reservation: reservation.clone(),
-                        charge_outright: Vec::new(),
-                        error: PlannerError::NoLocalRoute {
-                            from: source,
-                            to: approach,
-                        },
-                    }));
-                }
-            };
-            path.push(socket);
-            reserve_path(&mut reservation, &signal, &path);
-
-            // How much of this branch the trunk already laid, and what the
-            // signal is worth by the time it gets there. Planning the whole
-            // path from full strength would put refreshes on trunk cells that
-            // keep the first branch's blocks, so they would be planned and
-            // never built.
-            let shared = path
-                .iter()
-                .take_while(|anchor| route.anchors.contains(anchor))
-                .count();
-            let mut carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
-            let mut previous_cell = source;
-            let mut trunk_repeaters = 0u64;
-            for anchor in &path[..shared] {
-                let index = route
-                    .anchors
-                    .iter()
-                    .position(|laid| laid == anchor)
-                    .expect("the shared prefix is by definition already laid");
-                if route.realisation[index].kind
-                    == crate::redstone::world::block::BlockKind::Repeater
-                {
-                    carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
-                    trunk_repeaters += 1;
-                } else {
-                    carried = carried.saturating_sub(1);
-                }
-                previous_cell = *anchor;
-            }
-
-            let laid = realise_branch_from(previous_cell, carried, &path[shared..]);
-            if !laid.carries {
-                return Err(Box::new(RoutingFailure {
-                    blocked: signal.clone(),
-                    corridor: (source, approach),
-                    reservation: reservation.clone(),
-                    // Every cell this branch put above the gate plane. Nothing
-                    // else is at fault: the climb is what left the refreshes
-                    // nowhere to stand.
-                    charge_outright: path
-                        .iter()
-                        .copied()
-                        .filter(|cell| cell.y > PLANNER_Y)
-                        .collect(),
-                    error: PlannerError::PhysicalInvariant(
-                        compile::CompileError::CandidateMetadataViolation {
-                            item: signal.clone(),
-                            reason: format!(
-                                "the route to {}.in[{input_index}] decays to nothing before it \
-                                 arrives, and no cell along it can hold a refresh",
-                                netlist.gates[gate].output
-                            ),
-                        },
-                    ),
-                }));
-            }
-            // Whether the strength budget already needs the socket cell to be
-            // a refresh. If it does, no terminal-style preference may take it
-            // away: dust that cannot reach is not a cheaper terminal, it is a
-            // dead one.
-            let budget_needs_repeater = laid
-                .blocks
-                .last()
-                .is_some_and(|block| block.kind == crate::redstone::world::block::BlockKind::Repeater);
-            for ((anchor, block), floor) in path[shared..].iter().zip(laid.blocks).zip(laid.floors)
-            {
-                if route.anchors.contains(anchor) {
-                    continue;
-                }
-                route.anchors.push(*anchor);
-                route.realisation.push(block);
-                route.floors.push(floor);
-            }
-
-            let predecessor = path
-                .get(path.len().saturating_sub(2))
-                .copied()
-                .unwrap_or(source);
-
-            // A branch whose every sink is the same wire merge joins that
-            // merge's own dust, not a gate's support block: dust meets dust
-            // and nothing has to drive anything. The same condition
-            // `merge_branch_is_bare` states, read off the netlist.
-            let bare_merge = netlist.gates[gate].is_merge()
-                && consumers.iter().all(|&(sink, _)| sink == gate);
-
-            let kind = if bare_merge {
-                RouteTerminalKind::BareMergeDust
-            } else {
-                let style = if budget_needs_repeater {
-                    TerminalStyle::RepeaterIntoSupport
-                } else {
-                    terminal_style(&TerminalApproach::new(
-                        predecessor,
-                        socket,
-                        support,
-                        laid.strength_before_terminal,
-                        terminal_is_isolated(&reservation, &signal, predecessor, socket, support),
-                    ))
-                };
-                if let Some(index) = route.anchors.iter().position(|anchor| *anchor == socket) {
-                    route.realisation[index] = match style {
-                        TerminalStyle::RepeaterIntoSupport => compile::repeater(
-                            compile::direction_from(
-                                Position::new(predecessor.x, predecessor.y, predecessor.z),
-                                Position::new(socket.x, socket.y, socket.z),
-                            ),
-                        ),
-                        TerminalStyle::DirectedDustIntoSupport => compile::dust(),
-                    };
-                }
-                style.into()
-            };
-
-            // A terminal has to stay a straight line into its support, and a
-            // net is otherwise free to run alongside itself -- so the next
-            // branch of this very route would happily pass beside this
-            // terminal and turn it into a corner that drives nothing. Claim
-            // the cells around it under a name nobody routes as.
-            let guard = format!("terminal:{}.in[{input_index}]", netlist.gates[gate].output);
+            let guard = format!("terminal:{}.in[{input_index}]", definition.output);
             for neighbour in horizontal_neighbours(socket) {
-                if neighbour != predecessor && neighbour != support {
+                if neighbour != approach && neighbour != support {
                     reservation.insert(neighbour, &guard, Occupancy::Solid);
                 }
             }
-
-
-            route.terminals.push(RouteTerminal {
-                sink: RouteSink {
-                    gate: netlist.gates[gate].output.clone(),
-                    input_index,
-                    anchor: socket,
-                },
-                kind,
-                repeaters: trunk_repeaters + laid.repeaters,
-            });
         }
-        routes.push(route);
+    }
+}
+
+/// What a net just laid, read back out of the reservation it laid it into.
+///
+/// Nothing here re-derives a rule: the wire cells are the route's own anchors
+/// less its sockets, and the mandatory-air cells are whatever [`reserve_path`]
+/// wrote under this net's `stair:` guard as [`Occupancy::Solid`] -- which is
+/// [`staircase_clearance`]'s answer, recorded by the same function the router
+/// uses.
+fn claim_of(net: &str, route: &Route, reservation: &Reservation) -> NetClaim {
+    let sockets: BTreeSet<Anchor> = route
+        .terminals
+        .iter()
+        .map(|terminal| terminal.sink.anchor)
+        .collect();
+    NetClaim {
+        wire: route
+            .anchors
+            .iter()
+            .copied()
+            .filter(|anchor| !sockets.contains(anchor))
+            .collect(),
+        air: reservation.mandatory_air_of(&stair_guard(net)),
+    }
+}
+
+/// How many iterations [`route_negotiated`] gets.
+///
+/// The probe this design comes from converged `segment_a` at iteration 7 and
+/// `full_adder` at 2 (spec §5.1). This is the smallest power of two comfortably
+/// above that with room for a circuit that needs the present term to reach its
+/// cap, which takes ten iterations on [`present_term`]'s schedule.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) const NEGOTIATION_ROUNDS: usize = 32;
+
+/// Lay every net every iteration, letting them share, until none of them do.
+///
+/// The loop, in full:
+///
+/// 1. Every net is ripped up and re-laid, in a fixed order, against a
+///    reservation holding the hard furniture and *its own* cells only. Foreign
+///    nets are not in that reservation at all, so nothing about them can refuse
+///    a cell; they are in [`Negotiation`] instead, as a price.
+/// 2. A cell two nets ended up wanting is charged to `history`, permanently.
+/// 3. The present term doubles.
+/// 4. When an iteration ends with **no** contested cell and every net laid, the
+///    plan is checked once more from its own routes and returned.
+///
+/// **A plan in which any cell is shared is illegal and is never returned.**
+/// Sharing is a tool this search uses between step 1 and step 4 and nothing
+/// else; if the budget runs out with cells still contested, this fails in
+/// exactly the way the router fails today -- an error, not a plan.
+fn route_negotiated(
+    candidate: PlanCandidate,
+    netlist: &Netlist,
+    iterations: usize,
+) -> Result<PlanCandidate, PlannerError> {
+    negotiate(candidate, netlist, iterations, &mut Vec::new())
+}
+
+/// What one iteration of [`negotiate`] ended with.
+///
+/// The convergence sequence is the only thing that says whether a negotiation
+/// is negotiating or oscillating, and by rule 4 of this branch's ledger a cited
+/// number needs a reproducible method in the tree -- so the loop records it
+/// rather than a probe re-deriving it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NegotiationRound {
+    /// Cells two nets both wanted at the end of the iteration. Zero is the exit
+    /// condition.
+    pub contested: usize,
+    /// Nets that could not be laid at all -- no path, or a path the strength
+    /// budget refused.
+    pub unlaid: usize,
+    /// Wire cells laid, over every net that was laid.
+    pub cells: usize,
+}
+
+/// [`route_negotiated`], recording what each iteration ended with.
+fn negotiate(
+    mut candidate: PlanCandidate,
+    netlist: &Netlist,
+    iterations: usize,
+    trace: &mut Vec<NegotiationRound>,
+) -> Result<PlanCandidate, PlannerError> {
+    let sinks = net_sinks(netlist);
+    let order: Vec<String> = sinks.keys().cloned().collect();
+    let hard = hard_furniture(&candidate, netlist);
+
+    let mut table = Negotiation::default();
+    let mut last: Option<PlannerError> = None;
+
+    for iteration in 0..iterations {
+        table.present = present_term(iteration);
+        let mut laid: BTreeMap<String, Route> = BTreeMap::new();
+        let mut every_net_laid = true;
+
+        for signal in &order {
+            // Rip up before re-laying: what this net sees is everyone else's
+            // current choice, never its own last one.
+            table.release(signal);
+            let source = net_source(&candidate, signal).map_err(|failure| failure.error)?;
+            let consumers = sinks
+                .get(signal)
+                .cloned()
+                .expect("the order is built from these very keys");
+            let mut reservation = hard.clone();
+            let outcome = {
+                let prices = Prices::Negotiated {
+                    table: &table,
+                    mine: signal,
+                };
+                lay_net(
+                    signal,
+                    source,
+                    &consumers,
+                    netlist,
+                    &candidate,
+                    &mut reservation,
+                    &prices,
+                )
+            };
+            match outcome {
+                Ok(route) => {
+                    table.claim(signal, claim_of(signal, &route, &reservation));
+                    laid.insert(signal.clone(), route);
+                }
+                Err(failure) => {
+                    // The strength budget is FORBIDDEN, not priced, so this is
+                    // not a contested cell and charging the neighbours would ask
+                    // the wrong nets to move. What has to become expensive is
+                    // the height this branch chose, which is the one thing the
+                    // rip-up loop already got right.
+                    every_net_laid = false;
+                    table.charge_history(failure.charge_outright.iter().copied());
+                    last = Some(failure.error);
+                }
+            }
+        }
+
+        let contested = table.contested();
+        trace.push(NegotiationRound {
+            contested: contested.len(),
+            unlaid: order.len() - laid.len(),
+            cells: laid.values().map(|route| route.anchors.len()).sum(),
+        });
+        if every_net_laid && contested.is_empty() {
+            candidate.routes = order
+                .iter()
+                .map(|signal| laid.remove(signal).expect("every net was laid"))
+                .collect();
+            // Unreachable unless the incremental bookkeeping and the sweep
+            // disagree, which is the one thing the sweep exists to catch --
+            // and it is reported rather than returned, because an illegal plan
+            // never leaves this function.
+            negotiation_left_nothing_shared(&candidate)?;
+            return Ok(candidate);
+        }
+        table.charge_history(contested);
     }
 
-    candidate.routes = routes;
-    Ok(candidate)
+    Err(last.unwrap_or(PlannerError::UnrealisableNode {
+        id: "netlist".to_string(),
+        reason: format!("negotiation did not separate the nets within {iterations} iterations"),
+    }))
+}
+
+/// Prove, from the finished routes alone, that no two nets share anything.
+///
+/// The loop's own [`Negotiation::contested`] is incremental -- stamps added and
+/// removed as nets are ripped up and re-laid -- so it is exactly the sort of
+/// bookkeeping that can be wrong in a way no assertion inside it would notice.
+/// This re-derives the whole relation from the plan that is about to be
+/// returned, and adds [`verify_spacing`]'s literal test on top: one cell, one
+/// net.
+///
+/// It does **not** re-check the FORBIDDEN list. Those were refusals inside
+/// [`lay_net`] in the iteration that produced these routes, under the same
+/// [`anchor_is_free_for`] the shipping router uses, so a route that violated one
+/// could not have been laid. What negotiation is responsible for -- and the only
+/// thing a price could ever have let through -- is inter-net contention, and
+/// that is what this proves absent.
+fn negotiation_left_nothing_shared(candidate: &PlanCandidate) -> Result<(), PlannerError> {
+    verify_spacing(candidate)?;
+
+    let sockets: BTreeSet<Anchor> = candidate
+        .routes
+        .iter()
+        .flat_map(|route| route.terminals.iter().map(|terminal| terminal.sink.anchor))
+        .collect();
+    let mut claimed: BTreeMap<Anchor, String> = BTreeMap::new();
+    for route in &candidate.routes {
+        for anchor in &route.anchors {
+            if sockets.contains(anchor) {
+                continue;
+            }
+            for cell in exclusion_zone(*anchor) {
+                if let Some(other) = claimed.get(&cell) {
+                    if other != &route.id {
+                        return Err(PlannerError::PhysicalInvariant(
+                            compile::CompileError::SpacingViolation {
+                                cell: (cell.x, cell.y, cell.z),
+                                expected_net: other.clone(),
+                                found_net: Some(route.id.clone()),
+                            },
+                        ));
+                    }
+                }
+            }
+        }
+        // The stamp goes down only after every one of this net's cells has been
+        // checked against what other nets stamped, because a net's own cells are
+        // inside each other's zones by construction and are not a contention.
+        for anchor in &route.anchors {
+            if sockets.contains(anchor) {
+                continue;
+            }
+            claimed.insert(*anchor, route.id.clone());
+        }
+    }
+    Ok(())
+}
+
+/// Which router lays the nets.
+///
+/// **Both are in the tree and only one of them ships.** [`SHIPPING_ROUTER`] is
+/// [`RouterKind::RipUp`], so `compile()` and [`plan_from_netlist`] behave
+/// exactly as they did before negotiation existed -- pinned by
+/// `the_hand_written_circuits_keep_their_measured_size`, which does not move
+/// while that constant says `RipUp`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(crate) enum RouterKind {
+    /// One pass per net, no take-backs within a pass, and a rip-up loop whose
+    /// only feedback is a flat bounding-box charge. What has always shipped.
+    #[default]
+    RipUp,
+    /// [`route_negotiated`]. Not shipping in this commit -- nothing outside a
+    /// test constructs this, which is what `cfg_attr` below is for and what
+    /// `the_shipping_router_is_the_rip_up_one_and_the_two_do_not_agree` pins.
+    #[cfg_attr(not(test), allow(dead_code))]
+    Negotiated,
 }
 
 /// One step from `anchor` towards `facing`.
@@ -4181,7 +4908,7 @@ mod tests {
             other_sink,
             "source",
             &without_destination_reservation,
-            &Congestion::default(),
+            &Prices::RipUp(&Congestion::default()),
         )
         .expect("the direct fanout branch is routable without the destination reservation");
         assert_eq!(
@@ -6084,7 +6811,13 @@ mod tests {
             for (axes, label) in
                 [(relax::Axes::IN_PLANE, "IN_PLANE"), (relax::Axes::ALL, "ALL     ")]
             {
-                match plan_with_axes(&netlist, &PortPlacements::default(), axes, RIP_UP_ROUNDS) {
+                match plan_with_axes(
+                    &netlist,
+                    &PortPlacements::default(),
+                    axes,
+                    RIP_UP_ROUNDS,
+                    SHIPPING_ROUTER,
+                ) {
                     Ok(candidate) => {
                         let (x, y, z) = extent(&candidate);
                         let legal = match verify_candidate(&candidate, &netlist) {
@@ -15709,6 +16442,517 @@ mod tests {
             "and dust is the majority of the conductors the rule is asked about: {} of \
              {all}",
             dust.cells
+        );
+    }
+
+
+    // -----------------------------------------------------------------------
+    // Negotiated congestion
+    //
+    // `route_negotiated` and the switch that keeps it out of the shipping path.
+    // Everything here is measured on this tree at HEAD `9d0707d`; every number
+    // quoted comes out of `what_the_two_routers_do_to_the_six_condition_circuits`
+    // below, which is in the tree and re-runnable.
+
+    /// `verilog:and4` placed by relaxation and routed by whichever router.
+    ///
+    /// The placement is shared deliberately: the two routers are then the only
+    /// difference between the two plans, which is what makes any difference
+    /// between them attributable.
+    fn verilog_and4_both_ways() -> (Netlist, PlanCandidate, PlanCandidate) {
+        let circuit = crate::circuits::verilog::find("verilog:and4")
+            .expect("the catalog ships verilog:and4");
+        let (gate_level, _) = circuit.baked_netlist();
+        // `lower`, not `lower_optimised`: it is what `compile` runs for this
+        // circuit and what `every_reference_circuit_records_which_path_produced_it`
+        // pins, so this measures the circuit the compiler actually builds.
+        let netlist = crate::compile::lowering::lower(&gate_level)
+            .expect("verilog:and4 must lower");
+        // Through the switch rather than around it, so this measures the two
+        // routers as a caller reaches them and a broken `plan_with_axes` arm
+        // cannot pass.
+        let rip_up = plan_from_netlist_with_router(
+            &netlist,
+            &PortPlacements::default(),
+            RIP_UP_ROUNDS,
+            RouterKind::RipUp,
+        )
+        .expect("verilog:and4 routes through the rip-up router");
+        let negotiated = plan_from_netlist_with_router(
+            &netlist,
+            &PortPlacements::default(),
+            NEGOTIATION_ROUNDS,
+            RouterKind::Negotiated,
+        )
+        .expect("verilog:and4 routes through the negotiated router");
+        (netlist, rip_up, negotiated)
+    }
+
+    fn route_named<'a>(candidate: &'a PlanCandidate, id: &str) -> &'a Route {
+        candidate
+            .routes()
+            .iter()
+            .find(|route| route.id() == id)
+            .unwrap_or_else(|| panic!("this plan has a route `{id}`"))
+    }
+
+    /// The first target of the negotiation work, and the smallest instance of
+    /// the defect it exists to remove.
+    ///
+    /// **The brief's coordinates for this case do not reproduce at this HEAD
+    /// and the numbers below are re-measured rather than quoted.** The brief
+    /// describes `n1` running `(58,1,36) -> (58,1,30)`, a straight line six
+    /// cells long, laid in 11 cells against a wanted 8. At `9d0707d`
+    /// relaxation puts `n1`'s source at `(61,1,49)` and `g0`'s second socket at
+    /// `(65,1,44)`, so the net is a diagonal and not a straight line, and the
+    /// rip-up router lays it in **14** cells. Same circuit, same net, same
+    /// mechanism, different placement -- and the mechanism is what this test is
+    /// about, so it is stated in the numbers this tree produces.
+    ///
+    /// What the rip-up router does, measured: `n0` is laid first (the order is
+    /// alphabetical) and takes the corridor at `x = 62..63`; `n1` then has no
+    /// way through, because `anchor_is_free_for` refuses a contested cell
+    /// outright and cannot be told *which* cell was wanted. So it climbs --
+    /// `(60,1,48) -> (60,2,47) -> y=3` -- and spends two cells and a repeater
+    /// going round.
+    ///
+    /// What negotiation does: both nets are laid every iteration and priced
+    /// rather than refused, and after four iterations (contested cells
+    /// `8 -> 5 -> 6 -> 0`) they have divided the space between them. `n1` comes
+    /// out at **12** cells, which is `manhattan + 1` and one cell off the
+    /// unobstructed best.
+    ///
+    /// The two nets genuinely cross -- `(66,51) -> (62,44)` and
+    /// `(61,49) -> (66,44)` are two segments that intersect, and
+    /// `anchor_is_free_for` will not let one lay its floor on the other's dust
+    /// -- so neither of them can have a flat straight line and the question is
+    /// only which of them pays and how much. Under the rip-up router the answer
+    /// is decided by net order; under negotiation it is decided by price.
+    #[test]
+    fn negotiation_shortens_the_route_the_rip_up_router_sent_over_the_top() {
+        let (netlist, rip_up, negotiated) = verilog_and4_both_ways();
+
+        assert_eq!(
+            route_named(&rip_up, "n1").anchors().len(),
+            14,
+            "the rip-up router's n1, for the record: {:?}",
+            route_named(&rip_up, "n1").anchors()
+        );
+        assert_eq!(
+            route_named(&negotiated, "n1").anchors().len(),
+            12,
+            "negotiation must win n1 room the rip-up router could not ask for: {:?}",
+            route_named(&negotiated, "n1").anchors()
+        );
+
+        // Not just this one net: the whole circuit is shorter, so nothing was
+        // paid for it elsewhere.
+        let cells = |candidate: &PlanCandidate| -> usize {
+            candidate.routes().iter().map(|route| route.anchors().len()).sum()
+        };
+        assert_eq!((cells(&rip_up), cells(&negotiated)), (131, 129));
+
+        // ROUTES WITHOUT VERIFIES IS WORTH NOTHING. A congestion probe once
+        // routed segment_a below legacy's anchor box and failed verification;
+        // `verify_candidate` is the judge, not the cell count.
+        verify_candidate(&negotiated, &netlist)
+            .expect("the negotiated plan must pass all four physical invariants");
+    }
+
+    /// The switch, and the thing that would make this whole commit a silent
+    /// change of what ships.
+    ///
+    /// Two claims, and the second is why the first is worth asserting: the
+    /// shipping router is the rip-up one, **and** the two routers genuinely
+    /// disagree on a circuit `compile` builds -- so a flip of
+    /// [`SHIPPING_ROUTER`] is a change anyone can see rather than a constant
+    /// nobody reads. `the_hand_written_circuits_keep_their_measured_size`
+    /// covers the block counts; this covers the reason they do not move.
+    #[test]
+    fn the_shipping_router_is_the_rip_up_one_and_the_two_do_not_agree() {
+        assert_eq!(SHIPPING_ROUTER, RouterKind::RipUp);
+
+        let (netlist, rip_up, negotiated) = verilog_and4_both_ways();
+        assert_ne!(
+            rip_up.routes(),
+            negotiated.routes(),
+            "if the two routers agreed, nothing below would be evidence of anything"
+        );
+
+        let shipped = plan_from_netlist(&netlist, &PortPlacements::default())
+            .expect("verilog:and4 plans");
+        assert_eq!(
+            shipped.routes(),
+            rip_up.routes(),
+            "`plan_from_netlist` must still be the rip-up router, cell for cell"
+        );
+    }
+
+    /// The priced set is exactly the set of ways one net can refuse a cell to
+    /// another, and this is what says so.
+    ///
+    /// [`exclusion_zone`] is the whole of what the negotiation trades in: a
+    /// price is charged where a foreign net's wire would have made
+    /// [`anchor_is_free_for`] refuse, and nowhere else. Too small and the loop
+    /// converges on a plan the router would not accept; too large and it
+    /// demands separation physics does not, and refuses circuits that route.
+    ///
+    /// So the equivalence is swept rather than argued: one foreign wire cell is
+    /// placed at every offset in a `5 x 5 x 5` box around the cell under test,
+    /// with the floor that wire's realisation would lay, and the rule's verdict
+    /// is compared against membership of the zone. 125 rows, both directions.
+    #[test]
+    fn the_priced_zone_is_exactly_what_a_foreign_wire_makes_anchor_is_free_for_refuse() {
+        let cell = Anchor { x: 40, y: 4, z: 40 };
+        // Far enough away that none of `anchor_is_free_for`'s three exemptions
+        // -- start, goal, and the socket's own support -- can fire.
+        let elsewhere = Anchor { x: 0, y: 0, z: 0 };
+        let zone: BTreeSet<Anchor> = exclusion_zone(cell).into_iter().collect();
+
+        let mut disagreements = Vec::new();
+        for dx in -2..=2 {
+            for dy in -2..=2 {
+                for dz in -2..=2 {
+                    let foreign = Anchor {
+                        x: cell.x + dx,
+                        y: cell.y + dy,
+                        z: cell.z + dz,
+                    };
+                    let mut reservation = Reservation::new();
+                    // Exactly what `reserve_path` writes for one cell of a
+                    // foreign net: the wire, and the stone floor under it.
+                    reservation.insert(foreign, "theirs", Occupancy::Wire);
+                    reservation.insert(
+                        Anchor { y: foreign.y - 1, ..foreign },
+                        "theirs",
+                        Occupancy::Stone,
+                    );
+                    let free = anchor_is_free_for(
+                        cell,
+                        elsewhere,
+                        elsewhere,
+                        elsewhere,
+                        "mine",
+                        &reservation,
+                    );
+                    if free == zone.contains(&foreign) {
+                        disagreements.push(format!(
+                            "  offset ({dx}, {dy}, {dz}): the zone says {} and the rule says {}",
+                            if zone.contains(&foreign) { "priced" } else { "free" },
+                            if free { "free" } else { "refused" },
+                        ));
+                    }
+                }
+            }
+        }
+        assert!(
+            disagreements.is_empty(),
+            "the priced set and the rule must agree cell for cell:\n{}",
+            disagreements.join("\n")
+        );
+    }
+
+    /// **A plan in which any cell is shared is illegal and must never be
+    /// returned**, and this is the guard that says so rather than the loop's
+    /// own bookkeeping.
+    ///
+    /// Three routes, hand-built so nothing about the placer or the search is
+    /// involved: a straight run, a second run two cells away, and a third one
+    /// cell away. The first pair is legal and the sweep admits it; the second
+    /// is inside `keep_out` and the sweep refuses it, naming the cell.
+    #[test]
+    fn a_plan_where_two_nets_stand_within_keep_out_is_refused_by_the_sweep() {
+        let run = |x: i32| -> Vec<Anchor> {
+            (0..6).map(|z| Anchor { x, y: 1, z }).collect()
+        };
+        let apart = PlanCandidate::new(
+            Vec::new(),
+            vec![Route::new("a", run(10)), Route::new("b", run(13))],
+        );
+        negotiation_left_nothing_shared(&apart)
+            .expect("three cells apart is three cells apart");
+
+        let beside = PlanCandidate::new(
+            Vec::new(),
+            vec![Route::new("a", run(10)), Route::new("b", run(11))],
+        );
+        let refused = negotiation_left_nothing_shared(&beside)
+            .expect_err("two nets one cell apart are inside each other's keep_out");
+        assert!(
+            refused.to_string().contains("spacing violation"),
+            "the refusal must name the cell and both nets: {refused}"
+        );
+
+        // And the literal case `verify_spacing` already answers, kept here so
+        // this guard is known to cover it rather than assumed to.
+        let same = PlanCandidate::new(
+            Vec::new(),
+            vec![Route::new("a", run(10)), Route::new("b", run(10))],
+        );
+        negotiation_left_nothing_shared(&same)
+            .expect_err("one cell, two nets, is the violation this whole design is about");
+    }
+
+    /// Sharing is a tool the search uses mid-iteration, and a budget that runs
+    /// out with cells still contested is a failure, not a plan.
+    ///
+    /// `verilog:and4` needs four iterations (`8 -> 5 -> 6 -> 0`). Given one, the
+    /// router must fail the way it fails today -- an error -- rather than hand
+    /// back the iteration-0 plan, whose nets run through each other.
+    #[test]
+    fn a_negotiation_that_has_not_converged_returns_an_error_and_not_a_plan() {
+        let circuit = crate::circuits::verilog::find("verilog:and4")
+            .expect("the catalog ships verilog:and4");
+        let (gate_level, _) = circuit.baked_netlist();
+        let netlist =
+            crate::compile::lowering::lower(&gate_level).expect("verilog:and4 must lower");
+        let placement = relaxed_placement(&netlist, &PortPlacements::default(), SHIPPING_AXES)
+            .expect("verilog:and4 places");
+        let snapped = relax::snap(&placement).expect("verilog:and4 snaps");
+        let bare = candidate_from_snapped(&netlist, &PortPlacements::default(), &snapped);
+
+        let mut trace = Vec::new();
+        let one = negotiate(bare.clone(), &netlist, 1, &mut trace);
+        assert_eq!(
+            trace.iter().map(|round| round.contested).collect::<Vec<_>>(),
+            vec![8],
+            "iteration 0 is priced at zero, so the nets run straight through each other"
+        );
+        assert!(
+            one.is_err(),
+            "eight contested cells is not a plan, however short its routes are"
+        );
+
+        let mut trace = Vec::new();
+        negotiate(bare, &netlist, NEGOTIATION_ROUNDS, &mut trace)
+            .expect("four iterations is enough for verilog:and4");
+        assert_eq!(
+            trace.iter().map(|round| round.contested).collect::<Vec<_>>(),
+            vec![8, 5, 6, 0],
+            "and the sequence it converges along is the evidence it negotiated at all"
+        );
+    }
+
+    /// What both routers do to all six condition circuits, side by side.
+    ///
+    /// The measurement behind every number this branch's negotiation work
+    /// quotes, in the tree because rule 4 says a cited number needs a
+    /// reproducible method in it. Asserts nothing; `--ignored --nocapture`.
+    ///
+    /// Measured 2026-08-18 at `9d0707d`, `--release`:
+    ///
+    /// | circuit | rip-up | negotiated | contested |
+    /// |---|---|---|---|
+    /// | and4 | ok 104 cells, 232 blocks, verifies | ok 106 cells, 236 blocks, verifies | 6 5 4 0 |
+    /// | full_adder | ok 507 cells, 1,065 blocks, verifies | ok 522 cells, **verify refuses** | 108 43 15 0 |
+    /// | verilog:and4 | ok 131 cells, 290 blocks, verifies | ok 129 cells, 286 blocks, verifies | 8 5 6 0 |
+    /// | segment_a | ERR 34.7s | ERR 41.4s | 474 337 163 109 17 61 118 41 22 27 16 10 70 38 16 14 15 15 16 15 15 16 17 15 18 15 11 12 11 11 12 11 |
+    /// | seven_segment | ERR 19.4s | ERR 184.9s | 1155 1013 600 377 290 187 122 163 164 57 164 135 160 136 83 73 78 241 226 80 169 203 93 48 143 98 88 34 179 26 122 97 |
+    ///
+    /// Three things this says, and the second is the one the spec asked for.
+    ///
+    /// 1. **The mechanism works on the small circuits.** All three converge, in
+    ///    four iterations or fewer, and two of the three verify.
+    /// 2. **`segment_a` does NOT converge with the four dropped constraints
+    ///    restored.** The probe in
+    ///    `docs/superpowers/specs/2026-08-15-routing-at-scale.md` §5.1 converged
+    ///    it at iteration 7 (`260 -> 66 -> 37 -> 21 -> 9 -> 6 -> 2 -> 0`) with
+    ///    the strength budget, staircase clearance, the terminal guards and the
+    ///    socket pre-claim dropped. With all four back it falls from 474 to
+    ///    about 11 and then oscillates between 10 and 18 for twenty iterations.
+    ///    §6 names re-running the probe with them restored as the *first*
+    ///    milestone of this work and says that if `segment_a` no longer
+    ///    converges the document's recommendation is wrong. **This is that
+    ///    measurement, and it is one schedule, not a swept one** -- §8 item 5
+    ///    already records that the schedule was never swept, and that caveat
+    ///    now applies to this row as well as to the probe's `seven_segment`.
+    /// 3. **`full_adder` computes `full_adder`, on all eight vectors, in the
+    ///    real `Simulator`, and `verify_signal_strength` refuses it anyway.**
+    ///    See `the_strength_verifier_cannot_see_past_a_repeater_that_feeds_a_climb`.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, routes six circuits twice, about four minutes"]
+    fn what_the_two_routers_do_to_the_six_condition_circuits() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+        use std::time::Instant;
+
+        let lowered = |name: &str| {
+            let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
+            let (gate_level, _) = circuit.baked_netlist();
+            crate::compile::lowering::lower(&gate_level).expect("it lowers")
+        };
+        let cases: Vec<(&str, Netlist)> = vec![
+            ("and4", build_and4_netlist().0),
+            ("full_adder", build_full_adder_netlist().0),
+            ("verilog:and4", lowered("verilog:and4")),
+            ("segment_a", build_single_segment_netlist(0).0),
+            ("seven_segment", build_seven_segment_netlist().0),
+        ];
+
+        for (name, netlist) in &cases {
+            let placement = relaxed_placement(netlist, &PortPlacements::default(), SHIPPING_AXES)
+                .expect("every circuit here places");
+            let snapped = relax::snap(&placement).expect("and snaps");
+            let bare = candidate_from_snapped(netlist, &PortPlacements::default(), &snapped);
+
+            let started = Instant::now();
+            let rip_up = route_every_net(bare.clone(), netlist, RIP_UP_ROUNDS);
+            let rip_up_seconds = started.elapsed().as_secs_f64();
+
+            let started = Instant::now();
+            let mut trace = Vec::new();
+            let negotiated = negotiate(bare, netlist, NEGOTIATION_ROUNDS, &mut trace);
+            let negotiated_seconds = started.elapsed().as_secs_f64();
+
+            let report = |plan: &Result<PlanCandidate, PlannerError>, seconds: f64| match plan {
+                Err(error) => format!("ERR {seconds:.1}s {error}"),
+                Ok(plan) => {
+                    let cells: usize =
+                        plan.routes().iter().map(|route| route.anchors().len()).sum();
+                    let verdict = match verify_candidate(plan, netlist) {
+                        Err(error) => format!("VERIFY REFUSED: {error}"),
+                        Ok(()) => {
+                            let realised =
+                                emit_candidate(plan, netlist, candidate_world_size(plan))
+                                    .expect("a verified plan realises");
+                            let (sx, sy, sz) = realised.world.size();
+                            let mut blocks = 0usize;
+                            for x in 0..sx {
+                                for y in 0..sy {
+                                    for z in 0..sz {
+                                        if realised.world.get(x, y, z).kind
+                                            != crate::redstone::world::block::BlockKind::Air
+                                        {
+                                            blocks += 1;
+                                        }
+                                    }
+                                }
+                            }
+                            format!("verifies, {blocks} blocks")
+                        }
+                    };
+                    format!("ok {seconds:.1}s {cells} cells, {verdict}")
+                }
+            };
+
+            eprintln!(
+                "{name}\n  rip-up      {}\n  negotiated  {}\n  contested   {:?}\n  unlaid      {:?}",
+                report(&rip_up, rip_up_seconds),
+                report(&negotiated, negotiated_seconds),
+                trace.iter().map(|round| round.contested).collect::<Vec<_>>(),
+                trace.iter().map(|round| round.unlaid).collect::<Vec<_>>(),
+            );
+        }
+    }
+
+    /// A defect in the **verifier**, found by the negotiated router and left
+    /// where it was found.
+    ///
+    /// `full_adder` routed by negotiation computes `full_adder` -- all eight
+    /// vectors, in the real `Simulator`, which is the oracle every circuit in
+    /// this tree is judged against -- and `verify_signal_strength` refuses it:
+    ///
+    /// ```text
+    /// signal-strength violation: net `cin` never delivers a non-zero signal
+    /// to gate `g16`'s support block (57, 1, 91)
+    /// ```
+    ///
+    /// **The mechanism, traced rather than guessed.** `cin`'s second branch
+    /// climbs, and `realise_branch_from` puts a mandatory refresh on the last
+    /// flat cell before every climb -- here a repeater at `(55, 1, 108)` facing
+    /// `-z`. Its output lands on `(55, 1, 107)`, which is the **floor** of the
+    /// climbing cell `(55, 2, 107)`, and a strongly powered floor drives the
+    /// dust standing on it. `compile::net_signal_strength` models exactly that
+    /// (its own comment describes this ramp case in detail) -- but its
+    /// `deliver` only *enqueues* a cell that is in `own_cells`, and `own_cells`
+    /// is `verify_spacing`'s reservation, which holds **route anchors only**.
+    /// A planner-laid floor is not a route anchor, so the walk records a
+    /// strength at the riser and stops there, and every cell of the branch past
+    /// the climb reads zero.
+    ///
+    /// Latent, not new: nothing about negotiation creates the geometry, and
+    /// `plan_from_netlist` has been able to produce it since Task 10. What the
+    /// negotiated router does is *reach* it, because it separates nets by going
+    /// over them where the rip-up router separates them in the plane.
+    ///
+    /// **The one-line change that removes it, measured rather than proposed.**
+    /// In `net_signal_strength`'s `deliver`, widening the enqueue test from
+    ///
+    /// ```text
+    /// if own_cells.contains(&target)
+    /// ```
+    ///
+    /// to `|| own_cells.contains(&target.up())` -- "or this is the floor of one
+    /// of the route's own cells" -- makes the refusal disappear entirely and
+    /// turns this test red. That injection is what establishes the trace above
+    /// as the cause rather than a story that fits.
+    ///
+    /// **NOT FIXED HERE, deliberately.** It is a change to the *judge*, and
+    /// changing the judge while changing the router leaves nothing to
+    /// attribute a regression to -- the same reason
+    /// `2026-08-15-routing-at-scale.md` §11 keeps placement out of the routing
+    /// work. A looser verifier also passes more, so "the suite is still green
+    /// under the injection" is not evidence that it is still sound. It wants
+    /// its own brief. **NOT MEASURED:** whether the same walk under-reports on
+    /// any circuit the shipping router lays today, and whether the widened test
+    /// admits anything it should refuse.
+    #[test]
+    fn the_strength_verifier_cannot_see_past_a_repeater_that_feeds_a_climb() {
+        use crate::circuits::full_adder::{build_full_adder_netlist, INPUT_NAMES};
+
+        let (netlist, outputs) = build_full_adder_netlist();
+        let sinks = vec![outputs["sum"].clone(), outputs["cout"].clone()];
+        let placement = relaxed_placement(&netlist, &PortPlacements::default(), SHIPPING_AXES)
+            .expect("full_adder places");
+        let snapped = relax::snap(&placement).expect("full_adder snaps");
+        let bare = candidate_from_snapped(&netlist, &PortPlacements::default(), &snapped);
+        let plan = route_negotiated(bare, &netlist, NEGOTIATION_ROUNDS)
+            .expect("full_adder converges in three iterations");
+
+        let refusal = verify_candidate(&plan, &netlist)
+            .expect_err("this is the refusal the test is about");
+        assert!(
+            refusal.to_string().contains("signal-strength violation"),
+            "the refusal has to be the strength walk's, not some other invariant's: {refusal}"
+        );
+
+        // The repeater the walk cannot see past, named rather than described.
+        let cin = route_named(&plan, "cin");
+        let climb_refresh = cin
+            .anchors()
+            .iter()
+            .zip(cin.realisation().iter())
+            .zip(cin.anchors().iter().skip(1))
+            .find(|((_, block), next)| {
+                block.kind == crate::redstone::world::block::BlockKind::Repeater
+                    && next.y > 1
+            })
+            .map(|((anchor, _), next)| (*anchor, *next));
+        assert!(
+            climb_refresh.is_some(),
+            "the mechanism needs a repeater whose next cell climbs; `cin` lays {:?}",
+            cin.anchors()
+        );
+
+        // And the circuit is right anyway, which is what makes this the
+        // verifier's finding and not the router's.
+        let realised = emit_candidate(&plan, &netlist, candidate_world_size(&plan))
+            .expect("the plan realises even though the walk refuses it");
+        let compiled = compile::CompiledCircuit {
+            world: realised.world,
+            input_positions: realised.ports.input_positions,
+            output_positions: realised.ports.output_positions,
+            gate_output_positions: realised.ports.gate_output_positions,
+            gate_facings: (0..netlist.gates.len()).map(|g| plan.facing_of(g)).collect(),
+            planner_kind: compile::PlannerKind::Unified3d,
+            legacy_emission: None,
+        };
+        assert_eq!(
+            simulated_truth_table(&compiled, &INPUT_NAMES[..], &sinks, full_adder_expected),
+            Ok(8),
+            "the simulator is the oracle, and it says this circuit is a full adder"
         );
     }
 
