@@ -15,6 +15,13 @@
 //! `dust_connections((57,2,99), West)` returned `[(56,1,99)]` in that very
 //! world. Same blocks, fully re-settled, and the chain reads 9, 8, 7, 6.
 //!
+//! That gap is closed: `active_dust_networks`' flood now walks incoming dust
+//! edges as well as outgoing ones (its doc comment carries the mechanism, a
+//! one-way dust edge). This module is unchanged by the fix on purpose -- it
+//! is the instrument that found the gap, and through
+//! `compile::resettle_differential`'s non-ignored tests it stays in
+//! `check.sh` as the gate that catches the next one.
+//!
 //! # The oracle
 //!
 //! The one thing in the tree that uses the same physics and none of the
@@ -244,7 +251,7 @@ mod tests {
     }
 
     /// **The mechanism, in five blocks.** The measured stale chain in the
-    /// negotiated `full_adder` isolation world sits behind a dust edge that
+    /// negotiated `full_adder` isolation world sat behind a dust edge that
     /// exists in one direction only: `(57,2,99)` *descends* into `(56,1,99)`,
     /// but the climb back is refused because the cell the climb would step on,
     /// `(57,1,99)`, holds wire, and wire does not support a dust step. This
@@ -257,22 +264,23 @@ mod tests {
     /// ```
     ///
     /// `U -> L` is a descent (the cell above L is air); `L -> U` is a climb
-    /// and is refused (`supports_dust_step(M)` is false, M is wire). So when
-    /// the lever flips off, `take_dirty` holds only the lever's cell,
-    /// `active_dust_networks`' two-hop seeding finds L and M, and the flood
-    /// from them follows **outgoing** edges only -- U is never added. The
-    /// recompute then sees no source for {L, M} (dust-to-dust feed only
-    /// happens through the BFS, and U is not in it) and writes both to 0,
-    /// while U still reads 15 and still, by `dust_connections`' own answer,
-    /// feeds L at 14.
+    /// and is refused (`supports_dust_step(M)` is false, M is wire). When the
+    /// lever flips off, `take_dirty` holds only the lever's cell and
+    /// `active_dust_networks`' two-hop seeding finds L and M -- U is three
+    /// hops away, and no outgoing edge of L or M reaches it. A flood over
+    /// **outgoing** `dust_connections` alone therefore recomputed {L, M} with
+    /// no source at all (the initial-strength loop deliberately ignores dust
+    /// neighbours) and wrote both to 0, while U still read 15 and still, by
+    /// `dust_connections`' own answer, fed L at 14 -- the pinned defect this
+    /// test used to assert. The flood now walks incoming edges too
+    /// (`active_dust_networks`'s doc carries the rule), so U joins the active
+    /// set and the run must read its true strengths.
     ///
-    /// **This test asserts the defective behaviour on purpose** -- it is the
-    /// pinned reproduction. The fix to `recompute_dust_strengths` must flip
-    /// every assertion below marked STALE, at which point this test goes red
-    /// and should be rewritten to assert `power == 14` / `13` and an empty
-    /// differential.
+    /// Rule 2, measured: with the incoming-edge walk removed from
+    /// `active_dust_networks`' flood, this test goes red at `L == 0` -- the
+    /// old bookkeeping cannot pass it.
     #[test]
-    fn a_one_way_descent_edge_leaves_the_lower_run_stale() {
+    fn a_one_way_descent_edge_feeds_the_lower_run() {
         let mut world = World::new(8, 4, 3);
         world.set(0, 1, 0, lever_on()); // beside L
         world.set(1, 0, 0, stone());
@@ -288,7 +296,8 @@ mod tests {
         assert_eq!(simulator.world().get(2, 2, 0).power, 15, "U beside the redstone block");
 
         // Flip the lever off. Only the lever's cell is dirty; the seeding
-        // finds L and M; the directed flood never reaches U.
+        // finds L and M; the flood must follow the incoming descent edge up
+        // to U, the run's only remaining feeder.
         let mut off = simulator.world().get(0, 1, 0).clone();
         off.lit = false;
         simulator.world_mut().set(0, 1, 0, off);
@@ -300,26 +309,21 @@ mod tests {
             15,
             "U is untouched and still fed by the redstone block"
         );
-        // STALE: the physics says 14 (one step of decay down the descent).
         assert_eq!(
             settled.get(1, 1, 0).power,
-            0,
-            "L is left stale at 0 -- if this just became 14, the defect is fixed: \
-             rewrite this pin to assert the true strengths and an empty differential"
+            14,
+            "L's only remaining source is U, one descent step away -- 0 here \
+             is the old stale write-back"
         );
-        assert_eq!(settled.get(2, 1, 0).power, 0, "M is left stale at 0");
+        assert_eq!(settled.get(2, 1, 0).power, 13, "M, one more step along the run");
 
-        // The differential names both cells and the oracle's answer.
+        // And the settle is a true fixed point: the differential is empty.
         let result = resettle_differential(&settled, 50).expect("the oracle settles");
-        let by_position = |x: i32, y: i32, z: i32| {
-            result
-                .diffs
-                .iter()
-                .find(|diff| diff.position == Position::new(x, y, z))
-                .unwrap_or_else(|| panic!("({x}, {y}, {z}) must be reported stale"))
-        };
-        assert_eq!(by_position(1, 1, 0).resettled_power, 14);
-        assert_eq!(by_position(2, 1, 0).resettled_power, 13);
+        assert!(
+            result.diffs.is_empty(),
+            "the incremental settle must agree with the full re-settle, got {:?}",
+            result.diffs
+        );
     }
 
     #[test]

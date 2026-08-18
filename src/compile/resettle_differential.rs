@@ -3,15 +3,17 @@
 //!
 //! # What is being measured
 //!
-//! `Simulator::run_until_stable` can leave a dust run stale -- see
-//! `redstone::simulator::differential`'s module doc for the mechanism and the
-//! measured case that found it. Everything this branch claims is read through
-//! that settle: the four reference circuits' truth tables, the negotiated
-//! plans' vector sweeps, `a_self_placed_and4_computes_and4`'s 240-transition
-//! worst-settle, and `genuine_decay_is_still_refused`'s per-origin isolation
-//! readings. This module runs the differential over each of those surfaces
-//! and reports, per settled state, every cell the incremental settle got
-//! wrong -- and, decisively, whether any output reading moves.
+//! `Simulator::run_until_stable` could leave a dust run stale behind a
+//! one-way dust edge -- see `redstone::simulator::differential`'s module doc
+//! for the mechanism and the measured case that found it, and
+//! `propagate::active_dust_networks` for the incoming-edge flood that closed
+//! it. Everything this branch claims is read through that settle: the four
+//! reference circuits' truth tables, the negotiated plans' vector sweeps,
+//! `a_self_placed_and4_computes_and4`'s 240-transition worst-settle, and
+//! `genuine_decay_is_still_refused`'s per-origin isolation readings. This
+//! module runs the differential over each of those surfaces and reports, per
+//! settled state, every cell the incremental settle got wrong -- and,
+//! decisively, whether any output reading moves.
 //!
 //! # How to run the harnesses
 //!
@@ -20,9 +22,12 @@
 //!   compile::resettle_differential -- --ignored --nocapture
 //! ```
 //!
-//! The non-ignored tests in here are the pin on the reported case and the
-//! instrument checks; the wide sweeps are `#[ignore]`d measurement harnesses
-//! in the tree's usual style.
+//! The non-ignored tests in here are the gates that run in `check.sh` on
+//! every change -- the reported case settling clean, and one full compiled
+//! circuit swept vector by vector against the oracle -- because an oracle
+//! that can silently start lying again is the thing the 2026-08-19 fix was
+//! about. The wide sweeps are `#[ignore]`d measurement harnesses in the
+//! tree's usual style.
 
 use std::collections::BTreeSet;
 
@@ -63,7 +68,9 @@ fn set_lever(simulator: &mut Simulator, position: (i32, i32, i32), on: bool) {
 /// incremental flood could have reached it: for a dust cell, every directed
 /// dust edge in and out of it, marked `one-way` when the reverse walk does
 /// not exist. A one-way edge *into* a stale cell is the shape the seed flood
-/// cannot cross from below.
+/// could not cross from below until `active_dust_networks` learnt to walk
+/// incoming edges (2026-08-19) -- if one shows up beside a diff again, the
+/// first suspect is that walk.
 fn describe(world: &World, diff: &CellDiff) -> String {
     let mut extra = String::new();
     if diff.kind == BlockKind::RedstoneWire {
@@ -131,7 +138,7 @@ fn diff_line(label: &str, settled: &World) -> (Resettle, String) {
 }
 
 // -------------------------------------------------------------------------
-// The pin: the reported case, reproduced from its recipe.
+// The gates: the reported case and one compiled circuit, in check.sh.
 // -------------------------------------------------------------------------
 
 /// The world the defect was reported in: negotiated `full_adder`
@@ -180,17 +187,20 @@ fn the_reported_world() -> World {
     isolated
 }
 
-/// **The pin.** The defect reported against `run_until_stable` reproduces
-/// from its recipe, and the differential names the exact cells.
+/// **The reported case, settling clean.** This test used to be the pin that
+/// asserted the defect: as settled incrementally, the dust at `(56, 1, 99)`
+/// read 0 while `(57, 2, 99)` read 10 and connected to it, and only the full
+/// re-settle read the true chain 9, 8, 7, 6 into `(60, 1, 99)`. With
+/// `active_dust_networks` flooding incoming dust edges too, the incremental
+/// settle must now read that chain itself, and the differential over the
+/// whole world must be empty.
 ///
-/// As settled incrementally, the dust at `(56, 1, 99)` reads 0 while
-/// `(57, 2, 99)` reads 10 and connects to it; fully re-settled, the run
-/// reads 9, 8, 7, 6 into `(60, 1, 99)`. This test asserts the *current*,
-/// defective behaviour on purpose: it is the reproduction, and the fix to
-/// `recompute_dust_strengths` must flip it to assert that the differential
-/// is empty -- at which point the assertion below goes red and says so.
+/// Rule 2, measured: with the incoming-edge walk removed from
+/// `active_dust_networks`' flood, this test goes red at `(56, 1, 99) == 0`
+/// with the differential naming all four stale cells -- the old bookkeeping
+/// cannot pass it.
 #[test]
-fn the_reported_stale_dust_cell_reproduces() {
+fn the_reported_stale_dust_case_settles_clean() {
     let world = the_reported_world();
     let mut simulator = Simulator::new(world);
     simulator
@@ -198,26 +208,61 @@ fn the_reported_stale_dust_cell_reproduces() {
         .expect("the isolation world settles");
     let settled = simulator.world().clone();
 
+    // The chain the report named, read straight out of the incremental
+    // settle -- the values only the oracle used to see.
+    for (expected, position) in [
+        (10u8, Position::new(57, 2, 99)),
+        (9, Position::new(56, 1, 99)),
+        (8, Position::new(57, 1, 99)),
+        (7, Position::new(58, 1, 99)),
+        (6, Position::new(59, 1, 99)),
+    ] {
+        assert_eq!(
+            settled.get(position.x, position.y, position.z).power,
+            expected,
+            "({}, {}, {}) must carry the re-settled chain's value",
+            position.x,
+            position.y,
+            position.z
+        );
+    }
+
     let (result, line) = diff_line("reported case", &settled);
     eprintln!("{line}");
     for diff in &result.diffs {
         eprintln!("{}", describe(&result.world, diff));
     }
+    assert!(
+        result.diffs.is_empty(),
+        "the reported world's incremental settle must agree with the full \
+         re-settle everywhere"
+    );
+}
 
-    let stale = result
-        .diffs
-        .iter()
-        .find(|diff| diff.position == Position::new(56, 1, 99))
-        .unwrap_or_else(|| {
-            panic!(
-                "the reported stale cell (56, 1, 99) no longer differs -- if \
-                 recompute_dust_strengths was just fixed, rewrite this pin to assert \
-                 the differential is EMPTY here; diffs as measured: {:?}",
-                result.diffs
-            )
-        });
-    assert_eq!(stale.settled_power, 0, "the stale reading the report names");
-    assert_eq!(stale.resettled_power, 9, "the oracle's answer the report names");
+/// **The standing gate on a whole compiled circuit.** and4 through the real
+/// `compile()`, swept exactly the way the truth-table tests sweep it -- one
+/// long-lived simulator, levers thrown per mask -- with the full-re-settle
+/// differential at every one of the 16 settled states. Not `#[ignore]`d, so
+/// `check.sh` runs it on every change: the incremental settle is the oracle
+/// everything in this project reads through, and an oracle that can silently
+/// start lying again is the defect this file exists to catch.
+#[test]
+fn and4s_full_sweep_is_differential_clean() {
+    use crate::circuits::and4::build_and4_netlist;
+
+    let (netlist, _) = build_and4_netlist();
+    let (vectors, with_diffs, stale, moves) = sweep_compiled("and4 [gate]", &netlist, true);
+    assert_eq!(vectors, 16, "and4 has 16 input vectors");
+    assert_eq!(
+        (with_diffs, stale),
+        (0, 0),
+        "every settled state must agree with its full re-settle"
+    );
+    assert!(
+        moves.is_empty(),
+        "no output reading may move under the oracle:\n{}",
+        moves.join("\n")
+    );
 }
 
 // -------------------------------------------------------------------------

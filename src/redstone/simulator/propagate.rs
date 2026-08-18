@@ -134,12 +134,33 @@ pub fn recompute_dust_strengths(world: &mut World) -> Vec<Position> {
 ///    的訊號源），`dust_connections` 的爬升／下降規則也是看鄰居的上方或
 ///    下方（同樣是 2 跳）。只展開 1 跳會漏掉「兩格外的比較器把訊號送進
 ///    導體，導體再驅動粉」這種接法。
-/// 2. **從種子洪水填滿整個網路**：找到種子之後，沿著 `dust_connections`
-///    走訪整個連通的紅石粉網路（跟下面 BFS 傳播強度用的是同一套連接
+/// 2. **從種子洪水填滿整個網路**：找到種子之後，沿著連接關係走訪整個
+///    連通的紅石粉網路（跟下面 BFS 傳播強度用的是同一套 `dust_connections`
 ///    規則），因為網路裡任何一格的強度都可能因為上游的改變而跟著變 ——
 ///    只重算種子本身、不管它所在的整條線，會漏掉沿線往後傳的變化。
 ///
 /// 沒被任何髒格波及的網路完全不會出現在回傳值裡，維持原樣不用重算。
+///
+/// The flood in step 2 walks the connection graph **in both directions**:
+/// outgoing `dust_connections` edges, and incoming ones -- cells whose own
+/// `dust_connections` reach the cell being expanded. The two are not the same
+/// set, because dust edges can be one-way: a descent can be legal while the
+/// climb back is refused (the cell the climb would step on cannot carry dust
+/// -- wire doubling back under its own staircase), and a climb over glass can
+/// be legal while the descent back is blocked (glass supports a dust step).
+/// Walking outgoing edges only, a network re-dirtied on the *downstream* side
+/// of such an edge never adds its only feeder; the initial-strength loop
+/// above deliberately ignores dust neighbours, so the recompute sees no
+/// source at all, and the write-back zeroes a run that the feeder -- by
+/// `dust_connections`' own answer, in that very world -- still feeds.
+/// Measured exactly so on the negotiated `full_adder`'s g11 isolation world:
+/// `(56, 1, 99)` settled at 0 while `(57, 2, 99)` read 10 and fed it
+/// (`redstone::simulator::differential` is the instrument;
+/// `differential::tests::a_one_way_descent_edge_feeds_the_lower_run` and
+/// `tests::a_one_way_climb_edge_feeds_the_upper_run` below are the two
+/// five-block shapes). Closing the flood over incoming edges makes the active
+/// set closed under "is fed by" as well as "feeds", which is what the
+/// write-back loop's unconditional zeroing assumes.
 fn active_dust_networks(world: &World, dirty: &[usize]) -> Vec<Position> {
     let mut visited: HashSet<Position> = HashSet::new();
     let mut active: Vec<Position> = Vec::new();
@@ -180,6 +201,32 @@ fn active_dust_networks(world: &World, dirty: &[usize]) -> Vec<Position> {
                         if visited.insert(neighbour) {
                             active.push(neighbour);
                             stack.push(neighbour);
+                        }
+                    }
+
+                    // Incoming edges too: `dust_connections` is directed, and
+                    // a one-way edge (see the doc comment) would otherwise
+                    // leave this cell's only feeder outside the active set --
+                    // whose write-back then zeroes a run its feeder still
+                    // feeds. Same-layer edges are symmetric by construction
+                    // (each end merely requires the other to hold dust), so
+                    // only the two diagonal candidates can carry an edge the
+                    // outgoing walk does not mirror -- and the edge itself is
+                    // still asked of `dust_connections`, from the candidate's
+                    // side, so the connection rules stay defined in exactly
+                    // one place.
+                    let sideways = pos.offset(facing);
+                    for feeder in [sideways.up(), sideways.down()] {
+                        if world.get(feeder.x, feeder.y, feeder.z).kind != BlockKind::RedstoneWire {
+                            continue;
+                        }
+                        if dust_connections(world, feeder, facing.opposite())
+                            .iter()
+                            .any(|target| target == pos)
+                            && visited.insert(feeder)
+                        {
+                            active.push(feeder);
+                            stack.push(feeder);
                         }
                     }
                 }
@@ -424,6 +471,83 @@ mod tests {
         for x in 1..=5 {
             assert_eq!(w.get(x, 1, 0).power, 0, "dust at x={x} after source removal");
         }
+    }
+
+    /// The climb-direction twin of
+    /// `differential::tests::a_one_way_descent_edge_feeds_the_lower_run`:
+    /// a dust edge that exists **upward only**, because glass sits directly
+    /// above the lower cell -- glass is not conductive, so the climb is
+    /// allowed, but its top face supports a dust step, so the descent back is
+    /// refused (`connectivity`'s two rules read opposite polarities of
+    /// different cells, which is exactly how an edge gets to be one-way).
+    ///
+    /// ```text
+    ///   y=2   G     X  lever   G = glass over W; X = dust on the step
+    ///   y=1   W  #             W = dust; # = the stone step under X
+    ///   y=0   #                stone floor under W
+    /// ```
+    ///
+    /// Flipping the lever off dirties only the lever's cell; the seeds reach
+    /// X but W is three hops away, and no outgoing edge of X reaches W. A
+    /// flood over outgoing `dust_connections` alone recomputes {X} with no
+    /// source and zeroes it, while W still reads 15 and still feeds X at 14
+    /// by `dust_connections`' own answer -- the same bookkeeping gap measured
+    /// on the negotiated full_adder's g11 isolation world, in the other
+    /// vertical direction. The flood walks incoming edges too, so X must
+    /// follow its feeder down to 14.
+    ///
+    /// The rig drains the dirty set before the flip (the write-back marks
+    /// its own writes dirty, so the recompute right after a change still has
+    /// last round's cells as seeds -- a settled world does not). Without the
+    /// drain this test passes even under the outgoing-only flood, measured:
+    /// W stays a seed of its own and hides the gap.
+    #[test]
+    fn a_one_way_climb_edge_feeds_the_upper_run() {
+        let mut w = World::new(8, 4, 3);
+        w.set(0, 1, 0, redstone_block()); // steady source beside W
+        w.set(1, 0, 0, stone());
+        w.set(1, 1, 0, dust()); // W
+        w.set(1, 2, 0, named("minecraft:glass", BlockKind::Glass)); // the one-way maker
+        w.set(2, 1, 0, stone()); // the step
+        w.set(2, 2, 0, dust()); // X
+        let mut lever = named("minecraft:lever", BlockKind::Lever);
+        lever.lit = true;
+        w.set(3, 2, 0, lever); // toggling source beside X
+
+        // The premise, asked of the connection rules themselves: W -> X
+        // exists, X -> W does not.
+        let w_pos = Position::new(1, 1, 0);
+        let x_pos = Position::new(2, 2, 0);
+        assert!(
+            dust_connections(&w, w_pos, Facing::East).iter().any(|p| p == x_pos),
+            "the climb W -> X must exist for this test to test anything"
+        );
+        for facing in HORIZONTAL {
+            assert!(
+                !dust_connections(&w, x_pos, facing).iter().any(|p| p == w_pos),
+                "X -> W must not exist -- the edge must be one-way"
+            );
+        }
+
+        // Settle: recompute until a pass changes nothing, then once more to
+        // drain the write-back's own dirty marks.
+        while !recompute_dust_strengths(&mut w).is_empty() {}
+        assert_eq!(w.get(1, 1, 0).power, 15, "W beside the redstone block");
+        assert_eq!(w.get(2, 2, 0).power, 15, "X beside the lit lever");
+
+        // Flip the lever off: its own cell is now the only dirty one.
+        let mut off = w.get(3, 2, 0).clone();
+        off.lit = false;
+        w.set(3, 2, 0, off);
+        recompute_dust_strengths(&mut w);
+
+        assert_eq!(w.get(1, 1, 0).power, 15, "W is untouched");
+        assert_eq!(
+            w.get(2, 2, 0).power,
+            14,
+            "X's only remaining source is W, one climb step away -- a flood \
+             over outgoing edges alone leaves this stale at 0"
+        );
     }
 
     #[test]
