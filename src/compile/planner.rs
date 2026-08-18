@@ -16864,20 +16864,37 @@ mod tests {
     /// quotes, in the tree because rule 4 says a cited number needs a
     /// reproducible method in it. Asserts nothing; `--ignored --nocapture`.
     ///
-    /// Measured 2026-08-18 at `9d0707d`, `--release`:
+    /// **Verifying and computing are two columns, not one.** A plan the judge
+    /// passes is not thereby a circuit, and this branch has shipped two that
+    /// passed every invariant and computed the wrong function, so every row
+    /// that verifies is also driven through the real `Simulator` for its whole
+    /// truth table and its worst settle.
+    ///
+    /// Re-measured 2026-08-18 with the strength walk's block-mediated step
+    /// repaired (`the_strength_verifier_follows_a_repeater_that_feeds_a_climb`),
+    /// `--release`. The **only** column the repair moved is `full_adder`
+    /// negotiated, from `VERIFY REFUSED` to what is below; no emission changed,
+    /// so no block count or tick count could:
     ///
     /// | circuit | rip-up | negotiated | contested |
     /// |---|---|---|---|
-    /// | and4 | ok 104 cells, 232 blocks, verifies | ok 106 cells, 236 blocks, verifies | 6 5 4 0 |
-    /// | full_adder | ok 507 cells, 1,065 blocks, verifies | ok 522 cells, **verify refuses** | 108 43 15 0 |
-    /// | verilog:and4 | ok 131 cells, 290 blocks, verifies | ok 129 cells, 286 blocks, verifies | 8 5 6 0 |
-    /// | segment_a | ERR 34.7s | ERR 41.4s | 474 337 163 109 17 61 118 41 22 27 16 10 70 38 16 14 15 15 16 15 15 16 17 15 18 15 11 12 11 11 12 11 |
-    /// | seven_segment | ERR 19.4s | ERR 184.9s | 1155 1013 600 377 290 187 122 163 164 57 164 135 160 136 83 73 78 241 226 80 169 203 93 48 143 98 88 34 179 26 122 97 |
+    /// | and4 | 104 cells, 232 blocks, verifies, truth 16/16, 14 ticks | 106 cells, 236 blocks, verifies, truth 16/16, 14 ticks | 6 5 4 0 |
+    /// | full_adder | 507 cells, 1,065 blocks, verifies, truth 8/8, 46 ticks | 522 cells, 1,096 blocks, verifies, truth 8/8, 44 ticks (**was VERIFY REFUSED**) | 108 43 15 0 |
+    /// | verilog:and4 | 131 cells, 290 blocks, verifies, truth 16/16, 14 ticks | 129 cells, 286 blocks, verifies, truth 16/16, 14 ticks | 8 5 6 0 |
+    /// | segment_a | ERR 36.3s | ERR 43.1s | 474 337 163 109 17 61 118 41 22 27 16 10 70 38 16 14 15 15 16 15 15 16 17 15 18 15 11 12 11 11 12 11 |
+    /// | seven_segment | ERR 20.7s | ERR 195.2s | 1155 1013 600 377 290 187 122 163 164 57 164 135 160 136 83 73 78 241 226 80 169 203 93 48 143 98 88 34 179 26 122 97 |
+    ///
+    /// Both `ERR` rows are the routers' own failures on this schedule, not the
+    /// judge's: neither plan ever reaches `verify_candidate`. `segment_a` does
+    /// route under `PresentSchedule::starting_at(8)`, and what that plan is
+    /// worth is measured in
+    /// `negotiated_segment_a_routes_and_still_does_not_compute`.
     ///
     /// Three things this says, and the second is the one the spec asked for.
     ///
     /// 1. **The mechanism works on the small circuits.** All three converge, in
-    ///    four iterations or fewer, and two of the three verify.
+    ///    four iterations or fewer, all three verify, and all three compute
+    ///    their function in the simulator.
     /// 2. **`segment_a` does NOT converge with the four dropped constraints
     ///    restored.** The probe in
     ///    `docs/superpowers/specs/2026-08-15-routing-at-scale.md` §5.1 converged
@@ -16904,20 +16921,69 @@ mod tests {
         };
         use std::time::Instant;
 
-        let lowered = |name: &str| {
+        // The netlist *and* the signal names its declared outputs lower to --
+        // guessing the latter is how the first version of this harness reported
+        // `verilog:and4` as computing the wrong function when it computes the
+        // right one.
+        let lowered = |name: &str| -> (Netlist, Vec<String>) {
             let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
-            let (gate_level, _) = circuit.baked_netlist();
-            crate::compile::lowering::lower(&gate_level).expect("it lowers")
+            let (gate_level, labels) = circuit.baked_netlist();
+            (
+                crate::compile::lowering::lower(&gate_level).expect("it lowers"),
+                labels.into_iter().map(|(_, signal)| signal).collect(),
+            )
         };
-        let cases: Vec<(&str, Netlist)> = vec![
-            ("and4", build_and4_netlist().0),
-            ("full_adder", build_full_adder_netlist().0),
-            ("verilog:and4", lowered("verilog:and4")),
-            ("segment_a", build_single_segment_netlist(0).0),
-            ("seven_segment", build_seven_segment_netlist().0),
+        let (verilog_and4, verilog_and4_outputs) = lowered("verilog:and4");
+        let (and4, and4_output) = build_and4_netlist();
+        let (adder, adder_outputs) = build_full_adder_netlist();
+        let (segment_a, segment_a_output) = build_single_segment_netlist(0);
+        let (decoder, decoder_outputs) = build_seven_segment_netlist();
+        let cases: Vec<ConditionCircuit> = vec![
+            ConditionCircuit {
+                name: "and4",
+                netlist: and4,
+                inputs: &crate::circuits::and4::INPUT_NAMES[..],
+                outputs: vec![and4_output],
+                expected: and4_expected,
+            },
+            ConditionCircuit {
+                name: "full_adder",
+                netlist: adder,
+                inputs: &crate::circuits::full_adder::INPUT_NAMES[..],
+                outputs: vec![
+                    adder_outputs["sum"].clone(),
+                    adder_outputs["cout"].clone(),
+                ],
+                expected: full_adder_expected,
+            },
+            ConditionCircuit {
+                name: "verilog:and4",
+                netlist: verilog_and4,
+                inputs: &crate::circuits::and4::INPUT_NAMES[..],
+                outputs: verilog_and4_outputs,
+                expected: and4_expected,
+            },
+            ConditionCircuit {
+                name: "segment_a",
+                netlist: segment_a,
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: vec![segment_a_output],
+                expected: segment_a_expected,
+            },
+            ConditionCircuit {
+                name: "seven_segment",
+                netlist: decoder,
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: crate::circuits::seven_segment::SEGMENT_NAMES
+                    .iter()
+                    .map(|name| decoder_outputs[name].clone())
+                    .collect(),
+                expected: seven_segment_expected,
+            },
         ];
 
-        for (name, netlist) in &cases {
+        for case in &cases {
+            let (name, netlist) = (case.name, &case.netlist);
             let placement = relaxed_placement(netlist, &PortPlacements::default(), SHIPPING_AXES)
                 .expect("every circuit here places");
             let snapped = relax::snap(&placement).expect("and snaps");
@@ -16956,7 +17022,39 @@ mod tests {
                                     }
                                 }
                             }
-                            format!("verifies, {blocks} blocks")
+                            // The judge passing it is not the same claim as
+                            // the simulator agreeing with it, and this branch
+                            // has shipped circuits where those came apart. Both
+                            // columns, always.
+                            let compiled = compile::CompiledCircuit {
+                                world: realised.world,
+                                input_positions: realised.ports.input_positions,
+                                output_positions: realised.ports.output_positions,
+                                gate_output_positions: realised.ports.gate_output_positions,
+                                gate_facings: (0..netlist.gates.len())
+                                    .map(|g| plan.facing_of(g))
+                                    .collect(),
+                                planner_kind: compile::PlannerKind::Unified3d,
+                                legacy_emission: None,
+                            };
+                            let truth = simulated_truth_table(
+                                &compiled,
+                                case.inputs,
+                                &case.outputs,
+                                case.expected,
+                            );
+                            let ticks = worst_settle_game_ticks(&compiled, case.inputs);
+                            format!(
+                                "verifies, {blocks} blocks, truth {}, worst settle {}",
+                                match &truth {
+                                    Ok(vectors) => format!("Ok ({vectors} vectors)"),
+                                    Err(error) => format!("**WRONG** {error}"),
+                                },
+                                match &ticks {
+                                    Ok(ticks) => format!("{ticks} game ticks"),
+                                    Err(error) => format!("**{error}**"),
+                                },
+                            )
                         }
                     };
                     format!("ok {seconds:.1}s {cells} cells, {verdict}")
