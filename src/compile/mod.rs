@@ -78,6 +78,11 @@ pub mod routing_stats;
 /// model. Test-only, so it ships in nothing and takes no dependency.
 #[cfg(test)]
 pub mod satcnf;
+/// The incremental settle against a full re-settle, cell by cell, over every
+/// surface this project reads truth through. Measurement only plus one pin --
+/// see the module doc and `redstone::simulator::differential`.
+#[cfg(test)]
+pub mod resettle_differential;
 /// The static strength walk against the running `Simulator`, cell by cell.
 /// Measurement only -- see the module doc.
 #[cfg(test)]

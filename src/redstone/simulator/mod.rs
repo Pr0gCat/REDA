@@ -7,6 +7,7 @@
 
 pub mod component;
 pub mod connectivity;
+pub mod differential;
 pub mod observer;
 pub mod position;
 pub mod propagate;

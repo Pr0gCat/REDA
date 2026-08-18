@@ -595,7 +595,7 @@ fn settle(world: World, what: &str) -> Result<World, String> {
 /// A merge gate's "output position" is plain dust (`place_merge_gate`), not a
 /// component, so it is not a source and deleting it would delete the junction
 /// itself.
-fn every_source(
+pub(crate) fn every_source(
     netlist: &Netlist,
     gate_output_positions: &BTreeMap<String, (i32, i32, i32)>,
     input_positions: &BTreeMap<String, (i32, i32, i32)>,
@@ -635,7 +635,7 @@ fn every_source(
 /// support is now fed by nothing at all, so `component::torch_should_be_lit`
 /// settles it lit on its own -- and `OriginIsolation::emits` records whether it
 /// really did rather than assuming it.
-fn isolation_world(base: &World, all_sources: &BTreeSet<Position>, keep: Position) -> World {
+pub(crate) fn isolation_world(base: &World, all_sources: &BTreeSet<Position>, keep: Position) -> World {
     let mut world = base.clone();
     for &source in all_sources {
         if source == keep {
