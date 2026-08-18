@@ -82,27 +82,36 @@ fn output_positions(circuit_name: &str) -> Vec<(i32, i32, i32)> {
 /// The hand-written size ladder first, then the Verilog catalog verbatim --
 /// `verilog:` prefix included, because `verilog:seven_segment` and
 /// `seven_segment` compute the same function out of entirely different gates
-/// and a viewer showing one of them has to say which. The same reasoning
-/// carries the `planned:` entries at the end: `planned:and4` and `and4` are
-/// the same function laid out by two different placers.
+/// and a viewer showing one of them has to say which.
+///
+/// # And nothing else: the `planned:` block is gone
+///
+/// This test used to require those four entries. It now forbids them, and the
+/// reason is that `compile` became a hybrid -- it tries relaxation placement
+/// and falls back to the emitter -- which made every one of them either a
+/// duplicate or a trap. `planned:and4` and `planned:full_adder` became
+/// byte-identical to the plain names; `planned:segment_a` and
+/// `planned:seven_segment` freeze the page for tens of seconds on a
+/// synchronous wasm call and then fail, because the planner places those two
+/// and cannot route them.
+///
+/// Asserted as an absence rather than deleted, so that putting them back is a
+/// decision somebody makes on purpose. `PLANNED_PREFIX` and its branch in
+/// `Session::new` are still there for the day the two paths differ again on a
+/// circuit that routes.
 #[test]
-fn list_circuits_reports_both_catalogs_with_the_verilog_prefix_intact() {
+fn list_circuits_reports_both_catalogs_and_nothing_else() {
     let names = list_circuits();
     let verilog_names: Vec<String> = verilog::CIRCUITS.iter().map(|c| c.name.to_string()).collect();
-    let planned_start = names
-        .iter()
-        .position(|name| name.starts_with("planned:"))
-        .expect("the planner-placed circuits must be listed");
-    assert_eq!(
-        names[planned_start - verilog_names.len()..planned_start],
-        verilog_names[..],
-        "the Verilog catalog must appear, in its own order, before the planned ones; got {names:?}"
-    );
+
     assert!(
-        names[planned_start..]
-            .iter()
-            .all(|name| name.starts_with("planned:")),
-        "the planned entries come last, in one block; got {names:?}"
+        !names.iter().any(|name| name.starts_with("planned:")),
+        "the planned entries are duplicates or stalls now; got {names:?}"
+    );
+    assert_eq!(
+        names[names.len() - verilog_names.len()..],
+        verilog_names[..],
+        "the Verilog catalog must appear last, in its own order; got {names:?}"
     );
     assert!(names.iter().any(|n| n == "seven_segment"), "the hand-written decoder must still be listed");
     assert!(names.iter().any(|n| n == "verilog:seven_segment"), "the synthesised decoder must be listed");

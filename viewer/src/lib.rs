@@ -144,20 +144,36 @@ fn build_named_circuit(name: &str) -> Option<(Netlist, Vec<(String, String)>)> {
 /// Every circuit name `Session::new` accepts: the hand-written size ladder
 /// first, then the Verilog-derived circuits under their own `verilog:`
 /// prefixed names.
+///
+/// # The `planned:` entries are gone, and `compile` is why
+///
+/// They were added when `compile` was always the row/channel/track emitter,
+/// so `planned:x` was the only way to see what the planner did on its own.
+/// `compile` is now a hybrid -- it tries relaxation placement and falls back
+/// -- which turned every one of those four entries into either a duplicate or
+/// a trap:
+///
+/// - `planned:and4` and `planned:full_adder` became **byte-identical to the
+///   plain names**, because those circuits now take the planner path through
+///   `compile`. Measured in the viewer: same input coordinates, same clip box.
+/// - `planned:segment_a` and `planned:seven_segment` **hang the page**. The
+///   planner places them and cannot route them, and `compile_planned` spends
+///   its whole rip-up budget finding that out -- tens of seconds of frozen UI
+///   on a synchronous wasm call, ending in an error message. `compile` reaches
+///   the same conclusion in eight rounds and falls back, so the plain names
+///   show a circuit instead of a stall.
+///
+/// So the plain names now show the best layout that exists for each circuit,
+/// and there is nothing a `planned:` name could add. If a future change makes
+/// the two paths differ again on a circuit that routes, this is the function
+/// to put them back in -- `PLANNED_PREFIX` and its branch in `Session::new`
+/// are deliberately left in place for that.
 #[wasm_bindgen]
 pub fn list_circuits() -> Vec<String> {
     CIRCUITS
         .iter()
         .map(|&(name, _)| name.to_string())
         .chain(verilog::CIRCUITS.iter().map(|circuit| circuit.name.to_string()))
-        // The same circuits again, laid out by the planner itself rather than
-        // by the row/channel/track emitter. Listed last so the familiar names
-        // stay where they were.
-        .chain(
-            CIRCUITS
-                .iter()
-                .map(|&(name, _)| format!("{PLANNED_PREFIX}{name}")),
-        )
         .collect()
 }
 
