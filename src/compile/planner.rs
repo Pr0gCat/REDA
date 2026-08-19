@@ -8360,6 +8360,16 @@ mod tests {
     /// its gainless form, 3 of them in the SHIPPING full_adder rip-up plan --
     /// and zero cross a repeater, so no diode bypass exists anywhere.
     ///
+    /// **Re-run after the Wide tree rule landed (bbfb7a8): EXTRA plain fell
+    /// 10 -> 3**, and all three survivors are the shipping rip-up
+    /// full_adder's, which the negotiated-only rule structurally cannot
+    /// touch. Every negotiated-Wide plan reads EXTRA plain 0 -- the realised
+    /// graph equals the intended tree over the dust-join relation, which is
+    /// the property the Wide rule exists to buy. MISSING and ONE-WAY are
+    /// unchanged. A reader running this today gets the 3; the 10 above is
+    /// pinned to 4ba23d5 so the improvement stays visible instead of being
+    /// absorbed.
+    ///
     /// Hunts a fourth shape: for every buildable plan, every route's realised
     /// same-net electrical graph (the simulator's own `dust_connections`, plus
     /// the repeater's two directed edges) is diffed against the tree the
