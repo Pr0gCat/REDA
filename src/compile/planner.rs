@@ -855,6 +855,7 @@ pub fn try_move(
                 support,
                 &owner,
                 &reservation,
+                &OwnJoinCheck::off(),
                 &Prices::RipUp(&Congestion::default()),
             )
             .ok_or(
@@ -1332,6 +1333,7 @@ fn deterministic_astar(
     terminal_support: Anchor,
     owner: &str,
     reservation: &Reservation,
+    own_join: &OwnJoinCheck,
     prices: &Prices,
 ) -> Option<Vec<Anchor>> {
     let margin = manhattan_distance(start, goal).saturating_add(2) as i32;
@@ -1378,6 +1380,18 @@ fn deterministic_astar(
             // Y breaks a step it already took. Neither case is visible to the
             // reservation, because none of this path is written yet.
             if self_obstructs(&previous, state.anchor, next) {
+                continue;
+            }
+
+            // THE SEARCH-TIME TREE RULE. Under the negotiated router a step
+            // that would join this branch's own net anywhere but its
+            // attachment prefix is refused HERE, while the search can still
+            // route around it -- instead of being laid and refused by the
+            // post-lay ring rule, which taught the negotiation nothing it
+            // could afford to learn (128 iterations of the same latch
+            // corridor, measured). `OwnJoinPolicy::Off` -- every rip-up
+            // caller -- returns false without reading anything.
+            if own_join.blocks(next, state.anchor, start, goal, owner, reservation, &previous) {
                 continue;
             }
 
@@ -1588,6 +1602,11 @@ enum Prices<'a> {
     Negotiated {
         table: &'a Negotiation,
         mine: &'a str,
+        /// What the search may do about its own net's cells -- see
+        /// [`OwnJoinPolicy`]. A property of the router, carried here because
+        /// this enum is already the whole of what distinguishes the two
+        /// routers inside one search.
+        own_join: OwnJoinPolicy,
     },
 }
 
@@ -1595,8 +1614,247 @@ impl Prices<'_> {
     fn price(&self, cell: &Anchor) -> u64 {
         match self {
             Prices::RipUp(congestion) => congestion.price(cell),
-            Prices::Negotiated { table, mine } => table.price(cell, mine),
+            Prices::Negotiated { table, mine, .. } => table.price(cell, mine),
         }
+    }
+
+    /// The search-time tree rule this router runs under.
+    ///
+    /// [`Prices::RipUp`] is **always** [`OwnJoinPolicy::Off`]: the shipping
+    /// router's search is byte-identical to what it was before the rule
+    /// existed, which is what keeps the four pinned block counts still.
+    fn own_join(&self) -> OwnJoinPolicy {
+        match self {
+            Prices::RipUp(_) => OwnJoinPolicy::Off,
+            Prices::Negotiated { own_join, .. } => *own_join,
+        }
+    }
+}
+
+/// THE SEARCH-TIME TREE RULE (2026-08-20): what a branch may do about **its
+/// own net's** cells while it is still being searched.
+///
+/// The ring rule ([`ring_closed_in`], in [`lay_net`]) fires *after* a branch
+/// is laid, and the search itself was blind to rings -- so at scale the
+/// negotiated router proposed the same latch corridor forever: seven
+/// schedules, budgets to 128 iterations (387s), every one dying at the ring
+/// rule on a high-fanout net. The diagnosis behind it names a class, not one
+/// member: every foreign interaction is policed during search, every SAME-NET
+/// interaction was exempt in every rule that could see it -- rings, the
+/// gainless parallel-run joins, the wire-under-wire one-way edges. All three
+/// are the realised graph diverging from the intended tree.
+///
+/// [`Wide`](OwnJoinPolicy::Wide) is the class fix and the one the negotiated
+/// router runs ([`NEGOTIATED_OWN_JOIN`]): a branch may join its own net ONLY
+/// at its attachment prefix -- everywhere else, own wire is what foreign wire
+/// already is, a refusal. The realised graph then equals the intended tree by
+/// construction, so no repeater's output can reach its own input (a tree has
+/// no cycle for it to travel).
+///
+/// [`Narrow`](OwnJoinPolicy::Narrow) is the named fix kept for comparison: it
+/// refuses an own-net join only where the joined cell is **not** reachable
+/// from the branch's departure through the laid route's dust alone -- i.e.
+/// exactly where a repeater stands inside the loop the join would close.
+/// It is measurably leaky at search time, twice, and both leaks are stated
+/// where they live (see [`OwnJoinCheck::blocks`]): the branch's *own future
+/// repeaters* do not exist yet (`realise_branch_from` places them after the
+/// search -- pricing them here would be a second copy of the strength budget,
+/// which rule 6 forbids), and the reservation's [`Occupancy::Wire`] cannot
+/// tell a laid repeater from laid dust, so a laid repeater's halo is refused
+/// conservatively.
+///
+/// [`Off`](OwnJoinPolicy::Off) is the old behaviour, kept callable so the
+/// forever-refusal it produces stays reproducible in the tree (rule 4), and
+/// because the rip-up router MUST run under it -- byte-identical, pinned.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum OwnJoinPolicy {
+    /// No search-time rule: own cells are steppable and joinable everywhere,
+    /// and only the post-lay ring rule stands between a latch corridor and a
+    /// laid latch. The rip-up router's only mode.
+    Off,
+    /// Refuse an own-net join whose joined cell is beyond a repeater of the
+    /// laid route (not dust-reachable from the departure). Gainless parallel
+    /// joins stay legal; within-branch loops stay invisible.
+    Narrow,
+    /// Own wire is foreign wire everywhere but the attachment prefix: no
+    /// re-entry, no join halo. The realised graph equals the intended tree.
+    Wide,
+}
+
+/// The policy [`route_negotiated`] runs under -- the ship decision of the
+/// ring-aware-search round, made on measurement (see the corridor test
+/// `the_search_time_tree_rule_decides_the_two_corridors` and the segment_a
+/// numbers in the ledger). One constant with one reader, like
+/// [`SHIPPING_ROUTER`], so there is exactly one thing to flip.
+pub(crate) const NEGOTIATED_OWN_JOIN: OwnJoinPolicy = OwnJoinPolicy::Wide;
+
+/// One branch's search-time tree rule, built by [`lay_net`] per branch from
+/// what is already laid, and asked once per candidate step.
+struct OwnJoinCheck {
+    policy: OwnJoinPolicy,
+    /// [`OwnJoinPolicy::Narrow`] only: which dust-connected component of the
+    /// laid route each laid cell belongs to. Repeaters are the separators --
+    /// they are in no component -- and the edges are
+    /// [`dust_join_neighbours`] with [`ring_closed_in`]'s own notion of
+    /// sealed, so this cannot drift from the post-lay rule it is trying to
+    /// preempt.
+    dust_component: BTreeMap<Anchor, u32>,
+}
+
+impl OwnJoinCheck {
+    /// The rule switched off -- what every [`Prices::RipUp`] caller passes.
+    fn off() -> Self {
+        Self {
+            policy: OwnJoinPolicy::Off,
+            dust_component: BTreeMap::new(),
+        }
+    }
+
+    fn for_branch(policy: OwnJoinPolicy, route: &Route, reservation: &Reservation) -> Self {
+        if policy != OwnJoinPolicy::Narrow {
+            return Self {
+                policy,
+                dust_component: BTreeMap::new(),
+            };
+        }
+        use crate::redstone::world::block::BlockKind;
+        let kind_of: BTreeMap<Anchor, &BlockState> = route
+            .anchors
+            .iter()
+            .copied()
+            .zip(route.realisation.iter())
+            .collect();
+        let sealed = |lid: Anchor| -> bool {
+            !kind_of.contains_key(&lid) && reservation.stone_owner(&lid).is_some()
+        };
+        let mut dust_component = BTreeMap::new();
+        let mut next_component = 0u32;
+        for (&cell, state) in &kind_of {
+            if state.kind != BlockKind::RedstoneWire || dust_component.contains_key(&cell) {
+                continue;
+            }
+            let component = next_component;
+            next_component += 1;
+            let mut frontier = vec![cell];
+            while let Some(at) = frontier.pop() {
+                if dust_component.insert(at, component).is_some() {
+                    continue;
+                }
+                frontier.extend(
+                    dust_join_neighbours(at, &sealed)
+                        .into_iter()
+                        .filter(|joined| {
+                            kind_of
+                                .get(joined)
+                                .is_some_and(|block| block.kind == BlockKind::RedstoneWire)
+                                && !dust_component.contains_key(joined)
+                        }),
+                );
+            }
+        }
+        Self {
+            policy,
+            dust_component,
+        }
+    }
+
+    /// Whether stepping from `at` onto `next` breaks the tree rule.
+    ///
+    /// Two questions, matching the two ways a step can meet its own net:
+    ///
+    /// 1. **Standing on own wire.** Allowed only as the attachment prefix --
+    ///    from the start, or from a cell that is itself own wire -- and as the
+    ///    arrival at `goal` (the pre-claimed approach is this net's wire by
+    ///    name). A step from fresh ground back ONTO own wire is a re-entry,
+    ///    and a re-entry is a join.
+    /// 2. **The join halo of a fresh cell.** [`dust_join_neighbours`] against
+    ///    the reservation's stone commitments, with two exemptions: `at`
+    ///    (the intended tree edge -- consecutive cells of one branch, or the
+    ///    departure cell when stepping off the prefix) and `goal` (the
+    ///    branch's own terminal). Own wire in that halo is refused under
+    ///    [`OwnJoinPolicy::Wide`]; under [`OwnJoinPolicy::Narrow`] it is
+    ///    refused only when the joined cell is in a different dust component
+    ///    than the departure -- a repeater inside the loop -- or in none (a
+    ///    laid repeater's own cell, or a pre-claimed approach: the
+    ///    reservation cannot tell, so it refuses).
+    ///
+    /// Under `Wide` the same halo is also held against the path walked so
+    /// far (the `previous` chain, exactly as [`self_obstructs`] walks it),
+    /// because a branch doubling back beside itself is the measured g0 ring
+    /// shape and none of those cells is in any reservation yet. Under
+    /// `Narrow` the chain is deliberately NOT walked: the branch holds no
+    /// repeaters at search time, so the search cannot know whether the loop
+    /// will contain one -- that is Narrow's structural leak, and the post-lay
+    /// ring rule plus its counter are what measure it.
+    ///
+    /// The chain is the current best path to `at`, not necessarily the final
+    /// one -- the same approximation `self_obstructs` already lives with.
+    #[allow(clippy::too_many_arguments)]
+    fn blocks(
+        &self,
+        next: Anchor,
+        at: Anchor,
+        start: Anchor,
+        goal: Anchor,
+        owner: &str,
+        reservation: &Reservation,
+        previous: &BTreeMap<Anchor, Anchor>,
+    ) -> bool {
+        if self.policy == OwnJoinPolicy::Off {
+            return false;
+        }
+        let own_wire = |cell: &Anchor| reservation.wire_owner(cell) == Some(owner);
+
+        if own_wire(&next) {
+            return !(at == start || next == goal || own_wire(&at));
+        }
+
+        let halo: Vec<Anchor> =
+            dust_join_neighbours(next, &|lid: Anchor| reservation.stone_owner(&lid).is_some())
+                .into_iter()
+                .filter(|cell| *cell != at && *cell != goal)
+                .collect();
+
+        for cell in &halo {
+            if !own_wire(cell) {
+                continue;
+            }
+            match self.policy {
+                OwnJoinPolicy::Wide => return true,
+                OwnJoinPolicy::Narrow => {
+                    // The departure: the deepest own-wire cell of the chain
+                    // (the last prefix cell), or the source -- which is
+                    // primitive-owned, never own wire, but IS a laid anchor
+                    // once the first branch exists, so the component map can
+                    // still answer for it.
+                    let departure = std::iter::successors(Some(at), |cell| {
+                        previous.get(cell).copied()
+                    })
+                    .find(|cell| own_wire(cell))
+                    .unwrap_or(start);
+                    let same_component = self
+                        .dust_component
+                        .get(&departure)
+                        .zip(self.dust_component.get(cell))
+                        .is_some_and(|(mine, joined)| mine == joined);
+                    if !same_component {
+                        return true;
+                    }
+                }
+                OwnJoinPolicy::Off => unreachable!("returned above"),
+            }
+        }
+
+        if self.policy == OwnJoinPolicy::Wide {
+            let mut walk = previous.get(&at).copied();
+            while let Some(cell) = walk {
+                if halo.contains(&cell) {
+                    return true;
+                }
+                walk = previous.get(&cell).copied();
+            }
+        }
+        false
     }
 }
 
@@ -1747,9 +2005,10 @@ fn keep_out(anchor: Anchor) -> Vec<Anchor> {
 /// vertical pair is apart iff the lid is a conductive full block**, which is
 /// what [`Occupancy::Stone`] records.
 ///
-/// Only [`keep_out_against`] reads this, and that function is not wired into
-/// the router -- see its doc comment for the two measurements that stopped it.
-#[cfg(test)]
+/// Three readers: [`keep_out_against`] (not wired into the router -- see its
+/// doc comment for the two measurements that stopped it), [`ring_closed_in`]
+/// (the post-lay ring rule), and [`dust_join_neighbours`] (the search-time
+/// tree rule). One statement of the lid, by standing rule 6.
 fn join_lid(anchor: Anchor, neighbour: Anchor) -> Option<Anchor> {
     match neighbour.y.cmp(&anchor.y) {
         std::cmp::Ordering::Equal => None,
@@ -1766,6 +2025,26 @@ fn join_lid(anchor: Anchor, neighbour: Anchor) -> Option<Anchor> {
             ..neighbour
         }),
     }
+}
+
+/// Every cell a wire at `cell` would **join**, by the measured relation, given
+/// what `sealed` says about lids: [`keep_out`]'s twelve, less the vertical
+/// pairs whose [`join_lid`] cell is sealed. The four same-layer cells never
+/// leave -- the same-layer arm of `dust_connections` has no gate to open
+/// (`docs/derived/dust-join-relation.md`).
+///
+/// This is the one wire-against-wire join encoding, shared by the two rules
+/// that walk it (standing rule 6): [`ring_closed_in`], whose `sealed` also
+/// treats a lid that is one of the route's own anchors as open, and the
+/// search-time tree rule ([`OwnJoinCheck`]), whose `sealed` is the
+/// reservation's stone commitment. What "sealed" may mean is the caller's
+/// derivation to defend; what a lid *is* is stated here and in [`join_lid`]
+/// only.
+fn dust_join_neighbours(cell: Anchor, sealed: &impl Fn(Anchor) -> bool) -> Vec<Anchor> {
+    keep_out(cell)
+        .into_iter()
+        .filter(|neighbour| !join_lid(cell, *neighbour).is_some_and(sealed))
+        .collect()
 }
 
 /// [`keep_out`]'s twelve cells as asked **from a cell that will hold wire**,
@@ -2149,11 +2428,11 @@ impl Reservation {
     /// [`Reservation::conductor_owner`], because the derived join relation is
     /// about wire against wire and a gate's "conductors" are mostly not wire.
     ///
-    /// `#[cfg(test)]` for the same reason [`keep_out_against`] is: its only
-    /// caller is that rule, and that rule is not in the router. The
-    /// *distinction* it reads is not test-only -- [`reserve_path`] writes
-    /// `Wire` on the shipping path -- only this query is.
-    #[cfg(test)]
+    /// Was `#[cfg(test)]` while its only caller was [`keep_out_against`],
+    /// which is not in the router. The search-time tree rule
+    /// ([`OwnJoinCheck`]) is a production reader now: it asks which cells hold
+    /// *this net's own wire*, and a primitive's `GateConductor` must not
+    /// answer -- the join relation is wire against wire.
     fn wire_owner(&self, anchor: &Anchor) -> Option<&str> {
         self.cells.get(anchor).and_then(|(owner, occupancy)| {
             matches!(occupancy, Occupancy::Wire).then_some(owner.as_str())
@@ -3038,6 +3317,14 @@ fn net_source(candidate: &PlanCandidate, signal: &str) -> Result<Anchor, Box<Rou
 /// game physics, so it is a **refusal** in [`lay_net`] under both routers,
 /// never a price.
 ///
+/// Since 2026-08-20 this is the **safety net**, not the front line: the
+/// negotiated router's search refuses own-net joins before they are laid
+/// ([`OwnJoinPolicy`], the search-time tree rule), so under
+/// [`NEGOTIATED_OWN_JOIN`] this should never fire -- and
+/// [`NegotiationRound::rings_refused`] counts how often it does rather than
+/// trusting that it does not. Under the rip-up router the search stays blind
+/// and this is still all there is.
+///
 /// The edges walked are the measured physics, not plain adjacency:
 ///
 /// * dust to dust on the same level -- joined unconditionally
@@ -3084,33 +3371,22 @@ fn ring_closed_in(route: &Route, reservation: &Reservation) -> Option<(Anchor, B
         };
         match state.kind {
             BlockKind::RedstoneWire => {
-                for beside in horizontal_neighbours(cell) {
-                    if let Some(neighbour) = kind_of.get(&beside) {
+                // The dust-against-dust edges are the one shared encoding --
+                // `dust_join_neighbours` with this route's notion of sealed --
+                // plus the diode's input edge, which exists on the same layer
+                // only (a repeater reads directly behind itself).
+                for joined in dust_join_neighbours(cell, &|lid| sealed(lid)) {
+                    if let Some(neighbour) = kind_of.get(&joined) {
                         match neighbour.kind {
-                            BlockKind::RedstoneWire => out.push(beside),
+                            BlockKind::RedstoneWire => out.push(joined),
                             BlockKind::Repeater
-                                if repeater_input(beside, neighbour) == Some(cell) =>
+                                if joined.y == cell.y
+                                    && repeater_input(joined, neighbour) == Some(cell) =>
                             {
-                                out.push(beside);
+                                out.push(joined);
                             }
                             _ => {}
                         }
-                    }
-                    let up = Anchor { y: beside.y + 1, ..beside };
-                    if kind_of
-                        .get(&up)
-                        .is_some_and(|block| block.kind == BlockKind::RedstoneWire)
-                        && !sealed(Anchor { y: cell.y + 1, ..cell })
-                    {
-                        out.push(up);
-                    }
-                    let down = Anchor { y: beside.y - 1, ..beside };
-                    if kind_of
-                        .get(&down)
-                        .is_some_and(|block| block.kind == BlockKind::RedstoneWire)
-                        && !sealed(beside)
-                    {
-                        out.push(down);
                     }
                 }
             }
@@ -3214,12 +3490,18 @@ fn lay_net(
             y: socket.y + (socket.y - support.y),
             z: socket.z + (socket.z - support.z),
         };
+        // The search-time tree rule for THIS branch, rebuilt per branch
+        // because the tree it must not re-join is whatever the earlier
+        // branches laid. `Prices::RipUp` always answers `Off`, so the
+        // shipping router's search is untouched.
+        let own_join = OwnJoinCheck::for_branch(prices.own_join(), &route, reservation);
         let mut path = match deterministic_astar(
             source,
             approach,
             socket,
             &signal,
             reservation,
+            &own_join,
             prices,
         ) {
             Some(path) => path,
@@ -3503,7 +3785,13 @@ fn route_in_order(
 //   and its refresh before every climb. A branch that decays is not a dear
 //   route, it is a dead one: the iteration is refused outright and the height
 //   it chose is charged, which is the one thing the rip-up loop already did
-//   right (`RoutingFailure::charge_outright`).
+//   right (`RoutingFailure::charge_outright`);
+// * the search-time tree rule (2026-08-20) -- a branch may join ITS OWN net
+//   only at its attachment prefix (`OwnJoinPolicy`, `NEGOTIATED_OWN_JOIN`).
+//   Not a relation between two nets, so not a price: it is the plan's claim
+//   to be a tree, and the ring rule below is what a plan that is not a tree
+//   costs. This is the one rule the negotiated router runs that the rip-up
+//   router does not -- `Prices::RipUp` pins it `Off`, byte for byte.
 //
 // The two "against this net's own cells" clauses are where the split actually
 // lives, and they are exact rather than approximate: `exclusion_zone` is the
@@ -3897,30 +4185,19 @@ fn route_negotiated(
     negotiate(candidate, netlist, iterations, schedule, &mut Vec::new())
 }
 
-/// What one iteration of [`negotiate`] ended with.
+/// [`negotiate`] with the search-time tree rule named rather than assumed.
 ///
-/// The convergence sequence is the only thing that says whether a negotiation
-/// is negotiating or oscillating, and by rule 4 of this branch's ledger a cited
-/// number needs a reproducible method in the tree -- so the loop records it
-/// rather than a probe re-deriving it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) struct NegotiationRound {
-    /// Cells two nets both wanted at the end of the iteration. Zero is the exit
-    /// condition.
-    pub contested: usize,
-    /// Nets that could not be laid at all -- no path, or a path the strength
-    /// budget refused.
-    pub unlaid: usize,
-    /// Wire cells laid, over every net that was laid.
-    pub cells: usize,
-}
-
-/// [`route_negotiated`], recording what each iteration ended with.
-fn negotiate(
+/// Exists for the same reason [`PresentSchedule`] does: the rule is the one
+/// thing this round changed about the search, and by rule 4 a measurement
+/// comparing [`OwnJoinPolicy::Off`] (the old forever-refusal), `Narrow` and
+/// `Wide` needs all three callable from the tree. Every production path goes
+/// through [`negotiate`], which passes [`NEGOTIATED_OWN_JOIN`].
+fn negotiate_with_policy(
     mut candidate: PlanCandidate,
     netlist: &Netlist,
     iterations: usize,
     schedule: PresentSchedule,
+    own_join: OwnJoinPolicy,
     trace: &mut Vec<NegotiationRound>,
 ) -> Result<PlanCandidate, PlannerError> {
     let sinks = net_sinks(netlist);
@@ -3934,6 +4211,7 @@ fn negotiate(
         table.present = schedule.term(iteration);
         let mut laid: BTreeMap<String, Route> = BTreeMap::new();
         let mut every_net_laid = true;
+        let mut rings_refused = 0usize;
 
         for signal in &order {
             // Rip up before re-laying: what this net sees is everyone else's
@@ -3949,6 +4227,7 @@ fn negotiate(
                 let prices = Prices::Negotiated {
                     table: &table,
                     mine: signal,
+                    own_join,
                 };
                 lay_net(
                     signal,
@@ -3973,6 +4252,9 @@ fn negotiate(
                     // rip-up loop already got right.
                     every_net_laid = false;
                     table.charge_history(failure.charge_outright.iter().copied());
+                    if failure.error.to_string().contains("closes a ring") {
+                        rings_refused += 1;
+                    }
                     last = Some(failure.error);
                 }
             }
@@ -3983,6 +4265,7 @@ fn negotiate(
             contested: contested.len(),
             unlaid: order.len() - laid.len(),
             cells: laid.values().map(|route| route.anchors.len()).sum(),
+            rings_refused,
         });
         if every_net_laid && contested.is_empty() {
             candidate.routes = order
@@ -4003,6 +4286,51 @@ fn negotiate(
         id: "netlist".to_string(),
         reason: format!("negotiation did not separate the nets within {iterations} iterations"),
     }))
+}
+
+/// What one iteration of [`negotiate`] ended with.
+///
+/// The convergence sequence is the only thing that says whether a negotiation
+/// is negotiating or oscillating, and by rule 4 of this branch's ledger a cited
+/// number needs a reproducible method in the tree -- so the loop records it
+/// rather than a probe re-deriving it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct NegotiationRound {
+    /// Cells two nets both wanted at the end of the iteration. Zero is the exit
+    /// condition.
+    pub contested: usize,
+    /// Nets that could not be laid at all -- no path, or a path the strength
+    /// budget refused.
+    pub unlaid: usize,
+    /// Wire cells laid, over every net that was laid.
+    pub cells: usize,
+    /// How many branches the POST-LAY ring rule refused this iteration -- the
+    /// safety net behind the search-time tree rule. If the search is sound
+    /// this is zero on every iteration; the Verify phase reports it rather
+    /// than trusts it (the corridor test pins the mechanism, this counts it
+    /// at scale). Identified the way the pin test identifies the refusal:
+    /// the error names "closes a ring".
+    pub rings_refused: usize,
+}
+
+/// [`route_negotiated`], recording what each iteration ended with. Runs under
+/// [`NEGOTIATED_OWN_JOIN`] -- the negotiated router's search-time tree rule --
+/// which is the whole difference from [`negotiate_with_policy`].
+fn negotiate(
+    candidate: PlanCandidate,
+    netlist: &Netlist,
+    iterations: usize,
+    schedule: PresentSchedule,
+    trace: &mut Vec<NegotiationRound>,
+) -> Result<PlanCandidate, PlannerError> {
+    negotiate_with_policy(
+        candidate,
+        netlist,
+        iterations,
+        schedule,
+        NEGOTIATED_OWN_JOIN,
+        trace,
+    )
 }
 
 /// Prove, from the finished routes alone, that no two nets share anything.
@@ -5256,6 +5584,7 @@ mod tests {
             other_sink,
             "source",
             &without_destination_reservation,
+            &OwnJoinCheck::off(),
             &Prices::RipUp(&Congestion::default()),
         )
         .expect("the direct fanout branch is routable without the destination reservation");
@@ -17667,19 +17996,26 @@ mod tests {
     ///    right trade by standing rule 7: a plan that routes and does not
     ///    compute is worth nothing.
     ///
-    /// What this test pins: `starting_at(8)` yields **no plan** -- the
-    /// refusal is the router's own, before the judge is ever asked -- and the
-    /// recorded failure is one of the two rules by name. If this ever turns
-    /// green-with-a-plan again, that is news: it means negotiation found a
-    /// ring-free, lid-safe `segment_a`, and the plan deserves the full
-    /// measurement battery (rings, latch oracle, truth table) before anyone
-    /// calls it progress.
+    /// What this test pins, updated for the ring-aware search (2026-08-20):
+    /// `starting_at(8)` still yields **no plan**, and the failure is no
+    /// longer the ring rule's. The search-time tree rule
+    /// ([`NEGOTIATED_OWN_JOIN`] = `Wide`) refuses a latch corridor DURING the
+    /// search, so what remains at scale is what the corridors were hiding:
+    /// the branch dead-ends against its own tree (`no safe local route`) or
+    /// decays, and the negotiation oscillates without converging. Measured
+    /// across schedules {0,1,2,4,8,16} at budget 32 and {4,8} at budget 128:
+    /// no plan anywhere, and the post-lay ring rule fired **zero** times --
+    /// against 119 firings at schedule 8 alone with the search rule off
+    /// (`REDA_OWN_JOIN=off`, the sweep harness). The wall moved from "the
+    /// search proposes the same latch forever" to "the negotiation does not
+    /// converge", which is a different piece of work.
     ///
-    /// NOT MEASURED: whether any other schedule routes `segment_a` under the
-    /// two rules (no sweep, unchanged from the ledger), and whether a bigger
-    /// iteration budget would converge it.
+    /// If this ever turns green-with-a-plan, that is news: it means
+    /// negotiation found a ring-free, lid-safe `segment_a`, and the plan
+    /// deserves the full measurement battery (rings, latch oracle, truth
+    /// table) before anyone calls it progress.
     #[test]
-    #[ignore = "measurement: runs segment_a through 32 negotiation iterations, about 40 seconds"]
+    #[ignore = "measurement: runs segment_a through 32 negotiation iterations, about 100 seconds"]
     fn negotiated_segment_a_routes_and_still_does_not_compute() {
         use crate::circuits::seven_segment::build_single_segment_netlist;
 
@@ -17699,15 +18035,23 @@ mod tests {
                      last recorded failure: {refusal}"
                 );
                 assert!(
-                    refusal.contains("closes a ring") || refusal.contains("did not separate"),
-                    "the refusal should be the ring rule's or plain non-convergence, \
-                     not some new failure mode: {refusal}"
+                    !refusal.contains("closes a ring"),
+                    "the search-time tree rule should refuse latch corridors before \
+                     they are laid, so the post-lay ring rule should never be the \
+                     recorded failure: {refusal}"
+                );
+                assert!(
+                    refusal.contains("no safe local route")
+                        || refusal.contains("decays to nothing")
+                        || refusal.contains("did not separate"),
+                    "the refusal should be a search dead end, the strength budget, or \
+                     plain non-convergence, not some new failure mode: {refusal}"
                 );
             }
             Ok(plan) => {
                 let cells: usize = plan.routes().iter().map(|route| route.anchors().len()).sum();
                 panic!(
-                    "segment_a routed under the ring and lid rules ({cells} cells): \
+                    "segment_a routed under the ring-aware search ({cells} cells): \
                      that is news, not a regression -- measure it (rings, latch oracle, \
                      truth table) before celebrating, then rewrite this test to pin it"
                 );
@@ -19525,89 +19869,116 @@ mod tests {
     ///   must allow it. The rule keys on the repeater inside the ring, not
     ///   on loops and not on repeaters.
     ///
+    /// The walled two-gate corridor the ring tests share: a 21-cell trunk to
+    /// gate 0 (so the strength budget puts a refresh at (14,1,0)), and a
+    /// second branch forced up a staircase at the trunk's far end and back
+    /// along the storey above through exactly the cells `open` leaves free.
+    /// Returns what [`lay_net`] does to the two-consumer net under `prices`.
+    fn lay_through_walled_corridor(
+        open: &BTreeSet<Anchor>,
+        support1: Anchor,
+        prices: &Prices,
+    ) -> Result<Route, Box<RoutingFailure>> {
+        let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
+        let trunk_end = 20;
+        let netlist = Netlist {
+            inputs: vec!["n".to_string()],
+            outputs: vec!["s0".to_string(), "s1".to_string()],
+            gates: vec![Gate::nor("s0", &["n"]), Gate::nor("s1", &["n"])],
+        };
+        let support0 = at(trunk_end + 2, 1, 0);
+        let candidate = PlanCandidate::with_facings(
+            vec![support0, support1],
+            Vec::new(),
+            Vec::new(),
+            vec![geometry::CellFacing::NORTH, geometry::CellFacing::EAST],
+        );
+        let socket0 = step(
+            support0,
+            compile::geometry::input_directions(candidate.facing_of(0))[0],
+        );
+        let socket1 = step(
+            support1,
+            compile::geometry::input_directions(candidate.facing_of(1))[0],
+        );
+        assert_eq!(socket0, at(trunk_end + 1, 1, 0));
+
+        let mut walled = Reservation::new();
+        for x in -25..=45 {
+            for y in 1..=5 {
+                for z in -25..=25 {
+                    let cell = at(x, y, z);
+                    let is_open = open.contains(&cell)
+                        || cell == socket0
+                        || cell == support0
+                        || cell == socket1
+                        || cell == support1;
+                    if !is_open {
+                        walled.insert(cell, "wall", Occupancy::Solid);
+                    }
+                }
+            }
+        }
+
+        lay_net(
+            "n",
+            at(0, 1, 0),
+            &[(0, 0), (1, 0)],
+            &netlist,
+            &candidate,
+            &mut walled,
+            prices,
+        )
+    }
+
+    /// The corridor's fixed furniture: the trunk, the climb, and whatever
+    /// `upper` cells the variant opens.
+    fn trunk_climb_and(upper: &[Anchor]) -> BTreeSet<Anchor> {
+        let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
+        let trunk_end = 20;
+        let mut open: BTreeSet<Anchor> = BTreeSet::new();
+        for x in 0..=trunk_end {
+            open.insert(at(x, 1, 0)); // the trunk
+        }
+        open.insert(at(trunk_end, 1, 1)); // the climb's riser
+        open.insert(at(trunk_end, 2, 0)); // the climb's headroom
+        open.extend(upper.iter().copied());
+        open
+    }
+
+    /// The **ring** corridor: return run directly beside the trunk (z = 1)
+    /// with open lids at x = 8..=12, west of the refresh at (14,1,0) -- so
+    /// the second branch joins back onto the trunk with the repeater inside
+    /// the loop. Gate 1's approach (8,2,1) is the run's west end.
+    fn ring_corridor() -> (BTreeSet<Anchor>, Anchor) {
+        let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
+        let mut ring_upper: Vec<Anchor> = (8..=20).map(|x| at(x, 2, 1)).collect();
+        ring_upper.extend((8..=12).map(|x| at(x, 2, 0)));
+        (trunk_climb_and(&ring_upper), at(8, 2, 3))
+    }
+
+    /// The **control** corridor: return run two cells over (z = 2), one open
+    /// lid at x = 16 -- east of the refresh, so the loop it closes holds no
+    /// repeater. A gainless same-net join, not a latch.
+    fn control_corridor() -> (BTreeSet<Anchor>, Anchor) {
+        let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
+        let mut control_upper: Vec<Anchor> = vec![at(20, 2, 1)];
+        control_upper.extend((16..=20).map(|x| at(x, 2, 2)));
+        control_upper.push(at(16, 2, 1)); // the descent-join, and the approach
+        control_upper.push(at(16, 2, 0)); // its open lid
+        (trunk_climb_and(&control_upper), at(16, 2, 3))
+    }
+
     /// Injection (standing rule 2): with the `ring_closed_in` call in
     /// `lay_net` commented out, the first half goes red (`lay_net` returns
     /// `Ok` and the ring ships in the returned route). Confirmed red on
     /// 2026-08-19, then the call restored.
     #[test]
     fn lay_net_refuses_the_branch_that_closes_a_ring() {
-        let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
-        let trunk_end = 20;
-
-        // Gate 0 faces north at (22,1,0): socket (21,1,0), approach (20,1,0)
-        // -- the trunk's own east end. Gate 1 faces east, so its socket is
-        // one cell north of its support and the approach one further.
-        let lay_through = |open: &BTreeSet<Anchor>,
-                           support1: Anchor|
-         -> Result<Route, Box<RoutingFailure>> {
-            let netlist = Netlist {
-                inputs: vec!["n".to_string()],
-                outputs: vec!["s0".to_string(), "s1".to_string()],
-                gates: vec![Gate::nor("s0", &["n"]), Gate::nor("s1", &["n"])],
-            };
-            let support0 = at(trunk_end + 2, 1, 0);
-            let candidate = PlanCandidate::with_facings(
-                vec![support0, support1],
-                Vec::new(),
-                Vec::new(),
-                vec![geometry::CellFacing::NORTH, geometry::CellFacing::EAST],
-            );
-            let socket0 = step(
-                support0,
-                compile::geometry::input_directions(candidate.facing_of(0))[0],
-            );
-            let socket1 = step(
-                support1,
-                compile::geometry::input_directions(candidate.facing_of(1))[0],
-            );
-            assert_eq!(socket0, at(trunk_end + 1, 1, 0));
-
-            let mut walled = Reservation::new();
-            for x in -25..=45 {
-                for y in 1..=5 {
-                    for z in -25..=25 {
-                        let cell = at(x, y, z);
-                        let is_open = open.contains(&cell)
-                            || cell == socket0
-                            || cell == support0
-                            || cell == socket1
-                            || cell == support1;
-                        if !is_open {
-                            walled.insert(cell, "wall", Occupancy::Solid);
-                        }
-                    }
-                }
-            }
-
-            let congestion = Congestion::default();
-            let prices = Prices::RipUp(&congestion);
-            lay_net(
-                "n",
-                at(0, 1, 0),
-                &[(0, 0), (1, 0)],
-                &netlist,
-                &candidate,
-                &mut walled,
-                &prices,
-            )
-        };
-
-        let trunk_climb_and = |upper: &[Anchor]| -> BTreeSet<Anchor> {
-            let mut open: BTreeSet<Anchor> = BTreeSet::new();
-            for x in 0..=trunk_end {
-                open.insert(at(x, 1, 0)); // the trunk
-            }
-            open.insert(at(trunk_end, 1, 1)); // the climb's riser
-            open.insert(at(trunk_end, 2, 0)); // the climb's headroom
-            open.extend(upper.iter().copied());
-            open
-        };
-
-        // The ring corridor: return run beside the trunk, lids open west of
-        // the refresh. Gate 1's approach (8,2,1) is the run's west end.
-        let mut ring_upper: Vec<Anchor> = (8..=trunk_end).map(|x| at(x, 2, 1)).collect();
-        ring_upper.extend((8..=12).map(|x| at(x, 2, 0)));
-        let failure = match lay_through(&trunk_climb_and(&ring_upper), at(8, 2, 3)) {
+        let congestion = Congestion::default();
+        let rip_up = Prices::RipUp(&congestion);
+        let (ring_open, ring_support) = ring_corridor();
+        let failure = match lay_through_walled_corridor(&ring_open, ring_support, &rip_up) {
             Err(failure) => failure,
             Ok(route) => panic!(
                 "the return run closes a ring around the trunk's refresh, but lay_net \
@@ -19629,11 +20000,8 @@ mod tests {
         // The control corridor: return run two cells over, one open lid at
         // x = 16, east of the refresh. Gate 1's approach (16,2,1) is the
         // join column itself.
-        let mut control_upper: Vec<Anchor> = vec![at(trunk_end, 2, 1)];
-        control_upper.extend((16..=trunk_end).map(|x| at(x, 2, 2)));
-        control_upper.push(at(16, 2, 1)); // the descent-join, and the approach
-        control_upper.push(at(16, 2, 0)); // its open lid
-        let route = match lay_through(&trunk_climb_and(&control_upper), at(16, 2, 3)) {
+        let (control_open, control_support) = control_corridor();
+        let route = match lay_through_walled_corridor(&control_open, control_support, &rip_up) {
             Ok(route) => route,
             Err(failure) => panic!(
                 "a loop whose repeater sits outside it is not a latch, but lay_net \
@@ -19649,6 +20017,113 @@ mod tests {
             "the control is only a control while the route still carries a refresh \
              somewhere outside the loop"
         );
+    }
+
+    /// **THE SEARCH-TIME TREE RULE, decided cell for cell on the same two
+    /// corridors the ring rule is pinned on.** Same fixture, negotiated
+    /// prices, the policy swept -- so this one test is the 2x3 matrix of
+    /// what each policy does to a latch corridor and to a gainless join:
+    ///
+    /// * `Off` is the old search: it LAYS the latch and the post-lay ring
+    ///   rule refuses it -- the safety net firing is the forever-refusal
+    ///   mechanism in miniature (rule 2's "disable it and the old refusal
+    ///   returns", as a runtime policy instead of an edit).
+    /// * `Narrow` refuses the latch corridor DURING the search -- the join
+    ///   is beyond the trunk's refresh, in another dust component -- so the
+    ///   failure is `NoLocalRoute`, never the ring rule. The control's
+    ///   gainless join is dust-reachable from the departure and stays legal.
+    /// * `Wide` refuses both during the search: own wire is foreign
+    ///   everywhere but the prefix. The control corridor is the measured
+    ///   cost of Wide -- a route Narrow keeps and Wide spends -- stated here
+    ///   rather than smoothed over.
+    #[test]
+    fn the_search_time_tree_rule_decides_the_two_corridors() {
+        let table = Negotiation::default();
+        let negotiated = |own_join: OwnJoinPolicy| Prices::Negotiated {
+            table: &table,
+            mine: "n",
+            own_join,
+        };
+
+        // Off: the latch is laid, and only the post-lay ring rule stands.
+        let (ring_open, ring_support) = ring_corridor();
+        match lay_through_walled_corridor(&ring_open, ring_support, &negotiated(OwnJoinPolicy::Off))
+        {
+            Err(failure) => assert!(
+                failure.error.to_string().contains("closes a ring"),
+                "under Off the safety net fires: {}",
+                failure.error
+            ),
+            Ok(route) => panic!(
+                "the blind search lays the latch and the ring rule refuses it, \
+                 but lay_net returned a {}-cell route",
+                route.anchors().len()
+            ),
+        }
+
+        // Narrow and Wide: the search itself refuses the corridor, so the
+        // failure is a dead end, not a laid ring.
+        for policy in [OwnJoinPolicy::Narrow, OwnJoinPolicy::Wide] {
+            match lay_through_walled_corridor(&ring_open, ring_support, &negotiated(policy)) {
+                Err(failure) => {
+                    let reason = failure.error.to_string();
+                    assert!(
+                        reason.contains("no safe local route"),
+                        "under {policy:?} the search dead-ends instead of laying the ring: \
+                         {reason}"
+                    );
+                    assert!(
+                        !reason.contains("closes a ring"),
+                        "under {policy:?} the post-lay safety net must stay silent: {reason}"
+                    );
+                }
+                Ok(route) => panic!(
+                    "the ring-aware search must never lay the latch corridor, but under \
+                     {policy:?} it returned a {}-cell route",
+                    route.anchors().len()
+                ),
+            }
+        }
+
+        // The control corridor: Narrow keeps the gainless join...
+        let (control_open, control_support) = control_corridor();
+        match lay_through_walled_corridor(
+            &control_open,
+            control_support,
+            &negotiated(OwnJoinPolicy::Narrow),
+        ) {
+            Ok(route) => assert!(
+                route
+                    .realisation()
+                    .iter()
+                    .any(|block| block.kind == crate::redstone::world::block::BlockKind::Repeater),
+                "the control still carries its refresh outside the loop"
+            ),
+            Err(failure) => panic!(
+                "Narrow admits a join no repeater sits inside, but it refused: {}",
+                failure.error
+            ),
+        }
+
+        // ...and Wide spends it: the corridor's only entry is an own-net
+        // join, and under Wide the realised graph must equal the intended
+        // tree, gainless joins included.
+        match lay_through_walled_corridor(
+            &control_open,
+            control_support,
+            &negotiated(OwnJoinPolicy::Wide),
+        ) {
+            Err(failure) => assert!(
+                failure.error.to_string().contains("no safe local route"),
+                "Wide's refusal is the search's own: {}",
+                failure.error
+            ),
+            Ok(route) => panic!(
+                "Wide refuses the gainless join too -- the measured cost of the class fix -- \
+                 but it returned a {}-cell route",
+                route.anchors().len()
+            ),
+        }
     }
 
     // =======================================================================
@@ -19786,6 +20261,10 @@ mod tests {
                 "  contested per iteration {:?}",
                 trace.iter().map(|round| round.contested).collect::<Vec<_>>()
             );
+            eprintln!(
+                "  post-lay ring rule fired {} time(s)",
+                trace.iter().map(|round| round.rings_refused).sum::<usize>()
+            );
             match outcome {
                 Err(error) => eprintln!("  NO PLAN: {error}"),
                 Ok(plan) => {
@@ -19804,16 +20283,41 @@ mod tests {
         }
     }
 
-    /// The schedule question the ledger has carried as NOT MEASURED since the
-    /// negotiated router landed: does any `starting_at(k)` other than 0 and 8
-    /// route `segment_a` -- now with the ring and lid rules live. One line
-    /// per schedule; any plan that appears gets the full battery, because a
-    /// route without a truth table is worth nothing (rule 7).
+    /// The schedule sweep, re-run for the ring-aware search. `segment_a`,
+    /// negotiated, one line per schedule; any plan that appears gets the full
+    /// battery, because a route without a truth table is worth nothing
+    /// (rule 7). Prints the per-schedule iteration count, wall clock and the
+    /// post-lay ring rule's firing count -- the safety net the search-time
+    /// tree rule is supposed to keep silent.
+    ///
+    /// Env-driven in the growth probe's style, so the Off/Narrow/Wide
+    /// comparison is reproducible from the tree (rule 4):
+    /// `REDA_OWN_JOIN` = `off` | `narrow` | `wide` (default: the shipped
+    /// [`NEGOTIATED_OWN_JOIN`]), `REDA_SCHEDULES` = comma-separated
+    /// `starting_at` values (default `0,1,2,4,8,16`), `REDA_BUDGET` =
+    /// iterations (default [`NEGOTIATION_ROUNDS`]).
     #[test]
-    #[ignore = "measurement: segment_a negotiated across four more schedules, minutes"]
+    #[ignore = "measurement: segment_a negotiated across six schedules, minutes"]
     fn segment_a_negotiated_swept_across_schedules() {
         use crate::circuits::seven_segment::build_single_segment_netlist;
         use std::time::Instant;
+
+        let own_join = match std::env::var("REDA_OWN_JOIN").as_deref() {
+            Ok("off") => OwnJoinPolicy::Off,
+            Ok("narrow") => OwnJoinPolicy::Narrow,
+            Ok("wide") => OwnJoinPolicy::Wide,
+            _ => NEGOTIATED_OWN_JOIN,
+        };
+        let schedules: Vec<u64> = std::env::var("REDA_SCHEDULES")
+            .map(|list| {
+                list.split(',')
+                    .map(|value| value.trim().parse().expect("REDA_SCHEDULES is numbers"))
+                    .collect()
+            })
+            .unwrap_or_else(|_| vec![0, 1, 2, 4, 8, 16]);
+        let budget: usize = std::env::var("REDA_BUDGET")
+            .map(|value| value.parse().expect("REDA_BUDGET is a number"))
+            .unwrap_or(NEGOTIATION_ROUNDS);
 
         let (netlist, output) = build_single_segment_netlist(0);
         let placement = relaxed_placement(&netlist, &PortPlacements::default(), SHIPPING_AXES)
@@ -19821,28 +20325,33 @@ mod tests {
         let snapped = relax::snap(&placement).expect("and snaps");
         let bare = candidate_from_snapped(&netlist, &PortPlacements::default(), &snapped);
 
-        for at_zero in [1u64, 2, 4, 16] {
+        eprintln!("segment_a negotiated, own_join {own_join:?}, budget {budget}:");
+        for at_zero in schedules {
             let mut trace = Vec::new();
             let started = Instant::now();
-            let outcome = negotiate(
+            let outcome = negotiate_with_policy(
                 bare.clone(),
                 &netlist,
-                NEGOTIATION_ROUNDS,
+                budget,
                 PresentSchedule::starting_at(at_zero),
+                own_join,
                 &mut trace,
             );
             let seconds = started.elapsed().as_secs_f64();
             let unlaid: Vec<usize> = trace.iter().map(|round| round.unlaid).collect();
+            let rings: usize = trace.iter().map(|round| round.rings_refused).sum();
             match outcome {
                 Err(error) => {
                     eprintln!(
-                        "starting_at({at_zero}): NO PLAN after {} iteration(s), {seconds:.1}s\n  unlaid {unlaid:?}\n  last failure: {error}",
+                        "starting_at({at_zero}): NO PLAN after {} iteration(s), {seconds:.1}s, \
+                         ring rule fired {rings} time(s)\n  unlaid {unlaid:?}\n  last failure: {error}",
                         trace.len(),
                     );
                 }
                 Ok(plan) => {
                     eprintln!(
-                        "starting_at({at_zero}): ROUTED in {} iteration(s), {seconds:.1}s -- full battery:",
+                        "starting_at({at_zero}): ROUTED in {} iteration(s), {seconds:.1}s, \
+                         ring rule fired {rings} time(s) -- full battery:",
                         trace.len(),
                     );
                     battery_of_a_routed_plan(
@@ -19894,6 +20403,10 @@ mod tests {
         eprintln!(
             "  contested per iteration {:?}",
             trace.iter().map(|round| round.contested).collect::<Vec<_>>()
+        );
+        eprintln!(
+            "  post-lay ring rule fired {} time(s)",
+            trace.iter().map(|round| round.rings_refused).sum::<usize>()
         );
         match outcome {
             Err(error) => eprintln!("  NO PLAN: {error}"),
