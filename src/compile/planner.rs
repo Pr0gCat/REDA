@@ -17672,6 +17672,18 @@ mod tests {
     /// | segment_a | ERR 36.3s | ERR 43.1s | 474 337 163 109 17 61 118 41 22 27 16 10 70 38 16 14 15 15 16 15 15 16 17 15 18 15 11 12 11 11 12 11 |
     /// | seven_segment | ERR 20.7s | ERR 195.2s | 1155 1013 600 377 290 187 122 163 164 57 164 135 160 136 83 73 78 241 226 80 169 203 93 48 143 98 88 34 179 26 122 97 |
     ///
+    /// Re-measured 2026-08-20 under the search-time tree rule
+    /// ([`NEGOTIATED_OWN_JOIN`] = `Wide`). The rip-up column is unchanged cell
+    /// for cell (the rip-up router is pinned `Off` structurally). Three
+    /// negotiated cells moved, because Wide searches a different corridor set:
+    /// `full_adder` negotiated is now **516 cells, 1,084 blocks, verifies,
+    /// truth 8/8, 42 ticks** (contested 100 41 17 0); `segment_a` negotiated
+    /// now fails as `no safe local route from (84,1,105) to (108,1,101)` in
+    /// 12.9s -- a search dead-end, not the ring rule -- freezing at unlaid 6 /
+    /// contested 0 from iteration 10; `seven_segment` negotiated now fails as
+    /// `g9 -> g10.in[1] decays` in 515.1s where it used to die on g9's ring.
+    /// and4 and verilog:and4 negotiated are unchanged.
+    ///
     /// Both `ERR` rows are the routers' own failures on this schedule, not the
     /// judge's: neither plan ever reaches `verify_candidate`. `segment_a` used
     /// to route under `PresentSchedule::starting_at(8)` -- into nine latched
@@ -20424,6 +20436,385 @@ mod tests {
                     seven_segment_expected,
                 );
                 eprintln!("  (legacy ships 16,244 blocks / 98 ticks)");
+            }
+        }
+    }
+
+    /// The schedule sweep `segment_a` gets, run on `seven_segment` -- the
+    /// other circuit the wall stands in front of. Same knobs, same battery on
+    /// any plan that appears (`REDA_OWN_JOIN` / `REDA_SCHEDULES` /
+    /// `REDA_BUDGET`, defaults the shipped policy, `0,1,2,4,8,16`, and
+    /// [`NEGOTIATION_ROUNDS`]), because "seven_segment under the tree rule"
+    /// stood in NOT MEASURED when the Wide policy landed and a number cited
+    /// without a method in the tree is hearsay (rule 4).
+    #[test]
+    #[ignore = "measurement: seven_segment negotiated across six schedules, tens of minutes"]
+    fn seven_segment_negotiated_swept_across_schedules() {
+        use crate::circuits::seven_segment::build_seven_segment_netlist;
+        use std::time::Instant;
+
+        let own_join = match std::env::var("REDA_OWN_JOIN").as_deref() {
+            Ok("off") => OwnJoinPolicy::Off,
+            Ok("narrow") => OwnJoinPolicy::Narrow,
+            Ok("wide") => OwnJoinPolicy::Wide,
+            _ => NEGOTIATED_OWN_JOIN,
+        };
+        let schedules: Vec<u64> = std::env::var("REDA_SCHEDULES")
+            .map(|list| {
+                list.split(',')
+                    .map(|value| value.trim().parse().expect("REDA_SCHEDULES is numbers"))
+                    .collect()
+            })
+            .unwrap_or_else(|_| vec![0, 1, 2, 4, 8, 16]);
+        let budget: usize = std::env::var("REDA_BUDGET")
+            .map(|value| value.parse().expect("REDA_BUDGET is a number"))
+            .unwrap_or(NEGOTIATION_ROUNDS);
+
+        let (netlist, outputs) = build_seven_segment_netlist();
+        let placement = relaxed_placement(&netlist, &PortPlacements::default(), SHIPPING_AXES)
+            .expect("seven_segment places");
+        let snapped = relax::snap(&placement).expect("and snaps");
+        let bare = candidate_from_snapped(&netlist, &PortPlacements::default(), &snapped);
+        let segment_outputs: Vec<String> = crate::circuits::seven_segment::SEGMENT_NAMES
+            .iter()
+            .map(|name| outputs[*name].clone())
+            .collect();
+
+        eprintln!("seven_segment negotiated, own_join {own_join:?}, budget {budget}:");
+        for at_zero in schedules {
+            let mut trace = Vec::new();
+            let started = Instant::now();
+            let outcome = negotiate_with_policy(
+                bare.clone(),
+                &netlist,
+                budget,
+                PresentSchedule::starting_at(at_zero),
+                own_join,
+                &mut trace,
+            );
+            let seconds = started.elapsed().as_secs_f64();
+            let unlaid: Vec<usize> = trace.iter().map(|round| round.unlaid).collect();
+            let rings: usize = trace.iter().map(|round| round.rings_refused).sum();
+            match outcome {
+                Err(error) => {
+                    eprintln!(
+                        "starting_at({at_zero}): NO PLAN after {} iteration(s), {seconds:.1}s, \
+                         ring rule fired {rings} time(s)\n  unlaid {unlaid:?}\n  last failure: {error}",
+                        trace.len(),
+                    );
+                }
+                Ok(plan) => {
+                    eprintln!(
+                        "starting_at({at_zero}): ROUTED in {} iteration(s), {seconds:.1}s, \
+                         ring rule fired {rings} time(s) -- full battery:",
+                        trace.len(),
+                    );
+                    battery_of_a_routed_plan(
+                        "seven_segment",
+                        &netlist,
+                        &plan,
+                        &crate::circuits::seven_segment::INPUT_NAMES[..],
+                        &segment_outputs,
+                        seven_segment_expected,
+                    );
+                    eprintln!("  (legacy ships 16,244 blocks / 98 ticks)");
+                }
+            }
+        }
+    }
+
+    /// Worst settle measured the `a_self_placed_and4` way: **every ordered
+    /// transition, timed from a settled state, on a simulator that has seen
+    /// nothing else** -- and every arrival's outputs checked against the
+    /// truth function, so a stale reading cannot hide inside a fast number.
+    ///
+    /// This is NOT `worst_settle_game_ticks` (the battery's chained sweep on
+    /// one long-lived simulator): Task 10 measured the same 240 and4
+    /// transitions at 38 chained and 14 fresh, so the chained number is not a
+    /// property of the circuit. Delay has been the recurring blind spot, and
+    /// this is the method the record trusts.
+    fn worst_settle_from_settled_states(
+        compiled: &CompiledCircuit,
+        inputs: &[&str],
+        outputs: &[String],
+        expected: fn(&[bool]) -> Vec<bool>,
+    ) -> Result<(u64, usize, String), String> {
+        use crate::redstone::simulator::Simulator;
+        const MAX_TICKS: u64 = 2000;
+
+        let mut levers = Vec::with_capacity(inputs.len());
+        for name in inputs {
+            match compiled.input_positions.get(*name) {
+                Some(position) => levers.push(*position),
+                None => return Err(format!("no lever for input `{name}`")),
+            }
+        }
+        let mut sinks = Vec::with_capacity(outputs.len());
+        for signal in outputs {
+            match compiled.output_positions.get(signal) {
+                Some(position) => sinks.push(*position),
+                None => return Err(format!("no output `{signal}`")),
+            }
+        }
+
+        let bits_of = |mask: usize| -> Vec<bool> {
+            (0..inputs.len())
+                .map(|index| (mask >> (inputs.len() - 1 - index)) & 1 == 1)
+                .collect()
+        };
+        let states = 1usize << inputs.len();
+        let mut worst = 0u64;
+        let mut worst_at = (0usize, 0usize);
+        let mut transitions = 0usize;
+        let mut wrong = 0usize;
+        let mut first_wrong: Option<String> = None;
+        for from in 0..states {
+            for to in 0..states {
+                if from == to {
+                    continue;
+                }
+                transitions += 1;
+                let mut simulator = Simulator::new(compiled.world.clone());
+                for (position, &bit) in levers.iter().zip(bits_of(from).iter()) {
+                    let mut state =
+                        simulator.world().get(position.0, position.1, position.2).clone();
+                    state.lit = bit;
+                    simulator.world_mut().set(position.0, position.1, position.2, state);
+                }
+                simulator
+                    .run_until_stable(MAX_TICKS)
+                    .map_err(|error| format!("did not settle at from={from:b}: {error:?}"))?;
+                let to_bits = bits_of(to);
+                for (position, &bit) in levers.iter().zip(to_bits.iter()) {
+                    let mut state =
+                        simulator.world().get(position.0, position.1, position.2).clone();
+                    state.lit = bit;
+                    simulator.world_mut().set(position.0, position.1, position.2, state);
+                }
+                let ticks = simulator
+                    .run_until_stable(MAX_TICKS)
+                    .map_err(|error| format!("did not settle at to={to:b}: {error:?}"))?;
+                if ticks > worst {
+                    worst = ticks;
+                    worst_at = (from, to);
+                }
+                let want = expected(&to_bits);
+                for (index, position) in sinks.iter().enumerate() {
+                    let got = simulator.world().get(position.0, position.1, position.2).lit;
+                    if got != want[index] {
+                        wrong += 1;
+                        first_wrong.get_or_insert(format!(
+                            "{from:b} -> {to:b}: `{}` expected {}, got {got}",
+                            outputs[index], want[index]
+                        ));
+                    }
+                }
+            }
+        }
+        match first_wrong {
+            Some(example) => Err(format!("{wrong} readings wrong: {example}")),
+            None => Ok((
+                worst,
+                transitions,
+                format!("{:0w$b} -> {:0w$b}", worst_at.0, worst_at.1, w = inputs.len()),
+            )),
+        }
+    }
+
+    /// The settle numbers for **the plans the ring-aware search returns** --
+    /// every condition circuit through the negotiated router at
+    /// `PresentSchedule::SHIPPING` under the shipped [`NEGOTIATED_OWN_JOIN`],
+    /// each plan that verifies swept the `a_self_placed_and4` way. A circuit
+    /// that does not route is printed as its refusal, never skipped silently.
+    ///
+    /// `REDA_SETTLE_SHIPPING=1` additionally sweeps the six circuits as
+    /// `compile()` actually ships them, for the floor's record on the same
+    /// method (the panel's tick column is the chained sweep, a different
+    /// number). `REDA_SETTLE_CIRCUITS` (comma-separated names) narrows the
+    /// run to the circuits it names, so one number can be re-measured without
+    /// paying for the other five.
+    #[test]
+    #[ignore = "measurement: fresh-simulator settle sweeps, hundreds of double settles per circuit"]
+    fn worst_settle_from_settled_states_of_the_negotiated_plans() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+        use std::time::Instant;
+
+        let only: Option<Vec<String>> = std::env::var("REDA_SETTLE_CIRCUITS")
+            .ok()
+            .map(|list| list.split(',').map(|name| name.trim().to_string()).collect());
+        let wanted = |name: &str| only.as_ref().is_none_or(|list| list.iter().any(|n| n == name));
+
+        let lowered = |name: &str| -> (Netlist, Vec<String>) {
+            let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
+            let (gate_level, labels) = circuit.baked_netlist();
+            (
+                crate::compile::lowering::lower(&gate_level).expect("it lowers"),
+                labels.into_iter().map(|(_, signal)| signal).collect(),
+            )
+        };
+        let lowered_optimised = |name: &str| -> (Netlist, Vec<String>) {
+            let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
+            let (gate_level, labels) = circuit.baked_netlist();
+            (
+                crate::compile::lowering::lower_optimised(&gate_level).expect("it lowers"),
+                labels.into_iter().map(|(_, signal)| signal).collect(),
+            )
+        };
+        let (verilog_and4, verilog_and4_outputs) = lowered("verilog:and4");
+        let (verilog_decoder, verilog_decoder_outputs) =
+            lowered_optimised("verilog:seven_segment");
+        let (and4, and4_output) = build_and4_netlist();
+        let (adder, adder_outputs) = build_full_adder_netlist();
+        let (segment_a, segment_a_output) = build_single_segment_netlist(0);
+        let (decoder, decoder_outputs) = build_seven_segment_netlist();
+        let cases: Vec<ConditionCircuit> = vec![
+            ConditionCircuit {
+                name: "and4",
+                netlist: and4,
+                inputs: &crate::circuits::and4::INPUT_NAMES[..],
+                outputs: vec![and4_output],
+                expected: and4_expected,
+            },
+            ConditionCircuit {
+                name: "full_adder",
+                netlist: adder,
+                inputs: &crate::circuits::full_adder::INPUT_NAMES[..],
+                outputs: vec![adder_outputs["sum"].clone(), adder_outputs["cout"].clone()],
+                expected: full_adder_expected,
+            },
+            ConditionCircuit {
+                name: "verilog:and4",
+                netlist: verilog_and4,
+                inputs: &crate::circuits::and4::INPUT_NAMES[..],
+                outputs: verilog_and4_outputs,
+                expected: and4_expected,
+            },
+            ConditionCircuit {
+                name: "segment_a",
+                netlist: segment_a,
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: vec![segment_a_output],
+                expected: segment_a_expected,
+            },
+            ConditionCircuit {
+                name: "seven_segment",
+                netlist: decoder,
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: crate::circuits::seven_segment::SEGMENT_NAMES
+                    .iter()
+                    .map(|name| decoder_outputs[name].clone())
+                    .collect(),
+                expected: seven_segment_expected,
+            },
+            // Cannot place through the planner at all (the projection
+            // deadlock), so its negotiated row below reports that refusal;
+            // it is here for the `compile()` leg, where it ships Legacy.
+            ConditionCircuit {
+                name: "verilog:seven_segment",
+                netlist: verilog_decoder,
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: verilog_decoder_outputs,
+                expected: seven_segment_expected,
+            },
+        ];
+
+        eprintln!(
+            "negotiated plans at PresentSchedule::SHIPPING, own_join {NEGOTIATED_OWN_JOIN:?}:"
+        );
+        for case in &cases {
+            if !wanted(case.name) {
+                continue;
+            }
+            let placement = match relaxed_placement(
+                &case.netlist,
+                &PortPlacements::default(),
+                SHIPPING_AXES,
+            ) {
+                Err(error) => {
+                    eprintln!("  {}: NO PLACEMENT -- {error}", case.name);
+                    continue;
+                }
+                Ok(placement) => placement,
+            };
+            let snapped = relax::snap(&placement).expect("and snaps");
+            let bare = candidate_from_snapped(&case.netlist, &PortPlacements::default(), &snapped);
+            let mut trace = Vec::new();
+            let plan = match negotiate(
+                bare,
+                &case.netlist,
+                NEGOTIATION_ROUNDS,
+                PresentSchedule::SHIPPING,
+                &mut trace,
+            ) {
+                Err(error) => {
+                    eprintln!("  {}: NO PLAN -- {error}", case.name);
+                    continue;
+                }
+                Ok(plan) => plan,
+            };
+            if let Err(error) = verify_candidate(&plan, &case.netlist) {
+                eprintln!("  {}: VERIFY REFUSED -- {error}", case.name);
+                continue;
+            }
+            let realised = emit_candidate(&plan, &case.netlist, candidate_world_size(&plan))
+                .expect("a verified plan realises");
+            let compiled = compile::CompiledCircuit {
+                world: realised.world.clone(),
+                input_positions: realised.ports.input_positions.clone(),
+                output_positions: realised.ports.output_positions.clone(),
+                gate_output_positions: realised.ports.gate_output_positions.clone(),
+                gate_facings: (0..case.netlist.gates.len()).map(|g| plan.facing_of(g)).collect(),
+                planner_kind: compile::PlannerKind::Unified3d,
+                legacy_emission: None,
+            };
+            let started = Instant::now();
+            match worst_settle_from_settled_states(
+                &compiled,
+                case.inputs,
+                &case.outputs,
+                case.expected,
+            ) {
+                Ok((worst, transitions, at)) => eprintln!(
+                    "  {}: worst settle {worst} game ticks over {transitions} fresh-simulator \
+                     transitions, at {at}, every arrival right ({:.1}s)",
+                    case.name,
+                    started.elapsed().as_secs_f64(),
+                ),
+                Err(error) => eprintln!("  {}: **{error}**", case.name),
+            }
+        }
+
+        if std::env::var("REDA_SETTLE_SHIPPING").as_deref() == Ok("1") {
+            eprintln!("compile() as shipped (SHIPPING_ROUTER = {SHIPPING_ROUTER:?}):");
+            for case in &cases {
+                if !wanted(case.name) {
+                    continue;
+                }
+                let compiled = match compile::compile(&case.netlist) {
+                    Err(error) => {
+                        eprintln!("  {}: ERR -- {error}", case.name);
+                        continue;
+                    }
+                    Ok(compiled) => compiled,
+                };
+                let started = Instant::now();
+                match worst_settle_from_settled_states(
+                    &compiled,
+                    case.inputs,
+                    &case.outputs,
+                    case.expected,
+                ) {
+                    Ok((worst, transitions, at)) => eprintln!(
+                        "  {}: worst settle {worst} game ticks over {transitions} \
+                         fresh-simulator transitions, at {at}, every arrival right ({:.1}s)",
+                        case.name,
+                        started.elapsed().as_secs_f64(),
+                    ),
+                    Err(error) => eprintln!("  {}: **{error}**", case.name),
+                }
             }
         }
     }
