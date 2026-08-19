@@ -766,6 +766,10 @@ answer.
       `stair:` owner, and one of them has to become stone while the other has
       to stay air. It now writes the riser `Occupancy::Stone` and the
       headroom `Occupancy::Solid`. The obstacle was the type, not the world.
+      (Since 2026-08-19 the headroom is `Occupancy::Air`, a fifth value split
+      out of `Solid` so the lid rule -- `anchor_is_free_for` refusing any
+      anchor whose floor cell is committed air, own net included -- has a
+      commitment to read; the ledger's "two hard rules" entry records why.)
     - `the_lid_cell_can_be_open_when_asked_and_stone_one_net_later` (was
       `..._solid_one_net_later`) — the lid cell is still frequently **not in
       the reservation at all** when `anchor_is_free_for` is asked, and

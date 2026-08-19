@@ -1677,6 +1677,23 @@ fn anchor_is_free_for(
     if reservation.conductor_owner(&below).is_some() {
         return false;
     }
+    // THE LID RULE (2026-08-19). A cell a laid staircase needs to stay air --
+    // any staircase, this net's own included -- refuses this cell, because
+    // this cell's floor is stone written exactly there, and a stone lid is
+    // what cuts a climb: `docs/derived/dust-join-relation.md`'s closed form,
+    // climb joins iff the step supports and the lid does not conduct. This is
+    // game physics, not contention, so it is a refusal and never a price.
+    // Measured before this arm existed: negotiated segment_a's g0 laid its
+    // third branch at (86,3,109), one storey over its own certified climb
+    // (86,1,109) -> (87,2,109); every arm of this function passed, the floor
+    // sealed the lid, and the simulator read the climb dead at all 16 vectors
+    // (`the_dead_climb_of_negotiated_segment_a_read_to_the_cell`). The
+    // symmetric half -- refusing a NEW climb whose headroom is already
+    // committed, by anyone -- is `deterministic_astar`'s staircase arm, which
+    // refuses any owned clearance cell.
+    if reservation.air_owner(&below).is_some() {
+        return false;
+    }
 
     keep_out(anchor).into_iter().all(|neighbour| {
         neighbour == start
@@ -1868,9 +1885,9 @@ fn reserve_path(reservation: &mut Reservation, owner: &str, path: &[Anchor]) {
             // block the upper cell stands on, so realisation writes stone into
             // it -- it is that cell's own floor, written by the loop below as
             // well. The cell over the climber's head, and the cell a descent
-            // needs left empty, both have to stay AIR. `Occupancy::Solid` is
-            // what "claimed, and not stone" means, and the join rule reads the
-            // difference: see [`join_lid`].
+            // needs left empty, both have to stay AIR -- `Occupancy::Air`, the
+            // commitment the lid rule in `anchor_is_free_for` reads, and the
+            // join rule reads the riser/air difference: see [`join_lid`].
             let is_riser = window[1].y > window[0].y && cell.y == window[0].y;
             reservation.insert(
                 cell,
@@ -1878,7 +1895,7 @@ fn reserve_path(reservation: &mut Reservation, owner: &str, path: &[Anchor]) {
                 if is_riser {
                     Occupancy::Stone
                 } else {
-                    Occupancy::Solid
+                    Occupancy::Air
                 },
             );
         }
@@ -2068,9 +2085,26 @@ pub enum Occupancy {
     /// does -- is reasoning about a world that will not exist at those three
     /// cells. That is why the exact rule is not wired into the shipping router.
     Stone,
+    /// A cell the plan has committed to **air**, and realisation depends on
+    /// it: the cell over a climber's head and the cell a descent falls past.
+    /// [`reserve_path`] writes this under a `stair:` guard and nothing else
+    /// writes it at all.
+    ///
+    /// Split out of [`Occupancy::Solid`] on 2026-08-19, because the two mean
+    /// opposite futures and one rule has to tell them apart: `Solid` is
+    /// "something stands here", `Air` is "nothing may ever stand here". The
+    /// measured failure that forced the split is negotiated `segment_a`'s g0,
+    /// whose third branch laid a wire one storey above its own certified
+    /// climb -- the wire's floor landed in the climb's headroom, this entry
+    /// said `Solid` like a torch does, `anchor_is_free_for`'s below-floor arm
+    /// asks only `conductor_owner`, and the stone that `emit_routes` then
+    /// wrote into the lid cut the climb dead
+    /// (`the_dead_climb_of_negotiated_segment_a_read_to_the_cell`). The lid
+    /// rule -- `anchor_is_free_for` refusing any anchor whose floor cell is
+    /// committed `Air`, own net included -- reads exactly this value.
+    Air,
     /// Occupied, and *not* known to be a conductive full block: a gate's torch
-    /// or lever, a terminal guard, the cell over a climber's head, and the
-    /// cell a descent needs to stay empty. For the join rule this reads the
+    /// or lever, or a terminal guard. For the join rule this reads the
     /// same as air, which is the safe reading -- it refuses.
     Solid,
 }
@@ -2138,6 +2172,17 @@ impl Reservation {
         })
     }
 
+    /// The owner of a cell the plan has committed to stay **air** -- a laid
+    /// climb's headroom or a laid descent's drop, [`Occupancy::Air`] under a
+    /// `stair:` guard. `Some` means a staircase already depends on this cell
+    /// being empty, so a floor written here cuts that staircase: the lid rule
+    /// in [`anchor_is_free_for`] is the reader.
+    fn air_owner(&self, anchor: &Anchor) -> Option<&str> {
+        self.cells.get(anchor).and_then(|(owner, occupancy)| {
+            matches!(occupancy, Occupancy::Air).then_some(owner.as_str())
+        })
+    }
+
     /// What this reservation calls a cell, whoever owns it.
     ///
     /// A read-only accessor, `#[cfg(test)]`, for the arithmetic harness: the
@@ -2153,14 +2198,14 @@ impl Reservation {
     /// Asked of a `stair:` guard, this is [`staircase_clearance`]'s
     /// mandatory-air half -- the cell over a climber's head and the one a
     /// descent falls past -- read back out of what [`reserve_path`] wrote
-    /// rather than derived a second time. [`Occupancy::Solid`] is exactly
-    /// "claimed, and not stone", and a guard's other cell, the riser, is
+    /// rather than derived a second time. [`Occupancy::Air`] is exactly that
+    /// commitment, and a guard's other cell, the riser, is
     /// [`Occupancy::Stone`].
     fn mandatory_air_of(&self, owner: &str) -> Vec<Anchor> {
         self.cells
             .iter()
             .filter(|(_, (held_by, occupancy))| {
-                held_by == owner && matches!(occupancy, Occupancy::Solid)
+                held_by == owner && matches!(occupancy, Occupancy::Air)
             })
             .map(|(cell, _)| *cell)
             .collect()
@@ -2977,6 +3022,146 @@ fn net_source(candidate: &PlanCandidate, signal: &str) -> Result<Anchor, Box<Rou
         })
 }
 
+/// THE RING RULE (2026-08-19): a repeater in `route` whose output can reach
+/// its own input cell through this route's own realised cells, or `None` when
+/// the route is electrically a tree.
+///
+/// `emit` places every repeater pre-lit, so a route that feeds a repeater's
+/// output back into that repeater's input is a latch: it comes up powered and
+/// stays powered at every input vector, which is a different circuit, not a
+/// dear one. Measured before this rule existed: negotiated `segment_a` at
+/// `PresentSchedule::starting_at(8)` laid **nine** such rings across six of
+/// its 47 nets -- g0's repeater at (93,4,110) closing through six of its own
+/// cells is the diagnosed one -- and the latch oracle (every torch deleted,
+/// every lever off, the real `Simulator` settled) read 751 cells still
+/// powered on that plan against zero on every other buildable plan. A ring is
+/// game physics, so it is a **refusal** in [`lay_net`] under both routers,
+/// never a price.
+///
+/// The edges walked are the measured physics, not plain adjacency:
+///
+/// * dust to dust on the same level -- joined unconditionally
+///   (`docs/derived/dust-join-relation.md`, same-layer arm);
+/// * dust to dust one level up or down across a horizontal step -- joined
+///   unless the pair's lid is committed stone. The closed form's step
+///   conjunct holds whenever the upper cell exists at all, because
+///   realisation lays a stone floor under every routed cell; the lid is
+///   consulted in the reservation, and a lid that is one of this route's own
+///   anchors counts as open, because a later anchor over an earlier floor
+///   stays dust in the world while the books say `Stone`
+///   ([`Occupancy::Stone`]'s doc);
+/// * dust into the input side of a repeater directly behind it, and a
+///   repeater into its output cell -- the diode's two edges, one-way.
+///
+/// The strongly-powered-block ramp (a repeater aiming into stone drives dust
+/// on every face of that stone) adds no own-cell edge at plan time: a trunk
+/// repeater aims into the next routed cell, which is dust, and a terminal
+/// repeater aims into a gate support whose sides `keep_out` refuses to this
+/// net's own wire -- so it is not walked here.
+fn ring_closed_in(route: &Route, reservation: &Reservation) -> Option<(Anchor, BTreeSet<Anchor>)> {
+    use crate::redstone::world::block::BlockKind;
+
+    let kind_of: BTreeMap<Anchor, &BlockState> = route
+        .anchors
+        .iter()
+        .copied()
+        .zip(route.realisation.iter())
+        .collect();
+
+    let sealed = |lid: Anchor| -> bool {
+        !kind_of.contains_key(&lid) && reservation.stone_owner(&lid).is_some()
+    };
+    let repeater_input = |cell: Anchor, state: &BlockState| -> Option<Anchor> {
+        (state.kind == BlockKind::Repeater)
+            .then(|| state.facing.map(|facing| step(cell, facing)))
+            .flatten()
+    };
+
+    let steps_from = |cell: Anchor| -> Vec<Anchor> {
+        let mut out = Vec::new();
+        let Some(state) = kind_of.get(&cell) else {
+            return out;
+        };
+        match state.kind {
+            BlockKind::RedstoneWire => {
+                for beside in horizontal_neighbours(cell) {
+                    if let Some(neighbour) = kind_of.get(&beside) {
+                        match neighbour.kind {
+                            BlockKind::RedstoneWire => out.push(beside),
+                            BlockKind::Repeater
+                                if repeater_input(beside, neighbour) == Some(cell) =>
+                            {
+                                out.push(beside);
+                            }
+                            _ => {}
+                        }
+                    }
+                    let up = Anchor { y: beside.y + 1, ..beside };
+                    if kind_of
+                        .get(&up)
+                        .is_some_and(|block| block.kind == BlockKind::RedstoneWire)
+                        && !sealed(Anchor { y: cell.y + 1, ..cell })
+                    {
+                        out.push(up);
+                    }
+                    let down = Anchor { y: beside.y - 1, ..beside };
+                    if kind_of
+                        .get(&down)
+                        .is_some_and(|block| block.kind == BlockKind::RedstoneWire)
+                        && !sealed(beside)
+                    {
+                        out.push(down);
+                    }
+                }
+            }
+            BlockKind::Repeater => {
+                if let Some(facing) = state.facing {
+                    let output = step(cell, facing.opposite());
+                    if let Some(next) = kind_of.get(&output) {
+                        match next.kind {
+                            BlockKind::RedstoneWire => out.push(output),
+                            BlockKind::Repeater if repeater_input(output, next) == Some(cell) => {
+                                out.push(output);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        out
+    };
+
+    for (&cell, state) in &kind_of {
+        let Some(input) = repeater_input(cell, state) else {
+            continue;
+        };
+        if !kind_of.contains_key(&input) {
+            continue;
+        }
+        let Some(facing) = state.facing else { continue };
+        let output = step(cell, facing.opposite());
+        if !kind_of.contains_key(&output) {
+            continue;
+        }
+        // Flood from the output through this route's own cells, never through
+        // the repeater itself. Reaching its own input closes a ring.
+        let mut seen: BTreeSet<Anchor> = BTreeSet::from([cell]);
+        let mut frontier = vec![output];
+        while let Some(at) = frontier.pop() {
+            if !seen.insert(at) {
+                continue;
+            }
+            if at == input {
+                return Some((cell, seen));
+            }
+            frontier.extend(steps_from(at).into_iter().filter(|next| !seen.contains(next)));
+        }
+    }
+    None
+}
+
 /// Lay one net: a branch per consumer, each searched from the net's source,
 /// each sharing whatever prefix an earlier branch already laid.
 ///
@@ -3189,6 +3374,45 @@ fn lay_net(
             kind,
             repeaters: trunk_repeaters + laid.repeaters,
         });
+
+        // THE RING RULE. A branch that closes a cycle through one of this
+        // route's own repeaters has built a latch, and a latch is a different
+        // circuit: pre-lit repeaters (`emit` places every one lit) keep it
+        // powered at every input vector. Game physics, so a refusal under
+        // both routers -- see [`ring_closed_in`] for the measured case and
+        // the edges walked. Checked after every branch so the branch that
+        // closed the ring is the one refused and charged.
+        if let Some((repeater, ring)) = ring_closed_in(&route, reservation) {
+            let mut charged: Vec<Anchor> = path[shared..]
+                .iter()
+                .copied()
+                .filter(|cell| ring.contains(cell))
+                .collect();
+            if charged.is_empty() {
+                // The closure always involves cells this branch laid, but if
+                // bookkeeping ever disagrees, charge the whole branch rather
+                // than nothing: an uncharged refusal repeats forever.
+                charged = path[shared..].to_vec();
+            }
+            return Err(Box::new(RoutingFailure {
+                blocked: signal.clone(),
+                corridor: (source, approach),
+                reservation: reservation.clone(),
+                charge_outright: charged,
+                error: PlannerError::PhysicalInvariant(
+                    compile::CompileError::CandidateMetadataViolation {
+                        item: signal.clone(),
+                        reason: format!(
+                            "the branch to {}.in[{input_index}] closes a ring: the repeater \
+                             at ({}, {}, {}) reaches its own input cell through this net's \
+                             own cells, and a route that feeds its own repeater input is a \
+                             latch, not a wire",
+                            netlist.gates[gate].output, repeater.x, repeater.y, repeater.z
+                        ),
+                    },
+                ),
+            }));
+        }
     }
     Ok(route)
 }
@@ -3343,7 +3567,7 @@ struct NetClaim {
     wire: Vec<Anchor>,
     /// The cells this net's staircases need to stay **air** -- the cell over a
     /// climber's head and the one a descent falls past. [`reserve_path`] writes
-    /// them [`Occupancy::Solid`] under a `stair:` owner; they are read back out
+    /// them [`Occupancy::Air`] under a `stair:` owner; they are read back out
     /// of the reservation rather than re-derived, so this cannot drift from
     /// [`staircase_clearance`].
     air: Vec<Anchor>,
@@ -3618,7 +3842,7 @@ fn preclaim_terminal_guards(
 ///
 /// Nothing here re-derives a rule: the wire cells are the route's own anchors
 /// less its sockets, and the mandatory-air cells are whatever [`reserve_path`]
-/// wrote under this net's `stair:` guard as [`Occupancy::Solid`] -- which is
+/// wrote under this net's `stair:` guard as [`Occupancy::Air`] -- which is
 /// [`staircase_clearance`]'s answer, recorded by the same function the router
 /// uses.
 fn claim_of(net: &str, route: &Route, reservation: &Reservation) -> NetClaim {
@@ -7732,6 +7956,12 @@ mod tests {
                         checkable += 1;
                         got == BlockKind::Solid
                     }
+                    // A mandatory-air commitment predicts exactly air; the lid
+                    // rule exists so nothing can write over it.
+                    Occupancy::Air => {
+                        checkable += 1;
+                        got == BlockKind::Air
+                    }
                     // Predicts nothing checkable: a GateConductor may be stone,
                     // AIR (the cell above a torch), or dust.
                     Occupancy::GateConductor | Occupancy::Solid => true,
@@ -7941,9 +8171,9 @@ mod tests {
         );
         assert_eq!(
             reservation.cells.get(&headroom).map(|(_, o)| *o),
-            Some(Occupancy::Solid),
-            "the cell over the climber's head has to stay air, and `Solid` is \
-             what 'claimed, and not stone' means"
+            Some(Occupancy::Air),
+            "the cell over the climber's head has to stay air, and `Air` is \
+             that commitment by name -- the lid rule reads it"
         );
         assert_ne!(
             reservation.cells.get(&riser).map(|(_, o)| *o),
@@ -16885,10 +17115,11 @@ mod tests {
     /// | seven_segment | ERR 20.7s | ERR 195.2s | 1155 1013 600 377 290 187 122 163 164 57 164 135 160 136 83 73 78 241 226 80 169 203 93 48 143 98 88 34 179 26 122 97 |
     ///
     /// Both `ERR` rows are the routers' own failures on this schedule, not the
-    /// judge's: neither plan ever reaches `verify_candidate`. `segment_a` does
-    /// route under `PresentSchedule::starting_at(8)`, and what that plan is
-    /// worth is measured in
-    /// `negotiated_segment_a_routes_and_still_does_not_compute`.
+    /// judge's: neither plan ever reaches `verify_candidate`. `segment_a` used
+    /// to route under `PresentSchedule::starting_at(8)` -- into nine latched
+    /// rings and a sealed climb -- and since 2026-08-19 the ring and lid rules
+    /// refuse that schedule's every candidate too; the history and the refusal
+    /// are pinned in `negotiated_segment_a_routes_and_still_does_not_compute`.
     ///
     /// Three things this says, and the second is the one the spec asked for.
     ///
@@ -17175,177 +17406,84 @@ mod tests {
         );
     }
 
-    /// **What the fixed judge does not unblock, measured because the brief
-    /// claimed the opposite.**
+    /// **What the fixed judge does not unblock -- and, since 2026-08-19, what
+    /// the router itself refuses.**
     ///
-    /// The case for fixing the judge included a claim: that a negotiated router
-    /// at `PresentSchedule::starting_at(8)` *routes* `segment_a` -- 2,127 cells,
-    /// all 47 nets laid, no shared cell -- and that the only thing refusing it
-    /// was the strength walk, so "the wall that has blocked this branch since
-    /// Task 13 is not a routing wall".
+    /// The history, in order, because each layer was measured before the next
+    /// existed:
     ///
-    /// It routes: **2,127 cells, 4,356 blocks, box 91x5x95, worst settle 42
-    /// game ticks** -- against the legacy emitter's 6,416 blocks and 68 ticks
-    /// for the same circuit, so it is smaller and faster than what ships. It
-    /// does not compute. Measured here, with the judge fixed: **8 of 16 vectors
-    /// wrong in the real `Simulator`**, starting at
-    /// `[false, false, false, false]`, where segment `a` should be lit and is
-    /// dark. The judge still refuses it, at `g0` -> `g32`'s support
-    /// `(97, 1, 97)`, and refusing it is right.
+    /// 1. The case for fixing the judge included a claim: that a negotiated
+    ///    router at `PresentSchedule::starting_at(8)` *routes* `segment_a` --
+    ///    2,127 cells, all 47 nets laid, no shared cell -- and that the only
+    ///    thing refusing it was the strength walk.
+    /// 2. Measured with the judge fixed: it routed -- 2,127 cells, 4,356
+    ///    blocks, box 91x5x95, worst settle 42 game ticks, against legacy's
+    ///    6,416 blocks and 68 ticks -- **and it did not compute**: 8 of 16
+    ///    vectors wrong in the real `Simulator`, dark exactly where segment
+    ///    `a` should light. `g0` closed a ring -- the repeater at (93,4,110)
+    ///    feeding its own input through five of its own cells, pre-lit by
+    ///    `emit`, latched at every vector -- and `g0`'s real feed died at the
+    ///    climb (86,1,109) -> (87,2,109), sealed by the floor of `g0`'s own
+    ///    third branch. Not one ring: nine, across six nets, with 751 cells
+    ///    still powered after every source was deleted
+    ///    (`rings_and_wire_under_wire_swept_across_every_buildable_plan`,
+    ///    run at 78d5185 with the rules disabled).
+    /// 3. Those two shapes are game physics, not contention -- a route that
+    ///    latches is a different circuit, and a climb with a conductive lid
+    ///    does not conduct -- so they are hard refusals now: the ring rule
+    ///    ([`ring_closed_in`], in [`lay_net`]) and the lid rule
+    ///    ([`anchor_is_free_for`]'s air arm). **This schedule's every
+    ///    surviving candidate contained one of them, so the router now
+    ///    returns an error where it used to return a latch.** That is the
+    ///    right trade by standing rule 7: a plan that routes and does not
+    ///    compute is worth nothing.
     ///
-    /// **Why, traced.** `g0`'s route contains a **closed loop**:
-    /// `(93, 4, 110)` is a repeater whose output runs
-    /// `(94, 4, 110)` -> `(94, 4, 111)` -> `(93, 4, 111)` -> `(92, 4, 111)` ->
-    /// `(92, 4, 110)`, and `(92, 4, 110)` is that same repeater's own input
-    /// cell. `emit` places every repeater pre-lit -- `structural_output`'s own
-    /// doc comment records that, and it is why both static walks refuse to read
-    /// a fresh world's activation fields -- so the ring comes up latched and
-    /// stays latched: the repeater refreshes it to 15, five cells of dust decay
-    /// it to 11, and 11 arrives back at the repeater's input. It never needed
-    /// `g0`'s source, and it does not have it: the branch that should feed it
-    /// climbs at `(86, 1, 109)` -> `(87, 2, 109)` and dies there in the
-    /// simulator as well as in the walk.
+    /// What this test pins: `starting_at(8)` yields **no plan** -- the
+    /// refusal is the router's own, before the judge is ever asked -- and the
+    /// recorded failure is one of the two rules by name. If this ever turns
+    /// green-with-a-plan again, that is news: it means negotiation found a
+    /// ring-free, lid-safe `segment_a`, and the plan deserves the full
+    /// measurement battery (rings, latch oracle, truth table) before anyone
+    /// calls it progress.
     ///
-    /// So the six cells `strength_differential` still reports as under-read on
-    /// this plan are cells a latched ring powers, not cells the net delivers
-    /// to, and widening the walk far enough to "reach" them would be widening
-    /// it to follow a loop no source drives. **The wall is a routing wall.**
-    /// What `route_negotiated` is missing is a check that a laid route is a
-    /// tree; `negotiation_left_nothing_shared` proves no two nets share a cell
-    /// and proves nothing about one net meeting itself.
-    ///
-    /// NOT MEASURED: whether the rip-up router can lay the same loop, and
-    /// whether any other schedule routes `segment_a` without one.
+    /// NOT MEASURED: whether any other schedule routes `segment_a` under the
+    /// two rules (no sweep, unchanged from the ledger), and whether a bigger
+    /// iteration budget would converge it.
     #[test]
-    #[ignore = "measurement: routes segment_a through 32 negotiation iterations and simulates 16 vectors, about 80 seconds"]
+    #[ignore = "measurement: runs segment_a through 32 negotiation iterations, about 40 seconds"]
     fn negotiated_segment_a_routes_and_still_does_not_compute() {
-        use crate::circuits::seven_segment::{build_single_segment_netlist, INPUT_NAMES};
+        use crate::circuits::seven_segment::build_single_segment_netlist;
 
-        let (netlist, output) = build_single_segment_netlist(0);
-        let plan = plan_negotiated_on_schedule(
+        let (netlist, _output) = build_single_segment_netlist(0);
+        let outcome = plan_negotiated_on_schedule(
             &netlist,
             &PortPlacements::default(),
             NEGOTIATION_ROUNDS,
             PresentSchedule::starting_at(8),
-        )
-        .expect("segment_a routes on this schedule -- that much of the claim holds");
-
-        let cells: usize = plan.routes().iter().map(|route| route.anchors().len()).sum();
-        assert!(
-            cells > 2_000,
-            "the routed plan is the one the claim is about; it laid {cells} cells"
         );
 
-        // The loop, found from the plan rather than from the coordinates above:
-        // a repeater whose own input cell is reachable from its own output by
-        // steps within the same route.
-        let g0 = route_named(&plan, "g0");
-        let own: BTreeSet<Anchor> = g0.anchors().iter().copied().collect();
-        let mut rings = Vec::new();
-        for (anchor, block) in g0.anchors().iter().zip(g0.realisation().iter()) {
-            if block.kind != crate::redstone::world::block::BlockKind::Repeater {
-                continue;
+        match outcome {
+            Err(error) => {
+                let refusal = error.to_string();
+                eprintln!(
+                    "negotiated segment_a at PresentSchedule::starting_at(8): no plan.\n  \
+                     last recorded failure: {refusal}"
+                );
+                assert!(
+                    refusal.contains("closes a ring") || refusal.contains("did not separate"),
+                    "the refusal should be the ring rule's or plain non-convergence, \
+                     not some new failure mode: {refusal}"
+                );
             }
-            let Some(facing) = block.facing else { continue };
-            // `facing` on a diode points at its own input side -- the same
-            // convention `net_signal_strength`'s `deliver` enforces -- so the
-            // rear is one step along `facing` and the output one step against.
-            let step_of = |cell: Anchor, direction: crate::redstone::world::block::Facing| {
-                let moved = Position::new(cell.x, cell.y, cell.z).offset(direction);
-                Anchor { x: moved.x, y: moved.y, z: moved.z }
-            };
-            let input = step_of(*anchor, facing);
-            let output = step_of(*anchor, facing.opposite());
-            if !own.contains(&input) || !own.contains(&output) {
-                continue;
-            }
-            // Flood from the output through this route's own cells, never
-            // through the repeater itself. Reaching its own input closes a ring.
-            let mut seen: BTreeSet<Anchor> = BTreeSet::from([*anchor]);
-            let mut frontier = vec![output];
-            let mut closed = false;
-            while let Some(cell) = frontier.pop() {
-                if !seen.insert(cell) {
-                    continue;
-                }
-                if cell == input {
-                    closed = true;
-                    break;
-                }
-                for direction in crate::redstone::simulator::position::ALL_SIX {
-                    let step = step_of(cell, direction);
-                    if own.contains(&step) && !seen.contains(&step) {
-                        frontier.push(step);
-                    }
-                }
-            }
-            if closed {
-                rings.push((*anchor, seen.len()));
+            Ok(plan) => {
+                let cells: usize = plan.routes().iter().map(|route| route.anchors().len()).sum();
+                panic!(
+                    "segment_a routed under the ring and lid rules ({cells} cells): \
+                     that is news, not a regression -- measure it (rings, latch oracle, \
+                     truth table) before celebrating, then rewrite this test to pin it"
+                );
             }
         }
-        assert!(
-            !rings.is_empty(),
-            "the finding is that `g0` closes a ring through one of its own repeaters; \
-             none was found, so either the plan changed or this test is now measuring nothing"
-        );
-
-        let refusal = verify_candidate(&plan, &netlist)
-            .expect_err("the judge refuses this plan, and this test is why that is right");
-        assert!(
-            refusal.to_string().contains("signal-strength violation"),
-            "the refusal is the strength walk's: {refusal}"
-        );
-
-        let realised = emit_candidate(&plan, &netlist, candidate_world_size(&plan))
-            .expect("the plan realises even though the judge refuses it");
-        let compiled = compile::CompiledCircuit {
-            world: realised.world,
-            input_positions: realised.ports.input_positions,
-            output_positions: realised.ports.output_positions,
-            gate_output_positions: realised.ports.gate_output_positions,
-            gate_facings: (0..netlist.gates.len()).map(|g| plan.facing_of(g)).collect(),
-            planner_kind: compile::PlannerKind::Unified3d,
-            legacy_emission: None,
-        };
-        let table =
-            simulated_truth_table(&compiled, &INPUT_NAMES[..], &[output], segment_a_expected);
-        assert!(
-            table.is_err(),
-            "**the claim under test**: the simulator says this plan computes `segment_a`. \
-             It said {table:?}, and rings {rings:?} are still in the plan."
-        );
-
-        // Everything the ship report quotes about this plan, printed here so it
-        // is reproducible rather than remembered: blocks against the legacy
-        // emitter's 6,416, the box, and the settle against legacy's 68.
-        let (sx, sy, sz) = compiled.world.size();
-        let mut blocks = 0usize;
-        let (mut low, mut high) = ((i32::MAX, i32::MAX, i32::MAX), (0, 0, 0));
-        for x in 0..sx {
-            for y in 0..sy {
-                for z in 0..sz {
-                    if compiled.world.get(x, y, z).kind
-                        == crate::redstone::world::block::BlockKind::Air
-                    {
-                        continue;
-                    }
-                    blocks += 1;
-                    low = (low.0.min(x), low.1.min(y), low.2.min(z));
-                    high = (high.0.max(x), high.1.max(y), high.2.max(z));
-                }
-            }
-        }
-        let ticks = worst_settle_game_ticks(&compiled, &INPUT_NAMES[..]);
-        eprintln!(
-            "negotiated segment_a at PresentSchedule::starting_at(8):\n  \
-             {cells} cells, {blocks} blocks (legacy ships 6416), box {}x{}x{}\n  \
-             worst settle {ticks:?} game ticks (legacy 68)\n  \
-             {} ring(s) in `g0` {rings:?}\n  judge: {refusal}\n  simulator: {table:?}",
-            high.0 - low.0 + 1,
-            high.1 - low.1 + 1,
-            high.2 - low.2 + 1,
-            rings.len(),
-        );
     }
 
     // -----------------------------------------------------------------------
@@ -18276,5 +18414,1011 @@ mod tests {
                 }
             }
         }
+    }
+
+    // =======================================================================
+    // 2026-08-19: the dead climb, the rings, and the wire-under-wire shape,
+    // measured across every buildable plan. Measurement harnesses only --
+    // nothing here changes production behaviour, and each prints what it ran.
+    // =======================================================================
+
+    /// Every plan this branch can produce and realise, with the world each
+    /// realises: both routers on the three circuits both carry, negotiated
+    /// `segment_a` on the one schedule it routes under, and legacy seeds for
+    /// the three circuits neither router carries.
+    fn every_buildable_plan() -> Vec<(String, Netlist, PlanCandidate, World)> {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+        let lowered = |name: &str, optimised: bool| -> Netlist {
+            let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
+            let (gate_level, _) = circuit.baked_netlist();
+            if optimised {
+                crate::compile::lowering::lower_optimised(&gate_level)
+            } else {
+                crate::compile::lowering::lower(&gate_level)
+            }
+            .expect("it lowers")
+        };
+
+        let mut plans: Vec<(String, Netlist, PlanCandidate)> = Vec::new();
+        for (name, netlist) in [
+            ("and4", build_and4_netlist().0),
+            ("full_adder", build_full_adder_netlist().0),
+            ("verilog:and4", lowered("verilog:and4", false)),
+        ] {
+            let rip_up = plan_from_netlist_with_router(
+                &netlist,
+                &PortPlacements::default(),
+                RIP_UP_ROUNDS,
+                RouterKind::RipUp,
+            )
+            .expect("the rip-up router carries this circuit");
+            plans.push((format!("{name} [rip-up]"), netlist.clone(), rip_up));
+            let negotiated = plan_negotiated_on_schedule(
+                &netlist,
+                &PortPlacements::default(),
+                NEGOTIATION_ROUNDS,
+                PresentSchedule::SHIPPING,
+            )
+            .expect("the negotiated router carries this circuit at SHIPPING");
+            plans.push((format!("{name} [negotiated 0]"), netlist, negotiated));
+        }
+        {
+            // Until 2026-08-19 this schedule was the one plan the negotiated
+            // router produced at scale, and it was a latched wrong circuit --
+            // 9 rings, 751 self-sustaining cells, 8 of 16 vectors dark. The
+            // ring and lid rules refuse those shapes at plan time now, so
+            // whether anything is buildable here is a measurement, not a
+            // premise.
+            let (netlist, _) = build_single_segment_netlist(0);
+            match plan_negotiated_on_schedule(
+                &netlist,
+                &PortPlacements::default(),
+                NEGOTIATION_ROUNDS,
+                PresentSchedule::starting_at(8),
+            ) {
+                Ok(negotiated) => {
+                    plans.push(("segment_a [negotiated 8]".to_string(), netlist, negotiated));
+                }
+                Err(error) => {
+                    eprintln!(
+                        "segment_a [negotiated 8]: no plan -- the router refuses rather than \
+                         lay the latch it used to: {error}"
+                    );
+                }
+            }
+        }
+        for (name, netlist) in [
+            ("segment_a", build_single_segment_netlist(0).0),
+            ("seven_segment", build_seven_segment_netlist().0),
+            ("verilog:seven_segment", lowered("verilog:seven_segment", true)),
+        ] {
+            let compiled = compile::compile_legacy(&netlist).expect("legacy compiles everything");
+            let seed = seed_from_legacy(&netlist, &compiled).expect("the legacy seed rebuilds");
+            plans.push((format!("{name} [legacy seed]"), netlist, seed));
+        }
+
+        plans
+            .into_iter()
+            .map(|(name, netlist, plan)| {
+                let world = emit_candidate(&plan, &netlist, candidate_world_size(&plan))
+                    .expect("every buildable plan realises")
+                    .world;
+                (name, netlist, plan, world)
+            })
+            .collect()
+    }
+
+    /// Rings in one route: a repeater whose output cell reaches its own input
+    /// cell through this route's own realised cells, walked with the
+    /// simulator's own `dust_connections` in the realised world plus the
+    /// repeater's two edges and the strongly-powered-block coupling -- never
+    /// plain adjacency, which would count vertical pairs the world keeps
+    /// apart.
+    fn rings_of(world: &World, route: &Route) -> Vec<(Anchor, usize)> {
+        use crate::redstone::simulator::connectivity::dust_connections;
+        use crate::redstone::simulator::position::{ALL_SIX, HORIZONTAL};
+        use crate::redstone::world::block::BlockKind;
+
+        let own: BTreeSet<Anchor> = route.anchors().iter().copied().collect();
+        let at = |cell: Anchor| Position::new(cell.x, cell.y, cell.z);
+        let to_anchor = |position: Position| Anchor {
+            x: position.x,
+            y: position.y,
+            z: position.z,
+        };
+
+        // One step of realised physics out of `cell`, kept to this route's
+        // own cells.
+        let steps = |cell: Anchor| -> Vec<Anchor> {
+            let mut out = Vec::new();
+            match world.get(cell.x, cell.y, cell.z).kind {
+                BlockKind::RedstoneWire => {
+                    for direction in HORIZONTAL {
+                        for target in dust_connections(world, at(cell), direction).iter() {
+                            let target = to_anchor(target);
+                            if own.contains(&target) {
+                                out.push(target);
+                            }
+                        }
+                        // Dust drives a repeater standing beside it whose
+                        // input side faces this cell.
+                        let beside = to_anchor(at(cell).offset(direction));
+                        if own.contains(&beside) {
+                            let block = world.get(beside.x, beside.y, beside.z);
+                            if block.kind == BlockKind::Repeater
+                                && block
+                                    .facing
+                                    .is_some_and(|f| to_anchor(at(beside).offset(f)) == cell)
+                            {
+                                out.push(beside);
+                            }
+                        }
+                    }
+                }
+                BlockKind::Repeater => {
+                    if let Some(facing) = world.get(cell.x, cell.y, cell.z).facing {
+                        let output = to_anchor(at(cell).offset(facing.opposite()));
+                        if own.contains(&output) {
+                            out.push(output);
+                        }
+                        // A repeater strongly powers the block in front of it,
+                        // and a strongly powered block drives dust on every
+                        // face -- coupling-mechanisms.md mechanism 3, the ramp.
+                        if world.get(output.x, output.y, output.z).kind == BlockKind::Solid {
+                            for direction in ALL_SIX {
+                                let lit = to_anchor(at(output).offset(direction));
+                                if own.contains(&lit)
+                                    && world.get(lit.x, lit.y, lit.z).kind
+                                        == BlockKind::RedstoneWire
+                                {
+                                    out.push(lit);
+                                }
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+            out
+        };
+
+        let mut rings = Vec::new();
+        for anchor in route.anchors() {
+            let block = world.get(anchor.x, anchor.y, anchor.z);
+            if block.kind != BlockKind::Repeater {
+                continue;
+            }
+            let Some(facing) = block.facing else { continue };
+            let input = to_anchor(at(*anchor).offset(facing));
+            let output = to_anchor(at(*anchor).offset(facing.opposite()));
+            if !own.contains(&input) || !own.contains(&output) {
+                continue;
+            }
+            let mut seen: BTreeSet<Anchor> = BTreeSet::from([*anchor]);
+            let mut frontier = vec![output];
+            let mut closed = false;
+            while let Some(cell) = frontier.pop() {
+                if !seen.insert(cell) {
+                    continue;
+                }
+                if cell == input {
+                    closed = true;
+                    break;
+                }
+                for step in steps(cell) {
+                    if !seen.contains(&step) {
+                        frontier.push(step);
+                    }
+                }
+            }
+            if closed {
+                rings.push((*anchor, seen.len()));
+            }
+        }
+        rings
+    }
+
+    /// Every conductor that stays powered after every source is deleted:
+    /// torches removed, levers thrown off, the world settled by the real
+    /// `Simulator`. Nothing legitimate survives that -- whatever does is a
+    /// self-sustaining loop, which is the physics definition of a latch and
+    /// needs no propagation rule restated here (standing rule 6).
+    fn latched_cells(world: &World) -> Vec<(Anchor, crate::redstone::world::block::BlockKind, u8)> {
+        use crate::redstone::world::block::BlockKind;
+
+        let mut sourceless = world.clone();
+        let (sx, sy, sz) = sourceless.size();
+        for x in 0..sx {
+            for y in 0..sy {
+                for z in 0..sz {
+                    let block = sourceless.get(x, y, z).clone();
+                    match block.kind {
+                        BlockKind::Torch | BlockKind::WallTorch | BlockKind::RedstoneBlock => {
+                            sourceless.set(x, y, z, BlockState::air());
+                        }
+                        BlockKind::Lever => {
+                            let mut lever = block;
+                            lever.lit = false;
+                            sourceless.set(x, y, z, lever);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        let mut simulator = crate::redstone::simulator::Simulator::new(sourceless);
+        simulator
+            .run_until_stable(2000)
+            .expect("the sourceless world settles");
+        let mut out = Vec::new();
+        for x in 0..sx {
+            for y in 0..sy {
+                for z in 0..sz {
+                    let block = simulator.world().get(x, y, z);
+                    let alive = match block.kind {
+                        BlockKind::RedstoneWire => block.power > 0,
+                        BlockKind::Repeater => block.lit,
+                        _ => false,
+                    };
+                    if alive {
+                        out.push((Anchor { x, y, z }, block.kind, block.power));
+                    }
+                }
+            }
+        }
+        out
+    }
+
+    /// **(A) and (C) of the 2026-08-19 diagnosis**: every ring and every
+    /// wire-under-wire pair in every buildable plan, from the realised worlds.
+    ///
+    /// ```bash
+    /// cargo test --release --lib \
+    ///   compile::planner::tests::rings_and_wire_under_wire_swept_across_every_buildable_plan \
+    ///   -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "measurement harness: builds ten plans (negotiated segment_a alone is ~40s) and sweeps each"]
+    fn rings_and_wire_under_wire_swept_across_every_buildable_plan() {
+        let mut total_rings = 0usize;
+        let mut total_stacks = 0usize;
+        for (name, _netlist, plan, world) in every_buildable_plan() {
+            let mut owner_of: BTreeMap<Anchor, String> = BTreeMap::new();
+            for route in plan.routes() {
+                for anchor in route.anchors() {
+                    owner_of.insert(*anchor, route.id().to_string());
+                }
+            }
+
+            let mut plan_rings = Vec::new();
+            let mut plan_stacks = Vec::new();
+            for route in plan.routes() {
+                for (anchor, size) in rings_of(&world, route) {
+                    plan_rings.push((route.id().to_string(), anchor, size));
+                }
+                let own: BTreeSet<Anchor> = route.anchors().iter().copied().collect();
+                // A pair counts only when both cells hold a conductor in the
+                // realised world -- a legacy route's anchor list also names
+                // cells that realise as something else, and a "stack" whose
+                // upper half is stone is not the shape under measurement.
+                let conducts = |cell: &Anchor| {
+                    matches!(
+                        world.get(cell.x, cell.y, cell.z).kind,
+                        crate::redstone::world::block::BlockKind::RedstoneWire
+                            | crate::redstone::world::block::BlockKind::Repeater
+                    )
+                };
+                for anchor in route.anchors() {
+                    let above = Anchor {
+                        y: anchor.y + 1,
+                        ..*anchor
+                    };
+                    if !conducts(anchor) || !conducts(&above) {
+                        continue;
+                    }
+                    if own.contains(&above) {
+                        plan_stacks.push((
+                            format!("{} under itself", route.id()),
+                            *anchor,
+                            above,
+                        ));
+                    } else if let Some(other) = owner_of.get(&above) {
+                        if other != route.id() {
+                            plan_stacks.push((
+                                format!("{} under {other}", route.id()),
+                                *anchor,
+                                above,
+                            ));
+                        }
+                    }
+                }
+            }
+
+            let latched = latched_cells(&world);
+            total_rings += plan_rings.len();
+            total_stacks += plan_stacks.len();
+            eprintln!(
+                "{name}: {} route(s); {} ring(s); {} wire-under-wire pair(s); {} latched cell(s) with every source deleted",
+                plan.routes().len(),
+                plan_rings.len(),
+                plan_stacks.len(),
+                latched.len(),
+            );
+            for (net, anchor, size) in &plan_rings {
+                eprintln!(
+                    "    RING  net {net}: repeater ({}, {}, {}) closes through {size} of its own cells",
+                    anchor.x, anchor.y, anchor.z
+                );
+            }
+            for (label, lower, upper) in &plan_stacks {
+                eprintln!(
+                    "    STACK {label}: wire ({}, {}, {}) directly under wire ({}, {}, {})",
+                    lower.x, lower.y, lower.z, upper.x, upper.y, upper.z
+                );
+            }
+            for (cell, kind, power) in &latched {
+                eprintln!(
+                    "    LATCH ({}, {}, {}) {kind:?} power {power} owned by {:?}",
+                    cell.x,
+                    cell.y,
+                    cell.z,
+                    owner_of.get(cell)
+                );
+            }
+        }
+        eprintln!("total: {total_rings} ring(s), {total_stacks} wire-under-wire pair(s)");
+    }
+
+    /// **(B) of the 2026-08-19 diagnosis**: the dead climb of negotiated
+    /// `segment_a`, read to the cell -- who holds the lid, who put stone in
+    /// it, what the simulator says, and what plan-time legality asked.
+    ///
+    /// ```bash
+    /// cargo test --release --lib \
+    ///   compile::planner::tests::the_dead_climb_of_negotiated_segment_a_read_to_the_cell \
+    ///   -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "measurement harness: routes segment_a through 32 negotiation iterations and reads the climb, ~60s"]
+    fn the_dead_climb_of_negotiated_segment_a_read_to_the_cell() {
+        use crate::circuits::seven_segment::{build_single_segment_netlist, INPUT_NAMES};
+        use crate::redstone::simulator::connectivity::dust_connections;
+        use crate::redstone::simulator::position::HORIZONTAL;
+
+        let (netlist, _output) = build_single_segment_netlist(0);
+        // Since 2026-08-19 the ring and lid rules refuse every plan this
+        // schedule used to produce, so the shape this harness reads no longer
+        // exists on the shipping code. The diagnosis it records was measured
+        // with both rules disabled (the injection runs of
+        // `the_lid_rule_refuses_the_floor_that_cut_g0s_climb` and
+        // `lay_net_refuses_the_branch_that_closes_a_ring`); to replay it,
+        // disable those two arms and run this again.
+        let plan = match plan_negotiated_on_schedule(
+            &netlist,
+            &PortPlacements::default(),
+            NEGOTIATION_ROUNDS,
+            PresentSchedule::starting_at(8),
+        ) {
+            Ok(plan) => plan,
+            Err(error) => {
+                eprintln!(
+                    "the dead climb is unbuildable now: the router refuses this schedule's \
+                     every plan rather than lay the shapes that produced it: {error}"
+                );
+                return;
+            }
+        };
+
+        let q = Anchor { x: 86, y: 1, z: 109 }; // the lower dust of the dead climb
+        let p = Anchor { x: 87, y: 2, z: 109 }; // the upper dust
+        let lid = Anchor { x: 86, y: 2, z: 109 }; // Q.up() -- the cell the climb rule reads
+        let step_cell = Anchor { x: 87, y: 1, z: 109 }; // P.down() -- the step
+        let over = Anchor { x: 86, y: 3, z: 109 }; // the only cell whose floor is the lid
+
+        // 1. Who holds each cell as a route anchor, at which index. The index
+        // is the lay order: `lay_net` appends `path[shared..]` per branch.
+        for cell in [q, p, lid, step_cell, over] {
+            let mut holders = Vec::new();
+            for route in plan.routes() {
+                if let Some(index) = route.anchors().iter().position(|anchor| anchor == &cell) {
+                    holders.push(format!(
+                        "net {} anchor[{index}] holds {:?}",
+                        route.id(),
+                        route.realisation()[index].kind
+                    ));
+                }
+            }
+            eprintln!(
+                "plan ({}, {}, {}): {}",
+                cell.x,
+                cell.y,
+                cell.z,
+                if holders.is_empty() {
+                    "no route anchor".to_string()
+                } else {
+                    holders.join("; ")
+                }
+            );
+        }
+        for (index, node) in plan.primitive_nodes.iter().enumerate() {
+            if node.footprint.contains(&lid) || node.anchor == lid {
+                eprintln!("primitive {index} `{}` claims the lid", node.id);
+            }
+        }
+
+        // g0 near the climb, in anchor (= lay) order, and its branch ends.
+        let g0 = route_named(&plan, "g0");
+        for (index, (anchor, block)) in
+            g0.anchors().iter().zip(g0.realisation().iter()).enumerate()
+        {
+            if (anchor.x - 86).abs() <= 2 && (anchor.z - 109).abs() <= 2 {
+                eprintln!(
+                    "g0 anchor[{index}] ({}, {}, {}) {:?}",
+                    anchor.x, anchor.y, anchor.z, block.kind
+                );
+            }
+        }
+        for (index, terminal) in g0.terminals().iter().enumerate() {
+            let socket = terminal.sink.anchor;
+            let position = g0.anchors().iter().position(|anchor| *anchor == socket);
+            eprintln!(
+                "g0 terminal[{index}] -> {}.in[{}] socket ({}, {}, {}) at anchor index {position:?}",
+                terminal.sink.gate,
+                terminal.sink.input_index,
+                socket.x,
+                socket.y,
+                socket.z
+            );
+        }
+
+        // 2. The realised world: both columns.
+        let realised = emit_candidate(&plan, &netlist, candidate_world_size(&plan))
+            .expect("the plan realises");
+        for (x, z) in [(86, 109), (87, 109)] {
+            for y in 0..5 {
+                let block = realised.world.get(x, y, z);
+                eprintln!("world ({x}, {y}, {z}) = {:?}", block.kind);
+            }
+        }
+
+        // 3. The join relation in that world, asked through the simulator's
+        // own `dust_connections`: every direction out of Q and out of P.
+        for (label, cell) in [("Q(86,1,109)", q), ("P(87,2,109)", p)] {
+            for direction in HORIZONTAL {
+                let targets: Vec<Position> =
+                    dust_connections(&realised.world, Position::new(cell.x, cell.y, cell.z), direction)
+                        .iter()
+                        .collect();
+                eprintln!("dust_connections({label}, {direction:?}) = {targets:?}");
+            }
+        }
+
+        // 4. The simulator, all sixteen vectors: what Q and P carry.
+        let compiled = compile::CompiledCircuit {
+            world: realised.world.clone(),
+            input_positions: realised.ports.input_positions.clone(),
+            output_positions: realised.ports.output_positions.clone(),
+            gate_output_positions: realised.ports.gate_output_positions.clone(),
+            gate_facings: (0..netlist.gates.len()).map(|g| plan.facing_of(g)).collect(),
+            planner_kind: compile::PlannerKind::Unified3d,
+            legacy_emission: None,
+        };
+        let levers: Vec<(i32, i32, i32)> = INPUT_NAMES
+            .iter()
+            .map(|name| *compiled.input_positions.get(*name).expect("a lever per input"))
+            .collect();
+        let mut simulator = crate::redstone::simulator::Simulator::new(compiled.world.clone());
+        simulator.run_until_stable(2000).expect("settles");
+        let mut q_readings = BTreeSet::new();
+        let mut p_readings = BTreeSet::new();
+        for combination in 0..16usize {
+            let bits: Vec<bool> = (0..4).map(|i| (combination >> (3 - i)) & 1 == 1).collect();
+            for (position, &bit) in levers.iter().zip(bits.iter()) {
+                let mut state = simulator
+                    .world()
+                    .get(position.0, position.1, position.2)
+                    .clone();
+                state.lit = bit;
+                simulator
+                    .world_mut()
+                    .set(position.0, position.1, position.2, state);
+                simulator.run_until_stable(2000).expect("settles");
+            }
+            q_readings.insert(simulator.world().get(q.x, q.y, q.z).power);
+            p_readings.insert(simulator.world().get(p.x, p.y, p.z).power);
+        }
+        eprintln!("simulator, all 16 vectors: Q reads {q_readings:?}, P reads {p_readings:?}");
+
+        // 5. Plan-time legality, replayed. Reserve the climb exactly as
+        // `reserve_path` does, then ask `anchor_is_free_for` about the cell
+        // over the lid -- under this net's own name and under a foreign one.
+        let elsewhere = Anchor {
+            x: -10_000,
+            y: -10_000,
+            z: -10_000,
+        };
+        let mut reservation = Reservation::new();
+        reserve_path(&mut reservation, "g0", &[q, p]);
+        eprintln!(
+            "after the climb is reserved: lid ({}, {}, {}) owner {:?} occupancy {:?}; step ({}, {}, {}) owner {:?} occupancy {:?}",
+            lid.x,
+            lid.y,
+            lid.z,
+            reservation.owner(&lid),
+            reservation.occupancy(&lid),
+            step_cell.x,
+            step_cell.y,
+            step_cell.z,
+            reservation.owner(&step_cell),
+            reservation.occupancy(&step_cell),
+        );
+        eprintln!(
+            "anchor_is_free_for(over-the-lid (86,3,109), owner g0)      = {}",
+            anchor_is_free_for(over, elsewhere, elsewhere, elsewhere, "g0", &reservation)
+        );
+        eprintln!(
+            "anchor_is_free_for(over-the-lid (86,3,109), foreign owner) = {}",
+            anchor_is_free_for(over, elsewhere, elsewhere, elsewhere, "somebody_else", &reservation)
+        );
+    }
+
+    /// Whether the wire-under-wire shape is already in a world `compile()`
+    /// ships today: every condition circuit through the real shipping path,
+    /// the world scanned for dust standing directly on dust.
+    #[test]
+    #[ignore = "measurement harness: compiles all six condition circuits through the shipping path, ~5s"]
+    fn shipped_worlds_scanned_for_wire_under_wire() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+        use crate::redstone::world::block::BlockKind;
+
+        let lowered = |name: &str, optimised: bool| -> Netlist {
+            let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
+            let (gate_level, _) = circuit.baked_netlist();
+            if optimised {
+                crate::compile::lowering::lower_optimised(&gate_level)
+            } else {
+                crate::compile::lowering::lower(&gate_level)
+            }
+            .expect("it lowers")
+        };
+        for (name, netlist) in [
+            ("and4", build_and4_netlist().0),
+            ("full_adder", build_full_adder_netlist().0),
+            ("verilog:and4", lowered("verilog:and4", false)),
+            ("segment_a", build_single_segment_netlist(0).0),
+            ("seven_segment", build_seven_segment_netlist().0),
+            ("verilog:seven_segment", lowered("verilog:seven_segment", true)),
+        ] {
+            let compiled = compile::compile(&netlist).expect("every condition circuit compiles");
+            let (sx, sy, sz) = compiled.world.size();
+            let mut pairs = Vec::new();
+            for x in 0..sx {
+                for y in 1..sy {
+                    for z in 0..sz {
+                        if compiled.world.get(x, y, z).kind == BlockKind::RedstoneWire
+                            && compiled.world.get(x, y - 1, z).kind == BlockKind::RedstoneWire
+                        {
+                            pairs.push((x, y - 1, z));
+                        }
+                    }
+                }
+            }
+            eprintln!(
+                "{name} [{:?}]: {} dust-on-dust pair(s) in the shipped world{}{}",
+                compiled.planner_kind(),
+                pairs.len(),
+                if pairs.is_empty() { "" } else { ": lower cells " },
+                if pairs.is_empty() {
+                    String::new()
+                } else {
+                    format!("{pairs:?}")
+                },
+            );
+        }
+    }
+
+    /// **The class question of the 2026-08-19 diagnosis**: what the plan
+    /// certified (`realise_branch_from`'s `carries`, true for every branch of
+    /// every returned plan) against what the simulator delivers, sink by sink,
+    /// through `strength_differential`'s isolation worlds -- the corrected
+    /// oracle machinery from `2e0594f`, adapted from walk-vs-simulator to
+    /// plan-vs-simulator.
+    ///
+    /// ```bash
+    /// cargo test --release --lib \
+    ///   compile::planner::tests::plan_time_carry_certification_reconciled_with_the_simulator \
+    ///   -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "measurement harness: ten plans, each swept through every vector plus per-origin isolation worlds, several minutes"]
+    fn plan_time_carry_certification_reconciled_with_the_simulator() {
+        use crate::compile::strength_differential::measure;
+
+        for (name, netlist, plan, _world) in every_buildable_plan() {
+            let size = candidate_world_size(&plan);
+            let parts = realise_without_verifying(&plan, &netlist, size).expect("it realises");
+            let ports = &parts.realised.ports;
+            let measurement = match measure(
+                &parts.realised.world,
+                &parts.reservation,
+                &netlist,
+                &parts.nets,
+                &ports.gate_output_positions,
+                &ports.input_positions,
+                &ports.output_positions,
+            ) {
+                Ok(measurement) => measurement,
+                Err(error) => {
+                    eprintln!("{name}: NOT MEASURED: {error}");
+                    continue;
+                }
+            };
+
+            let terminals: usize = plan
+                .routes()
+                .iter()
+                .map(|route| route.terminals().len())
+                .sum();
+            let mut dead = Vec::new();
+            let mut sinks = 0usize;
+            for group in &measurement.groups {
+                for reading in group.readings.iter().filter(|reading| reading.is_sink) {
+                    sinks += 1;
+                    if !reading.attributed() {
+                        dead.push(format!(
+                            "nets [{}] deliver nothing to sink ({}, {}, {}) in any isolation world \
+                             (walk {}, live {}, control {}, every origin live: {})",
+                            group.nets.join(", "),
+                            reading.cell.x,
+                            reading.cell.y,
+                            reading.cell.z,
+                            reading.walk,
+                            reading.live,
+                            reading.control,
+                            group.every_origin_live(),
+                        ));
+                    }
+                }
+            }
+            eprintln!(
+                "{name}: {terminals} branch(es) certified carrying at plan time; {sinks} sink support(s) measured; {} dead in the world; judge: {}",
+                dead.len(),
+                measurement
+                    .shipping_verdict
+                    .clone()
+                    .unwrap_or_else(|| "passes".to_string()),
+            );
+            for line in &dead {
+                eprintln!("    DEAD  {line}");
+            }
+            for line in &measurement.unmeasured {
+                eprintln!("    NOT MEASURED: {line}");
+            }
+        }
+    }
+
+    // =======================================================================
+    // 2026-08-19: the two hard rules the diagnosis bought -- the lid rule (B)
+    // and the ring rule (A). Each test here can fail against the defect it
+    // names: disable the rule's arm and the assertion goes red on exactly the
+    // shape the diagnosis measured.
+    // =======================================================================
+
+    /// **THE LID RULE, replayed on the diagnosed cells.** Negotiated
+    /// `segment_a`'s g0 laid wire at (86,3,109), one storey above its own
+    /// certified climb (86,1,109) -> (87,2,109); the wire's floor is the
+    /// climb's lid, `anchor_is_free_for` answered `true` (measured in
+    /// `the_dead_climb_of_negotiated_segment_a_read_to_the_cell`), and the
+    /// stone `emit_routes` wrote there cut the climb at all 16 vectors.
+    ///
+    /// Injection (standing rule 2): with `anchor_is_free_for`'s air arm
+    /// commented out, the two refusal asserts below go red -- the exact call
+    /// the diagnosis replayed as `true` is `true` again. Confirmed red on
+    /// 2026-08-19, then the arm restored.
+    #[test]
+    fn the_lid_rule_refuses_the_floor_that_cut_g0s_climb() {
+        let q = Anchor { x: 86, y: 1, z: 109 };
+        let p = Anchor { x: 87, y: 2, z: 109 };
+        let lid = Anchor { x: 86, y: 2, z: 109 };
+        let over = Anchor { x: 86, y: 3, z: 109 };
+        let elsewhere = Anchor { x: -10_000, y: -10_000, z: -10_000 };
+
+        let mut reservation = Reservation::new();
+        reserve_path(&mut reservation, "g0", &[q, p]);
+
+        // The commitment is air by name now, not `Solid` like a torch.
+        assert_eq!(
+            reservation.occupancy(&lid),
+            Some(Occupancy::Air),
+            "the climb's headroom is a mandatory-air commitment"
+        );
+        assert_eq!(reservation.air_owner(&lid), Some("stair:g0"));
+
+        // The exact call the diagnosis replayed as `true`: the net's OWN later
+        // branch may not lay a floor into its own climb's lid...
+        assert!(
+            !anchor_is_free_for(over, elsewhere, elsewhere, elsewhere, "g0", &reservation),
+            "the cell over the lid must refuse wire to the climb's own net: \
+             its floor is the stone that cuts the climb"
+        );
+        // ...and the rule is symmetric: a foreign net is refused too (the
+        // rip-up router shares one reservation, so foreign guards are visible
+        // there; under negotiation the same relation is priced and gated to
+        // zero by `contested`).
+        assert!(
+            !anchor_is_free_for(over, elsewhere, elsewhere, elsewhere, "somebody_else", &reservation),
+            "the lid rule is symmetric across owners"
+        );
+
+        // Control: one cell west, whose floor is nobody's commitment, stays
+        // free -- the arm refuses the lid and nothing else.
+        let control = Anchor { x: 85, y: 3, z: 109 };
+        assert!(
+            anchor_is_free_for(control, elsewhere, elsewhere, elsewhere, "g0", &reservation),
+            "the refusal is the lid's, not the whole storey's"
+        );
+
+        // A descent's drop cell carries the same commitment: the cell beside
+        // the upper cell has to stay air or the fall is a wall.
+        let mut descent = Reservation::new();
+        reserve_path(
+            &mut descent,
+            "n",
+            &[Anchor { x: 0, y: 2, z: 0 }, Anchor { x: 1, y: 1, z: 0 }],
+        );
+        let drop = Anchor { x: 1, y: 2, z: 0 };
+        assert_eq!(descent.air_owner(&drop), Some("stair:n"));
+        assert!(
+            !anchor_is_free_for(
+                Anchor { x: 1, y: 3, z: 0 },
+                elsewhere,
+                elsewhere,
+                elsewhere,
+                "n",
+                &descent
+            ),
+            "a floor into a descent's drop cell is the same cut"
+        );
+    }
+
+    /// **THE RING RULE's detector, on the measured shape.** The first case is
+    /// byte-for-byte the diagnosed g0 ring: the repeater at (93,4,110), its
+    /// output running (94,4,110) -> (94,4,111) -> (93,4,111) -> (92,4,111) ->
+    /// (92,4,110), and (92,4,110) is the repeater's own input cell. The other
+    /// cases prove the detector's edges are the join relation and not plain
+    /// adjacency: an open loop is no ring, a ring through a vertical join
+    /// exists exactly while the pair's lid is uncommitted, and a committed
+    /// stone lid breaks it.
+    #[test]
+    fn a_ring_through_a_repeater_is_found_and_a_sealed_lid_breaks_it() {
+        use crate::redstone::world::block::Facing;
+
+        let dust = compile::dust();
+        let route_of = |cells: Vec<(Anchor, BlockState)>| -> Route {
+            let (anchors, blocks): (Vec<Anchor>, Vec<BlockState>) = cells.into_iter().unzip();
+            let floors = vec![compile::stone(); anchors.len()];
+            Route::from_legacy("g0".to_string(), anchors, Vec::new(), blocks, floors)
+        };
+        let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
+
+        // Case 1: the measured g0 ring, same level throughout. The signal
+        // travels east through the repeater, so `compile::repeater(East)`
+        // stores facing West -- input (92,4,110), output (94,4,110).
+        let measured = route_of(vec![
+            (at(92, 4, 110), dust.clone()),
+            (at(93, 4, 110), compile::repeater(Facing::East)),
+            (at(94, 4, 110), dust.clone()),
+            (at(94, 4, 111), dust.clone()),
+            (at(93, 4, 111), dust.clone()),
+            (at(92, 4, 111), dust.clone()),
+        ]);
+        let (repeater, ring) = ring_closed_in(&measured, &Reservation::new())
+            .expect("the measured g0 shape is a ring");
+        assert_eq!(repeater, at(93, 4, 110));
+        assert!(ring.contains(&at(92, 4, 110)), "the flood reached the input");
+
+        // Case 2: the same route with the closing cell gone is a tree.
+        let open = route_of(vec![
+            (at(92, 4, 110), dust.clone()),
+            (at(93, 4, 110), compile::repeater(Facing::East)),
+            (at(94, 4, 110), dust.clone()),
+            (at(94, 4, 111), dust.clone()),
+            (at(93, 4, 111), dust.clone()),
+        ]);
+        assert_eq!(
+            ring_closed_in(&open, &Reservation::new()),
+            None,
+            "no closure, no ring"
+        );
+
+        // Case 3: a ring that needs a vertical join -- the output side climbs
+        // at (4,1,0) -> (4,2,1), runs back west one storey up and two cells
+        // over, and descends onto the input side at (0,2,1) -> (0,1,0). Both
+        // joins' lids -- (4,2,0) and (0,2,0) -- are open, so the ring
+        // closes...
+        let climb_ring = || {
+            route_of(vec![
+                (at(0, 1, 0), dust.clone()),
+                (at(1, 1, 0), compile::repeater(Facing::East)),
+                (at(2, 1, 0), dust.clone()),
+                (at(3, 1, 0), dust.clone()),
+                (at(4, 1, 0), dust.clone()),
+                (at(4, 2, 1), dust.clone()),
+                (at(4, 2, 2), dust.clone()),
+                (at(3, 2, 2), dust.clone()),
+                (at(2, 2, 2), dust.clone()),
+                (at(1, 2, 2), dust.clone()),
+                (at(0, 2, 2), dust.clone()),
+                (at(0, 2, 1), dust.clone()),
+            ])
+        };
+        assert!(
+            ring_closed_in(&climb_ring(), &Reservation::new()).is_some(),
+            "the climb's lid (4,2,0) and the descent's lid (0,2,0) are open, \
+             so the vertical pairs join and the ring closes"
+        );
+
+        // ...and committing one lid to stone breaks exactly that join, which
+        // is the same closed form the lid rule stands on: a vertical pair is
+        // apart iff its lid is a conductive full block.
+        let mut sealed = Reservation::new();
+        sealed.insert(at(4, 2, 0), "anyone", Occupancy::Stone);
+        assert_eq!(
+            ring_closed_in(&climb_ring(), &sealed),
+            None,
+            "a committed stone lid seals the climb join and the ring cannot close"
+        );
+    }
+
+    /// **THE RING RULE, wired: `lay_net` refuses the branch that closes a
+    /// ring.** A two-gate net in a walled corridor. The first branch runs a
+    /// trunk of twenty-one cells, so the strength budget puts a refresh at
+    /// (14,1,0). The second branch is forced up a staircase at the trunk's
+    /// far end and back along the storey above:
+    ///
+    /// * In the **ring** corridor the return run is directly beside the
+    ///   trunk (z = 1) with open lids at x = 8..=12, so it joins back onto
+    ///   the trunk *west* of the refresh -- trunk, climb, return run and
+    ///   descent-joins close a cycle with the repeater inside it, which is
+    ///   the latch `emit` would light. `lay_net` must refuse the branch.
+    ///
+    /// * In the **control** corridor the return run is two cells over
+    ///   (z = 2) and rejoins the trunk through a single open lid at
+    ///   x = 16 -- *east* of the refresh. The same kind of cycle closes, and
+    ///   the route still carries a repeater, but the repeater is outside the
+    ///   loop: dust alone has no gain, so this is not a latch and `lay_net`
+    ///   must allow it. The rule keys on the repeater inside the ring, not
+    ///   on loops and not on repeaters.
+    ///
+    /// Injection (standing rule 2): with the `ring_closed_in` call in
+    /// `lay_net` commented out, the first half goes red (`lay_net` returns
+    /// `Ok` and the ring ships in the returned route). Confirmed red on
+    /// 2026-08-19, then the call restored.
+    #[test]
+    fn lay_net_refuses_the_branch_that_closes_a_ring() {
+        let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
+        let trunk_end = 20;
+
+        // Gate 0 faces north at (22,1,0): socket (21,1,0), approach (20,1,0)
+        // -- the trunk's own east end. Gate 1 faces east, so its socket is
+        // one cell north of its support and the approach one further.
+        let lay_through = |open: &BTreeSet<Anchor>,
+                           support1: Anchor|
+         -> Result<Route, Box<RoutingFailure>> {
+            let netlist = Netlist {
+                inputs: vec!["n".to_string()],
+                outputs: vec!["s0".to_string(), "s1".to_string()],
+                gates: vec![Gate::nor("s0", &["n"]), Gate::nor("s1", &["n"])],
+            };
+            let support0 = at(trunk_end + 2, 1, 0);
+            let candidate = PlanCandidate::with_facings(
+                vec![support0, support1],
+                Vec::new(),
+                Vec::new(),
+                vec![geometry::CellFacing::NORTH, geometry::CellFacing::EAST],
+            );
+            let socket0 = step(
+                support0,
+                compile::geometry::input_directions(candidate.facing_of(0))[0],
+            );
+            let socket1 = step(
+                support1,
+                compile::geometry::input_directions(candidate.facing_of(1))[0],
+            );
+            assert_eq!(socket0, at(trunk_end + 1, 1, 0));
+
+            let mut walled = Reservation::new();
+            for x in -25..=45 {
+                for y in 1..=5 {
+                    for z in -25..=25 {
+                        let cell = at(x, y, z);
+                        let is_open = open.contains(&cell)
+                            || cell == socket0
+                            || cell == support0
+                            || cell == socket1
+                            || cell == support1;
+                        if !is_open {
+                            walled.insert(cell, "wall", Occupancy::Solid);
+                        }
+                    }
+                }
+            }
+
+            let congestion = Congestion::default();
+            let prices = Prices::RipUp(&congestion);
+            lay_net(
+                "n",
+                at(0, 1, 0),
+                &[(0, 0), (1, 0)],
+                &netlist,
+                &candidate,
+                &mut walled,
+                &prices,
+            )
+        };
+
+        let trunk_climb_and = |upper: &[Anchor]| -> BTreeSet<Anchor> {
+            let mut open: BTreeSet<Anchor> = BTreeSet::new();
+            for x in 0..=trunk_end {
+                open.insert(at(x, 1, 0)); // the trunk
+            }
+            open.insert(at(trunk_end, 1, 1)); // the climb's riser
+            open.insert(at(trunk_end, 2, 0)); // the climb's headroom
+            open.extend(upper.iter().copied());
+            open
+        };
+
+        // The ring corridor: return run beside the trunk, lids open west of
+        // the refresh. Gate 1's approach (8,2,1) is the run's west end.
+        let mut ring_upper: Vec<Anchor> = (8..=trunk_end).map(|x| at(x, 2, 1)).collect();
+        ring_upper.extend((8..=12).map(|x| at(x, 2, 0)));
+        let failure = match lay_through(&trunk_climb_and(&ring_upper), at(8, 2, 3)) {
+            Err(failure) => failure,
+            Ok(route) => panic!(
+                "the return run closes a ring around the trunk's refresh, but lay_net \
+                 returned a {}-cell route -- the ring rule is not wired in",
+                route.anchors().len()
+            ),
+        };
+        let reason = failure.error.to_string();
+        assert!(
+            reason.contains("closes a ring"),
+            "the refusal is the ring rule's, not a routing dead end: {reason}"
+        );
+        assert!(
+            !failure.charge_outright.is_empty(),
+            "the refused branch charges the cells that closed the ring, \
+             so the next iteration prices this corridor"
+        );
+
+        // The control corridor: return run two cells over, one open lid at
+        // x = 16, east of the refresh. Gate 1's approach (16,2,1) is the
+        // join column itself.
+        let mut control_upper: Vec<Anchor> = vec![at(trunk_end, 2, 1)];
+        control_upper.extend((16..=trunk_end).map(|x| at(x, 2, 2)));
+        control_upper.push(at(16, 2, 1)); // the descent-join, and the approach
+        control_upper.push(at(16, 2, 0)); // its open lid
+        let route = match lay_through(&trunk_climb_and(&control_upper), at(16, 2, 3)) {
+            Ok(route) => route,
+            Err(failure) => panic!(
+                "a loop whose repeater sits outside it is not a latch, but lay_net \
+                 refused it: {}",
+                failure.error
+            ),
+        };
+        assert!(
+            route
+                .realisation()
+                .iter()
+                .any(|block| block.kind == crate::redstone::world::block::BlockKind::Repeater),
+            "the control is only a control while the route still carries a refresh \
+             somewhere outside the loop"
+        );
     }
 }
