@@ -7885,14 +7885,22 @@ mod tests {
     /// pins, and on the planner path it finds nothing else:
     ///
     /// ```text
-    /// and4:       232 built | 242 claimed | 188 checkable | 0 mismatched | 5 unclaimed (2%)
-    /// full_adder: 1065 built | 1127 claimed | 956 checkable | 3 mismatched | 5 unclaimed (0%)
+    /// and4:       232 built | 242 claimed | 192 checkable | 0 mismatched | 5 unclaimed (2%)
+    /// full_adder: 1065 built | 1127 claimed | 998 checkable | 3 mismatched | 5 unclaimed (0%)
     /// ```
     ///
-    /// **Two of the four `Occupancy` values make no checkable prediction.**
-    /// `GateConductor` may be realised as stone (a NOR support), as *air* (the
-    /// cell above a torch) or as dust (an output pin); `Solid` is the
-    /// catch-all. So 78% of and4's claims and 85% of full_adder's are
+    /// Re-measured 2026-08-19, after the lid rule gave `Occupancy` a fifth
+    /// value: a cell promised `Air` must be air, so a staircase's mandatory
+    /// headroom is now a checkable claim rather than an indistinguishable
+    /// `Solid` -- and4's checkable count moved 188 -> 192 and full_adder's
+    /// 956 -> 998 for exactly that reason. An earlier revision of this comment
+    /// carried the old numbers; the adversarial pass on the lid rule caught
+    /// the drift.
+    ///
+    /// **Two of the five `Occupancy` values still make no checkable
+    /// prediction.** `GateConductor` may be realised as stone (a NOR support),
+    /// as *air* (the cell above a torch) or as dust (an output pin); `Solid`
+    /// is the catch-all. So 79% of and4's claims and 89% of full_adder's are
     /// checkable, and the rest are unfalsifiable by construction. That is a
     /// property of the type, not a gap in this harness.
     ///
@@ -7998,6 +8006,227 @@ mod tests {
                 100.0 * unclaimed_total as f64 / world_cells as f64
             );
         }
+    }
+
+
+    /// The realised-vs-intended connectivity sweep, whole-family.
+    ///
+    /// Written as an adversarial scratch during the ring/lid review and
+    /// promoted into the tree because its numbers were about to be cited (a
+    /// cited number needs a reproducible method in the tree). What it found,
+    /// at 4ba23d5: **no fourth shape** -- and the known family enumerated
+    /// instead of discovered one costly failure at a time:
+    ///
+    /// ```text
+    /// TOTAL: MISSING 7 | ONE-WAY 5 | EXTRA repeater-bypass 0 | EXTRA plain 10 | EXTRA disconnected 0
+    /// ```
+    ///
+    /// Every ONE-WAY maps 1:1 onto the five pinned wire-under-wire stacks
+    /// (shape C). All 7 MISSING share one signature -- repeater into
+    /// diagonal-up dust, the repeater-through-block ramp this harness's edge
+    /// model deliberately omits (measured mechanism,
+    /// `docs/derived/coupling-mechanisms.md`), and whose delivery the carry
+    /// reconciliation and green truth tables prove. The 10 EXTRA plain are
+    /// same-net parallel-run joins **without gain** -- the shape-2 family in
+    /// its gainless form, 3 of them in the SHIPPING full_adder rip-up plan --
+    /// and zero cross a repeater, so no diode bypass exists anywhere.
+    ///
+    /// Hunts a fourth shape: for every buildable plan, every route's realised
+    /// same-net electrical graph (the simulator's own `dust_connections`, plus
+    /// the repeater's two directed edges) is diffed against the tree the
+    /// route's branches intended (consecutive anchors, plus each branch
+    /// start's attachment to earlier own cells). Three categories:
+    ///
+    ///   MISSING  - an intended consecutive pair, both realised as conductors,
+    ///              that the simulator does not join (the cut-lid family).
+    ///   ONE-WAY  - a dust-dust pair joined in one direction only (the
+    ///              wire-under-wire family's signature).
+    ///   EXTRA    - a realised join the tree never asked for; subclassified
+    ///              by whether the intended tree path between its endpoints
+    ///              crosses a repeater (a diode/refresh bypass - the ring
+    ///              family without closure, a candidate fourth shape).
+    #[test]
+    #[ignore = "adversarial verification harness: asserts nothing, sweeps all buildable plans"]
+    fn adversarial_realised_vs_intended_connectivity() {
+        use crate::redstone::simulator::connectivity::dust_connections;
+        use crate::redstone::simulator::position::HORIZONTAL;
+        use crate::redstone::world::block::BlockKind;
+
+        let norm = |a: Anchor, b: Anchor| -> (Anchor, Anchor) {
+            if a <= b { (a, b) } else { (b, a) }
+        };
+        // A legal path step: one horizontal cell, flat or one storey up/down.
+        let step_adjacent = |a: &Anchor, b: &Anchor| -> bool {
+            (a.x - b.x).abs() + (a.z - b.z).abs() == 1 && (a.y - b.y).abs() <= 1
+        };
+
+        let mut grand = [0usize; 5]; // missing, oneway, extra_bypass, extra_plain, extra_disconnected
+        for (name, _netlist, plan, world) in every_buildable_plan() {
+            let mut plan_counts = [0usize; 5];
+            for route in plan.routes() {
+                let anchors = route.anchors();
+                // Own cells that realise as conductors in the world.
+                let mut own: BTreeMap<Anchor, BlockKind> = BTreeMap::new();
+                for anchor in anchors {
+                    let kind = world.get(anchor.x, anchor.y, anchor.z).kind;
+                    if matches!(kind, BlockKind::RedstoneWire | BlockKind::Repeater) {
+                        own.insert(*anchor, kind);
+                    }
+                }
+
+                // The intended tree, reconstructed from lay order.
+                let mut intended: BTreeSet<(Anchor, Anchor)> = BTreeSet::new();
+                for i in 1..anchors.len() {
+                    if step_adjacent(&anchors[i - 1], &anchors[i]) {
+                        intended.insert(norm(anchors[i - 1], anchors[i]));
+                    } else {
+                        // Branch start: attaches to whichever earlier own
+                        // cell(s) it lies beside. Counting them all is
+                        // conservative against false EXTRAs.
+                        for j in 0..i {
+                            if step_adjacent(&anchors[j], &anchors[i]) {
+                                intended.insert(norm(anchors[j], anchors[i]));
+                            }
+                        }
+                    }
+                }
+
+                // The realised graph, asked of the simulator.
+                let mut directed: BTreeSet<(Anchor, Anchor)> = BTreeSet::new();
+                let mut realised: BTreeSet<(Anchor, Anchor)> = BTreeSet::new();
+                for (&cell, kind) in &own {
+                    match kind {
+                        BlockKind::RedstoneWire => {
+                            for direction in HORIZONTAL {
+                                for target in dust_connections(
+                                    &world,
+                                    Position::new(cell.x, cell.y, cell.z),
+                                    direction,
+                                )
+                                .iter()
+                                {
+                                    let ta = Anchor { x: target.x, y: target.y, z: target.z };
+                                    if own.contains_key(&ta) {
+                                        directed.insert((cell, ta));
+                                        realised.insert(norm(cell, ta));
+                                    }
+                                }
+                            }
+                        }
+                        BlockKind::Repeater => {
+                            if let Some(facing) = world.get(cell.x, cell.y, cell.z).facing {
+                                let input = step(cell, facing);
+                                let output = step(cell, facing.opposite());
+                                if own.contains_key(&input) {
+                                    realised.insert(norm(input, cell));
+                                }
+                                if own.contains_key(&output) {
+                                    realised.insert(norm(cell, output));
+                                }
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+
+                // MISSING and ONE-WAY.
+                for &(a, b) in &intended {
+                    let (Some(ka), Some(kb)) = (own.get(&a), own.get(&b)) else {
+                        continue; // realises as something else; not this hunt
+                    };
+                    if realised.contains(&norm(a, b)) {
+                        // Dust-dust joined, but is it symmetric?
+                        if *ka == BlockKind::RedstoneWire
+                            && *kb == BlockKind::RedstoneWire
+                            && directed.contains(&(a, b)) != directed.contains(&(b, a))
+                        {
+                            plan_counts[1] += 1;
+                            eprintln!(
+                                "    ONE-WAY net {}: ({},{},{}) <-> ({},{},{}) joined in one direction only",
+                                route.id(), a.x, a.y, a.z, b.x, b.y, b.z
+                            );
+                        }
+                        continue;
+                    }
+                    plan_counts[0] += 1;
+                    eprintln!(
+                        "    MISSING net {}: intended step ({},{},{}) {:?} -> ({},{},{}) {:?} not joined in the world",
+                        route.id(), a.x, a.y, a.z, ka, b.x, b.y, b.z, kb
+                    );
+                }
+
+                // EXTRA, classified by the intended tree path between the ends.
+                let mut tree: BTreeMap<Anchor, Vec<Anchor>> = BTreeMap::new();
+                for &(a, b) in &intended {
+                    tree.entry(a).or_default().push(b);
+                    tree.entry(b).or_default().push(a);
+                }
+                for &(a, b) in &realised {
+                    if intended.contains(&norm(a, b)) {
+                        continue;
+                    }
+                    // BFS a->b through intended edges, tracking parents.
+                    let mut parent: BTreeMap<Anchor, Anchor> = BTreeMap::new();
+                    let mut frontier = std::collections::VecDeque::from([a]);
+                    let mut seen: BTreeSet<Anchor> = BTreeSet::from([a]);
+                    let mut found = false;
+                    while let Some(at) = frontier.pop_front() {
+                        if at == b {
+                            found = true;
+                            break;
+                        }
+                        for next in tree.get(&at).cloned().unwrap_or_default() {
+                            if seen.insert(next) {
+                                parent.insert(next, at);
+                                frontier.push_back(next);
+                            }
+                        }
+                    }
+                    if !found {
+                        plan_counts[4] += 1;
+                        eprintln!(
+                            "    EXTRA(disconnected) net {}: ({},{},{}) <-> ({},{},{}) joined; no intended path between them",
+                            route.id(), a.x, a.y, a.z, b.x, b.y, b.z
+                        );
+                        continue;
+                    }
+                    let mut hops = 0usize;
+                    let mut crosses_repeater = false;
+                    let mut at = b;
+                    while at != a {
+                        if at != b && own.get(&at) == Some(&BlockKind::Repeater) {
+                            crosses_repeater = true;
+                        }
+                        at = parent[&at];
+                        hops += 1;
+                    }
+                    if crosses_repeater {
+                        plan_counts[2] += 1;
+                        eprintln!(
+                            "    EXTRA(REPEATER BYPASS) net {}: ({},{},{}) <-> ({},{},{}) joined; the intended path between them ({hops} hops) crosses this net's own repeater",
+                            route.id(), a.x, a.y, a.z, b.x, b.y, b.z
+                        );
+                    } else {
+                        plan_counts[3] += 1;
+                        eprintln!(
+                            "    EXTRA net {}: ({},{},{}) <-> ({},{},{}) joined; intended path {hops} hops, no repeater crossed",
+                            route.id(), a.x, a.y, a.z, b.x, b.y, b.z
+                        );
+                    }
+                }
+            }
+            eprintln!(
+                "{name}: MISSING {} | ONE-WAY {} | EXTRA repeater-bypass {} | EXTRA plain {} | EXTRA disconnected {}",
+                plan_counts[0], plan_counts[1], plan_counts[2], plan_counts[3], plan_counts[4]
+            );
+            for k in 0..5 {
+                grand[k] += plan_counts[k];
+            }
+        }
+        eprintln!(
+            "TOTAL: MISSING {} | ONE-WAY {} | EXTRA repeater-bypass {} | EXTRA plain {} | EXTRA disconnected {}",
+            grand[0], grand[1], grand[2], grand[3], grand[4]
+        );
     }
 
     /// What optimisation costs and what it buys, per circuit.
