@@ -19421,4 +19421,268 @@ mod tests {
              somewhere outside the loop"
         );
     }
+
+    // =======================================================================
+    // 2026-08-19: what the fixed router is worth, measured. Three harnesses,
+    // print-only -- the pin tests hold the assertions. Each exists because
+    // rule 4 says a cited number needs a reproducible method in the tree.
+    // =======================================================================
+
+    /// Everything a routed plan must survive before "routes" means anything:
+    /// both independent verify gates, realisation, blocks and the tight
+    /// bounding box, the structural ring scan, the latch oracle (every source
+    /// deleted, whatever stays powered sustains itself), the full truth table
+    /// and the worst settle -- the last two through the real `Simulator`,
+    /// which is the judge of judges by standing rule 7.
+    fn battery_of_a_routed_plan(
+        name: &str,
+        netlist: &Netlist,
+        plan: &PlanCandidate,
+        inputs: &[&str],
+        outputs: &[String],
+        expected: fn(&[bool]) -> Vec<bool>,
+    ) {
+        let cells: usize = plan.routes().iter().map(|route| route.anchors().len()).sum();
+        eprintln!(
+            "  routed: {} nets, {cells} route cells",
+            plan.routes().len()
+        );
+        if let Err(error) = verify_candidate(plan, netlist) {
+            eprintln!("  verify: REFUSED -- {error}");
+            return;
+        }
+        eprintln!("  verify: ok");
+
+        let realised = emit_candidate(plan, netlist, candidate_world_size(plan))
+            .expect("a verified plan realises");
+        let world = &realised.world;
+        let blocks = blocks_in(world);
+        let (sx, sy, sz) = world.size();
+        let mut lo = (i32::MAX, i32::MAX, i32::MAX);
+        let mut hi = (i32::MIN, i32::MIN, i32::MIN);
+        for x in 0..sx {
+            for y in 0..sy {
+                for z in 0..sz {
+                    if world.get(x, y, z).kind != crate::redstone::world::block::BlockKind::Air {
+                        lo = (lo.0.min(x), lo.1.min(y), lo.2.min(z));
+                        hi = (hi.0.max(x), hi.1.max(y), hi.2.max(z));
+                    }
+                }
+            }
+        }
+        eprintln!(
+            "  {blocks} blocks, box {}x{}x{}",
+            hi.0 - lo.0 + 1,
+            hi.1 - lo.1 + 1,
+            hi.2 - lo.2 + 1
+        );
+
+        let mut rings = 0usize;
+        for route in plan.routes() {
+            for (anchor, length) in rings_of(world, route) {
+                rings += 1;
+                eprintln!(
+                    "  RING: `{}` repeater at ({}, {}, {}) closes through {length} own cell(s)",
+                    route.id, anchor.x, anchor.y, anchor.z
+                );
+            }
+        }
+        let latched = latched_cells(world);
+        eprintln!(
+            "  {rings} ring(s); {} latched cell(s) with every source deleted",
+            latched.len()
+        );
+
+        let compiled = compile::CompiledCircuit {
+            world: realised.world.clone(),
+            input_positions: realised.ports.input_positions.clone(),
+            output_positions: realised.ports.output_positions.clone(),
+            gate_output_positions: realised.ports.gate_output_positions.clone(),
+            gate_facings: (0..netlist.gates.len()).map(|g| plan.facing_of(g)).collect(),
+            planner_kind: compile::PlannerKind::Unified3d,
+            legacy_emission: None,
+        };
+        match simulated_truth_table(&compiled, inputs, outputs, expected) {
+            Ok(vectors) => eprintln!("  truth table: {vectors}/{vectors} through the real Simulator"),
+            Err(error) => eprintln!("  truth table: **WRONG** -- {error}"),
+        }
+        match worst_settle_game_ticks(&compiled, inputs) {
+            Ok(ticks) => eprintln!("  worst settle: {ticks} game ticks"),
+            Err(error) => eprintln!("  worst settle: **{error}**"),
+        }
+        let _ = name;
+    }
+
+    /// **The prize, re-measured with both rules live.** `segment_a`,
+    /// negotiated, `starting_at(8)` -- the one schedule that ever routed it
+    /// at scale (as a latched, 8-of-16-wrong circuit, before the rules).
+    ///
+    /// Runs the shipping budget first, then four times it, because "a bigger
+    /// iteration budget was never tried" has stood in NOT MEASURED since the
+    /// rules landed. Prints the convergence trace either way: `unlaid` per
+    /// iteration is how far the router gets, and the final error is what
+    /// blocks it now.
+    #[test]
+    #[ignore = "measurement: segment_a negotiated at starting_at(8), budgets 32 and 128, minutes"]
+    fn the_prize_remeasured_segment_a_negotiated_at_8() {
+        use crate::circuits::seven_segment::build_single_segment_netlist;
+        use std::time::Instant;
+
+        let (netlist, output) = build_single_segment_netlist(0);
+        let placement = relaxed_placement(&netlist, &PortPlacements::default(), SHIPPING_AXES)
+            .expect("segment_a places");
+        let snapped = relax::snap(&placement).expect("and snaps");
+        let bare = candidate_from_snapped(&netlist, &PortPlacements::default(), &snapped);
+
+        for budget in [NEGOTIATION_ROUNDS, 4 * NEGOTIATION_ROUNDS] {
+            let mut trace = Vec::new();
+            let started = Instant::now();
+            let outcome = negotiate(
+                bare.clone(),
+                &netlist,
+                budget,
+                PresentSchedule::starting_at(8),
+                &mut trace,
+            );
+            eprintln!(
+                "segment_a negotiated starting_at(8), budget {budget}: {:.1}s over {} iteration(s)",
+                started.elapsed().as_secs_f64(),
+                trace.len(),
+            );
+            eprintln!(
+                "  unlaid per iteration    {:?}",
+                trace.iter().map(|round| round.unlaid).collect::<Vec<_>>()
+            );
+            eprintln!(
+                "  contested per iteration {:?}",
+                trace.iter().map(|round| round.contested).collect::<Vec<_>>()
+            );
+            match outcome {
+                Err(error) => eprintln!("  NO PLAN: {error}"),
+                Ok(plan) => {
+                    battery_of_a_routed_plan(
+                        "segment_a",
+                        &netlist,
+                        &plan,
+                        &crate::circuits::seven_segment::INPUT_NAMES[..],
+                        std::slice::from_ref(&output),
+                        segment_a_expected,
+                    );
+                    eprintln!("  (legacy ships 6,416 blocks / 68 ticks / box 137x6x182)");
+                    break;
+                }
+            }
+        }
+    }
+
+    /// The schedule question the ledger has carried as NOT MEASURED since the
+    /// negotiated router landed: does any `starting_at(k)` other than 0 and 8
+    /// route `segment_a` -- now with the ring and lid rules live. One line
+    /// per schedule; any plan that appears gets the full battery, because a
+    /// route without a truth table is worth nothing (rule 7).
+    #[test]
+    #[ignore = "measurement: segment_a negotiated across four more schedules, minutes"]
+    fn segment_a_negotiated_swept_across_schedules() {
+        use crate::circuits::seven_segment::build_single_segment_netlist;
+        use std::time::Instant;
+
+        let (netlist, output) = build_single_segment_netlist(0);
+        let placement = relaxed_placement(&netlist, &PortPlacements::default(), SHIPPING_AXES)
+            .expect("segment_a places");
+        let snapped = relax::snap(&placement).expect("and snaps");
+        let bare = candidate_from_snapped(&netlist, &PortPlacements::default(), &snapped);
+
+        for at_zero in [1u64, 2, 4, 16] {
+            let mut trace = Vec::new();
+            let started = Instant::now();
+            let outcome = negotiate(
+                bare.clone(),
+                &netlist,
+                NEGOTIATION_ROUNDS,
+                PresentSchedule::starting_at(at_zero),
+                &mut trace,
+            );
+            let seconds = started.elapsed().as_secs_f64();
+            let unlaid: Vec<usize> = trace.iter().map(|round| round.unlaid).collect();
+            match outcome {
+                Err(error) => {
+                    eprintln!(
+                        "starting_at({at_zero}): NO PLAN after {} iteration(s), {seconds:.1}s\n  unlaid {unlaid:?}\n  last failure: {error}",
+                        trace.len(),
+                    );
+                }
+                Ok(plan) => {
+                    eprintln!(
+                        "starting_at({at_zero}): ROUTED in {} iteration(s), {seconds:.1}s -- full battery:",
+                        trace.len(),
+                    );
+                    battery_of_a_routed_plan(
+                        "segment_a",
+                        &netlist,
+                        &plan,
+                        &crate::circuits::seven_segment::INPUT_NAMES[..],
+                        std::slice::from_ref(&output),
+                        segment_a_expected,
+                    );
+                }
+            }
+        }
+    }
+
+    /// `seven_segment`, negotiated, `starting_at(8)`, both rules live. Last
+    /// measured at SHIPPING it erred "route to g25.in[0] decays"; this is the
+    /// data point for the ship decision, not a gate.
+    #[test]
+    #[ignore = "measurement: seven_segment through 32 negotiation iterations, several minutes"]
+    fn seven_segment_negotiated_at_8_under_the_two_rules() {
+        use crate::circuits::seven_segment::build_seven_segment_netlist;
+        use std::time::Instant;
+
+        let (netlist, outputs) = build_seven_segment_netlist();
+        let placement = relaxed_placement(&netlist, &PortPlacements::default(), SHIPPING_AXES)
+            .expect("seven_segment places");
+        let snapped = relax::snap(&placement).expect("and snaps");
+        let bare = candidate_from_snapped(&netlist, &PortPlacements::default(), &snapped);
+
+        let mut trace = Vec::new();
+        let started = Instant::now();
+        let outcome = negotiate(
+            bare,
+            &netlist,
+            NEGOTIATION_ROUNDS,
+            PresentSchedule::starting_at(8),
+            &mut trace,
+        );
+        eprintln!(
+            "seven_segment negotiated starting_at(8): {:.1}s over {} iteration(s)",
+            started.elapsed().as_secs_f64(),
+            trace.len(),
+        );
+        eprintln!(
+            "  unlaid per iteration    {:?}",
+            trace.iter().map(|round| round.unlaid).collect::<Vec<_>>()
+        );
+        eprintln!(
+            "  contested per iteration {:?}",
+            trace.iter().map(|round| round.contested).collect::<Vec<_>>()
+        );
+        match outcome {
+            Err(error) => eprintln!("  NO PLAN: {error}"),
+            Ok(plan) => {
+                let segment_outputs: Vec<String> = crate::circuits::seven_segment::SEGMENT_NAMES
+                    .iter()
+                    .map(|name| outputs[*name].clone())
+                    .collect();
+                battery_of_a_routed_plan(
+                    "seven_segment",
+                    &netlist,
+                    &plan,
+                    &crate::circuits::seven_segment::INPUT_NAMES[..],
+                    &segment_outputs,
+                    seven_segment_expected,
+                );
+                eprintln!("  (legacy ships 16,244 blocks / 98 ticks)");
+            }
+        }
+    }
 }
