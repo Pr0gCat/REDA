@@ -1,0 +1,360 @@
+diff --git a/src/compile/mod.rs b/src/compile/mod.rs
+index 1dc0e69..2cbc110 100644
+--- a/src/compile/mod.rs
++++ b/src/compile/mod.rs
+@@ -1385,6 +1385,24 @@ impl std::fmt::Display for CompileError {
+ impl std::error::Error for CompileError {}
+ 
+ /// 編譯完成的電路。
++#[derive(Debug, Clone, Copy, PartialEq, Eq)]
++pub enum PlannerKind {
++    /// The public compiler path: a legacy layout is only a seed for the
++    /// unified candidate planner, which selects the emitted candidate.
++    Unified3d,
++    /// Internal metadata produced while constructing a legal seed.
++    LegacySeedAdapter,
++}
++
++/// Observable planner result metadata for callers and diagnostics.
++#[derive(Debug, Clone, PartialEq, Eq)]
++pub struct PlannerDiagnostics {
++    pub kind: PlannerKind,
++    pub evaluated_candidates: usize,
++    pub rejected_unrealisable_candidates: usize,
++    pub selected_legacy_seed: bool,
++}
++
+ pub struct CompiledCircuit {
+     pub world: World,
+     /// 每個輸入訊號的拉桿座標
+@@ -1409,12 +1427,35 @@ pub struct CompiledCircuit {
+     /// Explicit ownership data recorded while the legacy emitter places the
+     /// world.  This is intentionally not reconstructed from block kinds.
+     legacy_emission: LegacyEmission,
++    planner_diagnostics: PlannerDiagnostics,
+ }
+ 
+ impl CompiledCircuit {
+     pub(crate) fn legacy_emission(&self) -> Option<&LegacyEmission> {
+         Some(&self.legacy_emission)
+     }
++
++    pub fn planner_kind(&self) -> PlannerKind {
++        self.planner_diagnostics.kind
++    }
++
++    pub fn planner_diagnostics(&self) -> &PlannerDiagnostics {
++        &self.planner_diagnostics
++    }
++}
++
++pub(crate) fn compiled_from_legacy_emission(
++    legacy_emission: LegacyEmission,
++    planner_diagnostics: PlannerDiagnostics,
++) -> CompiledCircuit {
++    CompiledCircuit {
++        world: legacy_emission.world.clone(),
++        input_positions: legacy_emission.input_positions.clone(),
++        output_positions: legacy_emission.output_positions.clone(),
++        gate_output_positions: legacy_emission.gate_output_positions.clone(),
++        legacy_emission,
++        planner_diagnostics,
++    }
+ }
+ 
+ /// The legacy emitter's complete, replayable physical realisation.
+@@ -6081,7 +6122,7 @@ fn merge_output_group_root(
+ /// (`summarize_worst_case` does not fail an assertion on that; it walks
+ /// forever.) Requiring the caller to lower makes holding the wrong netlist
+ /// impossible rather than merely discouraged.
+-pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
++fn compile_legacy_seed(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
+     for gate in &netlist.gates {
+         let realisable = gate.kind.is_realisable() && gate.kind.accepts_arity(gate.inputs.len());
+         if !realisable {
+@@ -6264,9 +6305,67 @@ pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
+         output_positions,
+         gate_output_positions,
+         legacy_emission,
++        planner_diagnostics: PlannerDiagnostics {
++            kind: PlannerKind::LegacySeedAdapter,
++            evaluated_candidates: 0,
++            rejected_unrealisable_candidates: 0,
++            selected_legacy_seed: true,
++        },
+     })
+ }
+ 
++/// Compile a realisable netlist through the unified 3D planner.
++///
++/// The old row/channel/track implementation creates one legal seed only.
++/// The selected candidate is the sole source of the returned world.  Until
++/// the planner gains a block-level realiser for moved candidates, those
++/// candidates are rejected explicitly and the legal seed is selected.
++pub fn compile(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
++    let legacy_seed = compile_legacy_seed(netlist)?;
++    let seed = planner::seed_from_legacy(netlist, &legacy_seed).map_err(planner_compile_error)?;
++    let report = planner::optimise_with_report(
++        seed.clone(),
++        planner::PlannerWeights::default(),
++        planner::PlannerEffort {
++            // A moved candidate is deliberately not emitted until the
++            // block-level realiser exists.  Probe one deterministic proposal
++            // so diagnostics exercise that rejection path without paying for
++            // a search whose results cannot yet become Worlds.
++            evaluations: 1,
++            seed: 0x26_02,
++        },
++    );
++
++    let (emission, rejected_unrealisable_candidates, selected_legacy_seed) =
++        match planner::realise_candidate(&report.candidate) {
++            Ok(emission) => (emission, 0, report.candidate != seed),
++            Err(planner::PlannerError::CandidateNotRealisable { .. }) => (
++                planner::realise_candidate(&seed).map_err(planner_compile_error)?,
++                1,
++                true,
++            ),
++            Err(error) => return Err(planner_compile_error(error)),
++        };
++
++    verify_legacy_emission(&emission)?;
++    Ok(compiled_from_legacy_emission(
++        emission,
++        PlannerDiagnostics {
++            kind: PlannerKind::Unified3d,
++            evaluated_candidates: report.evaluations,
++            rejected_unrealisable_candidates,
++            selected_legacy_seed,
++        },
++    ))
++}
++
++fn planner_compile_error(error: planner::PlannerError) -> CompileError {
++    CompileError::CandidateMetadataViolation {
++        item: "unified-3d-planner".to_string(),
++        reason: error.to_string(),
++    }
++}
++
+ fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<PrimitiveNode> {
+     let mut nodes = Vec::with_capacity(anchors.len());
+     for (gate, anchor) in netlist.gates.iter().zip(anchors.iter().copied()) {
+diff --git a/src/compile/planner.rs b/src/compile/planner.rs
+index 74cff6e..d38db70 100644
+--- a/src/compile/planner.rs
++++ b/src/compile/planner.rs
+@@ -332,6 +332,7 @@ impl PlanCandidate {
+ pub enum PlannerError {
+     LegacyMetadataUnavailable,
+     NetlistDoesNotMatchCompiledOutput,
++    CandidateNotRealisable { reason: String },
+     UnknownPrimitive(NodeId),
+     AnchorOccupied(Anchor),
+     NoLocalRoute { from: Anchor, to: Anchor },
+@@ -347,6 +348,9 @@ impl std::fmt::Display for PlannerError {
+             Self::NetlistDoesNotMatchCompiledOutput => {
+                 write!(f, "netlist does not match the legacy compiler output")
+             }
++            Self::CandidateNotRealisable { reason } => {
++                write!(f, "candidate cannot be realised: {reason}")
++            }
+             Self::UnknownPrimitive(primitive) => write!(f, "unknown primitive node {primitive}"),
+             Self::AnchorOccupied(anchor) => write!(
+                 f,
+@@ -837,27 +841,47 @@ pub fn seed_from_legacy(
+ /// candidate must match every newly extracted seed field before an invariant
+ /// runs, so verification can never reuse the old emission's world as reality.
+ pub fn verify_candidate(candidate: &PlanCandidate) -> Result<(), PlannerError> {
+-    let netlist = candidate
++    let emission = realise_candidate(candidate)?;
++    compile::verify_legacy_emission(&emission).map_err(PlannerError::PhysicalInvariant)
++}
++
++/// Realise a candidate into the physical data owned by a compiler result.
++///
++/// The transitional planner can replay only an unchanged legacy seed.  A
++/// moved/oriented/rerouted candidate has no block-level realiser yet, so it is
++/// rejected here instead of accidentally returning the seed's old world.
++/// That boundary keeps every emitted world truthful about the selected
++/// candidate while the physical realiser is completed.
++pub(crate) fn realise_candidate(candidate: &PlanCandidate) -> Result<LegacyEmission, PlannerError> {
++    let emission = candidate
+         .legacy_emission
+         .as_ref()
+-        .ok_or(PlannerError::LegacyMetadataUnavailable)?
+-        .netlist();
+-    let compiled = compile::compile(netlist).map_err(PlannerError::PhysicalInvariant)?;
+-    let expected = seed_from_legacy(netlist, &compiled)?;
+-    if candidate != &expected {
+-        return Err(PlannerError::PhysicalInvariant(
+-            compile::CompileError::CandidateMetadataViolation {
+-                item: "candidate".to_string(),
+-                reason: "candidate metadata does not match the freshly emitted legacy seed"
+-                    .to_string(),
+-            },
+-        ));
++        .ok_or_else(|| PlannerError::CandidateNotRealisable {
++            reason: "the candidate has no seed physical realisation".to_string(),
++        })?;
++    let expected_routes: Vec<Route> = emission
++        .routes()
++        .iter()
++        .map(|route| {
++            Route::from_legacy(
++                route.owner().to_string(),
++                route.anchors().to_vec(),
++                route.terminals().to_vec(),
++            )
++        })
++        .collect();
++    let unchanged_seed = candidate.anchors == emission.primitive_anchors()
++        && candidate.primitive_nodes == emission.primitive_nodes()
++        && candidate.routes == expected_routes
++        && candidate.variant_indices.iter().all(|&variant| variant == 0)
++        && candidate.topology_entries.is_empty();
++    if !unchanged_seed {
++        return Err(PlannerError::CandidateNotRealisable {
++            reason: "its anchor, route, variant, or topology choice differs from the legal seed"
++                .to_string(),
++        });
+     }
+-
+-    let fresh_emission = compiled
+-        .legacy_emission()
+-        .expect("legacy compilation always records its emission metadata");
+-    compile::verify_legacy_emission(fresh_emission).map_err(PlannerError::PhysicalInvariant)
++    Ok(emission.clone())
+ }
+ 
+ /// Integer weights for the candidate cost terms.
+@@ -1097,7 +1121,7 @@ pub fn optimise(
+     optimise_with_report(seed, weights, effort).candidate
+ }
+ 
+-fn optimise_with_report(
++pub(crate) fn optimise_with_report(
+     seed: PlanCandidate,
+     weights: PlannerWeights,
+     effort: PlannerEffort,
+@@ -1109,7 +1133,11 @@ fn optimise_with_report(
+     loop {
+         let epoch = best.clone();
+         let mut improved = false;
+-        for proposal in enumerate_candidates(&epoch, effort.seed) {
++        for proposal in enumerate_candidates(
++            &epoch,
++            effort.seed,
++            effort.evaluations.saturating_sub(evaluations),
++        ) {
+             if evaluations >= effort.evaluations {
+                 return OptimisationReport {
+                     gate_effort: gate_efforts(&best),
+@@ -1146,7 +1174,11 @@ fn optimise_with_report(
+     }
+ }
+ 
+-fn enumerate_candidates(candidate: &PlanCandidate, seed: u64) -> Vec<PlanCandidate> {
++fn enumerate_candidates(
++    candidate: &PlanCandidate,
++    seed: u64,
++    maximum: usize,
++) -> Vec<PlanCandidate> {
+     const MOVES: [(i32, i32, i32); 6] = [
+         (-1, 0, 0),
+         (0, -1, 0),
+@@ -1156,10 +1188,16 @@ fn enumerate_candidates(candidate: &PlanCandidate, seed: u64) -> Vec<PlanCandida
+         (1, 0, 0),
+     ];
+     let mut proposals = Vec::new();
++    if maximum == 0 {
++        return proposals;
++    }
+     let rotation = (seed as usize) % MOVES.len();
+     for primitive in 0..candidate.anchors.len() {
+         let from = candidate.anchors[primitive];
+         for offset in 0..MOVES.len() {
++            if proposals.len() >= maximum {
++                return proposals;
++            }
+             let (x, y, z) = MOVES[(offset + rotation) % MOVES.len()];
+             if let Ok(moved) = try_move(
+                 candidate,
+@@ -1174,6 +1212,9 @@ fn enumerate_candidates(candidate: &PlanCandidate, seed: u64) -> Vec<PlanCandida
+             }
+         }
+         for variant in 0..4 {
++            if proposals.len() >= maximum {
++                return proposals;
++            }
+             if candidate.variant_indices.get(primitive).copied() == Some(variant) {
+                 continue;
+             }
+@@ -1185,6 +1226,9 @@ fn enumerate_candidates(candidate: &PlanCandidate, seed: u64) -> Vec<PlanCandida
+     }
+     for (route_index, route) in candidate.routes.iter().enumerate() {
+         for terminal_index in 0..route.terminals.len() {
++            if proposals.len() >= maximum {
++                return proposals;
++            }
+             let mut terminal_candidate = candidate.clone();
+             let terminal = &mut terminal_candidate.routes[route_index].terminals[terminal_index];
+             terminal.kind = match terminal.kind {
+@@ -1199,7 +1243,12 @@ fn enumerate_candidates(candidate: &PlanCandidate, seed: u64) -> Vec<PlanCandida
+             proposals.push(terminal_candidate);
+         }
+     }
+-    proposals.extend(topology_feedback_candidates(candidate));
++    for proposal in topology_feedback_candidates(candidate) {
++        if proposals.len() >= maximum {
++            break;
++        }
++        proposals.push(proposal);
++    }
+     proposals
+ }
+ 
+@@ -1577,6 +1626,11 @@ mod tests {
+         assert_eq!(moved.routes()[1], original_nonincident);
+     }
+ 
++    #[test]
++    fn zero_effort_generates_no_local_candidates() {
++        assert!(enumerate_candidates(&local_move_fixture(), 0, 0).is_empty());
++    }
++
+     #[test]
+     fn local_move_routes_around_a_live_nonincident_reservation() {
+         let mut seed = local_move_fixture();
+diff --git a/tests/verilog_frontend.rs b/tests/verilog_frontend.rs
+index 8a0eb43..654ef90 100644
+--- a/tests/verilog_frontend.rs
++++ b/tests/verilog_frontend.rs
+@@ -29,7 +29,7 @@ use reda::circuits::and4::build_and4_netlist;
+ use reda::circuits::seven_segment::{build_seven_segment_netlist, TRUTH_TABLE};
+ use reda::circuits::verilog;
+ use reda::compile::lowering::{format_histogram, lower, lower_optimised, LowerError};
+-use reda::compile::{compile, CompiledCircuit, Netlist};
++use reda::compile::{compile, CompiledCircuit, Netlist, PlannerKind};
+ use reda::frontend::synthesize_verilog;
+ use reda::redstone::simulator::Simulator;
+ use reda::redstone::world::block::BlockKind;
+@@ -40,6 +40,18 @@ use reda::timing::{
+ 
+ const MAX_TICKS: u64 = 2000;
+ 
++#[test]
++fn compile_uses_the_planner_path_for_an_optimised_verilog_circuit() {
++    let (gate_level, _) = verilog::find("verilog:seven_segment")
++        .expect("the shipped seven-segment circuit must exist")
++        .baked_netlist();
++    let netlist = lower_optimised(&gate_level).expect("the baked circuit must lower");
++
++    let compiled = compile(&netlist).expect("the lowered circuit must compile");
++
++    assert_eq!(compiled.planner_kind(), PlannerKind::Unified3d);
++}
++
+ fn set_lever(simulator: &mut Simulator, position: (i32, i32, i32), on: bool) {
+     let mut state = simulator.world().get(position.0, position.1, position.2).clone();
+     state.lit = on;

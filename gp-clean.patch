@@ -1,0 +1,144 @@
+diff --git a/src/compile/polarity.rs b/src/compile/polarity.rs
+index 95ccb2e..cd3723f 100644
+--- a/src/compile/polarity.rs
++++ b/src/compile/polarity.rs
+@@ -262,4 +262,139 @@ mod tests {
+             Err(PolarityError::OutputHasNoProducer { output: "missing".to_string() })
+         );
+     }
++
++    /// `Nor(4)` and `Or(1)` look directly realisable to lowering, but no
++    /// physical-library entry exists for either illegal arity. Assignment is
++    /// public fallible API, so scoring them must report an error, never leak
++    /// the library lookup panic.
++    #[test]
++    fn assignment_does_not_panic_for_unregistered_direct_gate_arities() {
++        for (kind, inputs) in [
++            (GateKind::Nor(4), vec!["a", "b", "c", "d"]),
++            (GateKind::Or(1), vec!["a"]),
++        ] {
++            let source = netlist(&["a", "b", "c", "d"], &["y"], vec![gate(kind, "y", &inputs)]);
++
++            let outcome = std::panic::catch_unwind(|| assign_polarities(&source));
++            assert!(matches!(outcome, Ok(Err(_))), "{kind:?} must return a named error, not panic");
++        }
++    }
++
++    /// This graph fans `x` into two branches and joins them again at `w`.
++    /// The score must first lower the complete candidate, where the one
++    /// required inverse of `x` is shared by both branches.
++    #[test]
++    fn score_counts_shared_inverters_once_across_reconvergent_fanout() {
++        let source = netlist(
++            &["a", "b", "c"],
++            &["w"],
++            vec![
++                gate(GateKind::Buf, "x", &["a"]),
++                gate(GateKind::And, "left", &["x", "b"]),
++                gate(GateKind::And, "right", &["x", "c"]),
++                gate(GateKind::Or(2), "w", &["left", "right"]),
++            ],
++        );
++        let assignment = [
++            SignalPolarity::Positive,
++            SignalPolarity::Negative,
++            SignalPolarity::Negative,
++            SignalPolarity::Positive,
++        ];
++        let lowered = lower_with_assignment(&source, &assignment).expect("candidate lowers");
++
++        assert_eq!(score(&source, &assignment).expect("candidate scores"), LoweredScore {
++            area: 60,
++            gates: 10,
++            torch_depth: 4,
++        });
++        assert_eq!(
++            lowered
++                .gates
++                .iter()
++                .filter(|gate| gate.kind == GateKind::Nor(1) && gate.inputs == ["x"])
++                .count(),
++            1,
++            "both reconvergent branches must share the one physical inverse of `x`"
++        );
++    }
++
++    /// Two buffers share one positive-only starting rail. Flipping either
++    /// one alone ties the all-positive score; flipping both removes the
++    /// one shared input inverse, so the pair sweep must escape this strict
++    /// single-flip local minimum.
++    #[test]
++    fn pair_flip_escapes_a_single_flip_local_minimum() {
++        let source = netlist(
++            &["a"],
++            &[],
++            vec![gate(GateKind::Buf, "x", &["a"]), gate(GateKind::Buf, "y", &["a"])],
++        );
++        let positive = [SignalPolarity::Positive, SignalPolarity::Positive];
++        let first_only = [SignalPolarity::Negative, SignalPolarity::Positive];
++        let second_only = [SignalPolarity::Positive, SignalPolarity::Negative];
++        let pair = [SignalPolarity::Negative, SignalPolarity::Negative];
++
++        let initial_score = score(&source, &positive).expect("initial candidate scores");
++        assert_eq!(score(&source, &first_only).expect("first flip scores"), initial_score);
++        assert_eq!(score(&source, &second_only).expect("second flip scores"), initial_score);
++        assert!(score(&source, &pair).expect("pair scores") < initial_score);
++        assert_eq!(assign_polarities(&source).expect("assignment succeeds"), pair);
++    }
++
++    /// The static comparison intentionally orders reserved area, then gate
++    /// count, then torch depth. Each input here is a real lowered netlist;
++    /// no synthetic score or mock participates in the ordering check.
++    #[test]
++    fn score_orders_area_then_gates_then_torch_depth() {
++        let lower_area = score_realisable_netlist(&netlist(
++            &["a", "b", "c", "d"],
++            &[],
++            vec![
++                gate(GateKind::Or(2), "o1", &["a", "b"]),
++                gate(GateKind::Or(2), "o2", &["o1", "c"]),
++                gate(GateKind::Or(2), "o3", &["o2", "d"]),
++            ],
++        ));
++        let fewer_gates = score_realisable_netlist(&netlist(
++            &["a", "b", "c", "d", "e"],
++            &[],
++            vec![
++                gate(GateKind::Nor(3), "n1", &["a", "b", "c"]),
++                gate(GateKind::Nor(3), "n2", &["n1", "d", "e"]),
++            ],
++        ));
++        let shallower = score_realisable_netlist(&netlist(
++            &["a", "b", "c"],
++            &[],
++            vec![gate(GateKind::Or(2), "o1", &["a", "b"]), gate(GateKind::Or(2), "o2", &["o1", "c"])],
++        ));
++        let deeper = score_realisable_netlist(&netlist(
++            &["a"],
++            &[],
++            vec![gate(GateKind::Nor(1), "n1", &["a"]), gate(GateKind::Nor(1), "n2", &["n1"])],
++        ));
++
++        assert_eq!(lower_area, LoweredScore { area: 18, gates: 3, torch_depth: 0 });
++        assert_eq!(fewer_gates, LoweredScore { area: 24, gates: 2, torch_depth: 2 });
++        assert_eq!(shallower, LoweredScore { area: 12, gates: 2, torch_depth: 0 });
++        assert_eq!(deeper, LoweredScore { area: 12, gates: 2, torch_depth: 2 });
++        assert!(lower_area < fewer_gates, "area wins even when it takes more gates");
++        assert!(fewer_gates < lower_area, "gate count wins before torch depth when area ties");
++        assert!(shallower < deeper, "torch depth breaks an area-and-gate-count tie");
++    }
++
++    #[test]
++    fn directly_realisable_nor_and_or_gates_are_not_polarity_eligible() {
++        let source = netlist(
++            &["a", "b", "c"],
++            &["y"],
++            vec![gate(GateKind::Nor(2), "n", &["a", "b"]), gate(GateKind::Or(2), "y", &["n", "c"])],
++        );
++
++        assert_eq!(
++            assign_polarities(&source).expect("valid directly realisable netlist assigns"),
++            vec![SignalPolarity::Positive, SignalPolarity::Positive]
++        );
++    }
+ }
