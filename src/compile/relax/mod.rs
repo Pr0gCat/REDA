@@ -19,7 +19,7 @@ mod snap;
 // `cargo clippy --all-targets -- -D warnings`.
 pub use build::{
     attach_offset, build, cells, pin_hops, Attach, Body, BodyGraph, BodyKind, Cell, Pull, Weld,
-    SIGNAL_STIFFNESS,
+    SIGNAL_REST_LENGTH, SIGNAL_STIFFNESS,
 };
 pub use linear::{Factorisation, NotPositiveDefinite};
 pub use project::{
@@ -372,14 +372,109 @@ fn laplacian(graph: &BodyGraph, free: &[Option<usize>], order: usize, anchor: f6
     matrix
 }
 
+/// The vector from a pull's `from` attachment to its `to` attachment, as the
+/// bodies currently stand.
+///
+/// This is the quantity every spring in this file is a function of, and it is
+/// the *attachment* separation rather than the body separation: a socket and a
+/// pin sit off their bodies' own positions by [`attach_offset`], which is how a
+/// facing enters the energy at all.
+fn separation(graph: &BodyGraph, pull: &Pull) -> [f64; 3] {
+    let from = &graph.bodies[pull.from.0];
+    let to = &graph.bodies[pull.to.0];
+    let from_at = attach_offset(pull.from.1, from);
+    let to_at = attach_offset(pull.to.1, to);
+    std::array::from_fn(|axis| {
+        (from.position[axis] + from_at[axis]) - (to.position[axis] + to_at[axis])
+    })
+}
+
+/// What fraction of a separation the spring still wants gone.
+///
+/// `0.0` at or inside [`Pull::rest`] -- the spring is slack and exerts nothing
+/// -- rising toward `1.0` as the separation grows past it. The norm is
+/// **Manhattan**, because a route is rectilinear and the Manhattan distance
+/// between two attachments is the least number of cells any path joining them
+/// can spend; [`SIGNAL_REST_LENGTH`] is calibrated in that metric and says why.
+///
+/// Two things follow, and both matter to the loop below.
+///
+/// **It is continuous at the boundary.** At `norm == rest` this is exactly
+/// zero and it approaches zero from above, so a pair crossing the free radius
+/// does not step from "no force" to "some force" -- the force it carries fades
+/// in. That is what a rest length has to do to be safe here: a discontinuous
+/// one is a pair that can flip between pulled and free forever, which is the
+/// oscillation this design was warned about. What is discontinuous is the
+/// second derivative, and nothing in this file differentiates twice.
+///
+/// **At `rest == 0.0` it is `1.0` for every separation that is not exactly
+/// zero, and `0.0` for one that is** -- and a separation of exactly zero
+/// contributes nothing either way, because it is multiplied by itself below.
+/// So a graph of zero-rest springs assembles the identical matrix and the
+/// identical right-hand side it did before rest lengths existed. That is not a
+/// coincidence to be grateful for; it is what makes
+/// `a_zero_rest_length_is_the_solver_that_shipped_before_it` able to fail.
+fn tension(separation: [f64; 3], rest: f64) -> f64 {
+    let norm = separation[0].abs() + separation[1].abs() + separation[2].abs();
+    if norm <= rest {
+        0.0
+    } else {
+        (norm - rest) / norm
+    }
+}
+
+/// The separation each pull is asking for on this step, linearised.
+///
+/// **This is where the non-linearity goes, and it is the whole design.** A rest
+/// length makes the spring energy `k * max(0, |d| - rest)^2`, which is not
+/// quadratic in position, so it cannot be assembled into a matrix and handed to
+/// a Cholesky. What is quadratic is "hold the separation at a *fixed vector*
+/// `t`" -- and the loop below already re-solves from scratch every step, so `t`
+/// can be recomputed each time from the configuration the step starts in and
+/// the solve stays linear. `t` is the current separation with the free part
+/// left in and the rest taken out: `d * (1 - tension(d))`, which is `d` itself
+/// while the pair is inside the free radius and shrinks toward the rest length
+/// as it leaves.
+///
+/// Its fixed point is the fixed point of the true energy. A slack pull asks for
+/// the separation it already has, so it contributes no force; a taut one asks
+/// for `rest` along the direction it currently points, so it stops pulling
+/// exactly when the pair is `rest` apart. Neither is an approximation of the
+/// answer -- only of the path taken to it.
+///
+/// **Frozen once per step, not recomputed per axis.** `settle` solves the three
+/// axes in sequence and writes each solution back into the bodies as it goes,
+/// so a target computed inside that loop would see X already moved while
+/// solving Z, and the three axes would stop being independent solves of one
+/// system. Every caller must compute this before the axis loop and hand the
+/// same targets to all three.
+fn pull_targets(graph: &BodyGraph) -> Vec<[f64; 3]> {
+    graph
+        .pulls
+        .iter()
+        .map(|pull| {
+            let apart = separation(graph, pull);
+            let slack = 1.0 - tension(apart, pull.rest);
+            [apart[0] * slack, apart[1] * slack, apart[2] * slack]
+        })
+        .collect()
+}
+
 /// The right-hand side for one axis, given the current facings.
 ///
-/// A pull wants `(x_i + off_i) - (x_j + off_j) == 0`, so the port offsets and
-/// every pinned neighbour's position land here. `anchor * legal` is the `c`
-/// term: every free body is also pulled toward where the projection last put
-/// it, which is what makes the two bounds meet. On the first step there is no
-/// "last put it" yet and `legal` is the layout `relax` was handed, legal or
-/// not; from the first projection on it is the projection's own output.
+/// A pull wants `(x_i + off_i) - (x_j + off_j) == t`, so the port offsets, the
+/// step's target separation and every pinned neighbour's position land here.
+/// `anchor * legal` is the `c` term: every free body is also pulled toward
+/// where the projection last put it, which is what makes the two bounds meet.
+/// On the first step there is no "last put it" yet and `legal` is the layout
+/// `relax` was handed, legal or not; from the first projection on it is the
+/// projection's own output.
+///
+/// **The matrix is not a party to any of this.** [`pull_targets`] changes what
+/// separation a spring asks for and never how stiffly it asks, so every
+/// coefficient of [`laplacian`] is what it was -- which is what keeps the
+/// system positive definite for exactly the reason its own doc gives, and what
+/// lets one factorisation still serve all three axes.
 fn right_hand_side(
     graph: &BodyGraph,
     free: &[Option<usize>],
@@ -387,18 +482,28 @@ fn right_hand_side(
     axis: usize,
     anchor: f64,
     legal: &[[f64; 3]],
+    targets: &[[f64; 3]],
 ) -> Vec<f64> {
+    // A `zip` shorter than the pulls would drop the tail of them from the
+    // right-hand side while [`laplacian`] kept every one of them on the
+    // diagonal -- a system asking the last few springs for a separation of
+    // nothing, which is not a failure any assertion downstream would catch.
+    assert_eq!(
+        targets.len(),
+        graph.pulls.len(),
+        "the target table is indexed by pull"
+    );
     let mut rhs = vec![0.0; order];
     for (index, slot) in free.iter().enumerate() {
         if let Some(slot) = slot {
             rhs[*slot] += anchor * legal[index][axis];
         }
     }
-    for pull in &graph.pulls {
+    for (pull, target) in graph.pulls.iter().zip(targets) {
         let (left, right) = (pull.from.0, pull.to.0);
         let left_offset = attach_offset(pull.from.1, &graph.bodies[left])[axis];
         let right_offset = attach_offset(pull.to.1, &graph.bodies[right])[axis];
-        let want = right_offset - left_offset;
+        let want = right_offset - left_offset + target[axis];
 
         if let Some(i) = free[left] {
             rhs[i] += pull.stiffness * want;
@@ -456,19 +561,31 @@ fn choose_facings(graph: &mut BodyGraph) -> bool {
 }
 
 /// The spring energy of every pull touching `body`, with everything else held.
+///
+/// **The free part of a separation carries no energy**, which is what makes a
+/// facing sweep agree with the solve it sits between rather than optimising a
+/// second, older objective. Only [`tension`] of each separation is squared: a
+/// pull whose two ends are already inside its rest length contributes exactly
+/// `0.0` whichever way its body faces, so a body all of whose pulls are slack
+/// has four equal energies and `choose_facings` leaves it where its
+/// lowest-index tie-break puts it. That is a real consequence and not a
+/// rounding one -- the four energies are the same `0.0`, bit for bit, on every
+/// toolchain, which is a good deal *safer* than the near-ties
+/// `measure_snapped_fingerprint_slack` exists to watch.
+///
+/// At `rest == 0.0` the tension is `1.0` and this is the plain sum of squared
+/// separations it has always been.
 fn incident_energy(graph: &BodyGraph, body: usize) -> f64 {
     let mut energy = 0.0;
     for pull in &graph.pulls {
         if pull.from.0 != body && pull.to.0 != body {
             continue;
         }
-        let from = &graph.bodies[pull.from.0];
-        let to = &graph.bodies[pull.to.0];
-        let from_at = attach_offset(pull.from.1, from);
-        let to_at = attach_offset(pull.to.1, to);
+        let apart = separation(graph, pull);
+        let taut = tension(apart, pull.rest);
         let mut squared = 0.0;
-        for axis in 0..3 {
-            let delta = (from.position[axis] + from_at[axis]) - (to.position[axis] + to_at[axis]);
+        for gap in &apart {
+            let delta = gap * taut;
             squared += delta * delta;
         }
         energy += pull.stiffness * squared;
@@ -497,6 +614,42 @@ pub fn relax(
 ) -> Result<ContinuousPlacement, RelaxError> {
     let mut bodies = build::build(netlist, graph, start, pinned)
         .map_err(|reason| RelaxError::CannotBuild { reason })?;
+    perturb(&mut bodies, effort.seed);
+    let required = project::required_separations(&bodies);
+    settle(bodies, &required, axes, effort)
+}
+
+/// [`relax`], with every signal spring's rest length overridden.
+///
+/// The measurement seam [`SIGNAL_REST_LENGTH`] was chosen through, and the only
+/// way to ask this solver what a *different* free radius would have produced
+/// without recompiling the constant. Four probes go through it, and between
+/// them they are why that constant is zero:
+/// `planner::sweep_the_signal_rest_length`,
+/// `planner::is_a_rest_lengths_delay_a_property_or_a_coincidence`,
+/// `planner::where_the_extra_repeater_comes_from` and
+/// `planner::does_more_room_let_the_negotiated_router_thread_segment_a`.
+///
+/// `#[cfg(test)]`, for the same reason [`relax_with_required`] below is: which
+/// rest length ships is this design's decision and not a caller's. Passing
+/// [`SIGNAL_REST_LENGTH`] here is [`relax`] exactly, and
+/// `the_rest_length_seam_at_the_shipped_value_is_the_shipping_placer` holds it
+/// to that on both reference circuits.
+#[cfg(test)]
+pub(crate) fn relax_with_rest(
+    netlist: &Netlist,
+    graph: &PrimitiveGraph,
+    start: &[Anchor],
+    pinned: &PortPlacements,
+    axes: Axes,
+    effort: RelaxEffort,
+    rest: f64,
+) -> Result<ContinuousPlacement, RelaxError> {
+    let mut bodies = build::build(netlist, graph, start, pinned)
+        .map_err(|reason| RelaxError::CannotBuild { reason })?;
+    for pull in &mut bodies.pulls {
+        pull.rest = rest;
+    }
     perturb(&mut bodies, effort.seed);
     let required = project::required_separations(&bodies);
     settle(bodies, &required, axes, effort)
@@ -586,16 +739,32 @@ fn settle(
         let factorisation = Factorisation::of(&laplacian(&bodies, &free, order, anchor), order)
             .map_err(|error| RelaxError::Unsolvable { component_row: error.row })?;
 
+        // What each spring asks for this step, linearised about the
+        // configuration the step starts in -- which is the last projection's
+        // output, and on step one the layout `relax` was handed.
+        //
+        // **Before the axis loop, and this is load-bearing.** The loop writes
+        // each axis's solution straight back into the bodies, so a target
+        // computed inside it would read an X that this same step had already
+        // moved while assembling Z. The three solves would then be three
+        // different systems rather than three axes of one, and the answer would
+        // depend on the order `axes.iter()` happens to yield. [`pull_targets`]
+        // says the same thing from the other end.
+        let targets = pull_targets(&bodies);
+
         // The lower bound: where the springs want the bodies, given how hard
         // they are currently held to the last legal configuration.
         //
         // Only the axes this stage may move on. An earlier draft solved all
         // three and restricted only the projection, which does not hold a body
-        // on its storey: springs have zero rest length, so the Y solve pulls
-        // every unpinned body onto its neighbours' plane and the storeys a
-        // pinned anchor put there collapse.
+        // on its storey: a signal spring's rest length is a Manhattan radius
+        // and Y counts toward it, so the Y solve pulls a body that is too far
+        // from its neighbours down onto their plane and the storeys a pinned
+        // anchor put there collapse. That was true when the springs had no rest
+        // length at all -- then *every* pull did it -- and a rest length
+        // narrows the case without closing it.
         for axis in axes.iter() {
-            let mut rhs = right_hand_side(&bodies, &free, order, axis, anchor, &legal);
+            let mut rhs = right_hand_side(&bodies, &free, order, axis, anchor, &legal, &targets);
             factorisation.solve(&mut rhs);
             for (index, slot) in free.iter().enumerate() {
                 if let Some(slot) = slot {
@@ -745,8 +914,9 @@ fn perturb(graph: &mut BodyGraph, seed: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compile::geometry::CellFacing;
     use crate::compile::primitive_graph::expand;
-    use crate::compile::topology::Library;
+    use crate::compile::topology::{Library, Primitive};
     use crate::compile::{Gate, Netlist};
 
     fn chain() -> Netlist {
@@ -1116,6 +1286,465 @@ mod tests {
             nudged.bodies[0].position.map(f64::to_bits),
             other.bodies[0].position.map(f64::to_bits),
             "two seeds have to give two starts"
+        );
+    }
+
+    /// A rest length is a distance the spring stops pulling at, and this is
+    /// what says so.
+    ///
+    /// [`pull_targets`] carries the whole of the non-linearity, so it is
+    /// asserted directly rather than read off a settled placement -- a lone
+    /// pull against the anchor converges to the anchor's residual and not to
+    /// its rest length, which is a fact about [`ANCHOR_GROWTH`] and would make
+    /// a fixture that asserted "8 apart" a test of the wrong thing. Four
+    /// separations, each deciding something a wrong implementation gets wrong:
+    ///
+    /// - **diagonal, well outside the rest length.** 40 along X and 40 along
+    ///   Z. The target has to have Manhattan norm exactly the rest length; a
+    ///   Euclidean implementation gives it Manhattan norm `rest * sqrt(2)`, so
+    ///   this is the case that decides the metric [`SIGNAL_REST_LENGTH`] is
+    ///   calibrated in.
+    /// - **inside the rest length.** The target has to be the separation
+    ///   itself, which is the "no pull inside it" half of the design: the
+    ///   right-hand side then asks for the separation the pair already has and
+    ///   the spring contributes no force. Taking `max` where [`pull_targets`]
+    ///   takes `min` -- the reading of "rest length" that also *pushes* -- is
+    ///   what this catches.
+    /// - **exactly at the rest length.** Both branches have to give the same
+    ///   answer, which is the continuity the loop's convergence rests on.
+    /// - **coincident.** No direction to point a target along; it has to be the
+    ///   zero vector rather than a `NaN` out of a division by a zero norm.
+    ///   `NaN` would not be caught downstream -- [`ANCHOR_CEILING`]'s doc walks
+    ///   through how every one of `relax`'s exit conditions passes a `NaN`
+    ///   rather than tripping on it.
+    #[test]
+    fn a_pull_stops_pulling_at_its_rest_length() {
+        let graph = |at: [f64; 3], rest: f64| BodyGraph {
+            bodies: vec![
+                Body {
+                    what: BodyKind::Primitive { node: 0, kind: Primitive::Torch },
+                    position: [0.0, 0.0, 0.0],
+                    inputs: Vec::new(),
+                    output: Some("n".into()),
+                    facing: CellFacing::NORTH,
+                    pinned: true,
+                },
+                Body {
+                    what: BodyKind::Primitive { node: 1, kind: Primitive::Torch },
+                    position: at,
+                    inputs: vec!["n".into()],
+                    output: None,
+                    facing: CellFacing::NORTH,
+                    pinned: false,
+                },
+            ],
+            // Attached at the two bodies' own cells, so the separation is the
+            // positions and the arithmetic below is readable. `Attach::Pin`
+            // would add `pin_hops` to it and test the same thing less clearly.
+            pulls: vec![Pull {
+                from: (0, Attach::Socket(0)),
+                to: (1, Attach::Socket(0)),
+                stiffness: SIGNAL_STIFFNESS,
+                rest,
+            }],
+            welds: Vec::new(),
+            nodes: vec![vec![0], vec![1]],
+            anchor_body: vec![0, 1],
+        };
+        let manhattan = |vector: [f64; 3]| vector[0].abs() + vector[1].abs() + vector[2].abs();
+
+        // Diagonal and far outside: the target points the same way and is
+        // exactly `rest` long, by the Manhattan norm.
+        for rest in [4.0f64, 8.0, 12.0] {
+            let bodies = graph([-40.0, 0.0, -40.0], rest);
+            let target = pull_targets(&bodies)[0];
+            assert!(
+                (manhattan(target) - rest).abs() < 1e-9,
+                "rest {rest} on a diagonal pair asked for a target {:.6} long by Manhattan; a \
+                 Euclidean rest length would make it {:.6}",
+                manhattan(target),
+                rest * 2.0f64.sqrt()
+            );
+            assert!(
+                (target[0] - target[2]).abs() < 1e-9 && target[0] > 0.0,
+                "the target has to point along the separation it shortened, not somewhere else: \
+                 {target:?}"
+            );
+        }
+
+        // Inside: the target is the separation itself, so the pull asks for
+        // what it already has and exerts nothing.
+        let bodies = graph([-3.0, 0.0, -4.0], 12.0);
+        let apart = separation(&bodies, &bodies.pulls[0]);
+        assert_eq!(
+            pull_targets(&bodies)[0].map(f64::to_bits),
+            apart.map(f64::to_bits),
+            "a pull inside its rest length has to ask for the separation it already has"
+        );
+        // And it carries no energy either, which is the same claim made to
+        // `choose_facings` rather than to the solve. A facing sweep run against
+        // the old zero-rest energy would turn bodies to shorten a distance the
+        // objective says is free -- two halves of one loop optimising two
+        // different things.
+        assert_eq!(
+            incident_energy(&bodies, 1),
+            0.0,
+            "a body whose every pull is slack has to weigh all four facings the same"
+        );
+        assert!(
+            incident_energy(&graph([-40.0, 0.0, -40.0], 12.0), 1) > 0.0,
+            "a body whose pull is taut still has an energy to minimise"
+        );
+
+        // Exactly at it: the two branches have to agree, or the force steps
+        // rather than fading in and a pair on the boundary can oscillate.
+        let bodies = graph([-8.0, 0.0, -4.0], 12.0);
+        let apart = separation(&bodies, &bodies.pulls[0]);
+        assert_eq!(
+            pull_targets(&bodies)[0].map(f64::to_bits),
+            apart.map(f64::to_bits),
+            "at exactly the rest length the pull is still slack"
+        );
+
+        // Coincident: no direction, and no division by a zero norm.
+        let bodies = graph([0.0, 0.0, 0.0], 12.0);
+        assert_eq!(
+            pull_targets(&bodies)[0],
+            [0.0, 0.0, 0.0],
+            "a coincident pair has no direction to shorten along"
+        );
+
+        // And the whole of it reaches the solver: the same fixture settled at
+        // three rest lengths comes back monotonically wider. The step is not
+        // the rest length -- the anchor doubles faster than one pull can pull,
+        // so what a lone pull converges to is the anchor's residual either way
+        // -- but it moves, and it moves the right way.
+        let settled_at = |rest: f64| -> f64 {
+            let bodies = graph([40.0, 1.0, 40.0], rest);
+            let required = vec![0.0; bodies.bodies.len()];
+            let placement = settle(bodies, &required, Axes::IN_PLANE, RelaxEffort::default())
+                .expect("one pull and one anchor always solve");
+            manhattan(separation(&placement.graph, &placement.graph.pulls[0]))
+        };
+        let (tight, four, twelve) = (settled_at(0.0), settled_at(4.0), settled_at(12.0));
+        assert!(
+            twelve > four && four > tight,
+            "settled separations {tight:.3} / {four:.3} / {twelve:.3} at rest 0 / 4 / 12 are not \
+             increasing, so the target never reached the right-hand side"
+        );
+    }
+
+    /// A rest length of zero is the solver that shipped before rest lengths,
+    /// and this is what makes that claim falsifiable.
+    ///
+    /// It matters because [`SIGNAL_REST_LENGTH`] is zero: every pinned number
+    /// on this branch rests on the rest-length machinery being inert at that
+    /// value, and "inert" is a claim about `tension` returning `1.0` for every
+    /// separation that is not exactly zero and about [`pull_targets`] returning
+    /// the zero vector, not something the reader should take on trust.
+    ///
+    /// Two assertions, and they catch different mistakes.
+    ///
+    /// The first is on the constant itself, and it is what goes red the moment
+    /// somebody gives `signal_pulls` a nonzero rest length: the pinned counts
+    /// have to move with it, so this test is the wrong thing to silence and
+    /// says so in its own message. Measured by injection -- setting
+    /// [`SIGNAL_REST_LENGTH`] to 12.0 turns this one red along with two more in
+    /// `relax::` and eighteen across the whole lib suite, and takes and4 from
+    /// 232 blocks to 370.
+    ///
+    /// The second compares `relax` against `relax_with_rest(0.0)` bit for bit
+    /// on `and4` and the two-gate chain. That is not a tautology while the
+    /// constant is zero and the seam takes its own path: the seam overwrites
+    /// every pull's rest *after* `build` and *before* `perturb`, and an
+    /// argument that the overwrite cannot matter at zero is exactly the kind
+    /// this file has been wrong about before.
+    #[test]
+    fn a_zero_rest_length_is_the_solver_that_shipped_before_it() {
+        assert_eq!(
+            SIGNAL_REST_LENGTH, 0.0,
+            "this test is the reason the pinned counts did not move; if the shipped rest length \
+             is no longer zero, they have to move and this test is the wrong one to silence"
+        );
+
+        for netlist in [chain(), crate::circuits::and4::build_and4_netlist().0] {
+            let graph = expand(&netlist, &Library::default_library()).expect("expands");
+            let start = starting_layout(&netlist, &PortPlacements::default()).expect("lays out");
+            let shipped = relax(
+                &netlist,
+                &graph,
+                &start,
+                &PortPlacements::default(),
+                Axes::IN_PLANE,
+                RelaxEffort::default(),
+            )
+            .expect("relaxes");
+            let through_the_seam = relax_with_rest(
+                &netlist,
+                &graph,
+                &start,
+                &PortPlacements::default(),
+                Axes::IN_PLANE,
+                RelaxEffort::default(),
+                0.0,
+            )
+            .expect("relaxes");
+
+            assert_eq!(shipped.iterations, through_the_seam.iterations);
+            for (index, (left, right)) in shipped
+                .graph
+                .bodies
+                .iter()
+                .zip(&through_the_seam.graph.bodies)
+                .enumerate()
+            {
+                assert_eq!(
+                    left.position.map(f64::to_bits),
+                    right.position.map(f64::to_bits),
+                    "body {index} landed somewhere else through the seam"
+                );
+                assert_eq!(left.facing, right.facing, "body {index} turned a different way");
+            }
+        }
+    }
+
+    /// [`relax_with_rest`] at [`SIGNAL_REST_LENGTH`] is [`relax`].
+    ///
+    /// The seam is what four measurement harnesses call, and a seam that has
+    /// drifted from the function it stands in for makes every number they print
+    /// a number about nothing. Bit for bit on two circuits, and it is a
+    /// different claim from the test above: that one fixes the rest length at
+    /// zero, this one follows whatever [`SIGNAL_REST_LENGTH`] becomes.
+    #[test]
+    fn the_rest_length_seam_at_the_shipped_value_is_the_shipping_placer() {
+        for netlist in [chain(), crate::circuits::and4::build_and4_netlist().0] {
+            let graph = expand(&netlist, &Library::default_library()).expect("expands");
+            let start = starting_layout(&netlist, &PortPlacements::default()).expect("lays out");
+            let direct = relax(
+                &netlist,
+                &graph,
+                &start,
+                &PortPlacements::default(),
+                Axes::IN_PLANE,
+                RelaxEffort::default(),
+            )
+            .expect("relaxes");
+            let seam = relax_with_rest(
+                &netlist,
+                &graph,
+                &start,
+                &PortPlacements::default(),
+                Axes::IN_PLANE,
+                RelaxEffort::default(),
+                SIGNAL_REST_LENGTH,
+            )
+            .expect("relaxes");
+            for (index, (left, right)) in
+                direct.graph.bodies.iter().zip(&seam.graph.bodies).enumerate()
+            {
+                assert_eq!(
+                    left.position.map(f64::to_bits),
+                    right.position.map(f64::to_bits),
+                    "body {index} landed somewhere else through the seam"
+                );
+            }
+        }
+    }
+
+    /// The rest length is in the right-hand side and nowhere near the matrix.
+    ///
+    /// [`laplacian`]'s own doc argues the system is positive definite from the
+    /// anchor on its diagonal, and [`RelaxError::Unsolvable`] argues from
+    /// `SIGNAL_STIFFNESS` being the only stiffness anything writes. Both
+    /// arguments survive a rest length only because a rest length changes what
+    /// a spring asks for and never how stiffly it asks. That is easy to say and
+    /// easy to break -- scaling the stiffness by `tension` is the obvious
+    /// implementation and it is the wrong one -- so it is asserted: the same
+    /// graph at four rest lengths assembles four bit-identical matrices.
+    #[test]
+    fn the_matrix_does_not_depend_on_the_rest_length() {
+        let netlist = crate::circuits::and4::build_and4_netlist().0;
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
+        let start = starting_layout(&netlist, &PortPlacements::default()).expect("lays out");
+        let mut bodies =
+            build(&netlist, &graph, &start, &PortPlacements::default()).expect("builds");
+        let free: Vec<Option<usize>> = (0..bodies.bodies.len()).map(Some).collect();
+        let order = bodies.bodies.len();
+
+        let reference = laplacian(&bodies, &free, order, ANCHOR_STIFFNESS);
+        for rest in [1.0f64, 8.0, 12.0, 1_000.0] {
+            for pull in &mut bodies.pulls {
+                pull.rest = rest;
+            }
+            let matrix = laplacian(&bodies, &free, order, ANCHOR_STIFFNESS);
+            assert_eq!(
+                matrix.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+                reference.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+                "rest {rest} changed the matrix, so the positive-definiteness argument no longer \
+                 holds and one factorisation no longer serves three axes"
+            );
+        }
+    }
+
+    /// A rest length converges, and a pair sitting on the free radius does not
+    /// flip between pulled and free forever.
+    ///
+    /// This is the failure the design was warned about and the reason
+    /// [`tension`] fades a pull in across its boundary rather than switching it
+    /// on. `and4` and `full_adder` are relaxed at every radius the sweep used,
+    /// and each has to converge -- `relax` returns `Err` if it does not -- well
+    /// inside the 256-step budget. The bound is 32, which is over twice the
+    /// worst step count any circuit reached in
+    /// `planner::sweep_the_signal_rest_length` (12, `seven_segment` at rest
+    /// 15) and far enough under the budget that an oscillation would have to
+    /// be a slow one to hide.
+    ///
+    /// Raising the bound is the wrong repair if this goes red. What the sweep
+    /// measured is that step counts *fall* as the rest length rises -- `and4`
+    /// 8, 8, 8, 8, 8, 8, 7, 7 across radii 0 to 15 -- because a slack spring
+    /// has less to argue with the projection about. A run that suddenly needs
+    /// dozens of steps is the oscillation, not a budget that was too small.
+    #[test]
+    fn a_rest_length_converges_at_every_radius_the_sweep_used() {
+        for (name, netlist) in [
+            ("and4", crate::circuits::and4::build_and4_netlist().0),
+            ("full_adder", crate::circuits::full_adder::build_full_adder_netlist().0),
+        ] {
+            let graph = expand(&netlist, &Library::default_library()).expect("expands");
+            let start = starting_layout(&netlist, &PortPlacements::default()).expect("lays out");
+            for rest in [0.0f64, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 15.0] {
+                let placement = relax_with_rest(
+                    &netlist,
+                    &graph,
+                    &start,
+                    &PortPlacements::default(),
+                    Axes::IN_PLANE,
+                    RelaxEffort::default(),
+                    rest,
+                )
+                .unwrap_or_else(|error| panic!("{name} at rest {rest} did not place: {error}"));
+                assert!(
+                    placement.iterations <= 32,
+                    "{name} at rest {rest} took {} steps; the sweep's worst is 12, so this is an \
+                     oscillation and not a budget",
+                    placement.iterations
+                );
+            }
+        }
+    }
+
+    /// The free radius really is free per edge, which is the premise the whole
+    /// direction rests on and the one part of it the measurement confirmed.
+    ///
+    /// Two bodies on one net, relaxed at rest 0 and at rest 12, then routed by
+    /// nothing -- the claim here is narrower than a route and does not need
+    /// one. What it asserts is that the pull is what moved them: at rest 12 the
+    /// separation is at least eight cells wider than at rest 0. If the springs
+    /// were still pulling to coincidence past their rest length the two numbers
+    /// would be equal, which is what this went red with before
+    /// [`right_hand_side`] learned about [`pull_targets`].
+    #[test]
+    fn the_rest_length_is_what_widens_a_layout() {
+        let netlist = chain();
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
+        let start = starting_layout(&netlist, &PortPlacements::default()).expect("lays out");
+        let width = |rest: f64| -> f64 {
+            let placement = relax_with_rest(
+                &netlist,
+                &graph,
+                &start,
+                &PortPlacements::default(),
+                Axes::IN_PLANE,
+                RelaxEffort::default(),
+                rest,
+            )
+            .expect("the chain places at every rest length");
+            placement
+                .graph
+                .pulls
+                .iter()
+                .map(|pull| {
+                    let apart = separation(&placement.graph, pull);
+                    apart[0].abs() + apart[1].abs() + apart[2].abs()
+                })
+                .fold(0.0, f64::max)
+        };
+        let tight = width(0.0);
+        let loose = width(12.0);
+        assert!(
+            loose - tight >= 8.0,
+            "rest 12 left the widest pull {loose:.3} apart against {tight:.3} at rest 0; a rest \
+             length that does not widen anything is not a rest length"
+        );
+    }
+
+    /// The three axes are three solves of one system, and a rest length must
+    /// not make them a chain.
+    ///
+    /// `settle` writes each axis's solution straight back into the bodies
+    /// before solving the next, which is harmless while every spring's target
+    /// is the constant zero and is not harmless once a target is a function of
+    /// the current separation: computing it inside the axis loop would let the
+    /// Z solve read an X this same step had already moved. `pull_targets` is
+    /// therefore called once, above the loop, and this is what would notice if
+    /// somebody moved it back down.
+    ///
+    /// **A symmetry, because a coupled solve cannot keep one.** Two repeaters
+    /// attached at `PortKind::RepeaterRear`, which `physical.rs` declares at
+    /// `ORIGIN` for all four facings -- so the attachment offsets are exactly
+    /// zero and the fixture is exactly symmetric under exchanging X and Z. One
+    /// is pinned at the origin, the other starts 40 along each axis with a rest
+    /// length of 12. Whatever the springs and the anchor do to it, they have to
+    /// do the same thing on both axes, to the bit. Solve X first and feed it
+    /// into Z and they do not.
+    ///
+    /// It is a `rest = 12` fixture even though the shipped rest length is zero:
+    /// at zero every target is the zero vector and the ordering cannot matter,
+    /// so a test written at the shipped value would be vacuous -- which is what
+    /// the first version of it was, and the injection that moved
+    /// `pull_targets` into the loop passed the whole of `relax::` green.
+    #[test]
+    fn the_axes_are_solved_from_one_configuration_not_in_sequence() {
+        use crate::compile::physical::PortKind;
+
+        let repeater = |position: [f64; 3], net: &str, pinned: bool| Body {
+            what: BodyKind::Primitive { node: 0, kind: Primitive::Repeater },
+            position,
+            inputs: if pinned { Vec::new() } else { vec![net.to_string()] },
+            output: if pinned { Some(net.to_string()) } else { None },
+            facing: CellFacing::NORTH,
+            pinned,
+        };
+        let bodies = BodyGraph {
+            bodies: vec![
+                repeater([0.0, 0.0, 0.0], "n", true),
+                repeater([40.0, 0.0, 40.0], "n", false),
+            ],
+            pulls: vec![Pull {
+                from: (0, Attach::Port(PortKind::RepeaterRear)),
+                to: (1, Attach::Port(PortKind::RepeaterRear)),
+                stiffness: SIGNAL_STIFFNESS,
+                rest: 12.0,
+            }],
+            welds: Vec::new(),
+            nodes: vec![vec![0], vec![1]],
+            anchor_body: vec![0, 1],
+        };
+        assert_eq!(
+            attach_offset(Attach::Port(PortKind::RepeaterRear), &bodies.bodies[0]),
+            [0.0, 0.0, 0.0],
+            "the fixture's symmetry rests on this port sitting at the body's own cell"
+        );
+
+        let required = vec![0.0; bodies.bodies.len()];
+        let placement = settle(bodies, &required, Axes::IN_PLANE, RelaxEffort::default())
+            .expect("one pull and one anchor always solve");
+        let apart = separation(&placement.graph, &placement.graph.pulls[0]);
+        assert_eq!(
+            apart[0].to_bits(),
+            apart[2].to_bits(),
+            "a symmetric fixture came back {apart:?}; the axes were solved in sequence, so the \
+             answer depends on the order `Axes::iter` yields"
         );
     }
 }

@@ -7580,6 +7580,632 @@ mod tests {
         }
     }
 
+    /// The measured detour: how many cells a real route spends per cell of
+    /// straight-line separation between the two anchors it joins.
+    ///
+    /// **This harness's ratio column is not a detour model, and reading it as
+    /// one is what set [`relax::SIGNAL_REST_LENGTH`] to 12 for an hour.** The
+    /// surplus a route spends over the Manhattan distance between its endpoints
+    /// is *additive* -- `where_the_extra_repeater_comes_from` shows `d + 1`
+    /// cells on eight of and4's ten edges and `d + 3` on the other two, the one
+    /// being the socket cell and the three one jog -- and dividing a fixed cost
+    /// by `d` inflates the quotient at the short end and understates it at the
+    /// long end. What the ratio is good for is comparing two routers on the
+    /// same circuits, which is the only thing it is used for below.
+    ///
+    /// Per routed sink:
+    ///
+    /// - `d` -- Manhattan distance from the producing node's own pin
+    ///   ([`PrimitiveNode::source`], which is what the router is handed) to the
+    ///   sink's anchor. This is the quantity a signal spring measures across.
+    /// - `cells` -- how many cells the route occupies. For a route with one
+    ///   sink that is exactly the path the signal walks. A fanout route shares
+    ///   a prefix between its branches, so its cells are not any one sink's
+    ///   path; those routes are counted separately and excluded from the ratio.
+    ///
+    /// Both routers are measured. The legacy row/channel/track emitter is what
+    /// `routing_stats` can decompose and what all six circuits have; the
+    /// planner's own A* is the one a relaxed placement is actually handed to,
+    /// and it exists for the three circuits `plan_from_netlist` routes. Run on
+    /// 2026-08-27: planner 1.182 pooled over 37 single-sink routes, legacy
+    /// 2.336 over 165.
+    ///
+    /// Asserts nothing; `--ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, prints the cited numbers"]
+    fn measure_the_detour_a_real_route_spends() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+
+        let lowered = |name: &str, optimised: bool| -> Netlist {
+            let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
+            let (gate_level, _) = circuit.baked_netlist();
+            if optimised {
+                crate::compile::lowering::lower_optimised(&gate_level)
+            } else {
+                crate::compile::lowering::lower(&gate_level)
+            }
+            .expect("it lowers")
+        };
+
+        let cases: Vec<(&str, Netlist)> = vec![
+            ("and4", build_and4_netlist().0),
+            ("full_adder", build_full_adder_netlist().0),
+            ("segment_a", build_single_segment_netlist(0).0),
+            ("seven_segment", build_seven_segment_netlist().0),
+            ("verilog:and4", lowered("verilog:and4", false)),
+            ("verilog:seven_segment", lowered("verilog:seven_segment", true)),
+        ];
+
+        fn quantile(sorted: &[f64], q: f64) -> f64 {
+            let at = ((sorted.len() - 1) as f64 * q).round() as usize;
+            sorted[at]
+        }
+
+        // Every single-sink route's (d, cells), pooled across circuits, per
+        // router. The pool is what the quantile is taken over: a quantile on
+        // and4's eleven routes is not a distribution.
+        let mut pooled: BTreeMap<&str, Vec<(i64, i64)>> = BTreeMap::new();
+
+        let mut report = |router: &'static str, name: &str, candidate: &PlanCandidate| {
+            let source_of = |signal: &str| -> Option<Anchor> {
+                candidate
+                    .primitive_nodes
+                    .iter()
+                    .find(|node| {
+                        node.id == format!("gate:{signal}") || node.id == format!("input:{signal}")
+                    })
+                    .map(|node| node.source())
+            };
+
+            let mut single: Vec<(i64, i64)> = Vec::new();
+            let mut fanout_routes = 0usize;
+            let mut fanout_sinks = 0usize;
+            // The largest `d` any sink reached on at most one repeater, and
+            // the smallest that cost two. The split is at one and not at zero
+            // because a socket's terminal is sometimes a repeater and
+            // sometimes dust: the legacy emitter takes a repeater at every
+            // socket by construction, while the planner's router takes dust
+            // wherever it can prove the approach straight, live and isolated.
+            // So a terminal repeater is a routing decision on one side and a
+            // structural certainty on the other, and one is the boundary that
+            // means the same thing to both.
+            let mut free_max = 0i64;
+            let mut paid_min = i64::MAX;
+            for route in candidate.routes() {
+                let Some(source) = source_of(&route.id) else {
+                    continue;
+                };
+                for terminal in &route.terminals {
+                    let d = manhattan_distance(source, terminal.sink.anchor) as i64;
+                    if terminal.repeaters <= 1 {
+                        free_max = free_max.max(d);
+                    } else {
+                        paid_min = paid_min.min(d);
+                    }
+                }
+                if route.terminals.len() == 1 {
+                    let d = manhattan_distance(source, route.terminals[0].sink.anchor) as i64;
+                    if d > 0 {
+                        single.push((d, route.anchors().len() as i64));
+                    }
+                } else if route.terminals.len() > 1 {
+                    fanout_routes += 1;
+                    fanout_sinks += route.terminals.len();
+                }
+            }
+
+            if single.is_empty() {
+                eprintln!("  {router:<8} {name:<22} no single-sink route to measure");
+                return;
+            }
+            let mut ratios: Vec<f64> = single
+                .iter()
+                .map(|&(d, cells)| cells as f64 / d as f64)
+                .collect();
+            ratios.sort_by(|a, b| a.partial_cmp(b).expect("no NaN here"));
+            let sum_d: i64 = single.iter().map(|&(d, _)| d).sum();
+            let sum_cells: i64 = single.iter().map(|&(_, cells)| cells).sum();
+            eprintln!(
+                "  {router:<8} {name:<22} n={:<4} ratio min {:.2} median {:.2} p90 {:.2} \
+                 max {:.2} | pooled cells/d {:.2} | fanout {fanout_routes} routes \
+                 {fanout_sinks} sinks | max d at <=1 repeater {free_max}, min d at >=2 {}",
+                single.len(),
+                ratios[0],
+                quantile(&ratios, 0.5),
+                quantile(&ratios, 0.9),
+                ratios[ratios.len() - 1],
+                sum_cells as f64 / sum_d as f64,
+                if paid_min == i64::MAX { -1 } else { paid_min },
+            );
+            pooled.entry(router).or_default().extend(single);
+        };
+
+        eprintln!("per circuit:");
+        for (name, netlist) in &cases {
+            match compile::compile_legacy(netlist) {
+                Ok(compiled) => match seed_from_legacy(netlist, &compiled) {
+                    Ok(seed) => report("legacy", name, &seed),
+                    Err(error) => eprintln!("  legacy   {name:<22} seed failed: {error}"),
+                },
+                Err(error) => eprintln!("  legacy   {name:<22} compile failed: {error}"),
+            }
+            match plan_from_netlist(netlist, &PortPlacements::default()) {
+                Ok(candidate) => report("planner", name, &candidate),
+                Err(error) => eprintln!("  planner  {name:<22} plan failed: {error}"),
+            }
+        }
+
+        eprintln!("pooled, and the free radius each pool implies at 15 cells of strength:");
+        for (router, single) in &pooled {
+            let mut ratios: Vec<f64> = single
+                .iter()
+                .map(|&(d, cells)| cells as f64 / d as f64)
+                .collect();
+            ratios.sort_by(|a, b| a.partial_cmp(b).expect("no NaN here"));
+            let sum_d: i64 = single.iter().map(|&(d, _)| d).sum();
+            let sum_cells: i64 = single.iter().map(|&(_, cells)| cells).sum();
+            let pooled_ratio = sum_cells as f64 / sum_d as f64;
+            eprintln!(
+                "  {router:<8} n={:<4} pooled cells/d {pooled_ratio:.3} -> radius {:.1} \
+                 | median {:.3} -> {:.1} | p75 {:.3} -> {:.1} | p90 {:.3} -> {:.1}",
+                single.len(),
+                15.0 / pooled_ratio,
+                quantile(&ratios, 0.5),
+                15.0 / quantile(&ratios, 0.5),
+                quantile(&ratios, 0.75),
+                15.0 / quantile(&ratios, 0.75),
+                quantile(&ratios, 0.9),
+                15.0 / quantile(&ratios, 0.9),
+            );
+        }
+    }
+
+    /// The rest-length sweep: what each free radius does to the box, to the
+    /// step count, and to the delay.
+    ///
+    /// **This is the probe that chose [`relax::SIGNAL_REST_LENGTH`], and the
+    /// first version of that constant was wrong because this had not been
+    /// run.** The detour measurement above says a routed cell costs 1.25 cells
+    /// of Manhattan distance, so 15 cells of strength ought to buy a free
+    /// radius of 12 -- and at 12 `and4`'s critical path goes from 10 priced
+    /// ticks to 18 and its worst measured settle from 14 game ticks to 22. A
+    /// ratio taken over the routes a *tight* placement produced does not
+    /// survive being used to make the placement loose: the router that spent
+    /// 1.14 cells per cell crossing a 45-by-23 box spends more crossing a
+    /// 53-by-41 one, because there is more room to bend in and further to go
+    /// around what is in the way. The detour is not a constant of the router.
+    /// It is a constant of the router *and the layout*, and the layout is what
+    /// this change moves.
+    ///
+    /// So the free radius is measured directly instead: the largest rest length
+    /// at which no circuit's `cost().delay` rises above its zero-rest value.
+    /// `delay` is the column that decides -- it is an upper bound on the
+    /// critical path since `2ef0b4f`, and the worst simulated settle is printed
+    /// beside it so that the bound and the world can be seen to move together.
+    ///
+    /// Asserts nothing; `--ignored --nocapture`. Several minutes: it places six
+    /// circuits at each of eight radii and routes and simulates every one that
+    /// gets that far.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, sweeps eight rest lengths over six circuits"]
+    fn sweep_the_signal_rest_length() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist, SEGMENT_NAMES,
+        };
+
+        let lowered = |name: &str, optimised: bool| -> (Netlist, Vec<String>) {
+            let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
+            let (gate_level, labels) = circuit.baked_netlist();
+            let netlist = if optimised {
+                crate::compile::lowering::lower_optimised(&gate_level)
+            } else {
+                crate::compile::lowering::lower(&gate_level)
+            }
+            .expect("it lowers");
+            (netlist, labels.into_iter().map(|(_, signal)| signal).collect())
+        };
+        let (verilog_and4, verilog_and4_outputs) = lowered("verilog:and4", false);
+        let (verilog_decoder, verilog_decoder_outputs) = lowered("verilog:seven_segment", true);
+        let (and4, and4_output) = build_and4_netlist();
+        let (adder, adder_outputs) = build_full_adder_netlist();
+        let (segment_a, segment_a_output) = build_single_segment_netlist(0);
+        let (decoder, decoder_outputs) = build_seven_segment_netlist();
+
+        let cases: Vec<ConditionCircuit> = vec![
+            ConditionCircuit {
+                name: "and4",
+                netlist: and4,
+                inputs: &crate::circuits::and4::INPUT_NAMES[..],
+                outputs: vec![and4_output],
+                expected: and4_expected,
+            },
+            ConditionCircuit {
+                name: "full_adder",
+                netlist: adder,
+                inputs: &crate::circuits::full_adder::INPUT_NAMES[..],
+                outputs: vec![adder_outputs["sum"].clone(), adder_outputs["cout"].clone()],
+                expected: full_adder_expected,
+            },
+            ConditionCircuit {
+                name: "verilog:and4",
+                netlist: verilog_and4,
+                inputs: &crate::circuits::and4::INPUT_NAMES[..],
+                outputs: verilog_and4_outputs,
+                expected: and4_expected,
+            },
+            ConditionCircuit {
+                name: "segment_a",
+                netlist: segment_a,
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: vec![segment_a_output],
+                expected: segment_a_expected,
+            },
+            ConditionCircuit {
+                name: "seven_segment",
+                netlist: decoder,
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: SEGMENT_NAMES
+                    .iter()
+                    .map(|name| decoder_outputs[name].clone())
+                    .collect(),
+                expected: seven_segment_expected,
+            },
+            ConditionCircuit {
+                name: "verilog:seven_segment",
+                netlist: verilog_decoder,
+                inputs: &crate::circuits::seven_segment::INPUT_NAMES[..],
+                outputs: verilog_decoder_outputs,
+                expected: seven_segment_expected,
+            },
+        ];
+
+        for case in &cases {
+            let netlist = &case.netlist;
+            eprintln!("{}:", case.name);
+            for rest in [0.0f64, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 15.0] {
+                let start = match starting_layout(netlist, &PortPlacements::default()) {
+                    Ok(start) => start,
+                    Err(error) => {
+                        eprintln!("  rest {rest:>4.1}  START ERR {error}");
+                        continue;
+                    }
+                };
+                let graph =
+                    primitive_graph::expand(netlist, &Library::default_library()).expect("expands");
+                let placement = relax::relax_with_rest(
+                    netlist,
+                    &graph,
+                    &start,
+                    &PortPlacements::default(),
+                    SHIPPING_AXES,
+                    relax::RelaxEffort::default(),
+                    rest,
+                );
+                let placement = match placement {
+                    Ok(placement) => placement,
+                    Err(error) => {
+                        eprintln!("  rest {rest:>4.1}  PLACE ERR {error}");
+                        continue;
+                    }
+                };
+                let snapped = match relax::snap(&placement) {
+                    Ok(snapped) => snapped,
+                    Err(error) => {
+                        eprintln!("  rest {rest:>4.1}  SNAP ERR {error}");
+                        continue;
+                    }
+                };
+                let (mut min, mut max) = ((i32::MAX, i32::MAX), (i32::MIN, i32::MIN));
+                for node in &snapped {
+                    min = (min.0.min(node.anchor.x), min.1.min(node.anchor.z));
+                    max = (max.0.max(node.anchor.x), max.1.max(node.anchor.z));
+                }
+                let (width, depth) = (max.0 - min.0 + 1, max.1 - min.1 + 1);
+                let head = format!(
+                    "rest {rest:>4.1}  box {width:>3}x{depth:<3} = {:>6}  steps {:>2}",
+                    width as i64 * depth as i64,
+                    placement.iterations
+                );
+
+                let bare = candidate_from_snapped(netlist, &PortPlacements::default(), &snapped);
+                let plan = match route_every_net(bare, netlist, RIP_UP_ROUNDS) {
+                    Ok(plan) => plan,
+                    Err(error) => {
+                        eprintln!("  {head}  ROUTE ERR {error}");
+                        continue;
+                    }
+                };
+                let cost = plan.cost();
+                let cells: usize = plan.routes().iter().map(|route| route.anchors().len()).sum();
+                let world = match verify_candidate(&plan, netlist) {
+                    Err(error) => format!("VERIFY REFUSED: {error}"),
+                    Ok(()) => {
+                        let realised = emit_candidate(&plan, netlist, candidate_world_size(&plan))
+                            .expect("a verified plan realises");
+                        let (sx, sy, sz) = realised.world.size();
+                        let mut blocks = 0usize;
+                        for x in 0..sx {
+                            for y in 0..sy {
+                                for z in 0..sz {
+                                    if realised.world.get(x, y, z).kind
+                                        != crate::redstone::world::block::BlockKind::Air
+                                    {
+                                        blocks += 1;
+                                    }
+                                }
+                            }
+                        }
+                        let compiled = compile::CompiledCircuit {
+                            world: realised.world,
+                            input_positions: realised.ports.input_positions,
+                            output_positions: realised.ports.output_positions,
+                            gate_output_positions: realised.ports.gate_output_positions,
+                            gate_facings: (0..netlist.gates.len())
+                                .map(|gate| plan.facing_of(gate))
+                                .collect(),
+                            planner_kind: compile::PlannerKind::Unified3d,
+                            legacy_emission: None,
+                        };
+                        let truth = simulated_truth_table(
+                            &compiled,
+                            case.inputs,
+                            &case.outputs,
+                            case.expected,
+                        );
+                        let ticks = worst_settle_game_ticks(&compiled, case.inputs);
+                        format!(
+                            "{blocks:>5} blocks  truth {}  settle {}",
+                            match &truth {
+                                Ok(vectors) => format!("{vectors:>2} ok"),
+                                Err(error) => format!("**WRONG** {error}"),
+                            },
+                            match &ticks {
+                                Ok(ticks) => format!("{ticks:>3}"),
+                                Err(error) => format!("**{error}**"),
+                            },
+                        )
+                    }
+                };
+                eprintln!(
+                    "  {head}  {cells:>5} cells  delay {:>3}  wire {:>5}  turns {:>4}  {world}",
+                    cost.delay, cost.wire, cost.turns
+                );
+            }
+        }
+    }
+
+    /// Where the extra repeater comes from: every routed sink of `and4` and
+    /// `verilog:and4`, at each rest length, with the cells its route spends and
+    /// the repeaters it costs.
+    ///
+    /// `sweep_the_signal_rest_length` shows the critical path gaining a
+    /// repeater the moment the rest length leaves zero, and a step in a
+    /// summary statistic is not a diagnosis. This is the per-edge dump behind
+    /// it: it says which sink gained the repeater, how many cells its route
+    /// spends, and therefore whether the gain is the strength budget running
+    /// out -- the thing a free radius is supposed to predict -- or something
+    /// else the router did.
+    ///
+    /// Asserts nothing; `--ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, prints every routed sink"]
+    fn where_the_extra_repeater_comes_from() {
+        let lowered = |name: &str| -> Netlist {
+            let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
+            let (gate_level, _) = circuit.baked_netlist();
+            crate::compile::lowering::lower(&gate_level).expect("it lowers")
+        };
+        let cases: Vec<(&str, Netlist)> = vec![
+            ("and4", build_and4_netlist().0),
+            ("verilog:and4", lowered("verilog:and4")),
+            ("full_adder", crate::circuits::full_adder::build_full_adder_netlist().0),
+        ];
+
+        for (name, netlist) in &cases {
+            eprintln!("{name}:");
+            for rest in [0.0f64, 1.0, 2.0, 3.0, 4.0, 8.0, 12.0] {
+                let start = starting_layout(netlist, &PortPlacements::default()).expect("starts");
+                let graph =
+                    primitive_graph::expand(netlist, &Library::default_library()).expect("expands");
+                let placement = relax::relax_with_rest(
+                    netlist,
+                    &graph,
+                    &start,
+                    &PortPlacements::default(),
+                    SHIPPING_AXES,
+                    relax::RelaxEffort::default(),
+                    rest,
+                )
+                .expect("places");
+                let snapped = relax::snap(&placement).expect("snaps");
+                let bare = candidate_from_snapped(netlist, &PortPlacements::default(), &snapped);
+                let plan = match route_every_net(bare, netlist, RIP_UP_ROUNDS) {
+                    Ok(plan) => plan,
+                    Err(error) => {
+                        eprintln!("  rest {rest:>4.1}  ROUTE ERR {error}");
+                        continue;
+                    }
+                };
+                let mut line = String::new();
+                for route in plan.routes() {
+                    let source = plan
+                        .primitive_nodes
+                        .iter()
+                        .find(|node| {
+                            node.id == format!("gate:{}", route.id)
+                                || node.id == format!("input:{}", route.id)
+                        })
+                        .map(|node| node.source())
+                        .expect("every route has a source");
+                    for terminal in &route.terminals {
+                        line.push_str(&format!(
+                            "    {:>4} -> {:<12} d {:>3}  cells {:>3}  repeaters {}\n",
+                            route.id,
+                            format!("{}.in[{}]", terminal.sink.gate, terminal.sink.input_index),
+                            manhattan_distance(source, terminal.sink.anchor),
+                            route.anchors().len(),
+                            terminal.repeaters,
+                        ));
+                    }
+                }
+                eprintln!("  rest {rest:>4.1}  delay {}\n{line}", plan.cost().delay);
+            }
+        }
+    }
+
+    /// Is a circuit's delay at one rest length a property of that rest length,
+    /// or of where the perturbation happened to leave one edge?
+    ///
+    /// `where_the_extra_repeater_comes_from` shows `and4` gaining two game
+    /// ticks the moment the rest length leaves zero, and shows the whole of
+    /// that gain sitting on one edge -- `g3 -> g4.in[0]`, 13 cells and no
+    /// repeater at rest 0, 14 cells and one repeater at rest 1. An edge one
+    /// cell inside a hard boundary is not evidence about an objective; it is a
+    /// coin that happened to land. So the same sweep is run again over
+    /// [`relax::RelaxEffort::seed`], which moves every unpinned body by up to a
+    /// quarter cell and changes nothing else, and the spread of delays at a
+    /// *fixed* rest length is what says how much of the difference between two
+    /// rest lengths was ever real.
+    ///
+    /// Asserts nothing; `--ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, sweeps rest lengths against seeds"]
+    fn is_a_rest_lengths_delay_a_property_or_a_coincidence() {
+        let lowered = |name: &str| -> Netlist {
+            let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
+            let (gate_level, _) = circuit.baked_netlist();
+            crate::compile::lowering::lower(&gate_level).expect("it lowers")
+        };
+        let cases: Vec<(&str, Netlist)> = vec![
+            ("and4", build_and4_netlist().0),
+            ("verilog:and4", lowered("verilog:and4")),
+            ("full_adder", crate::circuits::full_adder::build_full_adder_netlist().0),
+        ];
+
+        for (name, netlist) in &cases {
+            eprintln!("{name}:");
+            for rest in [0.0f64, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0] {
+                let mut delays: Vec<i64> = Vec::new();
+                let mut refused = 0usize;
+                for seed in 0..12u64 {
+                    let start =
+                        starting_layout(netlist, &PortPlacements::default()).expect("starts");
+                    let graph = primitive_graph::expand(netlist, &Library::default_library())
+                        .expect("expands");
+                    let placement = relax::relax_with_rest(
+                        netlist,
+                        &graph,
+                        &start,
+                        &PortPlacements::default(),
+                        SHIPPING_AXES,
+                        relax::RelaxEffort { iterations: 256, seed },
+                        rest,
+                    );
+                    let Ok(placement) = placement else {
+                        refused += 1;
+                        continue;
+                    };
+                    let Ok(snapped) = relax::snap(&placement) else {
+                        refused += 1;
+                        continue;
+                    };
+                    let bare =
+                        candidate_from_snapped(netlist, &PortPlacements::default(), &snapped);
+                    match route_every_net(bare, netlist, RIP_UP_ROUNDS) {
+                        Ok(plan) => delays.push(plan.cost().delay as i64),
+                        Err(_) => refused += 1,
+                    }
+                }
+                if delays.is_empty() {
+                    eprintln!("  rest {rest:>4.1}  nothing routed ({refused} refused)");
+                    continue;
+                }
+                let mut sorted = delays.clone();
+                sorted.sort_unstable();
+                let mean = delays.iter().sum::<i64>() as f64 / delays.len() as f64;
+                eprintln!(
+                    "  rest {rest:>4.1}  delay at seed 0 {:>3}  | over {} seeds: min {} median {} \
+                     mean {mean:.1} max {}  ({refused} refused)  {:?}",
+                    delays[0],
+                    delays.len(),
+                    sorted[0],
+                    sorted[sorted.len() / 2],
+                    sorted[sorted.len() - 1],
+                    sorted,
+                );
+            }
+        }
+    }
+
+    /// Does more room let *either* router thread `segment_a`?
+    ///
+    /// `sweep_the_signal_rest_length` puts the rip-up router at eight rest
+    /// lengths and `segment_a` fails at all eight -- but the rip-up router is
+    /// not the only one this tree has, and "more room does not help" is a claim
+    /// about routing, not about one router. So the negotiated router is put at
+    /// the same placements. If it threads a loosened `segment_a` where it
+    /// cannot thread a tight one, the free radius buys something after all and
+    /// the rip-up column was measuring the rip-up router's dead ends.
+    ///
+    /// Asserts nothing; `--ignored --nocapture`. Minutes: the negotiated router
+    /// lays every net every iteration.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, negotiates segment_a at four rest lengths"]
+    fn does_more_room_let_the_negotiated_router_thread_segment_a() {
+        use crate::circuits::seven_segment::build_single_segment_netlist;
+        use std::time::Instant;
+
+        let (netlist, _) = build_single_segment_netlist(0);
+        for rest in [0.0f64, 4.0, 8.0, 12.0, 15.0] {
+            let start = starting_layout(&netlist, &PortPlacements::default()).expect("starts");
+            let graph =
+                primitive_graph::expand(&netlist, &Library::default_library()).expect("expands");
+            let placement = relax::relax_with_rest(
+                &netlist,
+                &graph,
+                &start,
+                &PortPlacements::default(),
+                SHIPPING_AXES,
+                relax::RelaxEffort::default(),
+                rest,
+            )
+            .expect("segment_a places at every rest length");
+            let snapped = relax::snap(&placement).expect("snaps");
+            let bare = candidate_from_snapped(&netlist, &PortPlacements::default(), &snapped);
+
+            let started = Instant::now();
+            let mut trace = Vec::new();
+            let plan = negotiate(
+                bare,
+                &netlist,
+                NEGOTIATION_ROUNDS,
+                PresentSchedule::SHIPPING,
+                &mut trace,
+            );
+            let seconds = started.elapsed().as_secs_f64();
+            match plan {
+                Err(error) => eprintln!(
+                    "  rest {rest:>4.1}  negotiated ERR {seconds:.1}s {error}\n    contested {trace:?}"
+                ),
+                Ok(plan) => {
+                    let cells: usize =
+                        plan.routes().iter().map(|route| route.anchors().len()).sum();
+                    let verdict = match verify_candidate(&plan, &netlist) {
+                        Err(error) => format!("VERIFY REFUSED: {error}"),
+                        Ok(()) => format!("verifies, delay {}", plan.cost().delay),
+                    };
+                    eprintln!(
+                        "  rest {rest:>4.1}  negotiated Ok {seconds:.1}s, {cells} cells, {verdict}\n    contested {trace:?}"
+                    );
+                }
+            }
+        }
+    }
+
     /// How far a converged placement may drift before
     /// [`placement_fingerprint`] notices -- the method behind the "about a
     /// fortieth of a cell" that function's doc cites, and the reason

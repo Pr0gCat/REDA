@@ -39,6 +39,107 @@ use crate::redstone::world::block::BlockKind;
 /// first gate whose members are genuinely free to move apart.
 pub const SIGNAL_STIFFNESS: f64 = 1.0;
 
+/// How far apart a signal spring is content to leave its two ends, by
+/// Manhattan distance between the attachment points.
+///
+/// **Zero, and that is a measurement rather than the absence of one.** The
+/// mechanism above it is complete: `Pull` carries a rest length, `relax`
+/// linearises it, the matrix is untouched and the loop converges. What is zero
+/// is the *number*, because every value tried costs game ticks and buys
+/// nothing that could be measured back.
+///
+/// # What the change was supposed to buy
+///
+/// Dust is tick-free -- `recompute_dust_strengths` reaches its fixpoint inside
+/// the tick it is raised in, so only components cost time, and a signal buys
+/// nothing by arriving over a shorter run. It buys something only by needing
+/// one fewer repeater, and it needs a repeater only once its path has spent
+/// its strength. So distance inside that radius is free, and a zero-rest
+/// spring spends it anyway: it pulls until the separation projection stops it,
+/// and the room it takes is the room the router needs. The prediction was that
+/// a rest length would make layouts larger in area and no worse in delay.
+///
+/// **The first half is right and the second is not.**
+/// `planner::sweep_the_signal_rest_length` puts eight radii through the whole
+/// pipeline -- place, route, verify, realise, simulate -- and
+/// `planner::is_a_rest_lengths_delay_a_property_or_a_coincidence` re-runs the
+/// delay column over twelve perturbation seeds so that a two-tick step is not
+/// read off one coin landing. Median `cost().delay` over those seeds, in game
+/// ticks:
+///
+/// | rest | and4 | verilog:and4 | full_adder | and4 box |
+/// |---|---|---|---|---|
+/// | **0** | **10** | **10** | **42** | **45x23 = 1,035** |
+/// | 2 | 12 | 12 | 34 (does not verify) | 47x25 = 1,175 |
+/// | 4 | 12 | 12 | 40 | 48x29 = 1,392 |
+/// | 6 | 12 | 14 | 38 | 49x31 = 1,519 |
+/// | 8 | 12 | 14 | 36 | 50x35 = 1,750 |
+/// | 10 | 16 | 16 | 42 | 51x39 = 1,989 |
+/// | 12 | 18 | 18 | 42 | 53x41 = 2,173 |
+///
+/// The area prediction holds exactly -- every circuit's box grows
+/// monotonically, `and4`'s by 110% at 12. The delay prediction fails at the
+/// first step off zero: `and4` reads 12 at every one of twelve seeds for every
+/// rest length from 2 to 8, against a median of 10 at rest 0, and its worst
+/// measured settle through the real `Simulator` moves with it, 14 game ticks
+/// to 16. `full_adder` moves the other way -- 42 down to 36 at rest 8 -- so
+/// the trade is real and it is not one-sided; it is simply not free, and free
+/// was the premise.
+///
+/// # Why 15 is not spendable, which is the part worth keeping
+///
+/// `planner::where_the_extra_repeater_comes_from` dumps every routed sink, and
+/// two things fall out of it that no summary statistic showed.
+///
+/// **The detour is additive, not multiplicative.** A route spends `d + 1`
+/// cells on seven of `and4`'s ten edges and `d + 3` on two more; the surplus
+/// is the socket cell and a jog, and it does not scale with `d`. An earlier
+/// draft of this constant divided cells by `d`, read the quotient 1.25 as a
+/// rate and set the radius to 15 / 1.25 = 12 -- which is the same arithmetic
+/// as reading a fixed cost as a percentage, and it is wrong at both ends. It
+/// is recorded here rather than quietly replaced because the ratio is still
+/// printed by `planner::measure_the_detour_a_real_route_spends` and somebody
+/// will find it: **that harness's ratio column is not a detour model.**
+///
+/// **The boundary is 14 cells, and the tight layout already sits on it.**
+/// Every 14-cell route in that dump costs no repeater and every 15-cell route
+/// costs one. At rest 0, three of `and4`'s ten edges are already at `d = 13`,
+/// which is 14 cells -- one cell inside the boundary -- while the other seven
+/// sit at 4 to 10 with room to spare. So the springs really are over-tightening
+/// seven edges for nothing, exactly as the premise says. What a rest length
+/// cannot do is give that room back, because it is one number applied to every
+/// spring: the network re-equilibrates, and at rest 1 `g3 -> g4.in[0]` goes
+/// from 13 to 14 and buys a repeater while `b -> g1.in[0]` goes from 4 to 3.
+/// **The free radius wants to be a ceiling on the long edges, not a rest
+/// length on all of them**, and that is a different mechanism from this one.
+///
+/// # And the room was not the wall
+///
+/// The reason to accept a tick or two would have been `segment_a` and
+/// `seven_segment`, which place and do not route. They do not route at any
+/// radius. The rip-up router fails all eight in the sweep, on the ring rule and
+/// on dead-end searches rather than on space; and
+/// `planner::does_more_room_let_the_negotiated_router_thread_segment_a` puts
+/// the negotiated router at five of them and it fails all five too, with
+/// contested cells reaching zero and three to six nets still unlaid at
+/// `segment_a`'s box grown 67% to 112x121. More room moves the address of the
+/// failure and not the failure.
+///
+/// # What would move this number
+///
+/// A measurement, and these three would each be enough on their own: a router
+/// that threads a loosened `segment_a`; a circuit whose delay improves at some
+/// radius without another circuit's getting worse; or the ceiling formulation
+/// above, which the per-edge dump says is what the 15 cells actually want.
+///
+/// **Analogue signals would move it the other way and kill it.** Everything
+/// here assumes DIGITAL semantics -- strength matters only insofar as it is
+/// nonzero on arrival, so any decay short of death is free. The operator
+/// intends analogue later, and under those semantics decay *is* the signal and
+/// nothing inside 15 is free at all. See the ledger, "Dust is tick-free, and
+/// the springs do not know it".
+pub const SIGNAL_REST_LENGTH: f64 = 0.0;
+
 /// One thing relaxation may move.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Body {
@@ -106,6 +207,16 @@ pub struct Pull {
     pub from: (usize, Attach),
     pub to: (usize, Attach),
     pub stiffness: f64,
+    /// How far apart this spring is content to leave its two ends, by
+    /// Manhattan distance between the attachment points.
+    ///
+    /// Zero is a spring that wants them coincident, which is what every spring
+    /// in this design was before rest lengths existed and -- per
+    /// [`SIGNAL_REST_LENGTH`], which measured every alternative and kept zero
+    /// -- what every shipping spring still is. `relax` is written so that a
+    /// graph whose every `rest` is `0.0` solves bit for bit as it did then,
+    /// which is why nothing this branch has pinned moved.
+    pub rest: f64,
 }
 
 /// A relation between two bodies that must hold exactly. Projected, never
@@ -567,6 +678,7 @@ fn signal_pulls(netlist: &Netlist, anchor_body: &[usize], welds: &[Weld]) -> Vec
                 from,
                 to,
                 stiffness: SIGNAL_STIFFNESS,
+                rest: SIGNAL_REST_LENGTH,
             });
         }
     }
