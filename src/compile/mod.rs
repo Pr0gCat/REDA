@@ -2058,6 +2058,46 @@ fn side_directions(direction: Facing) -> [Facing; 2] {
 /// not just whatever happens to already be on the page.
 type Reservation = HashMap<Position, usize>;
 
+/// One electrical segment of a net's physical route.
+///
+/// `emit` writes a net's route in three passes -- ramps, then columns, then
+/// tracks -- because that is the order the *world* has to be written in: the
+/// seals a ramp lays have to be overwritable by the column and the track that
+/// run through them. That order is neither the order the signal travels in
+/// nor one branch at a time: the Tracks pass lays a single east-west run that
+/// every branch of a fanout draws a different *prefix* of.
+///
+/// So "how many repeaters stand between this net's source and this sink" is
+/// not a quantity any one pass can keep as a running total. It is a sum over
+/// the segments that one sink's signal passes through, and each pass knows
+/// only its own segments. Every repeater is therefore attributed to the
+/// segment carrying it at the moment it is placed, and
+/// [`resolve_terminal_repeaters`] adds up each sink's own path once all three
+/// passes have run.
+///
+/// That is precisely what the counter this replaces got wrong. `Route` used
+/// to carry a per-pass running total, and only the Columns pass ever asked
+/// for it, so a terminal recorded the column and gate-entry repeaters and
+/// none of the ramp or track ones. Measured over the six reference circuits,
+/// that silently dropped 22% to 48% of every repeater the emitter lays, and
+/// all of `full_adder`'s 32-against-42 delay gap.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Leg {
+    /// The `GATE_Y` column feeding slot `slot`'s descending ramp: slot 0's is
+    /// the trunk from the source pin, and slot `i > 0`'s is the feed-through
+    /// from slot `i - 1`'s landing.
+    Column { slot: usize },
+    /// The ramp from slot `slot`'s entry column down onto its track.
+    RampDown { slot: usize },
+    /// Slot `slot`'s track, from its entry column out to the tap at `tap_x`.
+    Track { slot: usize, tap_x: i32 },
+    /// The ramp from slot `slot`'s track at `tap_x` back up to `GATE_Y`.
+    RampUp { slot: usize, tap_x: i32 },
+    /// The final branch into one socket -- the bent path from a landing to
+    /// the gate's input cell, or, for a bypass net, the entire route.
+    Branch { gate: usize, input_index: usize },
+}
+
 /// The state one `emit` pass threads through every routing write.
 ///
 /// A keep-out cell only ever needs stone if nothing else in the entire
@@ -2077,7 +2117,13 @@ struct Footprint {
     /// Every sink's concrete terminal location and style, keyed by route.
     /// This is populated at the actual emit call site, so fanout branches do
     /// not rely on an incidental flattened route order.
+    ///
+    /// Each terminal's `repeaters` is left at zero here and filled in by
+    /// [`resolve_terminal_repeaters`] once all three passes have run -- see
+    /// [`Leg`] for why no earlier moment can know the number.
     route_terminals: Vec<Vec<RouteTerminal>>,
+    /// Every repeater this pass laid, attributed to the [`Leg`] carrying it.
+    repeaters: BTreeMap<(usize, Leg), u64>,
 }
 
 impl Footprint {
@@ -2087,6 +2133,7 @@ impl Footprint {
             recording: true,
             route_anchors: Vec::new(),
             route_terminals: Vec::new(),
+            repeaters: BTreeMap::new(),
         }
     }
 
@@ -2096,6 +2143,7 @@ impl Footprint {
             recording: false,
             route_anchors: Vec::new(),
             route_terminals: Vec::new(),
+            repeaters: BTreeMap::new(),
         }
     }
 
@@ -2119,7 +2167,38 @@ impl Footprint {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
+    /// Begin attributing repeaters to `leg`, discarding whatever an earlier
+    /// lay of the same leg recorded.
+    ///
+    /// Re-laying one leg is not a mistake: two exits of the same slot can
+    /// share a tap column, in which case the Ramps pass writes that ramp
+    /// twice, over itself, with the same repeaters both times. The count has
+    /// to replace rather than accumulate or the second lay would double it.
+    fn begin_leg(&mut self, net: usize, leg: Leg) {
+        self.repeaters.insert((net, leg), 0);
+    }
+
+    fn note_repeater(&mut self, net: usize, leg: Leg) {
+        *self.repeaters.entry((net, leg)).or_default() += 1;
+    }
+
+    /// Record that `count` repeaters stand between slot `slot`'s track entry
+    /// column and its tap at `tap_x`.
+    ///
+    /// The Tracks pass counts its own rather than reporting through
+    /// [`Footprint::note_repeater`]: one `lay_track` call fills every tap of
+    /// one slot, and each tap needs a different prefix of the same run.
+    fn note_track_tap(&mut self, net: usize, slot: usize, tap_x: i32, count: u64) {
+        self.repeaters.insert((net, Leg::Track { slot, tap_x }), count);
+    }
+
+    /// How many repeaters `net` laid on `leg`. Zero for a leg nothing laid --
+    /// a track whose tap *is* its own entry column has no cells at all, and
+    /// a ramp shorter than `RAMP_REST_INTERVAL` places no rest stop.
+    fn leg_repeaters(&self, net: usize, leg: Leg) -> u64 {
+        self.repeaters.get(&(net, leg)).copied().unwrap_or(0)
+    }
+
     fn terminal(
         &mut self,
         net: usize,
@@ -2127,7 +2206,6 @@ impl Footprint {
         input_index: usize,
         pos: Position,
         kind: RouteTerminalKind,
-        repeaters: u64,
     ) {
         if self.recording {
             if self.route_terminals.len() <= net {
@@ -2144,7 +2222,10 @@ impl Footprint {
                     },
                 },
                 kind,
-                repeaters,
+                // Filled by `resolve_terminal_repeaters` after the Tracks
+                // pass; this pass has not laid the track yet, let alone the
+                // one this branch draws from.
+                repeaters: 0,
             });
         }
     }
@@ -2193,15 +2274,12 @@ impl Footprint {
 struct Route<'a> {
     net: usize,
     footprint: &'a mut Footprint,
-    /// Repeaters laid so far along the path currently being written.
-    ///
-    /// A fanout's branches share a trunk, so this is snapshotted where they
-    /// diverge and restored before each one -- what a sink needs is the count
-    /// between it and the source, not every repeater the net owns. Recorded
-    /// here because this is where the decision to place one is made; a
-    /// finished world cannot say which repeaters a given sink's signal passed
-    /// through.
-    repeaters: u64,
+    /// Which electrical segment the repeaters written from here on belong
+    /// to. `emit` names it immediately before each call that can place one;
+    /// the low-level writers below never choose it, they only report through
+    /// it. `None` until the first [`Route::begin`], and for the Tracks pass,
+    /// which reports through [`Route::note_track_tap`] instead.
+    leg: Option<Leg>,
 }
 
 impl Route<'_> {
@@ -2209,8 +2287,22 @@ impl Route<'_> {
         self.footprint.claim(pos, self.net);
     }
 
+    /// Attribute every repeater written from here on to `leg`.
+    fn begin(&mut self, leg: Leg) {
+        self.leg = Some(leg);
+        self.footprint.begin_leg(self.net, leg);
+    }
+
     fn note_repeater(&mut self) {
-        self.repeaters = self.repeaters.saturating_add(1);
+        let leg = self.leg.expect(
+            "every repeater the emitter lays belongs to a named leg, so `Route::begin` \
+             must precede the write that places one -- see `Leg`",
+        );
+        self.footprint.note_repeater(self.net, leg);
+    }
+
+    fn note_track_tap(&mut self, slot: usize, tap_x: i32, count: u64) {
+        self.footprint.note_track_tap(self.net, slot, tap_x, count);
     }
 
     fn terminal(
@@ -2221,7 +2313,7 @@ impl Route<'_> {
         kind: RouteTerminalKind,
     ) {
         self.footprint
-            .terminal(self.net, gate, input_index, pos, kind, self.repeaters);
+            .terminal(self.net, gate, input_index, pos, kind);
     }
 }
 
@@ -2511,6 +2603,7 @@ fn track_exit_strengths(
 /// index) is the only thing that still needs to know the difference.
 fn lay_track(
     world: &mut World,
+    slot: usize,
     origin: (usize, i32, i32),
     span: (i32, i32),
     taps: &BTreeSet<i32>,
@@ -2531,19 +2624,26 @@ fn lay_track(
         let cells: Vec<i32> = (1..=length).map(|k| source_x + k * step).collect();
         let (is_repeater, strengths) = plan_track_run(&cells, incoming_strength, reserve, taps);
 
+        // One track feeds every tap on it, and each one leaves by a
+        // different prefix of this run -- so this reports a *cumulative*
+        // count at each tap rather than incrementing one leg (see `Leg`).
+        // The two directions are two independent runs out of the same entry
+        // column, so the count restarts with each of them.
+        let mut laid = 0u64;
         for (k, &x) in cells.iter().enumerate() {
             let pos = Position::new(x, y, z);
             ensure_floor(world, pos);
             route.claim(pos.down());
             if is_repeater[k] {
                 world.set(pos.x, pos.y, pos.z, repeater(direction));
-            route.note_repeater();
+                laid += 1;
             } else {
                 world.set(pos.x, pos.y, pos.z, dust());
             }
             route.claim(pos);
             if taps.contains(&x) {
                 exit_strength.insert(x, strengths[k]);
+                route.note_track_tap(slot, x, laid);
             }
         }
     }
@@ -4026,7 +4126,7 @@ fn emit(
         let mut route = Route {
             net: n,
             footprint: &mut *footprint,
-            repeaters: 0,
+            leg: None,
         };
         for slot in 0..net.channels.len() {
             let channel = net.channels[slot];
@@ -4038,9 +4138,11 @@ fn emit(
                 GATE_Y,
                 z + band_ramp_length(eff_band),
             );
+            route.begin(Leg::RampDown { slot });
             move_between_layers(world, entry, Facing::North, band_y(eff_band), &mut route);
             for exit in net.exits(slot, &plan.centre_x) {
                 let top = Position::new(exit.x(), band_y(eff_band), z);
+                route.begin(Leg::RampUp { slot, tap_x: exit.x() });
                 move_between_layers(world, top, Facing::North, GATE_Y, &mut route);
             }
         }
@@ -4052,7 +4154,7 @@ fn emit(
         let mut route = Route {
             net: n,
             footprint: &mut *footprint,
-            repeaters: 0,
+            leg: None,
         };
 
         if bypass[n] {
@@ -4081,6 +4183,9 @@ fn emit(
             // every bend -- see its own doc comment for why that used to
             // regress settle time instead of improving it.
             let (gate, input_index) = net.sinks[0][0];
+            // A bypass net *is* one branch: no ramp, no track, nothing
+            // shared with anybody, so its whole route is that one leg.
+            route.begin(Leg::Branch { gate, input_index });
             let pin = match net.source {
                 Source::Lever(i) => lever_pin[i],
                 Source::Gate(g) => gate_pin[g],
@@ -4158,6 +4263,7 @@ fn emit(
                     Source::Lever(i) => lever_pin[i],
                     Source::Gate(g) => gate_pin[g],
                 };
+                route.begin(Leg::Column { slot: 0 });
                 lay_dust_run(
                     world,
                     pin,
@@ -4168,12 +4274,7 @@ fn emit(
                     &mut route,
                 );
             }
-            // Every exit leaves the same landing, so each branch starts from
-            // the trunk's count rather than from whatever the previous branch
-            // added to it.
-            let repeaters_to_landing = route.repeaters;
             for exit in net.exits(slot, &plan.centre_x) {
-                route.repeaters = repeaters_to_landing;
                 let landing = Position::new(exit.x(), GATE_Y, z - band_ramp_length(eff_band));
                 let landing_strength =
                     ramp_ending_strength(band_levels(eff_band), exit_strength[n][slot][&exit.x()]);
@@ -4195,6 +4296,7 @@ fn emit(
                             waypoints.push(Position::new(landing.x, GATE_Y, row_z_gate));
                         }
                         waypoints.push(socket);
+                        route.begin(Leg::Branch { gate, input_index });
                         if merge_branch_is_bare(netlist, net, gate) {
                             let reserve = bare_reserve_for_merge(netlist, nets, gate);
                             let (_, terminal) = lay_bent_path_bare(
@@ -4229,6 +4331,9 @@ fn emit(
                         let next_z = track_z[next_channel][next_band];
                         let next_entry =
                             Position::new(x, GATE_Y, next_z + band_ramp_length(eff_next_band));
+                        // The column that feeds the *next* slot's ramp, which
+                        // is how `resolve_terminal_repeaters` names it.
+                        route.begin(Leg::Column { slot: next_slot });
                         lay_dust_run(
                             world,
                             landing,
@@ -4254,7 +4359,7 @@ fn emit(
         let mut route = Route {
             net: n,
             footprint: &mut *footprint,
-            repeaters: 0,
+            leg: None,
         };
         // Same multi-container indexing as the Columns pass above -- see its
         // own `#[allow]` comment.
@@ -4275,6 +4380,7 @@ fn emit(
                 ramp_ending_strength(band_levels(eff_band), entry_strength[n][slot]);
             lay_track(
                 world,
+                slot,
                 (eff_band, z, source_x),
                 (lo, hi),
                 &taps,
@@ -4329,11 +4435,127 @@ fn emit(
         output_positions.insert(output_name.clone(), (lamp_pos.x, lamp_pos.y, lamp_pos.z));
     }
 
+    // All three passes have run, so every leg of every net now has its
+    // count and each sink's own path can finally be added up.
+    resolve_terminal_repeaters(netlist, nets, &plan.centre_x, bypass, footprint);
+
     EmitResult {
         input_positions,
         output_positions,
         gate_output_positions,
         primitive_anchors,
+    }
+}
+
+/// Fill in every recorded terminal's repeater count, now that all three of
+/// `emit`'s passes have run.
+///
+/// A sink's count is the sum of the [`Leg`]s its signal passes through, in
+/// the order it passes them: the column into slot 0, that slot's ramp down
+/// onto its track, the track out to the tap this branch leaves by, the ramp
+/// back up to `GATE_Y` -- then, for an intermediate slot, the feed-through
+/// column that starts the next one, and at the last slot the branch into the
+/// socket itself.
+///
+/// This walks `Net::exits`, the same enumeration all three passes walked, so
+/// it cannot name a tap column the emitter did not actually use. It is the
+/// only writer of `RouteTerminal::repeaters` on the legacy path, and it
+/// checks that it found exactly one terminal for every sink it priced --
+/// a sink whose branch was never recorded, or recorded twice, would
+/// otherwise leave a zero behind that reads as a genuinely repeaterless
+/// route.
+fn resolve_terminal_repeaters(
+    netlist: &Netlist,
+    nets: &[Net],
+    centre_x: &[i32],
+    bypass: &[bool],
+    footprint: &mut Footprint,
+) {
+    // `terminal` only records while recording, so there is nothing to fill
+    // in on the enforcing pass -- and its ledger describes the same world.
+    if !footprint.recording {
+        return;
+    }
+
+    for (n, net) in nets.iter().enumerate() {
+        let mut priced: BTreeMap<(String, usize), u64> = BTreeMap::new();
+        let mut charge = |gate: usize, input_index: usize, total: u64| {
+            let previous = priced.insert(
+                (netlist.gates[gate].output.clone(), input_index),
+                total,
+            );
+            assert!(
+                previous.is_none(),
+                "net {n} priced `{}.in[{input_index}]` twice",
+                netlist.gates[gate].output
+            );
+        };
+
+        if bypass[n] {
+            let (gate, input_index) = net.sinks[0][0];
+            charge(
+                gate,
+                input_index,
+                footprint.leg_repeaters(n, Leg::Branch { gate, input_index }),
+            );
+        } else {
+            // What the signal has already passed through by the time it
+            // reaches this slot's entry column: zero at slot 0, and at every
+            // later slot the running total carried across the feed-through
+            // that led here.
+            let mut arriving = 0u64;
+            for slot in 0..net.channels.len() {
+                let on_the_track = arriving
+                    + footprint.leg_repeaters(n, Leg::Column { slot })
+                    + footprint.leg_repeaters(n, Leg::RampDown { slot });
+                let mut carried = None;
+                for exit in net.exits(slot, centre_x) {
+                    let tap_x = exit.x();
+                    let at_landing = on_the_track
+                        + footprint.leg_repeaters(n, Leg::Track { slot, tap_x })
+                        + footprint.leg_repeaters(n, Leg::RampUp { slot, tap_x });
+                    match exit {
+                        Exit::Socket {
+                            gate, input_index, ..
+                        } => charge(
+                            gate,
+                            input_index,
+                            at_landing
+                                + footprint.leg_repeaters(n, Leg::Branch { gate, input_index }),
+                        ),
+                        // At most one per slot, by construction: `Net::exits`
+                        // pushes `hops[slot]` and nothing else.
+                        Exit::Feedthrough { .. } => carried = Some(at_landing),
+                    }
+                }
+                arriving = carried.unwrap_or(0);
+            }
+        }
+
+        let Some(terminals) = footprint.route_terminals.get_mut(n) else {
+            assert!(
+                priced.is_empty(),
+                "net {n} has {} sink(s) but recorded no terminal at all",
+                priced.len()
+            );
+            continue;
+        };
+        assert_eq!(
+            terminals.len(),
+            priced.len(),
+            "net {n} recorded {} terminal(s) for {} sink(s)",
+            terminals.len(),
+            priced.len()
+        );
+        for terminal in terminals.iter_mut() {
+            let key = (terminal.sink.gate.clone(), terminal.sink.input_index);
+            terminal.repeaters = *priced.get(&key).unwrap_or_else(|| {
+                panic!(
+                    "net {n} recorded a terminal at `{}.in[{}]`, which is not one of its sinks",
+                    terminal.sink.gate, terminal.sink.input_index
+                )
+            });
+        }
     }
 }
 

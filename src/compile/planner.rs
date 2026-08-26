@@ -104,10 +104,27 @@ pub struct RouteTerminal {
     /// Repeaters between this route's source and this sink.
     ///
     /// Counted by whoever laid the branch, at the moment it decided to place
-    /// each one. A finished world cannot answer this: a route's cells are a
-    /// graph, and walking it can cross between two runs of the same net that
-    /// lie adjacent without being electrically sequential -- which is exactly
-    /// how the walk this replaces lost three of full_adder's repeaters.
+    /// each one. A finished world cannot answer this by walking: a route's
+    /// cells are a graph, and walking it can cross between two runs of the
+    /// same net that lie adjacent without being electrically sequential --
+    /// which is exactly how the walk this replaces lost three of full_adder's
+    /// repeaters.
+    ///
+    /// "Whoever laid the branch" is one router on the planner's own A* path,
+    /// and **three passes** on the legacy emitter's, which writes ramps, then
+    /// columns, then tracks. That is the order the world has to be written
+    /// in, not the order the signal travels in, and the track is shared by
+    /// every branch of a fanout -- so on that path the number is a sum over
+    /// the electrical segments this sink's signal passes through, assembled
+    /// by `compile::resolve_terminal_repeaters` once all three have run. See
+    /// `compile::Leg`.
+    ///
+    /// Whichever laid it, this is every repeater on the path and not a
+    /// subset. Measured against `routing_stats::analyze`, which reads the
+    /// finished blocks back instead of recording decisions: equal on all 373
+    /// routed edges of the six reference circuits, 0 disagreements. Until
+    /// 2026-08-26 those same edges dropped 762 of the 1,679 repeaters they
+    /// pass through, because only the Columns pass ever reported its count.
     pub repeaters: u64,
 }
 
@@ -5246,6 +5263,31 @@ fn axis_span(minimum: i32, maximum: i32) -> u64 {
 /// A fanout route's repeaters are counted per branch, because each terminal
 /// records how many stand between it and the route's source -- counted when
 /// the branch was laid, not recovered afterwards.
+///
+/// # Exact, and against what
+///
+/// This is a *static* longest path: an upper bound over all input behaviour,
+/// where the simulator can only report what some transition actually
+/// sensitises. On the six reference circuits' legacy layouts the two are
+/// equal -- every one of the paths this picks is sensitisable, none is a
+/// false path -- measured over every ordered pair of complete input vectors:
+///
+/// ```text
+///                        priced   the circuit's own worst output arrival
+/// and4                       14   14
+/// full_adder                 42   42
+/// segment_a                  68   68
+/// seven_segment              94   94
+/// verilog:and4               18   18
+/// verilog:seven_segment      80   80
+/// ```
+///
+/// Three of those need two levers to move at once before the path this picks
+/// appears at all, so a one-lever-at-a-time sweep measures them low. Where
+/// this number and a sweep disagree, check what the sweep sensitised before
+/// concluding the model is wrong: `timing::summarize_worst_case` reads 38 for
+/// full_adder off a single-lever sweep and 42 off an all-pairs one, and the
+/// circuit takes 42.
 fn critical_path_delay(candidate: &PlanCandidate) -> u64 {
     let mut is_merge: BTreeMap<&str, bool> = BTreeMap::new();
     for node in &candidate.primitive_nodes {
@@ -6228,19 +6270,115 @@ mod tests {
             .expect("a seed's terminals must describe its own blocks");
     }
 
+    /// The latest tick at which any declared output of `compiled` changes,
+    /// over every *ordered pair* of complete input vectors applied as one
+    /// simultaneous change from a settled state.
+    ///
+    /// This is the quantity `cost().delay` claims to be: the delay of the
+    /// slowest path through the circuit, with nothing after the driving gate
+    /// -- no lamp -- which is why an output's own arrival tick is read rather
+    /// than the transition's settle time (`critical_path_settle_model_game_
+    /// ticks` adds the lamp; `critical_path_delay`'s own doc says it does
+    /// not).
+    ///
+    /// Ordered pairs rather than one lever at a time, and this is the whole
+    /// reason the helper exists. A static longest path is an upper bound over
+    /// *all* input behaviour, and a path whose gates only both move when two
+    /// levers move together is invisible to the one-lever sweep every other
+    /// test in this tree runs. full_adder's real worst path is exactly that:
+    /// it never appears in the single-lever sweep, so comparing against that
+    /// sweep would have measured 38 for a circuit that really does take 42.
+    fn worst_output_arrival_over_all_input_pairs(
+        netlist: &compile::Netlist,
+        world: &World,
+        input_positions: &BTreeMap<String, (i32, i32, i32)>,
+        gate_output_positions: &BTreeMap<String, (i32, i32, i32)>,
+    ) -> u64 {
+        use crate::redstone::simulator::position::Position;
+        use crate::redstone::simulator::Simulator;
+        use crate::timing::observations_to_result;
+
+        const MAX_TICKS: u64 = 4000;
+
+        let levers: Vec<(i32, i32, i32)> = netlist
+            .inputs
+            .iter()
+            .map(|name| input_positions[name.as_str()])
+            .collect();
+        let bits = levers.len();
+
+        // The same watch list `timing::watch_all_nets` builds from a
+        // `CompiledCircuit`, assembled from the two maps directly so a
+        // realised candidate -- which is not one -- can be measured too.
+        let watched: Vec<(Position, String)> = input_positions
+            .iter()
+            .chain(gate_output_positions)
+            .map(|(name, &(x, y, z))| (Position::new(x, y, z), name.clone()))
+            .collect();
+
+        let mut simulator = Simulator::new(world.clone());
+        simulator
+            .run_until_stable(MAX_TICKS)
+            .expect("settles before the first reading");
+        simulator.attach_observer(watched);
+
+        let apply = |simulator: &mut Simulator, vector: u32| {
+            for (index, &at) in levers.iter().enumerate() {
+                let mut state = simulator.world().get(at.0, at.1, at.2).clone();
+                state.lit = (vector >> (bits - 1 - index)) & 1 == 1;
+                simulator.world_mut().set(at.0, at.1, at.2, state);
+            }
+        };
+
+        let mut worst = 0;
+        for from in 0u32..(1u32 << bits) {
+            for to in 0u32..(1u32 << bits) {
+                if from == to {
+                    continue;
+                }
+                apply(&mut simulator, from);
+                simulator.run_until_stable(MAX_TICKS).expect("settles");
+                simulator.reset_observer();
+                let start = simulator.current_tick();
+                apply(&mut simulator, to);
+                simulator.run_until_stable(MAX_TICKS).expect("settles");
+                let settle = simulator.current_tick() - start;
+                let result = observations_to_result(simulator.observations(), start, settle);
+                for output in &netlist.outputs {
+                    if let Some(arrival) =
+                        result.nets.get(output.as_str()).and_then(|net| net.arrival_tick())
+                    {
+                        worst = worst.max(arrival);
+                    }
+                }
+            }
+        }
+        worst
+    }
+
     /// The cost model's primary term is delay, and delay is the one this
     /// project already measures.
     ///
     /// `critical_path_settle_model_game_ticks` is exact against the simulator
     /// for every reference circuit: torch delay times the gates and repeaters
     /// on the measured critical path. A candidate carries the same facts --
-    /// its nodes say which are merges, its routes carry the blocks they lay --
-    /// so it prices that quantity instead of summing route lengths and calling
-    /// the result delay, which is what it used to do.
+    /// its nodes say which are merges, its routes carry the repeaters that
+    /// stand between each sink and its source -- so it prices that quantity
+    /// instead of summing route lengths and calling the result delay, which
+    /// is what it used to do.
     ///
     /// and4's two gates and five repeaters are what `reference_circuits`
     /// prints and the simulator confirms tick for tick. If a layout change
     /// moves them this fails and they get re-measured, rather than drifting.
+    ///
+    /// **This number used to be right for the wrong reason.** Until the
+    /// emitter attributed ramp and track repeaters to the branches that pass
+    /// through them, the walk behind it priced `a -> g0 -> g3 -> g4 -> g6` at
+    /// 4 gates + 3 repeaters while the simulator's critical path was
+    /// `d -> g5 -> g6` at 2 gates + 5 repeaters -- two different paths that
+    /// happen to sum to the same seven units. The walk now picks `d -> g5 ->
+    /// g6` itself, which is why the sibling test below can be an equality
+    /// against the simulator rather than against a remembered constant.
     #[test]
     fn candidate_delay_is_the_settle_model_the_simulator_confirms() {
         use crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS;
@@ -6251,26 +6389,42 @@ mod tests {
             .expect("compiled output must seed");
 
         assert_eq!(seed.cost().delay, TORCH_DELAY_GAME_TICKS * (2 + 5));
+        assert_eq!(
+            seed.cost().delay,
+            worst_output_arrival_over_all_input_pairs(
+                &netlist,
+                &compiled.world,
+                &compiled.input_positions,
+                &compiled.gate_output_positions,
+            ),
+            "and4's priced delay must be the delay and4 has"
+        );
     }
 
-    /// The same assertion for a circuit with real fanout, and it is three
-    /// short: 32 game ticks against a measured 38.
+    /// The same assertion for a circuit with real fanout -- and against the
+    /// simulator, not against a number somebody wrote down.
     ///
-    /// Not a repeater-attribution problem any more. Each terminal now records
-    /// the repeaters between it and its source, counted when the branch was
-    /// laid, and the longest path over those weights is 9 gates and 7
-    /// repeaters -- the same answer the graph walk this replaced gave, which
-    /// is how we know attribution was never the cause. `timing` measures 10
-    /// gates and 9 repeaters on the same circuit.
+    /// This was `#[ignore]`d from the day it was written: `cost().delay` read
+    /// 32 game ticks where the sweep measured 38. Both numbers were wrong,
+    /// and for two unrelated reasons, which is why neither could be made to
+    /// fit the other honestly.
     ///
-    /// So the two disagree about which path is critical, or about what an
-    /// edge's repeaters include. `critical_path_repeaters` reads them out of
-    /// `routing_stats`, which decomposes an edge into column, ramp, track and
-    /// approach parts; reconciling that decomposition with what the emitter
-    /// counts as it writes is the next step, and it needs reading, not
-    /// guessing.
+    /// **32 was short because the emitter counted repeaters per pass.** It
+    /// writes a net's route in three passes -- ramps, columns, tracks -- and
+    /// only the Columns pass ever asked its counter for a terminal, so every
+    /// repeater the ramps and the track laid was invisible to the plan (17 of
+    /// full_adder's 53; see `compile::Leg`). Attributing each repeater to the
+    /// electrical segment carrying it, and summing the segments each sink's
+    /// signal really passes through, moves this to 9 gates + 12 repeaters.
+    ///
+    /// **38 was short because it came from a one-lever sweep.** full_adder's
+    /// slowest path needs two inputs to move together; no single lever flip
+    /// sensitises it. Flip two and the simulator delivers `g21` at exactly
+    /// the tick this prices -- so the comparand here is the all-pairs sweep,
+    /// and the assertion is an equality with a measurement rather than with a
+    /// constant. Nothing in this test can be satisfied by adjusting the
+    /// model: the right-hand side is what the circuit does.
     #[test]
-    #[ignore = "known: full_adder delay is three repeaters short"]
     fn candidate_delay_is_exact_for_a_circuit_with_fanout() {
         use crate::circuits::full_adder::build_full_adder_netlist;
         use crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS;
@@ -6280,7 +6434,95 @@ mod tests {
         let seed = seed_from_legacy_parts(&netlist, compiled.legacy_emission().unwrap())
             .expect("compiled output must seed");
 
-        assert_eq!(seed.cost().delay, TORCH_DELAY_GAME_TICKS * (10 + 9));
+        let measured = worst_output_arrival_over_all_input_pairs(
+            &netlist,
+            &compiled.world,
+            &compiled.input_positions,
+            &compiled.gate_output_positions,
+        );
+        assert_eq!(
+            seed.cost().delay, measured,
+            "full_adder's priced delay must be the delay full_adder has"
+        );
+        assert_eq!(seed.cost().delay, TORCH_DELAY_GAME_TICKS * (9 + 12));
+    }
+
+    /// And on a circuit the repair was never checked against while it was
+    /// being made.
+    ///
+    /// and4 and full_adder are what the mechanism was read off and fixed
+    /// against. `segment_a` is an order of magnitude more routing -- 83 routed
+    /// edges against full_adder's 32, 340 repeaters against 53, and 160 of
+    /// those 340 were the ones the old counter dropped -- and it was not
+    /// consulted while the fix was written. If the model were tuned rather
+    /// than corrected, this is where it would show.
+    ///
+    /// It predicts 68 game ticks and the circuit takes exactly 68.
+    #[test]
+    fn candidate_delay_is_exact_for_a_circuit_nobody_tuned_it_against() {
+        use crate::circuits::seven_segment::build_single_segment_netlist;
+        use crate::redstone::simulator::component::TORCH_DELAY_GAME_TICKS;
+
+        let (netlist, _) = build_single_segment_netlist(0);
+        let compiled = compile::compile_legacy(&netlist).expect("segment_a compiles");
+        let seed = seed_from_legacy_parts(&netlist, compiled.legacy_emission().unwrap())
+            .expect("compiled output must seed");
+
+        let measured = worst_output_arrival_over_all_input_pairs(
+            &netlist,
+            &compiled.world,
+            &compiled.input_positions,
+            &compiled.gate_output_positions,
+        );
+        assert_eq!(
+            seed.cost().delay, measured,
+            "segment_a's priced delay must be the delay segment_a has"
+        );
+        assert_eq!(seed.cost().delay, TORCH_DELAY_GAME_TICKS * (9 + 25));
+    }
+
+    /// Every repeater a *moved* route lays is priced too.
+    ///
+    /// The seed's terminals come from the legacy emitter; a candidate
+    /// `optimise` returns has had branches ripped up and re-routed by the
+    /// planner's own A*, which records its terminals itself. Those are a
+    /// different writer of the same field, so exactness on the seed says
+    /// nothing about exactness after a move -- and this is the one path a
+    /// delay budget used as a placement constraint would actually run on.
+    ///
+    /// Measured against the same all-pairs sweep, on the world the moved
+    /// candidate realises to: priced 14, and the circuit takes 14. Before the
+    /// emitter attributed ramp and track repeaters this same candidate priced
+    /// 12 against the same real 14 -- the optimiser was being told a reroute
+    /// had bought two game ticks that were never there.
+    #[test]
+    fn a_moved_candidates_delay_is_exact_too() {
+        let (netlist, _) = build_and4_netlist();
+        let compiled = compile::compile_legacy(&netlist).expect("and4 compiles");
+        let seed = seed_from_legacy_parts(&netlist, compiled.legacy_emission().unwrap())
+            .expect("compiled output must seed");
+        let best = optimise(
+            seed,
+            &netlist,
+            PlannerWeights::default(),
+            PlannerEffort {
+                evaluations: 16,
+                seed: 0x26_02,
+            },
+        );
+        let realised = realise_and_verify(&best, &netlist, compiled.world.size())
+            .expect("the optimised candidate must be legal");
+
+        assert_eq!(
+            best.cost().delay,
+            worst_output_arrival_over_all_input_pairs(
+                &netlist,
+                &realised.world,
+                &realised.ports.input_positions,
+                &realised.ports.gate_output_positions,
+            ),
+            "a moved candidate's priced delay must be the delay it has"
+        );
     }
 
     /// The optimiser has to produce a circuit that is smaller, no slower, and
@@ -6288,11 +6530,15 @@ mod tests {
     ///
     /// Cost-model numbers are internal bookkeeping; blocks and settle ticks
     /// are what this project reports, and a truth table is what makes either
-    /// worth reporting. Measured at 16 evaluations: 472 blocks and 18 game
-    /// ticks become 405 and 16, with all sixteen rows correct. The tick saved
-    /// is one repeater, and the cost model's delay term moves 14 -> 12 with
-    /// it -- it did not, until a rerouted branch started refreshing the
-    /// repeater count it reports.
+    /// worth reporting. Measured at 16 evaluations, 2026-08-26: 472 blocks
+    /// and 18 game ticks become 464 and 13, with all sixteen rows correct.
+    /// The cost model's delay term does *not* move with them -- it reads 14
+    /// for both, and 14 is what an all-pairs sweep measures on both worlds
+    /// (`a_moved_candidates_delay_is_exact_too`). What the reroute buys is
+    /// wire (934 -> 860), turns (418 -> 352) and space (8,820 -> 8,460); the
+    /// settle time this sweep reports falls because it flips one lever at a
+    /// time from wherever the last row left the circuit, not because the
+    /// slowest path got shorter.
     ///
     /// and4 is where this works. 30 of its 42 single-cell moves are legal;
     /// full_adder, one circuit up, has 5 of 80, and gains 4% of its wire and

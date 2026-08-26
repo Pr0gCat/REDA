@@ -207,6 +207,35 @@ pub fn logic_depth_bound_game_ticks(netlist: &Netlist) -> u64 {
 /// `arrivals` maps signal name to arrival tick; a signal missing from it is
 /// treated as arriving at tick 0 (i.e. already stable before the transition
 /// being analysed), which is always less than any real change.
+///
+/// # A known miss, measured 2026-08-26 and deliberately not patched here
+///
+/// "Slowest-arriving input" is the wrong tie-break. What gates a signal is
+/// the input whose arrival **plus its own edge's delay** is largest, and two
+/// inputs that arrive on the same tick over routes of different length are
+/// not equally responsible. `max_by_key` keeps the last of a tie, so it can
+/// name the wrong predecessor.
+///
+/// Caught in the act on full_adder, all-pairs transition #40: `g19` and `g20`
+/// both arrive at tick 34 and `g21` at 42. `g19 -> g21.in[0]` carries three
+/// repeaters, `2 * (3 + 1) = 8`, and `34 + 8 = 42`; `g20 -> g21.in[1]`
+/// carries none, `34 + 2 = 36`, which is not when `g21` moved. The gating
+/// input is `g19`; this walk reports `g20`, and
+/// [`summarize_worst_case`] then models 42 against a measured 46.
+/// `seven_segment` shows the same class: model 96, measured 98.
+///
+/// It is invisible to every sweep in this tree because they all flip one
+/// lever at a time, which is also why nothing here is currently red. The fix
+/// is not a different tie-break -- **this function cannot see edge delays at
+/// all.** It is handed a netlist and a map of arrival ticks, and how long a
+/// hop takes is a fact about the *routed world*, which lives in the
+/// `CompiledCircuit` its caller has and it does not. Correcting it means
+/// threading that world in, which changes this signature and every caller;
+/// inventing a tie-break without the delays would be a guess dressed as one.
+///
+/// `planner::critical_path_delay` does have the per-edge weights and is
+/// exact on all six reference circuits, including these two. Where the two
+/// disagree, that one is the one to believe.
 pub fn critical_path(netlist: &Netlist, arrivals: &BTreeMap<String, u64>, output: &str) -> Vec<String> {
     let producer_of: HashMap<&str, usize> =
         netlist.gates.iter().enumerate().map(|(i, gate)| (gate.output.as_str(), i)).collect();
