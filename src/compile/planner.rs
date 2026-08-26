@@ -8011,6 +8011,16 @@ mod tests {
     /// minutes: `segment_a` and `seven_segment` are routed at six radii each
     /// and refused at all twelve.
     #[test]
+    /// **DELAY-ONLY, and the counts say `routed` not `legal`.** This stops at
+    /// `route_every_net` and `cost().delay`; it never calls
+    /// `verify_candidate`, so a "refused" here means the router found no path
+    /// and a non-refusal means it found one -- not that the plan passes the
+    /// physical invariants. That distinction is load-bearing for this
+    /// particular sweep: a positive rest length spreads a circuit out, and the
+    /// first thing that breaks when it does is the STRENGTH budget, which is
+    /// exactly what this harness cannot see. `relax::build::SIGNAL_REST_LENGTH`
+    /// carries the measurement that found it. Read these numbers as "what the
+    /// delay model says about plans that routed", nothing wider.
     #[ignore = "measurement harness: asserts nothing, sweeps sub-cell rest lengths"]
     fn is_there_a_free_radius_below_one_cell() {
         let lowered = |name: &str| -> Netlist {
@@ -8127,6 +8137,16 @@ mod tests {
     ///
     /// Asserts nothing; `--ignored --nocapture`.
     #[test]
+    /// **DELAY-ONLY, and the counts say `routed` not `legal`.** This stops at
+    /// `route_every_net` and `cost().delay`; it never calls
+    /// `verify_candidate`, so a "refused" here means the router found no path
+    /// and a non-refusal means it found one -- not that the plan passes the
+    /// physical invariants. That distinction is load-bearing for this
+    /// particular sweep: a positive rest length spreads a circuit out, and the
+    /// first thing that breaks when it does is the STRENGTH budget, which is
+    /// exactly what this harness cannot see. `relax::build::SIGNAL_REST_LENGTH`
+    /// carries the measurement that found it. Read these numbers as "what the
+    /// delay model says about plans that routed", nothing wider.
     #[ignore = "measurement harness: asserts nothing, twelve seeds per sub-cell radius"]
     fn is_a_sub_cell_rest_length_free_or_is_it_noise() {
         let lowered = |name: &str| -> Netlist {
@@ -8298,6 +8318,16 @@ mod tests {
     ///
     /// Asserts nothing; `--ignored --nocapture`.
     #[test]
+    /// **DELAY-ONLY, and the counts say `routed` not `legal`.** This stops at
+    /// `route_every_net` and `cost().delay`; it never calls
+    /// `verify_candidate`, so a "refused" here means the router found no path
+    /// and a non-refusal means it found one -- not that the plan passes the
+    /// physical invariants. That distinction is load-bearing for this
+    /// particular sweep: a positive rest length spreads a circuit out, and the
+    /// first thing that breaks when it does is the STRENGTH budget, which is
+    /// exactly what this harness cannot see. `relax::build::SIGNAL_REST_LENGTH`
+    /// carries the measurement that found it. Read these numbers as "what the
+    /// delay model says about plans that routed", nothing wider.
     #[ignore = "measurement harness: asserts nothing, sweeps rest lengths against seeds"]
     fn is_a_rest_lengths_delay_a_property_or_a_coincidence() {
         let lowered = |name: &str| -> Netlist {

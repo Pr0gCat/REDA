@@ -99,10 +99,55 @@ pub const SIGNAL_STIFFNESS: f64 = 1.0;
 /// `and4`'s mean bounding box is 1,035.0 cells at 0, 0.0625, 0.125, 0.25 and
 /// 0.5 alike -- to the cell, over twelve seeds -- while its snapped anchors
 /// move at every one of them. Its mean delay meanwhile rises monotonically,
-/// 10.50 / 10.50 / 10.67 / 11.17 / 12.00, with no plateau anywhere positive; a
-/// single-seed run reads 10 at 0.125 and that number is one seed out of a
-/// distribution that had already got worse. `segment_a` and `seven_segment`
-/// route at none of these radii either.
+/// 10.50 / 10.50 / 10.67 / 11.17 / 12.00; a single-seed run reads 10 at 0.125
+/// and that number is one seed out of a distribution that had already got
+/// worse. `segment_a` and `seven_segment` route at none of these radii either.
+///
+/// # "No plateau anywhere positive" was false, and only round numbers hid it
+///
+/// An earlier revision of this comment concluded from the two sweeps above
+/// that no positive radius is free. **Every sweep here steps 0, 0.0625 ...
+/// 1.0, then 2, 4, 6 ...: nobody had run the interval (1.0, 2.0).** The
+/// adversarial pass ran it and the operator re-ran it independently, twelve
+/// seeds, same harness:
+///
+/// ```text
+/// rest        and4 mean    verilog:and4    full_adder mean
+/// 0.0            10.50          10.00           41.67
+/// 1.25           11.83          10.00           40.00
+/// 1.50           10.50          10.00           38.50
+/// 1.625          10.17          10.00           38.00
+/// 1.75           11.83          10.00           38.00
+/// 2.0            12.00          11.00           35.00
+/// ```
+///
+/// At 1.625 `and4` is *better* than at rest 0 and `full_adder` is better by
+/// nearly four ticks, so the claim is refuted outright. But read the column
+/// rather than the best row: `and4` reads 11.83 at 1.25 and again at 1.75,
+/// with 1.5 and 1.625 between them. **That is jagged, not a plateau** -- a
+/// quarter of a cell either side of the good value costs a tick and a half on
+/// average. `full_adder` alone improves monotonically across the whole
+/// interval. One number chosen off a landscape that rough is a fit, not a
+/// finding.
+///
+/// # So why the shipped value is still 0.0, on the reason that actually holds
+///
+/// Not "every positive value costs ticks" -- that is the refuted claim. The
+/// wall past zero is the **strength budget, not the tick budget**. Measured by
+/// the adversarial pass at the shipping seed: `full_adder`'s plan begins
+/// failing `verify_candidate` with `signal-strength violation ... the real,
+/// decayed signal dies out before it arrives` -- 0 of 12 seeds at rest 0, 1 of
+/// 12 at 1.4375, 4 of 12 across 1.5625..1.6875, and at seed 0 as early as
+/// 0.125. A refusal falls back to the legacy emitter, which is a loss no delay
+/// column can see, because the delay column only ever prices plans that
+/// survived.
+///
+/// **And the sweeps above cannot see it either.** `sweep_the_signal_rest_length`
+/// and the two sub-cell harnesses stop at `route_every_net` and `cost().delay`;
+/// neither calls `verify_candidate`, so every "0 refused" in their output means
+/// *routed*, not *legal*. The tables in this comment are delay-only and are
+/// labelled as such rather than corrected, because the numbers are right for
+/// what they measure.
 ///
 /// So the interval below one cell is not a free radius that the coarse sweep
 /// missed. It is the same trade at a scale small enough to mistake for a free
