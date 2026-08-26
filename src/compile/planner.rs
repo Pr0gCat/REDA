@@ -7978,6 +7978,231 @@ mod tests {
         }
     }
 
+    /// Is there a free radius *below* one cell? -- the review's follow-up to
+    /// `sweep_the_signal_rest_length`, whose finest step off zero is 1.0.
+    ///
+    /// [`relax::SIGNAL_REST_LENGTH`] is zero because every radius the sweep
+    /// tried costs `and4` two game ticks or more, and "every radius tried"
+    /// stopped at 1.0 -- so "the free radius is 0" stood on an extrapolation
+    /// over the one interval nobody had run. This runs it: five sub-cell radii
+    /// through place, snap, route and the exact delay model, on all five
+    /// circuits that place.
+    ///
+    /// **What it found, 2026-08-27, and it is not what the shape of the
+    /// question suggested.** At one eighth of a cell the layout *moves* --
+    /// bodies cross rounding boundaries and the snapped anchors differ from the
+    /// shipped ones -- and `and4`'s bounding box does not grow by a single
+    /// cell: 45x23 = 1,035 at every radius from 0 to 0.75, and 45x24 at 1.0.
+    /// So the interval does have a third behaviour, and it is the useless one:
+    /// **a different layout of exactly the same size**. A radius small enough
+    /// not to cost `and4` a tick is a radius too small to hand the router any
+    /// room, which is the same trade the whole-cell sweep found, at a scale
+    /// where it is easier to mistake for a free lunch. Single-seed `and4` reads
+    /// delay 10 at 0.125 and 12 from 0.25 up;
+    /// [`Self::is_a_sub_cell_rest_length_free_or_is_it_noise`] is what decides
+    /// whether that 10 is an objective or a coin, and it says coin.
+    ///
+    /// `segment_a` and `seven_segment` route at none of these radii either --
+    /// same two failure families, ring rule and dead-end search, at addresses
+    /// that move with the layout -- and their boxes grow by under 5% across the
+    /// whole interval. Convergence is intact throughout: 8 to 13 steps.
+    ///
+    /// Asserts nothing; `--ignored --nocapture`. About three and a half
+    /// minutes: `segment_a` and `seven_segment` are routed at six radii each
+    /// and refused at all twelve.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, sweeps sub-cell rest lengths"]
+    fn is_there_a_free_radius_below_one_cell() {
+        let lowered = |name: &str| -> Netlist {
+            let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
+            let (gate_level, _) = circuit.baked_netlist();
+            crate::compile::lowering::lower(&gate_level).expect("it lowers")
+        };
+        let cases: Vec<(&str, Netlist)> = vec![
+            ("and4", build_and4_netlist().0),
+            ("verilog:and4", lowered("verilog:and4")),
+            ("full_adder", crate::circuits::full_adder::build_full_adder_netlist().0),
+            // The two the whole direction was for. They place and do not route
+            // at every radius from 1 to 15; the interval below one cell is the
+            // one nobody had asked them about.
+            ("segment_a", crate::circuits::seven_segment::build_single_segment_netlist(0).0),
+            ("seven_segment", crate::circuits::seven_segment::build_seven_segment_netlist().0),
+        ];
+
+        for (name, netlist) in &cases {
+            eprintln!("{name}:");
+            let mut shipped: Option<String> = None;
+            for rest in [0.0f64, 0.125, 0.25, 0.5, 0.75, 1.0] {
+                let start = starting_layout(netlist, &PortPlacements::default()).expect("starts");
+                let graph =
+                    primitive_graph::expand(netlist, &Library::default_library()).expect("expands");
+                let placement = relax::relax_with_rest(
+                    netlist,
+                    &graph,
+                    &start,
+                    &PortPlacements::default(),
+                    SHIPPING_AXES,
+                    relax::RelaxEffort::default(),
+                    rest,
+                )
+                .expect("it places at every sub-cell radius");
+                let snapped = relax::snap(&placement).expect("and snaps");
+                // The snapped layout as a string, so "identical to the shipped
+                // one" is a comparison of the thing the emitter builds rather
+                // than of the `f64`s underneath it: a sub-cell radius that
+                // moves nothing across a rounding boundary has changed the
+                // solve and not the circuit.
+                let layout = snapped
+                    .iter()
+                    .map(|node| {
+                        format!("{} {} {}", node.anchor.x, node.anchor.y, node.anchor.z)
+                    })
+                    .collect::<Vec<_>>()
+                    .join("|");
+                let (mut min, mut max) = ((i32::MAX, i32::MAX), (i32::MIN, i32::MIN));
+                for node in &snapped {
+                    min = (min.0.min(node.anchor.x), min.1.min(node.anchor.z));
+                    max = (max.0.max(node.anchor.x), max.1.max(node.anchor.z));
+                }
+                let (width, depth) = (max.0 - min.0 + 1, max.1 - min.1 + 1);
+                let same = match &shipped {
+                    None => {
+                        shipped = Some(layout.clone());
+                        "the shipped layout".to_string()
+                    }
+                    Some(zero) if *zero == layout => "SAME snapped layout as rest 0".to_string(),
+                    Some(_) => "MOVED".to_string(),
+                };
+                let bare = candidate_from_snapped(netlist, &PortPlacements::default(), &snapped);
+                let routed = match route_every_net(bare, netlist, RIP_UP_ROUNDS) {
+                    Ok(plan) => format!("delay {:>3}", plan.cost().delay),
+                    Err(error) => format!("ROUTE ERR {error}"),
+                };
+                eprintln!(
+                    "  rest {rest:>5.3}  box {width:>3}x{depth:<3} = {:>6}  steps {:>2}                       {routed}  -- {same}",
+                    width as i64 * depth as i64,
+                    placement.iterations,
+                );
+            }
+        }
+    }
+
+    /// The sub-cell radii of [`is_there_a_free_radius_below_one_cell`], put
+    /// through the seed sweep -- because the row that harness prints for
+    /// `rest 0.125` is one coin landing and it looks like a free radius.
+    ///
+    /// At one eighth of a cell every spring asks for a separation of 0.125,
+    /// which is a *perturbation* of the shipped solve rather than a design: at
+    /// a typical `and4` separation of ten cells the pull it removes is about
+    /// one percent of itself. Whether the resulting layout costs a game tick is
+    /// then a question about which side of a rounding boundary a handful of
+    /// bodies fall on, and `is_a_rest_lengths_delay_a_property_or_a_coincidence`
+    /// already measured that the *shipped* radius spans 10 to 12 game ticks on
+    /// `and4` across twelve seeds. A single-seed 10 at rest 0.125 is therefore
+    /// inside the noise of a single-seed 10 at rest 0, and the two are told
+    /// apart by their distributions or not at all.
+    ///
+    /// **Measured 2026-08-27: it is noise, and `and4` degrades smoothly.**
+    /// Mean `cost().delay` over twelve seeds, with the mean snapped bounding
+    /// box beside it:
+    ///
+    /// | rest | and4 delay | and4 box | verilog:and4 delay | full_adder delay |
+    /// |---|---|---|---|---|
+    /// | 0 | 10.50 | 1,035.0 | 10.00 | 41.67 |
+    /// | 0.0625 | 10.50 | 1,035.0 | 10.00 | 40.17 |
+    /// | 0.125 | 10.67 | 1,035.0 | 10.00 | 40.50 |
+    /// | 0.25 | 11.17 | 1,035.0 | 10.00 | 39.17 |
+    /// | 0.5 | 12.00 | 1,035.0 | 10.00 | 39.67 |
+    /// | 1.0 | 12.00 | 1,065.0 | 10.00 | 38.00 |
+    ///
+    /// Two things fall out. **`and4`'s delay has no plateau at a positive
+    /// radius** -- it rises monotonically from 10.50 and is saturated at 12 by
+    /// half a cell -- so the single-seed 10 at 0.125 that looked free is one
+    /// seed out of a distribution that had already got worse. And **`and4`'s
+    /// mean box is 1,035.0 at every radius up to 0.5**, to the cell, over
+    /// twelve seeds: whatever the sub-cell radius is buying, it is not room.
+    /// `full_adder` improves throughout, as it does at whole-cell radii, and
+    /// `verilog:and4` is flat at 10 across the whole interval -- so the trade
+    /// stays two-sided and stays a trade.
+    ///
+    /// Asserts nothing; `--ignored --nocapture`.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, twelve seeds per sub-cell radius"]
+    fn is_a_sub_cell_rest_length_free_or_is_it_noise() {
+        let lowered = |name: &str| -> Netlist {
+            let circuit = crate::circuits::verilog::find(name).expect("the catalog has it");
+            let (gate_level, _) = circuit.baked_netlist();
+            crate::compile::lowering::lower(&gate_level).expect("it lowers")
+        };
+        let cases: Vec<(&str, Netlist)> = vec![
+            ("and4", build_and4_netlist().0),
+            ("verilog:and4", lowered("verilog:and4")),
+            ("full_adder", crate::circuits::full_adder::build_full_adder_netlist().0),
+        ];
+
+        for (name, netlist) in &cases {
+            eprintln!("{name}:");
+            for rest in [0.0f64, 0.0625, 0.125, 0.25, 0.5, 1.0] {
+                let mut delays: Vec<i64> = Vec::new();
+                let mut areas: Vec<i64> = Vec::new();
+                let mut refused = 0usize;
+                for seed in 0..12u64 {
+                    let start =
+                        starting_layout(netlist, &PortPlacements::default()).expect("starts");
+                    let graph = primitive_graph::expand(netlist, &Library::default_library())
+                        .expect("expands");
+                    let placement = relax::relax_with_rest(
+                        netlist,
+                        &graph,
+                        &start,
+                        &PortPlacements::default(),
+                        SHIPPING_AXES,
+                        relax::RelaxEffort { iterations: 256, seed },
+                        rest,
+                    );
+                    let Ok(placement) = placement else {
+                        refused += 1;
+                        continue;
+                    };
+                    let Ok(snapped) = relax::snap(&placement) else {
+                        refused += 1;
+                        continue;
+                    };
+                    let (mut min, mut max) = ((i32::MAX, i32::MAX), (i32::MIN, i32::MIN));
+                    for node in &snapped {
+                        min = (min.0.min(node.anchor.x), min.1.min(node.anchor.z));
+                        max = (max.0.max(node.anchor.x), max.1.max(node.anchor.z));
+                    }
+                    areas.push(
+                        (max.0 - min.0 + 1) as i64 * (max.1 - min.1 + 1) as i64,
+                    );
+                    let bare =
+                        candidate_from_snapped(netlist, &PortPlacements::default(), &snapped);
+                    match route_every_net(bare, netlist, RIP_UP_ROUNDS) {
+                        Ok(plan) => delays.push(plan.cost().delay as i64),
+                        Err(_) => refused += 1,
+                    }
+                }
+                if delays.is_empty() {
+                    eprintln!("  rest {rest:>6.4}  nothing routed ({refused} refused)");
+                    continue;
+                }
+                let mut sorted = delays.clone();
+                sorted.sort_unstable();
+                let mean = delays.iter().sum::<i64>() as f64 / delays.len() as f64;
+                let area = areas.iter().sum::<i64>() as f64 / areas.len() as f64;
+                eprintln!(
+                    "  rest {rest:>6.4}  mean box {area:>7.1}  | delay over {} seeds: min {}                      median {} mean {mean:.2} max {}  ({refused} refused)  {:?}",
+                    delays.len(),
+                    sorted[0],
+                    sorted[sorted.len() / 2],
+                    sorted[sorted.len() - 1],
+                    sorted,
+                );
+            }
+        }
+    }
+
     /// Where the extra repeater comes from: every routed sink of `and4` and
     /// `verilog:and4`, at each rest length, with the cells its route spends and
     /// the repeaters it costs.

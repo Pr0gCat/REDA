@@ -86,6 +86,29 @@ pub const SIGNAL_STIFFNESS: f64 = 1.0;
 /// the trade is real and it is not one-sided; it is simply not free, and free
 /// was the premise.
 ///
+/// # And below one cell, which the sweep above could not see
+///
+/// The table stops at 2 and the sweep's finest step off zero is 1.0, so "every
+/// value costs ticks" rested on an extrapolation across the one interval nobody
+/// had run. The review ran it.
+/// `planner::is_there_a_free_radius_below_one_cell` and
+/// `planner::is_a_sub_cell_rest_length_free_or_is_it_noise` put five sub-cell
+/// radii through the same pipeline, the second of them over twelve seeds, and
+/// the interval turns out to hold the one outcome that is neither of the two a
+/// reader would guess: **a different layout of exactly the same size.**
+/// `and4`'s mean bounding box is 1,035.0 cells at 0, 0.0625, 0.125, 0.25 and
+/// 0.5 alike -- to the cell, over twelve seeds -- while its snapped anchors
+/// move at every one of them. Its mean delay meanwhile rises monotonically,
+/// 10.50 / 10.50 / 10.67 / 11.17 / 12.00, with no plateau anywhere positive; a
+/// single-seed run reads 10 at 0.125 and that number is one seed out of a
+/// distribution that had already got worse. `segment_a` and `seven_segment`
+/// route at none of these radii either.
+///
+/// So the interval below one cell is not a free radius that the coarse sweep
+/// missed. It is the same trade at a scale small enough to mistake for a free
+/// lunch: a radius too small to cost `and4` a tick is a radius too small to
+/// hand the router a cell.
+///
 /// # Why 15 is not spendable, which is the part worth keeping
 ///
 /// `planner::where_the_extra_repeater_comes_from` dumps every routed sink, and
