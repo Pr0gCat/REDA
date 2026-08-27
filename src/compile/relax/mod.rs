@@ -677,7 +677,6 @@ pub(crate) fn relax_with_rest(
 ///
 /// The probe is `planner::measure_whether_congestion_driven_placement_routes_
 /// segment_a`.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn relax_with_required(
     netlist: &Netlist,
     graph: &PrimitiveGraph,

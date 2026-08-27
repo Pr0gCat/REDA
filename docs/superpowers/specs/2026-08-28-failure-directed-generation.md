@@ -1,11 +1,30 @@
 # Failure-directed generation: form is a search variable
 
-**Status: in measurement.** Written the night of 2026-08-28 under a standing
-goal: a generation method that takes a netlist in and hands a
+**Status: DELIVERED, same night.** Written the night of 2026-08-28 under a
+standing goal: a generation method that takes a netlist in and hands a
 simulator-verified redstone circuit out, with `segment_a` routing AND
 verifying through the planner as the acceptance case, and only game mechanics
-admitted as rules. Sections marked *measured* carry tonight's numbers;
-sections marked *design* are the part still being built and can be wrong.
+admitted as rules.
+
+**The result.** `compile_grown` -- place, negotiate (`Wide`, never lays a
+ring), and when routing fails, multiply the hottest quarter of bodies'
+separations by 1.4 and place again (`GROWN_SHIPPING_RULE`). On segment_a,
+the full battery through the real Simulator
+(`measure_the_production_growth_loop`):
+
+    ROUTED and VERIFIES in 254.5s | 47 routes | verify: ok
+    0 ring(s); 0 latched cell(s) with every source deleted
+    truth table: 16/16 | worst settle: 68 game ticks
+    5,874 blocks, box 114x5x117   (legacy ships 6,416 / 68 ticks / 137x6x182)
+
+The first segment_a this tree ever produced outside the legacy emitter --
+and it is smaller than the legacy one at the same worst settle. The winning
+mechanism is the complement the night's probes measured: rip-up lays latches
+at every density (inflation alone: laid 28 -> 43 of 47, never routed);
+negotiated-Wide never lays a ring and only ever starved for room; room
+where the heat is plus Wide carries it end to end. The repair-phase design
+below (§ The design) was measured insufficient on its own and stands as the
+record of why the placer side had to move.
 
 ## The diagnosis this rests on (measured)
 

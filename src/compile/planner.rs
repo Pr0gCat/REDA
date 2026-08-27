@@ -2832,7 +2832,6 @@ pub(crate) fn plan_from_netlist_with_router(
 /// probe's Verify phase says which values -- see
 /// [`plan_from_netlist_with_growth`].
 #[derive(Debug, Clone, Copy)]
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) struct GrowthRule {
     /// The hottest `share` of nodes get their body's requirement multiplied
     /// by `growth` after every failed iteration.
@@ -2856,6 +2855,21 @@ pub(crate) struct GrowthRule {
     pub router: RouterKind,
 }
 
+/// What [`compile::compile_grown`] grows with: the first rule measured to
+/// carry `segment_a` end to end (2026-08-28, `measure_the_production_growth_loop`:
+/// ROUTED and VERIFIES in 315.3s, 47 routes, wire 4,530, delay term 74). The
+/// share, growth, and radius are the congestion probe's `hot:0.25,1.4` at
+/// radius 6; the router is [`RouterKind::Negotiated`] because the matrix of
+/// the night's probes is: rip-up lays rings at every density, negotiated-Wide
+/// never lays one and only ever starved for room.
+pub(crate) const GROWN_SHIPPING_RULE: GrowthRule = GrowthRule {
+    share: 0.25,
+    growth: 1.4,
+    radius: 6,
+    iterations: 12,
+    router: RouterKind::Negotiated,
+};
+
 /// The congestion-driven growth loop: place, trial-route, and when routing
 /// fails, buy room exactly where the router said it fought, then place again.
 ///
@@ -2878,7 +2892,6 @@ pub(crate) struct GrowthRule {
 /// the charges its failed rounds accrued; if it routed clean on the first
 /// round there is no heat to grow on, and the loop stops with the verify
 /// error rather than replaying the same iteration forever.
-#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn plan_from_netlist_with_growth(
     netlist: &Netlist,
     placements: &PortPlacements,
@@ -7552,12 +7565,31 @@ mod tests {
             std::env::var(name).unwrap_or_else(|_| fallback.to_string())
         };
         let wanted = setting("REDA_GROW_CIRCUIT", "segment_a");
-        let netlist = match wanted.as_str() {
-            "full_adder" => build_full_adder_netlist().0,
-            "segment_a" => build_single_segment_netlist(0).0,
-            "seven_segment" => build_seven_segment_netlist().0,
-            other => panic!("REDA_GROW_CIRCUIT names no circuit: {other}"),
-        };
+        type Expected = fn(&[bool]) -> Vec<bool>;
+        let (netlist, inputs, outputs, expected): (Netlist, &[&str], Vec<String>, Expected) =
+            match wanted.as_str() {
+                "full_adder" => {
+                    let (netlist, outputs) = build_full_adder_netlist();
+                    let inputs = &crate::circuits::full_adder::INPUT_NAMES[..];
+                    let outputs = vec![outputs["sum"].clone(), outputs["cout"].clone()];
+                    (netlist, inputs, outputs, full_adder_expected)
+                }
+                "segment_a" => {
+                    let (netlist, output) = build_single_segment_netlist(0);
+                    let inputs = &crate::circuits::seven_segment::INPUT_NAMES[..];
+                    (netlist, inputs, vec![output], segment_a_expected)
+                }
+                "seven_segment" => {
+                    let (netlist, outputs) = build_seven_segment_netlist();
+                    let inputs = &crate::circuits::seven_segment::INPUT_NAMES[..];
+                    let outputs = crate::circuits::seven_segment::SEGMENT_NAMES
+                        .iter()
+                        .map(|name| outputs[name].clone())
+                        .collect();
+                    (netlist, inputs, outputs, seven_segment_expected)
+                }
+                other => panic!("REDA_GROW_CIRCUIT names no circuit: {other}"),
+            };
         let rule = GrowthRule {
             share: setting("REDA_GROW_SHARE", "0.25").parse().expect("a share"),
             growth: setting("REDA_GROW_GROWTH", "1.4").parse().expect("a factor"),
@@ -7582,12 +7614,30 @@ mod tests {
                     cost.turns,
                     candidate.routes.len()
                 );
+                // A route without a truth table is worth nothing (rule 7):
+                // the full battery, simulator as the judge of judges.
+                battery_of_a_routed_plan(&wanted, &netlist, &candidate, inputs, &outputs, expected);
             }
             Err(error) => eprintln!(
                 "  no plan after {:.1}s: {error}",
                 started.elapsed().as_secs_f64()
             ),
         }
+    }
+
+    /// The generation front door carries a circuit end to end.
+    ///
+    /// [`compile::compile_grown`] on and4: iteration 1 routes and verifies,
+    /// so this costs milliseconds and covers the whole entry -- plan through
+    /// the growth loop, realise, four invariants, `CompiledCircuit` assembly.
+    /// The circuit it exists for is pinned by measurement instead: segment_a
+    /// through the same entry is 254.5s, 47 routes, 0 rings, truth 16/16,
+    /// worst settle 68 -- `measure_the_production_growth_loop`, 2026-08-28.
+    #[test]
+    fn the_generation_front_door_carries_and4() {
+        let (netlist, _) = build_and4_netlist();
+        let compiled = compile::compile_grown(&netlist).expect("and4 grows at iteration 1");
+        assert_eq!(compiled.planner_kind, compile::PlannerKind::Unified3d);
     }
 
     /// Growth at one iteration is the shipping planner, block for block.

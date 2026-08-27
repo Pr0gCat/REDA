@@ -7152,6 +7152,46 @@ pub fn compile_planned(
     compile_planned_within(netlist, placements, planner::RIP_UP_ROUNDS)
 }
 
+/// The failure-directed generation front door: place, negotiate, and when
+/// routing fails, buy room exactly where the router fought, until the circuit
+/// carries or the budget runs out. No legacy fallback anywhere behind it.
+///
+/// This is the night-of-2026-08-28 method
+/// (`docs/superpowers/specs/2026-08-28-failure-directed-generation.md`) as a
+/// compiler entry: [`planner::plan_from_netlist_with_growth`] under
+/// [`planner::GROWN_SHIPPING_RULE`], then the same realisation and four
+/// physical invariants every other path ends in. Its first measured plan is
+/// the first `segment_a` this tree ever routed and verified outside the
+/// legacy emitter: 47 nets, wire 4,530, delay term 74, in 315.3s.
+///
+/// **Deliberately not [`compile`]'s default.** That cost is real: `compile`
+/// stays the fast trial-then-fallback it documents, the viewer stays
+/// responsive, and a caller who wants the generated circuit -- and is willing
+/// to pay minutes for it on a decoder-sized netlist -- asks for it by name.
+pub fn compile_grown(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
+    let _ = checked_topological_order(netlist)?;
+    let candidate = planner::plan_from_netlist_with_growth(
+        netlist,
+        &planner::PortPlacements::default(),
+        planner::GROWN_SHIPPING_RULE,
+    )
+    .map_err(planner_error)?;
+    let gate_facings: Vec<geometry::CellFacing> =
+        (0..netlist.gates.len()).map(|g| candidate.facing_of(g)).collect();
+    let size = planner::candidate_world_size(&candidate);
+    let realised = planner::realise_and_verify(&candidate, netlist, size).map_err(planner_error)?;
+
+    Ok(CompiledCircuit {
+        world: realised.world,
+        input_positions: realised.ports.input_positions,
+        output_positions: realised.ports.output_positions,
+        gate_output_positions: realised.ports.gate_output_positions,
+        gate_facings,
+        planner_kind: PlannerKind::Unified3d,
+        legacy_emission: None,
+    })
+}
+
 /// [`compile_planned`], with the router's rip-up budget as a parameter.
 ///
 /// Private, and a parameter rather than a `pub` knob, for the reason Task 11
