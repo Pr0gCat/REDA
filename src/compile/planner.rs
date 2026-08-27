@@ -2846,6 +2846,14 @@ pub(crate) struct GrowthRule {
     /// How many place-route-inflate iterations before the loop hands back its
     /// last failure. Iteration 1 is exactly [`plan_from_netlist`].
     pub iterations: usize,
+    /// Which router trials each placement. This is the growth probe's one
+    /// untried cell (2026-08-28): rip-up at doubled density still lays rings
+    /// (laid 28 -> 43 of 47, never routed, ring rule at every area from
+    /// 8,099 to 14,884), and negotiated-Wide at the original density walls
+    /// six nets in a maze -- inflation opens mazes and Wide never lays a
+    /// ring, so the arms are complementary and only one of them has been
+    /// measured with room.
+    pub router: RouterKind,
 }
 
 /// The congestion-driven growth loop: place, trial-route, and when routing
@@ -2908,13 +2916,40 @@ pub(crate) fn plan_from_netlist_with_growth(
         let anchors: Vec<Anchor> = snapped.iter().map(|node| node.anchor).collect();
         let candidate = candidate_from_snapped(netlist, placements, &snapped);
 
-        let mut congestion = Congestion::default();
-        let outcome = route_every_net_charging(candidate, netlist, RIP_UP_ROUNDS, &mut congestion);
+        // Each arm trials with its own router and leaves behind that
+        // router's record of where nets fought, in the same cell -> charge
+        // shape: the rip-up router's congestion charges, or the negotiated
+        // table's never-decaying history.
+        let (outcome, charged) = match rule.router {
+            RouterKind::RipUp => {
+                let mut congestion = Congestion::default();
+                let outcome = route_every_net_charging(
+                    candidate,
+                    netlist,
+                    RIP_UP_ROUNDS,
+                    &mut congestion,
+                );
+                (outcome, congestion.charged)
+            }
+            RouterKind::Negotiated => {
+                let mut table = Negotiation::default();
+                let outcome = negotiate_charging(
+                    candidate,
+                    netlist,
+                    NEGOTIATION_ROUNDS,
+                    PresentSchedule::SHIPPING,
+                    NEGOTIATED_OWN_JOIN,
+                    &mut Vec::new(),
+                    &mut table,
+                );
+                (outcome, table.history)
+            }
+        };
         match outcome {
             Ok(routed) => match verify_candidate(&routed, netlist) {
                 Ok(()) => return Ok(routed),
                 Err(error) => {
-                    if congestion.charged.is_empty() {
+                    if charged.is_empty() {
                         // Routed clean and still wrong: there is no heat to
                         // grow on, and replaying the identical iteration
                         // answers nothing.
@@ -2929,7 +2964,7 @@ pub(crate) fn plan_from_netlist_with_growth(
         // The charge on every cell within `radius` of a node's anchor,
         // Chebyshev in plan -- the congestion probe's heat, verbatim.
         let mut heat = vec![0u64; anchors.len()];
-        for (cell, charge) in &congestion.charged {
+        for (cell, charge) in &charged {
             for (node, anchor) in anchors.iter().enumerate() {
                 if (cell.x - anchor.x).abs() <= rule.radius
                     && (cell.z - anchor.z).abs() <= rule.radius
@@ -4368,18 +4403,43 @@ fn route_negotiated(
 /// `Wide` needs all three callable from the tree. Every production path goes
 /// through [`negotiate`], which passes [`NEGOTIATED_OWN_JOIN`].
 fn negotiate_with_policy(
-    mut candidate: PlanCandidate,
+    candidate: PlanCandidate,
     netlist: &Netlist,
     iterations: usize,
     schedule: PresentSchedule,
     own_join: OwnJoinPolicy,
     trace: &mut Vec<NegotiationRound>,
 ) -> Result<PlanCandidate, PlannerError> {
+    negotiate_charging(
+        candidate,
+        netlist,
+        iterations,
+        schedule,
+        own_join,
+        trace,
+        &mut Negotiation::default(),
+    )
+}
+
+/// [`negotiate_with_policy`] with the table lent in rather than owned, so a
+/// caller can read [`Negotiation::history`] after a failure -- the negotiated
+/// router's own record of where nets fought, and the heat source
+/// [`plan_from_netlist_with_growth`]'s negotiated arm inflates on, exactly as
+/// the rip-up arm reads [`Congestion`]'s charges.
+#[allow(clippy::too_many_arguments)]
+fn negotiate_charging(
+    mut candidate: PlanCandidate,
+    netlist: &Netlist,
+    iterations: usize,
+    schedule: PresentSchedule,
+    own_join: OwnJoinPolicy,
+    trace: &mut Vec<NegotiationRound>,
+    table: &mut Negotiation,
+) -> Result<PlanCandidate, PlannerError> {
     let sinks = net_sinks(netlist);
     let order: Vec<String> = sinks.keys().cloned().collect();
     let hard = hard_furniture(&candidate, netlist);
 
-    let mut table = Negotiation::default();
     let mut last: Option<PlannerError> = None;
 
     for iteration in 0..iterations {
@@ -4400,7 +4460,7 @@ fn negotiate_with_policy(
             let mut reservation = hard.clone();
             let outcome = {
                 let prices = Prices::Negotiated {
-                    table: &table,
+                    table,
                     mine: signal,
                     own_join,
                 };
@@ -7471,6 +7531,65 @@ mod tests {
         }
     }
 
+    /// Does the PRODUCTION growth path carry segment_a?
+    ///
+    /// The congestion probe measures its own replica of the loop; shipping
+    /// runs through [`plan_from_netlist_with_growth`], and a ship decision
+    /// needs that exact function's answer. One call, the probe's default hot
+    /// rule, outcome and wall clock printed. `REDA_GROW_CIRCUIT`,
+    /// `REDA_GROW_SHARE`, `REDA_GROW_GROWTH`, `REDA_GROW_RADIUS`,
+    /// `REDA_GROW_ITERATIONS` override.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, runs the production growth loop once"]
+    fn measure_the_production_growth_loop() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+        use std::time::Instant;
+
+        let setting = |name: &str, fallback: &str| -> String {
+            std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+        };
+        let wanted = setting("REDA_GROW_CIRCUIT", "segment_a");
+        let netlist = match wanted.as_str() {
+            "full_adder" => build_full_adder_netlist().0,
+            "segment_a" => build_single_segment_netlist(0).0,
+            "seven_segment" => build_seven_segment_netlist().0,
+            other => panic!("REDA_GROW_CIRCUIT names no circuit: {other}"),
+        };
+        let rule = GrowthRule {
+            share: setting("REDA_GROW_SHARE", "0.25").parse().expect("a share"),
+            growth: setting("REDA_GROW_GROWTH", "1.4").parse().expect("a factor"),
+            radius: setting("REDA_GROW_RADIUS", "6").parse().expect("a radius"),
+            iterations: setting("REDA_GROW_ITERATIONS", "12").parse().expect("a count"),
+            router: match setting("REDA_GROW_ROUTER", "ripup").as_str() {
+                "ripup" => RouterKind::RipUp,
+                "negotiated" => RouterKind::Negotiated,
+                other => panic!("REDA_GROW_ROUTER is ripup or negotiated, not {other}"),
+            },
+        };
+        eprintln!("== production growth: {wanted}, {rule:?} ==");
+        let started = Instant::now();
+        match plan_from_netlist_with_growth(&netlist, &PortPlacements::default(), rule) {
+            Ok(candidate) => {
+                let cost = candidate.cost();
+                eprintln!(
+                    "  ROUTED and VERIFIES in {:.1}s | wire {} delay {} turns {} | {} routes",
+                    started.elapsed().as_secs_f64(),
+                    cost.wire,
+                    cost.delay,
+                    cost.turns,
+                    candidate.routes.len()
+                );
+            }
+            Err(error) => eprintln!(
+                "  no plan after {:.1}s: {error}",
+                started.elapsed().as_secs_f64()
+            ),
+        }
+    }
+
     /// Growth at one iteration is the shipping planner, block for block.
     ///
     /// [`plan_from_netlist_with_growth`]'s doc claims its first iteration is
@@ -7483,7 +7602,13 @@ mod tests {
     #[test]
     fn growth_at_one_iteration_is_the_shipping_planner() {
         let (netlist, _) = build_and4_netlist();
-        let rule = GrowthRule { share: 0.25, growth: 1.4, radius: 6, iterations: 1 };
+        let rule = GrowthRule {
+            share: 0.25,
+            growth: 1.4,
+            radius: 6,
+            iterations: 1,
+            router: RouterKind::RipUp,
+        };
         let grown = plan_from_netlist_with_growth(&netlist, &PortPlacements::default(), rule)
             .expect("and4 routes and verifies at iteration 1");
         let shipped = plan_from_netlist(&netlist, &PortPlacements::default())
