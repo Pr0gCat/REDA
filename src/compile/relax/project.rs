@@ -472,12 +472,30 @@ fn welded_partners(graph: &BodyGraph) -> Vec<Vec<usize>> {
 /// a projection that pushed them apart would fight the thing that holds them
 /// together, and the two would take turns undoing each other.
 ///
+/// Exempt, too, when they are welded to a **common third body**. [`satisfy`]
+/// writes a welded body exactly at its anchor plus a fixed offset, so two
+/// bodies sharing an anchor have their relative position fully decided before
+/// the pair loop ever sees them: a separation requirement between them has no
+/// degree of freedom left to satisfy it with, and is either already true or a
+/// contradiction with the welds -- which win by this module's own rule
+/// ("welds last, deliberately"). Whether such a pair *couples* is asked of
+/// the realised blocks by the four invariants and the simulator, not of a
+/// radius. The pair this clause is for is a merge with both branches
+/// isolated: two repeaters welded into one junction's two sockets, one cell
+/// either side, which `worst_violation` reported as a 1.25 shortfall and
+/// which stopped `verilog:seven_segment` from placing at all --
+/// `two_repeaters_welded_into_one_junctions_sockets_place` is that shape at
+/// the real requirement.
+///
 /// Not exempt for belonging to the same gate. A gate is exactly the place one
 /// net ends and another begins: a torch's support carries the signal driving
 /// it and its torch carries the signal it drives, and those are different nets
 /// by definition.
 fn exempt(welded: &[Vec<usize>], left: usize, right: usize) -> bool {
     welded[left].contains(&right)
+        || welded[left]
+            .iter()
+            .any(|shared| welded[right].contains(shared))
 }
 
 /// The worst pair still too close, for an error that names something.
@@ -962,11 +980,28 @@ mod tests {
         }
     }
 
-    /// Three bodies that must each touch a fourth and each stay clear of the
-    /// others may have no arrangement at all. That is a real outcome, and it
-    /// has to be reported rather than looped on for ever.
+    /// Two repeaters welded into one junction's two sockets place, because
+    /// the separation between them is not the projection's question.
+    ///
+    /// Their relative position is fully decided by the two welds -- `satisfy`
+    /// writes each repeater exactly at `junction + socket offset` -- so a
+    /// separation requirement between them has no degree of freedom left to
+    /// satisfy it with. It is either already true or a contradiction with the
+    /// welds, and the module's own rule is that welds win ("welds last,
+    /// deliberately"). Whether the two repeaters *couple* in game is the four
+    /// invariants' and the simulator's question, asked of the realised blocks,
+    /// not a radius's.
+    ///
+    /// This is the exact shape that stopped `verilog:seven_segment` from
+    /// placing: a merge with both branches isolated puts a repeater in two of
+    /// one junction's sockets, `exempt` related each repeater to the junction
+    /// but not to its sibling, and `project` reported a contradiction between
+    /// two bodies neither of which could ever have moved. Measured on
+    /// 2026-08-15 (the deadlock table in `planner.rs`): junction `[34, 1, 5]`,
+    /// repeaters `[33, 1, 5]` and `[35, 1, 5]`, required 3.250, shortfall
+    /// 1.25, at five gates.
     #[test]
-    fn constraints_that_contradict_are_reported_rather_than_spun_on() {
+    fn two_repeaters_welded_into_one_junctions_sockets_place() {
         let mut graph = graph_of(
             vec![body(0.0, 1.0, 0.0), body(-1.0, 1.0, 0.0), body(1.0, 1.0, 0.0)],
             vec![
@@ -974,10 +1009,48 @@ mod tests {
                 Weld::AtSocket { repeater: 2, junction: 0, input_index: 1 },
             ],
         );
-        // Wider than the two welded sockets can ever be from each other.
-        let required = vec![9.0; 3];
+        // What `required_separations` derived for the real five-gate netlist.
+        let required = vec![3.25; 3];
+        project(&mut graph, &required, Axes::IN_PLANE)
+            .expect("weld-determined siblings are not the projection's contradiction");
+
+        // The welds still hold: facing north, socket 0 is west of the
+        // junction and socket 1 east of it, one cell out.
+        let junction = graph.bodies[0].position;
+        assert_eq!(
+            graph.bodies[1].position,
+            [junction[0] - 1.0, junction[1], junction[2]],
+            "the first repeater sits in its socket"
+        );
+        assert_eq!(
+            graph.bodies[2].position,
+            [junction[0] + 1.0, junction[1], junction[2]],
+            "the second repeater sits in its socket"
+        );
+    }
+
+    /// Constraints that no motion can satisfy may still be handed in. That is
+    /// a real outcome, and it has to be reported rather than looped on for
+    /// ever.
+    ///
+    /// The fixture is two **pinned** bodies within a required nine of each
+    /// other: `separate` holds a pinned body by design, so the pair is the
+    /// contradiction `separate`'s own doc names as "the same answer two
+    /// pinned bodies have always had". It used to be two repeaters welded
+    /// into one junction's sockets, which stopped being a contradiction the
+    /// day `exempt` learned that weld-determined siblings are the welds'
+    /// business -- see `two_repeaters_welded_into_one_junctions_sockets_place`.
+    #[test]
+    fn constraints_that_contradict_are_reported_rather_than_spun_on() {
+        let mut left = body(0.0, 1.0, 0.0);
+        let mut right = body(2.0, 1.0, 0.0);
+        left.pinned = true;
+        right.pinned = true;
+        let mut graph = graph_of(vec![left, right], Vec::new());
+        // Wider than two pinned bodies can ever become.
+        let required = vec![9.0; 2];
         let deadlock = project(&mut graph, &required, Axes::IN_PLANE)
-            .expect_err("two welds one cell either side cannot also be nine apart");
+            .expect_err("two pinned bodies two apart cannot also be nine apart");
         assert!(deadlock.shortfall > 0.0);
     }
 }
