@@ -2881,12 +2881,11 @@ fn candidate_from_snapped(
 ) -> PlanCandidate {
     let mut anchors = Vec::with_capacity(snapped.len());
     let mut facings = Vec::with_capacity(snapped.len());
-    let mut primitive_nodes = Vec::with_capacity(snapped.len());
 
     // Pushed in iteration order, which is candidate node order because that is
     // what `snap` promises -- it maps over `anchor_body`, one entry per node,
     // gates then primary inputs, and `snap_answers_once_per_candidate_node_in_
-    // candidate_order` is what holds it to that. The two loops below index
+    // candidate_order` is what holds it to that. The loops below index
     // `anchors` and `facings` by node, so a `snap` that answered in body order
     // would give every gate after a merge's welded repeater somebody else's
     // anchor.
@@ -2894,6 +2893,27 @@ fn candidate_from_snapped(
         anchors.push(node.anchor);
         facings.push(node.facing);
     }
+
+    candidate_from_anchors_and_facings(netlist, placements, anchors, facings)
+}
+
+/// The body of [`candidate_from_snapped`], with `(anchor, facing)` per node as
+/// the input rather than what `snap` chose.
+///
+/// Split out so a caller can rebuild the same candidate with **one facing
+/// changed** -- same anchors, same builder, different door. A socket's only
+/// approach cell is a function of the gate's facing
+/// ([`preclaim_socket_approaches`]), so turning a gate is the one move that
+/// relocates a doorway no amount of pricing can move, and the probe that
+/// measures whether that unsticks a wedged net has to build its turned
+/// candidates through this exact function or it measures a different compiler.
+fn candidate_from_anchors_and_facings(
+    netlist: &Netlist,
+    placements: &PortPlacements,
+    anchors: Vec<Anchor>,
+    facings: Vec<geometry::CellFacing>,
+) -> PlanCandidate {
+    let mut primitive_nodes = Vec::with_capacity(anchors.len());
 
     for (index, gate) in netlist.gates.iter().enumerate() {
         let anchor = anchors[index];
@@ -7069,9 +7089,9 @@ mod tests {
         }
     }
 
-    /// The shape that deadlocks the projection, reduced to the smallest
-    /// netlist that shows it, with the reference circuits beside it as the
-    /// evidence for why nothing found it until now.
+    /// The shape that DEADLOCKED the projection until 2026-08-28, reduced to
+    /// the smallest netlist that shows it, with the reference circuits beside
+    /// it as the evidence for why nothing found it until now.
     ///
     /// ```bash
     /// cargo test --release --lib \
@@ -7079,8 +7099,22 @@ mod tests {
     ///   -- --ignored --nocapture
     /// ```
     ///
+    /// **Fixed by the weld-sibling exemption** (`relax::project::exempt`,
+    /// 2026-08-28): the separation between two bodies welded to a common
+    /// third was our constraint, not the game's, and it could only contradict
+    /// the welds that fully determine their relative position. Re-run that
+    /// day: **every row below places** -- verilog:seven_segment `lower` (7
+    /// double-socket junctions) and `lower_optimised` (9) both `relax Ok` in
+    /// 10 steps, the minimal netlist `compile_planned Ok`, `worst violation
+    /// as built: None`. The stage table's decoder row now stops in the
+    /// router (`no safe local route from (82,1,89) to (80,1,82)`), which is
+    /// the routing story, not this one. The table below is kept as the
+    /// history of what the deadlock was;
+    /// `a_merge_with_both_branches_isolated_places_and_compiles` pins the
+    /// fix, and was confirmed red against the reverted exemption.
+    ///
     /// `the_six_condition_circuits_stage_by_stage` above found that
-    /// `verilog:seven_segment` does not place: `projection deadlocked: bodies
+    /// `verilog:seven_segment` did not place: `projection deadlocked: bodies
     /// 2 and 3 cannot be 1.250 further apart and stay welded`. This is what
     /// that turned out to be.
     ///
@@ -7297,6 +7331,44 @@ mod tests {
             Ok(_) => eprintln!("  compile_planned Ok"),
             Err(error) => eprintln!("  compile_planned ERR: {error}"),
         }
+    }
+
+    /// A merge with both branches isolated places and compiles.
+    ///
+    /// The five-gate netlist is the minimal double-socket shape the deadlock
+    /// harness above derived from verilog:seven_segment: a merge whose two
+    /// input signals both fan out elsewhere gets an isolating repeater welded
+    /// into each of its two sockets, and until the weld-sibling exemption in
+    /// [`relax::project`] (2026-08-28) that pair deadlocked the projection --
+    /// `bodies cannot be 1.250 further apart and stay welded`, at five gates,
+    /// in every decoder lowering. This pins the whole pipeline over that
+    /// shape: place, route, and the four invariants, through
+    /// `compile_planned` so no legacy fallback can answer for it.
+    ///
+    /// Rule 2: with the exemption reverted (`exempt` back to
+    /// `welded[left].contains(&right)` alone), this fails as `projection
+    /// deadlocked` -- confirmed red on 2026-08-28 before the fix landed, via
+    /// the harness row this reproduces.
+    #[test]
+    fn a_merge_with_both_branches_isolated_places_and_compiles() {
+        let minimal = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec!["m".to_string(), "ka".to_string(), "kb".to_string()],
+            gates: vec![
+                Gate::nor("na", &["a"]),
+                Gate::nor("nb", &["b"]),
+                Gate {
+                    name: "m".to_string(),
+                    inputs: vec!["na".to_string(), "nb".to_string()],
+                    output: "m".to_string(),
+                    kind: crate::compile::topology::GateKind::Or(2),
+                },
+                Gate::nor("ka", &["na"]),
+                Gate::nor("kb", &["nb"]),
+            ],
+        };
+        compile::compile_planned(&minimal, &PortPlacements::default())
+            .expect("the double-socket merge places and compiles through the planner");
     }
 
     /// Corridors exist: a relaxed placement is not merely legal but routable.
@@ -11240,6 +11312,646 @@ mod tests {
                     name, netlist, *rule, source, iterations, rounds, radius,
                 );
             }
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // The reface probe: is the doorway a *facing* problem?
+    //
+    // Every search this branch has tried -- rip-up ordering, negotiated
+    // pricing, congestion-driven inflation, growth, a rest length -- moves
+    // either prices or positions. None of them can move a **door**: a
+    // socket's only approach cell is a function of the gate's facing
+    // (`preclaim_socket_approaches` derives it from `facing_of`), so a
+    // doorway two nets both need is pinned to the wall it is in, and pricing
+    // it only decides who starves. The one move that relocates a door is
+    // turning the gate, and `variant_indices` is written exactly once, by
+    // `snap`, before routing has said a word. Routing failure has never been
+    // able to reach back into facing. This probe measures whether it should.
+    // ---------------------------------------------------------------------
+
+    /// Which gates stand on the refused frontier, and whether turning ONE of
+    /// them lets the shipping search finish.
+    ///
+    /// Reads the same `harvest_routing` the congestion probes read, attributes
+    /// each refused cell to the nodes whose furniture it is -- footprint,
+    /// socket, or the socket's one approach cell -- then rebuilds the
+    /// candidate through `candidate_from_anchors_and_facings` (the shipping
+    /// builder, not a copy) with a single facing changed and routes again.
+    ///
+    /// `REDA_REFACE_CIRCUIT` (default `segment_a`), `REDA_REFACE_ROUNDS`
+    /// (default [`RIP_UP_ROUNDS`]), `REDA_REFACE_TOP` (default 6): how many of
+    /// the most-blamed gates to turn.
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, sweeps single-gate refacings over the refused frontier"]
+    fn measure_whether_refacing_a_frontier_gate_unsticks_the_search() {
+        use crate::circuits::and4::build_and4_netlist;
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::build_single_segment_netlist;
+        use std::time::Instant;
+
+        let setting = |name: &str, fallback: &str| -> String {
+            std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+        };
+        let wanted = setting("REDA_REFACE_CIRCUIT", "segment_a");
+        let rounds: usize = setting("REDA_REFACE_ROUNDS", &RIP_UP_ROUNDS.to_string())
+            .parse()
+            .expect("a count");
+        let top: usize = setting("REDA_REFACE_TOP", "6").parse().expect("a count");
+
+        let netlist = match wanted.as_str() {
+            "and4" => build_and4_netlist().0,
+            "full_adder" => build_full_adder_netlist().0,
+            "segment_a" => build_single_segment_netlist(0).0,
+            other => panic!("REDA_REFACE_CIRCUIT names no circuit: {other}"),
+        };
+
+        let placements = PortPlacements::default();
+        let placement =
+            relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+        let snapped = relax::snap(&placement).expect("snaps");
+        let base = candidate_from_snapped(&netlist, &placements, &snapped);
+        let anchors = base.anchors.clone();
+        let facings: Vec<geometry::CellFacing> =
+            (0..anchors.len()).map(|node| base.facing_of(node)).collect();
+
+        let describe = |harvest: &Harvest| -> String {
+            match &harvest.routed {
+                Some(routed) => match verify_candidate(routed, &netlist) {
+                    Ok(()) => format!(
+                        "ROUTED and VERIFIES in {} rounds, {} blocks of wire",
+                        harvest.rounds,
+                        routed.routes.iter().map(|route| route.anchors.len()).sum::<usize>()
+                    ),
+                    Err(error) => format!("routed, does not verify: {error}"),
+                },
+                None => format!(
+                    "laid {}/{} | {} refused cells | last: {}",
+                    harvest.deepest_laid,
+                    harvest.nets,
+                    harvest.refused.len(),
+                    harvest
+                        .last
+                        .as_ref()
+                        .map(|error| error.to_string())
+                        .unwrap_or_else(|| "-".to_string())
+                ),
+            }
+        };
+
+        eprintln!(
+            "== reface probe: {wanted}, {} nodes, {rounds} rounds ==",
+            anchors.len()
+        );
+        let started = Instant::now();
+        let base_harvest = harvest_routing(base.clone(), &netlist, rounds);
+        eprintln!(
+            "  base ({:?}-heavy): {} | {:.1}s",
+            facings
+                .iter()
+                .map(|facing| facing.direction())
+                .fold(BTreeMap::<String, usize>::new(), |mut count, direction| {
+                    *count.entry(format!("{direction:?}")).or_insert(0) += 1;
+                    count
+                })
+                .into_iter()
+                .max_by_key(|(_, count)| *count)
+                .map(|(direction, _)| direction)
+                .unwrap_or_default(),
+            describe(&base_harvest),
+            started.elapsed().as_secs_f64()
+        );
+        if base_harvest.routed.is_some() {
+            eprintln!("  nothing to unstick: the base candidate routed");
+            return;
+        }
+
+        // Attribute each refused cell to the nodes whose furniture it is.
+        // "Furniture" is what `facing` decides the position of: the footprint,
+        // each input socket, and each socket's one approach cell -- derived by
+        // the same arithmetic `preclaim_socket_approaches` uses.
+        let mut furniture: Vec<BTreeSet<Anchor>> = Vec::with_capacity(anchors.len());
+        for (node, primitive) in base.primitive_nodes.iter().enumerate() {
+            let mut cells: BTreeSet<Anchor> = primitive.footprint.iter().copied().collect();
+            if node < netlist.gates.len() {
+                let support = anchors[node];
+                for direction in geometry::input_directions(facings[node]) {
+                    let socket = step(support, direction);
+                    cells.insert(socket);
+                    cells.insert(Anchor {
+                        x: socket.x + (socket.x - support.x),
+                        y: socket.y + (socket.y - support.y),
+                        z: socket.z + (socket.z - support.z),
+                    });
+                }
+            }
+            furniture.push(cells);
+        }
+
+        let mut blame: Vec<u64> = vec![0; anchors.len()];
+        let mut unattributed: u64 = 0;
+        for (cell, weight) in &base_harvest.refused {
+            let mut standing: Vec<usize> = Vec::new();
+            for (node, cells) in furniture.iter().enumerate() {
+                if cells.contains(cell) {
+                    standing.push(node);
+                }
+            }
+            if standing.is_empty() {
+                unattributed += weight;
+            }
+            for node in standing {
+                blame[node] += weight;
+            }
+        }
+        let mut ranked: Vec<(usize, u64)> = blame
+            .iter()
+            .copied()
+            .enumerate()
+            .filter(|(_, weight)| *weight > 0)
+            .collect();
+        ranked.sort_by_key(|(_, weight)| std::cmp::Reverse(*weight));
+        eprintln!(
+            "  frontier: {} refused cells, {} blame unattributed to any furniture",
+            base_harvest.refused.len(),
+            unattributed
+        );
+        for (node, weight) in ranked.iter().take(top.max(8)) {
+            eprintln!(
+                "    {} at ({}, {}, {}) facing {:?}: blame {}",
+                base.primitive_nodes[*node].id,
+                anchors[*node].x,
+                anchors[*node].y,
+                anchors[*node].z,
+                facings[*node].direction(),
+                weight
+            );
+        }
+
+        // Turn each of the most-blamed gates to each of its three other
+        // facings, alone, and route again. One knob at a time: a sweep that
+        // turned pairs would not say which turn did the work.
+        let mut wins = 0usize;
+        for (node, weight) in ranked.iter().take(top) {
+            for index in 0..4u8 {
+                let facing = geometry::CellFacing::from_index(index).expect("four facings");
+                if facing == facings[*node] {
+                    continue;
+                }
+                let mut turned = facings.clone();
+                turned[*node] = facing;
+                let candidate = candidate_from_anchors_and_facings(
+                    &netlist,
+                    &placements,
+                    anchors.clone(),
+                    turned,
+                );
+                let started = Instant::now();
+                let harvest = harvest_routing(candidate, &netlist, rounds);
+                let verdict = describe(&harvest);
+                if harvest.routed.is_some() {
+                    wins += 1;
+                }
+                eprintln!(
+                    "  turn {} (blame {}) {:?} -> {:?}: {} | {:.1}s",
+                    base.primitive_nodes[*node].id,
+                    weight,
+                    facings[*node].direction(),
+                    facing.direction(),
+                    verdict,
+                    started.elapsed().as_secs_f64()
+                );
+            }
+        }
+        eprintln!(
+            "== reface probe: {wins} of {} single turns routed ==",
+            ranked.len().min(top) * 3
+        );
+    }
+
+    /// When a negotiated net dead-ends against its own tree, how far is the
+    /// socket it could not reach from the tree that walled it?
+    ///
+    /// The 2026-08-20 sweep froze `segment_a` at contested 0 / unlaid 6 --
+    /// six nets dead-ended against their own trees, charging nothing. Under
+    /// [`OwnJoinPolicy::Wide`] a branch's own laid wire is foreign everywhere
+    /// but its attachment prefix, so a tree that already runs *beside* the
+    /// socket makes that branch unroutable -- while in the game, dust beside
+    /// dust of the same net is one net, and the signal is already at the
+    /// door. If the dead branches' sockets are measurably adjacent to their
+    /// own trees, the fix is not a better search: it is `lay_net` noticing
+    /// the branch is already fed.
+    ///
+    /// Replicates [`negotiate_with_policy`]'s loop line for line (the same
+    /// way [`harvest_routing`] replicates [`route_every_net`]) because the
+    /// per-net failures inside an iteration are not in its return value.
+    /// `REDA_FED_CIRCUIT` (default `segment_a`), `REDA_FED_ITERATIONS`
+    /// (default 14; the measured freeze is from iteration 10).
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, replicates the negotiated loop and measures socket-to-own-tree distances at the freeze"]
+    fn measure_whether_the_dead_branches_are_already_fed_by_their_own_trees() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+        use std::time::Instant;
+
+        let setting = |name: &str, fallback: &str| -> String {
+            std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+        };
+        let wanted = setting("REDA_FED_CIRCUIT", "segment_a");
+        let iterations: usize = setting("REDA_FED_ITERATIONS", "14").parse().expect("a count");
+        // Which order a net's branches are laid in: `declared` is what
+        // `lay_net` does today (netlist consumer order), `far` lays the
+        // longest branch first while the field is still open, `near` the
+        // shortest. The six dead branches at the freeze are each the LAST
+        // thing their net tried after laying 47..98 cells of tree, which is
+        // the shape branch order would change.
+        let branch_order = setting("REDA_FED_ORDER", "declared");
+
+        let netlist = match wanted.as_str() {
+            "full_adder" => build_full_adder_netlist().0,
+            "segment_a" => build_single_segment_netlist(0).0,
+            "seven_segment" => build_seven_segment_netlist().0,
+            other => panic!("REDA_FED_CIRCUIT names no circuit: {other}"),
+        };
+        let placements = PortPlacements::default();
+        let placement =
+            relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+        let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation).expect("snaps");
+        let candidate = candidate_from_snapped(&netlist, &placements, &snapped);
+
+        let sinks = net_sinks(&netlist);
+        let order: Vec<String> = sinks.keys().cloned().collect();
+        let hard = hard_furniture(&candidate, &netlist);
+        let schedule = PresentSchedule::SHIPPING;
+        let own_join = NEGOTIATED_OWN_JOIN;
+
+        let mut table = Negotiation::default();
+        eprintln!(
+            "== already-fed probe: {wanted}, {} nets, {iterations} iterations, {:?} ==",
+            order.len(),
+            own_join
+        );
+        let started = Instant::now();
+        for iteration in 0..iterations {
+            table.present = schedule.term(iteration);
+            let mut laid: BTreeMap<String, Route> = BTreeMap::new();
+            let mut failures: Vec<(String, Box<RoutingFailure>)> = Vec::new();
+
+            for signal in &order {
+                table.release(signal);
+                let source = net_source(&candidate, signal)
+                    .map_err(|failure| failure.error)
+                    .expect("every net has a driver");
+                let mut consumers = sinks.get(signal).cloned().expect("the order is its keys");
+                match branch_order.as_str() {
+                    "declared" => {}
+                    "far" => consumers.sort_by_key(|&(gate, _)| {
+                        std::cmp::Reverse(manhattan_distance(source, candidate.anchors[gate]))
+                    }),
+                    "near" => consumers.sort_by_key(|&(gate, _)| {
+                        manhattan_distance(source, candidate.anchors[gate])
+                    }),
+                    other => panic!("REDA_FED_ORDER is declared, far or near, not {other}"),
+                }
+                let mut reservation = hard.clone();
+                let outcome = {
+                    let prices = Prices::Negotiated {
+                        table: &table,
+                        mine: signal,
+                        own_join,
+                    };
+                    lay_net(
+                        signal,
+                        source,
+                        &consumers,
+                        &netlist,
+                        &candidate,
+                        &mut reservation,
+                        &prices,
+                    )
+                };
+                match outcome {
+                    Ok(route) => {
+                        table.claim(signal, claim_of(signal, &route, &reservation));
+                        laid.insert(signal.clone(), route);
+                    }
+                    Err(failure) => {
+                        table.charge_history(failure.charge_outright.iter().copied());
+                        failures.push((signal.clone(), failure));
+                    }
+                }
+            }
+
+            let contested = table.contested();
+            eprintln!(
+                "  iter {iteration:2}: unlaid {} | contested {} | {:.1}s",
+                failures.len(),
+                contested.len(),
+                started.elapsed().as_secs_f64()
+            );
+
+            // The freeze is what this probe is for: report every dead branch
+            // against its own tree, then stop. Continuing past it re-measures
+            // the same frozen answer.
+            let last = iteration + 1 == iterations;
+            if last || (contested.is_empty() && !failures.is_empty()) {
+                for (signal, failure) in &failures {
+                    report_dead_branch(signal, failure, &netlist, &candidate, &sinks);
+                }
+                break;
+            }
+            table.charge_history(contested);
+        }
+    }
+
+    /// Does giving each net its OWN branch order let the negotiation finish?
+    ///
+    /// The already-fed probe measured that a single global branch order only
+    /// moves which nets die: `declared` froze segment_a at 6 unlaid, `far`
+    /// oscillated at 1..5 with different nets and different failure kinds.
+    /// So the order is a per-net knob, and the failure already says when to
+    /// turn it: a net that fails this iteration cycles to its next order for
+    /// the next one, while nets that lay keep what they have. Everything
+    /// else is [`negotiate_with_policy`]'s loop, replicated the way
+    /// [`harvest_routing`] replicates [`route_every_net`].
+    ///
+    /// If an iteration ends with every net laid and nothing contested, the
+    /// plan is completed the way `negotiate` completes it -- and then judged
+    /// by [`verify_candidate`], because a route that does not verify has
+    /// bought nothing (§10).
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, runs the per-net branch-order repair loop"]
+    fn measure_whether_per_net_branch_orders_let_negotiation_finish() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+        use std::time::Instant;
+
+        let setting = |name: &str, fallback: &str| -> String {
+            std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+        };
+        let wanted = setting("REDA_REPAIR_CIRCUIT", "segment_a");
+        let iterations: usize = setting("REDA_REPAIR_ITERATIONS", "32").parse().expect("a count");
+
+        let netlist = match wanted.as_str() {
+            "full_adder" => build_full_adder_netlist().0,
+            "segment_a" => build_single_segment_netlist(0).0,
+            "seven_segment" => build_seven_segment_netlist().0,
+            other => panic!("REDA_REPAIR_CIRCUIT names no circuit: {other}"),
+        };
+        let placements = PortPlacements::default();
+        let placement =
+            relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+        let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation).expect("snaps");
+        let mut candidate = candidate_from_snapped(&netlist, &placements, &snapped);
+
+        let sinks = net_sinks(&netlist);
+        let order: Vec<String> = sinks.keys().cloned().collect();
+        let hard = hard_furniture(&candidate, &netlist);
+        let schedule = PresentSchedule::SHIPPING;
+        let own_join = NEGOTIATED_OWN_JOIN;
+
+        // Each net's current branch order, as an index into the cycle
+        // below. A net that fails advances by one, wrapping; a net that
+        // lays keeps its choice. Everything starts at `declared`, which is
+        // what `lay_net` has always done.
+        const ORDERS: [&str; 3] = ["declared", "far", "near"];
+        let mut chosen: BTreeMap<String, usize> = BTreeMap::new();
+
+        let sort_consumers =
+            |consumers: &mut Vec<(usize, usize)>, source: Anchor, which: usize| match ORDERS
+                [which]
+            {
+                "far" => consumers.sort_by_key(|&(gate, _)| {
+                    std::cmp::Reverse(manhattan_distance(source, candidate.anchors[gate]))
+                }),
+                "near" => consumers.sort_by_key(|&(gate, _)| {
+                    manhattan_distance(source, candidate.anchors[gate])
+                }),
+                _ => {}
+            };
+
+        let mut table = Negotiation::default();
+        eprintln!(
+            "== per-net order repair: {wanted}, {} nets, {iterations} iterations, {:?} ==",
+            order.len(),
+            own_join
+        );
+        let started = Instant::now();
+        for iteration in 0..iterations {
+            table.present = schedule.term(iteration);
+            let mut laid: BTreeMap<String, Route> = BTreeMap::new();
+            let mut failed: Vec<(String, String)> = Vec::new();
+
+            for signal in &order {
+                table.release(signal);
+                let source = net_source(&candidate, signal)
+                    .map_err(|failure| failure.error)
+                    .expect("every net has a driver");
+                let mut consumers =
+                    sinks.get(signal).cloned().expect("the order is its keys");
+                let which = chosen.get(signal).copied().unwrap_or(0);
+                sort_consumers(&mut consumers, source, which);
+                let mut reservation = hard.clone();
+                let outcome = {
+                    let prices = Prices::Negotiated {
+                        table: &table,
+                        mine: signal,
+                        own_join,
+                    };
+                    lay_net(
+                        signal,
+                        source,
+                        &consumers,
+                        &netlist,
+                        &candidate,
+                        &mut reservation,
+                        &prices,
+                    )
+                };
+                match outcome {
+                    Ok(route) => {
+                        table.claim(signal, claim_of(signal, &route, &reservation));
+                        laid.insert(signal.clone(), route);
+                    }
+                    Err(failure) => {
+                        table.charge_history(failure.charge_outright.iter().copied());
+                        // The repair: this net's order did not work against
+                        // this world, so it tries its next one next time.
+                        *chosen.entry(signal.clone()).or_insert(0) += 1;
+                        let short = failure.error.to_string();
+                        let short = short
+                            .split(" for ")
+                            .next()
+                            .unwrap_or(&short)
+                            .chars()
+                            .take(60)
+                            .collect::<String>();
+                        failed.push((signal.clone(), short));
+                    }
+                }
+            }
+            for which in chosen.values_mut() {
+                *which %= ORDERS.len();
+            }
+
+            let contested = table.contested();
+            let assignments: Vec<String> = chosen
+                .iter()
+                .filter(|(_, which)| **which != 0)
+                .map(|(signal, which)| format!("{signal}:{}", ORDERS[*which]))
+                .collect();
+            eprintln!(
+                "  iter {iteration:2}: unlaid {} | contested {} | non-declared {{{}}} | {:.1}s",
+                failed.len(),
+                contested.len(),
+                assignments.join(" "),
+                started.elapsed().as_secs_f64()
+            );
+            for (signal, error) in &failed {
+                eprintln!("           dead: {signal}: {error}");
+            }
+
+            if failed.is_empty() && contested.is_empty() {
+                candidate.routes = order
+                    .iter()
+                    .map(|signal| laid.remove(signal).expect("every net was laid"))
+                    .collect();
+                match negotiation_left_nothing_shared(&candidate) {
+                    Ok(()) => {}
+                    Err(error) => {
+                        eprintln!("  SHARED CELLS SURVIVED THE EXIT: {error}");
+                        return;
+                    }
+                }
+                eprintln!("  ALL LAID AND NOTHING CONTESTED at iteration {iteration}");
+                match verify_candidate(&candidate, &netlist) {
+                    Ok(()) => eprintln!("  AND IT VERIFIES -- this is a plan"),
+                    Err(error) => eprintln!("  but does not verify: {error}"),
+                }
+                return;
+            }
+            table.charge_history(contested);
+        }
+        eprintln!("  did not finish within {iterations} iterations");
+    }
+
+    /// One dead branch's geometry against its own partial tree, printed.
+    fn report_dead_branch(
+        signal: &str,
+        failure: &RoutingFailure,
+        netlist: &Netlist,
+        candidate: &PlanCandidate,
+        sinks: &BTreeMap<String, Vec<(usize, usize)>>,
+    ) {
+        let (source, target) = failure.corridor;
+
+        // Which consumer this branch was aimed at: the one whose approach
+        // cell is the corridor's far end, by the same arithmetic `lay_net`
+        // aims with.
+        let consumers = sinks.get(signal).cloned().unwrap_or_default();
+        let mut aimed: Option<(usize, usize, Anchor)> = None;
+        for &(gate, input_index) in &consumers {
+            let support = candidate.anchors[gate];
+            let facing = candidate.facing_of(gate);
+            let socket =
+                step(support, compile::geometry::input_directions(facing)[input_index]);
+            let approach = Anchor {
+                x: socket.x + (socket.x - support.x),
+                y: socket.y + (socket.y - support.y),
+                z: socket.z + (socket.z - support.z),
+            };
+            if approach == target {
+                aimed = Some((gate, input_index, socket));
+                break;
+            }
+        }
+        let Some((gate, input_index, socket)) = aimed else {
+            eprintln!(
+                "    {signal}: {} -- corridor ({},{},{})->({},{},{}) matches no consumer approach",
+                failure.error, source.x, source.y, source.z, target.x, target.y, target.z
+            );
+            return;
+        };
+
+        // This net's own laid wire, out of the reservation the failure
+        // carries -- minus its own preclaimed socket approaches, which are
+        // claims for cells it has not laid.
+        let mut preclaimed: BTreeSet<Anchor> = BTreeSet::new();
+        for (gate, definition) in netlist.gates.iter().enumerate() {
+            let support = candidate.anchors[gate];
+            let facing = candidate.facing_of(gate);
+            for (input_index, driver) in definition.inputs.iter().enumerate() {
+                if driver != signal {
+                    continue;
+                }
+                let socket =
+                    step(support, compile::geometry::input_directions(facing)[input_index]);
+                preclaimed.insert(Anchor {
+                    x: socket.x + (socket.x - support.x),
+                    y: socket.y + (socket.y - support.y),
+                    z: socket.z + (socket.z - support.z),
+                });
+            }
+        }
+        let own_tree: Vec<Anchor> = failure
+            .reservation
+            .cells
+            .iter()
+            .filter(|(cell, (owner, occupancy))| {
+                owner == signal
+                    && matches!(occupancy, Occupancy::Wire)
+                    && !preclaimed.contains(cell)
+            })
+            .map(|(cell, _)| *cell)
+            .collect();
+
+        let chebyshev = |a: Anchor, b: Anchor| -> i32 {
+            (a.x - b.x).abs().max((a.y - b.y).abs()).max((a.z - b.z).abs())
+        };
+        let nearest = own_tree
+            .iter()
+            .map(|cell| (chebyshev(*cell, socket), *cell))
+            .min();
+        // Optimistically unsealed: the join relation with no lids in the
+        // way. What this counts is "the game would join these", not "the
+        // plan's lids permit it" -- the point is whether the signal is at
+        // the door, and a lid is the plan's own choice.
+        let joined = own_tree.iter().any(|cell| {
+            dust_join_neighbours(*cell, &|_| false).contains(&socket)
+        });
+        let same_gate_inputs = netlist.gates[gate]
+            .inputs
+            .iter()
+            .filter(|input| input.as_str() == signal)
+            .count();
+
+        match nearest {
+            Some((distance, cell)) => eprintln!(
+                "    {signal} -> {}.in[{input_index}]: socket ({},{},{}) | own tree {} cells, \
+                 nearest ({},{},{}) at chebyshev {distance} | joins socket already: {joined} | \
+                 this net feeds {same_gate_inputs} input(s) of this gate | {}",
+                netlist.gates[gate].output,
+                socket.x,
+                socket.y,
+                socket.z,
+                own_tree.len(),
+                cell.x,
+                cell.y,
+                cell.z,
+                failure.error
+            ),
+            None => eprintln!(
+                "    {signal} -> {}.in[{input_index}]: socket ({},{},{}) | own tree EMPTY | {}",
+                netlist.gates[gate].output,
+                socket.x,
+                socket.y,
+                socket.z,
+                failure.error
+            ),
         }
     }
 
