@@ -666,13 +666,18 @@ pub(crate) fn relax_with_rest(
 /// [`project`] already takes one as a parameter -- so the only thing missing was
 /// a way in.
 ///
-/// `#[cfg(test)]`, so nothing on the shipping path can reach it: [`relax`] above
-/// is the same function with `required_separations(&bodies)` in place of the
-/// argument, and it is the only caller `plan_from_netlist` has.
+/// Off the shipping path, though no longer `#[cfg(test)]`: [`relax`] above is
+/// the same function with `required_separations(&bodies)` in place of the
+/// argument, and it is still the only caller `plan_from_netlist` has. The
+/// second production reader is `planner::plan_from_netlist_with_growth`
+/// (2026-08-28) -- itself built-but-not-shipped in the same posture as the
+/// negotiated router, awaiting the growth probe's Verify phase -- and a
+/// growth path that placed through a test-only copy of this function would
+/// measure the copy.
 ///
 /// The probe is `planner::measure_whether_congestion_driven_placement_routes_
 /// segment_a`.
-#[cfg(test)]
+#[cfg_attr(not(test), allow(dead_code))]
 pub(crate) fn relax_with_required(
     netlist: &Netlist,
     graph: &PrimitiveGraph,

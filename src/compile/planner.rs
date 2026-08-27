@@ -2824,6 +2824,130 @@ pub(crate) fn plan_from_netlist_with_router(
     )
 }
 
+/// How a growth iteration turns the router's charge map into more room.
+///
+/// The parameters are the congestion probe's `hot:share,growth` rule with its
+/// heat radius and iteration budget made explicit, so a measurement can name
+/// exactly what produced its numbers. Nothing ships through this until the
+/// probe's Verify phase says which values -- see
+/// [`plan_from_netlist_with_growth`].
+#[derive(Debug, Clone, Copy)]
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) struct GrowthRule {
+    /// The hottest `share` of nodes get their body's requirement multiplied
+    /// by `growth` after every failed iteration.
+    pub share: f64,
+    pub growth: f64,
+    /// A cell's charge heats every node whose anchor is within this Chebyshev
+    /// distance in plan. The relaxed layouts' median nearest-neighbour anchor
+    /// distance is 7 (spec §3.2), so a radius near it is one body's
+    /// neighbourhood rather than the whole plane.
+    pub radius: i32,
+    /// How many place-route-inflate iterations before the loop hands back its
+    /// last failure. Iteration 1 is exactly [`plan_from_netlist`].
+    pub iterations: usize,
+}
+
+/// The congestion-driven growth loop: place, trial-route, and when routing
+/// fails, buy room exactly where the router said it fought, then place again.
+///
+/// **Built, measurable, and not on the shipping path** -- the same posture
+/// [`SHIPPING_ROUTER`]'s doc records for the negotiated router: `compile()`
+/// and [`plan_from_netlist`] behave exactly as before this existed, and the
+/// four pinned block counts do not move. The measured motivation: the router
+/// side of the night of 2026-08-28 is exhausted -- at the relaxed placement
+/// density, segment_a's six big-fanout nets lay under NO combination of
+/// pricing, ordering, and facing (`measure_whether_settle_then_repair_finishes`,
+/// and the reface and already-fed probes before it) -- so the remaining
+/// variable is the placement itself, and uniform room is refuted twice (the
+/// 2x anchor scaling, the rest-length sweep). What is left is room *where the
+/// heat is*, which is this loop.
+///
+/// Routing is not the acceptance condition: an iteration's candidate returns
+/// only if [`verify_candidate`] passes (§10 -- two placement prototypes on
+/// this branch turned route failures into signal-strength and torch-merge
+/// violations). A routed candidate that does not verify keeps inflating on
+/// the charges its failed rounds accrued; if it routed clean on the first
+/// round there is no heat to grow on, and the loop stops with the verify
+/// error rather than replaying the same iteration forever.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(crate) fn plan_from_netlist_with_growth(
+    netlist: &Netlist,
+    placements: &PortPlacements,
+    rule: GrowthRule,
+) -> Result<PlanCandidate, PlannerError> {
+    let start = starting_layout(netlist, placements)?;
+    let graph = primitive_graph::expand(netlist, &Library::default_library()).map_err(|error| {
+        PlannerError::UnrealisableNode {
+            id: "netlist".to_string(),
+            reason: error.to_string(),
+        }
+    })?;
+    let bodies = relax::build(netlist, &graph, &start, placements).map_err(|error| {
+        PlannerError::UnrealisableNode {
+            id: "netlist".to_string(),
+            reason: error.to_string(),
+        }
+    })?;
+    let anchor_body = bodies.anchor_body.clone();
+    let mut required = relax::required_separations(&bodies);
+
+    let mut last: Option<PlannerError> = None;
+    for _ in 0..rule.iterations.max(1) {
+        let placement = relax::relax_with_required(
+            netlist,
+            &graph,
+            &start,
+            placements,
+            SHIPPING_AXES,
+            relax::RelaxEffort::default(),
+            &required,
+        )
+        .map_err(PlannerError::Relaxation)?;
+        let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation)?;
+        let anchors: Vec<Anchor> = snapped.iter().map(|node| node.anchor).collect();
+        let candidate = candidate_from_snapped(netlist, placements, &snapped);
+
+        let mut congestion = Congestion::default();
+        let outcome = route_every_net_charging(candidate, netlist, RIP_UP_ROUNDS, &mut congestion);
+        match outcome {
+            Ok(routed) => match verify_candidate(&routed, netlist) {
+                Ok(()) => return Ok(routed),
+                Err(error) => {
+                    if congestion.charged.is_empty() {
+                        // Routed clean and still wrong: there is no heat to
+                        // grow on, and replaying the identical iteration
+                        // answers nothing.
+                        return Err(error);
+                    }
+                    last = Some(error);
+                }
+            },
+            Err(error) => last = Some(error),
+        }
+
+        // The charge on every cell within `radius` of a node's anchor,
+        // Chebyshev in plan -- the congestion probe's heat, verbatim.
+        let mut heat = vec![0u64; anchors.len()];
+        for (cell, charge) in &congestion.charged {
+            for (node, anchor) in anchors.iter().enumerate() {
+                if (cell.x - anchor.x).abs() <= rule.radius
+                    && (cell.z - anchor.z).abs() <= rule.radius
+                {
+                    heat[node] += charge;
+                }
+            }
+        }
+        let mut ranked: Vec<usize> = (0..heat.len()).filter(|node| heat[*node] > 0).collect();
+        ranked.sort_by(|left, right| heat[*right].cmp(&heat[*left]).then(left.cmp(right)));
+        let take = ((heat.len() as f64) * rule.share).ceil() as usize;
+        for node in ranked.into_iter().take(take) {
+            required[anchor_body[node]] *= rule.growth;
+        }
+    }
+    Err(last.expect("a growth loop that never returned always failed at least once"))
+}
+
 /// [`plan_from_netlist_with_router`] on [`RouterKind::Negotiated`], with the
 /// present-term schedule named rather than assumed.
 ///
@@ -3206,12 +3330,26 @@ fn route_every_net(
     netlist: &Netlist,
     rip_up_rounds: usize,
 ) -> Result<PlanCandidate, PlannerError> {
+    route_every_net_charging(candidate, netlist, rip_up_rounds, &mut Congestion::default())
+}
+
+/// [`route_every_net`] with the congestion table lent in rather than owned,
+/// so a caller can read the charge map after a failure. That map is the
+/// router's own record of where nets fought, and it is the whole input to
+/// [`plan_from_netlist_with_growth`]'s inflation -- reading it beats keeping
+/// a second line-for-line copy of this loop current (the fate the test-side
+/// `harvest_routing` already carries, with an edit-together warning).
+fn route_every_net_charging(
+    candidate: PlanCandidate,
+    netlist: &Netlist,
+    rip_up_rounds: usize,
+    congestion: &mut Congestion,
+) -> Result<PlanCandidate, PlannerError> {
     let mut order: Vec<String> = net_sinks(netlist).into_keys().collect();
-    let mut congestion = Congestion::default();
     let mut last: Option<PlannerError> = None;
 
     for _ in 0..rip_up_rounds {
-        match route_in_order(candidate.clone(), netlist, &order, &congestion) {
+        match route_in_order(candidate.clone(), netlist, &order, congestion) {
             Ok(routed) => return Ok(routed),
             Err(failure) => {
                 let RoutingFailure {
@@ -7330,6 +7468,37 @@ mod tests {
         match compile::compile_planned(&one_branch, &PortPlacements::default()) {
             Ok(_) => eprintln!("  compile_planned Ok"),
             Err(error) => eprintln!("  compile_planned ERR: {error}"),
+        }
+    }
+
+    /// Growth at one iteration is the shipping planner, block for block.
+    ///
+    /// [`plan_from_netlist_with_growth`]'s doc claims its first iteration is
+    /// exactly [`plan_from_netlist`]: the derived separations go in untouched
+    /// and the first candidate that routes and verifies returns before any
+    /// inflation runs. This holds the seam -- if the growth loop's placement
+    /// or routing drifts from the shipping path's, a circuit that routes
+    /// clean stops matching and this names it. and4, because it routes and
+    /// verifies at iteration 1 in milliseconds.
+    #[test]
+    fn growth_at_one_iteration_is_the_shipping_planner() {
+        let (netlist, _) = build_and4_netlist();
+        let rule = GrowthRule { share: 0.25, growth: 1.4, radius: 6, iterations: 1 };
+        let grown = plan_from_netlist_with_growth(&netlist, &PortPlacements::default(), rule)
+            .expect("and4 routes and verifies at iteration 1");
+        let shipped = plan_from_netlist(&netlist, &PortPlacements::default())
+            .expect("and4 ships");
+        assert_eq!(
+            grown.anchors, shipped.anchors,
+            "growth's first placement must be the shipping placement"
+        );
+        assert_eq!(
+            grown.routes.len(),
+            shipped.routes.len(),
+            "growth's first routing must be the shipping routing"
+        );
+        for (left, right) in grown.routes.iter().zip(&shipped.routes) {
+            assert_eq!(left.anchors, right.anchors, "route {} moved", left.id);
         }
     }
 
