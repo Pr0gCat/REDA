@@ -11839,6 +11839,377 @@ mod tests {
         eprintln!("  did not finish within {iterations} iterations");
     }
 
+    /// The generator core as a probe: settle prices, then repair the dead
+    /// tail with discrete realisation choices, then settle again.
+    ///
+    /// The per-net order probe measured that cycling knobs INSIDE the
+    /// pricing loop thrashes: price convergence wants stillness. So this one
+    /// separates the phases. Settle runs the shipped negotiation until the
+    /// measured freeze shape (contested 0 with a nonempty unlaid tail) or a
+    /// patience cap. Repair then takes each dead net against the frozen
+    /// world and tries, cheapest first: its two other branch orders, then
+    /// each failing branch's sink gate turned to its three other facings --
+    /// a facing change rebuilds candidate and furniture through
+    /// `candidate_from_anchors_and_facings` and sends the loop back to
+    /// settle, because moved furniture invalidates everyone's prices. A
+    /// repair that lays sticks; a net none of its knobs lay is left dead and
+    /// said so, which is a bounded negative result per net (rule: report the
+    /// outcome, do not move the goal to meet it).
+    ///
+    /// Exit is exactly the shipped exit: every net laid and nothing
+    /// contested in one iteration, `negotiation_left_nothing_shared`, then
+    /// [`verify_candidate`] -- routing is never the acceptance condition.
+    ///
+    /// `REDA_GEN_CIRCUIT` (default `segment_a`), `REDA_GEN_PHASES` (default
+    /// 6 settle+repair cycles), `REDA_GEN_SETTLE` (default 12 iterations per
+    /// settle).
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, runs settle-then-repair on the negotiated router"]
+    fn measure_whether_settle_then_repair_finishes() {
+        use crate::circuits::full_adder::build_full_adder_netlist;
+        use crate::circuits::seven_segment::{
+            build_seven_segment_netlist, build_single_segment_netlist,
+        };
+        use std::time::Instant;
+
+        let setting = |name: &str, fallback: &str| -> String {
+            std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+        };
+        let wanted = setting("REDA_GEN_CIRCUIT", "segment_a");
+        let phases: usize = setting("REDA_GEN_PHASES", "6").parse().expect("a count");
+        let settle_budget: usize = setting("REDA_GEN_SETTLE", "12").parse().expect("a count");
+
+        let netlist = match wanted.as_str() {
+            "full_adder" => build_full_adder_netlist().0,
+            "segment_a" => build_single_segment_netlist(0).0,
+            "seven_segment" => build_seven_segment_netlist().0,
+            other => panic!("REDA_GEN_CIRCUIT names no circuit: {other}"),
+        };
+        let placements = PortPlacements::default();
+        let placement =
+            relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+        let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation).expect("snaps");
+
+        let sinks = net_sinks(&netlist);
+        let order: Vec<String> = sinks.keys().cloned().collect();
+        let schedule = PresentSchedule::SHIPPING;
+        let own_join = NEGOTIATED_OWN_JOIN;
+
+        // The mutable realisation state the repair phase edits.
+        let mut candidate = candidate_from_snapped(&netlist, &placements, &snapped);
+        let mut anchors = candidate.anchors.clone();
+        let mut facings: Vec<geometry::CellFacing> =
+            (0..anchors.len()).map(|node| candidate.facing_of(node)).collect();
+        let mut hard = hard_furniture(&candidate, &netlist);
+        // 0 = declared, 1 = far, 2 = near, pinned per net once a repair lays.
+        let mut chosen: BTreeMap<String, usize> = BTreeMap::new();
+        // Nets whose whole knob set failed in a repair phase; left dead.
+        let mut abandoned: BTreeSet<String> = BTreeSet::new();
+
+        const ORDERS: [&str; 3] = ["declared", "far", "near"];
+        fn sorted(
+            consumers: &[(usize, usize)],
+            source: Anchor,
+            anchors: &[Anchor],
+            which: usize,
+        ) -> Vec<(usize, usize)> {
+            let mut consumers = consumers.to_vec();
+            match ORDERS[which] {
+                "far" => consumers.sort_by_key(|&(gate, _)| {
+                    std::cmp::Reverse(manhattan_distance(source, anchors[gate]))
+                }),
+                "near" => consumers
+                    .sort_by_key(|&(gate, _)| manhattan_distance(source, anchors[gate])),
+                _ => {}
+            }
+            consumers
+        }
+
+        let mut table = Negotiation::default();
+        let started = Instant::now();
+        eprintln!(
+            "== settle-then-repair: {wanted}, {} nets, {phases} phases x {settle_budget} settle ==",
+            order.len()
+        );
+
+        for phase in 0..phases {
+            // ---- settle ----
+            let mut frozen: Vec<(String, Box<RoutingFailure>)> = Vec::new();
+            for iteration in 0..settle_budget {
+                table.present = schedule.term(iteration);
+                let mut laid: BTreeMap<String, Route> = BTreeMap::new();
+                let mut failures: Vec<(String, Box<RoutingFailure>)> = Vec::new();
+
+                for signal in &order {
+                    table.release(signal);
+                    let source = net_source(&candidate, signal)
+                        .map_err(|failure| failure.error)
+                        .expect("every net has a driver");
+                    let consumers = sorted(
+                        sinks.get(signal).expect("the order is its keys"),
+                        source,
+                        &anchors,
+                        chosen.get(signal).copied().unwrap_or(0),
+                    );
+                    let mut reservation = hard.clone();
+                    let outcome = {
+                        let prices = Prices::Negotiated {
+                            table: &table,
+                            mine: signal,
+                            own_join,
+                        };
+                        lay_net(
+                            signal,
+                            source,
+                            &consumers,
+                            &netlist,
+                            &candidate,
+                            &mut reservation,
+                            &prices,
+                        )
+                    };
+                    match outcome {
+                        Ok(route) => {
+                            table.claim(signal, claim_of(signal, &route, &reservation));
+                            laid.insert(signal.clone(), route);
+                        }
+                        Err(failure) => {
+                            table.charge_history(failure.charge_outright.iter().copied());
+                            failures.push((signal.clone(), failure));
+                        }
+                    }
+                }
+
+                let contested = table.contested();
+                eprintln!(
+                    "  phase {phase} iter {iteration:2}: unlaid {} | contested {} | {:.1}s",
+                    failures.len(),
+                    contested.len(),
+                    started.elapsed().as_secs_f64()
+                );
+
+                if failures.is_empty() && contested.is_empty() {
+                    candidate.routes = order
+                        .iter()
+                        .map(|signal| laid.remove(signal).expect("every net was laid"))
+                        .collect();
+                    if let Err(error) = negotiation_left_nothing_shared(&candidate) {
+                        eprintln!("  SHARED CELLS SURVIVED THE EXIT: {error}");
+                        return;
+                    }
+                    eprintln!(
+                        "  ALL LAID AND NOTHING CONTESTED (phase {phase}, iter {iteration})"
+                    );
+                    eprintln!(
+                        "  pinned orders: {:?} | turned gates: {}",
+                        chosen
+                            .iter()
+                            .filter(|(_, which)| **which != 0)
+                            .map(|(signal, which)| format!("{signal}:{}", ORDERS[*which]))
+                            .collect::<Vec<_>>(),
+                        facings
+                            .iter()
+                            .enumerate()
+                            .filter(|(node, facing)| {
+                                **facing != snapped[*node].facing
+                            })
+                            .map(|(node, facing)| {
+                                format!(
+                                    "{}:{:?}",
+                                    candidate.primitive_nodes[node].id,
+                                    facing.direction()
+                                )
+                            })
+                            .collect::<Vec<_>>()
+                            .join(" ")
+                    );
+                    match verify_candidate(&candidate, &netlist) {
+                        Ok(()) => eprintln!("  AND IT VERIFIES -- this is a plan"),
+                        Err(error) => eprintln!("  but does not verify: {error}"),
+                    }
+                    return;
+                }
+
+                let freeze = contested.is_empty() && !failures.is_empty();
+                table.charge_history(contested);
+                if freeze {
+                    frozen = failures;
+                    break;
+                }
+                if iteration + 1 == settle_budget {
+                    frozen = failures;
+                }
+            }
+            if frozen.is_empty() {
+                eprintln!("  phase {phase}: nothing frozen and nothing finished -- oscillating");
+                continue;
+            }
+
+            // ---- repair ----
+            let mut turned_this_phase = false;
+            for (signal, failure) in &frozen {
+                if abandoned.contains(signal) {
+                    continue;
+                }
+                let source = net_source(&candidate, signal)
+                    .map_err(|failure| failure.error)
+                    .expect("every net has a driver");
+                let consumers_declared = sinks.get(signal).expect("its key").clone();
+                let current = chosen.get(signal).copied().unwrap_or(0);
+
+                // Cheapest knob first: the two other branch orders, laid
+                // against the frozen prices.
+                let mut repaired = false;
+                for which in (0..ORDERS.len()).filter(|which| *which != current) {
+                    let consumers = sorted(&consumers_declared, source, &anchors, which);
+                    let mut reservation = hard.clone();
+                    table.release(signal);
+                    let outcome = {
+                        let prices = Prices::Negotiated {
+                            table: &table,
+                            mine: signal,
+                            own_join,
+                        };
+                        lay_net(
+                            signal,
+                            source,
+                            &consumers,
+                            &netlist,
+                            &candidate,
+                            &mut reservation,
+                            &prices,
+                        )
+                    };
+                    if let Ok(route) = outcome {
+                        table.claim(signal, claim_of(signal, &route, &reservation));
+                        chosen.insert(signal.clone(), which);
+                        eprintln!(
+                            "  repair: {signal} lays under order {}",
+                            ORDERS[which]
+                        );
+                        repaired = true;
+                        break;
+                    }
+                }
+                if repaired {
+                    continue;
+                }
+
+                // The door knob: turn the failing branch's sink gate. The
+                // corridor's far end names the approach; the gate whose
+                // socket it serves is the door's owner.
+                let (_, target) = failure.corridor;
+                let mut sink_gate: Option<usize> = None;
+                for &(gate, input_index) in &consumers_declared {
+                    let support = candidate.anchors[gate];
+                    let facing = candidate.facing_of(gate);
+                    let socket = step(
+                        support,
+                        compile::geometry::input_directions(facing)[input_index],
+                    );
+                    let approach = Anchor {
+                        x: socket.x + (socket.x - support.x),
+                        y: socket.y + (socket.y - support.y),
+                        z: socket.z + (socket.z - support.z),
+                    };
+                    if approach == target {
+                        sink_gate = Some(gate);
+                        break;
+                    }
+                }
+                let Some(gate) = sink_gate else {
+                    eprintln!(
+                        "  repair: {signal} matches no consumer approach ({}) -- left dead",
+                        failure.error
+                    );
+                    abandoned.insert(signal.clone());
+                    continue;
+                };
+                if candidate.primitive_nodes[gate].pinned {
+                    eprintln!("  repair: {signal}'s sink gate is pinned -- left dead");
+                    abandoned.insert(signal.clone());
+                    continue;
+                }
+
+                let before = facings[gate];
+                let mut turned = false;
+                for index in 0..4u8 {
+                    let facing = geometry::CellFacing::from_index(index).expect("four");
+                    if facing == before {
+                        continue;
+                    }
+                    let mut trial_facings = facings.clone();
+                    trial_facings[gate] = facing;
+                    let trial = candidate_from_anchors_and_facings(
+                        &netlist,
+                        &placements,
+                        anchors.clone(),
+                        trial_facings.clone(),
+                    );
+                    let trial_hard = hard_furniture(&trial, &netlist);
+                    let trial_source = net_source(&trial, signal)
+                        .map_err(|failure| failure.error)
+                        .expect("every net has a driver");
+                    let consumers =
+                        sorted(&consumers_declared, trial_source, &anchors, current);
+                    let mut reservation = trial_hard.clone();
+                    table.release(signal);
+                    let outcome = {
+                        let prices = Prices::Negotiated {
+                            table: &table,
+                            mine: signal,
+                            own_join,
+                        };
+                        lay_net(
+                            signal,
+                            trial_source,
+                            &consumers,
+                            &netlist,
+                            &trial,
+                            &mut reservation,
+                            &prices,
+                        )
+                    };
+                    if let Ok(route) = outcome {
+                        table.claim(signal, claim_of(signal, &route, &reservation));
+                        eprintln!(
+                            "  repair: {signal} lays with {} turned {:?} -> {:?}",
+                            candidate.primitive_nodes[gate].id,
+                            before.direction(),
+                            facing.direction()
+                        );
+                        candidate = trial;
+                        facings = trial_facings;
+                        anchors = candidate.anchors.clone();
+                        hard = trial_hard;
+                        turned = true;
+                        turned_this_phase = true;
+                        break;
+                    }
+                }
+                if !turned {
+                    eprintln!(
+                        "  repair: {signal} lays under NO order and NO facing of its door -- \
+                         left dead ({})",
+                        failure.error
+                    );
+                    abandoned.insert(signal.clone());
+                }
+            }
+
+            if !turned_this_phase && frozen.iter().all(|(signal, _)| abandoned.contains(signal))
+            {
+                eprintln!("  every frozen net is out of knobs -- stopping");
+                break;
+            }
+        }
+        eprintln!(
+            "  did not finish: abandoned {:?} after {:.1}s",
+            abandoned,
+            started.elapsed().as_secs_f64()
+        );
+    }
+
     /// One dead branch's geometry against its own partial tree, printed.
     fn report_dead_branch(
         signal: &str,
