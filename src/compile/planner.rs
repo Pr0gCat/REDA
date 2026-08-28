@@ -13607,6 +13607,9 @@ mod tests {
         let wanted = setting("REDA_DIV_CIRCUIT", "verilog:seven_segment");
         let netlist = match wanted.as_str() {
             "segment_a" => build_single_segment_netlist(0).0,
+            "seven_segment" => {
+                crate::circuits::seven_segment::build_seven_segment_netlist().0
+            }
             "verilog:seven_segment" => {
                 let circuit = crate::circuits::verilog::find("verilog:seven_segment")
                     .expect("the catalog has the decoder");
