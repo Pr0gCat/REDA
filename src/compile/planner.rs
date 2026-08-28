@@ -1495,6 +1495,24 @@ fn deterministic_astar(
                     if is_riser {
                         return foreign || reservation.conductor_owner(&cell).is_some();
                     }
+                    // A cell this net's OWN stair guard holds as air is, by
+                    // the blocks alone, the other half of the reuse the
+                    // riser arm promises -- and exempting it is measured to
+                    // be UNSHIPPABLE until the search knows strength. Built
+                    // and killed three times on 2026-08-28: unbounded, it
+                    // let routes ride stairs anywhere and plans went
+                    // geometry-connected but electrically dead (negotiated
+                    // full_adder g2 -> g10, segment_a's grown plan g4 ->
+                    // g20); bounded to the branch's own start it still
+                    // re-rolled every growth trajectory and segment_a found
+                    // no plan twice more (795.9s, 788.0s). A staircase can
+                    // hold no refresh and this search prices distance, not
+                    // strength, so every admission here trades legality it
+                    // can see for decay it cannot. What this arm costs while
+                    // it stands: the decoder's three pocket nets (own pin
+                    // walled by their first branch's stair) stay unroutable
+                    // -- `a_second_branch_reclimbing_waits_for_a_strength_aware_search`
+                    // pins both halves of that trade.
                     reservation.owner(&cell).is_some()
                 })
             {
@@ -3129,6 +3147,27 @@ fn candidate_from_snapped(
     for node in snapped {
         anchors.push(node.anchor);
         facings.push(node.facing);
+    }
+
+    // A placement that drifted below the world's margin is translated back
+    // inside it, whole. The compiler owns this coordinate frame -- a legal
+    // plan shifted uniformly is the same circuit -- and growth's inflated
+    // iterations really do drift: segment_a's re-run burned 795.9s dying at
+    // `cell (-8, 1, 54) is outside the world` once realisation refused
+    // out-of-world plans by name. Three is the margin `candidate_world_size`
+    // reasons with on the far side: a footprint reaches at most that far out
+    // of its anchor. Conditional, so a layout already inside -- every
+    // placement fingerprint fixture, every pinned count -- does not move a
+    // cell; and never with a pinned node, whose position is a promise this
+    // frame has no right to break.
+    let min_x = anchors.iter().map(|anchor| anchor.x).min().unwrap_or(3);
+    let min_z = anchors.iter().map(|anchor| anchor.z).min().unwrap_or(3);
+    let shift = (3 - min_x.min(3), 3 - min_z.min(3));
+    if shift != (0, 0) && placements.is_empty() {
+        for anchor in &mut anchors {
+            anchor.x += shift.0;
+            anchor.z += shift.1;
+        }
     }
 
     candidate_from_anchors_and_facings(netlist, placements, anchors, facings)
@@ -7698,6 +7737,118 @@ mod tests {
                 started.elapsed().as_secs_f64()
             ),
         }
+    }
+
+    /// A placement that drifted below the world's margin is translated, not
+    /// doomed.
+    ///
+    /// Growth inflates separations and re-relaxes, and a late iteration can
+    /// push bodies below the origin -- measured tonight: segment_a's re-run
+    /// died at `cell (-8, 1, 54) is outside the world` after 795.9s, burning
+    /// its whole budget on iterations the honest out-of-world refusal now
+    /// kills at realisation. But the compiler owns this coordinate frame: a
+    /// legal plan shifted whole is the same circuit, so the right response
+    /// to drift is a translation at snap time, not a refusal at build time.
+    /// Nothing pinned may move, and a layout already inside the margin does
+    /// not move a cell -- which is what keeps every placement fingerprint
+    /// and pinned count exactly where it was.
+    #[test]
+    fn a_drifted_placement_is_translated_back_inside_the_world() {
+        let (netlist, _) = build_and4_netlist();
+        let placements = PortPlacements::default();
+        let placement =
+            relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+        let mut snapped = relax::snap(&placement).expect("snaps");
+        let reference = candidate_from_snapped(&netlist, &placements, &snapped);
+
+        // Drift the whole snap 60 cells into negative x, as an inflated
+        // iteration does.
+        for node in &mut snapped {
+            node.anchor.x -= 200;
+        }
+        let drifted = candidate_from_snapped(&netlist, &placements, &snapped);
+
+        let min_x = drifted.anchors.iter().map(|anchor| anchor.x).min().unwrap();
+        assert!(
+            min_x >= 3,
+            "the drifted snap must come back inside the margin, and its min x is {min_x}"
+        );
+        // Same circuit: every anchor at the same offset from its minimum.
+        let reference_min = reference.anchors.iter().map(|a| a.x).min().unwrap();
+        for (drifted_anchor, reference_anchor) in
+            drifted.anchors.iter().zip(&reference.anchors)
+        {
+            assert_eq!(
+                drifted_anchor.x - min_x,
+                reference_anchor.x - reference_min,
+                "translation must preserve the layout"
+            );
+            assert_eq!(drifted_anchor.y, reference_anchor.y);
+            assert_eq!(drifted_anchor.z, reference_anchor.z);
+        }
+    }
+
+    /// A second branch re-climbing its own staircase waits for a
+    /// strength-aware search -- the refusal is pinned WITH its cost.
+    ///
+    /// By the blocks alone the ride is legal reuse: the riser already holds
+    /// the stone, the overhead cell is committed air by this net's own
+    /// guard, and the riser arm of the clearance check has always exempted
+    /// own guards ("two branches climbing one stair is reuse"). The air arm
+    /// refuses anyway, and that refusal is a MEASURED decision, not an
+    /// oversight (2026-08-28, three kills): exempting own-guard air --
+    /// unbounded or bounded to the branch start -- re-rolls every growth
+    /// trajectory, and the search prices distance, not strength, so the
+    /// plans it then finds are geometry-connected and electrically dead
+    /// (negotiated full_adder g2 -> g10; segment_a's grown plan g4 -> g20,
+    /// then no plan at 795.9s and 788.0s). The cost of the refusal is also
+    /// measured: the decoder's three pocket nets -- own pin walled by their
+    /// first branch's stair -- stay unroutable under every order and every
+    /// facing. Whoever builds the strength-aware search flips this fixture's
+    /// expectation and collects both.
+    ///
+    /// The fixture is the decoder's measured pocket, minimal: a pin walled
+    /// by foreign solids on three sides, this net's own laid climb on the
+    /// fourth, the goal two flat steps past the top of the stair.
+    #[test]
+    fn a_second_branch_reclimbing_waits_for_a_strength_aware_search() {
+        let mut reservation = Reservation::new();
+        let pin = Anchor { x: 5, y: 1, z: 5 };
+        // Branch 1: the pin, a climb east, one cell of trunk on the storey.
+        let laid = vec![
+            pin,
+            Anchor { x: 6, y: 2, z: 5 },
+            Anchor { x: 7, y: 2, z: 5 },
+        ];
+        reserve_path(&mut reservation, "me", &laid);
+        // The packed plane: foreign furniture west, north and south of the
+        // pin, which is the decoder's measured pocket shape.
+        for cell in [
+            Anchor { x: 4, y: 1, z: 5 },
+            Anchor { x: 5, y: 1, z: 4 },
+            Anchor { x: 5, y: 1, z: 6 },
+        ] {
+            reservation.insert(cell, "primitive:99", Occupancy::Solid);
+        }
+
+        let goal = Anchor { x: 8, y: 2, z: 5 };
+        let route = Route::new("me".to_string(), laid.clone());
+        let own_join = OwnJoinCheck::for_branch(OwnJoinPolicy::Off, &route, &reservation);
+        let congestion = Congestion::default();
+        let path = deterministic_astar(
+            pin,
+            goal,
+            goal,
+            "me",
+            &reservation,
+            &own_join,
+            &Prices::RipUp(&congestion),
+        );
+        assert!(
+            path.is_none(),
+            "the ride is refused today, deliberately -- if a strength-aware search \
+             has made it legal, this pin owes it a flip: {path:?}"
+        );
     }
 
     /// A plan that extends outside the world is refused by name, not
@@ -12982,6 +13133,43 @@ mod tests {
                 .collect::<Vec<_>>()
                 .join(" | ")
         );
+
+        // The pocket, cell by cell. A wall of seven cells is small enough to
+        // look at, and looking beats a fourth guessed knob: every cell in a
+        // 7x7 window around the corridor's source, at the plane and one up,
+        // with its owner and occupancy. `.` is unclaimed.
+        for y in [source.y, source.y + 1] {
+            eprintln!("      pocket at y={y} (source ({},{},{})):", source.x, source.y, source.z);
+            for z in (source.z - 3)..=(source.z + 3) {
+                let mut row = String::new();
+                for x in (source.x - 3)..=(source.x + 3) {
+                    let cell = Anchor { x, y, z };
+                    let label = match failure.reservation.cells.get(&cell) {
+                        None => ".".to_string(),
+                        Some((owner, occupancy)) => {
+                            let mark = match occupancy {
+                                Occupancy::Wire => "w",
+                                Occupancy::GateConductor => "g",
+                                Occupancy::Stone => "s",
+                                Occupancy::Solid => "S",
+                                Occupancy::Air => "a",
+                            };
+                            let short: String = owner
+                                .replace("primitive:", "p")
+                                .replace("terminal:", "t:")
+                                .replace("stair:", "st:")
+                                .chars()
+                                .take(8)
+                                .collect();
+                            format!("{mark}[{short}]")
+                        }
+                    };
+                    let star = if cell == source { "*" } else { "" };
+                    row.push_str(&format!("{star}{label:<12}"));
+                }
+                eprintln!("        {row}");
+            }
+        }
     }
 
     // ---------------------------------------------------------------------

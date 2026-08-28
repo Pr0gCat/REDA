@@ -9566,8 +9566,14 @@ mod tests {
         )
         .err()
         .expect("the router must still fail on segment_a at the trial budget");
+        // Either text is the router itself saying no: a dead-ended search, or
+        // `lay_net`'s ring rule refusing a latch corridor. Which one segment_a
+        // hits at the trial budget moved on 2026-08-28, when the bounded
+        // own-stair reuse changed what the search explores -- the fallback
+        // story this test pins did not.
+        let message = refusal.to_string();
         assert!(
-            refusal.to_string().contains("no safe local route"),
+            message.contains("no safe local route") || message.contains("closes a ring"),
             "the planner must fail in the router, not somewhere else: {refusal}"
         );
 
