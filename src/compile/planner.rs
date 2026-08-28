@@ -7588,6 +7588,16 @@ mod tests {
                         .collect();
                     (netlist, inputs, outputs, seven_segment_expected)
                 }
+                "verilog:seven_segment" => {
+                    let circuit = crate::circuits::verilog::find("verilog:seven_segment")
+                        .expect("the catalog has the decoder");
+                    let (netlist, labels) = circuit.baked_netlist();
+                    let lowered = crate::compile::lowering::lower_optimised(&netlist)
+                        .expect("the decoder lowers");
+                    let outputs = labels.into_iter().map(|(_, signal)| signal).collect();
+                    let inputs = &crate::circuits::seven_segment::INPUT_NAMES[..];
+                    (lowered, inputs, outputs, seven_segment_expected)
+                }
                 other => panic!("REDA_GROW_CIRCUIT names no circuit: {other}"),
             };
         let rule = GrowthRule {
