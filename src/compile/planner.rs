@@ -1607,8 +1607,12 @@ fn entered_code(from: Anchor, to: Anchor) -> u8 {
 ///   signal leaves it at full strength -- the same cells `plan_bent_path`
 ///   can put a repeater on (not a bend, not a stair), so what this search
 ///   admits, realisation can build;
-/// - a cell of this branch's own already-laid trunk carries the TRUNK's
-///   strength, handed in as `trunk`: riding is then never a guess;
+/// - a cell of this branch's own already-laid trunk is ridden at the trunk's
+///   own arithmetic: its block KIND is handed in as `trunk`, a repeater
+///   restores and dust decays -- the same walk the shared-prefix accounting
+///   applies to a ridden line, cell for cell (the first draft handed in
+///   per-cell strengths from a positional walk of the whole route, which
+///   crosses branch boundaries and is wrong on both sides of every one);
 /// - a state that would arrive with nothing is not generated at all.
 ///
 /// **Not on any shipping path.** The shipping searches stay distance-only
@@ -1627,7 +1631,7 @@ fn strength_aware_astar(
     reservation: &Reservation,
     own_join: &OwnJoinCheck,
     prices: &Prices,
-    trunk: &BTreeMap<Anchor, u8>,
+    trunk: &BTreeMap<Anchor, crate::redstone::world::block::BlockKind>,
     source_strength: u8,
 ) -> Option<Vec<Anchor>> {
     let margin = manhattan_distance(start, goal).saturating_add(2) as i32;
@@ -1648,7 +1652,7 @@ fn strength_aware_astar(
         travelled: 0,
         anchor: start,
         entered: 4,
-        carried: trunk.get(&start).copied().unwrap_or(source_strength),
+        carried: source_strength,
     };
     let mut frontier = BTreeSet::from([start_state]);
     // Per (anchor, entered): the (travelled, carried) pairs already accepted.
@@ -1723,12 +1727,23 @@ fn strength_aware_astar(
                 continue;
             }
 
-            // The strength arithmetic. Leaving strength is full when THIS
-            // cell can hold a refresh: entered and left straight through,
-            // horizontally, and not a cell whose block is already built
-            // (the trunk's realisation is fixed).
+            // The strength arithmetic. Riding a trunk cell follows the
+            // trunk's own realisation -- a repeater restores, dust decays --
+            // which is the shared-prefix walk, cell for cell. Off the trunk,
+            // leaving strength is full when THIS cell can hold a refresh:
+            // entered and left straight through, horizontally, and not a
+            // cell whose block is already built.
             let carried = match trunk.get(&next) {
-                Some(&strength) => strength,
+                Some(kind) => {
+                    if *kind == crate::redstone::world::block::BlockKind::Repeater {
+                        crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH
+                    } else {
+                        match state.carried.checked_sub(1) {
+                            None | Some(0) => continue,
+                            Some(left) => left,
+                        }
+                    }
+                }
                 None => {
                     let step = entered_code(state.anchor, next);
                     let straight_through = state.entered == step
@@ -4104,24 +4119,17 @@ fn lay_net(
                 prices,
             ),
             SearchModel::StrengthAware => {
-                // What the laid trunk carries, cell by cell: a positional
-                // walk of the route's cells reading each block's kind --
-                // repeater restores, dust decays -- which is the same
-                // arithmetic the shared-prefix accounting below applies to
-                // a ridden line, with the same approximation at branch
-                // boundaries. The searcher treats these strengths as given.
-                let mut trunk: BTreeMap<Anchor, u8> = BTreeMap::new();
-                let mut carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
-                for (index, anchor) in route.anchors.iter().enumerate() {
-                    if route.realisation[index].kind
-                        == crate::redstone::world::block::BlockKind::Repeater
-                    {
-                        carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
-                    } else {
-                        carried = carried.saturating_sub(1);
-                    }
-                    trunk.insert(*anchor, carried);
-                }
+                // The laid trunk's cells and what stands in each -- the
+                // searcher rides them at the shared-prefix arithmetic
+                // (repeater restores, dust decays) along its own path, which
+                // is exactly the walk the accounting below applies to a
+                // ridden line.
+                let trunk: BTreeMap<Anchor, crate::redstone::world::block::BlockKind> = route
+                    .anchors
+                    .iter()
+                    .zip(&route.realisation)
+                    .map(|(anchor, block)| (*anchor, block.kind))
+                    .collect();
                 strength_aware_astar(
                     source,
                     approach,
@@ -8149,8 +8157,10 @@ mod tests {
         ] {
             reservation.insert(cell, "primitive:99", Occupancy::Solid);
         }
-        let trunk: BTreeMap<Anchor, u8> =
-            laid.iter().enumerate().map(|(i, &cell)| (cell, 15 - i as u8)).collect();
+        let trunk: BTreeMap<Anchor, crate::redstone::world::block::BlockKind> = laid
+            .iter()
+            .map(|&cell| (cell, crate::redstone::world::block::BlockKind::RedstoneWire))
+            .collect();
 
         let goal = Anchor { x: 8, y: 2, z: 5 };
         let route = Route::new("me".to_string(), laid.clone());
