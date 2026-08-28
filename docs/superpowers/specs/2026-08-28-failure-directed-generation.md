@@ -1,5 +1,23 @@
 # Failure-directed generation: form is a search variable
 
+**Second campaign (2026-08-29): the scale wall fell.** The decoder
+(verilog:seven_segment, 47 gates) is generated end to end by
+`compile_grown` -- truth table 16/16 through the real Simulator, 4,337
+blocks in 106x5x104 and worst settle 60 ticks against legacy's 16,244
+blocks and 84 ticks. The pieces that did it: a strength-aware A* (carried
+strength in the search state, refresh on straight cells, decay pruned
+before laying), merge strength normalized by construction (every terminal
+into a merge is a repeater, so a merge-sourced net's inherited strength is
+pure geometry), and two latent shipping bugs found by microscope -- the
+out-of-world silent drop and an output lamp paved over by its own route's
+floor. `compile_grown` ships as a two-arm portfolio: distance-only first
+(segment_a's winning trajectory, preserved bit for bit), strength-aware
+second (the decoder's rescue). The 84-gate seven_segment now routes inside
+the generation loop -- room from growth plus strength in the search, both
+necessary -- and still falls at strength verification, the residual
+searcher-vs-judge divergence that is the next campaign's first target.
+
+
 **Status: DELIVERED, same night.** Written the night of 2026-08-28 under a
 standing goal: a generation method that takes a netlist in and hands a
 simulator-verified redstone circuit out, with `segment_a` routing AND
