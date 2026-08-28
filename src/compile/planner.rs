@@ -698,7 +698,17 @@ fn emit_routes(world: &mut World, candidate: &PlanCandidate) -> Result<(), Plann
             .zip(route.realisation.iter())
             .zip(route.floors.iter())
         {
-            world.set(anchor.x, anchor.y - 1, anchor.z, floor.clone());
+            // A declared output's lamp hangs under the producing gate's pin,
+            // and a net with consumers starts its route AT that pin -- so
+            // this floor write used to pave the lamp with stone, and the
+            // truth table read a stone's `lit` forever after
+            // (`an_output_that_also_feeds_other_logic_keeps_its_lamp`). A
+            // redstone lamp is a conductive solid block: dust stands on it
+            // like any floor, so the lamp IS this cell's floor.
+            let under = world.get(anchor.x, anchor.y - 1, anchor.z);
+            if under.kind != crate::redstone::world::block::BlockKind::Lamp {
+                world.set(anchor.x, anchor.y - 1, anchor.z, floor.clone());
+            }
             world.set(anchor.x, anchor.y, anchor.z, block.clone());
         }
     }
@@ -3894,23 +3904,30 @@ fn net_source(candidate: &PlanCandidate, signal: &str) -> Result<Anchor, Box<Rou
         })
 }
 
-/// Which terminal style a bare merge branch gets, by whether its strength
-/// budget put a repeater in its final cell.
+/// What a merge-sourced net's signal is actually worth at its own pin.
 ///
-/// The two styles exist precisely for this split -- `BareMergeRepeater`'s
-/// own doc says "whose strength budget still needs a final repeater" -- and
-/// the verifier partitions on exactly (realised block, bare): a mismatch is
-/// a `CandidateMetadataViolation`. Until 2026-08-28 the styling site said
-/// `BareMergeDust` unconditionally, and no shipping branch ever arrived at a
-/// bare merge tired enough for `plan_bent_path` to spend its last cell on a
-/// refresh -- the strength-aware searcher's longer merge branches were what
-/// finally did (`n24 ... terminal style BareMergeDust does not match its
-/// realised sink block Repeater at (110, 1, 50)`).
-fn bare_merge_terminal_kind(budget_needs_repeater: bool) -> RouteTerminalKind {
-    if budget_needs_repeater {
-        RouteTerminalKind::BareMergeRepeater
-    } else {
-        RouteTerminalKind::BareMergeDust
+/// A merge's output is not a fresh source: it is the joined dust network's
+/// arrival, decayed by however far it travelled -- the two-lens microscope
+/// read the decoder's `g13` pin at 9 where the searcher, the shared-prefix
+/// accounting, and realisation's incoming all assumed 15, and the six
+/// phantom cells killed the branch at (141,1,95). With every inbound merge
+/// terminal now a repeater (see `lay_net`'s terminal arm), the junction
+/// always receives full strength, so the pin's worth is pure geometry:
+/// MAX at the junction dust, less one per cell to the pin. A non-merge
+/// source is its own component and starts at MAX as it always has.
+fn merge_source_strength(
+    netlist: &Netlist,
+    candidate: &PlanCandidate,
+    signal: &str,
+    pin: Anchor,
+) -> u8 {
+    match netlist.gates.iter().position(|gate| gate.output == signal) {
+        Some(gate) if netlist.gates[gate].is_merge() => {
+            let junction = candidate.anchors[gate];
+            crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH
+                .saturating_sub(manhattan_distance(junction, pin) as u8)
+        }
+        _ => crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
     }
 }
 
@@ -4080,6 +4097,7 @@ fn lay_net(
     prices: &Prices,
 ) -> Result<Route, Box<RoutingFailure>> {
     let signal = signal.to_string();
+    let source_strength = merge_source_strength(netlist, candidate, &signal, source);
     let mut route = Route::new(signal.clone(), Vec::new());
     route.owner = Some(signal.clone());
     for &(gate, input_index) in consumers {
@@ -4139,7 +4157,7 @@ fn lay_net(
                     &own_join,
                     prices,
                     &trunk,
-                    crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
+                    source_strength,
                 )
             }
         };
@@ -4170,7 +4188,7 @@ fn lay_net(
             .iter()
             .take_while(|anchor| route.anchors.contains(anchor))
             .count();
-        let mut carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+        let mut carried = source_strength;
         let mut previous_cell = source;
         let mut trunk_repeaters = 0u64;
         for anchor in &path[..shared] {
@@ -4246,10 +4264,26 @@ fn lay_net(
         let bare_merge = netlist.gates[gate].is_merge()
             && consumers.iter().all(|&(sink, _)| sink == gate);
 
+        // EVERY terminal into a merge is a repeater (2026-08-29). A merge's
+        // outbound strength used to be whatever its feeders happened to
+        // deliver -- the two-lens microscope read g13's pin at 9 where every
+        // model assumed 15, and the six phantom cells killed the branch.
+        // With a repeater at every inbound socket the junction always
+        // receives full strength, so what a merge-sourced net inherits
+        // becomes pure geometry (see `merge_source_strength`). Game-legal --
+        // it is the isolated-entry pattern applied uniformly -- and paid for
+        // honestly: two game ticks per feeder, on the delay term.
+        let into_merge = netlist.gates[gate].is_merge();
         let kind = if bare_merge {
-            bare_merge_terminal_kind(budget_needs_repeater)
+            if let Some(index) = route.anchors.iter().position(|anchor| *anchor == socket) {
+                route.realisation[index] = compile::repeater(compile::direction_from(
+                    Position::new(predecessor.x, predecessor.y, predecessor.z),
+                    Position::new(socket.x, socket.y, socket.z),
+                ));
+            }
+            RouteTerminalKind::BareMergeRepeater
         } else {
-            let style = if budget_needs_repeater {
+            let style = if budget_needs_repeater || into_merge {
                 TerminalStyle::RepeaterIntoSupport
             } else {
                 terminal_style(&TerminalApproach::new(
@@ -8109,29 +8143,6 @@ mod tests {
         }
     }
 
-    /// A bare merge branch that spends its last cell on a refresh is styled
-    /// as the repeater it realises.
-    ///
-    /// The verifier partitions terminal styles by (realised block, bare), so
-    /// a styling site that answers `BareMergeDust` whatever the budget did
-    /// hands every tired bare-merge branch a guaranteed
-    /// `CandidateMetadataViolation` -- which is exactly how the decoder's
-    /// strength-aware growth run died (`n24` at (110,1,50), 2026-08-28).
-    /// Red against the unconditional style, green with the split.
-    #[test]
-    fn a_tired_bare_merge_branch_is_styled_as_the_repeater_it_realises() {
-        assert_eq!(
-            bare_merge_terminal_kind(true),
-            RouteTerminalKind::BareMergeRepeater,
-            "a final-cell refresh is a repeater, and the style must say so"
-        );
-        assert_eq!(
-            bare_merge_terminal_kind(false),
-            RouteTerminalKind::BareMergeDust,
-            "a branch that arrives with strength ends in plain merge dust"
-        );
-    }
-
     /// The strength-aware search finds the pocket ride the distance-only
     /// search must refuse.
     ///
@@ -8346,6 +8357,41 @@ mod tests {
             path.is_none(),
             "the ride is refused today, deliberately -- if a strength-aware search \
              has made it legal, this pin owes it a flip: {path:?}"
+        );
+    }
+
+    /// An output that also feeds other logic keeps its lamp.
+    ///
+    /// A declared output's lamp hangs under the producing gate's pin, and a
+    /// net with consumers starts its route AT that pin -- so `emit_routes`,
+    /// paving a floor under every route cell, paved the lamp over with
+    /// stone. Only outputs that also feed onward have routes, which is why
+    /// no reference circuit ever caught it (their outputs are all terminal)
+    /// and why the decoder's first full truth run failed exactly one output
+    /// column: `g17` (a segment that also feeds `g18`) read a stone's `lit`,
+    /// false at all 16 vectors, 7 of them wrongly. The signal stood on the
+    /// pavement at power 14 the whole time.
+    ///
+    /// The fix is the game's own physics: a redstone lamp is a conductive
+    /// solid block, dust stands on it like any floor, so the route keeps the
+    /// lamp AS its floor instead of paving it.
+    #[test]
+    fn an_output_that_also_feeds_other_logic_keeps_its_lamp() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["s".to_string(), "t".to_string()],
+            gates: vec![Gate::nor("s", &["a"]), Gate::nor("t", &["s"])],
+        };
+        let compiled = compile::compile_planned(&netlist, &PortPlacements::default())
+            .expect("two gates compile");
+        let &(x, y, z) = compiled
+            .output_positions
+            .get("s")
+            .expect("the fed-onward output records a lamp");
+        assert_eq!(
+            compiled.world.get(x, y, z).kind,
+            crate::redstone::world::block::BlockKind::Lamp,
+            "the recorded lamp cell must hold a lamp, not its route's pavement"
         );
     }
 
@@ -13693,6 +13739,138 @@ mod tests {
                         anchor.x, anchor.y, anchor.z
                     );
                 }
+            }
+        }
+    }
+
+    /// Why does a structurally perfect plan compute the wrong function?
+    ///
+    /// The decoder's first full pass: routed, four invariants green, zero
+    /// rings, zero latched cells -- and 7 of 16 vectors wrong, `g17`
+    /// expected true at 0000 and read false. That is a missing minterm, and
+    /// the walk that finds it is the SIMULATOR's, cell by cell: settle the
+    /// realised world at a fixed vector, then print the wrong net's route
+    /// and every net feeding it -- block kind, facing, and the simulator's
+    /// actual power in each cell. The first cell where a live signal meets
+    /// zero names the break.
+    ///
+    /// `REDA_FN_NET` (default `g17`), `REDA_FN_BITS` (default `0000`,
+    /// most-significant first, the harness's own convention).
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, one negotiation plus a simulator walk of one wrong net"]
+    fn measure_where_the_wrong_function_breaks() {
+        let setting = |name: &str, fallback: &str| -> String {
+            std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+        };
+        let target = setting("REDA_FN_NET", "g17");
+        let bits: Vec<bool> = setting("REDA_FN_BITS", "0000")
+            .chars()
+            .map(|bit| bit == '1')
+            .collect();
+
+        let circuit = crate::circuits::verilog::find("verilog:seven_segment")
+            .expect("the catalog has the decoder");
+        let netlist = crate::compile::lowering::lower_optimised(&circuit.baked_netlist().0)
+            .expect("the decoder lowers");
+        let placements = PortPlacements::default();
+        let placement =
+            relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+        let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation).expect("snaps");
+        let candidate = candidate_from_snapped(&netlist, &placements, &snapped);
+        let routed = negotiate_charging(
+            candidate,
+            &netlist,
+            NEGOTIATION_ROUNDS,
+            PresentSchedule::SHIPPING,
+            NEGOTIATED_OWN_JOIN,
+            SearchModel::StrengthAware,
+            &mut Vec::new(),
+            &mut Negotiation::default(),
+        )
+        .expect("the decoder negotiates under the strength-aware search");
+        verify_candidate(&routed, &netlist).expect("and verifies");
+        let realised =
+            emit_candidate(&routed, &netlist, candidate_world_size(&routed)).expect("realises");
+
+        // Settle the world at the vector.
+        let mut simulator =
+            crate::redstone::simulator::Simulator::new(realised.world.clone());
+        simulator.run_until_stable(2000).expect("settles empty");
+        for (input, &bit) in crate::circuits::seven_segment::INPUT_NAMES.iter().zip(&bits) {
+            let &(x, y, z) = realised
+                .ports
+                .input_positions
+                .get(*input)
+                .expect("a lever per input");
+            let mut state = simulator.world().get(x, y, z).clone();
+            state.lit = bit;
+            simulator.world_mut().set(x, y, z, state);
+            simulator.run_until_stable(2000).expect("settles");
+        }
+
+        // The target net and everything feeding it, one hop of netlist
+        // upstream: enough to see a minterm die crossing a merge.
+        let mut interesting: Vec<String> = vec![target.clone()];
+        if let Some(gate) = netlist.gates.iter().find(|gate| gate.output == target) {
+            interesting.extend(gate.inputs.iter().cloned());
+            for input in &gate.inputs {
+                if let Some(feeder) =
+                    netlist.gates.iter().find(|gate| gate.output == *input)
+                {
+                    interesting.extend(feeder.inputs.iter().cloned());
+                }
+            }
+        }
+        eprintln!("== wrong function walk: {target} at {bits:?} ==");
+        // The last mile first: the output lamp the harness actually reads,
+        // and every cell around it.
+        if let Some(&(x, y, z)) = realised.ports.output_positions.get(&target) {
+            let lamp = simulator.world().get(x, y, z);
+            eprintln!(
+                "  lamp for {target} at ({x},{y},{z}): {:?} lit {} power {}",
+                lamp.kind, lamp.lit, lamp.power
+            );
+            for (dx, dy, dz) in [
+                (1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1), (0, 1, 0), (0, -1, 0),
+            ] {
+                let state = simulator.world().get(x + dx, y + dy, z + dz);
+                eprintln!(
+                    "    neighbour ({},{},{}): {:?} facing {:?} power {} lit {}",
+                    x + dx, y + dy, z + dz, state.kind, state.facing, state.power, state.lit
+                );
+            }
+        } else {
+            eprintln!("  no output lamp recorded for {target}");
+        }
+        for signal in &interesting {
+            let Some(route) = routed.routes.iter().find(|route| route.id == *signal) else {
+                eprintln!("  {signal}: no route (primary input or unrouted)");
+                continue;
+            };
+            eprintln!("  route {signal}: {} cells", route.anchors.len());
+            for (index, anchor) in route.anchors.iter().enumerate() {
+                let state = simulator.world().get(anchor.x, anchor.y, anchor.z);
+                let terminal = route
+                    .terminals
+                    .iter()
+                    .find(|terminal| terminal.sink.anchor == *anchor)
+                    .map(|terminal| {
+                        format!(
+                            "  <- into {}.in[{}] as {:?}",
+                            terminal.sink.gate, terminal.sink.input_index, terminal.kind
+                        )
+                    })
+                    .unwrap_or_default();
+                eprintln!(
+                    "    [{index:3}] ({:4},{:2},{:4}) {:?} facing {:?} power {:2} lit {}{terminal}",
+                    anchor.x,
+                    anchor.y,
+                    anchor.z,
+                    state.kind,
+                    state.facing,
+                    state.power,
+                    state.lit
+                );
             }
         }
     }

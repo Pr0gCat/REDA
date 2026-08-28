@@ -9609,7 +9609,7 @@ mod tests {
     /// distance, not isolation, and it is exactly why this is gated rather
     /// than left to a truth table to notice.
     #[test]
-    fn the_relaxation_path_cannot_isolate_a_shared_merge_branch() {
+    fn the_relaxation_path_isolates_a_shared_merge_branch_and_the_gate_awaits_its_battery() {
         use crate::compile::geometry::input_directions;
 
         // `a` drives the merge *and* the sentinel NOR, so the merge's first
@@ -9633,7 +9633,16 @@ mod tests {
             "the merge's first branch shares its producer with the sentinel"
         );
 
-        // (1) What the planner builds for it, on its own.
+        // (1) What the planner builds for it, on its own. UNTIL 2026-08-29
+        // this pinned the opposite: a bare joint and zero repeaters anywhere,
+        // which was `planner_can_express`'s whole measured justification.
+        // The merge-terminal normalization (every terminal into a merge is a
+        // repeater -- see `lay_net`) changed that fact deliberately: the
+        // planner now isolates every inbound merge branch BY CONSTRUCTION,
+        // shared ones included. The gate below still stands -- claim (2) --
+        // because dropping it takes an end-to-end battery on shared-merge
+        // netlists (truth table included), not one socket assertion; that
+        // measurement is the follow-up this comment is the marker for.
         let planned = compile_planned(&shared, &planner::PortPlacements::default())
             .expect("the planner places and routes this fixture");
         let socket = |compiled: &CompiledCircuit| {
@@ -9647,13 +9656,12 @@ mod tests {
                 .world
                 .get(planned_socket.x, planned_socket.y, planned_socket.z)
                 .kind,
-            BlockKind::RedstoneWire,
-            "the planner joins the shared branch bare"
+            BlockKind::Repeater,
+            "the planner now isolates the shared branch in its own socket"
         );
-        assert_eq!(
-            count_kind(&planned.world, BlockKind::Repeater),
-            0,
-            "and it places no repeater anywhere at all, so the isolation is not merely moved"
+        assert!(
+            count_kind(&planned.world, BlockKind::Repeater) >= 2,
+            "one isolating repeater per inbound merge branch, by construction"
         );
 
         // (2) What `compile` therefore does about it.
