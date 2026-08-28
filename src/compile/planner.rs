@@ -1927,7 +1927,24 @@ enum Prices<'a> {
         /// this enum is already the whole of what distinguishes the two
         /// routers inside one search.
         own_join: OwnJoinPolicy,
+        /// Which searcher lays the branches -- see [`SearchModel`]. Carried
+        /// here for the same reason `own_join` is; [`Prices::RipUp`] is
+        /// always distance-only, byte for byte the shipping search.
+        search: SearchModel,
     },
+}
+
+/// Which A* a router's branches are laid by.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SearchModel {
+    /// [`deterministic_astar`]: the shipping search, blind to strength.
+    DistanceOnly,
+    /// [`strength_aware_astar`]: carried strength in the state, decay pruned
+    /// at generation. Not on any shipping path until measured strictly
+    /// better -- the criterion-4 gauntlet; until then only the measurement
+    /// harnesses construct it, which is what the allow admits.
+    #[cfg_attr(not(test), allow(dead_code))]
+    StrengthAware,
 }
 
 impl Prices<'_> {
@@ -1947,6 +1964,14 @@ impl Prices<'_> {
         match self {
             Prices::RipUp(_) => OwnJoinPolicy::Off,
             Prices::Negotiated { own_join, .. } => *own_join,
+        }
+    }
+
+    /// Which searcher lays this router's branches.
+    fn search(&self) -> SearchModel {
+        match self {
+            Prices::RipUp(_) => SearchModel::DistanceOnly,
+            Prices::Negotiated { search, .. } => *search,
         }
     }
 }
@@ -3148,6 +3173,10 @@ pub(crate) struct GrowthRule {
     /// How many place-route-inflate iterations before the loop hands back its
     /// last failure. Iteration 1 is exactly [`plan_from_netlist`].
     pub iterations: usize,
+    /// Which searcher lays the negotiated arm's branches.
+    /// [`RouterKind::RipUp`] ignores this: the shipping search stays
+    /// distance-only whatever it says.
+    pub search: SearchModel,
     /// Which router trials each placement. This is the growth probe's one
     /// untried cell (2026-08-28): rip-up at doubled density still lays rings
     /// (laid 28 -> 43 of 47, never routed, ring rule at every area from
@@ -3170,6 +3199,7 @@ pub(crate) const GROWN_SHIPPING_RULE: GrowthRule = GrowthRule {
     growth: 1.4,
     radius: 6,
     iterations: 12,
+    search: SearchModel::DistanceOnly,
     router: RouterKind::Negotiated,
 };
 
@@ -3255,6 +3285,7 @@ pub(crate) fn plan_from_netlist_with_growth(
                     NEGOTIATION_ROUNDS,
                     PresentSchedule::SHIPPING,
                     NEGOTIATED_OWN_JOIN,
+                    rule.search,
                     &mut Vec::new(),
                     &mut table,
                 );
@@ -4042,15 +4073,49 @@ fn lay_net(
         // branches laid. `Prices::RipUp` always answers `Off`, so the
         // shipping router's search is untouched.
         let own_join = OwnJoinCheck::for_branch(prices.own_join(), &route, reservation);
-        let mut path = match deterministic_astar(
-            source,
-            approach,
-            socket,
-            &signal,
-            reservation,
-            &own_join,
-            prices,
-        ) {
+        let found = match prices.search() {
+            SearchModel::DistanceOnly => deterministic_astar(
+                source,
+                approach,
+                socket,
+                &signal,
+                reservation,
+                &own_join,
+                prices,
+            ),
+            SearchModel::StrengthAware => {
+                // What the laid trunk carries, cell by cell: a positional
+                // walk of the route's cells reading each block's kind --
+                // repeater restores, dust decays -- which is the same
+                // arithmetic the shared-prefix accounting below applies to
+                // a ridden line, with the same approximation at branch
+                // boundaries. The searcher treats these strengths as given.
+                let mut trunk: BTreeMap<Anchor, u8> = BTreeMap::new();
+                let mut carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+                for (index, anchor) in route.anchors.iter().enumerate() {
+                    if route.realisation[index].kind
+                        == crate::redstone::world::block::BlockKind::Repeater
+                    {
+                        carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+                    } else {
+                        carried = carried.saturating_sub(1);
+                    }
+                    trunk.insert(*anchor, carried);
+                }
+                strength_aware_astar(
+                    source,
+                    approach,
+                    socket,
+                    &signal,
+                    reservation,
+                    &own_join,
+                    prices,
+                    &trunk,
+                    crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
+                )
+            }
+        };
+        let mut path = match found {
             Some(path) => path,
             None => {
                 return Err(Box::new(RoutingFailure {
@@ -4753,6 +4818,7 @@ fn negotiate_with_policy(
         iterations,
         schedule,
         own_join,
+        SearchModel::DistanceOnly,
         trace,
         &mut Negotiation::default(),
     )
@@ -4770,6 +4836,7 @@ fn negotiate_charging(
     iterations: usize,
     schedule: PresentSchedule,
     own_join: OwnJoinPolicy,
+    search: SearchModel,
     trace: &mut Vec<NegotiationRound>,
     table: &mut Negotiation,
 ) -> Result<PlanCandidate, PlannerError> {
@@ -4800,6 +4867,7 @@ fn negotiate_charging(
                     table,
                     mine: signal,
                     own_join,
+                    search,
                 };
                 lay_net(
                     signal,
@@ -7929,6 +7997,11 @@ mod tests {
             growth: setting("REDA_GROW_GROWTH", "1.4").parse().expect("a factor"),
             radius: setting("REDA_GROW_RADIUS", "6").parse().expect("a radius"),
             iterations: setting("REDA_GROW_ITERATIONS", "12").parse().expect("a count"),
+            search: match setting("REDA_GROW_SEARCH", "distance").as_str() {
+                "distance" => SearchModel::DistanceOnly,
+                "strength" => SearchModel::StrengthAware,
+                other => panic!("REDA_GROW_SEARCH is distance or strength, not {other}"),
+            },
             router: match setting("REDA_GROW_ROUTER", "ripup").as_str() {
                 "ripup" => RouterKind::RipUp,
                 "negotiated" => RouterKind::Negotiated,
@@ -8312,6 +8385,7 @@ mod tests {
             growth: 1.4,
             radius: 6,
             iterations: 1,
+            search: SearchModel::DistanceOnly,
             router: RouterKind::RipUp,
         };
         let grown = plan_from_netlist_with_growth(&netlist, &PortPlacements::default(), rule)
@@ -12591,6 +12665,7 @@ mod tests {
         let hard = hard_furniture(&candidate, &netlist);
         let schedule = PresentSchedule::SHIPPING;
         let own_join = NEGOTIATED_OWN_JOIN;
+        let search = SearchModel::DistanceOnly;
 
         let mut table = Negotiation::default();
         eprintln!(
@@ -12626,6 +12701,7 @@ mod tests {
                         table: &table,
                         mine: signal,
                         own_join,
+                        search,
                     };
                     lay_net(
                         signal,
@@ -12718,6 +12794,7 @@ mod tests {
         let hard = hard_furniture(&candidate, &netlist);
         let schedule = PresentSchedule::SHIPPING;
         let own_join = NEGOTIATED_OWN_JOIN;
+        let search = SearchModel::DistanceOnly;
 
         // Each net's current branch order, as an index into the cycle
         // below. A net that fails advances by one, wrapping; a net that
@@ -12766,6 +12843,7 @@ mod tests {
                         table: &table,
                         mine: signal,
                         own_join,
+                        search,
                     };
                     lay_net(
                         signal,
@@ -12905,6 +12983,7 @@ mod tests {
         let order: Vec<String> = sinks.keys().cloned().collect();
         let schedule = PresentSchedule::SHIPPING;
         let own_join = NEGOTIATED_OWN_JOIN;
+        let search = SearchModel::DistanceOnly;
 
         // The mutable realisation state the repair phase edits.
         let mut candidate = candidate_from_snapped(&netlist, &placements, &snapped);
@@ -12968,6 +13047,7 @@ mod tests {
                             table: &table,
                             mine: signal,
                             own_join,
+                            search,
                         };
                         lay_net(
                             signal,
@@ -13080,6 +13160,7 @@ mod tests {
                             table: &table,
                             mine: signal,
                             own_join,
+                            search,
                         };
                         lay_net(
                             signal,
@@ -13206,6 +13287,7 @@ mod tests {
                                 table: &table,
                                 mine: signal,
                                 own_join,
+                                search,
                             };
                             lay_net(
                                 signal,
@@ -13296,6 +13378,7 @@ mod tests {
                                         table: &table,
                                         mine: signal,
                                         own_join,
+                                        search,
                                     };
                                     lay_net(
                                         signal,
@@ -23493,6 +23576,7 @@ mod tests {
             table: &table,
             mine: "n",
             own_join,
+            search: SearchModel::DistanceOnly,
         };
 
         // Off: the latch is laid, and only the post-lay ring rule stands.
