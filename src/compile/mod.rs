@@ -7170,11 +7170,37 @@ pub fn compile_planned(
 /// to pay minutes for it on a decoder-sized netlist -- asks for it by name.
 pub fn compile_grown(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
     let _ = checked_topological_order(netlist)?;
+    // Two arms, in this order, both measured (2026-08-29):
+    //
+    // 1. Distance-only growth -- segment_a's winning trajectory, bit for
+    //    bit (363s, truth 16/16). The strength-aware searcher re-rolls that
+    //    trajectory and segment_a finds no plan under it (1,802.8s), so the
+    //    arm that carries it runs first and untouched.
+    // 2. Strength-aware growth -- the decoder's rescue (79.0s, truth 16/16,
+    //    4,337 blocks against legacy's 16,244). The distance-only searcher
+    //    cannot ride its own stairs, so the decoder's pocket walls stand at
+    //    every inflation under arm 1 (1,259.2s, no plan) and only fall to
+    //    the searcher that prices strength.
+    //
+    // A circuit both arms refuse pays for both; that is the honest cost of
+    // a portfolio whose members win different circuits, and the ledger
+    // carries every number behind it.
+    let placements = planner::PortPlacements::default();
     let candidate = planner::plan_from_netlist_with_growth(
         netlist,
-        &planner::PortPlacements::default(),
+        &placements,
         planner::GROWN_SHIPPING_RULE,
     )
+    .or_else(|_| {
+        planner::plan_from_netlist_with_growth(
+            netlist,
+            &placements,
+            planner::GrowthRule {
+                search: planner::SearchModel::StrengthAware,
+                ..planner::GROWN_SHIPPING_RULE
+            },
+        )
+    })
     .map_err(planner_error)?;
     let gate_facings: Vec<geometry::CellFacing> =
         (0..netlist.gates.len()).map(|g| candidate.facing_of(g)).collect();
