@@ -1564,6 +1564,226 @@ fn deterministic_astar(
     None
 }
 
+/// One state of the strength-aware search: where the signal is, which way it
+/// entered, and how much of it is left.
+///
+/// `entered` is the horizontal step direction encoded 0..=3, or 4 for "no
+/// horizontal entry" -- the branch source, or a cell entered by a climb or a
+/// descent. It is part of the state because it decides the one thing the
+/// distance-only search cannot see: whether THIS cell could hold a refresh
+/// (a repeater needs the signal to pass straight through, horizontally).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct StrengthSearchState {
+    estimate: u64,
+    travelled: u64,
+    anchor: Anchor,
+    entered: u8,
+    carried: u8,
+}
+
+fn entered_code(from: Anchor, to: Anchor) -> u8 {
+    match unit_horizontal_direction(from, to) {
+        Some((1, 0, 0)) => 0,
+        Some((-1, 0, 0)) => 1,
+        Some((0, 0, 1)) => 2,
+        Some((0, 0, -1)) => 3,
+        _ => 4,
+    }
+}
+
+/// [`deterministic_astar`], with the strength budget in the state.
+///
+/// The distance-only search prices distance and cannot see decay, and one
+/// night measured what that blindness costs from both sides: it proposes
+/// paths that arrive electrically dead (`the route ... decays to nothing`),
+/// and every attempt to widen its move set -- stair reuse, bounded or not --
+/// re-rolled whole growth trajectories into plans that verified nowhere
+/// (three kills, 2026-08-28, the ledger's record). Here the state is
+/// `(anchor, entry direction, carried strength)`:
+///
+/// - a step costs one strength, climbs included -- `realise_branch_from`'s
+///   own arithmetic;
+/// - a cell passed straight through horizontally may hold a refresh, so the
+///   signal leaves it at full strength -- the same cells `plan_bent_path`
+///   can put a repeater on (not a bend, not a stair), so what this search
+///   admits, realisation can build;
+/// - a cell of this branch's own already-laid trunk carries the TRUNK's
+///   strength, handed in as `trunk`: riding is then never a guess;
+/// - a state that would arrive with nothing is not generated at all.
+///
+/// **Not on any shipping path.** The shipping searches stay distance-only
+/// until this one measures strictly better beside them -- the criterion-4
+/// gauntlet is the law. Dominance: a state is skipped when another visit to
+/// the same `(anchor, entered)` was both cheaper and stronger; the frontier
+/// per key is tiny (strength has 15 values) and the search stays
+/// deterministic, every tie broken by the state's own ordering.
+#[cfg_attr(not(test), allow(dead_code))]
+#[allow(clippy::too_many_arguments)]
+fn strength_aware_astar(
+    start: Anchor,
+    goal: Anchor,
+    terminal_support: Anchor,
+    owner: &str,
+    reservation: &Reservation,
+    own_join: &OwnJoinCheck,
+    prices: &Prices,
+    trunk: &BTreeMap<Anchor, u8>,
+    source_strength: u8,
+) -> Option<Vec<Anchor>> {
+    let margin = manhattan_distance(start, goal).saturating_add(2) as i32;
+    const CLIMB: i32 = 3;
+    let min = Anchor {
+        x: start.x.min(goal.x).saturating_sub(margin),
+        y: start.y.min(goal.y),
+        z: start.z.min(goal.z).saturating_sub(margin),
+    };
+    let max = Anchor {
+        x: start.x.max(goal.x).saturating_add(margin),
+        y: start.y.max(goal.y).saturating_add(CLIMB),
+        z: start.z.max(goal.z).saturating_add(margin),
+    };
+
+    let start_state = StrengthSearchState {
+        estimate: manhattan_distance(start, goal),
+        travelled: 0,
+        anchor: start,
+        entered: 4,
+        carried: trunk.get(&start).copied().unwrap_or(source_strength),
+    };
+    let mut frontier = BTreeSet::from([start_state]);
+    // Per (anchor, entered): the (travelled, carried) pairs already accepted.
+    // A new visit dominated on both axes is skipped.
+    let mut visited: BTreeMap<(Anchor, u8), Vec<(u64, u8)>> = BTreeMap::new();
+    visited.insert((start, 4), vec![(0, start_state.carried)]);
+    // Keyed WITH travelled: a generation edge always goes to a strictly
+    // smaller travelled, so the chain below can never cycle however often a
+    // better path re-claims the same (anchor, entered, carried).
+    type StateKey = (Anchor, u8, u8, u64);
+    let mut parent: BTreeMap<StateKey, StateKey> = BTreeMap::new();
+
+    while let Some(state) = frontier.iter().next().copied() {
+        frontier.remove(&state);
+        if state.anchor == goal {
+            // Rebuild the anchor path off the state chain.
+            let mut path = vec![state.anchor];
+            let mut walk = (state.anchor, state.entered, state.carried, state.travelled);
+            while let Some(&up) = parent.get(&walk) {
+                path.push(up.0);
+                walk = up;
+            }
+            path.reverse();
+            return Some(path);
+        }
+
+        // The chain this state actually took, materialised anchor-by-anchor
+        // for the two path-shape rules that read a parent map.
+        let chain: BTreeMap<Anchor, Anchor> = {
+            let mut chain = BTreeMap::new();
+            let mut walk = (state.anchor, state.entered, state.carried, state.travelled);
+            while let Some(&up) = parent.get(&walk) {
+                chain.insert(walk.0, up.0);
+                walk = up;
+            }
+            chain
+        };
+
+        for next in neighbours(state.anchor) {
+            // One branch, one visit per cell. Dust is a conductor: a path
+            // that returns to its own cell has already joined it, so the
+            // doubled tail carries nothing the first pass did not -- and a
+            // simple path is what lets `chain` above stay an acyclic map
+            // (an anchor revisited would fold it into a cycle, and the two
+            // path-shape rules below walk it).
+            if next == start || chain.contains_key(&next) {
+                continue;
+            }
+            if self_obstructs(&chain, state.anchor, next) {
+                continue;
+            }
+            if own_join.blocks(next, state.anchor, start, goal, owner, reservation, &chain) {
+                continue;
+            }
+            if !within_bounds(next, min, max)
+                || !anchor_is_free_for(next, start, goal, terminal_support, owner, reservation)
+                || staircase_clearance(state.anchor, next).into_iter().any(|cell| {
+                    let foreign = reservation.owner(&cell).is_some_and(|occupied_by| {
+                        occupied_by != owner && occupied_by != stair_guard(owner)
+                    });
+                    let is_riser = next.y > state.anchor.y && cell.y == state.anchor.y;
+                    if is_riser {
+                        return foreign || reservation.conductor_owner(&cell).is_some();
+                    }
+                    // The reuse the distance-only search must refuse is safe
+                    // here: strength is in the state, so a ride that decays
+                    // dies in the arithmetic instead of in the built world.
+                    reservation.owner(&cell).is_some()
+                        && reservation.air_owner(&cell) != Some(stair_guard(owner).as_str())
+                })
+            {
+                continue;
+            }
+
+            // The strength arithmetic. Leaving strength is full when THIS
+            // cell can hold a refresh: entered and left straight through,
+            // horizontally, and not a cell whose block is already built
+            // (the trunk's realisation is fixed).
+            let carried = match trunk.get(&next) {
+                Some(&strength) => strength,
+                None => {
+                    let step = entered_code(state.anchor, next);
+                    let straight_through = state.entered == step
+                        && step != 4
+                        && !trunk.contains_key(&state.anchor)
+                        && state.anchor != start;
+                    let leaving = if straight_through {
+                        crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH
+                    } else {
+                        state.carried
+                    };
+                    match leaving.checked_sub(1) {
+                        None | Some(0) => continue,
+                        Some(left) => left,
+                    }
+                }
+            };
+
+            const CLIMB_COST: u64 = 3;
+            let closer_in_y = (next.y - goal.y).abs() < (state.anchor.y - goal.y).abs();
+            let step_cost = if next.y == state.anchor.y || closer_in_y { 1 } else { CLIMB_COST };
+            let next_travelled = state
+                .travelled
+                .saturating_add(step_cost)
+                .saturating_add(prices.price(&next));
+
+            let entered = entered_code(state.anchor, next);
+            let seen = visited.entry((next, entered)).or_default();
+            if seen
+                .iter()
+                .any(|&(travelled, strength)| travelled <= next_travelled && strength >= carried)
+            {
+                continue;
+            }
+            seen.retain(|&(travelled, strength)| {
+                !(next_travelled <= travelled && carried >= strength)
+            });
+            seen.push((next_travelled, carried));
+
+            parent.insert(
+                (next, entered, carried, next_travelled),
+                (state.anchor, state.entered, state.carried, state.travelled),
+            );
+            frontier.insert(StrengthSearchState {
+                estimate: next_travelled.saturating_add(manhattan_distance(next, goal)),
+                travelled: next_travelled,
+                anchor: next,
+                entered,
+                carried,
+            });
+        }
+    }
+    None
+}
+
 fn reconstruct_path(previous: BTreeMap<Anchor, Anchor>, goal: Anchor) -> Vec<Anchor> {
     let mut path = vec![goal];
     while let Some(&parent) = previous.get(path.last().expect("path is non-empty")) {
@@ -7786,6 +8006,158 @@ mod tests {
             assert_eq!(drifted_anchor.y, reference_anchor.y);
             assert_eq!(drifted_anchor.z, reference_anchor.z);
         }
+    }
+
+    /// The strength-aware search finds the pocket ride the distance-only
+    /// search must refuse.
+    ///
+    /// Same fixture as the refusal pin below, other searcher: the decoder's
+    /// measured pocket, a pin walled on three sides with the net's own laid
+    /// climb as the only exit. With strength in the state the ride is not a
+    /// gamble -- the trunk's own strengths are handed in -- so the search
+    /// takes the stair and the path exists.
+    #[test]
+    fn the_strength_aware_search_finds_the_pocket_ride() {
+        let mut reservation = Reservation::new();
+        let pin = Anchor { x: 5, y: 1, z: 5 };
+        let laid = vec![
+            pin,
+            Anchor { x: 6, y: 2, z: 5 },
+            Anchor { x: 7, y: 2, z: 5 },
+        ];
+        reserve_path(&mut reservation, "me", &laid);
+        for cell in [
+            Anchor { x: 4, y: 1, z: 5 },
+            Anchor { x: 5, y: 1, z: 4 },
+            Anchor { x: 5, y: 1, z: 6 },
+        ] {
+            reservation.insert(cell, "primitive:99", Occupancy::Solid);
+        }
+        let trunk: BTreeMap<Anchor, u8> =
+            laid.iter().enumerate().map(|(i, &cell)| (cell, 15 - i as u8)).collect();
+
+        let goal = Anchor { x: 8, y: 2, z: 5 };
+        let route = Route::new("me".to_string(), laid.clone());
+        let own_join = OwnJoinCheck::for_branch(OwnJoinPolicy::Off, &route, &reservation);
+        let congestion = Congestion::default();
+        let path = strength_aware_astar(
+            pin,
+            goal,
+            goal,
+            "me",
+            &reservation,
+            &own_join,
+            &Prices::RipUp(&congestion),
+            &trunk,
+            crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
+        )
+        .expect("with strength in the state, the ride is safe and the pocket opens");
+        assert!(
+            path.contains(&Anchor { x: 6, y: 2, z: 5 }),
+            "the path rides the existing climb: {path:?}"
+        );
+    }
+
+    /// A long straight corridor carries: the refresh model admits what
+    /// `plan_bent_path` can actually build.
+    #[test]
+    fn the_strength_aware_search_carries_a_long_straight_corridor() {
+        let reservation = Reservation::new();
+        let start = Anchor { x: 0, y: 1, z: 0 };
+        let goal = Anchor { x: 25, y: 1, z: 0 };
+        let route = Route::new("me".to_string(), Vec::new());
+        let own_join = OwnJoinCheck::for_branch(OwnJoinPolicy::Off, &route, &reservation);
+        let congestion = Congestion::default();
+        let path = strength_aware_astar(
+            start,
+            goal,
+            goal,
+            "me",
+            &reservation,
+            &own_join,
+            &Prices::RipUp(&congestion),
+            &BTreeMap::new(),
+            crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
+        )
+        .expect("twenty-five straight cells hold refreshes and carry");
+        assert_eq!(path.len() as i32, 26, "straight through: {path:?}");
+    }
+
+    /// A serpentine where every cell is a bend decays to nothing, and only
+    /// the strength-aware search knows before laying it.
+    ///
+    /// Every interior cell of the zigzag is entered and left in different
+    /// directions, so no cell can hold a refresh, and past fifteen steps the
+    /// signal is gone. The distance-only search proposes it anyway -- that is
+    /// the `decays to nothing before it arrives` failure the far-order
+    /// probes kept hitting -- and the strength-aware search refuses to
+    /// generate the dead tail at all.
+    #[test]
+    fn a_serpentine_past_the_budget_is_pruned_only_by_the_strength_aware_search() {
+        let mut reservation = Reservation::new();
+        // The free snake: E, N, E, N ... nine of each, 19 cells.
+        let mut free = vec![Anchor { x: 0, y: 1, z: 0 }];
+        let mut at = free[0];
+        for step in 0..18 {
+            at = if step % 2 == 0 {
+                Anchor { x: at.x + 1, ..at }
+            } else {
+                Anchor { z: at.z + 1, ..at }
+            };
+            free.push(at);
+        }
+        let goal = *free.last().expect("the snake has an end");
+        let start = free[0];
+        // Wall in everything else at the plane, box-wide: climbs die on
+        // solid risers and the floor of the box is the world's edge.
+        let margin = manhattan_distance(start, goal) as i32 + 2;
+        // Airtight: everything in the search box that is not the snake
+        // itself is solid, every storey the climb cap can reach. An
+        // unclaimed riser is legal to a climber (it becomes the route's own
+        // stone), so a half-sealed box just measures how patiently the
+        // search explores the roof.
+        for x in (start.x - margin)..=(goal.x + margin) {
+            for z in (start.z - margin)..=(goal.z + margin) {
+                for y in 1..=4 {
+                    let cell = Anchor { x, y, z };
+                    if !(y == 1 && free.contains(&cell)) {
+                        reservation.insert(cell, "primitive:99", Occupancy::Solid);
+                    }
+                }
+            }
+        }
+
+        let route = Route::new("me".to_string(), Vec::new());
+        let own_join = OwnJoinCheck::for_branch(OwnJoinPolicy::Off, &route, &reservation);
+        let congestion = Congestion::default();
+        let blind = deterministic_astar(
+            start,
+            goal,
+            goal,
+            "me",
+            &reservation,
+            &own_join,
+            &Prices::RipUp(&congestion),
+        );
+        assert!(
+            blind.is_some(),
+            "the distance-only search proposes the dead serpentine -- that is its blindness"
+        );
+        let aware = strength_aware_astar(
+            start,
+            goal,
+            goal,
+            "me",
+            &reservation,
+            &own_join,
+            &Prices::RipUp(&congestion),
+            &BTreeMap::new(),
+            crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
+        );
+        assert!(
+            aware.is_none(),
+            "every cell is a bend, nothing refreshes, and the strength-aware search knows: {aware:?}"
+        );
     }
 
     /// A second branch re-climbing its own staircase waits for a
