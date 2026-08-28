@@ -13497,6 +13497,206 @@ mod tests {
         );
     }
 
+    /// Where does the strength searcher's promise diverge from the strength
+    /// the verifier measures?
+    ///
+    /// One placement, one negotiation under [`SearchModel::StrengthAware`],
+    /// and when the routed candidate fails [`verify_candidate`] with a
+    /// signal-strength violation, the named net's route is printed cell by
+    /// cell -- block kind, and the running carried under realisation's own
+    /// arithmetic (repeater restores, dust decays, walked positionally) --
+    /// beside its terminals. The searcher promised every branch arrives
+    /// alive; the walk shows where the promise and the realised route part.
+    ///
+    /// `REDA_DIV_CIRCUIT` (default `verilog:seven_segment`).
+    #[test]
+    #[ignore = "measurement harness: asserts nothing, one strength-aware negotiation plus a strength walk of the failing net"]
+    fn measure_where_the_strength_searchers_promise_diverges() {
+        use crate::circuits::seven_segment::build_single_segment_netlist;
+        use std::time::Instant;
+
+        let setting = |name: &str, fallback: &str| -> String {
+            std::env::var(name).unwrap_or_else(|_| fallback.to_string())
+        };
+        let wanted = setting("REDA_DIV_CIRCUIT", "verilog:seven_segment");
+        let netlist = match wanted.as_str() {
+            "segment_a" => build_single_segment_netlist(0).0,
+            "verilog:seven_segment" => {
+                let circuit = crate::circuits::verilog::find("verilog:seven_segment")
+                    .expect("the catalog has the decoder");
+                crate::compile::lowering::lower_optimised(&circuit.baked_netlist().0)
+                    .expect("the decoder lowers")
+            }
+            other => panic!("REDA_DIV_CIRCUIT names no circuit: {other}"),
+        };
+        let placements = PortPlacements::default();
+        let placement =
+            relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+        let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation).expect("snaps");
+        let mut candidate = candidate_from_snapped(&netlist, &placements, &snapped);
+
+        let started = Instant::now();
+        let mut trace = Vec::new();
+        let outcome = negotiate_charging(
+            candidate.clone(),
+            &netlist,
+            NEGOTIATION_ROUNDS,
+            PresentSchedule::SHIPPING,
+            NEGOTIATED_OWN_JOIN,
+            SearchModel::StrengthAware,
+            &mut trace,
+            &mut Negotiation::default(),
+        );
+        eprintln!(
+            "== promise divergence: {wanted}, negotiation {} in {:.1}s ==",
+            if outcome.is_ok() { "ROUTED" } else { "failed" },
+            started.elapsed().as_secs_f64()
+        );
+        let routed = match outcome {
+            Ok(routed) => routed,
+            Err(error) => {
+                eprintln!("  negotiation itself failed: {error}");
+                return;
+            }
+        };
+        candidate = routed;
+        match verify_candidate(&candidate, &netlist) {
+            Ok(()) => {
+                eprintln!("  AND IT VERIFIES -- no divergence to show");
+            }
+            Err(error) => {
+                let message = error.to_string();
+                eprintln!("  does not verify: {message}");
+                // `net \`g1\` never delivers ...` names the route to walk.
+                let Some(net) = message
+                    .split('`')
+                    .nth(1)
+                    .map(|name| name.to_string())
+                else {
+                    return;
+                };
+                let Some(route) =
+                    candidate.routes.iter().find(|route| route.id == net)
+                else {
+                    eprintln!("  no route named {net}");
+                    return;
+                };
+                eprintln!(
+                    "  route {net}: {} cells, {} terminals",
+                    route.anchors.len(),
+                    route.terminals.len()
+                );
+                // The verifier's own reading of the same net, beside the
+                // line walk: realise the plan, rebuild the group the
+                // signal-strength invariant walks, and ask
+                // `net_signal_strength` -- the judge itself -- what each
+                // route cell carries. The first cell where the walk says
+                // alive and the judge says nothing is the divergence.
+                let size = candidate_world_size(&candidate);
+                let verified = realise_without_verifying(&candidate, &netlist, size)
+                    .expect("the candidate realised once already");
+                let judged: std::collections::HashMap<Position, u8> = {
+                    use std::collections::{HashMap, HashSet};
+                    let nets = &verified.nets;
+                    let index_of: HashMap<&str, usize> = nets
+                        .iter()
+                        .enumerate()
+                        .map(|(i, entry)| (compile::net_source_name(&netlist, entry), i))
+                        .collect();
+                    match index_of.get(net.as_str()) {
+                        None => HashMap::new(),
+                        Some(&this) => {
+                            let groups = compile::MergeGroups::build(&netlist, nets);
+                            let root = groups.root(this);
+                            let mut cells: HashSet<Position> = HashSet::new();
+                            for (&pos, &owner) in &verified.reservation {
+                                if groups.root(owner) == root {
+                                    cells.insert(pos);
+                                }
+                            }
+                            for (&pos, &owner) in &compile::merge_gate_body_owners(
+                                &netlist,
+                                nets,
+                                &verified.realised.ports.gate_output_positions,
+                            ) {
+                                if owner == root {
+                                    cells.insert(pos);
+                                }
+                            }
+                            let mut sources: Vec<(Position, &crate::redstone::world::block::BlockState)> =
+                                Vec::new();
+                            for (n, entry) in nets.iter().enumerate() {
+                                if groups.root(n) != root {
+                                    continue;
+                                }
+                                if matches!(entry.source, compile::Source::Gate(g) if netlist.gates[g].is_merge())
+                                {
+                                    continue;
+                                }
+                                let (x, y, z) = match entry.source {
+                                    compile::Source::Lever(i) => *verified
+                                        .realised
+                                        .ports
+                                        .input_positions
+                                        .get(&netlist.inputs[i])
+                                        .expect("a lever position per input"),
+                                    compile::Source::Gate(g) => *verified
+                                        .realised
+                                        .ports
+                                        .gate_output_positions
+                                        .get(&netlist.gates[g].output)
+                                        .expect("a pin per gate"),
+                                };
+                                sources.push((
+                                    Position::new(x, y, z),
+                                    verified.realised.world.get(x, y, z),
+                                ));
+                            }
+                            compile::net_signal_strength(
+                                &verified.realised.world,
+                                &cells,
+                                &sources,
+                            )
+                        }
+                    }
+                };
+
+                let mut carried =
+                    crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+                for (index, anchor) in route.anchors.iter().enumerate() {
+                    let kind = route.realisation[index].kind;
+                    if kind == crate::redstone::world::block::BlockKind::Repeater {
+                        carried =
+                            crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+                    } else {
+                        carried = carried.saturating_sub(1);
+                    }
+                    let judge = judged
+                        .get(&Position::new(anchor.x, anchor.y, anchor.z))
+                        .map(|value| format!("{value:2}"))
+                        .unwrap_or_else(|| " -".to_string());
+                    let terminal = route
+                        .terminals
+                        .iter()
+                        .find(|terminal| terminal.sink.anchor == *anchor)
+                        .map(|terminal| {
+                            format!(
+                                "  <- terminal into {}.in[{}] as {:?}",
+                                terminal.sink.gate,
+                                terminal.sink.input_index,
+                                terminal.kind
+                            )
+                        })
+                        .unwrap_or_default();
+                    eprintln!(
+                        "    [{index:3}] ({:4},{:2},{:4}) {kind:?} walk~{carried} judge {judge}{terminal}",
+                        anchor.x, anchor.y, anchor.z
+                    );
+                }
+            }
+        }
+    }
+
     /// One dead branch's geometry against its own partial tree, printed.
     fn report_dead_branch(
         signal: &str,
