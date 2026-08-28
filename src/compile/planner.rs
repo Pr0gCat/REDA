@@ -3879,6 +3879,26 @@ fn net_source(candidate: &PlanCandidate, signal: &str) -> Result<Anchor, Box<Rou
         })
 }
 
+/// Which terminal style a bare merge branch gets, by whether its strength
+/// budget put a repeater in its final cell.
+///
+/// The two styles exist precisely for this split -- `BareMergeRepeater`'s
+/// own doc says "whose strength budget still needs a final repeater" -- and
+/// the verifier partitions on exactly (realised block, bare): a mismatch is
+/// a `CandidateMetadataViolation`. Until 2026-08-28 the styling site said
+/// `BareMergeDust` unconditionally, and no shipping branch ever arrived at a
+/// bare merge tired enough for `plan_bent_path` to spend its last cell on a
+/// refresh -- the strength-aware searcher's longer merge branches were what
+/// finally did (`n24 ... terminal style BareMergeDust does not match its
+/// realised sink block Repeater at (110, 1, 50)`).
+fn bare_merge_terminal_kind(budget_needs_repeater: bool) -> RouteTerminalKind {
+    if budget_needs_repeater {
+        RouteTerminalKind::BareMergeRepeater
+    } else {
+        RouteTerminalKind::BareMergeDust
+    }
+}
+
 /// THE RING RULE (2026-08-19): a repeater in `route` whose output can reach
 /// its own input cell through this route's own realised cells, or `None` when
 /// the route is electrically a tree.
@@ -4219,7 +4239,7 @@ fn lay_net(
             && consumers.iter().all(|&(sink, _)| sink == gate);
 
         let kind = if bare_merge {
-            RouteTerminalKind::BareMergeDust
+            bare_merge_terminal_kind(budget_needs_repeater)
         } else {
             let style = if budget_needs_repeater {
                 TerminalStyle::RepeaterIntoSupport
@@ -8079,6 +8099,29 @@ mod tests {
             assert_eq!(drifted_anchor.y, reference_anchor.y);
             assert_eq!(drifted_anchor.z, reference_anchor.z);
         }
+    }
+
+    /// A bare merge branch that spends its last cell on a refresh is styled
+    /// as the repeater it realises.
+    ///
+    /// The verifier partitions terminal styles by (realised block, bare), so
+    /// a styling site that answers `BareMergeDust` whatever the budget did
+    /// hands every tired bare-merge branch a guaranteed
+    /// `CandidateMetadataViolation` -- which is exactly how the decoder's
+    /// strength-aware growth run died (`n24` at (110,1,50), 2026-08-28).
+    /// Red against the unconditional style, green with the split.
+    #[test]
+    fn a_tired_bare_merge_branch_is_styled_as_the_repeater_it_realises() {
+        assert_eq!(
+            bare_merge_terminal_kind(true),
+            RouteTerminalKind::BareMergeRepeater,
+            "a final-cell refresh is a repeater, and the style must say so"
+        );
+        assert_eq!(
+            bare_merge_terminal_kind(false),
+            RouteTerminalKind::BareMergeDust,
+            "a branch that arrives with strength ends in plain merge dust"
+        );
     }
 
     /// The strength-aware search finds the pocket ride the distance-only
