@@ -601,9 +601,74 @@ pub fn emit_candidate(
     netlist: &Netlist,
     size: (i32, i32, i32),
 ) -> Result<RealisedCandidate, PlannerError> {
+    refuse_cells_outside_the_world(candidate, size)?;
     let mut realised = emit_primitives(candidate, netlist, size)?;
     emit_routes(&mut realised.world, candidate)?;
     Ok(realised)
+}
+
+/// Refuse, by name, a candidate whose blocks would fall outside the world.
+///
+/// `World::set` silently ignores an out-of-bounds write, so without this a
+/// plan with (say) a negative coordinate realises with its outside blocks
+/// missing -- and the four invariants then report whatever the holes happen
+/// to break. Measured on 2026-08-28: segment_a's growth pushed bodies to
+/// x = -18 and the failure surfaced as `terminal style ... does not match
+/// its realised sink block Air`, a symptom three layers downstream of the
+/// cause. A missing block is not a judgement the invariants should be making
+/// through a hole; it is a malformed plan, named here at the door.
+///
+/// The cells checked are the candidate's own: every primitive's footprint,
+/// conductors, anchor and output pin, and every route cell. **Deliberately
+/// not the floor one below a route cell**: legacy seeds route along y = 0
+/// and their floor writes at y = -1 have always been dropped -- the world
+/// that results is the one every invariant, truth table, and byte-exact
+/// seed-reproduction check has validated, so refusing it would fail the
+/// whole legacy fleet over a write that was never part of their circuits.
+/// A circuit that genuinely needs a floor the world cannot hold leaves its
+/// dust unsupported, and the connectivity invariant downstream is the judge
+/// of that.
+fn refuse_cells_outside_the_world(
+    candidate: &PlanCandidate,
+    size: (i32, i32, i32),
+) -> Result<(), PlannerError> {
+    let outside = |cell: &Anchor| -> bool {
+        cell.x < 0
+            || cell.y < 0
+            || cell.z < 0
+            || cell.x >= size.0
+            || cell.y >= size.1
+            || cell.z >= size.2
+    };
+    let refuse = |id: &str, cell: &Anchor| -> Result<(), PlannerError> {
+        if outside(cell) {
+            return Err(PlannerError::UnrealisableNode {
+                id: id.to_string(),
+                reason: format!(
+                    "cell ({}, {}, {}) is outside the world (size {} x {} x {}), and a block \
+                     written there would be silently dropped",
+                    cell.x, cell.y, cell.z, size.0, size.1, size.2
+                ),
+            });
+        }
+        Ok(())
+    };
+
+    for node in &candidate.primitive_nodes {
+        refuse(&node.id, &node.anchor)?;
+        for cell in node.footprint.iter().chain(&node.conductors) {
+            refuse(&node.id, cell)?;
+        }
+        if let Some(pin) = &node.output_pin {
+            refuse(&node.id, pin)?;
+        }
+    }
+    for route in &candidate.routes {
+        for anchor in &route.anchors {
+            refuse(&route.id, anchor)?;
+        }
+    }
+    Ok(())
 }
 
 /// Write every route's own cells, and the floor each one stands on.
@@ -7635,6 +7700,63 @@ mod tests {
         }
     }
 
+    /// A plan that extends outside the world is refused by name, not
+    /// realised with holes.
+    ///
+    /// `World::set` silently ignores an out-of-bounds write and
+    /// [`candidate_world_size`] only ever looks at the maximum corner, so a
+    /// candidate with a negative coordinate used to realise with its
+    /// outside-the-world blocks silently missing -- and the four invariants
+    /// then reported whatever the holes happened to break. Measured on
+    /// 2026-08-28, during the dead-end-signal round: segment_a's growth
+    /// pushed bodies to x = -18 and died as `terminal style
+    /// DirectedDustIntoSupport does not match its realised sink block Air`,
+    /// an error about a symptom three layers downstream of the cause.
+    ///
+    /// The fixture is the real and4 plan, translated whole into negative x:
+    /// the same circuit in a shifted frame, legal in game everywhere. The
+    /// assertion is that realisation names the actual defect.
+    #[test]
+    fn a_plan_outside_the_world_is_refused_by_name_not_realised_with_holes() {
+        let (netlist, _) = build_and4_netlist();
+        let mut candidate = plan_from_netlist(&netlist, &PortPlacements::default())
+            .expect("and4 plans");
+        verify_candidate(&candidate, &netlist).expect("and4 verifies where it stands");
+
+        let shift = |anchor: &mut Anchor| anchor.x -= 200;
+        for anchor in &mut candidate.anchors {
+            shift(anchor);
+        }
+        for node in &mut candidate.primitive_nodes {
+            shift(&mut node.anchor);
+            for cell in &mut node.footprint {
+                shift(cell);
+            }
+            for cell in &mut node.conductors {
+                shift(cell);
+            }
+            if let Some(pin) = &mut node.output_pin {
+                shift(pin);
+            }
+        }
+        for route in &mut candidate.routes {
+            for anchor in &mut route.anchors {
+                shift(anchor);
+            }
+            for terminal in &mut route.terminals {
+                shift(&mut terminal.sink.anchor);
+            }
+        }
+
+        let error = realise_and_verify(&candidate, &netlist, candidate_world_size(&candidate))
+            .expect_err("a plan below the world's origin cannot be built as it stands");
+        let message = error.to_string();
+        assert!(
+            message.contains("outside the world"),
+            "the refusal must name the actual defect, not a downstream symptom: {message}"
+        );
+    }
+
     /// The generation front door carries a circuit end to end.
     ///
     /// [`compile::compile_grown`] on and4: iteration 1 routes and verifies,
@@ -11927,6 +12049,12 @@ mod tests {
             "full_adder" => build_full_adder_netlist().0,
             "segment_a" => build_single_segment_netlist(0).0,
             "seven_segment" => build_seven_segment_netlist().0,
+            "verilog:seven_segment" => {
+                let circuit = crate::circuits::verilog::find("verilog:seven_segment")
+                    .expect("the catalog has the decoder");
+                crate::compile::lowering::lower_optimised(&circuit.baked_netlist().0)
+                    .expect("the decoder lowers")
+            }
             other => panic!("REDA_FED_CIRCUIT names no circuit: {other}"),
         };
         let placements = PortPlacements::default();
@@ -12237,6 +12365,12 @@ mod tests {
             "full_adder" => build_full_adder_netlist().0,
             "segment_a" => build_single_segment_netlist(0).0,
             "seven_segment" => build_seven_segment_netlist().0,
+            "verilog:seven_segment" => {
+                let circuit = crate::circuits::verilog::find("verilog:seven_segment")
+                    .expect("the catalog has the decoder");
+                crate::compile::lowering::lower_optimised(&circuit.baked_netlist().0)
+                    .expect("the decoder lowers")
+            }
             other => panic!("REDA_GEN_CIRCUIT names no circuit: {other}"),
         };
         let placements = PortPlacements::default();
@@ -12449,102 +12583,242 @@ mod tests {
                     continue;
                 }
 
-                // The door knob: turn the failing branch's sink gate. The
-                // corridor's far end names the approach; the gate whose
-                // socket it serves is the door's owner.
-                let (_, target) = failure.corridor;
-                let mut sink_gate: Option<usize> = None;
-                for &(gate, input_index) in &consumers_declared {
-                    let support = candidate.anchors[gate];
-                    let facing = candidate.facing_of(gate);
-                    let socket = step(
-                        support,
-                        compile::geometry::input_directions(facing)[input_index],
-                    );
-                    let approach = Anchor {
-                        x: socket.x + (socket.x - support.x),
-                        y: socket.y + (socket.y - support.y),
-                        z: socket.z + (socket.z - support.z),
-                    };
-                    if approach == target {
-                        sink_gate = Some(gate);
-                        break;
-                    }
+                // THE WALL KNOB, v2 (2026-08-28). v1 turned the failing
+                // branch's SINK gate, and on segment_a it laid nothing: the
+                // wall is not the door (g0's corridor was 37 manhattan of
+                // maze). What the refusal flood measures on the decoder is
+                // that three of five dead branches are sealed by ONE piece of
+                // somebody else's furniture -- a 7-cell wall with a single
+                // `primitive:N` at the top of the blame -- so the knob is the
+                // WALL'S OWNER, which the blame ranking hands over by index.
+                // A furniture turn is also durable across the next settle,
+                // which v1's per-net order fixes were not.
+                let wall = refusal_heat(
+                    failure.corridor.0,
+                    failure.corridor.1,
+                    signal,
+                    &failure.reservation,
+                );
+                let mut by_owner: BTreeMap<String, u64> = BTreeMap::new();
+                for (cell, blame) in &wall {
+                    let owner = failure
+                        .reservation
+                        .owner(cell)
+                        .unwrap_or("<unclaimed>")
+                        .to_string();
+                    *by_owner.entry(owner).or_insert(0) += blame;
                 }
-                let Some(gate) = sink_gate else {
-                    eprintln!(
-                        "  repair: {signal} matches no consumer approach ({}) -- left dead",
-                        failure.error
-                    );
-                    abandoned.insert(signal.clone());
-                    continue;
+                let mut ranked: Vec<(String, u64)> = by_owner.into_iter().collect();
+                ranked.sort_by_key(|(_, blame)| std::cmp::Reverse(*blame));
+
+                // Owner -> the node to turn. `primitive:N` is the node
+                // itself; a `terminal:<output>.in[k]` guard belongs to the
+                // gate whose socket it protects. This net's own wire and
+                // stairs have no node to turn -- their knob was the orders
+                // above.
+                let turnable = |owner: &str| -> Option<usize> {
+                    if let Some(index) = owner.strip_prefix("primitive:") {
+                        return index.parse().ok();
+                    }
+                    let guard = owner.strip_prefix("terminal:")?;
+                    let output = guard.split(".in[").next()?;
+                    netlist.gates.iter().position(|gate| gate.output == output)
                 };
-                if candidate.primitive_nodes[gate].pinned {
-                    eprintln!("  repair: {signal}'s sink gate is pinned -- left dead");
-                    abandoned.insert(signal.clone());
-                    continue;
+
+                // The knobs, in blame order -- and then the net's own source
+                // node. v2's first decoder run showed why the source belongs
+                // on the list: the three still-dead nets each have their
+                // output pin sealed in a 7-cell pocket of one foreign
+                // primitive plus their OWN stair and terminal guards, and
+                // turning the foreign piece alone leaves the pocket shut --
+                // while the one net whose wall owner happened to BE its own
+                // gate (g14) laid the moment it turned. The pin's position is
+                // facing-determined, so turning the source is the door move
+                // on the source side.
+                let mut knobs: Vec<(String, u64, usize)> = ranked
+                    .iter()
+                    .take(4)
+                    .filter_map(|(owner, blame)| {
+                        turnable(owner).map(|node| (owner.clone(), *blame, node))
+                    })
+                    .collect();
+                if let Some(source_node) = candidate.primitive_nodes.iter().position(|node| {
+                    node.id == format!("gate:{signal}") || node.id == format!("input:{signal}")
+                }) {
+                    if !knobs.iter().any(|(_, _, node)| *node == source_node) {
+                        knobs.push(("its own source".to_string(), 0, source_node));
+                    }
                 }
 
-                let before = facings[gate];
                 let mut turned = false;
-                for index in 0..4u8 {
-                    let facing = geometry::CellFacing::from_index(index).expect("four");
-                    if facing == before {
+                'owners: for (owner, blame, node) in &knobs {
+                    let (blame, node) = (*blame, *node);
+                    if node >= facings.len() || candidate.primitive_nodes[node].pinned {
                         continue;
                     }
-                    let mut trial_facings = facings.clone();
-                    trial_facings[gate] = facing;
-                    let trial = candidate_from_anchors_and_facings(
-                        &netlist,
-                        &placements,
-                        anchors.clone(),
-                        trial_facings.clone(),
-                    );
-                    let trial_hard = hard_furniture(&trial, &netlist);
-                    let trial_source = net_source(&trial, signal)
-                        .map_err(|failure| failure.error)
-                        .expect("every net has a driver");
-                    let consumers =
-                        sorted(&consumers_declared, trial_source, &anchors, current);
-                    let mut reservation = trial_hard.clone();
-                    table.release(signal);
-                    let outcome = {
-                        let prices = Prices::Negotiated {
-                            table: &table,
-                            mine: signal,
-                            own_join,
-                        };
-                        lay_net(
-                            signal,
-                            trial_source,
-                            &consumers,
+                    let before = facings[node];
+                    for index in 0..4u8 {
+                        let facing = geometry::CellFacing::from_index(index).expect("four");
+                        if facing == before {
+                            continue;
+                        }
+                        let mut trial_facings = facings.clone();
+                        trial_facings[node] = facing;
+                        let trial = candidate_from_anchors_and_facings(
                             &netlist,
-                            &trial,
-                            &mut reservation,
-                            &prices,
-                        )
-                    };
-                    if let Ok(route) = outcome {
-                        table.claim(signal, claim_of(signal, &route, &reservation));
-                        eprintln!(
-                            "  repair: {signal} lays with {} turned {:?} -> {:?}",
-                            candidate.primitive_nodes[gate].id,
-                            before.direction(),
-                            facing.direction()
+                            &placements,
+                            anchors.clone(),
+                            trial_facings.clone(),
                         );
-                        candidate = trial;
-                        facings = trial_facings;
-                        anchors = candidate.anchors.clone();
-                        hard = trial_hard;
-                        turned = true;
-                        turned_this_phase = true;
-                        break;
+                        let trial_hard = hard_furniture(&trial, &netlist);
+                        let trial_source = net_source(&trial, signal)
+                            .map_err(|failure| failure.error)
+                            .expect("every net has a driver");
+                        let consumers =
+                            sorted(&consumers_declared, trial_source, &anchors, current);
+                        let mut reservation = trial_hard.clone();
+                        table.release(signal);
+                        let outcome = {
+                            let prices = Prices::Negotiated {
+                                table: &table,
+                                mine: signal,
+                                own_join,
+                            };
+                            lay_net(
+                                signal,
+                                trial_source,
+                                &consumers,
+                                &netlist,
+                                &trial,
+                                &mut reservation,
+                                &prices,
+                            )
+                        };
+                        if let Ok(route) = outcome {
+                            table.claim(signal, claim_of(signal, &route, &reservation));
+                            eprintln!(
+                                "  repair: {signal} lays after turning {owner} = {} \
+                                 (blame {blame}) {:?} -> {:?}",
+                                candidate.primitive_nodes[node].id,
+                                before.direction(),
+                                facing.direction()
+                            );
+                            candidate = trial;
+                            facings = trial_facings;
+                            anchors = candidate.anchors.clone();
+                            hard = trial_hard;
+                            turned = true;
+                            turned_this_phase = true;
+                            break 'owners;
+                        }
+                    }
+                }
+                // The pair knob. The decoder's three stubborn nets share one
+                // shape: the output pin pocketed by one foreign primitive
+                // plus the net's OWN stair and guards, and no single turn
+                // lays them -- the foreign turn leaves the own furniture,
+                // the own turn leaves the foreign wall. Nine combinations of
+                // (foreign wall owner x own source), each a full re-lay.
+                if !turned {
+                    let foreign = knobs
+                        .iter()
+                        .find(|(owner, _, node)| {
+                            owner.starts_with("primitive:")
+                                && candidate.primitive_nodes[*node].id
+                                    != format!("gate:{signal}")
+                                && candidate.primitive_nodes[*node].id
+                                    != format!("input:{signal}")
+                        })
+                        .map(|(_, _, node)| *node);
+                    let own = candidate.primitive_nodes.iter().position(|node| {
+                        node.id == format!("gate:{signal}")
+                            || node.id == format!("input:{signal}")
+                    });
+                    if let (Some(foreign), Some(own)) = (foreign, own) {
+                        'pairs: for foreign_index in 0..4u8 {
+                            let foreign_facing = geometry::CellFacing::from_index(foreign_index)
+                                .expect("four");
+                            if foreign_facing == facings[foreign] {
+                                continue;
+                            }
+                            for own_index in 0..4u8 {
+                                let own_facing =
+                                    geometry::CellFacing::from_index(own_index).expect("four");
+                                if own_facing == facings[own] {
+                                    continue;
+                                }
+                                let mut trial_facings = facings.clone();
+                                trial_facings[foreign] = foreign_facing;
+                                trial_facings[own] = own_facing;
+                                let trial = candidate_from_anchors_and_facings(
+                                    &netlist,
+                                    &placements,
+                                    anchors.clone(),
+                                    trial_facings.clone(),
+                                );
+                                let trial_hard = hard_furniture(&trial, &netlist);
+                                let trial_source = net_source(&trial, signal)
+                                    .map_err(|failure| failure.error)
+                                    .expect("every net has a driver");
+                                let consumers = sorted(
+                                    &consumers_declared,
+                                    trial_source,
+                                    &anchors,
+                                    current,
+                                );
+                                let mut reservation = trial_hard.clone();
+                                table.release(signal);
+                                let outcome = {
+                                    let prices = Prices::Negotiated {
+                                        table: &table,
+                                        mine: signal,
+                                        own_join,
+                                    };
+                                    lay_net(
+                                        signal,
+                                        trial_source,
+                                        &consumers,
+                                        &netlist,
+                                        &trial,
+                                        &mut reservation,
+                                        &prices,
+                                    )
+                                };
+                                if let Ok(route) = outcome {
+                                    table.claim(
+                                        signal,
+                                        claim_of(signal, &route, &reservation),
+                                    );
+                                    eprintln!(
+                                        "  repair: {signal} lays after the PAIR turn: {} \
+                                         -> {:?} and its own {} -> {:?}",
+                                        candidate.primitive_nodes[foreign].id,
+                                        foreign_facing.direction(),
+                                        candidate.primitive_nodes[own].id,
+                                        own_facing.direction()
+                                    );
+                                    candidate = trial;
+                                    facings = trial_facings;
+                                    anchors = candidate.anchors.clone();
+                                    hard = trial_hard;
+                                    turned = true;
+                                    turned_this_phase = true;
+                                    break 'pairs;
+                                }
+                            }
+                        }
                     }
                 }
                 if !turned {
+                    let walls = ranked
+                        .iter()
+                        .take(3)
+                        .map(|(owner, blame)| format!("{owner} {blame}"))
+                        .collect::<Vec<_>>()
+                        .join(" | ");
                     eprintln!(
-                        "  repair: {signal} lays under NO order and NO facing of its door -- \
-                         left dead ({})",
+                        "  repair: {signal} lays under NO order, NO single turn, and NO pair \
+                         turn ({walls}) -- left dead ({})",
                         failure.error
                     );
                     abandoned.insert(signal.clone());
@@ -12678,6 +12952,36 @@ mod tests {
                 failure.error
             ),
         }
+
+        // WHO built the wall. The refusal flood names the cells that refused
+        // the frontier; the reservation the failure carries names their
+        // owners. Aggregated, this says what KIND of obstacle killed the
+        // branch -- a gate's furniture, a junction's welded repeater, this
+        // net's own wire, or a stranger's -- which is the fact that decides
+        // which knob can move it.
+        let wall = refusal_heat(source, target, signal, &failure.reservation);
+        let mut by_owner: BTreeMap<String, u64> = BTreeMap::new();
+        for (cell, blame) in &wall {
+            let owner = failure
+                .reservation
+                .owner(cell)
+                .unwrap_or("<unclaimed>")
+                .to_string();
+            *by_owner.entry(owner).or_insert(0) += blame;
+        }
+        let mut ranked: Vec<(String, u64)> = by_owner.into_iter().collect();
+        ranked.sort_by_key(|(_, blame)| std::cmp::Reverse(*blame));
+        let total: u64 = wall.values().sum();
+        eprintln!(
+            "      wall ({} cells, blame {total}): {}",
+            wall.len(),
+            ranked
+                .iter()
+                .take(6)
+                .map(|(owner, blame)| format!("{owner} {blame}"))
+                .collect::<Vec<_>>()
+                .join(" | ")
+        );
     }
 
     // ---------------------------------------------------------------------
