@@ -105,9 +105,28 @@ end to end already). `compile()` and the legacy emitter are not touched.
     {"inputs":  {"d0": {"at": [x,y,z], "outside": "south"}, ...},
      "outputs": {"a":  {"at": [x,y,z], "outside": "south"}, ...}}
 
-The pinout sidecar keeps its shape; for pinned ports the recorded coordinate
-is the terminal cell, which is the cell the viewer already reads by
-strength > 0.
+The pinout sidecar records, for a pinned port, the terminal cell plus its
+`outside` facing (unpinned ports keep the bare coordinate they have today).
+The facing is not decoration: it is how a consumer knows where the caller's
+side is.
+
+## The viewer plays the caller
+
+For a pinned circuit the viewer is no longer just a reader -- it is the
+demo's user, and it attaches things on the outside cells the way any caller
+would:
+
+- **Pinned inputs**: no lever exists in the artifact, so the existing lever
+  UI drives a viewer-installed source placed in the reserved outside cell at
+  load time. Same panel, same `set_lever` name, different block underneath.
+- **Pinned outputs**: badges already read strength > 0 at the recorded cell
+  and need nothing. For the display demo the viewer additionally hangs a
+  lamp on each output's outside cell, so the digit glyph is literally lit
+  lamps, not seven numbers in a side panel.
+
+Both attachments live on cells the contract guarantees empty, which is the
+point: the viewer exercises the interface exactly as an external caller
+would, and touches nothing inside the boundary.
 
 ## Acceptance
 
@@ -117,7 +136,9 @@ segments -- the contract does not care which plane the glyph lies in; the
 demo lays it flat on the ground), four inputs pinned in a row, all outsides
 facing away from the circuit, through `compile_grown`. Passes when:
 truth table 16/16 through the real Simulator, every terminal delivers per
-contract, every outside cell ships empty, and the four invariants hold.
+contract, every outside cell ships empty, and the four invariants hold --
+and the baked demo joins the viewer dropdown, where flipping the levers
+shows the digit on viewer-attached lamps.
 
 ## Deliberately out
 
@@ -128,4 +149,3 @@ contract, every outside cell ships empty, and the four invariants hold.
 - Multi-cell pads, analog strength contracts, or promising any strength
   above 1 at an output terminal.
 - Pinning a gate's position or facing. Ports only.
-- Baking a pinned demo into the viewer dropdown. Follows later if wanted.
