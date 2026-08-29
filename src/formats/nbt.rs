@@ -31,7 +31,17 @@ pub enum FormatError {
 /// 讀取一個 gzip 壓縮的 NBT 檔案並反序列化。
 pub fn read_gzip_nbt<T: DeserializeOwned>(path: &Path) -> Result<T, FormatError> {
     let file = File::open(path)?;
-    let mut decoder = GzDecoder::new(file);
+    from_gzip_reader(file)
+}
+
+/// 從已在記憶體裡的 gzip NBT bytes 反序列化——瀏覽器 (wasm) 沒有檔案
+/// 系統,fetch 回來的就是這個。
+pub fn from_gzip_bytes<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, FormatError> {
+    from_gzip_reader(bytes)
+}
+
+fn from_gzip_reader<T: DeserializeOwned, R: Read>(reader: R) -> Result<T, FormatError> {
+    let mut decoder = GzDecoder::new(reader);
     let mut bytes = Vec::new();
     decoder.read_to_end(&mut bytes)?;
     fastnbt::from_bytes(&bytes).map_err(|e| FormatError::Nbt(e.to_string()))

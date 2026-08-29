@@ -233,7 +233,14 @@ fn list_circuits(circuits: &[CircuitInfo]) {
 }
 
 fn main() {
-    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    // `--grown` compiles through the failure-directed generation front door
+    // (`compile_grown`) instead of the fast trial-then-fallback `compile`.
+    // Minutes, not milliseconds -- see compile_grown's own doc for the
+    // measured costs -- and the file is named `<name>.grown.litematic` so
+    // the two producers' outputs can sit side by side.
+    let grown = args.iter().any(|arg| arg == "--grown");
+    args.retain(|arg| arg != "--grown");
     let circuits = available_circuits();
 
     if args.is_empty() {
@@ -269,7 +276,11 @@ fn main() {
     // Not an `expect`: a synthesized netlist is only as well-formed as the
     // Verilog it came from, so this has to be able to fail readably rather
     // than panicking. See `mc_dump`'s identical reasoning.
-    let compiled = match compile(&netlist) {
+    let compiled = match if grown {
+        reda::compile::compile_grown(&netlist)
+    } else {
+        compile(&netlist)
+    } {
         Ok(compiled) => compiled,
         Err(err) => {
             eprintln!("circuit '{name}' failed to compile: {err:?}");
@@ -281,9 +292,67 @@ fn main() {
 
     let output_dir = Path::new("output");
     std::fs::create_dir_all(output_dir).expect("failed to create the output directory");
-    let output_path = output_dir.join(format!("{name}.litematic"));
+    let stem = if grown { format!("{name}.grown") } else { name.clone() };
+    let output_path = output_dir.join(format!("{stem}.litematic"));
 
     litematic::save(&output_path, &compiled.world, &name).expect("failed to write the litematic file");
+
+    // A plain-text block dump beside the litematic, one non-air block per
+    // line -- `x y z kind facing lit power` -- for viewers that are not
+    // Minecraft: the mc_dump format's spirit, without the conformance
+    // harness's framing.
+    {
+        use std::io::Write;
+        let dump_path = output_dir.join(format!("{stem}.blocks.txt"));
+        let mut dump = std::fs::File::create(&dump_path).expect("failed to create the dump");
+        for x in 0..size_x {
+            for y in 0..size_y {
+                for z in 0..size_z {
+                    let state = compiled.world.get(x, y, z);
+                    if state.kind == reda::redstone::world::block::BlockKind::Air {
+                        continue;
+                    }
+                    writeln!(
+                        dump,
+                        "{x} {y} {z} {:?} {} {} {}",
+                        state.kind,
+                        state
+                            .facing
+                            .map(|facing| format!("{facing:?}"))
+                            .unwrap_or_else(|| "-".to_string()),
+                        u8::from(state.lit),
+                        state.power
+                    )
+                    .expect("failed to write the dump");
+                }
+            }
+        }
+        println!("wrote {}", dump_path.display());
+    }
+
+    // The pinout as JSON beside the litematic: the viewer's baked-circuit
+    // loader needs the lever and lamp coordinates, and the schematic file
+    // does not carry names. Hand-rolled -- this crate deliberately has no
+    // serde_json (see mc_dump) and the structure is two flat maps.
+    {
+        use std::io::Write;
+        let json_path = output_dir.join(format!("{stem}.pinout.json"));
+        let mut json = std::fs::File::create(&json_path).expect("failed to create the pinout json");
+        let entries = |map: &std::collections::BTreeMap<String, (i32, i32, i32)>| -> String {
+            map.iter()
+                .map(|(name, (x, y, z))| format!("\"{name}\":[{x},{y},{z}]"))
+                .collect::<Vec<_>>()
+                .join(",")
+        };
+        write!(
+            json,
+            "{{\"inputs\":{{{}}},\"outputs\":{{{}}}}}",
+            entries(&compiled.input_positions),
+            entries(&compiled.output_positions)
+        )
+        .expect("failed to write the pinout json");
+        println!("wrote {}", json_path.display());
+    }
 
     println!("circuit: {name}");
     println!("bounding box: {size_x} x {size_y} x {size_z}");

@@ -4,7 +4,7 @@
     {
       "name": "viewer",
       "runtimeExecutable": "python",
-      "runtimeArgs": ["viewer/serve.py", "8000"],
+      "runtimeArgs": ["viewer/serve.py"],
       "port": 8000
     }
   ]

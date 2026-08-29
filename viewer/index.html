@@ -636,9 +636,33 @@ function setStatus(message, isError) {
   statusEl.classList.toggle('error', !!isError);
 }
 
-function loadCircuit(name) {
+// Pre-baked `compile_grown` circuits: generation takes minutes natively, so
+// the page fetches what `build_circuit --grown` wrote instead of compiling.
+// File stems mirror build_circuit's own sanitisation (`:` -> `_`).
+const GROWN = {
+  'grown:segment_a': 'segment_a.grown',
+  'grown:verilog:seven_segment': 'verilog_seven_segment.grown',
+};
+
+async function loadCircuit(name) {
   try {
-    session = new Session(name);
+    if (GROWN[name]) {
+      setStatus(`Loading baked ${name}…`);
+      const stem = GROWN[name];
+      const [worldResp, pinoutResp] = await Promise.all([
+        fetch(`baked/${stem}.litematic`),
+        fetch(`baked/${stem}.pinout.json`),
+      ]);
+      if (!worldResp.ok || !pinoutResp.ok) {
+        throw new Error(`baked files missing (${worldResp.status}/${pinoutResp.status}) -- run: cargo run --release --bin build_circuit -- --grown <name>`);
+      }
+      const worldBytes = new Uint8Array(await worldResp.arrayBuffer());
+      const pinoutJson = await pinoutResp.json();
+      session = Session.from_baked(name, worldBytes, pinoutJson);
+      setStatus('');
+    } else {
+      session = new Session(name);
+    }
   } catch (e) {
     setStatus(`Failed to build ${name}: ${e}`, true);
     return;
@@ -3541,7 +3565,7 @@ canvas.addEventListener('mouseleave', () => {
 // Wire up controls
 // ---------------------------------------------------------------------
 
-for (const name of list_circuits()) {
+for (const name of [...list_circuits(), ...Object.keys(GROWN)]) {
   const opt = document.createElement('option');
   opt.value = name;
   opt.textContent = name;

@@ -133,8 +133,23 @@ const CIRCUITS: &[(&str, CircuitBuilder)] = &[
 /// choosing its own anchors -- rather than by `compile`.
 const PLANNED_PREFIX: &str = "planned:";
 
+/// Names carrying this prefix are PRE-BAKED `compile_grown` circuits: the
+/// generation takes minutes natively and would take tens of minutes in wasm,
+/// so the page fetches the `.litematic` the `build_circuit --grown` bin
+/// wrote, plus its pinout sidecar, and hands both to `Session::from_baked`.
+const GROWN_PREFIX: &str = "grown:";
+
+/// A pre-baked circuit's world and port coordinates: what `Session::from_baked`
+/// hands `build_inner` in place of a `compile()` run.
+type BakedParts = (
+    World,
+    BTreeMap<String, (i32, i32, i32)>,
+    BTreeMap<String, (i32, i32, i32)>,
+);
+
 fn build_named_circuit(name: &str) -> Option<(Netlist, Vec<(String, String)>)> {
     let name = name.strip_prefix(PLANNED_PREFIX).unwrap_or(name);
+    let name = name.strip_prefix(GROWN_PREFIX).unwrap_or(name);
     if let Some(&(_, build)) = CIRCUITS.iter().find(|&&(n, _)| n == name) {
         return Some(build());
     }
@@ -835,6 +850,14 @@ impl Session {
     /// circuit's generator, compile it, and settle the simulator once so a
     /// caller sees a self-consistent world before ever calling `step`.
     fn build(circuit_name: &str) -> Result<Session, String> {
+        Session::build_inner(circuit_name, None)
+    }
+
+    fn build_inner(
+        circuit_name: &str,
+        baked: Option<BakedParts>,
+    ) -> Result<Session, String> {
+        let base_name = circuit_name.strip_prefix(GROWN_PREFIX).unwrap_or(circuit_name);
         let (source_netlist, outputs) = build_named_circuit(circuit_name).ok_or_else(|| {
             format!(
                 "unknown circuit `{circuit_name}` -- see list_circuits() for the valid names"
@@ -851,7 +874,7 @@ impl Session {
         // name, so they have to come from one and the same netlist. That is
         // exactly why `compile` refuses to lower on its own -- see its own
         // doc comment.
-        let (netlist, provenance, source_terminals) = if verilog::find(circuit_name).is_some() {
+        let (netlist, provenance, source_terminals) = if verilog::find(base_name).is_some() {
             lower_optimised_with_provenance(&source_netlist).map(|lowered| {
                 (lowered.netlist, lowered.provenance, lowered.source_terminals)
             })
@@ -866,6 +889,12 @@ impl Session {
         // own, rather than the row/channel/track one it merely realises and
         // checks. They are different circuits computing the same function,
         // which is the whole point of being able to look at both.
+        let (world, input_positions, output_positions_by_signal) = match baked {
+            // A pre-baked world skips compilation entirely: the litematic IS
+            // the circuit `compile_grown` produced, and the sidecar carries
+            // the lever and lamp coordinates the schematic cannot.
+            Some(parts) => parts,
+            None => {
         let compiled = if circuit_name.starts_with(PLANNED_PREFIX) {
             // Nothing is pinned here: the viewer's job is to show what the
             // planner does when it is left to decide.
@@ -879,6 +908,9 @@ impl Session {
                 .map_err(|error| format!("the planner could not build this circuit: {error}"))?
         } else {
             compile(&netlist).map_err(|error| format!("this circuit does not compile: {error}"))?
+        };
+                (compiled.world, compiled.input_positions, compiled.output_positions)
+            }
         };
 
         // Every gate in `netlist` is a NOR or a merge of fan-in 1..=3 --
@@ -943,7 +975,14 @@ impl Session {
         let output_positions = outputs
             .into_iter()
             .map(|(display_name, signal_name)| {
-                let position = *compiled.output_positions.get(&signal_name).unwrap_or_else(|| {
+                // Signal name first -- what `CompiledCircuit` keys by --
+                // then the display name, which is what a hand-written or
+                // human-facing pinout sidecar naturally uses. The coordinate
+                // is the substance either way.
+                let position = *output_positions_by_signal
+                    .get(&signal_name)
+                    .or_else(|| output_positions_by_signal.get(&display_name))
+                    .unwrap_or_else(|| {
                     panic!(
                         "compile() must place every output this generator declared; \
                          missing `{signal_name}`"
@@ -953,7 +992,7 @@ impl Session {
             })
             .collect();
 
-        let mut simulator = Simulator::new(compiled.world);
+        let mut simulator = Simulator::new(world);
         // `Simulator::new` already settles dust strengths, but every lever
         // starts off (`lever(false)` in `src/compile/mod.rs`) and torches are
         // laid out already self-consistent with that -- so nothing is
@@ -967,7 +1006,7 @@ impl Session {
         Ok(Session {
             circuit_name: circuit_name.to_string(),
             simulator,
-            input_positions: compiled.input_positions,
+            input_positions,
             output_positions,
             primitive_graph,
             gate_meta,
@@ -1088,6 +1127,30 @@ impl Session {
     #[wasm_bindgen(constructor)]
     pub fn new(circuit_name: &str) -> Result<Session, JsValue> {
         Session::build(circuit_name).map_err(|error| JsValue::from_str(&error))
+    }
+
+    /// Build a session from a pre-baked circuit: the gzip `.litematic` bytes
+    /// `build_circuit --grown` wrote, and its `.pinout.json` parsed to
+    /// `{inputs: {name: [x,y,z]}, outputs: {name: [x,y,z]}}`. The name still
+    /// has to resolve in the catalog (with its `grown:` prefix stripped),
+    /// because the topology view and the output ORDER come from the netlist
+    /// -- only the world and the port coordinates come from the bake.
+    pub fn from_baked(
+        circuit_name: &str,
+        world_bytes: &[u8],
+        pinout: JsValue,
+    ) -> Result<Session, JsValue> {
+        #[derive(serde::Deserialize)]
+        struct PinoutFile {
+            inputs: BTreeMap<String, (i32, i32, i32)>,
+            outputs: BTreeMap<String, (i32, i32, i32)>,
+        }
+        let world = reda::formats::litematic::load_bytes(world_bytes)
+            .map_err(|error| JsValue::from_str(&format!("bad litematic: {error}")))?;
+        let pinout: PinoutFile = serde_wasm_bindgen::from_value(pinout)
+            .map_err(|error| JsValue::from_str(&format!("bad pinout: {error}")))?;
+        Session::build_inner(circuit_name, Some((world, pinout.inputs, pinout.outputs)))
+            .map_err(|error| JsValue::from_str(&error))
     }
 
     /// World size as `[x, y, z]`.

@@ -240,7 +240,16 @@ pub fn parse_block_name(name: &str, properties: &HashMap<String, String>) -> Blo
 /// 多 region 的檔案目前只取第一個 —— 我們自己產生的檔案永遠是單 region，
 /// 而讀取社群結構時多 region 很罕見。
 pub fn load(path: &Path) -> Result<World, FormatError> {
-    let file: LitematicFile = read_gzip_nbt(path)?;
+    from_file(read_gzip_nbt(path)?)
+}
+
+/// [`load`],吃已在記憶體裡的 bytes——viewer 在瀏覽器 fetch 預烤電路時走
+/// 這裡,沒有檔案系統可言。
+pub fn load_bytes(bytes: &[u8]) -> Result<World, FormatError> {
+    from_file(crate::formats::nbt::from_gzip_bytes(bytes)?)
+}
+
+fn from_file(file: LitematicFile) -> Result<World, FormatError> {
 
     if file.version < MIN_SUPPORTED_VERSION || file.version > MAX_SUPPORTED_VERSION {
         return Err(FormatError::UnsupportedVersion(file.version));
