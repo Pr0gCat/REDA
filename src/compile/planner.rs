@@ -1089,6 +1089,27 @@ fn realise_branch_from(previous_cell: Anchor, incoming: u8, cells: &[Anchor]) ->
         .filter(|(_, window)| direction(window[0], window[1]) != direction(window[1], window[2]))
         .map(|(index, _)| index + 1)
         .collect();
+    // The window above cannot see the branch's mouth, and the mouth obeys
+    // the same physics as everywhere else: a repeater conducts straight
+    // through, horizontally. On `cells[0]` one is realisable only when the
+    // branch arrives on a flat unit step, and it feeds the branch only when
+    // the next cell continues on the same horizontal line -- flat, or
+    // climbing into the riser the repeater fires at. Every other mouth is a
+    // bend: a turn or a descent leaves the output facing open air (the
+    // 84-gate's `g25` -> g72, 2026-08-30), and a fresh branch's mouth is
+    // the pin itself, which has no arrival direction to face. The straight
+    // pre-climb mouth stays eligible on purpose: that ramp refresh is
+    // load-bearing (`genuine_decay_is_still_refused` counts its bites).
+    if cells.len() >= 2 {
+        let mouth_conducts =
+            unit_horizontal_direction(source, cells[0]).is_some_and(|entry| {
+                let onward = (cells[1].x - cells[0].x, cells[1].z - cells[0].z);
+                (entry.0, entry.2) == onward && cells[1].y >= cells[0].y
+            });
+        if !mouth_conducts {
+            bends.insert(0);
+        }
+    }
     // A repeater needs a flat cell to stand on and a horizontal facing, so a
     // staircase step can never hold one. `bend_indices` already means exactly
     // "no repeater here", so saying it there lets `plan_bent_path` put the
@@ -8195,6 +8216,37 @@ mod tests {
         );
     }
 
+    /// A branch's mouth can be a corner, and a corner holds no repeater.
+    ///
+    /// The 84-gate corpse (2026-08-30, `g25` -> g72.in[2]): a branch forked
+    /// at (149,4,60), entered (149,4,61) heading south, and turned west into
+    /// a descent. The pre-descent refresh rule put a repeater on that mouth,
+    /// and a repeater conducts straight through -- it fired south into open
+    /// air while the branch left west, and the judge read every cell after
+    /// it dead. The bend window walks `cells` alone, so a turn at index 0 is
+    /// invisible unless the branch's source joins the window.
+    #[test]
+    fn a_branch_mouth_that_turns_holds_no_repeater() {
+        let fork = Anchor { x: 0, y: 4, z: 0 };
+        // Entered heading +z, immediately turning +x into a three-step
+        // descent: the next cell drops a level, so the pre-descent rule
+        // wants its refresh on the mouth -- which is a corner.
+        let cells = [
+            Anchor { x: 0, y: 4, z: 1 },
+            Anchor { x: 1, y: 3, z: 1 },
+            Anchor { x: 2, y: 2, z: 1 },
+            Anchor { x: 3, y: 1, z: 1 },
+            Anchor { x: 4, y: 1, z: 1 },
+        ];
+        let laid = realise_branch_from(fork, 8, &cells);
+        assert_ne!(
+            laid.blocks[0].kind,
+            crate::redstone::world::block::BlockKind::Repeater,
+            "a repeater on the mouth corner conducts straight past the turn"
+        );
+        assert!(laid.carries, "eight strength crosses five cells unhelped");
+    }
+
     /// A long straight corridor carries: the refresh model admits what
     /// `plan_bent_path` can actually build.
     #[test]
@@ -13594,7 +13646,10 @@ mod tests {
     /// beside its terminals. The searcher promised every branch arrives
     /// alive; the walk shows where the promise and the realised route part.
     ///
-    /// `REDA_DIV_CIRCUIT` (default `verilog:seven_segment`).
+    /// `REDA_DIV_CIRCUIT` (default `verilog:seven_segment`). `REDA_DIV_GROW`
+    /// (default 0): when non-zero, run the shipping growth loop's shape for at
+    /// most that many iterations and walk the FIRST candidate that routes --
+    /// for the circuits that need room before the searcher can even finish.
     #[test]
     #[ignore = "measurement harness: asserts nothing, one strength-aware negotiation plus a strength walk of the failing net"]
     fn measure_where_the_strength_searchers_promise_diverges() {
@@ -13619,36 +13674,134 @@ mod tests {
             other => panic!("REDA_DIV_CIRCUIT names no circuit: {other}"),
         };
         let placements = PortPlacements::default();
-        let placement =
-            relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
-        let snapped = relax::snap(&placement).map_err(PlannerError::Relaxation).expect("snaps");
-        let mut candidate = candidate_from_snapped(&netlist, &placements, &snapped);
+        let grow: usize = setting("REDA_DIV_GROW", "0")
+            .parse()
+            .expect("REDA_DIV_GROW is a count of growth iterations");
 
         let started = Instant::now();
-        let mut trace = Vec::new();
-        let outcome = negotiate_charging(
-            candidate.clone(),
-            &netlist,
-            NEGOTIATION_ROUNDS,
-            PresentSchedule::SHIPPING,
-            NEGOTIATED_OWN_JOIN,
-            SearchModel::StrengthAware,
-            &mut trace,
-            &mut Negotiation::default(),
-        );
-        eprintln!(
-            "== promise divergence: {wanted}, negotiation {} in {:.1}s ==",
-            if outcome.is_ok() { "ROUTED" } else { "failed" },
-            started.elapsed().as_secs_f64()
-        );
-        let routed = match outcome {
-            Ok(routed) => routed,
-            Err(error) => {
-                eprintln!("  negotiation itself failed: {error}");
-                return;
+        let candidate = if grow == 0 {
+            let placement =
+                relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+            let snapped =
+                relax::snap(&placement).map_err(PlannerError::Relaxation).expect("snaps");
+            let unrouted = candidate_from_snapped(&netlist, &placements, &snapped);
+            let outcome = negotiate_charging(
+                unrouted,
+                &netlist,
+                NEGOTIATION_ROUNDS,
+                PresentSchedule::SHIPPING,
+                NEGOTIATED_OWN_JOIN,
+                SearchModel::StrengthAware,
+                &mut Vec::new(),
+                &mut Negotiation::default(),
+            );
+            eprintln!(
+                "== promise divergence: {wanted}, negotiation {} in {:.1}s ==",
+                if outcome.is_ok() { "ROUTED" } else { "failed" },
+                started.elapsed().as_secs_f64()
+            );
+            match outcome {
+                Ok(routed) => routed,
+                Err(error) => {
+                    eprintln!("  negotiation itself failed: {error}");
+                    return;
+                }
+            }
+        } else {
+            // The shipping growth loop's own shape
+            // (`plan_from_netlist_with_growth`), stopped at the FIRST
+            // candidate that routes: the corpse this microscope wants is
+            // routed-but-unverified, and a later iteration would bury it
+            // under a fresh placement.
+            let start = starting_layout(&netlist, &placements).expect("starts");
+            let graph = primitive_graph::expand(&netlist, &Library::default_library())
+                .unwrap_or_else(|error| panic!("expands: {error}"));
+            let bodies = relax::build(&netlist, &graph, &start, &placements)
+                .unwrap_or_else(|error| panic!("builds: {error}"));
+            let anchor_body = bodies.anchor_body.clone();
+            let mut required = relax::required_separations(&bodies);
+            let rule = GrowthRule {
+                search: SearchModel::StrengthAware,
+                ..GROWN_SHIPPING_RULE
+            };
+            let mut routed = None;
+            for iteration in 0..grow {
+                let placement = relax::relax_with_required(
+                    &netlist,
+                    &graph,
+                    &start,
+                    &placements,
+                    SHIPPING_AXES,
+                    relax::RelaxEffort::default(),
+                    &required,
+                )
+                .map_err(PlannerError::Relaxation)
+                .expect("relaxes");
+                let snapped = relax::snap(&placement)
+                    .map_err(PlannerError::Relaxation)
+                    .expect("snaps");
+                let anchors: Vec<Anchor> =
+                    snapped.iter().map(|node| node.anchor).collect();
+                let unrouted = candidate_from_snapped(&netlist, &placements, &snapped);
+                let mut table = Negotiation::default();
+                let outcome = negotiate_charging(
+                    unrouted,
+                    &netlist,
+                    NEGOTIATION_ROUNDS,
+                    PresentSchedule::SHIPPING,
+                    NEGOTIATED_OWN_JOIN,
+                    rule.search,
+                    &mut Vec::new(),
+                    &mut table,
+                );
+                match outcome {
+                    Ok(candidate) => {
+                        eprintln!(
+                            "== promise divergence: {wanted}, ROUTED at growth \
+                             iteration {iteration} in {:.1}s ==",
+                            started.elapsed().as_secs_f64()
+                        );
+                        routed = Some(candidate);
+                        break;
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "  iteration {iteration} ({:.1}s): negotiation failed: {error}",
+                            started.elapsed().as_secs_f64()
+                        );
+                        let mut heat = vec![0u64; anchors.len()];
+                        for (cell, charge) in &table.history {
+                            for (node, anchor) in anchors.iter().enumerate() {
+                                if (cell.x - anchor.x).abs() <= rule.radius
+                                    && (cell.z - anchor.z).abs() <= rule.radius
+                                {
+                                    heat[node] += charge;
+                                }
+                            }
+                        }
+                        let mut ranked: Vec<usize> =
+                            (0..heat.len()).filter(|node| heat[*node] > 0).collect();
+                        ranked.sort_by(|left, right| {
+                            heat[*right].cmp(&heat[*left]).then(left.cmp(right))
+                        });
+                        let take = ((heat.len() as f64) * rule.share).ceil() as usize;
+                        for node in ranked.into_iter().take(take) {
+                            required[anchor_body[node]] *= rule.growth;
+                        }
+                    }
+                }
+            }
+            match routed {
+                Some(candidate) => candidate,
+                None => {
+                    eprintln!(
+                        "  never routed within {grow} growth iterations ({:.1}s)",
+                        started.elapsed().as_secs_f64()
+                    );
+                    return;
+                }
             }
         };
-        candidate = routed;
         match verify_candidate(&candidate, &netlist) {
             Ok(()) => {
                 eprintln!("  AND IT VERIFIES -- no divergence to show");
@@ -13750,16 +13903,50 @@ mod tests {
                     }
                 };
 
-                let mut carried =
-                    crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+                // The walk starts at the net's true source strength -- for a
+                // merge-sourced net that is geometry, not 15 -- and follows
+                // forks: a non-adjacent step is a new branch, and its carried
+                // resumes from the earlier cell it forked off, not from the
+                // previous line of print.
+                let source_strength =
+                    merge_source_strength(&netlist, &candidate, &net, route.anchors[0]);
+                eprintln!("  source strength at the pin: {source_strength}");
+                let mut walked: Vec<u8> = Vec::with_capacity(route.anchors.len());
                 for (index, anchor) in route.anchors.iter().enumerate() {
-                    let kind = route.realisation[index].kind;
-                    if kind == crate::redstone::world::block::BlockKind::Repeater {
-                        carried =
-                            crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+                    let block = &route.realisation[index];
+                    let kind = block.kind;
+                    let adjacent = |other: &Anchor| {
+                        (other.x - anchor.x).abs() + (other.z - anchor.z).abs() == 1
+                            && (other.y - anchor.y).abs() <= 1
+                    };
+                    let (before, fork) = if index == 0 {
+                        (source_strength, String::new())
+                    } else if adjacent(&route.anchors[index - 1]) {
+                        (walked[index - 1], String::new())
                     } else {
-                        carried = carried.saturating_sub(1);
-                    }
+                        // Several earlier cells can touch the branch's first
+                        // cell; the strongest is the searcher's best case.
+                        match (0..index)
+                            .filter(|&j| adjacent(&route.anchors[j]))
+                            .max_by_key(|&j| walked[j])
+                        {
+                            Some(j) => (walked[j], format!(" fork@[{j}]")),
+                            None => (walked[index - 1], " fork@?".to_string()),
+                        }
+                    };
+                    let carried =
+                        if kind == crate::redstone::world::block::BlockKind::Repeater {
+                            crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH
+                        } else {
+                            before.saturating_sub(1)
+                        };
+                    walked.push(carried);
+                    let facing =
+                        if kind == crate::redstone::world::block::BlockKind::Repeater {
+                            format!(" facing {:?}", block.facing)
+                        } else {
+                            String::new()
+                        };
                     let judge = judged
                         .get(&Position::new(anchor.x, anchor.y, anchor.z))
                         .map(|value| format!("{value:2}"))
@@ -13778,7 +13965,7 @@ mod tests {
                         })
                         .unwrap_or_default();
                     eprintln!(
-                        "    [{index:3}] ({:4},{:2},{:4}) {kind:?} walk~{carried} judge {judge}{terminal}",
+                        "    [{index:3}] ({:4},{:2},{:4}) {kind:?} walk~{carried} judge {judge}{facing}{fork}{terminal}",
                         anchor.x, anchor.y, anchor.z
                     );
                 }

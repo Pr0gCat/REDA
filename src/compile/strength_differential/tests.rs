@@ -1080,6 +1080,13 @@ fn genuine_decay_is_still_refused() {
         }
         repeaters.sort_by_key(|cell| (cell.x, cell.y, cell.z));
         ramps.sort_by_key(|(cell, _)| (cell.x, cell.y, cell.z));
+        eprintln!(
+            "{}: {} repeaters, {} ramps {:?}",
+            case.name,
+            repeaters.len(),
+            ramps.len(),
+            ramps
+        );
         assert!(
             !repeaters.is_empty(),
             "{}: no repeater to injure -- the harness would be vacuous",
