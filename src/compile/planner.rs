@@ -1662,7 +1662,7 @@ fn strength_aware_astar(
     reservation: &Reservation,
     own_join: &OwnJoinCheck,
     prices: &Prices,
-    trunk: &BTreeMap<Anchor, crate::redstone::world::block::BlockKind>,
+    trunk: &BTreeMap<Anchor, crate::redstone::world::block::BlockState>,
     source_strength: u8,
 ) -> Option<Vec<Anchor>> {
     let margin = manhattan_distance(start, goal).saturating_add(2) as i32;
@@ -1758,6 +1758,32 @@ fn strength_aware_astar(
                 continue;
             }
 
+            // A trunk repeater is a diode, not dust: it accepts only through
+            // its input face and emits only through its output face. A step
+            // that touches one any other way carries nothing in the game --
+            // segment_a's `g2` forked off a trunk repeater's flank
+            // (2026-08-30) and the judge read the branch dead from its first
+            // cell -- so the ride is refused at generation, like every other
+            // decayed state.
+            if let Some(block) = trunk.get(&next) {
+                if block.kind == crate::redstone::world::block::BlockKind::Repeater
+                    && block
+                        .facing
+                        .is_some_and(|facing| step(next, facing) != state.anchor)
+                {
+                    continue;
+                }
+            }
+            if let Some(block) = trunk.get(&state.anchor) {
+                if block.kind == crate::redstone::world::block::BlockKind::Repeater
+                    && block
+                        .facing
+                        .is_some_and(|facing| step(state.anchor, facing.opposite()) != next)
+                {
+                    continue;
+                }
+            }
+
             // The strength arithmetic. Riding a trunk cell follows the
             // trunk's own realisation -- a repeater restores, dust decays --
             // which is the shared-prefix walk, cell for cell. Off the trunk,
@@ -1765,8 +1791,8 @@ fn strength_aware_astar(
             // entered and left straight through, horizontally, and not a
             // cell whose block is already built.
             let carried = match trunk.get(&next) {
-                Some(kind) => {
-                    if *kind == crate::redstone::world::block::BlockKind::Repeater {
+                Some(block) => {
+                    if block.kind == crate::redstone::world::block::BlockKind::Repeater {
                         crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH
                     } else {
                         match state.carried.checked_sub(1) {
@@ -4163,11 +4189,11 @@ fn lay_net(
                 // (repeater restores, dust decays) along its own path, which
                 // is exactly the walk the accounting below applies to a
                 // ridden line.
-                let trunk: BTreeMap<Anchor, crate::redstone::world::block::BlockKind> = route
+                let trunk: BTreeMap<Anchor, crate::redstone::world::block::BlockState> = route
                     .anchors
                     .iter()
                     .zip(&route.realisation)
-                    .map(|(anchor, block)| (*anchor, block.kind))
+                    .map(|(anchor, block)| (*anchor, block.clone()))
                     .collect();
                 strength_aware_astar(
                     source,
@@ -8189,9 +8215,9 @@ mod tests {
         ] {
             reservation.insert(cell, "primitive:99", Occupancy::Solid);
         }
-        let trunk: BTreeMap<Anchor, crate::redstone::world::block::BlockKind> = laid
+        let trunk: BTreeMap<Anchor, crate::redstone::world::block::BlockState> = laid
             .iter()
-            .map(|&cell| (cell, crate::redstone::world::block::BlockKind::RedstoneWire))
+            .map(|&cell| (cell, compile::dust()))
             .collect();
 
         let goal = Anchor { x: 8, y: 2, z: 5 };
@@ -8245,6 +8271,85 @@ mod tests {
             "a repeater on the mouth corner conducts straight past the turn"
         );
         assert!(laid.carries, "eight strength crosses five cells unhelped");
+    }
+
+    /// A trunk repeater is a diode, and the ride obeys its axis.
+    ///
+    /// segment_a's corpse (2026-08-30, `g2` -> g17.in[2]): the branch forked
+    /// off (66,2,104) -- a repeater conducting west -- stepping south, a
+    /// level down. A repeater is not dust: it accepts only through its input
+    /// face and emits only through its output face, so the judge read the
+    /// branch dead from its first cell while the searcher's trunk arm said
+    /// `Repeater => 15` and kept walking. Here the trunk runs east with a
+    /// repeater mid-line, the cheap exit south is right off the repeater's
+    /// side, and the search must pay for the detour instead of taking it.
+    #[test]
+    fn a_trunk_repeater_is_ridden_only_along_its_axis() {
+        let mut reservation = Reservation::new();
+        let pin = Anchor { x: 0, y: 1, z: 0 };
+        let laid = vec![
+            pin,
+            Anchor { x: 1, y: 1, z: 0 },
+            Anchor { x: 2, y: 1, z: 0 },
+            Anchor { x: 3, y: 1, z: 0 },
+            Anchor { x: 4, y: 1, z: 0 },
+            Anchor { x: 5, y: 1, z: 0 },
+        ];
+        reserve_path(&mut reservation, "me", &laid);
+        // Wall every southward lane beside the trunk except the repeater's
+        // own side, so the cheap exit south is exactly the diode's flank.
+        for cell in [
+            Anchor { x: 0, y: 1, z: 1 },
+            Anchor { x: 1, y: 1, z: 1 },
+            Anchor { x: 3, y: 1, z: 1 },
+            Anchor { x: 4, y: 1, z: 1 },
+            Anchor { x: 5, y: 1, z: 1 },
+        ] {
+            reservation.insert(cell, "primitive:99", Occupancy::Solid);
+        }
+        let repeater = Anchor { x: 2, y: 1, z: 0 };
+        let mut trunk: BTreeMap<Anchor, crate::redstone::world::block::BlockState> =
+            laid.iter().map(|&cell| (cell, compile::dust())).collect();
+        trunk.insert(
+            repeater,
+            compile::repeater(compile::direction_from(
+                Position::new(1, 1, 0),
+                Position::new(2, 1, 0),
+            )),
+        );
+
+        let goal = Anchor { x: 2, y: 1, z: 4 };
+        let route = Route::new("me".to_string(), laid.clone());
+        let own_join = OwnJoinCheck::for_branch(OwnJoinPolicy::Off, &route, &reservation);
+        let congestion = Congestion::default();
+        let path = strength_aware_astar(
+            pin,
+            goal,
+            goal,
+            "me",
+            &reservation,
+            &own_join,
+            &Prices::RipUp(&congestion),
+            &trunk,
+            crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
+        )
+        .expect("a legal route south exists past the walls");
+        for pair in path.windows(2) {
+            if pair[0] == repeater {
+                assert_eq!(
+                    pair[1],
+                    Anchor { x: 3, y: 1, z: 0 },
+                    "a diode emits only through its output face: {path:?}"
+                );
+            }
+            if pair[1] == repeater {
+                assert_eq!(
+                    pair[0],
+                    Anchor { x: 1, y: 1, z: 0 },
+                    "a diode accepts only through its input face: {path:?}"
+                );
+            }
+        }
     }
 
     /// A long straight corridor carries: the refresh model admits what
