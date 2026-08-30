@@ -127,14 +127,33 @@ interface assumption -- it is how the harness stands in for a caller.
   empty, and removed with the fixture teardown -- the shipped world contains
   neither.
 
+## Where pins come from
+
+A pin set has several sources and will grow more: a file today, a definition
+made in an editor, and -- planned -- coordinates picked in the game itself
+through a mod. They are adapters, not variants. **`PortPlacements` is the one
+representation the compiler knows**, and every source's only job is to
+produce one.
+
+Two consequences that are easy to get wrong and expensive to fix later:
+
+- **Validation belongs to the pin set, not to any parser.** A check written
+  in the JSON reader protects the file and abandons the editor and the mod.
+  Every named refusal in this document is stated against `PortPlacements`
+  and runs before planning, whoever assembled it.
+- **Refusals are structured, not prose.** An editor has to point at the pin
+  that is wrong and a mod has to highlight a block; both need the offending
+  port name and cell as data. A refusal that only renders as a sentence is a
+  refusal only a CLI can use.
+
 ## Plumbing
 
 `compile_planned` already takes `PortPlacements`; `compile_grown` gets the
 parameter it always plumbed internally and hard-coded to default
 (src/compile/mod.rs:7188 -- the growth loop underneath threads placements
 end to end already). `compile()` and the legacy emitter are not touched.
-`build_circuit` learns `--pins <file.json>` -- the pin-constraint file of the
-PCB analogy, the caller's whole side of the bargain:
+`build_circuit` learns `--pins <file.json>` -- the first adapter, the
+pin-constraint file of the PCB analogy:
 
     {"inputs":  {"d0": {"at": [x,y,z], "facing": "south"}, ...},
      "outputs": {"a":  {"at": [x,y,z], "facing": "south"}, ...}}
@@ -183,6 +202,9 @@ cells themselves.
 - Multi-cell pads, analog strength contracts, or promising any particular
   strength at the caller's cell.
 - Pinning a gate's position or facing. Ports only.
+- The editor and the in-game adapters themselves. This campaign ships the
+  representation they will target and the file adapter over it; building
+  them is their own work.
 - A board outline. The PCB analogy has one and REDA does not: worlds grow
   only toward positive coordinates and pinned anchors suppress the layout's
   drift translation, so today the pin coordinates *implicitly* decide where
