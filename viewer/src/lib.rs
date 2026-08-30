@@ -505,6 +505,7 @@ struct Pin {
     x: i32,
     y: i32,
     z: i32,
+    pinned: bool,
 }
 
 #[derive(Serialize)]
@@ -853,11 +854,14 @@ fn compute_gate_layers(netlist: &Netlist) -> Vec<i32> {
 // ---------------------------------------------------------------------
 
 /// One running instance of a circuit: the simulator plus enough bookkeeping
-/// to answer `pinout()` and to rebuild the circuit from scratch on `reset()`.
+/// to answer `pinout()` and restore its installed world on `reset()`.
 #[wasm_bindgen]
 pub struct Session {
     circuit_name: String,
     simulator: Simulator,
+    /// The settled world after caller fixtures have been installed. Reset
+    /// clones this instead of recompiling, so baked geometry stays baked.
+    initial_world: World,
     /// Signal name -> lever coordinate. Comes straight from
     /// `CompiledCircuit::input_positions`; every generator's input names
     /// double as the names `set_lever` takes.
@@ -867,6 +871,7 @@ pub struct Session {
     /// order (not alphabetical -- `full_adder`'s `sum` before `cout`,
     /// `seven_segment`'s `a` before `b`, etc).
     output_positions: Vec<(String, (i32, i32, i32))>,
+    pinned_outputs: Vec<(i32, i32, i32)>,
     /// The primitive-topology expansion of this circuit's own netlist --
     /// connectivity only, no positions (see this module's "Primitive
     /// topology" section and `compile::primitive_graph`'s own doc comment).
@@ -1151,7 +1156,7 @@ impl Session {
                 drive_caller_cell(&mut world, at, false);
             }
         }
-        for at in pinned_outputs {
+        for &at in &pinned_outputs {
             probe_caller_cell(&mut world, at);
         }
 
@@ -1165,13 +1170,17 @@ impl Session {
         simulator
             .run_until_stable(MAX_GAME_TICKS)
             .map_err(|error| format!("the circuit never settled: {error:?}"))?;
+        let initial_world = simulator.world().clone();
+        let simulator = Simulator::new(initial_world.clone());
 
         Ok(Session {
             circuit_name: circuit_name.to_string(),
             simulator,
+            initial_world,
             input_positions,
             input_controls,
             output_positions,
+            pinned_outputs,
             primitive_graph,
             gate_meta,
             source_netlist,
@@ -1320,7 +1329,7 @@ impl Session {
         vec![x, y, z]
     }
 
-    /// `{ inputs: [{name, x, y, z}], outputs: [{name, x, y, z}] }`.
+    /// `{ inputs: [{name, x, y, z, pinned}], outputs: [{name, x, y, z, pinned}] }`.
     ///
     /// Only meaningful when called from JS -- see the module doc comment on
     /// why a native `cargo test` cannot call this.
@@ -1328,12 +1337,24 @@ impl Session {
         let inputs = self
             .input_positions
             .iter()
-            .map(|(name, &(x, y, z))| Pin { name: name.clone(), x, y, z })
+            .map(|(name, &(x, y, z))| Pin {
+                name: name.clone(),
+                x,
+                y,
+                z,
+                pinned: self.input_controls[name] == InputControl::CallerCell,
+            })
             .collect();
         let outputs = self
             .output_positions
             .iter()
-            .map(|&(ref name, (x, y, z))| Pin { name: name.clone(), x, y, z })
+            .map(|&(ref name, (x, y, z))| Pin {
+                name: name.clone(),
+                x,
+                y,
+                z,
+                pinned: self.pinned_outputs.contains(&(x, y, z)),
+            })
             .collect();
         serde_wasm_bindgen::to_value(&Pinout { inputs, outputs })
             .expect("Pinout serializes without error -- it is plain strings and integers")
@@ -1399,10 +1420,13 @@ impl Session {
         self.simulator.current_tick() as u32
     }
 
-    /// Rebuild the circuit from scratch, discarding every input change and
-    /// resetting the tick count to 0.
+    /// Restore the fixture-installed initial world, discarding every input
+    /// change while preserving baked geometry and pin metadata.
     pub fn reset(&mut self) -> Result<(), JsValue> {
-        *self = Session::build(&self.circuit_name).map_err(|error| JsValue::from_str(&error))?;
+        self.simulator = Simulator::new(self.initial_world.clone());
+        self.simulator
+            .run_until_stable(MAX_GAME_TICKS)
+            .map_err(|error| JsValue::from_str(&format!("{error:?}")))?;
         Ok(())
     }
 
@@ -1975,6 +1999,7 @@ mod repeater_delay_geometry_tests {
             state.name = "minecraft:repeater".to_string();
             world.set(i as i32 * 2, 0, 0, state);
         }
+        let initial_world = world.clone();
         let simulator = Simulator::new(world);
         // This fixture bypasses `Session::build` entirely (see this module's
         // doc comment), so `primitive_graph`/`gate_meta` need a value from
@@ -1987,9 +2012,11 @@ mod repeater_delay_geometry_tests {
         Session {
             circuit_name: "repeater_delay_test_fixture".to_string(),
             simulator,
+            initial_world,
             input_positions: BTreeMap::new(),
             input_controls: BTreeMap::new(),
             output_positions: Vec::new(),
+            pinned_outputs: Vec::new(),
             primitive_graph,
             gate_meta: Vec::new(),
             source_netlist: empty_netlist,
@@ -2090,6 +2117,37 @@ mod pinned_baked_session_tests {
         );
 
         for input in ["b", "c", "d"] {
+            session.set_lever(input, true).unwrap();
+        }
+        session.run_until_stable().unwrap();
+        assert!(session.simulator.world().get(53, 1, 10).lit);
+    }
+
+    #[test]
+    fn pinned_baked_reset_restores_the_same_fixture_installed_world() {
+        let mut session = Session::build_inner("grown:and4", Some(pinned_and4_baked_parts()))
+            .expect("typed baked session builds");
+
+        for input in ["a", "b", "c", "d"] {
+            session.set_lever(input, true).unwrap();
+        }
+        session.run_until_stable().unwrap();
+        assert!(session.simulator.world().get(53, 1, 10).lit);
+
+        session.reset().unwrap();
+
+        assert_eq!(session.tick_count(), 0);
+        assert_eq!(
+            session.simulator.world().get(21, 1, 62).kind,
+            BlockKind::Air
+        );
+        assert_eq!(
+            session.simulator.world().get(53, 1, 10).kind,
+            BlockKind::Lamp
+        );
+        assert!(!session.simulator.world().get(53, 1, 10).lit);
+
+        for input in ["a", "b", "c", "d"] {
             session.set_lever(input, true).unwrap();
         }
         session.run_until_stable().unwrap();

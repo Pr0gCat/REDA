@@ -770,6 +770,7 @@ function buildLeverUI() {
 }
 
 function toggleLever(name, btn) {
+  const pin = pinout.inputs.find(pin => pin.name === name);
   const next = !leverState.get(name);
   leverState.set(name, next);
   try {
@@ -794,7 +795,11 @@ function toggleLever(name, btn) {
   outputSliceCache.clear();
   refreshSlice();
   refreshOutputs();
-  update3DStrengths();
+  if (pin.pinned) {
+    build3DGeometry();
+  } else {
+    update3DStrengths();
+  }
 }
 
 // ---------------------------------------------------------------------
@@ -1410,11 +1415,9 @@ function decodeGeometry(bytes) {
   return { count, coords, kinds, facings, faces, delays };
 }
 
-/** Rebuild the 3D scene's static geometry from scratch. Called once per
- * circuit (on load or reset) -- never on a lever flip or a step. That split
- * is exactly what `Session::geometry()` vs `Session::strengths()` documents:
- * the set of non-air cells never changes as the simulation runs, only what
- * they light up as.
+/** Rebuild the 3D scene's static geometry from scratch. Called on circuit
+ * load/reset and when a pinned input swaps Air and RedstoneBlock. Unpinned
+ * lever flips and simulation steps only change strengths.
  *
  * Groups cells into one `InstancedMesh` per shape family (`familyForCell`)
  * instead of one mesh for everything -- `seven_segment`'s 19,050 cells stay
@@ -3632,9 +3635,9 @@ resetBtn.addEventListener('click', () => {
   outputSliceCache.clear();
   refreshSlice();
   refreshOutputs();
-  // reset() rebuilds the world from scratch, so the set of non-air cells
-  // and their coordinates could in principle differ -- rebuild the 3D
-  // geometry too, not just its colours, to stay safe against that.
+  // reset() restores the fixture-installed world, whose non-air cells can
+  // differ from the currently driven pinned inputs. Rebuild geometry, not
+  // just its colours.
   build3DGeometry();
 });
 
