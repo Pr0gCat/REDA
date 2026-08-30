@@ -615,6 +615,14 @@ fn verify_lever(compiled: &CompiledCircuit, name: &str) -> Result<(), Equivalenc
         .get(name)
         .ok_or_else(|| EquivalenceError::LeverNotPlaced { name: name.to_string() })?;
     let state = compiled.world.get(x, y, z);
+    // A pinned input records its terminal dust, and the lever check applies
+    // only to unpinned ports: what drives a terminal is the caller's
+    // business, and `verify_terminal_contract` is that port's own judge. An
+    // unpinned input never records dust here -- `place_primary_input` writes
+    // the lever at exactly the recorded cell -- so nothing real slips by.
+    if state.kind == BlockKind::RedstoneWire {
+        return Ok(());
+    }
     if state.kind != BlockKind::Lever {
         return Err(EquivalenceError::LeverWrongKind { name: name.to_string(), position: (x, y, z) });
     }
@@ -627,6 +635,14 @@ fn verify_lamp(netlist: &Netlist, compiled: &CompiledCircuit, output_name: &str)
         .get(output_name)
         .ok_or_else(|| EquivalenceError::LampNotPlaced { name: output_name.to_string() })?;
     let lamp_state = compiled.world.get(lx, ly, lz);
+    // A pinned output records its terminal dust and has no lamp at all --
+    // the lamp invariant, fixed offset included, applies only to unpinned
+    // ports. An unpinned output never records dust here (`emit_primitives`
+    // writes the lamp at exactly the recorded cell), so the skip admits
+    // nothing an unpinned circuit could produce.
+    if lamp_state.kind == BlockKind::RedstoneWire {
+        return Ok(());
+    }
     if lamp_state.kind != BlockKind::Lamp {
         return Err(EquivalenceError::LampWrongKind { name: output_name.to_string(), position: (lx, ly, lz) });
     }

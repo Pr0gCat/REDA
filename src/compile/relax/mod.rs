@@ -600,8 +600,13 @@ fn terminal_lawful_facings(graph: &BodyGraph, body: usize) -> Vec<crate::compile
     let mut fixed_claims: Vec<(i32, i32, i32)> = Vec::new();
     let mut foreign_dust: Vec<(i32, i32, i32)> = Vec::new();
     for (index, other) in graph.bodies.iter().enumerate() {
-        let build::BodyKind::InputTerminal { outside: their_outside } = other.what else {
-            continue;
+        // Both kinds of terminal are fully determined claims: an output
+        // terminal has no repeater or pin of its own, but its dust, floor
+        // and reserved outside cell are exactly as fixed as an input's.
+        let their_outside = match other.what {
+            build::BodyKind::InputTerminal { outside }
+            | build::BodyKind::OutputTerminal { outside } => outside,
+            _ => continue,
         };
         if index == body {
             continue;

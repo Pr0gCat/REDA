@@ -1257,6 +1257,12 @@ pub enum CompileError {
     /// replay target. This distinguishes an identity/style mismatch from a
     /// legal circuit that merely fails a redstone invariant.
     CandidateMetadataViolation { item: String, reason: String },
+    /// A pinned port's realised world breaks the terminal contract: the
+    /// pinned cell does not hold its one terminal dust, the reserved outside
+    /// cell is not empty, or the outside cell sits adjacent to another net's
+    /// cells -- which would let the caller's attachment drive a net it never
+    /// agreed to touch.
+    PortTerminalViolation { port: String, reason: String },
     /// A report that reads the row/channel/track emitter's geometry was asked
     /// about a circuit that emitter did not lay out.
     ///
@@ -1337,6 +1343,12 @@ pub enum SignalSink {
         output: String,
         lamp: (i32, i32, i32),
     },
+    /// A pinned declared output's terminal dust: the net must deliver
+    /// strength >= 1 at the pinned cell itself.
+    OutputTerminal {
+        output: String,
+        terminal: (i32, i32, i32),
+    },
 }
 
 /// Which condition of the torch-merge invariant failed. See
@@ -1403,6 +1415,9 @@ impl std::fmt::Display for CompileError {
             CompileError::CandidateMetadataViolation { item, reason } => {
                 write!(f, "candidate metadata violation for {item}: {reason}")
             }
+            CompileError::PortTerminalViolation { port, reason } => {
+                write!(f, "terminal contract violation for port `{port}`: {reason}")
+            }
             CompileError::ConnectivityViolation { cell, found_net, expected_cell, expected_net } => {
                 write!(
                     f,
@@ -1455,6 +1470,13 @@ impl std::fmt::Display for CompileError {
                      output `{output}`'s lamp at {lamp:?} -- the geometry is structurally \
                      connected but the real, decayed signal dies out before it arrives"
                 ),
+                SignalSink::OutputTerminal { output, terminal } => write!(
+                    f,
+                    "signal-strength violation: net `{net}` never delivers a non-zero signal to \
+                     output `{output}`'s terminal dust at {terminal:?} -- the geometry is \
+                     structurally connected but the real, decayed signal dies out before it \
+                     arrives"
+                ),
             },
             CompileError::NotALegacyLayout { report } => write!(
                 f,
@@ -1475,7 +1497,9 @@ pub struct CompiledCircuit {
     /// Each output signal's reading point -- the coordinate of the redstone
     /// lamp that lights up when the signal is high, not the internal NOR
     /// gate's output torch. This is what a person standing in front of the
-    /// pasted circuit actually looks at.
+    /// pasted circuit actually looks at. For a **pinned** output there is no
+    /// lamp: this records the terminal dust at the pinned cell, and high
+    /// means strength > 0 there -- the contract's own reading.
     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
     /// Every gate's actual output position -- the wall torch that is this
     /// gate's real output -- keyed by the gate's output signal name.
@@ -2706,6 +2730,21 @@ pub(crate) fn place_input_terminal(
     world.set(pin.x, pin.y, pin.z, dust());
 
     (home, pin)
+}
+
+/// Write a pinned output's terminal: one redstone dust on its own floor block
+/// at `home`, and nothing else.
+///
+/// No lamp -- what reads the dust is the caller's business, and the contract
+/// is stated over this very cell: logically high means strength > 0 here,
+/// low means 0. The route that feeds it ends *at* this cell (its final dust
+/// is this dust), so the write is shared with `emit_routes` and idempotent.
+/// The cell on the port's `outside` face is deliberately not written: it
+/// ships empty for the caller to attach to.
+pub(crate) fn place_output_terminal(world: &mut World, home: Position) -> Position {
+    ensure_floor(world, home);
+    world.set(home.x, home.y, home.z, dust());
+    home
 }
 
 /// Where a socket's approach column has to run.
@@ -6497,7 +6536,8 @@ pub(crate) fn input_source_component(
 /// The signal-strength invariant: every net must deliver a non-zero signal
 /// to every one of its own declared gate-input sinks, and every declared
 /// circuit output must receive a non-zero signal from its driving gate's
-/// output torch. See this section's own doc comment for what makes this
+/// output torch -- or, for a pinned output, at its terminal dust itself:
+/// same check, new address. See this section's own doc comment for what makes this
 /// different from `verify_connectivity`/`verify_torch_merge`, and
 /// `net_signal_strength` for how the arriving strength is actually derived.
 ///
@@ -6672,8 +6712,35 @@ fn verify_signal_strength(
         let torch_state = world.get(tx, ty, tz);
         let &(lx, ly, lz) = output_positions
             .get(output_name)
-            .expect("emit records a lamp position for every declared output");
+            .expect("emit records a reading point for every declared output");
         let lamp_pos = Position::new(lx, ly, lz);
+
+        // A pinned output records its terminal dust rather than a lamp --
+        // the same block-kind sniff `input_source_component` makes on the
+        // input side. Same check, new address: the net must deliver a
+        // non-zero signal at the pinned cell itself, read off the very
+        // group walk every other sink of this net was judged by.
+        if world.get(lx, ly, lz).kind == BlockKind::RedstoneWire {
+            let &n = index_of_signal
+                .get(output_name.as_str())
+                .expect("a pinned output's terminal branch always gives its signal a net");
+            let delivered = group_strength
+                .get(&groups.root(n))
+                .and_then(|strength| strength.get(&lamp_pos))
+                .copied()
+                .unwrap_or(0);
+            if delivered == 0 {
+                return Err(CompileError::SignalStrengthViolation {
+                    net: output_name.clone(),
+                    sink: SignalSink::OutputTerminal {
+                        output: output_name.clone(),
+                        terminal: (lx, ly, lz),
+                    },
+                });
+            }
+            continue;
+        }
+
         let pin = lamp_pos.up();
 
         let delivers = if netlist.gates[g].is_merge() {
@@ -6759,6 +6826,37 @@ pub(crate) fn verify_route_terminal(
     route: &str,
     terminal: &RouteTerminal,
 ) -> Result<(), CompileError> {
+    // A pinned output's terminal is no gate's socket: its `sink.gate` carries
+    // the port name (the producing gate's own output signal), and the only
+    // structural claim to check is the contract's -- one redstone dust at the
+    // recorded cell, owned by this very net.
+    if terminal.kind == RouteTerminalKind::OutputTerminalDust {
+        let anchor = terminal.sink.anchor;
+        let position = Position::new(anchor.x, anchor.y, anchor.z);
+        if reservation.get(&position) != Some(&net) {
+            return Err(CompileError::SpacingViolation {
+                cell: (position.x, position.y, position.z),
+                expected_net: route.to_string(),
+                found_net: reservation
+                    .get(&position)
+                    .and_then(|owner| nets.get(*owner))
+                    .map(|owner| net_source_name(netlist, owner).to_string()),
+            });
+        }
+        let actual = world.get(position.x, position.y, position.z).kind;
+        if actual != BlockKind::RedstoneWire {
+            return Err(CompileError::CandidateMetadataViolation {
+                item: route.to_string(),
+                reason: format!(
+                    "output `{}`'s terminal at ({}, {}, {}) must be one redstone dust, \
+                     found {actual:?}",
+                    terminal.sink.gate, position.x, position.y, position.z
+                ),
+            });
+        }
+        return Ok(());
+    }
+
     let gate = netlist
         .gates
         .iter()
@@ -6803,6 +6901,9 @@ pub(crate) fn verify_route_terminal(
         RouteTerminalKind::DirectedDustIntoSupport => actual == BlockKind::RedstoneWire && !bare,
         RouteTerminalKind::BareMergeDust => actual == BlockKind::RedstoneWire && bare,
         RouteTerminalKind::BareMergeRepeater => actual == BlockKind::Repeater && bare,
+        // Handled by the early return above; a fall-through here would mean
+        // the sink resolved as a gate, which an output terminal never is.
+        RouteTerminalKind::OutputTerminalDust => unreachable!("returned above"),
     };
     if !matches {
         return Err(CompileError::CandidateMetadataViolation {

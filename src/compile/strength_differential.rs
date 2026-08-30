@@ -490,11 +490,12 @@ pub(crate) fn walk_by_group(
 /// The refusal this replica would issue, in `verify_signal_strength`'s own
 /// words and its own order.
 ///
-/// Only the gate-input arm. The judge's declared-output arm is, for a non-merge
-/// gate, a purely structural single-hop test that never consults the walk, so a
-/// differential against the simulator has nothing to say about it; a
-/// merge-sourced output does consult the walk, and whether any circuit measured
-/// here has one is recorded rather than assumed.
+/// Only the gate-input arm. The judge's declared-output arm is, for an
+/// unpinned non-merge gate, a purely structural single-hop test that never
+/// consults the walk, so a differential against the simulator has nothing to
+/// say about it; a merge-sourced output and a pinned output's terminal both
+/// do consult the walk, and whether any circuit measured here has either is
+/// recorded rather than assumed.
 fn replica_refusal(
     world: &World,
     netlist: &Netlist,

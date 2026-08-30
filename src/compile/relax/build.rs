@@ -247,6 +247,11 @@ pub enum BodyKind {
     /// `outside` face belongs to the caller and the repeater may never stand
     /// in that reserved cell.
     InputTerminal { outside: Facing },
+    /// A pinned output's terminal: one dust on its own floor at the pinned
+    /// cell, an extra sink on the declared output's net. Always pinned, and
+    /// facing-blind -- dust is isotropic, so unlike an input terminal there
+    /// is no repeater side to sweep; only the `outside` cell is reserved.
+    OutputTerminal { outside: Facing },
 }
 
 /// Where on a body a spring attaches.
@@ -342,6 +347,9 @@ pub fn pin_hops(body: &Body) -> i32 {
     match body.what {
         BodyKind::Primitive { kind: Primitive::Torch, .. } => 2,
         BodyKind::InputTerminal { .. } => 2,
+        // An output terminal is a sink, not a source: the spring from its
+        // producer attaches at the terminal dust itself, zero hops out.
+        BodyKind::OutputTerminal { .. } => 0,
         _ => 1,
     }
 }
@@ -415,6 +423,20 @@ pub struct Cell {
 pub fn cells(body: &Body) -> Vec<Cell> {
     let facing = body.facing;
     let mut cells = Vec::new();
+
+    // An output terminal fits neither arm below: it carries a net without
+    // driving one. Its dust conducts on the net that arrives; the floor
+    // `place_output_terminal` lays and the reserved outside cell are inert --
+    // claimed for cell exclusivity, which is the whole claim an always-empty
+    // cell needs.
+    if let BodyKind::OutputTerminal { outside } = body.what {
+        let reserved = Position::new(0, 0, 0).offset(outside);
+        return vec![
+            Cell { offset: (0, 0, 0), carries: body.inputs.clone() },
+            Cell { offset: (0, -1, 0), carries: Vec::new() },
+            Cell { offset: (reserved.x, reserved.y, reserved.z), carries: Vec::new() },
+        ];
+    }
 
     match (&body.output, body.inputs.is_empty()) {
         // A body carrying a gate's output is a gate cell: support or junction,
@@ -564,7 +586,14 @@ pub fn build(
     start: &[Anchor],
     pinned: &PortPlacements,
 ) -> Result<BodyGraph, String> {
-    let node_count = netlist.gates.len() + netlist.inputs.len();
+    // Candidate node order: gates, then primary inputs, then one node per
+    // pinned declared output -- the terminal body its route must reach.
+    let pinned_outputs: Vec<&String> = netlist
+        .outputs
+        .iter()
+        .filter(|name| pinned.get(name).is_some())
+        .collect();
+    let node_count = netlist.gates.len() + netlist.inputs.len() + pinned_outputs.len();
     assert_eq!(start.len(), node_count, "one start anchor per candidate node");
 
     let mut bodies: Vec<Body> = Vec::new();
@@ -731,7 +760,27 @@ pub fn build(
         anchor_body[candidate_node] = bodies.len() - 1;
     }
 
-    let pulls = signal_pulls(netlist, &anchor_body, &welds);
+    // A pinned output is a terminal body of its own: an extra sink on the
+    // declared output's net, pinned so only the producing gate moves toward
+    // it. Its facing is irrelevant to its cells (dust is isotropic), so the
+    // sweep may turn it freely and nothing changes.
+    for (index, name) in pinned_outputs.iter().enumerate() {
+        let candidate_node = netlist.gates.len() + netlist.inputs.len() + index;
+        let pin = pinned.get(name).expect("filtered on pinned above");
+        bodies.push(Body {
+            what: BodyKind::OutputTerminal { outside: pin.outside },
+            position: [pin.at.x as f64, pin.at.y as f64, pin.at.z as f64],
+            // The net that arrives at this dust; it drives nothing onward.
+            inputs: vec![(*name).clone()],
+            output: None,
+            facing: CellFacing::NORTH,
+            pinned: true,
+        });
+        nodes[candidate_node].push(bodies.len() - 1);
+        anchor_body[candidate_node] = bodies.len() - 1;
+    }
+
+    let pulls = signal_pulls(netlist, &anchor_body, &welds, pinned);
 
     debug_assert!(
         bodies.iter().all(|body| match body.what {
@@ -764,10 +813,19 @@ pub(crate) fn terminal_default_facing(outside: Facing) -> CellFacing {
 /// One pull per declared gate input: from the producer's outgoing pin to the
 /// consumer's socket for that branch.
 ///
-/// A declared output's lamp gets none. `emit_primitives` hangs it under its
-/// producer's pin and `PlanCandidate` has no anchor for it, so its position is
-/// not something relaxation chooses.
-fn signal_pulls(netlist: &Netlist, anchor_body: &[usize], welds: &[Weld]) -> Vec<Pull> {
+/// An unpinned declared output's lamp gets none. `emit_primitives` hangs it
+/// under its producer's pin and `PlanCandidate` has no anchor for it, so its
+/// position is not something relaxation chooses. A **pinned** output is
+/// different: its terminal is a body, and the spring from the producer's pin
+/// to the terminal dust (zero rest, terminal pinned) is what pulls the
+/// circuit toward the pinned coordinate instead of the router discovering
+/// the distance after placement froze.
+fn signal_pulls(
+    netlist: &Netlist,
+    anchor_body: &[usize],
+    welds: &[Weld],
+    pinned: &PortPlacements,
+) -> Vec<Pull> {
     let mut producer_node = std::collections::BTreeMap::new();
     for (index, gate) in netlist.gates.iter().enumerate() {
         producer_node.insert(gate.output.as_str(), index);
@@ -815,6 +873,25 @@ fn signal_pulls(netlist: &Netlist, anchor_body: &[usize], welds: &[Weld]) -> Vec
                 rest: SIGNAL_REST_LENGTH,
             });
         }
+    }
+
+    // Producer pin -> pinned output's terminal dust. `Attach::Pin` on the
+    // terminal is its own cell ([`pin_hops`] is zero there), and the terminal
+    // is pinned, so only the gate end of this spring ever moves.
+    let mut terminal_node = netlist.gates.len() + netlist.inputs.len();
+    for name in &netlist.outputs {
+        if pinned.get(name).is_none() {
+            continue;
+        }
+        if let Some(&producer) = producer_node.get(name.as_str()) {
+            pulls.push(Pull {
+                from: (anchor_body[producer], Attach::Pin),
+                to: (anchor_body[terminal_node], Attach::Pin),
+                stiffness: SIGNAL_STIFFNESS,
+                rest: SIGNAL_REST_LENGTH,
+            });
+        }
+        terminal_node += 1;
     }
     pulls
 }
@@ -1005,6 +1082,64 @@ mod tests {
         assert!(!built.bodies[built.anchor_body[0]].pinned, "nothing pinned the gate");
     }
 
+    /// A pinned output is a **terminal body**: one extra pinned body at the
+    /// pinned cell, pulled from its producer's pin with the ordinary signal
+    /// spring -- so the placer drags the producing gate toward the terminal
+    /// while the terminal itself takes no force. The gate stays free.
+    #[test]
+    fn a_pinned_output_is_a_pinned_terminal_body_pulled_by_its_producer() {
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["out".into()],
+            gates: vec![nor("out", &["a"])],
+        };
+        let mut placements = PortPlacements::default();
+        placements.pin("out", Anchor { x: 40, y: 1, z: 9 }, Facing::South);
+
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
+        // One extra start anchor: the terminal is a candidate node of its own.
+        let start = vec![Anchor { x: 0, y: 1, z: 0 }; 3];
+        let built = build(&netlist, &graph, &start, &placements).expect("builds");
+
+        assert_eq!(built.anchor_body.len(), 3, "gate, input, and the output's terminal");
+        let terminal = built.anchor_body[2];
+        assert!(built.bodies[terminal].pinned, "a pinned output must be a pinned body");
+        assert_eq!(built.bodies[terminal].position, [40.0, 1.0, 9.0]);
+        assert!(
+            matches!(
+                built.bodies[terminal].what,
+                BodyKind::OutputTerminal { outside: Facing::South }
+            ),
+            "a pin declares a terminal, not a nailed-down gate"
+        );
+        assert!(!built.bodies[built.anchor_body[0]].pinned, "the producing gate stays free");
+
+        let pull = built
+            .pulls
+            .iter()
+            .find(|pull| pull.to.0 == terminal)
+            .expect("the producer's pin is sprung to the terminal");
+        assert_eq!(pull.from.0, built.anchor_body[0], "the spring leaves the producer");
+        assert_eq!(pull.rest, 0.0, "zero rest: the gate is pulled all the way in");
+        assert_eq!(
+            attach_offset(Attach::Pin, &built.bodies[terminal]),
+            [0.0, 0.0, 0.0],
+            "the spring attaches at the terminal dust itself"
+        );
+
+        let cells = cells(&built.bodies[terminal]);
+        assert_eq!(cells.len(), 3, "dust, floor, and the reserved outside cell");
+        assert_eq!(
+            cells[0].carries,
+            vec!["out".to_string()],
+            "the terminal dust conducts on the net that arrives"
+        );
+        assert!(
+            cells.iter().any(|cell| cell.offset == (0, 0, 1) && cell.carries.is_empty()),
+            "the outside cell is claimed and inert -- it ships empty for the caller"
+        );
+    }
+
     /// Pinning by a gate's output signal is the removed behaviour: a pin
     /// declares a port's terminal, and no gate body ever takes a pin any
     /// more -- even when a placement names its output. (Reaching `build` with
@@ -1021,7 +1156,8 @@ mod tests {
         placements.pin("out", Anchor { x: 40, y: 1, z: 9 }, Facing::South);
 
         let graph = expand(&netlist, &Library::default_library()).expect("expands");
-        let start = vec![Anchor { x: 0, y: 1, z: 0 }; 2];
+        // Three anchors: the pin declares a terminal node of its own now.
+        let start = vec![Anchor { x: 0, y: 1, z: 0 }; 3];
         let built = build(&netlist, &graph, &start, &placements).expect("builds");
 
         let gate = built.anchor_body[0];
