@@ -28,9 +28,15 @@
 
 use reda::circuits::seven_segment::TRUTH_TABLE;
 use reda::circuits::verilog;
-use reda::compile::compile;
+use reda::compile::{compile, input_terminal_reader, output_terminal_handover};
 use reda::compile::lowering::lower_optimised;
+use reda::formats::litematic;
+use reda::redstone::simulator::position::Position;
+use reda::redstone::world::block::BlockKind;
 use reda_viewer::{list_circuits, Axis, Session};
+use serde_json::Value;
+use std::collections::BTreeSet;
+use std::path::Path;
 
 /// Bytes per cell in `Session::geometry`'s packed output -- the layout that
 /// method documents (`[x, y, z, kind, facing, face, delay]`, coordinates as
@@ -77,6 +83,128 @@ fn output_positions(circuit_name: &str) -> Vec<(i32, i32, i32)> {
         .iter()
         .map(|(_port, signal)| *compiled.output_positions.get(signal).expect("compile places every output"))
         .collect()
+}
+
+fn json_coordinate(value: &Value, field: &str, port: &str) -> [i32; 3] {
+    let values = value
+        .as_array()
+        .unwrap_or_else(|| panic!("`{port}`'s `{field}` must be a coordinate array, got {value}"));
+    assert_eq!(
+        values.len(),
+        3,
+        "`{port}`'s `{field}` must have three coordinates"
+    );
+    let mut coordinate = [0; 3];
+    for (index, value) in values.iter().enumerate() {
+        let value = value
+            .as_i64()
+            .unwrap_or_else(|| panic!("`{port}`'s `{field}` coordinate #{index} is not an integer"));
+        coordinate[index] = i32::try_from(value).unwrap_or_else(|_| {
+            panic!("`{port}`'s `{field}` coordinate #{index} is outside the i32 world range")
+        });
+    }
+    coordinate
+}
+
+/// The generated files are shipping artifacts, not test fixtures generated on
+/// demand. This reads those exact checked-in bytes and catches either half of
+/// the artifact drifting: the sidecar must retain the public glyph labels and
+/// literal geometry, while the litematic must contain the matching terminal
+/// handovers and leave every caller-owned `at` cell empty.
+#[test]
+fn checked_in_grown_decoder_is_the_pinned_glyph() {
+    let baked = Path::new(env!("CARGO_MANIFEST_DIR")).join("baked");
+    let pinout_text = std::fs::read_to_string(baked.join("verilog_seven_segment.grown.pinout.json"))
+        .expect("the grown decoder pinout is checked in");
+    let pinout: Value =
+        serde_json::from_str(&pinout_text).expect("the grown decoder pinout is JSON");
+    let inputs = pinout["inputs"]
+        .as_object()
+        .expect("pinout inputs are an object");
+    let outputs = pinout["outputs"]
+        .as_object()
+        .expect("pinout outputs are an object");
+
+    let input_keys: BTreeSet<&str> = inputs.keys().map(String::as_str).collect();
+    assert_eq!(input_keys, BTreeSet::from(["d0", "d1", "d2", "d3"]));
+    let output_keys: BTreeSet<&str> = outputs.keys().map(String::as_str).collect();
+    assert_eq!(
+        output_keys,
+        BTreeSet::from(["a", "b", "c", "d", "e", "f", "g"])
+    );
+    assert_eq!(
+        inputs.len() + outputs.len(),
+        11,
+        "the decoder ships eleven pinned ports"
+    );
+
+    let expected_inputs = [
+        ("d3", [76, 1, 120], "north", [76, 1, 119]),
+        ("d2", [88, 1, 120], "north", [88, 1, 119]),
+        ("d1", [100, 1, 120], "north", [100, 1, 119]),
+        ("d0", [112, 1, 120], "north", [112, 1, 119]),
+    ];
+    let expected_outputs = [
+        ("a", [76, 1, 24], "north", [76, 1, 25]),
+        ("b", [84, 1, 32], "east", [83, 1, 32]),
+        ("c", [84, 1, 48], "east", [83, 1, 48]),
+        ("d", [76, 1, 56], "south", [76, 1, 55]),
+        ("e", [68, 1, 48], "west", [69, 1, 48]),
+        ("f", [68, 1, 32], "west", [69, 1, 32]),
+        ("g", [76, 1, 40], "west", [77, 1, 40]),
+    ];
+
+    let world = litematic::load(&baked.join("verilog_seven_segment.grown.litematic"))
+        .expect("the checked-in grown decoder litematic loads");
+    for (is_input, expected) in [
+        (true, expected_inputs.as_slice()),
+        (false, expected_outputs.as_slice()),
+    ] {
+        let ports = if is_input { inputs } else { outputs };
+        for &(name, at, toward, handover) in expected {
+            let entry = ports[name]
+                .as_object()
+                .unwrap_or_else(|| {
+                    panic!(
+                        "`{name}` must be a structured pinned entry, got {}",
+                        ports[name]
+                    )
+                });
+            assert_eq!(
+                entry.len(),
+                3,
+                "`{name}` must report only at, toward and handover"
+            );
+            assert_eq!(json_coordinate(&entry["at"], "at", name), at, "`{name}` moved");
+            assert_eq!(
+                entry["toward"].as_str(),
+                Some(toward),
+                "`{name}` changed direction"
+            );
+            assert_eq!(
+                json_coordinate(&entry["handover"], "handover", name),
+                handover,
+                "`{name}` reported the wrong handover"
+            );
+
+            let recorded = Position::new(at[0], at[1], at[2]);
+            assert_eq!(
+                world.get(recorded.x, recorded.y, recorded.z).kind,
+                BlockKind::Air,
+                "`{name}`'s caller cell must ship empty"
+            );
+            let found = if is_input {
+                input_terminal_reader(&world, recorded)
+            } else {
+                output_terminal_handover(&world, recorded)
+            };
+            assert_eq!(
+                found,
+                Some(Position::new(handover[0], handover[1], handover[2])),
+                "`{name}`'s reported handover must be the shipped terminal"
+            );
+        }
+    }
 }
 
 /// The hand-written size ladder first, then the Verilog catalog verbatim --

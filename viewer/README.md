@@ -58,6 +58,13 @@ from the checked-in netlists in `src/circuits/baked/` -- a browser cannot run
 Yosys, so those are baked at build time and held to fresh synthesis by
 `the_baked_netlists_match_fresh_synthesis`.
 
+`grown:verilog:seven_segment` is different: it fetches the checked-in grown
+`.litematic` and its structured pinout. Every pinned `at` cell belongs to the
+caller and is deliberately Air in that litematic; the artifact contains
+neither input sources nor output lamps. The viewer installs its controllable
+sources and probe lamps in those caller cells only in the runtime session;
+reset starts from the fixture-free checked-in world and installs fresh ones.
+
 ### 2D Slice
 
 1. Pick a circuit from the **Circuit** dropdown (populated from
