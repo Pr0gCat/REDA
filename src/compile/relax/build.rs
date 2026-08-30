@@ -241,17 +241,16 @@ pub enum BodyKind {
     /// A declared wire merge. `expand` produces no primitive for one, and
     /// `place_merge_gate` writes blocks at its anchor regardless.
     Junction { gate: usize },
-    /// A pinned input's terminal: dust on its own floor at the pinned cell,
-    /// normalized by a repeater one cell inward. Always pinned, so it never
-    /// moves -- but it still turns, three ways rather than four, because the
-    /// `outside` face belongs to the caller and the repeater may never stand
-    /// in that reserved cell.
-    InputTerminal { outside: Facing },
-    /// A pinned output's terminal: one dust on its own floor at the pinned
-    /// cell, an extra sink on the declared output's net. Always pinned, and
-    /// facing-blind -- dust is isotropic, so unlike an input terminal there
-    /// is no repeater side to sweep; only the `outside` cell is reserved.
-    OutputTerminal { outside: Facing },
+    /// A pinned input's terminal: the caller's own cell (claimed, written by
+    /// nobody), a normalizing repeater in the neighbour `toward` names, and
+    /// the route's source one cell further. Always pinned, and it does not
+    /// turn: `toward` fixes the single lawful realisation, which is what makes
+    /// a pin a specification rather than a hint.
+    InputTerminal { toward: Facing },
+    /// A pinned output's terminal: the caller's own cell, plus the delivery
+    /// repeater in the neighbour opposite `toward`, driving into it. Always
+    /// pinned, and just as fixed as an input's.
+    OutputTerminal { toward: Facing },
 }
 
 /// Where on a body a spring attaches.
@@ -348,7 +347,7 @@ pub fn pin_hops(body: &Body) -> i32 {
         BodyKind::Primitive { kind: Primitive::Torch, .. } => 2,
         BodyKind::InputTerminal { .. } => 2,
         // An output terminal is a sink, not a source: the spring from its
-        // producer attaches at the terminal dust itself, zero hops out.
+        // producer attaches at the caller's own cell, zero hops out.
         BodyKind::OutputTerminal { .. } => 0,
         _ => 1,
     }
@@ -425,16 +424,23 @@ pub fn cells(body: &Body) -> Vec<Cell> {
     let mut cells = Vec::new();
 
     // An output terminal fits neither arm below: it carries a net without
-    // driving one. Its dust conducts on the net that arrives; the floor
-    // `place_output_terminal` lays and the reserved outside cell are inert --
-    // claimed for cell exclusivity, which is the whole claim an always-empty
-    // cell needs.
-    if let BodyKind::OutputTerminal { outside } = body.what {
-        let reserved = Position::new(0, 0, 0).offset(outside);
+    // driving one. Its own position is the **caller's** cell, which REDA never
+    // writes -- yet it still carries the port's net here, because that is what
+    // keeps foreign bodies away from a cell the caller is about to power or
+    // read. The handover one step against `toward` is the delivery repeater;
+    // the floor under it is inert.
+    if let BodyKind::OutputTerminal { toward } = body.what {
+        let handover = Position::new(0, 0, 0).offset(toward.opposite());
         return vec![
             Cell { offset: (0, 0, 0), carries: body.inputs.clone() },
-            Cell { offset: (0, -1, 0), carries: Vec::new() },
-            Cell { offset: (reserved.x, reserved.y, reserved.z), carries: Vec::new() },
+            Cell {
+                offset: (handover.x, handover.y, handover.z),
+                carries: body.inputs.clone(),
+            },
+            Cell {
+                offset: (handover.x, handover.y - 1, handover.z),
+                carries: Vec::new(),
+            },
         ];
     }
 
@@ -507,24 +513,19 @@ pub fn cells(body: &Body) -> Vec<Cell> {
                         carries: Vec::new(),
                     });
                 }
-                // `place_input_terminal` floors all three of its cells --
-                // dust, normalizing repeater, pin -- and its `outside` cell is
-                // claimed while staying empty: it is the caller's attachment
-                // point, and inert here means cell exclusivity is the whole
-                // claim, exactly what an always-empty cell needs.
-                BodyKind::InputTerminal { outside } => {
+                // `place_input_terminal` floors the two cells it writes -- the
+                // normalizing repeater and the pin -- and nothing else. The
+                // caller's own cell at hop zero is left entirely alone, its
+                // floor included, because whatever the caller builds there may
+                // need that cell for itself.
+                BodyKind::InputTerminal { .. } => {
                     let out_step = Position::new(0, 0, 0).offset(out);
-                    for hops in 0..=pin_hops(body) {
+                    for hops in 1..=pin_hops(body) {
                         cells.push(Cell {
                             offset: (out_step.x * hops, -1, out_step.z * hops),
                             carries: Vec::new(),
                         });
                     }
-                    let reserved = Position::new(0, 0, 0).offset(outside);
-                    cells.push(Cell {
-                        offset: (reserved.x, reserved.y, reserved.z),
-                        carries: Vec::new(),
-                    });
                 }
                 // A NOR floors nothing. `place_nor_gate` writes stone *at* the
                 // support rather than beneath it, hangs the torch on that
@@ -720,11 +721,11 @@ pub fn build(
         // is the caller's business.
         if let Some(pin) = pinned.get(name) {
             bodies.push(Body {
-                what: BodyKind::InputTerminal { outside: pin.outside },
+                what: BodyKind::InputTerminal { toward: pin.toward },
                 position: [pin.at.x as f64, pin.at.y as f64, pin.at.z as f64],
                 inputs: Vec::new(),
                 output: Some(name.clone()),
-                facing: terminal_default_facing(pin.outside),
+                facing: terminal_facing(pin.toward),
                 pinned: true,
             });
             nodes[candidate_node].push(bodies.len() - 1);
@@ -762,18 +763,19 @@ pub fn build(
 
     // A pinned output is a terminal body of its own: an extra sink on the
     // declared output's net, pinned so only the producing gate moves toward
-    // it. Its facing is irrelevant to its cells (dust is isotropic), so the
-    // sweep may turn it freely and nothing changes.
+    // it. Its cells come from `toward` rather than from its facing, and the
+    // facing is fixed to match anyway so nothing downstream can read a
+    // different answer out of it.
     for (index, name) in pinned_outputs.iter().enumerate() {
         let candidate_node = netlist.gates.len() + netlist.inputs.len() + index;
         let pin = pinned.get(name).expect("filtered on pinned above");
         bodies.push(Body {
-            what: BodyKind::OutputTerminal { outside: pin.outside },
+            what: BodyKind::OutputTerminal { toward: pin.toward },
             position: [pin.at.x as f64, pin.at.y as f64, pin.at.z as f64],
-            // The net that arrives at this dust; it drives nothing onward.
+            // The net that arrives at this terminal; it drives nothing onward.
             inputs: vec![(*name).clone()],
             output: None,
-            facing: CellFacing::NORTH,
+            facing: terminal_facing(pin.toward),
             pinned: true,
         });
         nodes[candidate_node].push(bodies.len() - 1);
@@ -784,10 +786,11 @@ pub fn build(
 
     debug_assert!(
         bodies.iter().all(|body| match body.what {
-            BodyKind::InputTerminal { outside } => body.facing.direction() != outside,
+            BodyKind::InputTerminal { toward } | BodyKind::OutputTerminal { toward } =>
+                body.facing == terminal_facing(toward),
             _ => true,
         }),
-        "a terminal's repeater side may never be its outside side"
+        "a terminal has one lawful realisation, and its facing is the one `toward` names"
     );
 
     Ok(BodyGraph {
@@ -799,15 +802,19 @@ pub fn build(
     })
 }
 
-/// The lowest-index facing whose output side is not the caller's, which is
-/// where a terminal's normalizing repeater starts before the facing sweep
-/// runs. Any of the three would do; the lowest index is the same tie-break
-/// `choose_facings` uses, so the choice is reproducible for free.
-pub(crate) fn terminal_default_facing(outside: Facing) -> CellFacing {
+/// The **one** facing a terminal is ever built at: the cell facing whose
+/// output side is the direction the signal travels.
+///
+/// A terminal has a single lawful realisation, so this is a lookup and not a
+/// sweep. It is what makes `Attach::Pin` land on an input terminal's route
+/// source ([`pin_hops`] steps along the output direction) without any second
+/// opinion about which neighbour that is, and it is what
+/// `relax::terminal_lawful_facings` returns as the whole choice.
+pub(crate) fn terminal_facing(toward: Facing) -> CellFacing {
     (0..4u8)
         .filter_map(CellFacing::from_index)
-        .find(|facing| facing.direction() != outside)
-        .expect("four horizontal facings and one reserved side always leave three")
+        .find(|facing| facing.direction() == toward)
+        .expect("a pin's `toward` is horizontal, and every horizontal is a cell facing")
 }
 
 /// One pull per declared gate input: from the producer's outgoing pin to the
@@ -817,7 +824,7 @@ pub(crate) fn terminal_default_facing(outside: Facing) -> CellFacing {
 /// under its producer's pin and `PlanCandidate` has no anchor for it, so its
 /// position is not something relaxation chooses. A **pinned** output is
 /// different: its terminal is a body, and the spring from the producer's pin
-/// to the terminal dust (zero rest, terminal pinned) is what pulls the
+/// to the caller's cell (zero rest, terminal pinned) is what pulls the
 /// circuit toward the pinned coordinate instead of the router discovering
 /// the distance after placement froze.
 fn signal_pulls(
@@ -875,7 +882,7 @@ fn signal_pulls(
         }
     }
 
-    // Producer pin -> pinned output's terminal dust. `Attach::Pin` on the
+    // Producer pin -> pinned output's own cell. `Attach::Pin` on the
     // terminal is its own cell ([`pin_hops`] is zero there), and the terminal
     // is pinned, so only the gate end of this spring ever moves.
     let mut terminal_node = netlist.gates.len() + netlist.inputs.len();
@@ -1046,10 +1053,10 @@ mod tests {
     }
 
     /// A pinned port is a **terminal**: a pinned body of its own kind at the
-    /// pinned cell, not a lever somebody nailed down. It takes no force --
+    /// caller's cell, not a lever somebody nailed down. It takes no force --
     /// recorded here rather than discovered in the solve, because the solve's
-    /// matrix is built by striking pinned bodies out of it -- and its repeater
-    /// side starts off the caller's reserved face.
+    /// matrix is built by striking pinned bodies out of it -- and its facing
+    /// is the one `toward` names, with nothing left to sweep.
     #[test]
     fn a_pinned_port_is_a_pinned_terminal_body() {
         let netlist = Netlist {
@@ -1058,7 +1065,7 @@ mod tests {
             gates: vec![nor("out", &["a"])],
         };
         let mut placements = PortPlacements::default();
-        placements.pin("a", Anchor { x: 40, y: 1, z: 9 }, Facing::South);
+        placements.pin("a", Anchor { x: 40, y: 1, z: 9 }, Facing::North);
 
         let graph = expand(&netlist, &Library::default_library()).expect("expands");
         let start = vec![Anchor { x: 0, y: 1, z: 0 }; 2];
@@ -1070,16 +1077,28 @@ mod tests {
         assert!(
             matches!(
                 built.bodies[terminal].what,
-                BodyKind::InputTerminal { outside: Facing::South }
+                BodyKind::InputTerminal { toward: Facing::North }
             ),
             "a pin declares a terminal, not a lever"
         );
-        assert_ne!(
+        assert_eq!(
             built.bodies[terminal].facing.direction(),
-            Facing::South,
-            "the normalizing repeater may never start in the reserved outside cell"
+            Facing::North,
+            "the reading repeater stands in the one cell `toward` names"
         );
         assert!(!built.bodies[built.anchor_body[0]].pinned, "nothing pinned the gate");
+
+        // The caller's own cell is claimed and written by nobody: no floor
+        // either, because whatever the caller builds may want that cell.
+        let cells = cells(&built.bodies[terminal]);
+        assert!(
+            cells.iter().any(|cell| cell.offset == (0, 0, 0)),
+            "the caller's cell is claimed"
+        );
+        assert!(
+            !cells.iter().any(|cell| cell.offset == (0, -1, 0)),
+            "and its floor is not REDA's to lay"
+        );
     }
 
     /// A pinned output is a **terminal body**: one extra pinned body at the
@@ -1108,7 +1127,7 @@ mod tests {
         assert!(
             matches!(
                 built.bodies[terminal].what,
-                BodyKind::OutputTerminal { outside: Facing::South }
+                BodyKind::OutputTerminal { toward: Facing::South }
             ),
             "a pin declares a terminal, not a nailed-down gate"
         );
@@ -1124,19 +1143,25 @@ mod tests {
         assert_eq!(
             attach_offset(Attach::Pin, &built.bodies[terminal]),
             [0.0, 0.0, 0.0],
-            "the spring attaches at the terminal dust itself"
+            "the spring attaches at the caller's own cell"
         );
 
         let cells = cells(&built.bodies[terminal]);
-        assert_eq!(cells.len(), 3, "dust, floor, and the reserved outside cell");
+        assert_eq!(cells.len(), 3, "the caller's cell, the handover, and its floor");
         assert_eq!(
             cells[0].carries,
             vec!["out".to_string()],
-            "the terminal dust conducts on the net that arrives"
+            "the caller's cell carries the net that arrives -- what keeps strangers away"
+        );
+        // The signal travels south, so it is delivered from the north.
+        assert!(
+            cells.iter().any(|cell| cell.offset == (0, 0, -1)
+                && cell.carries == vec!["out".to_string()]),
+            "the delivery repeater stands in the one cell opposite `toward`"
         );
         assert!(
-            cells.iter().any(|cell| cell.offset == (0, 0, 1) && cell.carries.is_empty()),
-            "the outside cell is claimed and inert -- it ships empty for the caller"
+            !cells.iter().any(|cell| cell.offset == (0, 0, 1)),
+            "and nothing of REDA's is claimed past the caller's cell"
         );
     }
 

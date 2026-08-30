@@ -85,7 +85,6 @@ pub(crate) mod project_for_test {
 use crate::compile::planner::{Anchor, PortPlacements};
 use crate::compile::primitive_graph::PrimitiveGraph;
 use crate::compile::Netlist;
-use crate::redstone::simulator::position::Position;
 
 /// How far a body may still be moving and the relaxation still be finished.
 ///
@@ -559,94 +558,23 @@ fn choose_facings(graph: &mut BodyGraph) -> bool {
     turned
 }
 
-/// The facings `body` may be built at, which for anything but an input
-/// terminal is all four.
+/// The facings `body` may be built at: all four for an ordinary body, and
+/// **exactly one** for a terminal.
 ///
-/// A terminal turns three ways, not four: its output side is where the
-/// normalizing repeater stands, and the `outside` face is the caller's
-/// reserved cell -- a facing that points there would build into the one cell
-/// the contract ships empty.
-///
-/// Between pinned terminals a second rule holds. Two terminals may lawfully
-/// stand a one-cell gap apart (a display glyph's segments), and both are
-/// fully determined, so nothing downstream can move them -- which makes the
-/// facing the one degree of freedom that decides whether one terminal's
-/// repeater or pin lands on, or dust-joins, its neighbour's cells. A facing
-/// that would is struck from the sweep: the conflict cells are the
-/// neighbour's **fixed** claims (dust, floor, outside), so the rule does not
-/// depend on the order bodies happen to turn in. Should packing ever bar all
-/// three facings, the outside rule alone decides and the four invariants
-/// judge the result -- a refusal there beats a panic here.
+/// This used to be a three-way sweep with a neighbour-conflict rule on top,
+/// because the old contract gave the compiler a choice of which side of the
+/// caller's cell to build on. The revised contract deletes that choice: a pin
+/// is `(cell, toward)` and `toward` names the single lawful neighbour, so a
+/// terminal has one realisation and there is nothing to sweep. Returning one
+/// facing rather than filtering three is what makes that unmissable -- no code
+/// path downstream can pick a different neighbour, because none is offered.
 fn terminal_lawful_facings(graph: &BodyGraph, body: usize) -> Vec<crate::compile::geometry::CellFacing> {
     use crate::compile::geometry::CellFacing;
-    let all = || (0..4u8).filter_map(CellFacing::from_index);
-
-    let build::BodyKind::InputTerminal { outside } = graph.bodies[body].what else {
-        return all().collect();
-    };
-    let off_the_outside: Vec<CellFacing> =
-        all().filter(|facing| facing.direction() != outside).collect();
-
-    // Every other pinned terminal's fixed cells, as integers -- a pinned body
-    // sits exactly on its pin, so rounding is exact.
-    let cell = |position: [f64; 3], step: Position| {
-        (
-            position[0].round() as i32 + step.x,
-            position[1].round() as i32 + step.y,
-            position[2].round() as i32 + step.z,
-        )
-    };
-    let origin = Position::new(0, 0, 0);
-    let mut fixed_claims: Vec<(i32, i32, i32)> = Vec::new();
-    let mut foreign_dust: Vec<(i32, i32, i32)> = Vec::new();
-    for (index, other) in graph.bodies.iter().enumerate() {
-        // Both kinds of terminal are fully determined claims: an output
-        // terminal has no repeater or pin of its own, but its dust, floor
-        // and reserved outside cell are exactly as fixed as an input's.
-        let their_outside = match other.what {
-            build::BodyKind::InputTerminal { outside }
-            | build::BodyKind::OutputTerminal { outside } => outside,
-            _ => continue,
-        };
-        if index == body {
-            continue;
+    match graph.bodies[body].what {
+        build::BodyKind::InputTerminal { toward } | build::BodyKind::OutputTerminal { toward } => {
+            vec![build::terminal_facing(toward)]
         }
-        let dust = cell(other.position, origin);
-        let floor = cell(other.position, origin.down());
-        let reserved = cell(other.position, origin.offset(their_outside));
-        fixed_claims.extend([dust, floor, reserved]);
-        // The pin dust this sweep is placing must not dust-join the
-        // neighbour's terminal dust, nor sit beside the outside cell where
-        // the neighbour's caller attaches a source.
-        foreign_dust.extend([dust, reserved]);
-    }
-    if fixed_claims.is_empty() {
-        return off_the_outside;
-    }
-
-    let joins = |mine: (i32, i32, i32), theirs: (i32, i32, i32)| {
-        (mine.0 - theirs.0).abs() + (mine.2 - theirs.2).abs() == 1
-            && (mine.1 - theirs.1).abs() <= 1
-    };
-    let lawful: Vec<CellFacing> = off_the_outside
-        .iter()
-        .copied()
-        .filter(|&facing| {
-            let step = origin.offset(facing.direction());
-            let repeater = cell(graph.bodies[body].position, step);
-            let pin = cell(
-                graph.bodies[body].position,
-                Position::new(step.x * 2, step.y * 2, step.z * 2),
-            );
-            !fixed_claims.contains(&repeater)
-                && !fixed_claims.contains(&pin)
-                && !foreign_dust.iter().any(|&theirs| joins(pin, theirs))
-        })
-        .collect();
-    if lawful.is_empty() {
-        off_the_outside
-    } else {
-        lawful
+        _ => (0..4u8).filter_map(CellFacing::from_index).collect(),
     }
 }
 
@@ -1112,23 +1040,25 @@ mod tests {
         );
     }
 
-    /// The three-way sweep: a terminal pulled hard toward its own outside
-    /// face still keeps its repeater off it, because the outside cell is the
-    /// caller's and the facing enumeration never offers it.
+    /// There is no sweep left for a terminal: `toward` names its one lawful
+    /// realisation, so the facing enumeration offers exactly that one and the
+    /// pulls have no say -- here the whole circuit lies due east and the
+    /// terminal still reads west, because west is what the pin asked for.
     #[test]
-    fn a_terminal_pulled_toward_its_outside_keeps_its_repeater_off_it() {
+    fn a_terminals_facing_is_the_one_its_toward_names_whatever_the_pulls_want() {
         use crate::redstone::world::block::Facing;
 
         let netlist = chain();
         let graph = expand(&netlist, &Library::default_library()).expect("expands");
-        // `a`'s only consumer sits due east, and east is the caller's side.
+        // `a`'s only consumer sits due east; the pin says the signal travels
+        // west through the caller's cell, which is the opposite of every pull.
         let start = vec![
             Anchor { x: 60, y: 1, z: 0 }, // gate b
             Anchor { x: 90, y: 1, z: 0 }, // gate c
             Anchor { x: 10, y: 1, z: 0 }, // input a
         ];
         let mut placements = PortPlacements::default();
-        placements.pin("a", start[2], Facing::East);
+        placements.pin("a", start[2], Facing::West);
 
         let placement = relax(
             &netlist,
@@ -1142,21 +1072,27 @@ mod tests {
 
         let terminal = &placement.graph.bodies[placement.graph.anchor_body[2]];
         assert!(
-            matches!(terminal.what, build::BodyKind::InputTerminal { outside: Facing::East }),
+            matches!(terminal.what, build::BodyKind::InputTerminal { toward: Facing::West }),
             "the pinned input is a terminal"
         );
-        assert_ne!(
+        assert_eq!(
             terminal.facing.direction(),
-            Facing::East,
-            "every pull wants east, and east is not on offer"
+            Facing::West,
+            "every pull wants east, and the pin is a requirement rather than a hint"
+        );
+        assert_eq!(
+            terminal_lawful_facings(&placement.graph, placement.graph.anchor_body[2]).len(),
+            1,
+            "one lawful realisation, so nothing downstream can pick another neighbour"
         );
     }
 
-    /// Two pinned terminals a one-cell gap apart are fully determined, so the
-    /// facing is the one freedom that decides whether one's repeater or pin
-    /// lands on the other's dust -- and the sweep strikes those facings out.
+    /// Two pinned terminals a one-cell gap apart used to fight over which of
+    /// three facings each could take. They no longer can: each pin names its
+    /// own handover, so both are decided before the solve and the neighbour
+    /// rule has nothing left to decide.
     #[test]
-    fn neighbouring_terminals_turn_their_repeaters_away_from_each_other() {
+    fn neighbouring_terminals_each_keep_the_facing_their_own_pin_names() {
         use crate::redstone::world::block::Facing;
 
         let netlist = Netlist {
@@ -1171,8 +1107,8 @@ mod tests {
             Anchor { x: 12, y: 1, z: 40 }, // input b
         ];
         let mut placements = PortPlacements::default();
-        placements.pin("a", start[1], Facing::South);
-        placements.pin("b", start[2], Facing::South);
+        placements.pin("a", start[1], Facing::North);
+        placements.pin("b", start[2], Facing::North);
 
         let placement = relax(
             &netlist,
@@ -1186,10 +1122,8 @@ mod tests {
 
         let a = &placement.graph.bodies[placement.graph.anchor_body[1]];
         let b = &placement.graph.bodies[placement.graph.anchor_body[2]];
-        assert_ne!(a.facing.direction(), Facing::East, "a's pin would land on b's dust");
-        assert_ne!(a.facing.direction(), Facing::South, "a's outside is the caller's");
-        assert_ne!(b.facing.direction(), Facing::West, "b's pin would land on a's dust");
-        assert_ne!(b.facing.direction(), Facing::South, "b's outside is the caller's");
+        assert_eq!(a.facing.direction(), Facing::North, "a reads where its pin says");
+        assert_eq!(b.facing.direction(), Facing::North, "and so does b");
     }
 
     /// Nothing has to be pinned, and on the netlist-only path nothing is: the

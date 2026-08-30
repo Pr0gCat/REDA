@@ -50,7 +50,7 @@ fn pins_file_defects_exit_by_name_before_any_compile() {
     // A malformed pin is named through the CLI surface, port and defect both.
     let scratch = scratch_dir("pins-bad-facing");
     let bad_facing = scratch.join("bad-facing.pins.json");
-    std::fs::write(&bad_facing, r#"{"inputs": {"a": {"at": [1,1,1], "outside": "up"}}}"#)
+    std::fs::write(&bad_facing, r#"{"inputs": {"a": {"at": [1,1,1], "toward": "up"}}}"#)
         .expect("the pins file is writable");
     let (output, _) = run_in_scratch(
         "pins-bad-facing",
@@ -67,7 +67,7 @@ fn pins_file_defects_exit_by_name_before_any_compile() {
     // the labels that would have worked.
     let scratch = scratch_dir("pins-bad-label");
     let bad_label = scratch.join("bad-label.pins.json");
-    std::fs::write(&bad_label, r#"{"outputs": {"q": {"at": [5,1,2], "outside": "north"}}}"#)
+    std::fs::write(&bad_label, r#"{"outputs": {"q": {"at": [5,1,2], "toward": "north"}}}"#)
         .expect("the pins file is writable");
     let (output, _) = run_in_scratch(
         "pins-bad-label",
@@ -83,7 +83,7 @@ fn pins_file_defects_exit_by_name_before_any_compile() {
     // Pins compile through the generation front door only.
     let scratch = scratch_dir("pins-without-grown");
     let lawful = scratch.join("lawful.pins.json");
-    std::fs::write(&lawful, r#"{"inputs": {"a": {"at": [21,1,62], "outside": "south"}}}"#)
+    std::fs::write(&lawful, r#"{"inputs": {"a": {"at": [21,1,62], "toward": "north"}}}"#)
         .expect("the pins file is writable");
     let (output, _) = run_in_scratch(
         "pins-without-grown",
@@ -98,22 +98,24 @@ fn pins_file_defects_exit_by_name_before_any_compile() {
 }
 
 /// The round trip: a pins file in, `compile_grown` under `--grown --pins`,
-/// and a sidecar out that records each pinned port as its terminal cell plus
-/// its `outside` facing -- the output keyed by the display label the caller
-/// pinned it under, unpinned ports keeping today's bare `[x,y,z]` -- while
-/// the world itself carries the terminal dust with the outside cell empty.
+/// and a sidecar out that records each pinned port as the caller's cell, its
+/// `toward`, and the resolved handover -- the output keyed by the display
+/// label the caller pinned it under, unpinned ports keeping today's bare
+/// `[x,y,z]` -- while the world itself ships every pinned cell empty with its
+/// handover repeater in the one neighbour the pin names.
 ///
 /// and4, because it grows at iteration 1 in milliseconds; the pin geometry
 /// mirrors the acceptance tests' shape (input row south of the free layout,
-/// output north of it, outsides facing away from the circuit).
+/// output north of it, every `toward` carrying the signal along the circuit's
+/// own north-running flow).
 #[test]
 fn a_pinned_and4_round_trips_through_the_flags() {
     let scratch = scratch_dir("pins-round-trip");
     let pins = scratch.join("and4.pins.json");
     std::fs::write(
         &pins,
-        r#"{"inputs": {"a": {"at": [21, 1, 62], "outside": "south"}},
-            "outputs": {"y": {"at": [53, 1, 10], "outside": "north"}}}"#,
+        r#"{"inputs": {"a": {"at": [21, 1, 62], "toward": "north"}},
+            "outputs": {"y": {"at": [53, 1, 10], "toward": "north"}}}"#,
     )
     .expect("the pins file is writable");
 
@@ -130,11 +132,11 @@ fn a_pinned_and4_round_trips_through_the_flags() {
     let sidecar = std::fs::read_to_string(scratch.join("output/and4.grown.pinout.json"))
         .expect("the pinout sidecar is written");
     assert!(
-        sidecar.contains(r#""a":{"at":[21,1,62],"outside":"south"}"#),
-        "the pinned input records its terminal cell and facing: {sidecar}"
+        sidecar.contains(r#""a":{"at":[21,1,62],"toward":"north","handover":[21,1,61]}"#),
+        "the pinned input records the caller's cell, its toward, and the handover: {sidecar}"
     );
     assert!(
-        sidecar.contains(r#""y":{"at":[53,1,10],"outside":"north"}"#),
+        sidecar.contains(r#""y":{"at":[53,1,10],"toward":"north","handover":[53,1,11]}"#),
         "the pinned output is keyed by its display label: {sidecar}"
     );
     assert!(
@@ -147,20 +149,21 @@ fn a_pinned_and4_round_trips_through_the_flags() {
     );
 
     // The world behind the sidecar honours the contract at both pinned
-    // cells: one dust at the terminal, nothing in the outside cell.
+    // cells: nothing at all in the caller's cell, and the handover repeater
+    // exactly where the sidecar says it is.
     let dump = std::fs::read_to_string(scratch.join("output/and4.grown.blocks.txt"))
         .expect("the block dump is written");
     let cell = |x: i32, y: i32, z: i32| -> Option<String> {
         let prefix = format!("{x} {y} {z} ");
         dump.lines().find(|line| line.starts_with(&prefix)).map(str::to_string)
     };
-    for (x, y, z) in [(21, 1, 62), (53, 1, 10)] {
-        let terminal = cell(x, y, z).unwrap_or_else(|| panic!("({x}, {y}, {z}) holds a block"));
+    assert_eq!(cell(21, 1, 62), None, "`a`'s pinned cell ships empty");
+    assert_eq!(cell(53, 1, 10), None, "`y`'s pinned cell ships empty");
+    for (x, y, z) in [(21, 1, 61), (53, 1, 11)] {
+        let handover = cell(x, y, z).unwrap_or_else(|| panic!("({x}, {y}, {z}) holds a block"));
         assert!(
-            terminal.contains("RedstoneWire"),
-            "the terminal at ({x}, {y}, {z}) is one redstone dust: {terminal}"
+            handover.contains("Repeater") && handover.contains("South"),
+            "the handover at ({x}, {y}, {z}) carries the signal north: {handover}"
         );
     }
-    assert_eq!(cell(21, 1, 63), None, "`a`'s outside cell ships empty");
-    assert_eq!(cell(53, 1, 9), None, "`y`'s outside cell ships empty");
 }

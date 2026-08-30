@@ -448,9 +448,9 @@ pub(crate) fn walk_by_group(
                 let &(x, y, z) = input_positions
                     .get(&netlist.inputs[i])
                     .expect("emit records a lever position for every input");
-                // The judge's own redirection: a pinned input records its
-                // terminal dust, and the true origin is its normalizing
-                // repeater -- see `input_source_component`.
+                // The judge's own redirection: a pinned input records the
+                // caller's own cell, which ships empty, and the true origin is
+                // the repeater reading it -- see `input_source_component`.
                 super::input_source_component(world, Position::new(x, y, z))
             }
             Source::Gate(g) => {

@@ -1258,10 +1258,10 @@ pub enum CompileError {
     /// legal circuit that merely fails a redstone invariant.
     CandidateMetadataViolation { item: String, reason: String },
     /// A pinned port's realised world breaks the terminal contract: the
-    /// pinned cell does not hold its one terminal dust, the reserved outside
-    /// cell is not empty, or the outside cell sits adjacent to another net's
-    /// cells -- which would let the caller's attachment drive a net it never
-    /// agreed to touch.
+    /// pinned cell does not ship empty, the one neighbour the pin names does
+    /// not hold this port's handover repeater, or the pinned cell sits
+    /// adjacent to another net's cells -- which would let whatever the caller
+    /// builds drive a net it never agreed to touch.
     PortTerminalViolation { port: String, reason: String },
     /// A report that reads the row/channel/track emitter's geometry was asked
     /// about a circuit that emitter did not lay out.
@@ -1343,8 +1343,9 @@ pub enum SignalSink {
         output: String,
         lamp: (i32, i32, i32),
     },
-    /// A pinned declared output's terminal dust: the net must deliver
-    /// strength >= 1 at the pinned cell itself.
+    /// A pinned declared output's handover: the net must deliver a live
+    /// signal into the delivery repeater, which is REDA's own last cell. The
+    /// caller's cell past it ships empty and holds no reading of its own.
     OutputTerminal {
         output: String,
         terminal: (i32, i32, i32),
@@ -1473,7 +1474,7 @@ impl std::fmt::Display for CompileError {
                 SignalSink::OutputTerminal { output, terminal } => write!(
                     f,
                     "signal-strength violation: net `{net}` never delivers a non-zero signal to \
-                     output `{output}`'s terminal dust at {terminal:?} -- the geometry is \
+                     output `{output}`'s handover repeater at {terminal:?} -- the geometry is \
                      structurally connected but the real, decayed signal dies out before it \
                      arrives"
                 ),
@@ -1498,8 +1499,9 @@ pub struct CompiledCircuit {
     /// lamp that lights up when the signal is high, not the internal NOR
     /// gate's output torch. This is what a person standing in front of the
     /// pasted circuit actually looks at. For a **pinned** output there is no
-    /// lamp: this records the terminal dust at the pinned cell, and high
-    /// means strength > 0 there -- the contract's own reading.
+    /// lamp and no block of any kind: this records the **caller's** own cell,
+    /// which ships empty. High means that cell is powered in the game's own
+    /// sense, and whatever the caller puts there is what reads it.
     pub output_positions: BTreeMap<String, (i32, i32, i32)>,
     /// Every gate's actual output position -- the wall torch that is this
     /// gate's real output -- keyed by the gate's output signal name.
@@ -2702,48 +2704,61 @@ pub(crate) fn place_primary_input(
     (home, pin)
 }
 
-/// Write a pinned input's terminal: dust on its own floor at `home`, a
-/// normalizing repeater one cell along the facing, and the pin dust the net's
-/// route starts from one cell further. Returns `(terminal, pin)`.
+/// Write a pinned input's terminal: **nothing at all** at `home` -- the
+/// caller's cell -- a normalizing repeater in the one neighbour `toward`
+/// names, and the pin dust the net's route starts from one cell further.
+/// Returns `(home, pin)`.
 ///
-/// No lever -- the caller powers the terminal dust by any means, at any
-/// strength >= 1, and the repeater reshapes whatever arrives to full strength
-/// so the route's source strength is geometry rather than a guess. The cell on
-/// the port's `outside` face is deliberately not written: it ships empty, and
-/// the facing this is built at never points there
-/// (`input_terminal_footprint` refuses that combination before a plan exists).
+/// No lever, and no dust in the caller's cell: the caller powers that cell by
+/// any means the game accepts, and the repeater reading it reshapes whatever
+/// arrives to full strength, so the route's source strength is geometry rather
+/// than a guess. Measured (`tests/terminal_handover.rs`, sensing table): a
+/// repeater's rear reads a lever, a redstone block, a torch, a strongly
+/// powered block and dust at any strength alike, and normalizes every one of
+/// them to 15 -- two of those states plain dust cannot see at all.
+///
+/// Neither `home` nor the block under it is written. The whole cell, its floor
+/// included, belongs to whatever the caller builds there afterwards.
 pub(crate) fn place_input_terminal(
     world: &mut World,
     home: Position,
-    facing: geometry::CellFacing,
+    toward: Facing,
 ) -> (Position, Position) {
-    ensure_floor(world, home);
-    world.set(home.x, home.y, home.z, dust());
+    let reader = home.offset(toward);
+    ensure_floor(world, reader);
+    world.set(reader.x, reader.y, reader.z, repeater(toward));
 
-    let inward = geometry::output_direction(facing);
-    let normalizer = home.offset(inward);
-    ensure_floor(world, normalizer);
-    world.set(normalizer.x, normalizer.y, normalizer.z, repeater(inward));
-
-    let pin = normalizer.offset(inward);
+    let pin = reader.offset(toward);
     ensure_floor(world, pin);
     world.set(pin.x, pin.y, pin.z, dust());
 
     (home, pin)
 }
 
-/// Write a pinned output's terminal: one redstone dust on its own floor block
-/// at `home`, and nothing else.
+/// Write a pinned output's terminal: **nothing at all** at `home` -- the
+/// caller's cell -- and a delivery repeater in the neighbour opposite
+/// `toward`, aimed into it. Returns `home`, the cell the contract is stated
+/// over.
 ///
-/// No lamp -- what reads the dust is the caller's business, and the contract
-/// is stated over this very cell: logically high means strength > 0 here,
-/// low means 0. The route that feeds it ends *at* this cell (its final dust
-/// is this dust), so the write is shared with `emit_routes` and idempotent.
-/// The cell on the port's `outside` face is deliberately not written: it
-/// ships empty for the caller to attach to.
-pub(crate) fn place_output_terminal(world: &mut World, home: Position) -> Position {
-    ensure_floor(world, home);
-    world.set(home.x, home.y, home.z, dust());
+/// No lamp: what reads the caller's cell is the caller's business, and the
+/// promise is the game's own sense of powered rather than any strength. A
+/// repeater is what keeps that promise for every receiver at once -- measured
+/// (`tests/terminal_handover.rs`, delivery table): a repeater aimed at the
+/// cell lights a lamp, strongly powers a solid block and feeds dust at 15,
+/// where a dust handover with one bend or one neighbour touching its side
+/// still feeds dust at 14 while leaving the lamp dark.
+///
+/// The route that feeds this terminal ends *at* the repeater's cell, so the
+/// write is shared with `emit_routes` and idempotent -- both put the same
+/// blockstate there.
+pub(crate) fn place_output_terminal(
+    world: &mut World,
+    home: Position,
+    toward: Facing,
+) -> Position {
+    let driver = home.offset(toward.opposite());
+    ensure_floor(world, driver);
+    world.set(driver.x, driver.y, driver.z, repeater(toward));
     home
 }
 
@@ -6502,11 +6517,15 @@ fn net_signal_strength(
 /// position `emit` recorded for it.
 ///
 /// An unpinned input records its lever, which is a source on its own. A
-/// pinned input records its terminal dust -- the coordinate the contract is
-/// stated over -- and dust is not a source in this model: the net's true
-/// origin is the normalizing repeater reading from that dust, which is the
-/// neighbour whose stored facing points back at it (`repeater(..)` stores
-/// the Minecraft convention: output-side toward input-side).
+/// **pinned** input records the caller's own cell -- the coordinate the
+/// contract is stated over -- and that cell ships **empty**: whatever powers
+/// it arrives after compilation and is no part of this world. So the net's
+/// true origin is the normalizing repeater reading out of it, which is the
+/// horizontal neighbour whose stored facing points back at it (`repeater(..)`
+/// stores the Minecraft convention: output-side toward input-side). Seeding
+/// the walk there is what makes this a *structural* check: it asks whether the
+/// circuit carries a source's signal, not whether some fixture happens to be
+/// installed.
 ///
 /// One function rather than two copies, because `verify_signal_strength` is
 /// the judge and `strength_differential::walk_by_group` its replica -- a
@@ -6516,30 +6535,67 @@ pub(crate) fn input_source_component(
     world: &World,
     recorded: Position,
 ) -> (Position, &BlockState) {
-    let state = world.get(recorded.x, recorded.y, recorded.z);
-    if state.kind != BlockKind::RedstoneWire {
-        return (recorded, state);
+    match input_terminal_reader(world, recorded) {
+        Some(reader) => (reader, world.get(reader.x, reader.y, reader.z)),
+        None => {
+            let state = world.get(recorded.x, recorded.y, recorded.z);
+            assert!(
+                state.kind != BlockKind::Air,
+                "a pinned input's empty cell always has its reading repeater beside it"
+            );
+            (recorded, state)
+        }
     }
-    let normalizer = HORIZONTAL
-        .iter()
-        .find_map(|&direction| {
-            let next = recorded.offset(direction);
-            let candidate = world.get(next.x, next.y, next.z);
-            (candidate.kind == BlockKind::Repeater
-                && candidate.facing == Some(direction.opposite()))
+}
+
+/// The normalizing repeater reading out of a pinned input's recorded cell, or
+/// `None` for a cell that is not a pinned input's at all.
+///
+/// The predicate every reader of a recorded input position shares, so the
+/// judge, its replica and `equivalence`'s lever check cannot drift on what
+/// "this port is pinned" means: the cell ships empty, and the neighbour whose
+/// stored facing points back at it is REDA's reader.
+pub(crate) fn input_terminal_reader(world: &World, recorded: Position) -> Option<Position> {
+    if world.get(recorded.x, recorded.y, recorded.z).kind != BlockKind::Air {
+        return None;
+    }
+    HORIZONTAL.iter().find_map(|&direction| {
+        let next = recorded.offset(direction);
+        let candidate = world.get(next.x, next.y, next.z);
+        (candidate.kind == BlockKind::Repeater && candidate.facing == Some(direction.opposite()))
             .then_some(next)
-        })
-        .expect("a terminal dust always has its normalizing repeater one cell inward");
-    (normalizer, world.get(normalizer.x, normalizer.y, normalizer.z))
+    })
+}
+
+/// The delivery repeater standing beside a pinned output's recorded cell, or
+/// `None` for a cell nothing drives that way.
+///
+/// The mirror of [`input_source_component`]'s search, and distinguishable from
+/// it by the same one field: a *reading* repeater at `recorded + d` stores
+/// `facing = d.opposite()` (its input side faces the recorded cell), while a
+/// *delivering* one stores `facing = d` (its output side does). So the two
+/// predicates can never confuse each other, and neither can mistake an
+/// unpinned output's lamp for a terminal.
+pub(crate) fn output_terminal_handover(world: &World, recorded: Position) -> Option<Position> {
+    if world.get(recorded.x, recorded.y, recorded.z).kind != BlockKind::Air {
+        return None;
+    }
+    HORIZONTAL.iter().find_map(|&direction| {
+        let next = recorded.offset(direction);
+        let candidate = world.get(next.x, next.y, next.z);
+        (candidate.kind == BlockKind::Repeater && candidate.facing == Some(direction))
+            .then_some(next)
+    })
 }
 
 /// The signal-strength invariant: every net must deliver a non-zero signal
 /// to every one of its own declared gate-input sinks, and every declared
 /// circuit output must receive a non-zero signal from its driving gate's
-/// output torch -- or, for a pinned output, at its terminal dust itself:
-/// same check, new address. See this section's own doc comment for what makes this
-/// different from `verify_connectivity`/`verify_torch_merge`, and
-/// `net_signal_strength` for how the arriving strength is actually derived.
+/// output torch -- or, for a pinned output, at its handover repeater, REDA's
+/// own last cell before the caller's: same check, new address. See this
+/// section's own doc comment for what makes this different from
+/// `verify_connectivity`/`verify_torch_merge`, and `net_signal_strength` for
+/// how the arriving strength is actually derived.
 ///
 /// This assumes `verify_connectivity` and `verify_torch_merge` have already
 /// run and passed: it trusts that a net's own reservation is a single clean
@@ -6715,18 +6771,23 @@ fn verify_signal_strength(
             .expect("emit records a reading point for every declared output");
         let lamp_pos = Position::new(lx, ly, lz);
 
-        // A pinned output records its terminal dust rather than a lamp --
+        // A pinned output records the caller's own cell, which ships empty --
         // the same block-kind sniff `input_source_component` makes on the
-        // input side. Same check, new address: the net must deliver a
-        // non-zero signal at the pinned cell itself, read off the very
-        // group walk every other sink of this net was judged by.
-        if world.get(lx, ly, lz).kind == BlockKind::RedstoneWire {
+        // input side. There is nothing of REDA's left to measure *in* that
+        // cell (an empty cell and a glass cube both read as unpowered under a
+        // repeater emitting 15), so the check walks to REDA's own last cell
+        // instead: the handover repeater must be fed. What that repeater then
+        // delivers into the caller's cell is settled by construction and
+        // measured in `tests/terminal_handover.rs`. Same check, new address,
+        // read off the very group walk every other sink of this net was
+        // judged by.
+        if let Some(handover) = output_terminal_handover(world, lamp_pos) {
             let &n = index_of_signal
                 .get(output_name.as_str())
                 .expect("a pinned output's terminal branch always gives its signal a net");
             let delivered = group_strength
                 .get(&groups.root(n))
-                .and_then(|strength| strength.get(&lamp_pos))
+                .and_then(|strength| strength.get(&handover))
                 .copied()
                 .unwrap_or(0);
             if delivered == 0 {
@@ -6734,7 +6795,7 @@ fn verify_signal_strength(
                     net: output_name.clone(),
                     sink: SignalSink::OutputTerminal {
                         output: output_name.clone(),
-                        terminal: (lx, ly, lz),
+                        terminal: (handover.x, handover.y, handover.z),
                     },
                 });
             }
@@ -6826,11 +6887,11 @@ pub(crate) fn verify_route_terminal(
     route: &str,
     terminal: &RouteTerminal,
 ) -> Result<(), CompileError> {
-    // A pinned output's terminal is no gate's socket: its `sink.gate` carries
+    // A pinned output's handover is no gate's socket: its `sink.gate` carries
     // the port name (the producing gate's own output signal), and the only
-    // structural claim to check is the contract's -- one redstone dust at the
-    // recorded cell, owned by this very net.
-    if terminal.kind == RouteTerminalKind::OutputTerminalDust {
+    // structural claim to check is the contract's -- one delivery repeater at
+    // the recorded cell, owned by this very net.
+    if terminal.kind == RouteTerminalKind::OutputTerminalRepeater {
         let anchor = terminal.sink.anchor;
         let position = Position::new(anchor.x, anchor.y, anchor.z);
         if reservation.get(&position) != Some(&net) {
@@ -6844,11 +6905,11 @@ pub(crate) fn verify_route_terminal(
             });
         }
         let actual = world.get(position.x, position.y, position.z).kind;
-        if actual != BlockKind::RedstoneWire {
+        if actual != BlockKind::Repeater {
             return Err(CompileError::CandidateMetadataViolation {
                 item: route.to_string(),
                 reason: format!(
-                    "output `{}`'s terminal at ({}, {}, {}) must be one redstone dust, \
+                    "output `{}`'s handover at ({}, {}, {}) must be the delivery repeater, \
                      found {actual:?}",
                     terminal.sink.gate, position.x, position.y, position.z
                 ),
@@ -6903,7 +6964,7 @@ pub(crate) fn verify_route_terminal(
         RouteTerminalKind::BareMergeRepeater => actual == BlockKind::Repeater && bare,
         // Handled by the early return above; a fall-through here would mean
         // the sink resolved as a gate, which an output terminal never is.
-        RouteTerminalKind::OutputTerminalDust => unreachable!("returned above"),
+        RouteTerminalKind::OutputTerminalRepeater => unreachable!("returned above"),
     };
     if !matches {
         return Err(CompileError::CandidateMetadataViolation {
@@ -7633,40 +7694,44 @@ pub(crate) fn lever_footprint(
 /// Every cell a pinned input's terminal occupies -- `(footprint, conductors,
 /// pin)`, in the shape `PrimitiveNode` records.
 ///
-/// The terminal dust sits at `anchor`, the normalizing repeater one cell along
-/// the facing, and the pin dust one further: the same two-hop shape as a NOR's
-/// torch-then-pin, with the repeater standing where the torch would. All three
+/// `anchor` is the **caller's** cell: claimed so no route or body ever takes
+/// it, and deliberately **not** a conductor, because `place_input_terminal`
+/// never writes it -- it ships exactly as it was. The normalizing repeater
+/// stands one cell along `toward` and the pin dust one further; those two
 /// conduct.
 ///
-/// The `outside` cell is the fourth entry of the footprint and deliberately
-/// **not** a conductor: it is claimed so no route or body ever takes it, and
-/// `place_input_terminal` never writes it -- the caller's attachment point
-/// ships empty, exactly like `lever_footprint`'s hazard cell is claimed air.
-///
-/// The facing is a realisation variant swept like a gate's, but three-way:
-/// the outside face is the caller's, so a terminal built pointing its
-/// repeater there would build into the one cell the contract reserves. That
-/// is a planning bug, not an input, hence the assert.
+/// There is no facing to sweep and no variant to pick. `toward` names the one
+/// lawful cell, which is what makes a pin a specification rather than a hint.
 pub(crate) fn input_terminal_footprint(
     anchor: Anchor,
-    facing: geometry::CellFacing,
-    outside: Facing,
+    toward: Facing,
 ) -> (Vec<Anchor>, Vec<Anchor>, Anchor) {
-    let inward = geometry::output_direction(facing);
-    assert_ne!(
-        inward, outside,
-        "an input terminal's repeater may not stand in the reserved outside cell"
-    );
     let home = Position::new(anchor.x, anchor.y, anchor.z);
-    let normalizer = home.offset(inward);
-    let pin = normalizer.offset(inward);
-    let outside_cell = home.offset(outside);
+    let reader = home.offset(toward);
+    let pin = reader.offset(toward);
     let cell = |p: Position| Anchor { x: p.x, y: p.y, z: p.z };
     (
-        vec![anchor, cell(normalizer), cell(pin), cell(outside_cell)],
-        vec![anchor, cell(normalizer), cell(pin)],
+        vec![anchor, cell(reader), cell(pin)],
+        vec![cell(reader), cell(pin)],
         cell(pin),
     )
+}
+
+/// Every cell a pinned output's terminal occupies -- `(footprint,
+/// conductors, handover)`.
+///
+/// `anchor` is the **caller's** cell, claimed and inert for the same reason as
+/// an input's. The delivery repeater stands in the neighbour opposite
+/// `toward`, which is the one cell the router must reach and the only one that
+/// conducts.
+pub(crate) fn output_terminal_footprint(
+    anchor: Anchor,
+    toward: Facing,
+) -> (Vec<Anchor>, Vec<Anchor>, Anchor) {
+    let home = Position::new(anchor.x, anchor.y, anchor.z);
+    let driver = home.offset(toward.opposite());
+    let handover = Anchor { x: driver.x, y: driver.y, z: driver.z };
+    (vec![anchor, handover], vec![handover], handover)
 }
 
 fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<PrimitiveNode> {
@@ -10053,11 +10118,11 @@ mod tests {
     }
 
     /// The strength-1 independence the terminal contract rests on: the caller
-    /// may power the pinned dust at any strength >= 1, and the circuit reads
-    /// full strength regardless, because the normalizing repeater reshapes
-    /// whatever arrives. Pinned by driving the dust at exactly 1 -- a lever
-    /// fourteen dust cells away, the longest run a signal survives -- and
-    /// reading 15 past the repeater through the real simulator.
+    /// may power their own cell at any strength >= 1, and the circuit reads
+    /// full strength regardless, because the reading repeater reshapes
+    /// whatever arrives. Pinned by driving the caller's cell at exactly 1 --
+    /// a lever fourteen dust cells away, the longest run a signal survives --
+    /// and reading 15 past the repeater through the real simulator.
     #[test]
     fn a_terminal_driven_at_strength_one_still_delivers_fifteen_past_its_repeater() {
         use crate::redstone::simulator::Simulator;
@@ -10065,31 +10130,32 @@ mod tests {
         let mut world = World::new(24, 4, 8);
         let y = 1;
         let z = 4;
-        // The caller: a lever at x = 2 and a dust run x = 3..=16, so the
-        // terminal dust at x = 17 receives 15 - 14 = 1.
+        // The caller's own build, entirely outside REDA's knowledge: a lever
+        // at x = 2 and a dust run x = 3..=17, so the caller's cell at x = 17
+        // holds dust at 15 - 14 = 1.
         let lever_at = Position::new(2, y, z);
         ensure_floor(&mut world, lever_at);
         world.set(lever_at.x, lever_at.y, lever_at.z, lever(true));
-        for x in 3..=16 {
+        for x in 3..=17 {
             let cell = Position::new(x, y, z);
             ensure_floor(&mut world, cell);
             world.set(cell.x, cell.y, cell.z, dust());
         }
 
-        // The terminal, built exactly as realisation builds it: dust at the
-        // pinned cell, repeater one cell inward (east, away from the caller),
-        // pin dust one further.
+        // The terminal, built exactly as realisation builds it: nothing at the
+        // pinned cell, the reading repeater in the one neighbour `toward`
+        // names (east, into the circuit), the route's source one further.
         let home = Position::new(17, y, z);
-        let (terminal, pin) = place_input_terminal(&mut world, home, geometry::CellFacing::EAST);
+        let (terminal, pin) = place_input_terminal(&mut world, home, Facing::East);
         assert_eq!(terminal, home);
         assert_eq!(pin, Position::new(19, y, z));
 
         let mut simulator = Simulator::new(world);
         simulator.run_until_stable(2000).expect("settles");
         assert_eq!(
-            simulator.world().get(terminal.x, terminal.y, terminal.z).power,
+            simulator.world().get(home.x, home.y, home.z).power,
             1,
-            "the fixture must actually deliver strength 1 at the terminal dust, \
+            "the caller must actually deliver strength 1 in their own cell, \
              or this measures nothing"
         );
         assert_eq!(
@@ -10098,7 +10164,7 @@ mod tests {
             "the repeater reshapes a strength-1 arrival to full strength"
         );
 
-        // And low is low: the caller unpowers the dust, the pin follows.
+        // And low is low: the caller unpowers their cell, the pin follows.
         let mut off = simulator.world().get(lever_at.x, lever_at.y, lever_at.z).clone();
         off.lit = false;
         simulator.world_mut().set(lever_at.x, lever_at.y, lever_at.z, off);
@@ -10106,26 +10172,31 @@ mod tests {
         assert_eq!(simulator.world().get(pin.x, pin.y, pin.z).power, 0);
     }
 
-    /// The terminal footprint's outside cell is claimed and inert: routing
-    /// keeps out of the caller's attachment point, and nothing is emitted
-    /// there. The conducting cells are the two-hop pin shape a NOR has, with
-    /// the repeater standing where the torch would.
+    /// The pinned cell is claimed and inert in both roles: routing keeps out
+    /// of the caller's cell, and nothing is emitted there. What conducts is
+    /// the handover `toward` names, and -- for an input -- the route source
+    /// one cell past it.
     #[test]
-    fn a_terminal_footprint_claims_its_outside_cell_without_conducting_there() {
+    fn a_terminal_footprint_claims_the_callers_cell_without_conducting_there() {
         let anchor = Anchor { x: 10, y: 1, z: 10 };
-        // Facing east, outside south: repeater at x+1, pin at x+2, reserved
-        // cell at z+1.
-        let (footprint, conductors, pin) =
-            input_terminal_footprint(anchor, geometry::CellFacing::EAST, Facing::South);
 
+        // An input whose signal travels east: reader at x+1, source at x+2.
+        let (footprint, conductors, pin) = input_terminal_footprint(anchor, Facing::East);
         assert_eq!(pin, Anchor { x: 12, y: 1, z: 10 });
-        let outside = Anchor { x: 10, y: 1, z: 11 };
-        assert!(footprint.contains(&outside), "the outside cell is claimed");
-        assert!(!conductors.contains(&outside), "and ships empty");
+        assert!(footprint.contains(&anchor), "the caller's cell is claimed");
+        assert!(!conductors.contains(&anchor), "and ships empty");
         assert_eq!(
             conductors,
-            vec![anchor, Anchor { x: 11, y: 1, z: 10 }, pin],
-            "dust, normalizing repeater, pin -- all conduct"
+            vec![Anchor { x: 11, y: 1, z: 10 }, pin],
+            "the reading repeater and the route's source conduct, and nothing else"
         );
+
+        // An output whose signal travels east leaves the circuit heading east,
+        // so it is driven from the west: handover at x-1.
+        let (footprint, conductors, handover) = output_terminal_footprint(anchor, Facing::East);
+        assert_eq!(handover, Anchor { x: 9, y: 1, z: 10 });
+        assert!(footprint.contains(&anchor), "the caller's cell is claimed");
+        assert!(!conductors.contains(&anchor), "and ships empty");
+        assert_eq!(conductors, vec![handover], "only the delivery repeater conducts");
     }
 }

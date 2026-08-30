@@ -26,16 +26,17 @@ pub struct Anchor {
 pub enum NodeRealisation {
     Primitive(Primitive),
     WireMerge,
-    /// A pinned input's terminal: dust on its own floor block at the pinned
-    /// cell, normalized to full strength by a repeater one cell inward. No
-    /// lever -- what drives the dust is the caller's business.
-    InputTerminal,
-    /// A pinned output's terminal: one dust on its own floor block at the
-    /// pinned cell, an extra sink on the declared output's net. No lamp --
-    /// what reads the dust is the caller's business. Carries its `outside`
-    /// facing because the router needs it: the terminal is approached from
-    /// the three other sides only.
-    OutputTerminal { outside: Facing },
+    /// A pinned input's terminal. The anchor is the **caller's** cell and
+    /// ships empty; REDA's reader -- one repeater, normalizing whatever the
+    /// caller offers to full strength -- stands in the single neighbour
+    /// `toward` names, and the route's source is the cell past it. No lever:
+    /// what drives the caller's cell is the caller's business.
+    InputTerminal { toward: Facing },
+    /// A pinned output's terminal. The anchor is the **caller's** cell and
+    /// ships empty; REDA's delivery repeater stands in the neighbour opposite
+    /// `toward` and drives into it. An extra sink on the declared output's
+    /// net. No lamp: what reads the cell is the caller's business.
+    OutputTerminal { toward: Facing },
 }
 
 /// The node whose primitive is placed at an anchor.  Candidate coordinates
@@ -168,15 +169,14 @@ pub enum RouteTerminalKind {
     /// A private merge branch whose strength budget still needs a final
     /// repeater; it terminates at merge dust, never at a NOR support.
     BareMergeRepeater,
-    /// A pinned declared output's terminal: the branch ends in the one dust
-    /// the contract promises at the pinned cell. Always dust -- a repeater
-    /// there would be a component in the interface -- so the strength budget
-    /// has to arrive alive one cell early, which `realise_branch_from`'s
-    /// dust-terminal arm plans for. Its `RouteSink::gate` carries the port
-    /// name (the producing gate's own output signal) and its `input_index`
-    /// is zero by convention; consumers that resolve sinks against gate
-    /// inputs skip this kind.
-    OutputTerminalDust,
+    /// A pinned declared output's handover: the branch ends in the delivery
+    /// repeater that drives the caller's cell. Always a repeater -- measured
+    /// (`tests/terminal_handover.rs`) as the only construction that powers a
+    /// lamp, a solid block and dust alike, whatever shape the wire behind it
+    /// takes. Its `RouteSink::gate` carries the port name (the producing
+    /// gate's own output signal) and its `input_index` is zero by convention;
+    /// consumers that resolve sinks against gate inputs skip this kind.
+    OutputTerminalRepeater,
 }
 
 /// The conservative choice for an ordinary route's final cell.
@@ -533,6 +533,73 @@ impl PlanCandidate {
     }
 }
 
+/// Why one pin can never become a lawful terminal, as **data**.
+///
+/// Pins come from a file today, from an editor next, and from an in-game mod
+/// after that. An editor has to point at the pin that is wrong and a mod has to
+/// highlight a block, so every refusal carries the offending cell rather than
+/// only a sentence a CLI can print. The sentence is `Display`'s job, derived
+/// from the same fields.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinRefusal {
+    /// The netlist declares no input or output with this name.
+    UndeclaredPort,
+    /// `toward` is the direction the signal travels through a cell of the
+    /// ground plane, so it has to be horizontal.
+    VerticalToward { toward: Facing },
+    /// One of this pin's own cells falls where no growable world reaches:
+    /// worlds start at the origin and only ever grow toward positive
+    /// coordinates.
+    OutsideEveryGrowableWorld { cell: Anchor },
+    /// This pin's cells collide with another port's -- the caller gave two
+    /// ports the same cell, or one port's handover the cell another needs.
+    CollidesWith { other_port_cell: Anchor },
+    /// Two different nets' pinned cells sit close enough to become one net in
+    /// the world: the caller left no gap between them.
+    NoGapFrom { other_pinned_cell: Anchor },
+    /// The one cell this pin's handover may occupy could not be reached. The
+    /// caller over-constrained the board, and this pin is what did it.
+    UnreachableHandover { cell: Anchor },
+}
+
+impl std::fmt::Display for PinRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let cell = |c: &Anchor| format!("({}, {}, {})", c.x, c.y, c.z);
+        match self {
+            Self::UndeclaredPort => {
+                write!(f, "the netlist declares no input or output with this name")
+            }
+            Self::VerticalToward { toward } => write!(
+                f,
+                "`toward` must be horizontal -- the direction the signal travels through the \
+                 pinned cell -- and this one is {toward:?}"
+            ),
+            Self::OutsideEveryGrowableWorld { cell: c } => write!(
+                f,
+                "its cell {} lies where no growable world reaches",
+                cell(c)
+            ),
+            Self::CollidesWith { other_port_cell } => write!(
+                f,
+                "another port already claims {} -- each pin owns the caller's cell and its one \
+                 handover",
+                cell(other_port_cell)
+            ),
+            Self::NoGapFrom { other_pinned_cell } => write!(
+                f,
+                "another net's pinned cell at {} is close enough to join this one -- a pinned \
+                 cell needs an empty cell between it and its neighbour",
+                cell(other_pinned_cell)
+            ),
+            Self::UnreachableHandover { cell: c } => write!(
+                f,
+                "its handover cell {} cannot be reached -- the board is over-constrained here",
+                cell(c)
+            ),
+        }
+    }
+}
+
 /// A legacy compiler output cannot be converted into a legal planner seed.
 ///
 /// No `Eq`: [`PlannerError::Relaxation`] carries a `Violation::shortfall`,
@@ -549,11 +616,13 @@ pub enum PlannerError {
     NoLocalRoute { from: Anchor, to: Anchor },
     /// Somebody fixed this port's position, so no move may change it.
     PortIsPinned(String),
-    /// A pin that can never become a terminal, refused by name before any
-    /// planning happens: an undeclared port, a vertical `outside`, a cell no
-    /// growable world can hold, or two terminals the caller left no gap
-    /// between.
-    InvalidPortPin { port: String, reason: String },
+    /// A pin that can never become a terminal, refused **by name** and with
+    /// the offending cell attached as data: see [`PinRefusal`].
+    InvalidPortPin {
+        port: String,
+        at: Anchor,
+        refusal: PinRefusal,
+    },
     /// A node's recorded realisation cannot be turned into blocks -- either
     /// the primitive has no emitter yet, or it contradicts the gate it is
     /// supposed to be realising.
@@ -584,9 +653,11 @@ impl std::fmt::Display for PlannerError {
                 from.x, from.y, from.z, to.x, to.y, to.z
             ),
             Self::PortIsPinned(port) => write!(f, "port {port} is pinned and cannot move"),
-            Self::InvalidPortPin { port, reason } => {
-                write!(f, "pin for port `{port}` is invalid: {reason}")
-            }
+            Self::InvalidPortPin { port, at, refusal } => write!(
+                f,
+                "pin for port `{port}` at ({}, {}, {}) is invalid: {refusal}",
+                at.x, at.y, at.z
+            ),
             Self::UnrealisableNode { id, reason } => {
                 write!(f, "cannot realise node {id}: {reason}")
             }
@@ -837,12 +908,14 @@ pub fn emit_primitives(
                             .input_positions
                             .insert(name.clone(), (lever.x, lever.y, lever.z));
                     }
-                    NodeRealisation::InputTerminal => {
+                    NodeRealisation::InputTerminal { toward } => {
                         let home = Position::new(anchor.x, anchor.y, anchor.z);
-                        let (terminal, _) = compile::place_input_terminal(&mut world, home, facing);
-                        // The port's cell is the terminal dust, not the repeater
-                        // behind it: that is the coordinate the contract is
-                        // stated over, and what a pinout consumer attaches to.
+                        let (terminal, _) =
+                            compile::place_input_terminal(&mut world, home, toward);
+                        // The port's cell is the caller's own, not the reader
+                        // standing beside it: that is the coordinate the
+                        // contract is stated over, and what a pinout consumer
+                        // attaches to. Nothing of REDA's is written in it.
                         ports
                             .input_positions
                             .insert(name.clone(), (terminal.x, terminal.y, terminal.z));
@@ -855,12 +928,13 @@ pub fn emit_primitives(
                     }
                 },
                 None => match node.realisation {
-                    // A pinned output's terminal: one dust on its own floor.
-                    // Its port name is the node's own id -- the one record of
-                    // which output this terminal serves -- and it must be a
-                    // declared output or the candidate names a port the
-                    // netlist does not have.
-                    NodeRealisation::OutputTerminal { .. } => {
+                    // A pinned output's terminal: the delivery repeater in the
+                    // one neighbour the pin names, and nothing at all in the
+                    // caller's own cell. Its port name is the node's own id --
+                    // the one record of which output this terminal serves --
+                    // and it must be a declared output or the candidate names
+                    // a port the netlist does not have.
+                    NodeRealisation::OutputTerminal { toward } => {
                         let name = node
                             .id
                             .strip_prefix("output:")
@@ -871,7 +945,7 @@ pub fn emit_primitives(
                                     .to_string(),
                             })?;
                         let home = Position::new(anchor.x, anchor.y, anchor.z);
-                        compile::place_output_terminal(&mut world, home);
+                        compile::place_output_terminal(&mut world, home, toward);
                         ports
                             .output_positions
                             .insert(name.to_string(), (home.x, home.y, home.z));
@@ -893,8 +967,8 @@ pub fn emit_primitives(
     // An unpinned declared output's lamp is not part of any gate cell and is
     // not claimed by a route: it hangs under the producing gate's own pin,
     // which is the one place nothing else can reach. A pinned output gets no
-    // lamp at all -- its reading point is the terminal dust the loop above
-    // already recorded, and what reads it is the caller's business.
+    // lamp at all -- its reading point is the caller's own cell, which the
+    // loop above recorded and deliberately left empty.
     for output in &netlist.outputs {
         if ports.output_positions.contains_key(output) {
             continue;
@@ -984,7 +1058,7 @@ pub fn try_move(
             && route
                 .terminals
                 .iter()
-                .any(|terminal| terminal.kind == RouteTerminalKind::OutputTerminalDust)
+                .any(|terminal| terminal.kind == RouteTerminalKind::OutputTerminalRepeater)
         {
             return Err(PlannerError::UnrealisableNode {
                 id: route.id.clone(),
@@ -1181,24 +1255,6 @@ fn realise_branch(source: Anchor, cells: &[Anchor]) -> LaidBranch {
 /// ones it wanted on the trunk are discarded, and its tail runs from wherever
 /// the trunk actually left the signal. So it is told.
 fn realise_branch_from(previous_cell: Anchor, incoming: u8, cells: &[Anchor]) -> LaidBranch {
-    realise_branch_from_styled(previous_cell, incoming, cells, false)
-}
-
-/// [`realise_branch_from`], with the final cell optionally barred from
-/// holding a repeater.
-///
-/// An output terminal's cell must ship as the one dust the contract promises,
-/// so the refresh the strength budget would have put there has to land one
-/// cell earlier instead. Saying so through `bends` -- which already means
-/// exactly "no repeater here" to `plan_bent_path` -- lets the same budget
-/// plan around the constraint, and `carries` then answers the contract's own
-/// question: does the terminal dust itself still read >= 1.
-fn realise_branch_from_styled(
-    previous_cell: Anchor,
-    incoming: u8,
-    cells: &[Anchor],
-    dust_terminal: bool,
-) -> LaidBranch {
     let source = previous_cell;
     let mut bends: BTreeSet<usize> = cells
         .windows(3)
@@ -1217,11 +1273,6 @@ fn realise_branch_from_styled(
             bends.insert(index);
         }
         previous = *cell;
-    }
-    if dust_terminal {
-        if let Some(last) = cells.len().checked_sub(1) {
-            bends.insert(last);
-        }
     }
 
     // Reserve for the stairs. Every cell of a climb spends strength and none
@@ -3039,29 +3090,70 @@ impl Reservation {
     }
 }
 
-/// Where a pinned port's terminal sits, and which side of it belongs to the
-/// caller.
+/// Which end of the circuit a pinned port is, which is what fixes the sign of
+/// its handover.
 ///
-/// `outside` must be horizontal. The cell one step that way from `at` is the
-/// caller's attachment point: it ships empty, internal routing never uses it,
-/// and the truth-table harnesses drive a pinned input by putting a temporary
-/// source there.
+/// Not derivable from the pin: the same `(at, toward)` names the neighbour
+/// *before* the caller's cell for an output and the one *after* it for an
+/// input. Whoever resolves a pin knows the role from the netlist, so the role
+/// is asked for rather than guessed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PortRole {
+    Input,
+    Output,
+}
+
+/// Where a pinned port's cell is, and **which way the signal travels through
+/// it**.
+///
+/// `at` is the **caller's** cell. REDA never puts a block there: a lamp, a
+/// lever, a piston, another circuit's wire or nothing at all is what ends up
+/// in it, decided after compilation and outside this compiler's knowledge.
+///
+/// `toward` must be horizontal, and it is a requirement rather than a hint --
+/// it names the single neighbour REDA may build in ([`PortPin::handover`]).
+/// The other three neighbours carry nothing of REDA's.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PortPin {
     pub at: Anchor,
-    pub outside: Facing,
+    pub toward: Facing,
 }
 
 impl PortPin {
-    /// The reserved-but-empty cell where the caller attaches.
-    pub fn outside_cell(&self) -> Anchor {
-        step(self.at, self.outside)
+    /// The one cell REDA may build its handover hardware in.
+    ///
+    /// An **output**'s signal leaves the circuit heading `toward`, so it is
+    /// driven into the caller's cell from the neighbour it comes *from*:
+    /// `at - toward`. An **input**'s signal enters heading `toward`, so it is
+    /// read out of the caller's cell in the neighbour it goes *to*:
+    /// `at + toward`. There is no third answer and no sweep -- that is what
+    /// makes a pin a specification.
+    pub fn handover(&self, role: PortRole) -> Anchor {
+        match role {
+            PortRole::Input => step(self.at, self.toward),
+            PortRole::Output => step(self.at, self.toward.opposite()),
+        }
+    }
+
+    /// REDA's own first net cell, one step further along the signal's travel
+    /// than the handover: the rear an output's delivery repeater reads, or the
+    /// cell an input's repeater drives its route out of.
+    ///
+    /// Unlike the handover this is an ordinary cell of the net -- reachable
+    /// from any side, in any shape, at any strength that still arrives, because
+    /// a diode reads its rear's power however the wire behind it is bent.
+    pub fn net_cell(&self, role: PortRole) -> Anchor {
+        let handover = self.handover(role);
+        match role {
+            PortRole::Input => step(handover, self.toward),
+            PortRole::Output => step(handover, self.toward.opposite()),
+        }
     }
 }
 
-/// The ports somebody has decided about, each declared as a **terminal**: one
-/// redstone dust on its own floor block at the pinned cell, with the `outside`
-/// neighbour left empty for the caller.
+/// The ports somebody has decided about, each declared as a **terminal**: the
+/// caller's own cell, plus the one neighbour `toward` names where REDA's
+/// handover hardware stands.
 ///
 /// A port has no position by default. Fixing every port before planning starts
 /// is what stops a layout ever being as small as it could be: the planner can
@@ -3076,10 +3168,10 @@ pub struct PortPlacements {
 }
 
 impl PortPlacements {
-    /// Declare `port`'s terminal at `at`, with `outside` facing the caller's
-    /// world. Nothing may move it afterwards.
-    pub fn pin(&mut self, port: impl Into<String>, at: Anchor, outside: Facing) -> &mut Self {
-        self.fixed.insert(port.into(), PortPin { at, outside });
+    /// Declare `port`'s cell at `at`, with `toward` the direction the signal
+    /// travels through it. Nothing may move it afterwards.
+    pub fn pin(&mut self, port: impl Into<String>, at: Anchor, toward: Facing) -> &mut Self {
+        self.fixed.insert(port.into(), PortPin { at, toward });
         self
     }
 
@@ -3662,11 +3754,11 @@ fn candidate_from_anchors_and_facings(
         let anchor = anchors[node];
         if let Some(pin) = placements.get(input) {
             let (footprint, conductors, out_pin) =
-                compile::input_terminal_footprint(anchor, facings[node], pin.outside);
+                compile::input_terminal_footprint(anchor, pin.toward);
             primitive_nodes.push(PrimitiveNode {
                 id: format!("input:{input}"),
                 anchor,
-                realisation: NodeRealisation::InputTerminal,
+                realisation: NodeRealisation::InputTerminal { toward: pin.toward },
                 footprint,
                 conductors,
                 pinned: true,
@@ -3688,8 +3780,8 @@ fn candidate_from_anchors_and_facings(
 
     // Pinned outputs' terminal nodes, in the same order `starting_layout`
     // and `relax::build` appended them: netlist output order, pinned only.
-    // One dust that conducts, plus the reserved outside cell -- claimed so
-    // no route or body ever takes it, written by nobody. No output pin: a
+    // The caller's cell -- claimed so no route or body ever takes it, written
+    // by nobody -- plus the one handover cell that conducts. No output pin: a
     // terminal is a sink, and `net_source` never resolves an `output:` id.
     let mut node = netlist.gates.len() + netlist.inputs.len();
     for output in &netlist.outputs {
@@ -3697,12 +3789,13 @@ fn candidate_from_anchors_and_facings(
             continue;
         };
         let anchor = anchors[node];
+        let (footprint, conductors, _) = compile::output_terminal_footprint(anchor, pin.toward);
         primitive_nodes.push(PrimitiveNode {
             id: format!("output:{output}"),
             anchor,
-            realisation: NodeRealisation::OutputTerminal { outside: pin.outside },
-            footprint: vec![anchor, step(anchor, pin.outside)],
-            conductors: vec![anchor],
+            realisation: NodeRealisation::OutputTerminal { toward: pin.toward },
+            footprint,
+            conductors,
             pinned: true,
             output_pin: None,
         });
@@ -3858,91 +3951,119 @@ pub(crate) fn starting_layout(
     Ok(anchors)
 }
 
+/// Which end of the circuit each pinned port is, or the refusal that says the
+/// netlist never declared it.
+///
+/// The role is what fixes the sign of every cell a pin resolves to, so it is
+/// read off the netlist once, here, and carried alongside the pin from then on.
+fn pin_roles<'a>(
+    netlist: &Netlist,
+    placements: &'a PortPlacements,
+) -> Result<Vec<(&'a String, PortPin, PortRole)>, PlannerError> {
+    let mut roles = Vec::new();
+    for (port, pin) in placements.iter() {
+        let role = if netlist.inputs.iter().any(|name| name == port) {
+            PortRole::Input
+        } else if netlist.outputs.iter().any(|name| name == port) {
+            PortRole::Output
+        } else {
+            return Err(PlannerError::InvalidPortPin {
+                port: port.clone(),
+                at: pin.at,
+                refusal: PinRefusal::UndeclaredPort,
+            });
+        };
+        roles.push((port, *pin, role));
+    }
+    Ok(roles)
+}
+
 /// Refuse, by name and before any planning happens, a pin that can never
 /// become a lawful terminal.
 ///
-/// Everything here is decidable from the pins and the netlist alone: which
-/// side the normalizing repeater takes is a realisation variant the relaxation
-/// sweeps later, but the terminal cell, its floor, and its outside cell are
-/// fixed the moment the pin is written, so their conflicts are named at the
-/// door instead of surfacing as a routing failure three stages downstream.
+/// **This lives on the pin set, not on any parser.** A check written into the
+/// JSON reader would protect the file and abandon the editor and the in-game
+/// mod that are coming; every refusal here is stated over `PortPlacements`,
+/// whoever assembled it, and every one carries the offending cell as data.
+///
+/// Everything checked here is decidable from the pins and the netlist alone.
+/// Since the pin names the handover rather than the compiler choosing it,
+/// there is no variant left to sweep: the caller's cell, the handover and the
+/// one net cell behind it are all fixed the moment the pin is written, so
+/// their conflicts are named at the door instead of surfacing as a routing
+/// failure three stages downstream. The one refusal that cannot be made here
+/// -- a handover the router genuinely could not reach -- is raised against the
+/// same pin by [`lay_net`], as [`PinRefusal::UnreachableHandover`].
 fn validate_port_placements(
     netlist: &Netlist,
     placements: &PortPlacements,
 ) -> Result<(), PlannerError> {
-    let invalid = |port: &str, reason: String| PlannerError::InvalidPortPin {
+    let invalid = |port: &str, pin: &PortPin, refusal: PinRefusal| PlannerError::InvalidPortPin {
         port: port.to_string(),
-        reason,
+        at: pin.at,
+        refusal,
     };
 
-    for (port, pin) in placements.iter() {
-        if matches!(pin.outside, Facing::Up | Facing::Down) {
+    let roles = pin_roles(netlist, placements)?;
+
+    for (port, pin, role) in &roles {
+        if matches!(pin.toward, Facing::Up | Facing::Down) {
             return Err(invalid(
                 port,
-                format!("`outside` must be horizontal, got {:?}", pin.outside),
-            ));
-        }
-        let declared = netlist.inputs.iter().any(|name| name == port)
-            || netlist.outputs.iter().any(|name| name == port);
-        if !declared {
-            return Err(invalid(
-                port,
-                "the netlist declares no input or output with this name".to_string(),
+                pin,
+                PinRefusal::VerticalToward { toward: pin.toward },
             ));
         }
         // Worlds start at the origin and only ever grow toward positive
-        // coordinates, so a terminal whose own cells sit below zero -- the
-        // floor one under the dust included -- can never be emitted whole.
-        let outside = pin.outside_cell();
-        if pin.at.x < 0 || pin.at.z < 0 || pin.at.y < 1 || outside.x < 0 || outside.z < 0 {
-            return Err(invalid(
-                port,
-                format!(
-                    "terminal cell ({}, {}, {}) leaves no room for its floor or its outside \
-                     cell inside any growable world",
-                    pin.at.x, pin.at.y, pin.at.z
-                ),
-            ));
+        // coordinates, so a pin whose own cells sit below zero -- the floor
+        // under the handover included -- can never be emitted whole. The net
+        // cell is checked with them: it is the one cell the route must reach
+        // or leave from, and a pin whose net cell is unreachable by
+        // arithmetic is over-constrained before any search runs.
+        for cell in [pin.at, pin.handover(*role), pin.net_cell(*role)] {
+            if cell.x < 0 || cell.z < 0 || cell.y < 1 {
+                return Err(invalid(
+                    port,
+                    pin,
+                    PinRefusal::OutsideEveryGrowableWorld { cell },
+                ));
+            }
         }
     }
 
-    let pins: Vec<(&String, &PortPin)> = placements.iter().collect();
-    for (index, &(port, pin)) in pins.iter().enumerate() {
-        for &(other_port, other) in &pins[index + 1..] {
+    // The cells one pin owns outright: the caller's own, and the single
+    // handover the pin names. The net cell joins them because for an input it
+    // is REDA's own dust and for an output it is the router's one approach --
+    // either way no second port may stand there.
+    let claims = |pin: &PortPin, role: PortRole| {
+        [pin.at, pin.handover(role), pin.net_cell(role)]
+    };
+
+    for (index, (port, pin, role)) in roles.iter().enumerate() {
+        for (_other_port, other, other_role) in &roles[index + 1..] {
             // Dust connects to dust one cardinal step away on the same level
-            // or one level up or down, so two terminals of different nets
-            // that close are one net in the world however the netlist reads.
-            // (Two pins never share a net today -- every port drives or is
-            // its own signal -- but the rule is stated over nets, and input
-            // and output terminals inherit it alike.)
+            // or one level up or down, so two pinned cells of different nets
+            // that close are one net in the world however the netlist reads --
+            // a glyph needs a gap between its segments.
             let dx = (pin.at.x - other.at.x).abs();
             let dy = (pin.at.y - other.at.y).abs();
             let dz = (pin.at.z - other.at.z).abs();
             if dx + dz == 1 && dy <= 1 {
                 return Err(invalid(
                     port,
-                    format!(
-                        "its terminal dust would connect to port `{other_port}`'s -- \
-                         a terminal needs one empty cell between it and its neighbour"
-                    ),
+                    pin,
+                    PinRefusal::NoGapFrom { other_pinned_cell: other.at },
                 ));
             }
-            // The cells a pin claims before any variant is chosen: the
-            // terminal dust, the floor under it, and the outside cell that
-            // ships empty. Two pins may not share any of them -- an outside
-            // cell on another terminal's dust would power a net the caller
-            // never attached to.
-            let claims = |p: &PortPin| {
-                [p.at, Anchor { y: p.at.y - 1, ..p.at }, p.outside_cell()]
-            };
-            let ours = claims(pin);
-            if claims(other).iter().any(|cell| ours.contains(cell)) {
+            let ours = claims(pin, *role);
+            if let Some(shared) = claims(other, *other_role)
+                .into_iter()
+                .find(|cell| ours.contains(cell))
+            {
                 return Err(invalid(
                     port,
-                    format!(
-                        "its terminal's cells collide with port `{other_port}`'s -- \
-                         each terminal owns its dust, its floor, and its outside cell"
-                    ),
+                    pin,
+                    PinRefusal::CollidesWith { other_port_cell: shared },
                 ));
             }
         }
@@ -4129,14 +4250,24 @@ fn net_sinks(netlist: &Netlist) -> BTreeMap<String, Vec<(usize, usize)>> {
 }
 
 /// One place a net must reach: a declared gate input, or a pinned output's
-/// terminal dust.
+/// handover repeater.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum NetConsumer {
     Gate { gate: usize, input_index: usize },
-    /// The extra sink a pinned declared output puts on its own net: one dust
-    /// at `at`, approached from any horizontal side but `outside`, which is
-    /// the caller's reserved cell.
-    Terminal { port: String, at: Anchor, outside: Facing },
+    /// The extra sink a pinned declared output puts on its own net: the
+    /// delivery repeater at `handover`, which a diode can only be entered
+    /// from behind, so it has exactly **one** lawful approach -- `net_cell`,
+    /// the cell the pin names and nothing else may take.
+    Terminal {
+        port: String,
+        /// The caller's own cell, for naming a refusal against the pin.
+        at: Anchor,
+        handover: Anchor,
+        net_cell: Anchor,
+        /// The direction the signal travels through all three, which is the
+        /// delivery repeater's own orientation.
+        toward: Facing,
+    },
 }
 
 /// [`net_sinks`], plus one terminal consumer per pinned output -- read off
@@ -4160,7 +4291,7 @@ fn net_consumers(netlist: &Netlist, candidate: &PlanCandidate) -> BTreeMap<Strin
         );
     }
     for node in &candidate.primitive_nodes {
-        let NodeRealisation::OutputTerminal { outside } = node.realisation else {
+        let NodeRealisation::OutputTerminal { toward } = node.realisation else {
             continue;
         };
         let port = node
@@ -4168,10 +4299,13 @@ fn net_consumers(netlist: &Netlist, candidate: &PlanCandidate) -> BTreeMap<Strin
             .strip_prefix("output:")
             .expect("terminal nodes are named output:<port>")
             .to_string();
+        let pin = PortPin { at: node.anchor, toward };
         consumers.entry(port.clone()).or_default().push(NetConsumer::Terminal {
             port,
             at: node.anchor,
-            outside,
+            handover: pin.handover(PortRole::Output),
+            net_cell: pin.net_cell(PortRole::Output),
+            toward,
         });
     }
     consumers
@@ -4234,53 +4368,56 @@ fn preclaim_socket_approaches(
     }
 }
 
-/// Claim, under each pinned port's own signal, the six face-neighbours of
-/// its reserved outside cell.
+/// Claim, under each pinned port's own signal, the six face-neighbours of the
+/// **caller's** cell -- and, for an output, the single cell its delivery
+/// repeater may be approached from.
 ///
-/// The caller attaches at the outside cell, and what it attaches powers what
-/// it touches -- the truth harnesses' fixture lever strongly powers all six
-/// neighbours under this simulator's taxonomy -- so a foreign net's wire in
-/// any of them would be driven by a signal it never declared.
-/// [`verify_terminal_contract`] refuses such a plan after the fact; this is
-/// the same rule stated to the search, so the router lays a lawful plan
-/// instead of discovering the refusal three stages downstream. Measured
-/// before this existed (2026-08-30): the pinned-cin coupling probe's plan
-/// ran `g2` cardinally beside `cin`'s outside cell and the new invariant
-/// failed the one terminal-realised plan that extraction inspects.
+/// The caller builds in their own cell, and what they build powers what it
+/// touches: measured (`tests/terminal_handover.rs`), a lever there is strong
+/// on all six neighbours and a conductive block there re-drives dust in every
+/// one of them. So a foreign net's wire in any of those six would be driven by
+/// a signal it never declared. [`verify_terminal_contract`] refuses such a
+/// plan after the fact; this is the same rule stated to the search, so the
+/// router lays a lawful plan instead of discovering the refusal three stages
+/// downstream. Measured before this existed (2026-08-30): the pinned-cin
+/// coupling probe's plan ran `g2` cardinally beside `cin`'s cell and the
+/// invariant failed the one terminal-realised plan that extraction inspects.
+///
+/// The approach claim is the same rule [`preclaim_socket_approaches`] makes
+/// for a gate socket, and for the same reason: a diode reads only its rear, so
+/// the pin leaves the router exactly one way in and a stranger who took that
+/// cell would make this pin unroutable rather than expensive.
 ///
 /// Claimed under the **port's own signal**, not a guard name, because the
-/// contract's adjacency clause is stated over *other* nets: the port's own
-/// net may sit beside its own outside cell -- the terminal dust itself
-/// always does. `Occupancy::Solid` so the claim is pure cell exclusivity:
-/// inert cells trigger no keep-out of their own, and first-writer-wins means
-/// a cell already inside some body's footprint keeps its real occupancy.
-fn preclaim_outside_halos(reservation: &mut Reservation, candidate: &PlanCandidate) {
+/// contract's adjacency clause is stated over *other* nets: the port's own net
+/// always sits beside its own cell -- the handover does. `Occupancy::Solid`
+/// for the halo, so the claim is pure cell exclusivity; inert cells trigger no
+/// keep-out of their own, and first-writer-wins means a cell already inside
+/// some body's footprint keeps its real occupancy.
+fn preclaim_pinned_cell_halos(reservation: &mut Reservation, candidate: &PlanCandidate) {
     for node in &candidate.primitive_nodes {
         let signal = match node.realisation {
-            NodeRealisation::InputTerminal => node.id.strip_prefix("input:"),
+            NodeRealisation::InputTerminal { .. } => node.id.strip_prefix("input:"),
             NodeRealisation::OutputTerminal { .. } => node.id.strip_prefix("output:"),
             _ => continue,
         };
         let Some(signal) = signal else {
             continue;
         };
-        let Some(outside) = node
-            .footprint
-            .iter()
-            .find(|cell| !node.conductors.contains(cell))
-            .copied()
-        else {
-            continue;
-        };
+        let at = node.anchor;
         for cell in [
-            Anchor { x: outside.x - 1, ..outside },
-            Anchor { x: outside.x + 1, ..outside },
-            Anchor { z: outside.z - 1, ..outside },
-            Anchor { z: outside.z + 1, ..outside },
-            Anchor { y: outside.y - 1, ..outside },
-            Anchor { y: outside.y + 1, ..outside },
+            Anchor { x: at.x - 1, ..at },
+            Anchor { x: at.x + 1, ..at },
+            Anchor { z: at.z - 1, ..at },
+            Anchor { z: at.z + 1, ..at },
+            Anchor { y: at.y - 1, ..at },
+            Anchor { y: at.y + 1, ..at },
         ] {
             reservation.insert(cell, signal, Occupancy::Solid);
+        }
+        if let NodeRealisation::OutputTerminal { toward } = node.realisation {
+            let pin = PortPin { at, toward };
+            reservation.insert(pin.net_cell(PortRole::Output), signal, Occupancy::Wire);
         }
     }
 }
@@ -4547,9 +4684,13 @@ fn lay_net(
         // behind itself; the legacy router guarantees that with a dedicated
         // approach column, and here the search is aimed one cell further out
         // and the socket appended, the same guarantee stated as geometry.
-        // An output terminal is plain dust and dust joins from any side, so
-        // it offers the three horizontal approaches that are not the
-        // caller's reserved `outside` cell.
+        // An output terminal is the same shape: its handover is a delivery
+        // repeater, which reads only from directly behind, so the pin leaves
+        // exactly one approach -- the net cell the pin itself names. That is
+        // the price of the pin naming the handover rather than the compiler
+        // choosing it, and the repeater hands it straight back: its rear is
+        // an ordinary net cell, reachable bent, branched or nearly spent
+        // (measured, `tests/terminal_handover.rs`).
         //
         // `try_move` asks the gate question the same way since Task 10:
         // `route_endpoints` threads each branch's `RouteSink` out and
@@ -4569,14 +4710,7 @@ fn lay_net(
                 };
                 (socket, vec![approach])
             }
-            NetConsumer::Terminal { at, outside, .. } => {
-                let approaches: Vec<Anchor> = [Facing::North, Facing::South, Facing::West, Facing::East]
-                    .into_iter()
-                    .filter(|side| side != outside)
-                    .map(|side| step(*at, side))
-                    .collect();
-                (*at, approaches)
-            }
+            NetConsumer::Terminal { handover, net_cell, .. } => (*handover, vec![*net_cell]),
         };
         // What this branch's failure is called, in the error's own words.
         let sink_label = match consumer {
@@ -4635,15 +4769,32 @@ fn lay_net(
         let mut path = match found {
             Some(path) => path,
             None => {
+                // A pinned terminal has one lawful cell and no second way in,
+                // so a search that fails here is the caller having
+                // over-constrained the board -- refused against **that pin**
+                // rather than reported as an anonymous corridor the router
+                // might have taken elsewhere. The failure still travels
+                // through the negotiation loop, so rip-up and re-ordering get
+                // their turns first; this is the sentence the loop ends on.
+                let error = match consumer {
+                    NetConsumer::Terminal { port, at, handover, .. } => {
+                        PlannerError::InvalidPortPin {
+                            port: port.clone(),
+                            at: *at,
+                            refusal: PinRefusal::UnreachableHandover { cell: *handover },
+                        }
+                    }
+                    NetConsumer::Gate { .. } => PlannerError::NoLocalRoute {
+                        from: source,
+                        to: approach,
+                    },
+                };
                 return Err(Box::new(RoutingFailure {
                     blocked: signal.clone(),
                     corridor: (source, approach),
                     reservation: reservation.clone(),
                     charge_outright: Vec::new(),
-                    error: PlannerError::NoLocalRoute {
-                        from: source,
-                        to: approach,
-                    },
+                    error,
                 }));
             }
         };
@@ -4679,12 +4830,12 @@ fn lay_net(
             previous_cell = *anchor;
         }
 
-        // An output terminal's cell must ship as dust, so its branch is
-        // realised with the final cell barred from holding a refresh --
-        // `carries` then answers the contract's own question: the terminal
-        // dust itself still reads >= 1.
-        let dust_terminal = matches!(consumer, NetConsumer::Terminal { .. });
-        let laid = realise_branch_from_styled(previous_cell, carried, &path[shared..], dust_terminal);
+        // An output terminal's last cell is a delivery repeater, which is
+        // what an ordinary branch's budget already plans for when it needs a
+        // refresh there -- so no styling: the terminal arm below simply forces
+        // the repeater the contract requires, and a repeater is always at
+        // least as strong as the dust the budget would otherwise have laid.
+        let laid = realise_branch_from(previous_cell, carried, &path[shared..]);
         if !laid.carries {
             return Err(Box::new(RoutingFailure {
                 blocked: signal.clone(),
@@ -4812,25 +4963,32 @@ fn lay_net(
                     repeaters: trunk_repeaters + laid.repeaters,
                 });
             }
-            NetConsumer::Terminal { port, .. } => {
-                // The contract's one dust, whatever the shared-trunk overlap
-                // did: the styled realisation above never plans a repeater
-                // here, and this write makes the plan say so at the recorded
-                // cell even when the trunk already owned it.
+            NetConsumer::Terminal { port, at, toward, .. } => {
+                // The contract's one delivery repeater, whatever the
+                // shared-trunk overlap did: aimed along `toward` so its output
+                // lands in the caller's cell, and written here so the plan says
+                // so at the handover even when the trunk already owned it.
+                // `place_output_terminal` writes the same blockstate.
                 if let Some(index) = route.anchors.iter().position(|anchor| *anchor == socket) {
-                    route.realisation[index] = compile::dust();
+                    route.realisation[index] = compile::repeater(*toward);
                 }
-                // No guard cells: dust joins from any side, so a later branch
-                // of this same net alongside the terminal still carries -- and
-                // the outside cell is already claimed by the terminal's own
-                // body, which no route may enter.
+                // A diode reads only its rear, so the same straight-line rule a
+                // gate socket gets applies here: claim the cells flanking the
+                // handover under a name nobody routes as, or a later branch of
+                // this very net could run alongside and lock the repeater.
+                let guard = format!("terminal:output:{port}");
+                for neighbour in horizontal_neighbours(socket) {
+                    if neighbour != predecessor && neighbour != *at {
+                        reservation.insert(neighbour, &guard, Occupancy::Solid);
+                    }
+                }
                 route.terminals.push(RouteTerminal {
                     sink: RouteSink {
                         gate: port.clone(),
                         input_index: 0,
                         anchor: socket,
                     },
-                    kind: RouteTerminalKind::OutputTerminalDust,
+                    kind: RouteTerminalKind::OutputTerminalRepeater,
                     repeaters: trunk_repeaters + laid.repeaters,
                 });
             }
@@ -4889,7 +5047,7 @@ fn route_in_order(
     let sinks = net_consumers(netlist, &candidate);
 
     preclaim_socket_approaches(&mut reservation, &candidate, netlist);
-    preclaim_outside_halos(&mut reservation, &candidate);
+    preclaim_pinned_cell_halos(&mut reservation, &candidate);
 
     let prices = Prices::RipUp(congestion);
     let mut routes = Vec::with_capacity(sinks.len());
@@ -5264,7 +5422,7 @@ fn hard_furniture(candidate: &PlanCandidate, netlist: &Netlist) -> Reservation {
     let mut reservation = reserve_primitives(&candidate.primitive_nodes);
     preclaim_socket_approaches(&mut reservation, candidate, netlist);
     preclaim_terminal_guards(&mut reservation, candidate, netlist);
-    preclaim_outside_halos(&mut reservation, candidate);
+    preclaim_pinned_cell_halos(&mut reservation, candidate);
     reservation
 }
 
@@ -5282,6 +5440,11 @@ fn hard_furniture(candidate: &PlanCandidate, netlist: &Netlist) -> Reservation {
 /// furniture, and which net gets it is not a thing to negotiate about. Claiming
 /// them as they are laid leaves the answer depending on net order, and under
 /// negotiation the order is not a lever any more.
+///
+/// A pinned output's handover takes the same guards for the same reason: it is
+/// a repeater, it reads only its rear, and a stranger's repeater beside it
+/// would lock it. Its three fixed cells are the pin's own -- the caller's cell,
+/// the handover, and the one approach -- so they are furniture too.
 fn preclaim_terminal_guards(
     reservation: &mut Reservation,
     candidate: &PlanCandidate,
@@ -5302,6 +5465,24 @@ fn preclaim_terminal_guards(
                 if neighbour != approach && neighbour != support {
                     reservation.insert(neighbour, &guard, Occupancy::Solid);
                 }
+            }
+        }
+    }
+
+    for node in &candidate.primitive_nodes {
+        let NodeRealisation::OutputTerminal { toward } = node.realisation else {
+            continue;
+        };
+        let Some(port) = node.id.strip_prefix("output:") else {
+            continue;
+        };
+        let pin = PortPin { at: node.anchor, toward };
+        let handover = pin.handover(PortRole::Output);
+        let approach = pin.net_cell(PortRole::Output);
+        let guard = format!("terminal:output:{port}");
+        for neighbour in horizontal_neighbours(handover) {
+            if neighbour != approach && neighbour != node.anchor {
+                reservation.insert(neighbour, &guard, Occupancy::Solid);
             }
         }
     }
@@ -5818,13 +5999,15 @@ fn verified_parts(
 /// The terminal-contract invariant, one clause per promise the spec states
 /// over a pinned port's cells:
 ///
-/// * the pinned cell holds its one terminal dust;
-/// * the reserved outside cell is air -- it belongs to the caller;
-/// * the outside cell is adjacent to **no other net's** cells, because the
-///   caller's attachment (a source for an input, per the contract's own
-///   harness) powers what it touches, and a foreign net beside it would be
-///   driven by a signal it never declared. The port's own net may sit there
-///   -- the terminal dust itself always does.
+/// * **the pinned cell ships empty** -- it is the caller's, and REDA puts no
+///   block in it, ever;
+/// * the one neighbour the pin names holds this port's own handover, a
+///   repeater whose signal travels `toward`, identical in both roles;
+/// * the pinned cell is adjacent to **no other net's** cells, because whatever
+///   the caller builds there powers what it touches -- measured: a lever there
+///   is strong on all six neighbours -- and a foreign net beside it would be
+///   driven by a signal it never declared. The port's own net may sit there:
+///   the handover always does.
 ///
 /// "Cells" here are the routes' cells, read off the same reservation
 /// `verify_spacing` proved -- ownership is never guessed by scanning blocks.
@@ -5845,52 +6028,54 @@ fn verify_terminal_contract(
     };
 
     for node in &candidate.primitive_nodes {
-        let port = match node.realisation {
-            NodeRealisation::InputTerminal => node.id.strip_prefix("input:"),
-            NodeRealisation::OutputTerminal { .. } => node.id.strip_prefix("output:"),
+        let (port, role, toward) = match node.realisation {
+            NodeRealisation::InputTerminal { toward } => {
+                (node.id.strip_prefix("input:"), PortRole::Input, toward)
+            }
+            NodeRealisation::OutputTerminal { toward } => {
+                (node.id.strip_prefix("output:"), PortRole::Output, toward)
+            }
             _ => continue,
-        }
-        .unwrap_or(&node.id);
-
-        let dust = world.get(node.anchor.x, node.anchor.y, node.anchor.z);
-        if dust.kind != BlockKind::RedstoneWire {
-            return Err(violation(
-                port,
-                format!(
-                    "the pinned cell ({}, {}, {}) holds {:?}, not the terminal dust",
-                    node.anchor.x, node.anchor.y, node.anchor.z, dust.kind
-                ),
-            ));
-        }
-
-        // The one footprint cell that does not conduct is the reserved
-        // outside cell -- both terminal footprints record it that way.
-        let Some(outside) = node
-            .footprint
-            .iter()
-            .find(|cell| !node.conductors.contains(cell))
-            .copied()
-        else {
-            continue;
         };
-        let standing = world.get(outside.x, outside.y, outside.z);
+        let port = port.unwrap_or(&node.id);
+        let pin = PortPin { at: node.anchor, toward };
+
+        let at = node.anchor;
+        let standing = world.get(at.x, at.y, at.z);
         if standing.kind != BlockKind::Air {
             return Err(violation(
                 port,
                 format!(
-                    "the outside cell ({}, {}, {}) ships {:?}, not empty",
-                    outside.x, outside.y, outside.z, standing.kind
+                    "the pinned cell ({}, {}, {}) ships {:?}, not empty -- it belongs to the \
+                     caller",
+                    at.x, at.y, at.z, standing.kind
+                ),
+            ));
+        }
+
+        // The handover, and only the handover: one repeater whose signal
+        // travels `toward`, which `compile::repeater` stores as the Minecraft
+        // convention's opposite.
+        let handover = pin.handover(role);
+        let built = world.get(handover.x, handover.y, handover.z);
+        if built.kind != BlockKind::Repeater || built.facing != Some(toward.opposite()) {
+            return Err(violation(
+                port,
+                format!(
+                    "its handover cell ({}, {}, {}) holds {:?} facing {:?}, not the repeater \
+                     carrying the signal {toward:?}",
+                    handover.x, handover.y, handover.z, built.kind, built.facing
                 ),
             ));
         }
 
         for neighbour in [
-            Anchor { x: outside.x - 1, ..outside },
-            Anchor { x: outside.x + 1, ..outside },
-            Anchor { z: outside.z - 1, ..outside },
-            Anchor { z: outside.z + 1, ..outside },
-            Anchor { y: outside.y - 1, ..outside },
-            Anchor { y: outside.y + 1, ..outside },
+            Anchor { x: at.x - 1, ..at },
+            Anchor { x: at.x + 1, ..at },
+            Anchor { z: at.z - 1, ..at },
+            Anchor { z: at.z + 1, ..at },
+            Anchor { y: at.y - 1, ..at },
+            Anchor { y: at.y + 1, ..at },
         ] {
             let position = Position::new(neighbour.x, neighbour.y, neighbour.z);
             let Some(&net) = reservation.get(&position) else {
@@ -5905,10 +6090,10 @@ fn verify_terminal_contract(
                 return Err(violation(
                     port,
                     format!(
-                        "its outside cell ({}, {}, {}) is adjacent to net `{owner}`'s cell at \
-                         ({}, {}, {}) -- the caller's attachment would drive a net it never \
+                        "its pinned cell ({}, {}, {}) is adjacent to net `{owner}`'s cell at \
+                         ({}, {}, {}) -- whatever the caller builds would drive a net it never \
                          agreed to touch",
-                        outside.x, outside.y, outside.z, neighbour.x, neighbour.y, neighbour.z
+                        at.x, at.y, at.z, neighbour.x, neighbour.y, neighbour.z
                     ),
                 ));
             }
@@ -5986,7 +6171,7 @@ fn verification_nets(
             // the net's own *producer*, and recording that as a gate-input
             // sink would claim the net drives itself. The declared-output
             // pass of `verify_signal_strength` is what checks it instead.
-            if terminal.kind == RouteTerminalKind::OutputTerminalDust {
+            if terminal.kind == RouteTerminalKind::OutputTerminalRepeater {
                 continue;
             }
             let gate = netlist
@@ -6011,7 +6196,7 @@ fn verification_nets(
     let mut covered: BTreeMap<(usize, usize), usize> = BTreeMap::new();
     for (net, route) in candidate.routes.iter().enumerate() {
         for terminal in &route.terminals {
-            if terminal.kind == RouteTerminalKind::OutputTerminalDust {
+            if terminal.kind == RouteTerminalKind::OutputTerminalRepeater {
                 continue;
             }
             let gate = netlist
@@ -8057,12 +8242,18 @@ mod tests {
 
     /// One toggleable driver position per input, in input order.
     ///
-    /// An unpinned input's driver is its own lever. A pinned input has none
-    /// -- what drives its terminal is the caller's business -- so the harness
-    /// plays the caller: it installs a fixture lever in the reserved outside
-    /// cell, which the contract guarantees empty, and toggles that. Same
-    /// `.lit` write either way, which is what lets both harnesses drive both
-    /// kinds of port through one loop.
+    /// An unpinned input's driver is its own lever. A pinned input has none --
+    /// what drives the caller's cell is the caller's business -- so the
+    /// harness plays the caller: it installs a fixture lever **in the caller's
+    /// own cell**, which the contract guarantees ships empty, and toggles
+    /// that. Same `.lit` write either way, which is what lets both harnesses
+    /// drive both kinds of port through one loop.
+    ///
+    /// A lever is one of the states the reading repeater was measured against
+    /// (`tests/terminal_handover.rs`, sensing table: lit lever -> rear 15). It
+    /// is a fixture, not an interface assumption -- the contract admits any
+    /// means the game accepts -- and the same file recommends a redstone block
+    /// as the safer fixture, which is a harness change of its own.
     fn install_fixture_drivers(
         world: &mut World,
         input_positions: &BTreeMap<String, (i32, i32, i32)>,
@@ -8073,17 +8264,17 @@ mod tests {
         for name in inputs {
             match placements.get(name) {
                 Some(pin) => {
-                    let outside = pin.outside_cell();
-                    let standing = world.get(outside.x, outside.y, outside.z);
+                    let at = pin.at;
+                    let standing = world.get(at.x, at.y, at.z);
                     if standing.kind != crate::redstone::world::block::BlockKind::Air {
                         return Err(format!(
-                            "`{name}`'s outside cell ({}, {}, {}) ships {:?}, not empty -- \
+                            "`{name}`'s pinned cell ({}, {}, {}) ships {:?}, not empty -- \
                              the fixture cannot attach where the contract broke",
-                            outside.x, outside.y, outside.z, standing.kind
+                            at.x, at.y, at.z, standing.kind
                         ));
                     }
-                    world.set(outside.x, outside.y, outside.z, compile::lever(false));
-                    drivers.push((outside.x, outside.y, outside.z));
+                    world.set(at.x, at.y, at.z, compile::lever(false));
+                    drivers.push((at.x, at.y, at.z));
                 }
                 None => match input_positions.get(*name) {
                     Some(position) => drivers.push(*position),
@@ -8096,6 +8287,39 @@ mod tests {
         Ok(drivers)
     }
 
+    /// Hang a probe lamp in every pinned output's own cell, so the harness
+    /// reads the contract the way a caller does.
+    ///
+    /// The contract is about a cell REDA does not own and ships empty, so
+    /// there is nothing of REDA's left to measure there: an empty cell and a
+    /// glass cube both read `(None, 0)` under a repeater emitting 15
+    /// (measured, `tests/terminal_handover.rs`). A lamp is the receiver that
+    /// answers the promise exactly -- lit when the signal is high, dark when
+    /// it is low -- and it is also the receiver a dust handover would have
+    /// failed, which is why the probe is a lamp and not a dust reading.
+    fn install_fixture_probes(
+        world: &mut World,
+        outputs: &[String],
+        placements: &PortPlacements,
+    ) -> Result<(), String> {
+        for name in outputs {
+            let Some(pin) = placements.get(name) else {
+                continue;
+            };
+            let at = pin.at;
+            let standing = world.get(at.x, at.y, at.z);
+            if standing.kind != crate::redstone::world::block::BlockKind::Air {
+                return Err(format!(
+                    "`{name}`'s pinned cell ({}, {}, {}) ships {:?}, not empty -- the probe \
+                     cannot attach where the contract broke",
+                    at.x, at.y, at.z, standing.kind
+                ));
+            }
+            world.set(at.x, at.y, at.z, compile::lamp());
+        }
+        Ok(())
+    }
+
     /// `net_sinks`' gate tuples in `lay_net`'s consumer vocabulary, for the
     /// probes that sort and re-order branches as bare `(gate, input)` pairs.
     fn as_gate_consumers(sinks: &[(usize, usize)]) -> Vec<NetConsumer> {
@@ -8105,15 +8329,87 @@ mod tests {
             .collect()
     }
 
-    /// Reading one output at its recorded position: a lamp's `lit` for an
-    /// unpinned port, dust strength > 0 at the terminal cell for a pinned
-    /// one -- the contract's own reading, no lamp involved. The block kind
-    /// says which, exactly the sniff `verify_signal_strength` makes.
+    /// Reading one output at its recorded position: a lamp's `lit`.
+    ///
+    /// One rule for both kinds of port, because both end at a lamp -- an
+    /// unpinned output's own, hung under its producing gate's pin, and a
+    /// pinned output's probe, which [`install_fixture_probes`] hangs in the
+    /// caller's cell exactly as a caller would.
     fn output_reads_high(world: &World, at: (i32, i32, i32)) -> bool {
-        let state = world.get(at.0, at.1, at.2);
-        match state.kind {
-            crate::redstone::world::block::BlockKind::RedstoneWire => state.power > 0,
-            _ => state.lit,
+        world.get(at.0, at.1, at.2).lit
+    }
+
+    /// The terminal contract read off the shipped blocks, port by port: the
+    /// recorded reading point is the caller's cell, that cell ships **empty**,
+    /// the one neighbour the pin names holds this port's own handover
+    /// repeater, and nothing that carries a signal stands in any of the other
+    /// five neighbours.
+    ///
+    /// The halo clause is not a restatement of `verify_terminal_contract`'s:
+    /// that one judges the router's reservation, which holds route cells and
+    /// no gate bodies, so a gate body parked beside a pinned cell passes it
+    /// (its own doc comment says so). This one judges blocks and catches
+    /// that. Solid and glass are allowed -- floor and fill are what the halo
+    /// is claimed as, and neither carries a signal on its own.
+    fn assert_terminal_contract_in_the_world(
+        compiled: &CompiledCircuit,
+        placements: &PortPlacements,
+        netlist: &Netlist,
+    ) {
+        use crate::redstone::world::block::BlockKind;
+
+        for (name, pin) in placements.iter() {
+            let role = if netlist.inputs.iter().any(|input| input == name) {
+                PortRole::Input
+            } else {
+                PortRole::Output
+            };
+            let recorded = compiled
+                .input_positions
+                .get(name)
+                .or_else(|| compiled.output_positions.get(name))
+                .copied();
+            assert_eq!(
+                recorded,
+                Some((pin.at.x, pin.at.y, pin.at.z)),
+                "`{name}`'s recorded position is the caller's own cell"
+            );
+            assert_eq!(
+                compiled.world.get(pin.at.x, pin.at.y, pin.at.z).kind,
+                BlockKind::Air,
+                "`{name}`'s pinned cell ships empty -- it belongs to the caller"
+            );
+            let handover = pin.handover(role);
+            let built = compiled.world.get(handover.x, handover.y, handover.z);
+            assert_eq!(
+                built.kind,
+                BlockKind::Repeater,
+                "`{name}`'s handover at {handover:?} holds the terminal repeater"
+            );
+            assert_eq!(
+                built.facing,
+                Some(pin.toward.opposite()),
+                "`{name}`'s handover carries the signal {:?}",
+                pin.toward
+            );
+            for neighbour in [
+                (pin.at.x - 1, pin.at.y, pin.at.z),
+                (pin.at.x + 1, pin.at.y, pin.at.z),
+                (pin.at.x, pin.at.y, pin.at.z - 1),
+                (pin.at.x, pin.at.y, pin.at.z + 1),
+                (pin.at.x, pin.at.y - 1, pin.at.z),
+                (pin.at.x, pin.at.y + 1, pin.at.z),
+            ] {
+                if neighbour == (handover.x, handover.y, handover.z) {
+                    continue;
+                }
+                let kind = compiled.world.get(neighbour.0, neighbour.1, neighbour.2).kind;
+                assert!(
+                    matches!(kind, BlockKind::Air | BlockKind::Solid | BlockKind::Glass),
+                    "`{name}`'s pinned cell touches {kind:?} at {neighbour:?} -- what the \
+                     caller builds would drive what it never agreed to touch"
+                );
+            }
         }
     }
 
@@ -8139,8 +8435,9 @@ mod tests {
     }
 
     /// [`simulated_truth_table`], driving any pinned input through a fixture
-    /// source in its reserved outside cell -- the way an external caller
-    /// would.
+    /// source in the caller's own cell and reading any pinned output through a
+    /// probe lamp in the caller's own cell -- the way an external caller would
+    /// do both.
     fn simulated_truth_table_driving_pins(
         compiled: &CompiledCircuit,
         inputs: &[&str],
@@ -8153,6 +8450,7 @@ mod tests {
         let mut world = compiled.world.clone();
         let levers =
             install_fixture_drivers(&mut world, &compiled.input_positions, inputs, placements)?;
+        install_fixture_probes(&mut world, outputs, placements)?;
         let mut sinks = Vec::with_capacity(outputs.len());
         for signal in outputs {
             match compiled.output_positions.get(signal) {
@@ -10960,7 +11258,7 @@ mod tests {
             ..free.port_anchor("a").expect("the input is a port")
         };
         let mut placements = PortPlacements::default();
-        placements.pin("a", elsewhere, Facing::South);
+        placements.pin("a", elsewhere, Facing::North);
 
         let pinned = plan_from_netlist(&netlist, &placements)
             .expect("a pinned circuit must place too");
@@ -10972,19 +11270,59 @@ mod tests {
         let node = &pinned.primitive_nodes()[netlist.gates.len()];
         assert_eq!(
             node.realisation,
-            NodeRealisation::InputTerminal,
+            NodeRealisation::InputTerminal { toward: Facing::North },
             "a pin declares a terminal, not a lever"
         );
         assert!(node.pinned, "and nothing may move it afterwards");
         assert!(
-            node.footprint.contains(&Anchor { z: elsewhere.z + 1, ..elsewhere }),
-            "the outside cell is claimed so routing keeps out of the caller's attachment point"
+            node.footprint.contains(&elsewhere),
+            "the caller's cell is claimed so routing keeps out of it"
         );
         assert!(
-            !node.conductors.contains(&Anchor { z: elsewhere.z + 1, ..elsewhere }),
+            !node.conductors.contains(&elsewhere),
             "claimed, but nothing conducts there: it ships empty"
         );
         verify_candidate(&pinned, &netlist).expect("and be legal");
+    }
+
+    /// **The sign, stated once, concretely.** A pin is a cell and the
+    /// direction the signal travels through it, and the whole reason a pin can
+    /// be a specification is that this resolves to exactly one neighbour per
+    /// role. An output's signal *leaves* heading `toward`, so it is driven
+    /// from behind; an input's signal *enters* heading `toward`, so it is read
+    /// from in front. Get the sign backwards and every terminal is built on
+    /// the far side of the caller's cell, so it is written down here rather
+    /// than left to a reader's arithmetic.
+    #[test]
+    fn a_pins_handover_is_the_one_neighbour_its_toward_names() {
+        let at = Anchor { x: 10, y: 1, z: 20 };
+
+        // North is -z. An output at (10, 1, 20) whose signal leaves heading
+        // north is driven from (10, 1, 21), which is south of it.
+        let output = PortPin { at, toward: Facing::North };
+        assert_eq!(output.handover(PortRole::Output), Anchor { x: 10, y: 1, z: 21 });
+        assert_eq!(output.net_cell(PortRole::Output), Anchor { x: 10, y: 1, z: 22 });
+
+        // An input at the same cell whose signal enters heading north is read
+        // at (10, 1, 19), which is north of it.
+        let input = PortPin { at, toward: Facing::North };
+        assert_eq!(input.handover(PortRole::Input), Anchor { x: 10, y: 1, z: 19 });
+        assert_eq!(input.net_cell(PortRole::Input), Anchor { x: 10, y: 1, z: 18 });
+
+        // The two roles are mirror images through the caller's cell, and
+        // neither ever lands on it.
+        for role in [PortRole::Input, PortRole::Output] {
+            for toward in [Facing::North, Facing::South, Facing::East, Facing::West] {
+                let pin = PortPin { at, toward };
+                assert_ne!(pin.handover(role), at);
+                assert_ne!(pin.net_cell(role), at);
+                assert_eq!(
+                    step(pin.handover(role), toward) == pin.net_cell(role),
+                    matches!(role, PortRole::Input),
+                    "the net cell is one step further along the signal's own travel"
+                );
+            }
+        }
     }
 
     /// What was pinned stays pinned: optimisation may move anything else.
@@ -11039,97 +11377,124 @@ mod tests {
         assert_eq!(port, "d0");
     }
 
-    /// `outside` is which side belongs to the caller, and a gate cell has no
-    /// vertical faces to give away.
+    /// `toward` is the direction the signal travels through a cell of the
+    /// ground plane, and there is no vertical answer to that.
     #[test]
-    fn a_vertical_outside_facing_is_refused_by_name() {
+    fn a_vertical_toward_is_refused_by_name() {
         let netlist = two_input_netlist();
         let mut placements = PortPlacements::default();
         placements.pin("a", Anchor { x: 10, y: 1, z: 10 }, Facing::Up);
 
         let error = plan_from_netlist(&netlist, &placements)
-            .expect_err("a vertical outside has no terminal");
+            .expect_err("a vertical toward has no terminal");
         assert!(
-            matches!(&error, PlannerError::InvalidPortPin { port, .. } if port == "a"),
-            "refused, but not by name: {error}"
+            matches!(
+                &error,
+                PlannerError::InvalidPortPin {
+                    port,
+                    refusal: PinRefusal::VerticalToward { toward: Facing::Up },
+                    ..
+                } if port == "a"
+            ),
+            "refused, but not by name and as data: {error}"
         );
     }
 
-    /// Two terminals of different nets one dust-connecting step apart are one
-    /// net in the world however the netlist reads: the caller left no gap.
+    /// Two pinned cells of different nets one dust-connecting step apart are
+    /// one net in the world however the netlist reads: the caller left no gap,
+    /// and a glyph needs a gap between its segments.
     #[test]
-    fn two_terminals_the_caller_left_no_gap_between_are_refused() {
+    fn two_pinned_cells_the_caller_left_no_gap_between_are_refused() {
         let netlist = two_input_netlist();
         let mut placements = PortPlacements::default();
-        placements.pin("a", Anchor { x: 10, y: 1, z: 10 }, Facing::South);
-        placements.pin("b", Anchor { x: 11, y: 1, z: 10 }, Facing::South);
+        placements.pin("a", Anchor { x: 10, y: 1, z: 10 }, Facing::North);
+        placements.pin("b", Anchor { x: 11, y: 1, z: 10 }, Facing::North);
 
         let error = plan_from_netlist(&netlist, &placements)
-            .expect_err("adjacent terminal dusts join into one net");
-        assert!(
-            matches!(&error, PlannerError::InvalidPortPin { reason, .. }
-                if reason.contains('a') || reason.contains('b')),
-            "the refusal names the colliding pair: {error}"
+            .expect_err("adjacent pinned cells join into one net");
+        let PlannerError::InvalidPortPin { port, at, refusal } = &error else {
+            panic!("refused, but not as a pin problem: {error}");
+        };
+        assert_eq!(port, "a");
+        assert_eq!(*at, Anchor { x: 10, y: 1, z: 10 });
+        assert_eq!(
+            *refusal,
+            PinRefusal::NoGapFrom {
+                other_pinned_cell: Anchor { x: 11, y: 1, z: 10 }
+            },
+            "the refusal points at the neighbour, as data an editor can highlight"
         );
 
         // One empty cell between them is the contract's gap, and it passes
         // validation (the world may still refuse it later for other reasons,
         // so only the door is asserted here).
         let mut spaced = PortPlacements::default();
-        spaced.pin("a", Anchor { x: 10, y: 1, z: 10 }, Facing::South);
-        spaced.pin("b", Anchor { x: 12, y: 1, z: 10 }, Facing::South);
+        spaced.pin("a", Anchor { x: 10, y: 1, z: 10 }, Facing::North);
+        spaced.pin("b", Anchor { x: 12, y: 1, z: 10 }, Facing::North);
         starting_layout(&netlist, &spaced).expect("a one-cell gap is lawful");
     }
 
-    /// A terminal's outside cell is the caller's attachment point, and two
-    /// terminals may not share one: a source attached for `a` would power
-    /// `b`'s dust too, through a cell both contracts call their own. This is
-    /// the collision the dust-adjacency rule alone cannot see -- the two
-    /// dusts sit a lawful two cells apart.
+    /// A pin owns the caller's cell, its one handover and the net cell behind
+    /// it, and two pins may share none of them: `a`'s reader standing where
+    /// `b`'s reader must stand is the caller over-constraining the board. This
+    /// is the collision the gap rule alone cannot see -- the two pinned cells
+    /// sit a lawful four cells apart.
     #[test]
-    fn an_outside_cell_colliding_with_another_terminals_cells_is_refused() {
+    fn a_handover_colliding_with_another_pins_cells_is_refused() {
         let netlist = two_input_netlist();
         let mut placements = PortPlacements::default();
-        // Both outside cells land on (10, 1, 11).
+        // Two inputs facing each other four apart: both readers want
+        // (10, 1, 12) and (10, 1, 13) between them.
         placements.pin("a", Anchor { x: 10, y: 1, z: 10 }, Facing::South);
-        placements.pin("b", Anchor { x: 10, y: 1, z: 12 }, Facing::North);
+        placements.pin("b", Anchor { x: 10, y: 1, z: 14 }, Facing::North);
 
         let error = plan_from_netlist(&netlist, &placements)
-            .expect_err("two terminals sharing an attachment cell is a collision");
+            .expect_err("two pins needing the same cell is a collision");
+        let PlannerError::InvalidPortPin { port, refusal, .. } = &error else {
+            panic!("refused, but not as a pin problem: {error}");
+        };
+        assert_eq!(port, "a");
         assert!(
-            matches!(&error, PlannerError::InvalidPortPin { .. }),
-            "refused, but not as a pin problem: {error}"
+            matches!(refusal, PinRefusal::CollidesWith { .. }),
+            "refused, but not as a collision: {refusal}"
         );
     }
 
-    /// Worlds start at the origin, so a terminal whose floor or outside cell
-    /// would fall below it can never be emitted whole.
+    /// Worlds start at the origin, so a pin whose handover or net cell would
+    /// fall below it can never be emitted whole.
     #[test]
     fn a_pin_no_growable_world_can_hold_is_refused_by_name() {
         let netlist = two_input_netlist();
-        for (at, outside) in [
-            // Floor at y = -1.
+        for (at, toward) in [
+            // The handover's floor would be at y = -1.
             (Anchor { x: 10, y: 0, z: 10 }, Facing::South),
-            // Outside cell at x = -1.
+            // Reading westwards from x = 0 puts the handover at x = -1.
             (Anchor { x: 0, y: 1, z: 10 }, Facing::West),
+            // And the net cell alone can be the offender: reading west from
+            // x = 1 leaves the handover at 0 and the source at -1.
+            (Anchor { x: 1, y: 1, z: 10 }, Facing::West),
         ] {
             let mut placements = PortPlacements::default();
-            placements.pin("a", at, outside);
+            placements.pin("a", at, toward);
             let error = plan_from_netlist(&netlist, &placements)
-                .expect_err("a terminal outside every growable world cannot be built");
+                .expect_err("a pin outside every growable world cannot be built");
+            let PlannerError::InvalidPortPin { port, refusal, .. } = &error else {
+                panic!("refused, but not as a pin problem: {error}");
+            };
+            assert_eq!(port, "a");
             assert!(
-                matches!(&error, PlannerError::InvalidPortPin { port, .. } if port == "a"),
-                "refused, but not by name: {error}"
+                matches!(refusal, PinRefusal::OutsideEveryGrowableWorld { .. }),
+                "refused, but not with the cell that did it: {refusal}"
             );
         }
     }
 
-    /// An output pin builds a terminal now: one dust on its own floor at the
-    /// pinned cell, the outside cell shipped empty, no lamp anywhere for the
-    /// pinned port -- and the circuit still computes, read the contract's
-    /// way: dust strength > 0 at the terminal.
+    /// An output pin builds a terminal now: nothing at all in the caller's
+    /// cell, the delivery repeater in the one neighbour the pin names, no lamp
+    /// anywhere for the pinned port -- and the circuit still computes, read
+    /// the contract's way: a probe lamp in the caller's cell lights.
     #[test]
-    fn an_output_pin_compiles_to_a_terminal_with_an_empty_outside_cell() {
+    fn an_output_pin_compiles_to_a_terminal_that_ships_the_pinned_cell_empty() {
         use crate::redstone::world::block::BlockKind;
 
         let netlist = two_input_netlist();
@@ -11143,23 +11508,25 @@ mod tests {
         assert_eq!(
             compiled.output_positions.get("y"),
             Some(&(at.x, at.y, at.z)),
-            "`y`'s recorded reading point is its terminal cell"
+            "`y`'s recorded reading point is the caller's own cell"
         );
         assert_eq!(
             compiled.world.get(at.x, at.y, at.z).kind,
-            BlockKind::RedstoneWire,
-            "the terminal is one redstone dust at the pinned cell"
-        );
-        assert_ne!(
-            compiled.world.get(at.x, at.y - 1, at.z).kind,
             BlockKind::Air,
-            "on its own floor block"
+            "the pinned cell ships empty -- it belongs to the caller"
         );
-        let outside = placements.get("y").expect("pinned above").outside_cell();
+        // The signal leaves heading south, so it is delivered from the north.
+        let handover = placements
+            .get("y")
+            .expect("pinned above")
+            .handover(PortRole::Output);
+        assert_eq!(handover, Anchor { x: 10, y: 1, z: 39 });
+        let built = compiled.world.get(handover.x, handover.y, handover.z);
+        assert_eq!(built.kind, BlockKind::Repeater, "the handover is the delivery repeater");
         assert_eq!(
-            compiled.world.get(outside.x, outside.y, outside.z).kind,
-            BlockKind::Air,
-            "the outside cell ships empty -- it belongs to the caller"
+            built.facing,
+            Some(Facing::North),
+            "aimed so its output lands in the caller's cell"
         );
         // No lamp is placed for a pinned output, anywhere in the world.
         let (sx, sy, sz) = compiled.world.size();
@@ -11175,8 +11542,8 @@ mod tests {
             }
         }
 
-        // The truth table, read the contract's way: a pinned output is dust
-        // strength > 0, not a lamp's `lit`.
+        // The truth table, read the contract's way: a probe lamp the harness
+        // hangs in the caller's cell, exactly as a caller would.
         let vectors = simulated_truth_table_driving_pins(
             &compiled,
             &["a", "b"],
@@ -11189,7 +11556,7 @@ mod tests {
     }
 
     /// A mixed circuit keeps both behaviours side by side: the pinned output
-    /// reads at its terminal dust and the unpinned one keeps its lamp under
+    /// ships its caller's cell empty and the unpinned one keeps its lamp under
     /// the producing gate's pin, exactly as before terminals existed.
     #[test]
     fn a_pinned_output_keeps_no_lamp_and_an_unpinned_sibling_keeps_its_lamp() {
@@ -11209,8 +11576,8 @@ mod tests {
 
         assert_eq!(
             compiled.world.get(at.x, at.y, at.z).kind,
-            BlockKind::RedstoneWire,
-            "`p` reads at its terminal dust"
+            BlockKind::Air,
+            "`p`'s pinned cell ships empty for the caller to read"
         );
         let &(qx, qy, qz) = compiled
             .output_positions
@@ -11234,26 +11601,27 @@ mod tests {
         );
     }
 
-    /// The terminal-contract invariant refuses a foreign net beside a
-    /// reserved outside cell: the caller's attachment powers what it
-    /// touches, so a stranger's dust there would be driven by a signal it
-    /// never declared. The tampering is deliberate -- the router itself
-    /// never lays this plan -- so the invariant is what stands between a
-    /// lawful-looking world and a coupled one.
+    /// The terminal-contract invariant refuses a foreign net beside a pinned
+    /// cell: whatever the caller builds there powers what it touches -- a
+    /// lever is strong on all six neighbours -- so a stranger's dust beside it
+    /// would be driven by a signal it never declared. The tampering is
+    /// deliberate -- the router itself never lays this plan -- so the
+    /// invariant is what stands between a lawful-looking world and a coupled
+    /// one.
     #[test]
-    fn a_foreign_net_beside_a_reserved_outside_cell_is_refused() {
+    fn a_foreign_net_beside_a_pinned_cell_is_refused() {
         let netlist = two_input_netlist();
         let at = Anchor { x: 10, y: 1, z: 40 };
         let mut placements = PortPlacements::default();
-        placements.pin("a", at, Facing::South);
+        placements.pin("a", at, Facing::North);
 
         let candidate = plan_from_netlist(&netlist, &placements).expect("plans pinned");
         verify_candidate(&candidate, &netlist).expect("the untampered plan is lawful");
 
-        // Park one foreign dust cell directly beside `a`'s outside cell --
-        // two cells from the terminal dust, so nothing else objects first.
+        // Park one foreign dust cell directly beside `a`'s pinned cell, on the
+        // side away from its handover so nothing else objects first.
         let mut tampered = candidate.clone();
-        let intruder = Anchor { x: at.x, y: 1, z: at.z + 2 };
+        let intruder = Anchor { x: at.x, y: 1, z: at.z + 1 };
         let mut stray = Route::new("b".to_string(), vec![intruder]);
         stray.owner = Some("b".to_string());
         stray.realisation = vec![compile::dust()];
@@ -11261,7 +11629,7 @@ mod tests {
         tampered.routes.push(stray);
 
         let error = verify_candidate(&tampered, &netlist)
-            .expect_err("a foreign net beside the reserved outside cell is a violation");
+            .expect_err("a foreign net beside the pinned cell is a violation");
         let PlannerError::PhysicalInvariant(
             compile::CompileError::PortTerminalViolation { port, reason },
         ) = &error
@@ -11274,19 +11642,16 @@ mod tests {
 
     /// The acceptance shape of the input-terminal stage: a real circuit with
     /// every input pinned in a row -- one-cell gaps, the contract's tightest
-    /// lawful packing -- compiles through `compile_planned`, each terminal is
-    /// its dust at the pinned cell with the outside cell shipped empty, and
-    /// the truth table passes with the inputs driven through fixture sources
-    /// in the reserved outside cells, exactly as an external caller would
-    /// drive them.
+    /// lawful packing -- compiles through `compile_planned`, every pinned cell
+    /// ships empty with its reader in the one neighbour the pin names, and the
+    /// truth table passes with the inputs driven through fixture sources in
+    /// the callers' own cells, exactly as an external caller would drive them.
     ///
-    /// This packing is demanding on purpose. At pitch 2 every terminal is
-    /// forced to face the same way (its neighbours' dust strikes the other
-    /// two facings), so the three pins emerge as parallel lanes with no free
-    /// column between them and the fan-out has to climb to cross. That shape
-    /// found two router bugs on 2026-08-30 -- the spiral staircase that
-    /// crushed its own dust (`self_obstructs`'s third arm) and the
-    /// riser-mediated latch the ring rule could not see
+    /// This packing is demanding on purpose. At pitch 2 the three pins emerge
+    /// as parallel lanes with no free column between them and the fan-out has
+    /// to climb to cross. That shape found two router bugs on 2026-08-30 --
+    /// the spiral staircase that crushed its own dust (`self_obstructs`'s
+    /// third arm) and the riser-mediated latch the ring rule could not see
     /// (`a_ring_through_a_repeaters_own_riser_is_found`) -- which is exactly
     /// why the tightest row stays the acceptance geometry.
     #[test]
@@ -11311,45 +11676,25 @@ mod tests {
             .expect("full_adder has inputs");
         let mut placements = PortPlacements::default();
         for (index, name) in INPUT_NAMES.iter().enumerate() {
+            // The signal enters heading north, into the circuit sitting north
+            // of this row.
             placements.pin(
                 *name,
                 Anchor { x: base.x + 2 * index as i32, y: 1, z: base.z + 4 },
-                Facing::South,
+                Facing::North,
             );
         }
 
         let compiled = crate::compile::compile_planned(&netlist, &placements)
             .unwrap_or_else(|error| panic!("full_adder compiles through its terminals: {error}"));
 
+        assert_terminal_contract_in_the_world(&compiled, &placements, &netlist);
         for name in INPUT_NAMES {
             let pin = placements.get(name).expect("pinned above");
             assert_eq!(
-                compiled.input_positions.get(name),
-                Some(&(pin.at.x, pin.at.y, pin.at.z)),
-                "`{name}`'s recorded position is its terminal cell"
-            );
-            let terminal = compiled.world.get(pin.at.x, pin.at.y, pin.at.z);
-            assert_eq!(
-                terminal.kind,
-                crate::redstone::world::block::BlockKind::RedstoneWire,
-                "`{name}`'s terminal is one redstone dust at the pinned cell"
-            );
-            let floor = compiled.world.get(pin.at.x, pin.at.y - 1, pin.at.z);
-            assert_ne!(
-                floor.kind,
+                compiled.world.get(pin.at.x, pin.at.y - 1, pin.at.z).kind,
                 crate::redstone::world::block::BlockKind::Air,
-                "on its own floor block"
-            );
-            let outside = pin.outside_cell();
-            assert_eq!(
-                compiled.world.get(outside.x, outside.y, outside.z).kind,
-                crate::redstone::world::block::BlockKind::Air,
-                "`{name}`'s outside cell ships empty -- it belongs to the caller"
-            );
-            assert_eq!(
-                compiled.world.get(pin.at.x, pin.at.y, pin.at.z).power,
-                0,
-                "and nothing inside the circuit drives the terminal dust"
+                "`{name}`'s pinned cell has no floor of REDA's either"
             );
         }
 
@@ -11367,12 +11712,13 @@ mod tests {
     /// The acceptance shape of the output-terminal stage: the same full
     /// adder with **every** port pinned -- the three inputs in the southern
     /// row the input stage proved out, and both outputs in a northern row of
-    /// their own, one-cell gaps respected, every outside facing away from
-    /// the circuit. Compiles through `compile_planned`; each terminal is one
-    /// dust at its pinned cell with the outside cell shipped empty; no lamp
-    /// exists anywhere; and the truth table passes end to end with inputs
-    /// driven through fixture sources and outputs read as dust strength > 0
-    /// -- the contract exercised from both sides at once.
+    /// their own, one-cell gaps respected, every `toward` carrying the signal
+    /// away from the circuit and into the caller's world. Compiles through
+    /// `compile_planned`; every pinned cell ships empty with its handover in
+    /// the one neighbour the pin names and nothing that carries a signal in
+    /// the other five; no lamp exists anywhere; and the truth table passes end
+    /// to end with inputs driven through fixture sources and outputs read
+    /// through probe lamps -- the contract exercised from both sides at once.
     #[test]
     fn a_full_adder_with_all_ports_pinned_computes_through_its_terminals() {
         use crate::circuits::full_adder::{build_full_adder_netlist, INPUT_NAMES};
@@ -11391,13 +11737,15 @@ mod tests {
         }
 
         let mut placements = PortPlacements::default();
+        // Inputs south of the circuit: the signal enters heading north.
         for (index, name) in INPUT_NAMES.iter().enumerate() {
             placements.pin(
                 *name,
                 Anchor { x: base_x + 2 * index as i32, y: 1, z: max_z + 4 },
-                Facing::South,
+                Facing::North,
             );
         }
+        // Outputs north of it: the signal leaves heading north.
         for (index, signal) in sinks.iter().enumerate() {
             placements.pin(
                 signal,
@@ -11409,35 +11757,7 @@ mod tests {
         let compiled = crate::compile::compile_planned(&netlist, &placements)
             .unwrap_or_else(|error| panic!("full_adder compiles with all ports pinned: {error}"));
 
-        for name in INPUT_NAMES.iter().map(|name| name.to_string()).chain(sinks.iter().cloned()) {
-            let pin = placements.get(&name).expect("pinned above");
-            let recorded = compiled
-                .input_positions
-                .get(&name)
-                .or_else(|| compiled.output_positions.get(&name))
-                .copied();
-            assert_eq!(
-                recorded,
-                Some((pin.at.x, pin.at.y, pin.at.z)),
-                "`{name}`'s recorded position is its terminal cell"
-            );
-            assert_eq!(
-                compiled.world.get(pin.at.x, pin.at.y, pin.at.z).kind,
-                BlockKind::RedstoneWire,
-                "`{name}`'s terminal is one redstone dust at the pinned cell"
-            );
-            assert_ne!(
-                compiled.world.get(pin.at.x, pin.at.y - 1, pin.at.z).kind,
-                BlockKind::Air,
-                "`{name}`'s terminal stands on its own floor block"
-            );
-            let outside = pin.outside_cell();
-            assert_eq!(
-                compiled.world.get(outside.x, outside.y, outside.z).kind,
-                BlockKind::Air,
-                "`{name}`'s outside cell ships empty -- it belongs to the caller"
-            );
-        }
+        assert_terminal_contract_in_the_world(&compiled, &placements, &netlist);
 
         // With both outputs pinned there is no lamp anywhere in the world.
         let (sx, sy, sz) = compiled.world.size();
@@ -11464,6 +11784,310 @@ mod tests {
         assert_eq!(vectors, 8);
     }
 
+    /// **The price of the pin, paid out loud.** A pinned output's handover has
+    /// one lawful approach and no second way in, so a net that cannot reach it
+    /// is the caller having over-constrained the board -- and the router says
+    /// which pin did it, by name and with the cell, rather than reporting an
+    /// anonymous corridor it might have taken somewhere else.
+    ///
+    /// Built by walling the terminal off in the reservation, because that is
+    /// the state the negotiation loop actually ends in when a handover is
+    /// boxed: the search returns nothing and the failure's own error is what
+    /// the loop finally reports.
+    #[test]
+    fn a_handover_the_router_cannot_reach_is_refused_against_its_own_pin() {
+        let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["y".to_string()],
+            gates: vec![Gate::nor("y", &["a"])],
+        };
+        // The signal leaves heading north, so the handover is south of the
+        // caller's cell and the one approach is south of that again.
+        let pinned = at(10, 1, 10);
+        let pin = PortPin { at: pinned, toward: Facing::North };
+        let consumer = NetConsumer::Terminal {
+            port: "y".to_string(),
+            at: pinned,
+            handover: pin.handover(PortRole::Output),
+            net_cell: pin.net_cell(PortRole::Output),
+            toward: pin.toward,
+        };
+        let candidate = PlanCandidate::with_facings(
+            vec![at(0, 1, 0)],
+            Vec::new(),
+            Vec::new(),
+            vec![geometry::CellFacing::NORTH],
+        );
+
+        // Everything a route could stand in, claimed by a stranger, so the
+        // one approach the pin allows is unreachable rather than merely
+        // expensive.
+        let mut walled = Reservation::new();
+        for x in -2..=20 {
+            for y in 1..=3 {
+                for z in -2..=20 {
+                    let cell = at(x, y, z);
+                    if cell != at(0, 1, 0) {
+                        walled.insert(cell, "wall", Occupancy::Solid);
+                    }
+                }
+            }
+        }
+
+        let congestion = Congestion::default();
+        let failure = lay_net(
+            "y",
+            at(0, 1, 0),
+            std::slice::from_ref(&consumer),
+            &netlist,
+            &candidate,
+            &mut walled,
+            &Prices::RipUp(&congestion),
+        )
+        .expect_err("a walled-in handover cannot be reached");
+
+        let PlannerError::InvalidPortPin { port, at: named, refusal } = &failure.error else {
+            panic!("refused, but not against the pin: {}", failure.error);
+        };
+        assert_eq!(port, "y", "the refusal names the pin, not the corridor");
+        assert_eq!(*named, pinned, "and the caller's own cell");
+        assert_eq!(
+            *refusal,
+            PinRefusal::UnreachableHandover { cell: at(10, 1, 11) },
+            "with the one cell that could not be reached, as data"
+        );
+    }
+
+    /// The glyph acceptance's fixture: the lowered decoder, its seven
+    /// segment signals in `a`..`g` order (the order
+    /// [`seven_segment_expected`] answers in, resolved here rather than
+    /// taken from the labels channel's own ordering), and the eleven pins --
+    /// the digit at y = 1 (left column
+    /// x = 48, spine x = 52, right column x = 56; rows z = 40, the top bar,
+    /// through z = 56, the bottom bar) plus the input row at z = 64, eight
+    /// cells south of the bottom bar.
+    ///
+    /// One pinned cell per segment at pitch 4 -- far beyond the
+    /// one-empty-cell gap the contract demands -- and every `toward` carries
+    /// the signal away from the digit's spine except `g`, the middle bar,
+    /// which has no outward side and sends its signal into the glyph's open
+    /// interior. The inputs' `toward` is north: their signal enters heading
+    /// into the circuit, which sits north of their row. Output pins are keyed
+    /// by internal signal name; `a`..`g` resolve through the output-labels
+    /// channel, the same resolution the CLI's `--pins` performs.
+    ///
+    /// The band is measured, not aesthetic. Worlds start at the origin and
+    /// only grow toward positive coordinates, and pinned anchors suppress
+    /// the whole-layout drift translation, so the pins choose where the
+    /// 47-gate mass may spread -- and the relaxed decoder wants roughly
+    /// 170 x 140 of plan around them. Measured 2026-08-30 by sweeping this
+    /// pin set's translation through one relaxation each: at the origin
+    /// corner (glyph z 8..24) the mass spills north, `cell (96, 1, -6) is
+    /// outside the world`; at this z band but x 16..24, twelve inflations
+    /// creep ~31 cells west and die at `cell (-17, 1, 65)`; another +32 in
+    /// x and the separation projection deadlocks outright (shortfall ~1.25
+    /// -- the pins' pull must stay within reach of `starting_layout`'s
+    /// absolute rows). This band's snapped mass sat at x 46..141, z 39..116,
+    /// the best west margin of every band that relaxed at all.
+    fn pinned_glyph_decoder() -> (Netlist, Vec<String>, PortPlacements) {
+        let circuit = crate::circuits::verilog::find("verilog:seven_segment")
+            .expect("the catalog has the decoder");
+        let (netlist, labels) = circuit.baked_netlist();
+        let lowered = crate::compile::lowering::lower_optimised(&netlist)
+            .expect("the decoder lowers");
+
+        let glyph: &[(&str, Anchor, Facing)] = &[
+            ("a", Anchor { x: 52, y: 1, z: 40 }, Facing::North),
+            ("b", Anchor { x: 56, y: 1, z: 44 }, Facing::East),
+            ("c", Anchor { x: 56, y: 1, z: 52 }, Facing::East),
+            ("d", Anchor { x: 52, y: 1, z: 56 }, Facing::South),
+            ("e", Anchor { x: 48, y: 1, z: 52 }, Facing::West),
+            ("f", Anchor { x: 48, y: 1, z: 44 }, Facing::West),
+            ("g", Anchor { x: 52, y: 1, z: 48 }, Facing::West),
+        ];
+        assert_eq!(
+            glyph.iter().map(|(label, _, _)| *label).collect::<Vec<_>>(),
+            crate::circuits::seven_segment::SEGMENT_NAMES.to_vec(),
+            "the glyph names the segments in the order the expectation answers in"
+        );
+
+        let mut placements = PortPlacements::default();
+        let mut segments = Vec::with_capacity(glyph.len());
+        for (label, at, toward) in glyph {
+            let signal = labels
+                .iter()
+                .find(|(name, _)| name == label)
+                .map(|(_, signal)| signal.clone())
+                .unwrap_or_else(|| panic!("the decoder declares segment `{label}`"));
+            placements.pin(signal.clone(), *at, *toward);
+            segments.push(signal);
+        }
+        for (index, name) in crate::circuits::seven_segment::INPUT_NAMES.iter().enumerate() {
+            placements.pin(
+                *name,
+                Anchor { x: 46 + 4 * index as i32, y: 1, z: 64 },
+                Facing::North,
+            );
+        }
+        (lowered, segments, placements)
+    }
+
+    /// The shipping glyph passes the door, in milliseconds.
+    ///
+    /// The acceptance below is minutes and `#[ignore]`d, so nothing cheap
+    /// would notice a validation rule that started refusing the very pin set
+    /// the campaign exists to build. This is that guard: eleven pins, seven of
+    /// them a digit glyph at pitch 4 with `g` pointing into its own interior,
+    /// all of them through `starting_layout` -- which is where
+    /// `validate_port_placements` runs.
+    #[test]
+    fn the_shipping_glyph_pin_set_is_lawful_at_the_door() {
+        let (lowered, _segments, placements) = pinned_glyph_decoder();
+        starting_layout(&lowered, &placements)
+            .expect("the glyph the campaign ships is not refused by its own door");
+
+        // And the eleven handovers really are eleven distinct cells: the
+        // collision rule above is what says so, and this is the reading of it
+        // a caller laying out a glyph cares about.
+        let mut handovers: BTreeSet<Anchor> = BTreeSet::new();
+        for (name, pin) in placements.iter() {
+            let role = if lowered.inputs.iter().any(|input| input == name) {
+                PortRole::Input
+            } else {
+                PortRole::Output
+            };
+            assert!(
+                handovers.insert(pin.handover(role)),
+                "`{name}`'s handover is somebody else's too"
+            );
+        }
+        assert_eq!(handovers.len(), 11, "seven segments and four inputs");
+    }
+
+    /// THE SPEC'S ACCEPTANCE, verbatim (docs/superpowers/specs/
+    /// 2026-08-30-io-terminals.md): the circuit that named the problem,
+    /// built as the thing it names. verilog:seven_segment through
+    /// `compile_grown` with its seven outputs pinned as a digit glyph laid
+    /// flat on the ground and its four inputs pinned in a row
+    /// ([`pinned_glyph_decoder`]). Passes when the truth table is 16/16
+    /// through the real `Simulator`, every terminal delivers per contract,
+    /// and every pinned cell ships empty; `compile_grown` ends in
+    /// `realise_and_verify`, so the `Ok` it returns IS the four physical
+    /// invariants passing.
+    ///
+    /// The halo sweep here is not a restatement of
+    /// `verify_terminal_contract`'s adjacency clause: that one judges the
+    /// router's own reservation, which holds route cells and no gate bodies.
+    /// This one judges blocks, so a gate body parked beside a pinned cell --
+    /// the gap that clause's doc comment names -- fails the record.
+    ///
+    /// This is the shipping record, measured 2026-08-30 with --release:
+    /// RECORD_PLACEHOLDER
+    ///
+    /// ```bash
+    /// cargo test --release --lib \
+    ///   the_decoder_computes_as_a_digit_glyph_through_pinned_terminals \
+    ///   -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "the shipping record: compile_grown on the decoder pinned as a digit glyph, minutes"]
+    fn the_decoder_computes_as_a_digit_glyph_through_pinned_terminals() {
+        use crate::redstone::world::block::BlockKind;
+        use std::time::Instant;
+
+        let (lowered, segments, placements) = pinned_glyph_decoder();
+
+        let started = Instant::now();
+        let compiled = compile::compile_grown(&lowered, &placements).expect(
+            "the pinned decoder is generated by compile_grown, four invariants included",
+        );
+        eprintln!(
+            "compile_grown(verilog:seven_segment, glyph pins): Ok in {:.1}s",
+            started.elapsed().as_secs_f64()
+        );
+
+        // Every terminal delivers per contract, halo included.
+        assert_terminal_contract_in_the_world(&compiled, &placements, &lowered);
+
+        // With every port pinned there is neither lamp nor lever anywhere:
+        // the fixtures the contract demoted stop being built at all. Count
+        // the blocks while walking, because they are the record's numbers.
+        let (sx, sy, sz) = compiled.world.size();
+        let mut blocks = 0usize;
+        for x in 0..sx {
+            for y in 0..sy {
+                for z in 0..sz {
+                    let kind = compiled.world.get(x, y, z).kind;
+                    assert!(
+                        !matches!(kind, BlockKind::Lamp | BlockKind::Lever),
+                        "all ports pinned means no fixture, found {kind:?} at ({x}, {y}, {z})"
+                    );
+                    if kind != BlockKind::Air {
+                        blocks += 1;
+                    }
+                }
+            }
+        }
+        eprintln!("{blocks} blocks in a {sx} x {sy} x {sz} box");
+
+        // The truth table, all sixteen vectors through the real Simulator,
+        // inputs driven through fixture sources in the callers' own cells and
+        // outputs read through probe lamps hung in theirs.
+        let vectors = simulated_truth_table_driving_pins(
+            &compiled,
+            &crate::circuits::seven_segment::INPUT_NAMES[..],
+            &segments,
+            seven_segment_expected,
+            &placements,
+        )
+        .expect("the digit computes through its terminals");
+        assert_eq!(vectors, 16, "all sixteen vectors");
+
+        // The record's settle number: the same sixteen vectors chained on
+        // one simulator, each transition timed from the settled state the
+        // previous one left behind. All four inputs move at once here, which
+        // the loop above never does -- so the digit is read again, and the
+        // glyph has to be right however the caller flips the levers.
+        let mut fixture = compiled.world.clone();
+        let drivers = install_fixture_drivers(
+            &mut fixture,
+            &compiled.input_positions,
+            &crate::circuits::seven_segment::INPUT_NAMES[..],
+            &placements,
+        )
+        .expect("every pinned input attaches its fixture in the caller's own cell");
+        install_fixture_probes(&mut fixture, &segments, &placements)
+            .expect("every pinned output takes a probe lamp in the caller's own cell");
+        let mut simulator = crate::redstone::simulator::Simulator::new(fixture);
+        simulator.run_until_stable(2000).expect("the idle world settles");
+        let mut worst = 0u64;
+        for combination in 0..16usize {
+            let bits: Vec<bool> =
+                (0..4).map(|index| (combination >> (3 - index)) & 1 == 1).collect();
+            for (at, &bit) in drivers.iter().zip(bits.iter()) {
+                let mut state = simulator.world().get(at.0, at.1, at.2).clone();
+                state.lit = bit;
+                simulator.world_mut().set(at.0, at.1, at.2, state);
+            }
+            let ticks =
+                simulator.run_until_stable(2000).expect("every vector settles");
+            worst = worst.max(ticks);
+
+            let want = seven_segment_expected(&bits);
+            for (index, signal) in segments.iter().enumerate() {
+                let at = compiled.output_positions[signal];
+                assert_eq!(
+                    output_reads_high(simulator.world(), at),
+                    want[index],
+                    "segment `{}` at {at:?} after a simultaneous flip to {bits:?}",
+                    crate::circuits::seven_segment::SEGMENT_NAMES[index]
+                );
+            }
+        }
+        eprintln!("worst settle over the sixteen chained transitions: {worst} ticks");
+    }
+
     /// World sizing follows the pins: a terminal placed past where the free
     /// layout would ever build still gets a world that holds it, margin
     /// included, and the circuit still computes.
@@ -11474,28 +12098,31 @@ mod tests {
             outputs: vec!["y".to_string()],
             gates: vec![Gate::nor("y", &["a"])],
         };
+        // Far east, with the signal entering westwards: the handover is at
+        // x - 1 and the route's source at x - 2, so the pin's own cells reach
+        // back toward the circuit while the world must still cover the pin.
         let at = Anchor { x: 60, y: 1, z: 40 };
         let mut placements = PortPlacements::default();
-        placements.pin("a", at, Facing::East);
+        placements.pin("a", at, Facing::West);
 
         let compiled = crate::compile::compile_planned(&netlist, &placements)
             .unwrap_or_else(|error| panic!("a far pin compiles: {error}"));
         let (sx, _sy, sz) = compiled.world.size();
         assert!(
-            sx > at.x + 1 && sz > at.z,
-            "the world ({sx} x {sz}) must hold the pin at ({}, {}) and its outside cell",
+            sx > at.x && sz > at.z,
+            "the world ({sx} x {sz}) must hold the pin at ({}, {})",
             at.x,
             at.z
         );
         assert_eq!(
             compiled.world.get(at.x, at.y, at.z).kind,
-            crate::redstone::world::block::BlockKind::RedstoneWire,
-            "the terminal dust really is inside the world, not silently dropped"
+            crate::redstone::world::block::BlockKind::Air,
+            "the pinned cell is inside the world and ships empty"
         );
         assert_eq!(
-            compiled.world.get(at.x + 1, at.y, at.z).kind,
-            crate::redstone::world::block::BlockKind::Air,
-            "and the outside cell east of it ships empty"
+            compiled.world.get(at.x - 1, at.y, at.z).kind,
+            crate::redstone::world::block::BlockKind::Repeater,
+            "and its reader really is inside the world, not silently dropped"
         );
 
         let vectors = simulated_truth_table_driving_pins(
@@ -17251,8 +17878,9 @@ mod tests {
     }
 
     /// [`worst_settle_and_truth`], driving any pinned input through a fixture
-    /// source in its reserved outside cell -- the way an external caller
-    /// would.
+    /// source in the caller's own cell and reading any pinned output through a
+    /// probe lamp in the caller's own cell -- the way an external caller would
+    /// do both.
     fn worst_settle_and_truth_driving_pins(
         realised: &RealisedCandidate,
         inputs: &[&str],

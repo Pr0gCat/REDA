@@ -1513,6 +1513,10 @@ fn no_extra_edge_is_carried_by_the_cell_above_a_lever_or_a_torch() {
     // path may not step directly above its own cells). `compile_planned`
     // spends the same rounds, so this inspects the plan a caller would
     // actually get.
+    //
+    // `toward` is north because the gates sit north of the input row that
+    // `starting_layout` lays: an input's signal travels *into* the circuit,
+    // so the reading repeater lands on the circuit's side of the pin.
     let (netlist, _outputs) = build_full_adder_netlist();
     let mut placements = PortPlacements::default();
     placements.pin(
@@ -1522,7 +1526,7 @@ fn no_extra_edge_is_carried_by_the_cell_above_a_lever_or_a_torch() {
             y: 1,
             z: 126,
         },
-        crate::redstone::world::block::Facing::South,
+        crate::redstone::world::block::Facing::North,
     );
     let mut lost_coverage = Vec::new();
     match planner::plan_from_netlist_within(&netlist, &placements, planner::RIP_UP_ROUNDS)

@@ -32,7 +32,7 @@ use std::path::Path;
 
 use reda::circuits::{and4, full_adder, seven_segment, verilog};
 use reda::compile::lowering::{lower, lower_optimised};
-use reda::compile::planner::{Anchor, PortPin, PortPlacements};
+use reda::compile::planner::{Anchor, PortPin, PortPlacements, PortRole};
 use reda::compile::{compile, CompiledCircuit, Netlist};
 use reda::formats::litematic;
 use reda::redstone::world::block::{BlockKind, Facing};
@@ -51,8 +51,8 @@ struct PinsFile {
 /// Parse the `--pins` JSON:
 ///
 /// ```json
-/// {"inputs":  {"d0": {"at": [x,y,z], "outside": "south"}},
-///  "outputs": {"a":  {"at": [x,y,z], "outside": "south"}}}
+/// {"inputs":  {"d0": {"at": [x,y,z], "toward": "north"}},
+///  "outputs": {"a":  {"at": [x,y,z], "toward": "north"}}}
 /// ```
 ///
 /// Hand-rolled like the pinout writer it mirrors -- this crate's binaries
@@ -114,11 +114,18 @@ fn parse_port_map(cursor: &mut Cursor, ports: &mut Vec<(String, PortPin)>) -> Re
     cursor.expect(b'}')
 }
 
-/// One `{"at": [x,y,z], "outside": "<facing>"}` object, keys in any order,
+/// One `{"at": [x,y,z], "toward": "<facing>"}` object, keys in any order,
 /// both required, nothing else admitted.
+///
+/// `toward` is the direction the signal travels through the pinned cell, and
+/// nothing here interprets it: which neighbour that resolves to depends on
+/// whether the port is an input or an output, and the parser does not know.
+/// **The parser validates syntax and nothing else** -- every semantic refusal
+/// belongs to `PortPlacements`, so the editor and the in-game adapter that
+/// never touch this file inherit the same rules.
 fn parse_pin(cursor: &mut Cursor) -> Result<PortPin, String> {
     cursor.expect(b'{')?;
-    let (mut at, mut outside) = (None, None);
+    let (mut at, mut toward) = (None, None);
     loop {
         let key = cursor.string()?;
         cursor.expect(b':')?;
@@ -139,22 +146,22 @@ fn parse_pin(cursor: &mut Cursor) -> Result<PortPin, String> {
                 })?;
                 at = Some(triple);
             }
-            "outside" => {
+            "toward" => {
                 let name = cursor.string()?;
-                outside = Some(match name.as_str() {
+                toward = Some(match name.as_str() {
                     "north" => Facing::North,
                     "south" => Facing::South,
                     "east" => Facing::East,
                     "west" => Facing::West,
                     other => {
                         return Err(format!(
-                            "\"outside\" must be north, south, east, or west; got \"{other}\""
+                            "\"toward\" must be north, south, east, or west; got \"{other}\""
                         ))
                     }
                 });
             }
             other => {
-                return Err(format!("unknown key \"{other}\": a pin has \"at\" and \"outside\""))
+                return Err(format!("unknown key \"{other}\": a pin has \"at\" and \"toward\""))
             }
         }
         if !cursor.take(b',') {
@@ -162,10 +169,12 @@ fn parse_pin(cursor: &mut Cursor) -> Result<PortPin, String> {
         }
     }
     cursor.expect(b'}')?;
-    match (at, outside) {
-        (Some(at), Some(outside)) => Ok(PortPin { at, outside }),
-        (None, _) => Err("missing \"at\": the terminal cell as [x, y, z]".to_string()),
-        (_, None) => Err("missing \"outside\": the side that belongs to the caller".to_string()),
+    match (at, toward) {
+        (Some(at), Some(toward)) => Ok(PortPin { at, toward }),
+        (None, _) => Err("missing \"at\": the caller's cell as [x, y, z]".to_string()),
+        (_, None) => Err(
+            "missing \"toward\": the direction the signal travels through that cell".to_string(),
+        ),
     }
 }
 
@@ -261,7 +270,7 @@ fn resolve_pins(
 ) -> Result<PortPlacements, String> {
     let mut placements = PortPlacements::default();
     for (name, pin) in &pins.inputs {
-        placements.pin(name.clone(), pin.at, pin.outside);
+        placements.pin(name.clone(), pin.at, pin.toward);
     }
     for (label, pin) in &pins.outputs {
         let signal = output_labels
@@ -278,7 +287,7 @@ fn resolve_pins(
                         .join(", ")
                 )
             })?;
-        placements.pin(signal, pin.at, pin.outside);
+        placements.pin(signal, pin.at, pin.toward);
     }
     Ok(placements)
 }
@@ -441,42 +450,60 @@ fn count_non_air(world: &World) -> usize {
 /// `cout`, `a` before `g`, rather than whatever order the internal names
 /// happen to sort into.
 ///
-/// A pinned port is a terminal, not a lever or a lamp, so its line says so
-/// and names the side the caller attaches on. An unpinned run prints exactly
-/// what it always did.
+/// A pinned port's cell is the **caller's**: it ships empty, and the line
+/// says which way its signal travels and where REDA's handover ended up. The
+/// handover is derivable rather than chosen, but a caller building against it
+/// should not have to redo the derivation -- and a reported cell that
+/// disagrees with the shipped world is a bug this line makes visible. An
+/// unpinned run prints exactly what it always did.
 fn print_pinout(
     compiled: &CompiledCircuit,
     output_labels: &[(String, String)],
     placements: &PortPlacements,
 ) {
-    let annotate = |pin: Option<PortPin>| match pin {
-        Some(pin) => format!("   terminal, outside {}", facing_name(pin.outside)),
+    let annotate = |pin: Option<PortPin>, role: PortRole| match pin {
+        Some(pin) => {
+            let handover = pin.handover(role);
+            format!(
+                "   yours (ships empty), signal {}, handover ({}, {}, {})",
+                facing_name(pin.toward),
+                handover.x,
+                handover.y,
+                handover.z
+            )
+        }
         None => String::new(),
     };
     println!();
     println!("pinout (schematic-local coordinates: x,y,z from the corner the .litematic is pasted at)");
     println!("  inputs (lever):");
     for (name, (x, y, z)) in &compiled.input_positions {
-        println!("    {name:<12} ({x}, {y}, {z}){}", annotate(placements.get(name)));
+        println!(
+            "    {name:<12} ({x}, {y}, {z}){}",
+            annotate(placements.get(name), PortRole::Input)
+        );
     }
     println!("  outputs (lamp):");
     for (label, signal) in output_labels {
         let (x, y, z) = compiled.output_positions[signal];
-        println!("    {label:<12} ({x}, {y}, {z}){}", annotate(placements.get(signal)));
+        println!(
+            "    {label:<12} ({x}, {y}, {z}){}",
+            annotate(placements.get(signal), PortRole::Output)
+        );
     }
 }
 
-/// The lowercase name the pins file and the pinout sidecar share for an
-/// `outside` facing.
+/// The lowercase name the pins file and the pinout sidecar share for a
+/// `toward` facing.
 fn facing_name(facing: Facing) -> &'static str {
     match facing {
         Facing::North => "north",
         Facing::South => "south",
         Facing::East => "east",
         Facing::West => "west",
-        // The planner's door refused any vertical `outside` long before a
+        // The planner's door refused any vertical `toward` long before a
         // compiled circuit existed to print.
-        Facing::Up | Facing::Down => unreachable!("a pin's outside facing is horizontal"),
+        Facing::Up | Facing::Down => unreachable!("a pin's `toward` is horizontal"),
     }
 }
 
@@ -487,8 +514,8 @@ fn list_circuits(circuits: &[CircuitInfo]) {
     println!("--grown compiles through the generation front door (minutes, not");
     println!("milliseconds); --pins declares IO terminals for it -- inputs by name,");
     println!("outputs by display label:");
-    println!("  {{\"inputs\":  {{\"d0\": {{\"at\": [x,y,z], \"outside\": \"south\"}}}},");
-    println!("   \"outputs\": {{\"a\":  {{\"at\": [x,y,z], \"outside\": \"south\"}}}}}}");
+    println!("  {{\"inputs\":  {{\"d0\": {{\"at\": [x,y,z], \"toward\": \"north\"}}}},");
+    println!("   \"outputs\": {{\"a\":  {{\"at\": [x,y,z], \"toward\": \"north\"}}}}}}");
     println!();
     println!("Available circuits:");
     for info in circuits {
@@ -656,25 +683,36 @@ fn main() {
     // serde_json (see mc_dump) and the structure is two flat maps.
     //
     // An unpinned port stays the bare `[x,y,z]` it has always been. A pinned
-    // one records its terminal cell *and* its `outside` facing -- the facing
-    // is not decoration, it is how a consumer knows which side the caller
-    // attaches on -- and a pinned output is keyed by its display label, the
-    // name the caller pinned it under.
+    // one records the caller's cell, its `toward`, and the resolved handover
+    // cell: `toward` is not decoration -- it is how a consumer knows which way
+    // the signal runs -- and the handover is reported rather than left to be
+    // re-derived, so a cell that disagrees with the shipped world is visible.
+    // A pinned output is keyed by its display label, the name the caller
+    // pinned it under.
     {
         use std::io::Write;
         let json_path = output_dir.join(format!("{stem}.pinout.json"));
         let mut json = std::fs::File::create(&json_path).expect("failed to create the pinout json");
-        let entry = |key: &str, (x, y, z): (i32, i32, i32), pin: Option<PortPin>| match pin {
-            Some(pin) => format!(
-                "\"{key}\":{{\"at\":[{x},{y},{z}],\"outside\":\"{}\"}}",
-                facing_name(pin.outside)
-            ),
-            None => format!("\"{key}\":[{x},{y},{z}]"),
-        };
+        let entry =
+            |key: &str, (x, y, z): (i32, i32, i32), pin: Option<PortPin>, role: PortRole| match pin {
+                Some(pin) => {
+                    let handover = pin.handover(role);
+                    format!(
+                        "\"{key}\":{{\"at\":[{x},{y},{z}],\"toward\":\"{}\",\"handover\":[{},{},{}]}}",
+                        facing_name(pin.toward),
+                        handover.x,
+                        handover.y,
+                        handover.z
+                    )
+                }
+                None => format!("\"{key}\":[{x},{y},{z}]"),
+            };
         let inputs = compiled
             .input_positions
             .iter()
-            .map(|(name, &position)| entry(name, position, placements.get(name)))
+            .map(|(name, &position)| {
+                entry(name, position, placements.get(name), PortRole::Input)
+            })
             .collect::<Vec<_>>()
             .join(",");
         let label_of: std::collections::BTreeMap<&str, &str> = output_labels
@@ -690,7 +728,7 @@ fn main() {
                     Some(_) => label_of.get(signal.as_str()).copied().unwrap_or(signal.as_str()),
                     None => signal.as_str(),
                 };
-                entry(key, position, pin)
+                entry(key, position, pin, PortRole::Output)
             })
             .collect::<Vec<_>>()
             .join(",");
@@ -717,9 +755,9 @@ mod tests {
     #[test]
     fn a_well_formed_pins_file_parses_into_both_sections() {
         let pins = parse_pins_file(
-            r#"{"inputs": {"d0": {"at": [3, 1, 10], "outside": "south"},
-                           "d1": {"at": [5, 1, 10], "outside": "south"}},
-                "outputs": {"a": {"at": [4, 1, 2], "outside": "north"}}}"#,
+            r#"{"inputs": {"d0": {"at": [3, 1, 10], "toward": "south"},
+                           "d1": {"at": [5, 1, 10], "toward": "south"}},
+                "outputs": {"a": {"at": [4, 1, 2], "toward": "north"}}}"#,
         )
         .expect("the spec's example shape is lawful");
 
@@ -728,21 +766,21 @@ mod tests {
         let (name, pin) = &pins.inputs[0];
         assert_eq!(name, "d0");
         assert_eq!(pin.at, Anchor { x: 3, y: 1, z: 10 });
-        assert_eq!(pin.outside, Facing::South);
+        assert_eq!(pin.toward, Facing::South);
         let (label, pin) = &pins.outputs[0];
         assert_eq!(label, "a");
-        assert_eq!(pin.outside, Facing::North);
+        assert_eq!(pin.toward, Facing::North);
     }
 
     /// A section may be absent (pin only outputs, only inputs, or nothing);
     /// keys may come in either order inside a pin.
     #[test]
     fn missing_sections_and_reordered_pin_keys_are_lawful() {
-        let pins = parse_pins_file(r#"{"outputs": {"y": {"outside": "west", "at": [7, 2, 0]}}}"#)
+        let pins = parse_pins_file(r#"{"outputs": {"y": {"toward": "west", "at": [7, 2, 0]}}}"#)
             .expect("a file that only pins outputs is lawful");
         assert!(pins.inputs.is_empty());
         assert_eq!(pins.outputs[0].1.at, Anchor { x: 7, y: 2, z: 0 });
-        assert_eq!(pins.outputs[0].1.outside, Facing::West);
+        assert_eq!(pins.outputs[0].1.toward, Facing::West);
 
         assert!(parse_pins_file("{}").expect("an empty object pins nothing").inputs.is_empty());
     }
@@ -758,19 +796,19 @@ mod tests {
             // A section this format does not have.
             (r#"{"outpts": {}}"#, "outpts"),
             // A facing that is not one of the four horizontal names.
-            (r#"{"inputs": {"a": {"at": [1,1,1], "outside": "up"}}}"#, "up"),
-            (r#"{"inputs": {"a": {"at": [1,1,1], "outside": "North"}}}"#, "North"),
+            (r#"{"inputs": {"a": {"at": [1,1,1], "toward": "up"}}}"#, "up"),
+            (r#"{"inputs": {"a": {"at": [1,1,1], "toward": "North"}}}"#, "North"),
             // A pin missing one of its two required keys.
-            (r#"{"inputs": {"a": {"at": [1,1,1]}}}"#, "outside"),
-            (r#"{"inputs": {"a": {"outside": "south"}}}"#, "\"at\""),
+            (r#"{"inputs": {"a": {"at": [1,1,1]}}}"#, "toward"),
+            (r#"{"inputs": {"a": {"toward": "south"}}}"#, "\"at\""),
             // A key a pin does not have.
-            (r#"{"inputs": {"a": {"at": [1,1,1], "outside": "south", "colour": "red"}}}"#, "colour"),
+            (r#"{"inputs": {"a": {"at": [1,1,1], "toward": "south", "colour": "red"}}}"#, "colour"),
             // A coordinate that is not a three-integer array.
-            (r#"{"inputs": {"a": {"at": [1,1], "outside": "south"}}}"#, "integer"),
+            (r#"{"inputs": {"a": {"at": [1,1], "toward": "south"}}}"#, "integer"),
             // The same port pinned twice in one section.
             (
-                r#"{"inputs": {"a": {"at": [1,1,1], "outside": "south"},
-                               "a": {"at": [4,1,1], "outside": "south"}}}"#,
+                r#"{"inputs": {"a": {"at": [1,1,1], "toward": "south"},
+                               "a": {"at": [4,1,1], "toward": "south"}}}"#,
                 "twice",
             ),
             // Content after the closing brace.
@@ -789,8 +827,8 @@ mod tests {
     /// knows *which* of seven pinned segments was malformed.
     #[test]
     fn a_defective_pin_is_named_by_its_port() {
-        let error = parse_pins_file(r#"{"outputs": {"g": {"at": [1,1,1], "outside": "down"}}}"#)
-            .expect_err("a vertical outside is refused");
+        let error = parse_pins_file(r#"{"outputs": {"g": {"at": [1,1,1], "toward": "down"}}}"#)
+            .expect_err("a vertical toward is refused");
         assert!(error.contains('g'), "the port name travels with the defect: {error}");
     }
 
@@ -799,8 +837,8 @@ mod tests {
     #[test]
     fn resolve_pins_translates_output_labels_to_internal_signals() {
         let pins = parse_pins_file(
-            r#"{"inputs": {"a": {"at": [3, 1, 20], "outside": "south"}},
-                "outputs": {"y": {"at": [5, 1, 2], "outside": "north"}}}"#,
+            r#"{"inputs": {"a": {"at": [3, 1, 20], "toward": "south"}},
+                "outputs": {"y": {"at": [5, 1, 2], "toward": "north"}}}"#,
         )
         .expect("parses");
         let labels = vec![("y".to_string(), "g6".to_string())];
@@ -808,11 +846,11 @@ mod tests {
         let placements = resolve_pins(&pins, &labels).expect("`y` resolves through the labels");
         assert_eq!(
             placements.get("a"),
-            Some(PortPin { at: Anchor { x: 3, y: 1, z: 20 }, outside: Facing::South })
+            Some(PortPin { at: Anchor { x: 3, y: 1, z: 20 }, toward: Facing::South })
         );
         assert_eq!(
             placements.get("g6"),
-            Some(PortPin { at: Anchor { x: 5, y: 1, z: 2 }, outside: Facing::North }),
+            Some(PortPin { at: Anchor { x: 5, y: 1, z: 2 }, toward: Facing::North }),
             "the placement is keyed by the internal signal the label names"
         );
         assert_eq!(placements.get("y"), None, "the display label itself pins nothing");
@@ -822,7 +860,7 @@ mod tests {
     /// labels that would have worked.
     #[test]
     fn an_unresolvable_output_label_is_refused_by_name() {
-        let pins = parse_pins_file(r#"{"outputs": {"q": {"at": [5, 1, 2], "outside": "north"}}}"#)
+        let pins = parse_pins_file(r#"{"outputs": {"q": {"at": [5, 1, 2], "toward": "north"}}}"#)
             .expect("parses");
         let labels = vec![("y".to_string(), "g6".to_string())];
 
