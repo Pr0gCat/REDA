@@ -4376,7 +4376,8 @@ fn preclaim_socket_approaches(
 /// touches: measured (`tests/terminal_handover.rs`), a lever there is strong
 /// on all six neighbours and a conductive block there re-drives dust in every
 /// one of them. So a foreign net's wire in any of those six would be driven by
-/// a signal it never declared. [`verify_terminal_contract`] refuses such a
+/// a signal it never declared, and this port's own wire there would be driven
+/// around its own handover. [`verify_terminal_contract`] refuses such a
 /// plan after the fact; this is the same rule stated to the search, so the
 /// router lays a lawful plan instead of discovering the refusal three stages
 /// downstream. Measured before this existed (2026-08-30): the pinned-cin
@@ -4388,23 +4389,35 @@ fn preclaim_socket_approaches(
 /// the pin leaves the router exactly one way in and a stranger who took that
 /// cell would make this pin unroutable rather than expensive.
 ///
-/// Claimed under the **port's own signal**, not a guard name, because the
-/// contract's adjacency clause is stated over *other* nets: the port's own net
-/// always sits beside its own cell -- the handover does. `Occupancy::Solid`
-/// for the halo, so the claim is pure cell exclusivity; inert cells trigger no
-/// keep-out of their own, and first-writer-wins means a cell already inside
-/// some body's footprint keeps its real occupancy.
+/// Claimed under **a name nobody routes as**, the way a socket's own
+/// straight-line guard is (see `lay_net`'s `terminal:` guards), because the
+/// contract's clause is stated over every net and not only over strangers: the
+/// five cells the pin does not name carry nothing of REDA's, this port's own
+/// wire included, or the caller's cell would have a second path into the net
+/// that goes around the handover repeater the promise is made of. The handover
+/// itself is skipped -- the terminal body claimed it before this ran, and it is
+/// the one cell of REDA's the contract does name. `Occupancy::Solid` for the
+/// halo, so the claim is pure cell exclusivity; inert cells trigger no keep-out
+/// of their own, and first-writer-wins means a cell already inside some body's
+/// footprint keeps its real occupancy.
 fn preclaim_pinned_cell_halos(reservation: &mut Reservation, candidate: &PlanCandidate) {
     for node in &candidate.primitive_nodes {
-        let signal = match node.realisation {
-            NodeRealisation::InputTerminal { .. } => node.id.strip_prefix("input:"),
-            NodeRealisation::OutputTerminal { .. } => node.id.strip_prefix("output:"),
+        let (signal, role, toward) = match node.realisation {
+            NodeRealisation::InputTerminal { toward } => {
+                (node.id.strip_prefix("input:"), PortRole::Input, toward)
+            }
+            NodeRealisation::OutputTerminal { toward } => {
+                (node.id.strip_prefix("output:"), PortRole::Output, toward)
+            }
             _ => continue,
         };
         let Some(signal) = signal else {
             continue;
         };
         let at = node.anchor;
+        let pin = PortPin { at, toward };
+        let handover = pin.handover(role);
+        let guard = format!("pin:{signal}");
         for cell in [
             Anchor { x: at.x - 1, ..at },
             Anchor { x: at.x + 1, ..at },
@@ -4413,10 +4426,12 @@ fn preclaim_pinned_cell_halos(reservation: &mut Reservation, candidate: &PlanCan
             Anchor { y: at.y - 1, ..at },
             Anchor { y: at.y + 1, ..at },
         ] {
-            reservation.insert(cell, signal, Occupancy::Solid);
+            if cell == handover {
+                continue;
+            }
+            reservation.insert(cell, &guard, Occupancy::Solid);
         }
-        if let NodeRealisation::OutputTerminal { toward } = node.realisation {
-            let pin = PortPin { at, toward };
+        if role == PortRole::Output {
             reservation.insert(pin.net_cell(PortRole::Output), signal, Occupancy::Wire);
         }
     }
@@ -6003,11 +6018,14 @@ fn verified_parts(
 ///   block in it, ever;
 /// * the one neighbour the pin names holds this port's own handover, a
 ///   repeater whose signal travels `toward`, identical in both roles;
-/// * the pinned cell is adjacent to **no other net's** cells, because whatever
-///   the caller builds there powers what it touches -- measured: a lever there
-///   is strong on all six neighbours -- and a foreign net beside it would be
-///   driven by a signal it never declared. The port's own net may sit there:
-///   the handover always does.
+/// * **no other neighbour carries any net at all** -- not a stranger's and not
+///   this port's own. Whatever the caller builds in their cell powers what it
+///   touches (measured: a lever there is strong on all six neighbours, and
+///   REDA's own delivery makes a conductive pinned cell a strength-15 source
+///   for dust), so a foreign net beside it would be driven by a signal it never
+///   declared, and own wire beside it would be a second path around the very
+///   repeater the promise is made of. The five cells the pin does not name
+///   carry nothing of REDA's, which is what lets the caller build into them.
 ///
 /// "Cells" here are the routes' cells, read off the same reservation
 /// `verify_spacing` proved -- ownership is never guessed by scanning blocks.
@@ -6077,6 +6095,9 @@ fn verify_terminal_contract(
             Anchor { y: at.y - 1, ..at },
             Anchor { y: at.y + 1, ..at },
         ] {
+            if neighbour == handover {
+                continue;
+            }
             let position = Position::new(neighbour.x, neighbour.y, neighbour.z);
             let Some(&net) = reservation.get(&position) else {
                 continue;
@@ -6086,17 +6107,21 @@ fn verify_terminal_contract(
                 .get(net)
                 .map(|route| route.owner.as_deref().unwrap_or(route.id.as_str()))
                 .unwrap_or("");
-            if owner != port {
-                return Err(violation(
-                    port,
-                    format!(
-                        "its pinned cell ({}, {}, {}) is adjacent to net `{owner}`'s cell at \
-                         ({}, {}, {}) -- whatever the caller builds would drive a net it never \
-                         agreed to touch",
-                        at.x, at.y, at.z, neighbour.x, neighbour.y, neighbour.z
-                    ),
-                ));
-            }
+            let whose = if owner == port {
+                "its own net".to_string()
+            } else {
+                format!("net `{owner}`")
+            };
+            return Err(violation(
+                port,
+                format!(
+                    "its pinned cell ({}, {}, {}) is adjacent to {whose}'s cell at ({}, {}, {}), \
+                     which the pin does not name -- REDA builds in the handover and nowhere else, \
+                     so whatever the caller puts in their own cell drives nothing it never agreed \
+                     to touch",
+                    at.x, at.y, at.z, neighbour.x, neighbour.y, neighbour.z
+                ),
+            ));
         }
     }
 
@@ -8240,44 +8265,93 @@ mod tests {
         vec![seven_segment_expected(bits)[0]]
     }
 
-    /// One toggleable driver position per input, in input order.
+    /// One toggleable driver per input, in input order.
     ///
-    /// An unpinned input's driver is its own lever. A pinned input has none --
-    /// what drives the caller's cell is the caller's business -- so the
-    /// harness plays the caller: it installs a fixture lever **in the caller's
-    /// own cell**, which the contract guarantees ships empty, and toggles
-    /// that. Same `.lit` write either way, which is what lets both harnesses
-    /// drive both kinds of port through one loop.
-    ///
-    /// A lever is one of the states the reading repeater was measured against
-    /// (`tests/terminal_handover.rs`, sensing table: lit lever -> rear 15). It
-    /// is a fixture, not an interface assumption -- the contract admits any
-    /// means the game accepts -- and the same file recommends a redstone block
-    /// as the safer fixture, which is a harness change of its own.
+    /// An unpinned input's driver is its own lever, toggled through `lit`
+    /// exactly as before terminals existed. A pinned input has no lever at all
+    /// -- what powers the caller's cell is the caller's business -- so the
+    /// harness plays the caller and drives that cell itself. Both answer
+    /// `set`, which is what lets one loop drive a mixed circuit.
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum FixtureDriver {
+        /// An unpinned input's own lever, which ships with the world.
+        Lever((i32, i32, i32)),
+        /// A pinned input's caller cell, which ships empty and which the
+        /// harness fills only for as long as it is reading.
+        CallerCell((i32, i32, i32)),
+    }
+
+    impl FixtureDriver {
+        fn at(&self) -> (i32, i32, i32) {
+            match self {
+                Self::Lever(at) | Self::CallerCell(at) => *at,
+            }
+        }
+
+        /// Drive this input high or low.
+        ///
+        /// The lever arm is the `.lit` write every harness in this module has
+        /// always made. The caller-cell arm is [`compile::drive_caller_cell`]:
+        /// a redstone block for high, the empty cell the world shipped for low
+        /// -- both measured states of the reading repeater's rear, and neither
+        /// needing a support the contract does not promise.
+        fn set(&self, world: &mut World, on: bool) {
+            match self {
+                Self::Lever(at) => {
+                    let mut state = world.get(at.0, at.1, at.2).clone();
+                    state.lit = on;
+                    world.set(at.0, at.1, at.2, state);
+                }
+                Self::CallerCell(at) => compile::drive_caller_cell(world, *at, on),
+            }
+        }
+
+        /// Give the caller their cell back. A lever is REDA's own block and
+        /// stays exactly where it was built.
+        fn remove(&self, world: &mut World) {
+            if let Self::CallerCell(at) = self {
+                compile::clear_caller_cell(world, *at);
+            }
+        }
+    }
+
+    /// The caller's cell has to be empty before a fixture may stand in it --
+    /// that is the contract, and a harness that papered over a broken one
+    /// would measure a world nobody ships.
+    fn caller_cell_is_free(
+        world: &World,
+        name: &str,
+        at: Anchor,
+        what: &str,
+    ) -> Result<(), String> {
+        let standing = world.get(at.x, at.y, at.z);
+        if standing.kind != crate::redstone::world::block::BlockKind::Air {
+            return Err(format!(
+                "`{name}`'s pinned cell ({}, {}, {}) ships {:?}, not empty -- the {what} \
+                 cannot stand where the contract broke",
+                at.x, at.y, at.z, standing.kind
+            ));
+        }
+        Ok(())
+    }
+
     fn install_fixture_drivers(
         world: &mut World,
         input_positions: &BTreeMap<String, (i32, i32, i32)>,
         inputs: &[&str],
         placements: &PortPlacements,
-    ) -> Result<Vec<(i32, i32, i32)>, String> {
+    ) -> Result<Vec<FixtureDriver>, String> {
         let mut drivers = Vec::with_capacity(inputs.len());
         for name in inputs {
             match placements.get(name) {
                 Some(pin) => {
-                    let at = pin.at;
-                    let standing = world.get(at.x, at.y, at.z);
-                    if standing.kind != crate::redstone::world::block::BlockKind::Air {
-                        return Err(format!(
-                            "`{name}`'s pinned cell ({}, {}, {}) ships {:?}, not empty -- \
-                             the fixture cannot attach where the contract broke",
-                            at.x, at.y, at.z, standing.kind
-                        ));
-                    }
-                    world.set(at.x, at.y, at.z, compile::lever(false));
-                    drivers.push((at.x, at.y, at.z));
+                    caller_cell_is_free(world, name, pin.at, "fixture source")?;
+                    // Nothing is written yet: an empty caller cell *is* the low
+                    // state, so installation and "drive it low" are one thing.
+                    drivers.push(FixtureDriver::CallerCell((pin.at.x, pin.at.y, pin.at.z)));
                 }
                 None => match input_positions.get(*name) {
-                    Some(position) => drivers.push(*position),
+                    Some(position) => drivers.push(FixtureDriver::Lever(*position)),
                     None => {
                         return Err(format!("compiled circuit has no lever for input `{name}`"))
                     }
@@ -8288,7 +8362,8 @@ mod tests {
     }
 
     /// Hang a probe lamp in every pinned output's own cell, so the harness
-    /// reads the contract the way a caller does.
+    /// reads the contract the way a caller does; returns the cells it filled,
+    /// so [`remove_fixtures`] can hand them back.
     ///
     /// The contract is about a cell REDA does not own and ships empty, so
     /// there is nothing of REDA's left to measure there: an empty cell and a
@@ -8301,21 +8376,56 @@ mod tests {
         world: &mut World,
         outputs: &[String],
         placements: &PortPlacements,
-    ) -> Result<(), String> {
+    ) -> Result<Vec<(i32, i32, i32)>, String> {
+        let mut probes = Vec::new();
         for name in outputs {
             let Some(pin) = placements.get(name) else {
                 continue;
             };
-            let at = pin.at;
-            let standing = world.get(at.x, at.y, at.z);
-            if standing.kind != crate::redstone::world::block::BlockKind::Air {
-                return Err(format!(
-                    "`{name}`'s pinned cell ({}, {}, {}) ships {:?}, not empty -- the probe \
-                     cannot attach where the contract broke",
-                    at.x, at.y, at.z, standing.kind
-                ));
+            caller_cell_is_free(world, name, pin.at, "probe lamp")?;
+            let at = (pin.at.x, pin.at.y, pin.at.z);
+            compile::probe_caller_cell(world, at);
+            probes.push(at);
+        }
+        Ok(probes)
+    }
+
+    /// Take every fixture back out and prove none of it was ever in the world
+    /// the compiler shipped.
+    ///
+    /// The contract's cells belong to the caller, so a harness borrows them and
+    /// gives them back. Checking `shipped` as well as the borrowed copy is what
+    /// makes this a real guard rather than bookkeeping: it is the one place
+    /// that would notice a fixture written into the compiled world by mistake.
+    fn remove_fixtures(
+        world: &mut World,
+        shipped: &World,
+        drivers: &[FixtureDriver],
+        probes: &[(i32, i32, i32)],
+    ) -> Result<(), String> {
+        use crate::redstone::world::block::BlockKind;
+
+        for driver in drivers {
+            driver.remove(world);
+        }
+        for &at in probes {
+            compile::clear_caller_cell(world, at);
+        }
+        let borrowed = drivers
+            .iter()
+            .filter(|driver| matches!(driver, FixtureDriver::CallerCell(_)))
+            .map(FixtureDriver::at)
+            .chain(probes.iter().copied());
+        for at in borrowed {
+            for (which, world) in [("harness", &*world), ("shipped", shipped)] {
+                let kind = world.get(at.0, at.1, at.2).kind;
+                if kind != BlockKind::Air {
+                    return Err(format!(
+                        "the {which} world holds {kind:?} at the caller's cell {at:?} -- a \
+                         fixture is not part of any circuit"
+                    ));
+                }
             }
-            world.set(at.x, at.y, at.z, compile::lamp());
         }
         Ok(())
     }
@@ -8448,9 +8558,9 @@ mod tests {
         const MAX_TICKS: u64 = 2000;
 
         let mut world = compiled.world.clone();
-        let levers =
+        let drivers =
             install_fixture_drivers(&mut world, &compiled.input_positions, inputs, placements)?;
-        install_fixture_probes(&mut world, outputs, placements)?;
+        let probes = install_fixture_probes(&mut world, outputs, placements)?;
         let mut sinks = Vec::with_capacity(outputs.len());
         for signal in outputs {
             match compiled.output_positions.get(signal) {
@@ -8471,10 +8581,8 @@ mod tests {
             let bits: Vec<bool> = (0..inputs.len())
                 .map(|index| (combination >> (inputs.len() - 1 - index)) & 1 == 1)
                 .collect();
-            for (position, &bit) in levers.iter().zip(bits.iter()) {
-                let mut state = simulator.world().get(position.0, position.1, position.2).clone();
-                state.lit = bit;
-                simulator.world_mut().set(position.0, position.1, position.2, state);
+            for (driver, &bit) in drivers.iter().zip(bits.iter()) {
+                driver.set(simulator.world_mut(), bit);
                 if let Err(error) = simulator.run_until_stable(MAX_TICKS) {
                     return Err(format!("did not settle at {bits:?}: {error:?}"));
                 }
@@ -8491,6 +8599,8 @@ mod tests {
                 }
             }
         }
+
+        remove_fixtures(simulator.world_mut(), &compiled.world, &drivers, &probes)?;
 
         match first {
             None => Ok(vectors),
@@ -11640,6 +11750,217 @@ mod tests {
         assert!(reason.contains("adjacent"), "the reason names the adjacency: {reason}");
     }
 
+    /// The same refusal for the port's **own** net, which is the clause the
+    /// contract actually states: REDA builds in the one neighbour the pin names
+    /// and in none of the other five, so the caller may build into them freely.
+    ///
+    /// Own wire there is not a coupling between strangers but a second path
+    /// between the caller's cell and this very net -- one that bypasses the
+    /// handover repeater the promise is made of. Measured
+    /// (`tests/terminal_handover.rs`): REDA delivering into a conductive
+    /// pinned cell makes it a strength-15 source for any dust touching it, and
+    /// a caller powering their own cell does the same, so dust parked beside it
+    /// is driven around the diode in whichever role the port has.
+    #[test]
+    fn the_ports_own_net_beside_its_pinned_cell_is_refused_too() {
+        let netlist = two_input_netlist();
+        let at = Anchor { x: 10, y: 1, z: 40 };
+        let mut placements = PortPlacements::default();
+        placements.pin("a", at, Facing::North);
+
+        let candidate = plan_from_netlist(&netlist, &placements).expect("plans pinned");
+        verify_candidate(&candidate, &netlist).expect("the untampered plan is lawful");
+
+        // `a`'s own route, extended into the cell on the caller's side of the
+        // pinned cell -- the side opposite the handover, so nothing else
+        // objects first.
+        let mut tampered = candidate.clone();
+        let intruder = Anchor { x: at.x, y: 1, z: at.z + 1 };
+        let own = tampered
+            .routes
+            .iter_mut()
+            .find(|route| route.owner.as_deref().unwrap_or(route.id.as_str()) == "a")
+            .expect("the pinned input has a route of its own");
+        own.anchors.push(intruder);
+        own.realisation.push(compile::dust());
+        own.floors.push(compile::stone());
+
+        let error = verify_candidate(&tampered, &netlist)
+            .expect_err("the port's own net beside its pinned cell is a violation");
+        let PlannerError::PhysicalInvariant(
+            compile::CompileError::PortTerminalViolation { port, reason },
+        ) = &error
+        else {
+            panic!("refused, but not by the terminal contract: {error}");
+        };
+        assert_eq!(port, "a");
+        assert!(reason.contains("adjacent"), "the reason names the adjacency: {reason}");
+    }
+
+    /// Both truth harnesses read a pinned output through the caller's own
+    /// cell, and both drive a pinned input through it -- on the same circuit,
+    /// with one port of each kind left unpinned.
+    ///
+    /// `simulated_truth_table_driving_pins` sweeps the vectors from one settled
+    /// state; `worst_settle_and_truth_driving_pins` walks every *ordered*
+    /// transition and times it. They are separate harnesses with separate
+    /// fixture code paths, and the second one had none: a pinned output records
+    /// the caller's cell, which ships empty, so without a probe it reads
+    /// `lit = false` on every vector -- and a circuit whose output is low
+    /// everywhere still passes every low row, which is the kind of silence that
+    /// only a test with a high row in it can break.
+    #[test]
+    fn both_truth_harnesses_read_a_pinned_output_through_the_callers_cell() {
+        let netlist = two_input_netlist();
+        let mut placements = PortPlacements::default();
+        // Mixed on both sides: `a` and `y` pinned, `b` keeping its lever.
+        placements.pin("a", Anchor { x: 10, y: 1, z: 40 }, Facing::North);
+        placements.pin("y", Anchor { x: 16, y: 1, z: 40 }, Facing::South);
+
+        let expected: fn(&[bool]) -> Vec<bool> = |bits| vec![!(bits[0] || bits[1])];
+
+        let candidate = plan_from_netlist(&netlist, &placements).expect("the mixed circuit plans");
+        let realised = realise_and_verify(&candidate, &netlist, candidate_world_size(&candidate))
+            .expect("and realises");
+        let (_worst, _at, seen) = worst_settle_and_truth_driving_pins(
+            &realised,
+            &["a", "b"],
+            &netlist.outputs,
+            expected,
+            &placements,
+        )
+        .expect("every ordered transition reads NOR through the caller's own cells");
+        assert_eq!(seen, 12, "four states, every ordered transition between them");
+
+        let compiled = crate::compile::compile_planned(&netlist, &placements)
+            .unwrap_or_else(|error| panic!("the mixed circuit compiles: {error}"));
+        let vectors = simulated_truth_table_driving_pins(
+            &compiled,
+            &["a", "b"],
+            &netlist.outputs,
+            expected,
+            &placements,
+        )
+        .expect("and so does the vector sweep");
+        assert_eq!(vectors, 4);
+    }
+
+    /// A fixture is borrowed, never built.
+    ///
+    /// Every cell the harness fills belongs to the caller, so when the vectors
+    /// are done `remove_fixtures` hands them back -- and the world the compiler
+    /// shipped, which the harness only ever read, still holds nothing in either
+    /// of them. The sweep is the half worth having: a fixture that leaked into
+    /// a shipped world would be a source or a lamp nobody asked for, and both
+    /// are visible from anywhere in the box.
+    #[test]
+    fn no_fixture_survives_in_the_world_the_compiler_shipped() {
+        use crate::redstone::world::block::BlockKind;
+
+        let netlist = two_input_netlist();
+        let mut placements = PortPlacements::default();
+        placements.pin("a", Anchor { x: 10, y: 1, z: 40 }, Facing::North);
+        placements.pin("y", Anchor { x: 16, y: 1, z: 40 }, Facing::South);
+
+        let compiled = crate::compile::compile_planned(&netlist, &placements)
+            .unwrap_or_else(|error| panic!("the mixed circuit compiles: {error}"));
+        let vectors = simulated_truth_table_driving_pins(
+            &compiled,
+            &["a", "b"],
+            &netlist.outputs,
+            |bits| vec![!(bits[0] || bits[1])],
+            &placements,
+        )
+        .expect("the fixtures drive and read the contract, then come back out");
+        assert_eq!(vectors, 4);
+
+        for name in ["a", "y"] {
+            let pin = placements.get(name).expect("pinned above");
+            assert_eq!(
+                compiled.world.get(pin.at.x, pin.at.y, pin.at.z).kind,
+                BlockKind::Air,
+                "`{name}`'s cell is the caller's, before the harness and after it"
+            );
+        }
+        let (sx, sy, sz) = compiled.world.size();
+        for x in 0..sx {
+            for y in 0..sy {
+                for z in 0..sz {
+                    let kind = compiled.world.get(x, y, z).kind;
+                    assert!(
+                        !matches!(kind, BlockKind::RedstoneBlock | BlockKind::Lamp),
+                        "a fixture leaked into the shipped world: {kind:?} at ({x}, {y}, {z})"
+                    );
+                }
+            }
+        }
+    }
+
+    /// What the harness stands in a pinned input's own cell, and what it puts
+    /// back when it is done.
+    ///
+    /// A **redstone block**, measured (`tests/terminal_handover.rs`): it reads
+    /// 15 at the reading repeater's rear like every other state a caller can
+    /// offer, it powers no block at all -- so its keep-out is one cell where a
+    /// lit lever's strong faces make two -- and it needs no attachment face.
+    /// That last one is the reason it is not a lever: the contract guarantees
+    /// every neighbour of the caller's cell empty, and `taxonomy`'s own
+    /// `air_supports_nothing` says nothing attaches to air, so a fixture lever
+    /// there would be unbuildable in the game while this simulator, which does
+    /// not model placement legality, happily computed a truth table with it.
+    ///
+    /// Low is the empty cell the world shipped -- also measured: an empty
+    /// caller cell reads 0 at the repeater's rear.
+    #[test]
+    fn a_pinned_inputs_fixture_is_a_source_that_stands_on_nothing() {
+        use crate::redstone::world::block::BlockKind;
+
+        let netlist = two_input_netlist();
+        let at = Anchor { x: 10, y: 1, z: 40 };
+        let mut placements = PortPlacements::default();
+        placements.pin("a", at, Facing::North);
+
+        let compiled = crate::compile::compile_planned(&netlist, &placements)
+            .unwrap_or_else(|error| panic!("the pinned input compiles: {error}"));
+
+        let mut fixture = compiled.world.clone();
+        let drivers = install_fixture_drivers(
+            &mut fixture,
+            &compiled.input_positions,
+            &["a", "b"],
+            &placements,
+        )
+        .expect("both inputs get a driver");
+
+        drivers[0].set(&mut fixture, true);
+        assert_eq!(
+            fixture.get(at.x, at.y, at.z).kind,
+            BlockKind::RedstoneBlock,
+            "a pinned input is driven high by a source in the caller's own cell"
+        );
+        assert_eq!(
+            fixture.get(at.x, at.y - 1, at.z).kind,
+            BlockKind::Air,
+            "and it stands on nothing -- a lever would have needed a face here"
+        );
+
+        drivers[0].set(&mut fixture, false);
+        assert_eq!(
+            fixture.get(at.x, at.y, at.z).kind,
+            BlockKind::Air,
+            "low is the empty cell the world shipped"
+        );
+
+        // The unpinned sibling is untouched: its own lever, toggled as ever.
+        let &lever = compiled.input_positions.get("b").expect("`b` keeps its lever");
+        assert_eq!(drivers[1].at(), lever);
+        assert_eq!(
+            fixture.get(lever.0, lever.1, lever.2).kind,
+            BlockKind::Lever,
+            "an unpinned input keeps today's behaviour exactly"
+        );
+    }
+
     /// The acceptance shape of the input-terminal stage: a real circuit with
     /// every input pinned in a row -- one-cell gaps, the contract's tightest
     /// lawful packing -- compiles through `compile_planned`, every pinned cell
@@ -12057,7 +12378,7 @@ mod tests {
             &placements,
         )
         .expect("every pinned input attaches its fixture in the caller's own cell");
-        install_fixture_probes(&mut fixture, &segments, &placements)
+        let probes = install_fixture_probes(&mut fixture, &segments, &placements)
             .expect("every pinned output takes a probe lamp in the caller's own cell");
         let mut simulator = crate::redstone::simulator::Simulator::new(fixture);
         simulator.run_until_stable(2000).expect("the idle world settles");
@@ -12065,10 +12386,8 @@ mod tests {
         for combination in 0..16usize {
             let bits: Vec<bool> =
                 (0..4).map(|index| (combination >> (3 - index)) & 1 == 1).collect();
-            for (at, &bit) in drivers.iter().zip(bits.iter()) {
-                let mut state = simulator.world().get(at.0, at.1, at.2).clone();
-                state.lit = bit;
-                simulator.world_mut().set(at.0, at.1, at.2, state);
+            for (driver, &bit) in drivers.iter().zip(bits.iter()) {
+                driver.set(simulator.world_mut(), bit);
             }
             let ticks =
                 simulator.run_until_stable(2000).expect("every vector settles");
@@ -12086,6 +12405,11 @@ mod tests {
             }
         }
         eprintln!("worst settle over the sixteen chained transitions: {worst} ticks");
+
+        // The fixtures go back out, and neither the world they were installed
+        // into nor the world `compile_grown` shipped keeps any of them.
+        remove_fixtures(simulator.world_mut(), &compiled.world, &drivers, &probes)
+            .expect("every fixture comes back out of the caller's own cells");
     }
 
     /// World sizing follows the pins: a terminal placed past where the free
@@ -17892,12 +18216,13 @@ mod tests {
 
         let width = inputs.len();
         let mut fixture = realised.world.clone();
-        let levers = install_fixture_drivers(
+        let drivers = install_fixture_drivers(
             &mut fixture,
             &realised.ports.input_positions,
             inputs,
             placements,
         )?;
+        let probes = install_fixture_probes(&mut fixture, outputs, placements)?;
         let mut sinks = Vec::with_capacity(outputs.len());
         for signal in outputs {
             match realised.ports.output_positions.get(signal) {
@@ -17930,18 +18255,14 @@ mod tests {
                 }
                 let after = bits_of(to);
                 let mut simulator = Simulator::new(fixture.clone());
-                for (at, &bit) in levers.iter().zip(before.iter()) {
-                    let mut state = simulator.world().get(at.0, at.1, at.2).clone();
-                    state.lit = bit;
-                    simulator.world_mut().set(at.0, at.1, at.2, state);
+                for (driver, &bit) in drivers.iter().zip(before.iter()) {
+                    driver.set(simulator.world_mut(), bit);
                 }
                 simulator
                     .run_until_stable(2000)
                     .map_err(|error| format!("did not settle at {before:?}: {error:?}"))?;
-                for (at, &bit) in levers.iter().zip(after.iter()) {
-                    let mut state = simulator.world().get(at.0, at.1, at.2).clone();
-                    state.lit = bit;
-                    simulator.world_mut().set(at.0, at.1, at.2, state);
+                for (driver, &bit) in drivers.iter().zip(after.iter()) {
+                    driver.set(simulator.world_mut(), bit);
                 }
                 let ticks = simulator
                     .run_until_stable(2000)
@@ -17964,6 +18285,8 @@ mod tests {
                 seen += 1;
             }
         }
+
+        remove_fixtures(&mut fixture, &realised.world, &drivers, &probes)?;
 
         Ok((worst, worst_at, seen))
     }

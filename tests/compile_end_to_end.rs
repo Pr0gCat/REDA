@@ -10,26 +10,62 @@ use reda::circuits::and4::build_and4_netlist;
 use reda::compile::physical;
 use reda::compile::planner::{
     emit_candidate, emit_primitives, seed_from_legacy, verify_candidate, Anchor, NodeRealisation,
-    NormalisedScore, PlannerWeights, RouteTerminalKind,
+    NormalisedScore, PlannerWeights, PortPlacements, RouteTerminalKind,
 };
 use reda::compile::topology::Primitive;
-use reda::redstone::world::block::BlockKind;
+use reda::redstone::world::block::{BlockKind, Facing};
 use reda::redstone::world::storage::World;
-use reda::compile::{compile, compile_legacy, CompileError, CompiledCircuit, Gate, Netlist};
+use reda::compile::{
+    compile, compile_legacy, compile_planned, CompileError, CompiledCircuit, Gate, Netlist,
+};
 use reda::formats::litematic;
+use reda::redstone::simulator::position::Position;
 use reda::redstone::simulator::Simulator;
 
 const MAX_TICKS: u64 = 500;
 
-fn set_lever(simulator: &mut Simulator, position: (i32, i32, i32), on: bool) {
-    let mut state = simulator
-        .world()
-        .get(position.0, position.1, position.2)
-        .clone();
-    state.lit = on;
-    simulator
-        .world_mut()
-        .set(position.0, position.1, position.2, state);
+/// How one input is driven, resolved **once** against the world as it shipped.
+///
+/// An unpinned input is its own lever and is toggled through `lit`, exactly as
+/// before terminals existed. A pinned input has no lever at all: it records the
+/// caller's own cell, which ships empty, and what powers that cell is the
+/// caller's business -- so a test playing the caller puts a source there and
+/// takes it away again.
+///
+/// Resolved before any fixture is installed, and by `compile`'s own shared
+/// predicate rather than by a guess local to this file: `input_terminal_reader`
+/// asks for an empty recorded cell, and the fixture is precisely what stops it
+/// being empty.
+#[derive(Debug, Clone, Copy)]
+enum Driver {
+    Lever((i32, i32, i32)),
+    CallerCell((i32, i32, i32)),
+}
+
+fn driver_for(world: &World, position: (i32, i32, i32)) -> Driver {
+    let recorded = Position::new(position.0, position.1, position.2);
+    match reda::compile::input_terminal_reader(world, recorded) {
+        Some(_) => Driver::CallerCell(position),
+        None => Driver::Lever(position),
+    }
+}
+
+fn set_lever(simulator: &mut Simulator, driver: Driver, on: bool) {
+    match driver {
+        Driver::Lever(position) => {
+            let mut state = simulator
+                .world()
+                .get(position.0, position.1, position.2)
+                .clone();
+            state.lit = on;
+            simulator
+                .world_mut()
+                .set(position.0, position.1, position.2, state);
+        }
+        Driver::CallerCell(position) => {
+            reda::compile::drive_caller_cell(simulator.world_mut(), position, on)
+        }
+    }
     simulator
         .run_until_stable(MAX_TICKS)
         .expect("circuit must settle after changing an input");
@@ -455,7 +491,7 @@ fn a_compiled_not_gate_matches_its_truth_table() {
         .run_until_stable(MAX_TICKS)
         .expect("circuit must settle before the first reading");
 
-    let lever_a = *compiled.input_positions.get("a").unwrap();
+    let lever_a = driver_for(simulator.world(), *compiled.input_positions.get("a").unwrap());
     let output_y = *compiled.output_positions.get("y").unwrap();
 
     let rows: [(bool, bool); 2] = [(false, true), (true, false)];
@@ -479,8 +515,8 @@ fn a_compiled_and_gate_matches_its_truth_table() {
         .run_until_stable(MAX_TICKS)
         .expect("circuit must settle before the first reading");
 
-    let lever_a = *compiled.input_positions.get("a").unwrap();
-    let lever_b = *compiled.input_positions.get("b").unwrap();
+    let lever_a = driver_for(simulator.world(), *compiled.input_positions.get("a").unwrap());
+    let lever_b = driver_for(simulator.world(), *compiled.input_positions.get("b").unwrap());
     let output_y = *compiled.output_positions.get("y").unwrap();
 
     // 四列全測：00->0, 01->0, 10->0, 11->1
@@ -498,6 +534,80 @@ fn a_compiled_and_gate_matches_its_truth_table() {
         assert_eq!(
             output, expected,
             "AND({a}, {b}) should be {expected}, got {output}"
+        );
+    }
+}
+
+/// The same AND gate, half of it pinned, driven and read exactly the way an
+/// external caller would -- through cells REDA never puts a block in.
+///
+/// A **mixed** circuit on purpose: `a` and `y` are pinned, `b` keeps its lever,
+/// so one run exercises both halves of every helper in this file and proves
+/// unpinned ports still behave as they always did. The fixtures -- a source in
+/// the pinned input's cell, a probe lamp in the pinned output's -- are the
+/// test's own, installed into a copy; the world the compiler shipped ships both
+/// pinned cells empty and is asserted to still do so afterwards.
+#[test]
+fn a_mixed_pinned_and_gate_computes_through_the_callers_own_cells() {
+    let netlist = and_netlist();
+    let mut placements = PortPlacements::default();
+    // The signal enters heading north, into the circuit north of this row, and
+    // leaves heading south, out of it.
+    placements.pin("a", Anchor { x: 10, y: 1, z: 40 }, Facing::North);
+    placements.pin("y", Anchor { x: 16, y: 1, z: 40 }, Facing::South);
+
+    let compiled = compile_planned(&netlist, &placements)
+        .unwrap_or_else(|error| panic!("the mixed circuit compiles: {error}"));
+
+    let pinned_in = *compiled.input_positions.get("a").unwrap();
+    let lever_b = *compiled.input_positions.get("b").unwrap();
+    let pinned_out = *compiled.output_positions.get("y").unwrap();
+    assert_eq!(pinned_in, (10, 1, 40), "a pinned port records the caller's own cell");
+    assert_eq!(pinned_out, (16, 1, 40));
+
+    // The caller's side, built after compilation and outside REDA's knowledge:
+    // a lamp to read the output with. The input needs nothing until it is
+    // driven -- an empty cell is the low state.
+    let mut world = compiled.world.clone();
+    reda::compile::probe_caller_cell(&mut world, pinned_out);
+
+    let driver_a = driver_for(&compiled.world, pinned_in);
+    let driver_b = driver_for(&compiled.world, lever_b);
+    assert!(matches!(driver_a, Driver::CallerCell(_)), "`a` is driven by the caller's cell");
+    assert!(matches!(driver_b, Driver::Lever(_)), "`b` keeps today's lever");
+
+    let mut simulator = Simulator::new(world);
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle before the first reading");
+
+    for (a, b, expected) in [
+        (false, false, false),
+        (false, true, false),
+        (true, false, false),
+        (true, true, true),
+    ] {
+        set_lever(&mut simulator, driver_a, a);
+        set_lever(&mut simulator, driver_b, b);
+        let output = read_output(&simulator, pinned_out);
+        assert_eq!(output, expected, "AND({a}, {b}) should be {expected}, got {output}");
+    }
+
+    // The fixtures were the test's, never the circuit's -- the source the last
+    // row left high included.
+    for at in [pinned_in, pinned_out] {
+        reda::compile::clear_caller_cell(simulator.world_mut(), at);
+    }
+    for at in [pinned_in, pinned_out] {
+        assert_eq!(
+            simulator.world().get(at.0, at.1, at.2).kind,
+            BlockKind::Air,
+            "the borrowed cell {at:?} is handed back empty"
+        );
+        assert_eq!(
+            compiled.world.get(at.0, at.1, at.2).kind,
+            BlockKind::Air,
+            "and the shipped world never held a fixture at {at:?} at all"
         );
     }
 }

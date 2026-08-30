@@ -337,6 +337,20 @@ pub(crate) fn lamp() -> BlockState {
     state
 }
 
+/// A redstone block: a source that stands on nothing and powers no block.
+///
+/// The one source in this vocabulary that drives adjacent dust while powering
+/// no block at all (`taxonomy::power_emitted_by`'s `RedstoneBlock` arm), and
+/// the one that needs neither a support nor an attachment face. That is what
+/// makes it the fixture a *caller's* own cell is driven with -- see
+/// [`drive_caller_cell`].
+pub(crate) fn redstone_block() -> BlockState {
+    let mut state = BlockState::air();
+    state.kind = BlockKind::RedstoneBlock;
+    state.name = "minecraft:redstone_block".to_string();
+    state
+}
+
 /// `place_primary_input` always stands the lever on top of a floor block
 /// (`ensure_floor` runs right after this), never against a wall, so `face`
 /// must be `Floor` -- Minecraft's own default is `Wall`, which is exactly
@@ -6555,7 +6569,7 @@ pub(crate) fn input_source_component(
 /// judge, its replica and `equivalence`'s lever check cannot drift on what
 /// "this port is pinned" means: the cell ships empty, and the neighbour whose
 /// stored facing points back at it is REDA's reader.
-pub(crate) fn input_terminal_reader(world: &World, recorded: Position) -> Option<Position> {
+pub fn input_terminal_reader(world: &World, recorded: Position) -> Option<Position> {
     if world.get(recorded.x, recorded.y, recorded.z).kind != BlockKind::Air {
         return None;
     }
@@ -6576,7 +6590,7 @@ pub(crate) fn input_terminal_reader(world: &World, recorded: Position) -> Option
 /// *delivering* one stores `facing = d` (its output side does). So the two
 /// predicates can never confuse each other, and neither can mistake an
 /// unpinned output's lamp for a terminal.
-pub(crate) fn output_terminal_handover(world: &World, recorded: Position) -> Option<Position> {
+pub fn output_terminal_handover(world: &World, recorded: Position) -> Option<Position> {
     if world.get(recorded.x, recorded.y, recorded.z).kind != BlockKind::Air {
         return None;
     }
@@ -6586,6 +6600,51 @@ pub(crate) fn output_terminal_handover(world: &World, recorded: Position) -> Opt
         (candidate.kind == BlockKind::Repeater && candidate.facing == Some(direction))
             .then_some(next)
     })
+}
+
+/// Power a pinned port's own cell the way a caller would: a redstone block
+/// when `on`, and the empty cell the world shipped when not.
+///
+/// The contract promises that the circuit reads the pinned cell as high when
+/// the caller powers it "by any means the game accepts as a signal". A
+/// redstone block is the means with the fewest strings attached, and every
+/// claim here is measured in `tests/terminal_handover.rs` rather than assumed:
+/// it reads a full 15 at the reading repeater's rear, it powers no block at
+/// all (so it cannot leak into anything but the reader), and -- unlike a lever
+/// -- it needs neither a support under it nor a face to attach to, which
+/// matters because the contract guarantees every neighbour of the pinned cell
+/// empty and nothing attaches to air. An empty cell is the low state, also
+/// measured: the repeater's rear reads 0.
+///
+/// A **fixture**, not an interface assumption: this is how a harness, an
+/// integration test or the viewer stands in for the caller. Nothing REDA
+/// compiles ever calls it, and the cell it writes is one REDA never owns.
+pub fn drive_caller_cell(world: &mut World, at: (i32, i32, i32), on: bool) {
+    let state = if on { redstone_block() } else { BlockState::air() };
+    world.set(at.0, at.1, at.2, state);
+}
+
+/// Hang the receiver a pinned output is read through: a lamp in the caller's
+/// own cell.
+///
+/// Verification cannot answer an output by inspecting the shipped world --
+/// measured, an empty cell and a glass cube both read `(None, 0)` under a
+/// repeater emitting 15 -- so "powered" is only a question about what stands
+/// in the cell, and the harness has to put something there to ask it. A lamp
+/// answers the promise exactly (lit when high, dark when low) and is also the
+/// receiver a dust handover would have failed, which is why the probe is a
+/// lamp and not a dust reading.
+pub fn probe_caller_cell(world: &mut World, at: (i32, i32, i32)) {
+    world.set(at.0, at.1, at.2, lamp());
+}
+
+/// Take a fixture back out, leaving the empty cell the world shipped.
+///
+/// The counterpart every installer needs: a pinned cell belongs to the caller,
+/// so a harness that installs into it owes the world it borrowed back exactly
+/// as it was.
+pub fn clear_caller_cell(world: &mut World, at: (i32, i32, i32)) {
+    world.set(at.0, at.1, at.2, BlockState::air());
 }
 
 /// The signal-strength invariant: every net must deliver a non-zero signal
@@ -9403,6 +9462,106 @@ mod tests {
             message.contains("g0")
                 && message.contains(&format!("{:?}", (support.x, support.y, support.z))),
             "message must name the gate and the unreached support: {message}"
+        );
+    }
+
+    /// A **pinned** declared output is judged at REDA's own last cell -- the
+    /// delivery repeater -- and nowhere further, because nothing further can be
+    /// measured: the caller's cell ships empty, and an empty cell and a glass
+    /// cube read the same `(None, 0)` under a repeater emitting 15 (measured,
+    /// `tests/terminal_handover.rs`). What decides the contract's promise is
+    /// therefore one question, and this invariant asks exactly it: does a live
+    /// signal arrive at the handover's rear? A repeater that is fed emits 15
+    /// into whatever the caller later stands in their own cell, whatever shape
+    /// the wire behind it took.
+    ///
+    /// The same rig one hop apart, because an invariant that only ever refuses
+    /// proves nothing: fifteen cells arrive with a strength of 1 and pass,
+    /// sixteen die on the last cell and are refused by output name and
+    /// handover cell -- the two things a caller can act on.
+    #[test]
+    fn signal_strength_judges_a_pinned_output_at_its_handover_repeater() {
+        // One gate, declared as the circuit's output. Net 0 is the lever's and
+        // net 1 the gate's own; neither declares a gate-input sink, so the
+        // declared-output pass is the only thing under test here.
+        let mut netlist = single_input_gate("out");
+        netlist.outputs = vec!["out".to_string()];
+        let nets = vec![
+            nameless_net(Source::Lever(0)),
+            nameless_net(Source::Gate(0)),
+        ];
+
+        // Torch -> `run` dust cells -> the handover repeater -> the caller's
+        // cell, which is never written and must stay air for the port to read
+        // as pinned at all.
+        let judge = |run: i32| -> (Result<(), CompileError>, Position) {
+            let mut world = World::new(30, 5, 5);
+            let lever_pos = Position::new(0, 0, 2);
+            world.set(lever_pos.x, lever_pos.y, lever_pos.z, lever(false));
+
+            let mut reservation = Reservation::new();
+            let torch = place_test_gate(&mut world, Position::new(1, 0, 2));
+            let handover =
+                lay_test_dust_run(&mut world, &mut reservation, Position::new(2, 1, 2), run, 1);
+            world.set(
+                handover.x,
+                handover.y,
+                handover.z,
+                repeater(Facing::East),
+            );
+            reservation.insert(handover, 1);
+            let callers_cell = handover.offset(Facing::East);
+
+            let mut input_positions = BTreeMap::new();
+            input_positions.insert("a".to_string(), (lever_pos.x, lever_pos.y, lever_pos.z));
+            let mut gate_output_positions = BTreeMap::new();
+            gate_output_positions.insert("out".to_string(), (torch.x, torch.y, torch.z));
+            let mut output_positions = BTreeMap::new();
+            output_positions.insert(
+                "out".to_string(),
+                (callers_cell.x, callers_cell.y, callers_cell.z),
+            );
+
+            assert_eq!(
+                output_terminal_handover(&world, callers_cell),
+                Some(handover),
+                "the rig is a pinned output: an empty caller cell with REDA's repeater beside it"
+            );
+
+            (
+                verify_signal_strength(
+                    &world,
+                    &reservation,
+                    &netlist,
+                    &nets,
+                    &gate_output_positions,
+                    &input_positions,
+                    &output_positions,
+                ),
+                handover,
+            )
+        };
+
+        let (arrives, _) = judge(15);
+        assert_eq!(arrives, Ok(()), "a signal that still arrives at the rear delivers");
+
+        let (dies, handover) = judge(16);
+        let err = dies.expect_err("a handover nothing feeds can deliver nothing into the caller's cell");
+        assert_eq!(
+            err,
+            CompileError::SignalStrengthViolation {
+                net: "out".to_string(),
+                sink: SignalSink::OutputTerminal {
+                    output: "out".to_string(),
+                    terminal: (handover.x, handover.y, handover.z),
+                },
+            }
+        );
+        let message = err.to_string();
+        assert!(
+            message.contains("out")
+                && message.contains(&format!("{:?}", (handover.x, handover.y, handover.z))),
+            "message must name the output and REDA's own last cell: {message}"
         );
     }
 
