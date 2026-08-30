@@ -72,7 +72,7 @@ prose disagree, the model is right and the prose is the bug.
 ## The mechanism: terminals are pinned bodies
 
 The one existing position mechanism, `PortPlacements`
-(src/compile/planner.rs:2891), already threads pins through starting layout,
+(src/compile/planner.rs:3166), already threads pins through starting layout,
 the relaxation solve (struck from the matrix), the separation projection
 (neighbours pay), snap (returned exactly), and `try_move` (`PortIsPinned`).
 Its vocabulary changes from a bare `Anchor` to `(Anchor, toward: Facing)`,

@@ -1271,6 +1271,22 @@ pub enum CompileError {
     /// replay target. This distinguishes an identity/style mismatch from a
     /// legal circuit that merely fails a redstone invariant.
     CandidateMetadataViolation { item: String, reason: String },
+    /// A pin that can never become a lawful terminal, named against the pin
+    /// that did it and carrying the offending cell as **data**.
+    ///
+    /// The one planner failure that survives the compile boundary whole
+    /// instead of being rendered into [`CompileError::CandidateMetadataViolation`]'s
+    /// sentence. Pins come from a file today, an editor next and an in-game mod
+    /// after that; an editor has to point at the wrong pin and a mod has to
+    /// highlight a block, and neither can do it with prose. See
+    /// [`planner::PinRefusal`] for the refusals themselves, and
+    /// `planner::validate_port_placements` for the door they are raised at --
+    /// which runs before planning, whoever assembled the pin set.
+    InvalidPortPin {
+        port: String,
+        at: planner::Anchor,
+        refusal: planner::PinRefusal,
+    },
     /// A pinned port's realised world breaks the terminal contract: the
     /// pinned cell does not ship empty, the one neighbour the pin names does
     /// not hold this port's handover repeater, or the pinned cell sits
@@ -1433,6 +1449,14 @@ impl std::fmt::Display for CompileError {
             CompileError::PortTerminalViolation { port, reason } => {
                 write!(f, "terminal contract violation for port `{port}`: {reason}")
             }
+            // The same sentence `PlannerError::InvalidPortPin` renders, kept
+            // word for word so a caller reading the CLI's message and a caller
+            // matching on the variant are told the same thing.
+            CompileError::InvalidPortPin { port, at, refusal } => write!(
+                f,
+                "pin for port `{port}` at ({}, {}, {}) is invalid: {refusal}",
+                at.x, at.y, at.z
+            ),
             CompileError::ConnectivityViolation { cell, found_net, expected_cell, expected_net } => {
                 write!(
                     f,
@@ -7459,7 +7483,9 @@ pub fn compile_planned(
 /// `placements` declares the ports the caller owns as terminals (the growth
 /// loop threaded them end to end from the day it existed; only this signature
 /// hard-coded the default). An empty `PortPlacements` is byte-for-byte
-/// today's behaviour -- the criterion records run through exactly this call.
+/// today's behaviour -- the criterion records run through exactly this call,
+/// and `planner::tests::an_unpinned_grown_and4_is_the_world_it_always_shipped`
+/// holds that claim on the one circuit cheap enough to re-run every time.
 pub fn compile_grown(
     netlist: &Netlist,
     placements: &planner::PortPlacements,
@@ -7549,9 +7575,18 @@ fn compile_planned_within(
 
 /// A planner failure that is not already an invariant violation is still a
 /// compile failure: the plan was unbuildable.
+///
+/// Two failures cross this boundary whole rather than as a sentence. A
+/// physical invariant is already a `CompileError`. An invalid pin is the
+/// caller's own input refused by name, and the spec requires it to arrive as
+/// data: the file adapter renders it, but the editor and the in-game mod that
+/// are coming have to point at a pin and highlight a block.
 fn planner_error(error: planner::PlannerError) -> CompileError {
     match error {
         planner::PlannerError::PhysicalInvariant(inner) => inner,
+        planner::PlannerError::InvalidPortPin { port, at, refusal } => {
+            CompileError::InvalidPortPin { port, at, refusal }
+        }
         other => CompileError::CandidateMetadataViolation {
             item: "candidate".to_string(),
             reason: other.to_string(),

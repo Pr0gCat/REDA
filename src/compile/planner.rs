@@ -9576,6 +9576,90 @@ mod tests {
         assert_eq!(compiled.planner_kind, compile::PlannerKind::Unified3d);
     }
 
+    /// Every non-air block of a world as one number, so a *configuration* can
+    /// be recorded and not merely a count.
+    ///
+    /// `tests/review_fingerprint.rs` makes the argument this exists for: two
+    /// different layouts hold the same number of blocks, so a pinned block
+    /// count cannot say a world did not move. FNV-1a over `x y z kind facing
+    /// lit power delay` for every non-air cell, in the world's own iteration
+    /// order: no dependency, and every field that decides what a block *does*,
+    /// so nothing this compiler can change is outside the record.
+    fn world_digest(world: &World) -> u64 {
+        let (size_x, size_y, size_z) = world.size();
+        let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+        for x in 0..size_x {
+            for y in 0..size_y {
+                for z in 0..size_z {
+                    let state = world.get(x, y, z);
+                    if state.kind == crate::redstone::world::block::BlockKind::Air {
+                        continue;
+                    }
+                    let line = format!(
+                        "{x} {y} {z} {:?} {:?} {} {} {}",
+                        state.kind, state.facing, state.lit, state.power, state.delay
+                    );
+                    for byte in line.as_bytes() {
+                        hash ^= u64::from(*byte);
+                        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+                    }
+                }
+            }
+        }
+        hash
+    }
+
+    /// With no pins, the generation front door ships the world it always
+    /// shipped.
+    ///
+    /// [`compile::compile_grown`] grew a `placements` parameter for the
+    /// IO-terminals contract, and every criterion record this project quotes
+    /// runs through that call with an empty [`PortPlacements`]: the decoder's
+    /// 25-minute criterion-1 run above, and the baked `segment_a.grown` the
+    /// viewer serves. Neither may move because terminals exist, and neither is
+    /// affordable as a guard -- so the guard is and4, the one circuit
+    /// `compile_grown` carries in milliseconds, recorded as a *configuration*
+    /// rather than a count (see [`world_digest`], and
+    /// `tests/review_fingerprint.rs` for why a count would not do).
+    ///
+    /// Said in words the digest cannot: an unpinned input is still its own
+    /// lever and an unpinned output still its own lamp. Those are exactly what
+    /// a terminal replaces, so a placements parameter that leaked into the
+    /// unpinned path would show here first.
+    ///
+    /// When this breaks, `cargo run --release --bin mc_dump -- and4` on both
+    /// trees is the diff.
+    #[test]
+    fn an_unpinned_grown_and4_is_the_world_it_always_shipped() {
+        use crate::redstone::world::block::BlockKind;
+
+        let (netlist, _) = build_and4_netlist();
+        let compiled = compile::compile_grown(&netlist, &PortPlacements::default())
+            .expect("and4 grows at iteration 1");
+
+        assert_eq!(compiled.world.size(), (68, 6, 61), "the grown and4's bounding box");
+        assert_eq!(
+            world_digest(&compiled.world),
+            7_885_360_476_135_848_183,
+            "the grown and4, block for block"
+        );
+
+        for (name, &(x, y, z)) in &compiled.input_positions {
+            assert_eq!(
+                compiled.world.get(x, y, z).kind,
+                BlockKind::Lever,
+                "unpinned input `{name}` keeps its lever"
+            );
+        }
+        for (signal, &(x, y, z)) in &compiled.output_positions {
+            assert_eq!(
+                compiled.world.get(x, y, z).kind,
+                BlockKind::Lamp,
+                "unpinned output `{signal}` keeps its lamp"
+            );
+        }
+    }
+
     /// THE GOAL'S CRITERION (1), verbatim: verilog:seven_segment, generated
     /// by `compile_grown`, through the four physical invariants and the
     /// simulator's truth table.

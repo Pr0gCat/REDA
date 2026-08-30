@@ -33,8 +33,9 @@ use std::path::Path;
 use reda::circuits::{and4, full_adder, seven_segment, verilog};
 use reda::compile::lowering::{lower, lower_optimised};
 use reda::compile::planner::{Anchor, PortPin, PortPlacements, PortRole};
-use reda::compile::{compile, CompiledCircuit, Netlist};
+use reda::compile::{compile, CompileError, CompiledCircuit, Netlist};
 use reda::formats::litematic;
+use reda::redstone::simulator::position::Position;
 use reda::redstone::world::block::{BlockKind, Facing};
 use reda::redstone::world::storage::World;
 
@@ -461,35 +462,103 @@ fn print_pinout(
     output_labels: &[(String, String)],
     placements: &PortPlacements,
 ) {
-    let annotate = |pin: Option<PortPin>, role: PortRole| match pin {
-        Some(pin) => {
-            let handover = pin.handover(role);
-            format!(
-                "   yours (ships empty), signal {}, handover ({}, {}, {})",
-                facing_name(pin.toward),
-                handover.x,
-                handover.y,
-                handover.z
-            )
+    let annotate = |port: &str, at: (i32, i32, i32), pin: Option<PortPin>, role: PortRole| {
+        match pin {
+            Some(pin) => {
+                let handover = handover_in_the_world(&compiled.world, port, at, pin, role)
+                    .unwrap_or_else(|why| panic!("the pinout would describe a world that did not ship: {why}"));
+                format!(
+                    "   yours (ships empty), signal {}, handover ({}, {}, {})",
+                    facing_name(pin.toward),
+                    handover.x,
+                    handover.y,
+                    handover.z
+                )
+            }
+            None => String::new(),
         }
-        None => String::new(),
     };
     println!();
     println!("pinout (schematic-local coordinates: x,y,z from the corner the .litematic is pasted at)");
-    println!("  inputs (lever):");
-    for (name, (x, y, z)) in &compiled.input_positions {
+    println!("  inputs (lever, unless pinned):");
+    for (name, &(x, y, z)) in &compiled.input_positions {
         println!(
             "    {name:<12} ({x}, {y}, {z}){}",
-            annotate(placements.get(name), PortRole::Input)
+            annotate(name, (x, y, z), placements.get(name), PortRole::Input)
         );
     }
-    println!("  outputs (lamp):");
+    println!("  outputs (lamp, unless pinned):");
     for (label, signal) in output_labels {
         let (x, y, z) = compiled.output_positions[signal];
         println!(
             "    {label:<12} ({x}, {y}, {z}){}",
-            annotate(placements.get(signal), PortRole::Output)
+            annotate(label, (x, y, z), placements.get(signal), PortRole::Output)
         );
+    }
+}
+
+/// REDA's own handover cell for a pinned port, **read out of the shipped
+/// world** and required to be the cell the pin derives.
+///
+/// The handover is derivable rather than chosen, so a report could simply
+/// print `pin.handover(role)` and be right whenever the compiler is. That is
+/// exactly the failure worth catching: it would print the same number when the
+/// compiler is wrong, and ship a correct-looking file describing a world that
+/// does not exist. So the cell that gets reported is the one the world
+/// actually holds, found through `compile`'s own shared predicates rather than
+/// by a search invented here, and a disagreement is named instead of hidden.
+///
+/// `recorded` is the port's position as the compiled circuit recorded it,
+/// which for a pinned port must be the caller's own cell -- checked, because a
+/// recorded position that drifted off the pin would make every coordinate on
+/// the line describe a different port than its name says.
+///
+/// Not a second copy of `verify_terminal_contract`, which asserts the same
+/// geometry *inside* the compiler and from the plan's own arithmetic. This
+/// arrives at it from the other end -- the shipped blocks, through the
+/// predicates that only know how to recognise a terminal -- so the report is
+/// not taking the compiler's word for the compiler's work.
+fn handover_in_the_world(
+    world: &World,
+    port: &str,
+    recorded: (i32, i32, i32),
+    pin: PortPin,
+    role: PortRole,
+) -> Result<Anchor, String> {
+    let derived = pin.handover(role);
+    let cell = |(x, y, z): (i32, i32, i32)| format!("({x}, {y}, {z})");
+    if recorded != (pin.at.x, pin.at.y, pin.at.z) {
+        return Err(format!(
+            "port `{port}` is pinned at {} but the compiled circuit records it at {} -- \
+             the shipped world is not the one the pins asked for",
+            cell((pin.at.x, pin.at.y, pin.at.z)),
+            cell(recorded)
+        ));
+    }
+    let at = Position::new(recorded.0, recorded.1, recorded.2);
+    let found = match role {
+        PortRole::Input => reda::compile::input_terminal_reader(world, at),
+        PortRole::Output => reda::compile::output_terminal_handover(world, at),
+    };
+    match found {
+        Some(cell_in_world)
+            if (cell_in_world.x, cell_in_world.y, cell_in_world.z)
+                == (derived.x, derived.y, derived.z) =>
+        {
+            Ok(derived)
+        }
+        Some(cell_in_world) => Err(format!(
+            "port `{port}`: its `toward` puts the handover at {}, but the shipped world holds it \
+             at {}",
+            cell((derived.x, derived.y, derived.z)),
+            cell((cell_in_world.x, cell_in_world.y, cell_in_world.z))
+        )),
+        None => Err(format!(
+            "port `{port}`: its `toward` puts the handover at {}, but the shipped world has no \
+             handover beside the caller's cell {} at all",
+            cell((derived.x, derived.y, derived.z)),
+            cell(recorded)
+        )),
     }
 }
 
@@ -629,6 +698,17 @@ fn main() {
         compile(&netlist)
     } {
         Ok(compiled) => compiled,
+        // A refused pin is the *caller's* input, not a compiler failure, and
+        // it arrives as data precisely so each adapter can present it its own
+        // way: an editor points at the pin, a mod highlights the block, and
+        // this one -- the file adapter -- renders the sentence the refusal was
+        // written to be. Everything else stays the Debug dump, because
+        // everything else is this compiler's own business and there is nothing
+        // for the caller to fix.
+        Err(err @ CompileError::InvalidPortPin { .. }) => {
+            eprintln!("pins: {err}");
+            std::process::exit(1);
+        }
         Err(err) => {
             eprintln!("circuit '{name}' failed to compile: {err:?}");
             std::process::exit(1);
@@ -686,9 +766,10 @@ fn main() {
     // one records the caller's cell, its `toward`, and the resolved handover
     // cell: `toward` is not decoration -- it is how a consumer knows which way
     // the signal runs -- and the handover is reported rather than left to be
-    // re-derived, so a cell that disagrees with the shipped world is visible.
-    // A pinned output is keyed by its display label, the name the caller
-    // pinned it under.
+    // re-derived. Reported from the *world* at that: `handover_in_the_world`
+    // reads it back out of what shipped and refuses to write a number the
+    // blocks do not agree with. A pinned output is keyed by its display label,
+    // the name the caller pinned it under.
     {
         use std::io::Write;
         let json_path = output_dir.join(format!("{stem}.pinout.json"));
@@ -696,7 +777,8 @@ fn main() {
         let entry =
             |key: &str, (x, y, z): (i32, i32, i32), pin: Option<PortPin>, role: PortRole| match pin {
                 Some(pin) => {
-                    let handover = pin.handover(role);
+                    let handover = handover_in_the_world(&compiled.world, key, (x, y, z), pin, role)
+                        .unwrap_or_else(|why| panic!("the pinout would describe a world that did not ship: {why}"));
                     format!(
                         "\"{key}\":{{\"at\":[{x},{y},{z}],\"toward\":\"{}\",\"handover\":[{},{},{}]}}",
                         facing_name(pin.toward),
@@ -854,6 +936,69 @@ mod tests {
             "the placement is keyed by the internal signal the label names"
         );
         assert_eq!(placements.get("y"), None, "the display label itself pins nothing");
+    }
+
+    /// A world holding exactly one repeater, so the two predicates behind
+    /// `handover_in_the_world` have something real to find. `facing` is stored
+    /// the way the compiler stores it, which is the field that tells a
+    /// *reading* repeater from a *delivering* one.
+    fn world_with_a_repeater(at: Anchor, facing: Facing) -> World {
+        let mut world = World::new(16, 3, 16);
+        let mut repeater = reda::redstone::world::block::BlockState::air();
+        repeater.kind = BlockKind::Repeater;
+        repeater.facing = Some(facing);
+        repeater.delay = 1;
+        world.set(at.x, at.y, at.z, repeater);
+        world
+    }
+
+    /// The sidecar prints the handover the **world** holds, not the one the
+    /// pin derives -- and says so when they disagree.
+    ///
+    /// Both roles resolve to a repeater beside the caller's cell, and with
+    /// `toward: north` both happen to store `South`: an input's reader points
+    /// its input side back at the caller's cell, an output's deliverer points
+    /// its output side into it. That is the one field that keeps the two
+    /// predicates from ever answering for each other.
+    #[test]
+    fn a_reported_handover_is_read_out_of_the_world_and_a_disagreement_is_named() {
+        let at = Anchor { x: 4, y: 1, z: 6 };
+        let pin = PortPin { at, toward: Facing::North };
+
+        // An input reads the caller's cell from the north neighbour.
+        let reader = Anchor { x: 4, y: 1, z: 5 };
+        let world = world_with_a_repeater(reader, Facing::South);
+        assert_eq!(
+            handover_in_the_world(&world, "d0", (at.x, at.y, at.z), pin, PortRole::Input),
+            Ok(reader)
+        );
+        // The same world says nothing about an output pinned there: a
+        // delivering repeater would store the opposite facing.
+        assert!(handover_in_the_world(&world, "d0", (at.x, at.y, at.z), pin, PortRole::Output)
+            .is_err());
+
+        // An output drives the caller's cell from the south neighbour.
+        let deliverer = Anchor { x: 4, y: 1, z: 7 };
+        let world = world_with_a_repeater(deliverer, Facing::South);
+        assert_eq!(
+            handover_in_the_world(&world, "y", (at.x, at.y, at.z), pin, PortRole::Output),
+            Ok(deliverer)
+        );
+
+        // A world with nothing beside the caller's cell is the bug this check
+        // exists to make visible, and it names the port and both cells.
+        let empty = World::new(16, 3, 16);
+        let error = handover_in_the_world(&empty, "y", (at.x, at.y, at.z), pin, PortRole::Output)
+            .expect_err("an empty world holds no handover");
+        assert!(error.contains('y'), "the refusal names the port: {error}");
+        assert!(error.contains("(4, 1, 7)"), "and the cell the pin named: {error}");
+
+        // So is a recorded position that has drifted off the pin: the sidecar
+        // would otherwise print a cell nobody owns.
+        let world = world_with_a_repeater(deliverer, Facing::South);
+        let error = handover_in_the_world(&world, "y", (9, 1, 9), pin, PortRole::Output)
+            .expect_err("a recorded cell that is not the pinned one");
+        assert!(error.contains("(9, 1, 9)"), "the refusal names the drift: {error}");
     }
 
     /// A label the circuit does not declare is refused by name, with the

@@ -1,9 +1,19 @@
 //! Black-box tests for `build_circuit --pins`: the IO-terminals contract
 //! (docs/superpowers/specs/2026-08-30-io-terminals.md) exercised through the
 //! public command line, exactly as a caller with a pins file would drive it.
+//!
+//! Plus the one claim the command line cannot make about itself: that the pins
+//! file is an *adapter* over `PortPlacements` and not the place the rules live.
+//! That is stated here, from outside the binary, against the same public entry
+//! an editor or an in-game mod would call.
 
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+
+use reda::circuits::and4::build_and4_netlist;
+use reda::compile::planner::{Anchor, PinRefusal, PortPlacements};
+use reda::compile::{compile_grown, CompileError};
+use reda::redstone::world::block::Facing;
 
 /// One test's own scratch directory, created empty-or-reused. The binary is
 /// run *in* it because the `output/` tree it writes is relative to the
@@ -94,6 +104,90 @@ fn pins_file_defects_exit_by_name_before_any_compile() {
         stderr_of(&output).contains("--pins requires --grown"),
         "the refusal names the missing flag: {}",
         stderr_of(&output)
+    );
+}
+
+/// A refusal only the door can make still reaches the caller by name, through
+/// the file adapter, as the sentence it was written to be.
+///
+/// The file here is syntactically perfect and the parser is right to accept
+/// it: an input pinned at z = 0 with `toward: north` puts its handover at
+/// z = -1, and only `PortPlacements` -- which knows the port's role, and so
+/// which neighbour `toward` resolves to -- can say so. The adapter does not
+/// repeat that rule; it inherits it and renders it.
+#[test]
+fn a_refusal_only_the_door_can_make_reaches_the_caller_by_name() {
+    let scratch = scratch_dir("pins-off-the-board");
+    let off_board = scratch.join("off-board.pins.json");
+    std::fs::write(&off_board, r#"{"inputs": {"a": {"at": [1,1,0], "toward": "north"}}}"#)
+        .expect("the pins file is writable");
+
+    let (output, _) = run_in_scratch(
+        "pins-off-the-board",
+        &["and4", "--grown", "--pins", off_board.to_str().expect("utf-8 path")],
+    );
+    assert!(!output.status.success(), "an unbuildable pin must not ship a circuit");
+    let stderr = stderr_of(&output);
+    assert!(
+        stderr.contains("`a`") && stderr.contains("(1, 1, -1)"),
+        "the refusal names the pin and the cell that put it off the board: {stderr}"
+    );
+    assert!(
+        !stderr.contains("OutsideEveryGrowableWorld"),
+        "and renders it, rather than dumping the variant at the caller: {stderr}"
+    );
+}
+
+/// A pin set nobody parsed meets exactly the same door, and the refusal comes
+/// back as **data**.
+///
+/// The pins file is one adapter over `PortPlacements`; an editor and an
+/// in-game mod are coming, and a rule written into the JSON reader would
+/// protect the file and abandon both. So this assembles the pin set the way
+/// they will -- `PortPlacements::pin`, no parser anywhere near it -- and calls
+/// the same public entry `--pins` calls.
+///
+/// Both defects here are ones the reader can never even hand on: its grammar
+/// admits four horizontal facing names, so `Facing::Up` cannot be spelled in a
+/// file at all, and it leaves input names to the door on purpose. What they
+/// exercise is therefore precisely the semantics a second adapter inherits for
+/// free.
+///
+/// The assertion is `assert_eq!` against the whole error rather than a
+/// substring of its sentence, because that is the difference the spec asks
+/// for: an editor points at the pin that is wrong and a mod highlights a
+/// block, and neither can do it with prose.
+#[test]
+fn a_pin_set_built_without_the_parser_meets_the_same_door() {
+    let (netlist, _) = build_and4_netlist();
+    let cell = Anchor { x: 21, y: 1, z: 62 };
+
+    let mut vertical = PortPlacements::default();
+    vertical.pin("a", cell, Facing::Up);
+    let Err(error) = compile_grown(&netlist, &vertical) else {
+        panic!("a vertical `toward` names no neighbour of the caller's cell");
+    };
+    assert_eq!(
+        error,
+        CompileError::InvalidPortPin {
+            port: "a".to_string(),
+            at: cell,
+            refusal: PinRefusal::VerticalToward { toward: Facing::Up },
+        }
+    );
+
+    let mut undeclared = PortPlacements::default();
+    undeclared.pin("nowhere", cell, Facing::North);
+    let Err(error) = compile_grown(&netlist, &undeclared) else {
+        panic!("and4 declares no port `nowhere`");
+    };
+    assert_eq!(
+        error,
+        CompileError::InvalidPortPin {
+            port: "nowhere".to_string(),
+            at: cell,
+            refusal: PinRefusal::UndeclaredPort,
+        }
     );
 }
 
