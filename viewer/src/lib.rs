@@ -208,8 +208,8 @@ fn baked_port_position(
     let derived = [derived.x, derived.y, derived.z];
     if derived != handover {
         return Err(format!(
-            "port `{port}`: `at` and `toward` derive handover {:?}, but the pinout records {:?}",
-            derived, handover
+            "port `{port}`: reported handover {:?}, but derived/world expected handover {:?}",
+            handover, derived
         ));
     }
 
@@ -2056,7 +2056,7 @@ mod pinned_baked_session_tests {
     use reda::compile::compile_grown;
     use reda::compile::planner::{Anchor, PortPlacements};
 
-    fn pinned_and4_baked_parts() -> BakedParts {
+    pub(super) fn pinned_and4_baked_parts() -> BakedParts {
         let (netlist, output_signal) = and4::build_and4_netlist();
         let input_at = Anchor { x: 21, y: 1, z: 62 };
         let output_at = Anchor { x: 53, y: 1, z: 10 };
@@ -2167,6 +2167,148 @@ mod pinned_baked_session_tests {
         assert!(
             error.contains("`y`"),
             "the malformed pinout must name its missing output port: {error}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod baked_pinout_format_tests {
+    use super::pinned_baked_session_tests::pinned_and4_baked_parts;
+    use super::*;
+
+    #[test]
+    fn legacy_coordinate_arrays_deserialize_as_unpinned_ports() {
+        let pinout: BakedPinout =
+            serde_json::from_str(r#"{"inputs":{"a":[1,2,3]},"outputs":{"y":[4,5,6]}}"#)
+                .expect("legacy coordinate-array sidecar parses");
+
+        match pinout.inputs.get("a") {
+            Some(BakedPort::Unpinned(at)) => assert_eq!(*at, [1, 2, 3]),
+            other => panic!("input `a` must be the exact legacy unpinned port, got {other:?}"),
+        }
+        match pinout.outputs.get("y") {
+            Some(BakedPort::Unpinned(at)) => assert_eq!(*at, [4, 5, 6]),
+            other => panic!("output `y` must be the exact legacy unpinned port, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn structured_entries_deserialize_as_pinned_ports() {
+        let pinout: BakedPinout = serde_json::from_str(
+            r#"{"inputs":{"a":{"at":[21,1,62],"toward":"north","handover":[21,1,61]}},"outputs":{"y":{"at":[53,1,10],"toward":"north","handover":[53,1,11]}}}"#,
+        )
+        .expect("structured pinned sidecar parses");
+
+        match pinout.inputs.get("a") {
+            Some(BakedPort::Pinned {
+                at,
+                toward,
+                handover,
+            }) => {
+                assert_eq!(*at, [21, 1, 62]);
+                assert_eq!(toward, "north");
+                assert_eq!(*handover, [21, 1, 61]);
+            }
+            other => panic!("input `a` must be the exact structured pinned port, got {other:?}"),
+        }
+        match pinout.outputs.get("y") {
+            Some(BakedPort::Pinned {
+                at,
+                toward,
+                handover,
+            }) => {
+                assert_eq!(*at, [53, 1, 10]);
+                assert_eq!(toward, "north");
+                assert_eq!(*handover, [53, 1, 11]);
+            }
+            other => panic!("output `y` must be the exact structured pinned port, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn wrong_handover_names_reported_and_derived_world_expected_cells() {
+        let mut parts = pinned_and4_baked_parts();
+        let BakedPort::Pinned { handover, .. } = parts
+            .pinout
+            .inputs
+            .get_mut("a")
+            .expect("fixture contains input `a`")
+        else {
+            panic!("fixture input `a` must be pinned");
+        };
+        *handover = [21, 1, 60];
+
+        let error = match Session::build_inner("grown:and4", Some(parts)) {
+            Err(error) => error,
+            Ok(_) => panic!("a sidecar reporting the wrong handover must be refused"),
+        };
+
+        assert!(
+            error.contains("port `a`"),
+            "error must name the port: {error}"
+        );
+        assert!(
+            error.contains("reported handover [21, 1, 60]"),
+            "error must label the sidecar's reported cell: {error}"
+        );
+        assert!(
+            error.contains("derived/world expected handover [21, 1, 61]"),
+            "error must label the cell independently expected by geometry and world: {error}"
+        );
+    }
+
+    #[test]
+    fn invalid_facing_is_a_named_session_construction_error() {
+        let mut parts = pinned_and4_baked_parts();
+        let BakedPort::Pinned { toward, .. } = parts
+            .pinout
+            .inputs
+            .get_mut("a")
+            .expect("fixture contains input `a`")
+        else {
+            panic!("fixture input `a` must be pinned");
+        };
+        *toward = "up".to_string();
+
+        let error = match Session::build_inner("grown:and4", Some(parts)) {
+            Err(error) => error,
+            Ok(_) => panic!("a sidecar reporting a vertical facing must be refused"),
+        };
+
+        assert!(
+            error.contains("port `a`"),
+            "error must name the port: {error}"
+        );
+        assert!(
+            error.contains("invalid `toward`"),
+            "error must identify the malformed facing field: {error}"
+        );
+    }
+
+    #[test]
+    fn world_handover_mismatch_is_a_named_session_construction_error() {
+        let mut parts = pinned_and4_baked_parts();
+        let mut reader = parts.world.get(21, 1, 61).clone();
+        parts.world.set(21, 1, 61, BlockState::air());
+        reader.facing = Some(Facing::North);
+        parts.world.set(21, 1, 63, reader);
+
+        let error = match Session::build_inner("grown:and4", Some(parts)) {
+            Err(error) => error,
+            Ok(_) => panic!("a sidecar disagreeing with its shipped world must be refused"),
+        };
+
+        assert!(
+            error.contains("port `a`"),
+            "error must name the port: {error}"
+        );
+        assert!(
+            error.contains("pinout records handover [21, 1, 61]"),
+            "error must include the sidecar cell: {error}"
+        );
+        assert!(
+            error.contains("shipped world holds it at [21, 1, 63]"),
+            "error must include the world cell: {error}"
         );
     }
 }
