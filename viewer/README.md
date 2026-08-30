@@ -87,7 +87,8 @@ reset restores the saved world with those runtime fixtures already present.
    the canvas currently displays).
 4. **Step** advances exactly one game tick; **Run to stable** runs until
    nothing is left to schedule (or throws if the circuit diverges); **Reset**
-   rebuilds the circuit from scratch, discarding lever state and tick count.
+   restores the saved fixture-installed `initial_world`, discarding input
+   state and tick count without recompiling or changing baked geometry.
 5. Hovering the canvas shows the coordinate, block kind, and signal strength
    under the cursor.
 

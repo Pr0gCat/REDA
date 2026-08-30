@@ -940,9 +940,9 @@ fn source_terminals_by_declared_output(
 }
 
 impl Session {
-    /// Build (or rebuild, for `reset`) a session from scratch: look up the
-    /// circuit's generator, compile it, and settle the simulator once so a
-    /// caller sees a self-consistent world before ever calling `step`.
+    /// Build a session initially: look up the circuit's generator, compile it,
+    /// and settle the simulator once so a caller sees a self-consistent world
+    /// before ever calling `step`.
     fn build(circuit_name: &str) -> Result<Session, String> {
         Session::build_inner(circuit_name, None)
     }
