@@ -209,12 +209,14 @@ For a pinned circuit the viewer is no longer just a reader -- it is the
 demo's user, and it builds in the caller's own cells the way any caller
 would:
 
-- **Pinned inputs**: no lever exists in the artifact, so the existing lever
-  UI drives a viewer-installed source placed in the caller's cell at load
-  time. Same panel, same `set_lever` name, different block underneath.
-- **Pinned outputs**: the viewer hangs a lamp in each output's caller cell,
-  so the digit glyph is literally seven lit lamps at the pinned coordinates
-  -- not seven numbers in a side panel. Badges read those lamps.
+- **Pinned inputs**: no lever exists in the artifact. At session
+  initialization an OFF input's caller cell remains `Air`; switching it ON
+  places a viewer-owned `RedstoneBlock`, and switching it OFF removes that
+  block and restores `Air`. Same panel, same `set_lever` name, different block
+  underneath.
+- **Pinned outputs**: at load time the viewer installs a lamp in each output's
+  caller cell, so the digit glyph is literally seven lit lamps at the pinned
+  coordinates -- not seven numbers in a side panel. Badges read those lamps.
 
 Every attachment lands in a cell the contract guarantees empty, which is the
 point: the viewer exercises the interface exactly as an external caller

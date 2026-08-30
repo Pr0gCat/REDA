@@ -3112,7 +3112,8 @@ pub enum PortRole {
 ///
 /// `toward` must be horizontal, and it is a requirement rather than a hint --
 /// it names the single neighbour REDA may build in ([`PortPin::handover`]).
-/// The other three neighbours carry nothing of REDA's.
+/// Of the six face-neighbours, the other five -- excluding the handover -- may
+/// contain no signal-carrying REDA cell.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PortPin {
     pub at: Anchor,
@@ -12090,11 +12091,13 @@ mod tests {
     /// 15 at the reading repeater's rear like every other state a caller can
     /// offer, it powers no block at all -- so its keep-out is one cell where a
     /// lit lever's strong faces make two -- and it needs no attachment face.
-    /// That last one is the reason it is not a lever: the contract guarantees
-    /// every neighbour of the caller's cell empty, and `taxonomy`'s own
-    /// `air_supports_nothing` says nothing attaches to air, so a fixture lever
-    /// there would be unbuildable in the game while this simulator, which does
-    /// not model placement legality, happily computed a truth table with it.
+    /// That last one is the reason it is not a lever: the handover neighbour
+    /// holds the terminal repeater, while the other five are guaranteed only
+    /// to contain no signal-carrying REDA cell -- no attachment surface is
+    /// promised. `taxonomy`'s own `air_supports_nothing` says nothing attaches
+    /// to air, so a fixture lever there could be unbuildable in the game while
+    /// this simulator, which does not model placement legality, happily
+    /// computed a truth table with it.
     ///
     /// Low is the empty cell the world shipped -- also measured: an empty
     /// caller cell reads 0 at the repeater's rear.

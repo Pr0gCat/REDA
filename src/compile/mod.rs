@@ -6636,9 +6636,10 @@ pub fn output_terminal_handover(world: &World, recorded: Position) -> Option<Pos
 /// it reads a full 15 at the reading repeater's rear, it powers no block at
 /// all (so it cannot leak into anything but the reader), and -- unlike a lever
 /// -- it needs neither a support under it nor a face to attach to, which
-/// matters because the contract guarantees every neighbour of the pinned cell
-/// empty and nothing attaches to air. An empty cell is the low state, also
-/// measured: the repeater's rear reads 0.
+/// matters because the handover neighbour holds the terminal repeater and the
+/// other five may contain no signal-carrying REDA cell; no attachment surface
+/// is promised. An empty cell is the low state, also measured: the repeater's
+/// rear reads 0.
 ///
 /// A **fixture**, not an interface assumption: this is how a harness, an
 /// integration test or the viewer stands in for the caller. Nothing REDA
