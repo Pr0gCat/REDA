@@ -142,12 +142,13 @@
 //!   redstone block drives dust just as hard in every direction, which is all
 //!   a fixture has to do. Not measured here but worth the design's attention:
 //!   a lever also needs an attachment face (`world::block::Face`), and the
-//!   contract guarantees every neighbour of the caller's cell empty, where
-//!   `taxonomy`'s `air_supports_nothing` says nothing can be attached. This
-//!   simulator does not model placement legality, so that half is an argument
-//!   and not a reading. A redstone block needs no support at all. Read a
-//!   pinned output with a **lamp**: no support either, and it is the receiver
-//!   a dust handover fails while a dust probe would not notice.
+//!   contract promises no attachment face: the other five neighbours may hold
+//!   inert primitive support, floor, or fill, but no signal-carrying REDA cell.
+//!   The simulator does not model placement legality, and `taxonomy`'s
+//!   `air_supports_nothing` confirms that an air cell cannot provide a mount,
+//!   so a fixture cannot rely on one. A redstone block needs no support at all.
+//!   Read a pinned output with a **lamp**: no support either, and it is the
+//!   receiver a dust handover fails while a dust probe would not notice.
 //! * **The limit of the measurement**, stated rather than hidden: the
 //!   contract names a piston among the things a caller might attach, and this
 //!   simulator refuses pistons, observers, buttons and pressure plates
@@ -1311,7 +1312,9 @@ fn a_delivery_repeater_puts_nothing_into_its_own_side_cells() {
 ///
 /// This is the keep-out rule for an output terminal, and it is about the
 /// *caller's* cell, not REDA's: REDA cannot see what will be put there, so
-/// every neighbour of `P` but the handover has to be free of REDA's dust.
+/// every neighbour of `P` but the handover has to be free of signal-carrying
+/// REDA cells. This test uses dust to demonstrate that requirement; inert
+/// primitive support, floor, or fill remains permitted.
 #[test]
 fn a_conductive_block_in_the_pinned_cell_re_drives_dust_in_every_neighbour() {
     for receiver in [Receiver::Block, Receiver::Lamp] {
@@ -1371,13 +1374,13 @@ fn a_lever_in_the_pinned_cell_strongly_powers_all_six_neighbours() {
 /// caller's source as far as any reader is concerned -- but it powers no
 /// block, so the second hop never happens and its keep-out is one cell deep.
 ///
-/// It also needs no attachment face, which a lever in the caller's cell has
-/// nowhere to find -- the contract guarantees every neighbour of that cell
-/// empty. That half is not measured here and cannot be: this simulator does
-/// not model placement legality, so a floating lever behaves exactly like a
-/// mounted one. It follows from `world::block::Face` and taxonomy's
-/// `air_supports_nothing`, and it is recorded because a fixture that would
-/// pop off in the real game is not a fixture.
+/// It also needs no attachment face, which the contract does not promise: the
+/// other five neighbours may hold inert primitive support, floor, or fill, but
+/// no signal-carrying REDA cell. That half is not measured here and cannot be:
+/// this simulator does not model placement legality, so a floating lever
+/// behaves exactly like a mounted one. It follows from `world::block::Face`
+/// and taxonomy's `air_supports_nothing`, and it is recorded because a fixture
+/// that would pop off in the real game is not a fixture.
 #[test]
 fn a_redstone_block_fixture_drives_dust_without_powering_a_single_block() {
     let p = pinned_cell();
@@ -1561,11 +1564,12 @@ fn the_simulator_refuses_to_answer_for_a_piston_in_the_pinned_cell() {
 }
 
 /// And the positive statement the design can build on: with that keep-out
-/// honoured -- nothing of REDA's in any neighbour of `P` but the handover,
-/// and no dust of REDA's beside the handover either -- the worst thing a
-/// caller can build reaches nothing. A lit lever in `P`, conductive blocks
-/// filling every cell the contract grants them, and REDA's own net is still
-/// exactly as dark as it was.
+/// honoured -- no signal-carrying REDA cell in any neighbour of `P` but the
+/// handover, and no dust of REDA's beside the handover either -- the worst
+/// fixture this test constructs reaches nothing. A lit lever in `P` and
+/// conductive blocks filling every non-handover neighbour leave REDA's own net
+/// exactly as dark as it was; this construction does not claim those cells ship
+/// empty, because inert primitive support, floor, or fill may occupy them.
 #[test]
 fn the_contracts_keep_out_survives_the_worst_the_caller_can_build() {
     let p = pinned_cell();
@@ -1583,7 +1587,8 @@ fn the_contracts_keep_out_survives_the_worst_the_caller_can_build() {
         put(&mut world, deeper.down(), glass());
         put(&mut world, deeper, dust());
 
-        // The caller, building as freely as the contract lets them.
+        // A worst-case caller fixture; the contract does not promise these
+        // non-handover cells ship empty in a compiled world.
         put(&mut world, p, lit_lever());
         for direction in ALL_SIX {
             let cell = p.offset(direction);

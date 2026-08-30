@@ -4395,14 +4395,15 @@ fn preclaim_socket_approaches(
 /// Claimed under **a name nobody routes as**, the way a socket's own
 /// straight-line guard is (see `lay_net`'s `terminal:` guards), because the
 /// contract's clause is stated over every net and not only over strangers: the
-/// five cells the pin does not name carry nothing of REDA's, this port's own
-/// wire included, or the caller's cell would have a second path into the net
-/// that goes around the handover repeater the promise is made of. The handover
+/// five cells the pin does not name may contain no signal-carrying REDA cell,
+/// this port's own wire included, or the caller's cell would have a second path
+/// into the net that goes around the handover repeater the promise is made of.
+/// Inert primitive support, floor, or fill remains permitted. The handover
 /// itself is skipped -- the terminal body claimed it before this ran, and it is
-/// the one cell of REDA's the contract does name. `Occupancy::Solid` for the
-/// halo, so the claim is pure cell exclusivity; inert cells trigger no keep-out
-/// of their own, and first-writer-wins means a cell already inside some body's
-/// footprint keeps its real occupancy.
+/// the one signal-carrying cell the contract does name. `Occupancy::Solid` for
+/// the halo, so the claim is pure route-cell exclusivity; inert cells trigger
+/// no keep-out of their own, and first-writer-wins means a cell already inside
+/// some body's footprint keeps its real occupancy.
 fn preclaim_pinned_cell_halos(reservation: &mut Reservation, candidate: &PlanCandidate) {
     for node in &candidate.primitive_nodes {
         let (signal, role, toward) = match node.realisation {
@@ -6025,8 +6026,9 @@ fn verified_parts(
 ///   REDA's own delivery makes a conductive pinned cell a strength-15 source
 ///   for dust), so a foreign net beside it would be driven by a signal it never
 ///   declared, and own wire beside it would be a second path around the very
-///   repeater the promise is made of. The five cells the pin does not name
-///   carry nothing of REDA's, which is what lets the caller build into them.
+///   repeater the promise is made of. The five cells the pin does not name may
+///   contain no signal-carrying REDA cell; inert primitive support, floor, or
+///   fill stays permitted, so the caller must not assume those cells are empty.
 ///
 /// "Cells" here are route cells, read off the same reservation
 /// `verify_spacing` proved, and signal-carrying primitive cells, read from the
@@ -11939,8 +11941,10 @@ mod tests {
     }
 
     /// The same refusal for the port's **own** net, which is the clause the
-    /// contract actually states: REDA builds in the one neighbour the pin names
-    /// and in none of the other five, so the caller may build into them freely.
+    /// contract actually states: REDA's signal-carrying handover occupies the
+    /// one neighbour the pin names, and no signal-carrying REDA cell may occupy
+    /// the other five. Inert primitive support, floor, or fill may be present,
+    /// so the caller must not assume those cells are empty.
     ///
     /// Own wire there is not a coupling between strangers but a second path
     /// between the caller's cell and this very net -- one that bypasses the

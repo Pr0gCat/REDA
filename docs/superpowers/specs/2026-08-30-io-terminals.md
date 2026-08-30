@@ -36,10 +36,11 @@ of travel says which side of the caller's cell the circuit is on:
   cell from the cell the signal goes *to* -- the neighbour in the `toward`
   direction.
 
-Either way REDA occupies exactly one neighbour, named by the pin and not
-chosen by the compiler. **The other five neighbours carry nothing of
-REDA's**, so nothing but this port's own signal can reach the caller's cell,
-and the caller may build into them freely.
+Either way REDA uses exactly one neighbour for the signal-carrying handover,
+named by the pin and not chosen by the compiler. **The other five neighbours
+may contain no signal-carrying REDA cell**, so nothing but this port's own
+signal can reach the caller's cell. Inert primitive support, floor, or fill may
+still occupy those cells; the caller must not assume they are completely empty.
 
 The whole promise, per pinned port:
 
@@ -90,8 +91,8 @@ footprint claims the caller's cell and emits nothing there -- that cell ships
 exactly as it was. There is no facing sweep and no handover variant to choose:
 a terminal has a single lawful interface realisation, which is what makes a
 pin a specification rather than a hint. The remaining five neighbours are
-claimed only to the extent of keeping signal-carrying cells out of them; REDA
-builds in none of them.
+claimed only to the extent of keeping signal-carrying REDA cells out of them;
+inert primitive support, floor, or fill may remain.
 
 **Input terminal.** The port's body stops being a lever. REDA's reader sits
 in the `toward` neighbour and normalizes: whatever the caller's cell offers,
@@ -153,7 +154,9 @@ interface assumption -- it is how the harness stands in for a caller.
   still have lamps and levers.
 - `planner::verify_terminal_contract` requires, per pinned port, that the
   caller's cell ships empty; the one neighbour the pin names carries this
-  port's own handover; and the other five neighbours carry no net at all.
+  port's own handover; and the other five neighbours contain no
+  signal-carrying REDA cell, while inert primitive support, floor, or fill is
+  permitted.
 - The truth-table battery drives a pinned input by placing a fixture source
   in the caller's cell and reads a pinned output by probing the caller's
   cell. Both fixtures are installed into cells the contract guarantees
