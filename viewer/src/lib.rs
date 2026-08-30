@@ -36,13 +36,17 @@ use reda::circuits::{and4, full_adder, seven_segment, verilog};
 use reda::compile::primitive_graph::{self, PrimitiveGraph, Provenance};
 use reda::compile::topology::{Library, Primitive as TopoPrimitive, TemplateNode};
 use reda::compile::lowering::{lower_optimised_with_provenance, lower_with_provenance};
-use reda::compile::planner::PortPlacements;
-use reda::compile::{compile, compile_planned, Netlist};
+use reda::compile::planner::{Anchor, PortPin, PortPlacements, PortRole};
+use reda::compile::{
+    compile, compile_planned, drive_caller_cell, input_terminal_reader, output_terminal_handover,
+    probe_caller_cell, Netlist,
+};
+use reda::redstone::simulator::position::Position;
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::{BlockKind, BlockState, Face, Facing};
 use reda::redstone::world::storage::World;
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 /// Upper bound on how many game ticks `run_until_stable` will spend before
@@ -139,13 +143,94 @@ const PLANNED_PREFIX: &str = "planned:";
 /// wrote, plus its pinout sidecar, and hands both to `Session::from_baked`.
 const GROWN_PREFIX: &str = "grown:";
 
-/// A pre-baked circuit's world and port coordinates: what `Session::from_baked`
-/// hands `build_inner` in place of a `compile()` run.
-type BakedParts = (
-    World,
-    BTreeMap<String, (i32, i32, i32)>,
-    BTreeMap<String, (i32, i32, i32)>,
-);
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+enum BakedPort {
+    Unpinned([i32; 3]),
+    Pinned {
+        at: [i32; 3],
+        toward: String,
+        handover: [i32; 3],
+    },
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct BakedPinout {
+    inputs: BTreeMap<String, BakedPort>,
+    outputs: BTreeMap<String, BakedPort>,
+}
+
+/// A pre-baked circuit's shipped world and typed port metadata: what
+/// `Session::from_baked` hands `build_inner` in place of a `compile()` run.
+struct BakedParts {
+    world: World,
+    pinout: BakedPinout,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum InputControl {
+    Lever,
+    CallerCell,
+}
+
+fn baked_facing(name: &str) -> Option<Facing> {
+    match name {
+        "north" => Some(Facing::North),
+        "south" => Some(Facing::South),
+        "east" => Some(Facing::East),
+        "west" => Some(Facing::West),
+        _ => None,
+    }
+}
+
+fn baked_port_position(
+    world: &World,
+    port: &str,
+    baked: BakedPort,
+    role: PortRole,
+) -> Result<([i32; 3], bool), String> {
+    let (at, toward, handover) = match baked {
+        BakedPort::Unpinned(at) => return Ok((at, false)),
+        BakedPort::Pinned { at, toward, handover } => (at, toward, handover),
+    };
+    let toward = baked_facing(&toward).ok_or_else(|| {
+        format!("port `{port}` has invalid `toward`; expected north, south, east, or west")
+    })?;
+    let pin = PortPin {
+        at: Anchor {
+            x: at[0],
+            y: at[1],
+            z: at[2],
+        },
+        toward,
+    };
+    let derived = pin.handover(role);
+    let derived = [derived.x, derived.y, derived.z];
+    if derived != handover {
+        return Err(format!(
+            "port `{port}`: `at` and `toward` derive handover {:?}, but the pinout records {:?}",
+            derived, handover
+        ));
+    }
+
+    let recorded = Position::new(at[0], at[1], at[2]);
+    let found = match role {
+        PortRole::Input => input_terminal_reader(world, recorded),
+        PortRole::Output => output_terminal_handover(world, recorded),
+    };
+    match found {
+        Some(found) if [found.x, found.y, found.z] == handover => Ok((at, true)),
+        Some(found) => Err(format!(
+            "port `{port}`: the pinout records handover {:?}, but the shipped world holds it at {:?}",
+            handover,
+            [found.x, found.y, found.z]
+        )),
+        None => Err(format!(
+            "port `{port}`: the pinout records handover {:?}, but the shipped world has none beside caller cell {:?}",
+            handover, at
+        )),
+    }
+}
 
 fn build_named_circuit(name: &str) -> Option<(Netlist, Vec<(String, String)>)> {
     let name = name.strip_prefix(PLANNED_PREFIX).unwrap_or(name);
@@ -777,6 +862,7 @@ pub struct Session {
     /// `CompiledCircuit::input_positions`; every generator's input names
     /// double as the names `set_lever` takes.
     input_positions: BTreeMap<String, (i32, i32, i32)>,
+    input_controls: BTreeMap<String, InputControl>,
     /// `(display_name, lamp coordinate)`, in each circuit's declared output
     /// order (not alphabetical -- `full_adder`'s `sum` before `cout`,
     /// `seven_segment`'s `a` before `b`, etc).
@@ -889,27 +975,72 @@ impl Session {
         // own, rather than the row/channel/track one it merely realises and
         // checks. They are different circuits computing the same function,
         // which is the whole point of being able to look at both.
-        let (world, input_positions, output_positions_by_signal) = match baked {
+        let (world, input_positions, input_controls, output_positions_by_signal) = match baked {
             // A pre-baked world skips compilation entirely: the litematic IS
-            // the circuit `compile_grown` produced, and the sidecar carries
-            // the lever and lamp coordinates the schematic cannot.
-            Some(parts) => parts,
+            // the circuit `compile_grown` produced. Validate each typed pinned
+            // port against that shipped world before installing the viewer's
+            // caller-owned source or receiver.
+            Some(BakedParts { world, pinout }) => {
+                let BakedPinout { inputs, outputs } = pinout;
+                let mut input_positions = BTreeMap::new();
+                let mut input_controls = BTreeMap::new();
+                for (name, port) in inputs {
+                    let (at, pinned) = baked_port_position(&world, &name, port, PortRole::Input)?;
+                    input_positions.insert(name.clone(), (at[0], at[1], at[2]));
+                    let control =
+                        if pinned { InputControl::CallerCell } else { InputControl::Lever };
+                    input_controls.insert(name, control);
+                }
+
+                let mut output_positions = BTreeMap::new();
+                let mut pinned_outputs = Vec::new();
+                for (name, port) in outputs {
+                    let (at, pinned) = baked_port_position(&world, &name, port, PortRole::Output)?;
+                    output_positions.insert(name, (at[0], at[1], at[2]));
+                    if pinned {
+                        pinned_outputs.push((at[0], at[1], at[2]));
+                    }
+                }
+
+                let mut world = world;
+                for (name, &at) in &input_positions {
+                    if input_controls[name] == InputControl::CallerCell {
+                        drive_caller_cell(&mut world, at, false);
+                    }
+                }
+                for at in pinned_outputs {
+                    probe_caller_cell(&mut world, at);
+                }
+                (world, input_positions, input_controls, output_positions)
+            }
             None => {
-        let compiled = if circuit_name.starts_with(PLANNED_PREFIX) {
-            // Nothing is pinned here: the viewer's job is to show what the
-            // planner does when it is left to decide.
-            //
-            // `{error}`, not `{error:?}`: `CompileError` writes a sentence
-            // saying what failed and why -- "the geometry is structurally
-            // connected but the real, decayed signal dies out before it
-            // arrives" -- and the derived Debug throws all of that away for a
-            // struct dump. This page is where a person reads these.
-            compile_planned(&netlist, &PortPlacements::default())
-                .map_err(|error| format!("the planner could not build this circuit: {error}"))?
-        } else {
-            compile(&netlist).map_err(|error| format!("this circuit does not compile: {error}"))?
-        };
-                (compiled.world, compiled.input_positions, compiled.output_positions)
+                let compiled = if circuit_name.starts_with(PLANNED_PREFIX) {
+                    // Nothing is pinned here: the viewer's job is to show what the
+                    // planner does when it is left to decide.
+                    //
+                    // `{error}`, not `{error:?}`: `CompileError` writes a sentence
+                    // saying what failed and why -- "the geometry is structurally
+                    // connected but the real, decayed signal dies out before it
+                    // arrives" -- and the derived Debug throws all of that away for a
+                    // struct dump. This page is where a person reads these.
+                    compile_planned(&netlist, &PortPlacements::default()).map_err(|error| {
+                        format!("the planner could not build this circuit: {error}")
+                    })?
+                } else {
+                    compile(&netlist)
+                        .map_err(|error| format!("this circuit does not compile: {error}"))?
+                };
+                let input_controls = compiled
+                    .input_positions
+                    .keys()
+                    .map(|name| (name.clone(), InputControl::Lever))
+                    .collect();
+                (
+                    compiled.world,
+                    compiled.input_positions,
+                    input_controls,
+                    compiled.output_positions,
+                )
             }
         };
 
@@ -1007,6 +1138,7 @@ impl Session {
             circuit_name: circuit_name.to_string(),
             simulator,
             input_positions,
+            input_controls,
             output_positions,
             primitive_graph,
             gate_meta,
@@ -1140,16 +1272,11 @@ impl Session {
         world_bytes: &[u8],
         pinout: JsValue,
     ) -> Result<Session, JsValue> {
-        #[derive(serde::Deserialize)]
-        struct PinoutFile {
-            inputs: BTreeMap<String, (i32, i32, i32)>,
-            outputs: BTreeMap<String, (i32, i32, i32)>,
-        }
         let world = reda::formats::litematic::load_bytes(world_bytes)
             .map_err(|error| JsValue::from_str(&format!("bad litematic: {error}")))?;
-        let pinout: PinoutFile = serde_wasm_bindgen::from_value(pinout)
+        let pinout: BakedPinout = serde_wasm_bindgen::from_value(pinout)
             .map_err(|error| JsValue::from_str(&format!("bad pinout: {error}")))?;
-        Session::build_inner(circuit_name, Some((world, pinout.inputs, pinout.outputs)))
+        Session::build_inner(circuit_name, Some(BakedParts { world, pinout }))
             .map_err(|error| JsValue::from_str(&error))
     }
 
@@ -1204,9 +1331,16 @@ impl Session {
                 self.circuit_name
             ))
         })?;
-        let mut state = self.simulator.world().get(x, y, z).clone();
-        state.lit = on;
-        self.simulator.world_mut().set(x, y, z, state);
+        match self.input_controls[name] {
+            InputControl::Lever => {
+                let mut state = self.simulator.world().get(x, y, z).clone();
+                state.lit = on;
+                self.simulator.world_mut().set(x, y, z, state);
+            }
+            InputControl::CallerCell => {
+                drive_caller_cell(self.simulator.world_mut(), (x, y, z), on);
+            }
+        }
         Ok(())
     }
 
@@ -1820,6 +1954,7 @@ mod repeater_delay_geometry_tests {
             circuit_name: "repeater_delay_test_fixture".to_string(),
             simulator,
             input_positions: BTreeMap::new(),
+            input_controls: BTreeMap::new(),
             output_positions: Vec::new(),
             primitive_graph,
             gate_meta: Vec::new(),
@@ -1851,5 +1986,79 @@ mod repeater_delay_geometry_tests {
         for cell in &cells {
             assert_eq!(cell[6], BlockKind::Repeater as u8);
         }
+    }
+}
+
+#[cfg(test)]
+mod pinned_baked_session_tests {
+    use super::*;
+    use reda::compile::compile_grown;
+    use reda::compile::planner::{Anchor, PortPlacements};
+
+    #[test]
+    fn pinned_baked_session_installs_and_drives_caller_fixtures() {
+        let (netlist, output_signal) = and4::build_and4_netlist();
+        let input_at = Anchor { x: 21, y: 1, z: 62 };
+        let output_at = Anchor { x: 53, y: 1, z: 10 };
+        let mut placements = PortPlacements::default();
+        placements.pin("a", input_at, Facing::North);
+        placements.pin(output_signal, output_at, Facing::North);
+
+        let compiled = compile_grown(&netlist, &placements).expect("pinned and4 compiles");
+        let inputs = compiled
+            .input_positions
+            .iter()
+            .map(|(name, &(x, y, z))| {
+                let port = if name == "a" {
+                    BakedPort::Pinned {
+                        at: [21, 1, 62],
+                        toward: "north".to_string(),
+                        handover: [21, 1, 61],
+                    }
+                } else {
+                    BakedPort::Unpinned([x, y, z])
+                };
+                (name.clone(), port)
+            })
+            .collect();
+        let pinout = BakedPinout {
+            inputs,
+            outputs: BTreeMap::from([(
+                and4::OUTPUT_NAME.to_string(),
+                BakedPort::Pinned {
+                    at: [53, 1, 10],
+                    toward: "north".to_string(),
+                    handover: [53, 1, 11],
+                },
+            )]),
+        };
+        let mut session = Session::build_inner(
+            "grown:and4",
+            Some(BakedParts {
+                world: compiled.world,
+                pinout,
+            }),
+        )
+        .expect("typed baked session builds");
+
+        assert_eq!(
+            session.simulator.world().get(21, 1, 62).kind,
+            BlockKind::Air
+        );
+        assert_eq!(
+            session.simulator.world().get(53, 1, 10).kind,
+            BlockKind::Lamp
+        );
+        session.set_lever("a", true).unwrap();
+        assert_eq!(
+            session.simulator.world().get(21, 1, 62).kind,
+            BlockKind::RedstoneBlock
+        );
+
+        for input in ["b", "c", "d"] {
+            session.set_lever(input, true).unwrap();
+        }
+        session.run_until_stable().unwrap();
+        assert!(session.simulator.world().get(53, 1, 10).lit);
     }
 }
