@@ -975,16 +975,25 @@ impl Session {
         // own, rather than the row/channel/track one it merely realises and
         // checks. They are different circuits computing the same function,
         // which is the whole point of being able to look at both.
-        let (world, input_positions, input_controls, output_positions_by_signal) = match baked {
+        let (
+            world,
+            input_positions,
+            input_controls,
+            output_positions_by_signal,
+            pinned_outputs,
+        ) = match baked {
             // A pre-baked world skips compilation entirely: the litematic IS
             // the circuit `compile_grown` produced. Validate each typed pinned
             // port against that shipped world before installing the viewer's
             // caller-owned source or receiver.
             Some(BakedParts { world, pinout }) => {
-                let BakedPinout { inputs, outputs } = pinout;
+                let BakedPinout {
+                    inputs: baked_inputs,
+                    outputs: baked_outputs,
+                } = pinout;
                 let mut input_positions = BTreeMap::new();
                 let mut input_controls = BTreeMap::new();
-                for (name, port) in inputs {
+                for (name, port) in baked_inputs {
                     let (at, pinned) = baked_port_position(&world, &name, port, PortRole::Input)?;
                     input_positions.insert(name.clone(), (at[0], at[1], at[2]));
                     let control =
@@ -994,7 +1003,7 @@ impl Session {
 
                 let mut output_positions = BTreeMap::new();
                 let mut pinned_outputs = Vec::new();
-                for (name, port) in outputs {
+                for (name, port) in baked_outputs {
                     let (at, pinned) = baked_port_position(&world, &name, port, PortRole::Output)?;
                     output_positions.insert(name, (at[0], at[1], at[2]));
                     if pinned {
@@ -1002,16 +1011,30 @@ impl Session {
                     }
                 }
 
-                let mut world = world;
-                for (name, &at) in &input_positions {
-                    if input_controls[name] == InputControl::CallerCell {
-                        drive_caller_cell(&mut world, at, false);
+                for name in &source_netlist.inputs {
+                    if !input_positions.contains_key(name) {
+                        return Err(format!(
+                            "baked pinout is missing required input port `{name}`"
+                        ));
                     }
                 }
-                for at in pinned_outputs {
-                    probe_caller_cell(&mut world, at);
+                for (display_name, signal_name) in &outputs {
+                    if !output_positions.contains_key(signal_name)
+                        && !output_positions.contains_key(display_name)
+                    {
+                        return Err(format!(
+                            "baked pinout is missing required output port `{display_name}`"
+                        ));
+                    }
                 }
-                (world, input_positions, input_controls, output_positions)
+
+                (
+                    world,
+                    input_positions,
+                    input_controls,
+                    output_positions,
+                    pinned_outputs,
+                )
             }
             None => {
                 let compiled = if circuit_name.starts_with(PLANNED_PREFIX) {
@@ -1040,6 +1063,7 @@ impl Session {
                     compiled.input_positions,
                     input_controls,
                     compiled.output_positions,
+                    Vec::new(),
                 )
             }
         };
@@ -1110,18 +1134,26 @@ impl Session {
                 // then the display name, which is what a hand-written or
                 // human-facing pinout sidecar naturally uses. The coordinate
                 // is the substance either way.
-                let position = *output_positions_by_signal
+                let position = output_positions_by_signal
                     .get(&signal_name)
                     .or_else(|| output_positions_by_signal.get(&display_name))
-                    .unwrap_or_else(|| {
-                    panic!(
-                        "compile() must place every output this generator declared; \
-                         missing `{signal_name}`"
-                    )
-                });
-                (display_name, position)
+                    .copied()
+                    .ok_or_else(|| {
+                        format!("circuit metadata is missing required output port `{display_name}`")
+                    })?;
+                Ok((display_name, position))
             })
-            .collect();
+            .collect::<Result<Vec<_>, String>>()?;
+
+        let mut world = world;
+        for (name, &at) in &input_positions {
+            if input_controls[name] == InputControl::CallerCell {
+                drive_caller_cell(&mut world, at, false);
+            }
+        }
+        for at in pinned_outputs {
+            probe_caller_cell(&mut world, at);
+        }
 
         let mut simulator = Simulator::new(world);
         // `Simulator::new` already settles dust strengths, but every lever
@@ -1262,11 +1294,13 @@ impl Session {
     }
 
     /// Build a session from a pre-baked circuit: the gzip `.litematic` bytes
-    /// `build_circuit --grown` wrote, and its `.pinout.json` parsed to
-    /// `{inputs: {name: [x,y,z]}, outputs: {name: [x,y,z]}}`. The name still
-    /// has to resolve in the catalog (with its `grown:` prefix stripped),
-    /// because the topology view and the output ORDER come from the netlist
-    /// -- only the world and the port coordinates come from the bake.
+    /// `build_circuit --grown` wrote, and its `.pinout.json`. Each input or
+    /// output value is either the legacy unpinned `[x,y,z]`, or the structured
+    /// pinned `{at: [x,y,z], toward: "north|south|east|west", handover:
+    /// [x,y,z]}`. The name still has to resolve in the catalog (with its
+    /// `grown:` prefix stripped), because the topology view and the output
+    /// ORDER come from the netlist -- only the world and the port metadata
+    /// come from the bake.
     pub fn from_baked(
         circuit_name: &str,
         world_bytes: &[u8],
@@ -1995,8 +2029,7 @@ mod pinned_baked_session_tests {
     use reda::compile::compile_grown;
     use reda::compile::planner::{Anchor, PortPlacements};
 
-    #[test]
-    fn pinned_baked_session_installs_and_drives_caller_fixtures() {
+    fn pinned_and4_baked_parts() -> BakedParts {
         let (netlist, output_signal) = and4::build_and4_netlist();
         let input_at = Anchor { x: 21, y: 1, z: 62 };
         let output_at = Anchor { x: 53, y: 1, z: 10 };
@@ -2021,25 +2054,26 @@ mod pinned_baked_session_tests {
                 (name.clone(), port)
             })
             .collect();
-        let pinout = BakedPinout {
-            inputs,
-            outputs: BTreeMap::from([(
-                and4::OUTPUT_NAME.to_string(),
-                BakedPort::Pinned {
-                    at: [53, 1, 10],
-                    toward: "north".to_string(),
-                    handover: [53, 1, 11],
-                },
-            )]),
-        };
-        let mut session = Session::build_inner(
-            "grown:and4",
-            Some(BakedParts {
-                world: compiled.world,
-                pinout,
-            }),
-        )
-        .expect("typed baked session builds");
+        BakedParts {
+            world: compiled.world,
+            pinout: BakedPinout {
+                inputs,
+                outputs: BTreeMap::from([(
+                    and4::OUTPUT_NAME.to_string(),
+                    BakedPort::Pinned {
+                        at: [53, 1, 10],
+                        toward: "north".to_string(),
+                        handover: [53, 1, 11],
+                    },
+                )]),
+            },
+        }
+    }
+
+    #[test]
+    fn pinned_baked_session_installs_and_drives_caller_fixtures() {
+        let mut session = Session::build_inner("grown:and4", Some(pinned_and4_baked_parts()))
+            .expect("typed baked session builds");
 
         assert_eq!(
             session.simulator.world().get(21, 1, 62).kind,
@@ -2060,5 +2094,21 @@ mod pinned_baked_session_tests {
         }
         session.run_until_stable().unwrap();
         assert!(session.simulator.world().get(53, 1, 10).lit);
+    }
+
+    #[test]
+    fn missing_declared_output_is_named_before_any_fixture_is_installed() {
+        let mut parts = pinned_and4_baked_parts();
+        parts.pinout.outputs.remove(and4::OUTPUT_NAME);
+
+        let error = match Session::build_inner("grown:and4", Some(parts)) {
+            Err(error) => error,
+            Ok(_) => panic!("a baked and4 without output `y` must be refused"),
+        };
+
+        assert!(
+            error.contains("`y`"),
+            "the malformed pinout must name its missing output port: {error}"
+        );
     }
 }
