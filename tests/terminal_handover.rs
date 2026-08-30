@@ -1487,18 +1487,20 @@ fn a_delivered_pinned_cell_leaks_one_cell_and_a_caller_source_leaks_two() {
 
 /// Where that second cell actually lands, named as a coordinate rather than
 /// as a depth: the neighbour of `P` perpendicular to `toward` is one step
-/// from the cell beside REDA's own handover, in **either** role. So a caller
-/// who builds a conductive block in a cell the contract explicitly grants
-/// them, and powers `P` from their own side, re-drives any dust REDA left
-/// touching the handover.
+/// from the cell beside REDA's own handover, in **either** role. This test
+/// deliberately places a hypothetical caller-owned conductive fixture in a
+/// non-handover cell and powers `P` from the caller's side, demonstrating that
+/// it re-drives any dust REDA left touching the handover. That is a signal
+/// isolation/refusal probe, not a claim that the contract grants this cell to
+/// the caller: the halo may contain inert support, floor, or fill, and is not
+/// guaranteed physically empty or freely usable.
 ///
 /// This is the constraint the keep-out has to be stated in: not "REDA keeps
 /// off the caller's cell" but "REDA keeps its dust two cells away from the
 /// caller's cell in every direction but the handover axis". It is unavoidable
 /// on the input side, where the caller's source is the whole point; on the
-/// output side it is only reachable if the caller puts a source of their own
-/// in a neighbour of `P`, which the contract grants them and does not
-/// forbid.
+/// output side this test reaches it only by placing that hypothetical source
+/// in a non-handover neighbour of `P`.
 #[test]
 fn a_caller_conductor_beside_the_pinned_cell_reaches_dust_beside_the_handover() {
     let p = pinned_cell();

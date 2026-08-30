@@ -6074,9 +6074,11 @@ fn verify_terminal_contract(
             ));
         }
 
-        // The handover, and only the handover: one repeater whose signal
-        // travels `toward`, which `compile::repeater` stores as the Minecraft
-        // convention's opposite.
+        // The handover is the only signal-carrying REDA neighbour: one
+        // repeater whose signal travels `toward`, which `compile::repeater`
+        // stores as the Minecraft convention's opposite. The other five
+        // reject route cells and signal-carrying primitive conductors below;
+        // inert primitive support, floor, or fill may remain.
         let handover = pin.handover(role);
         let built = world.get(handover.x, handover.y, handover.z);
         if built.kind != BlockKind::Repeater || built.facing != Some(toward.opposite()) {
@@ -6110,9 +6112,11 @@ fn verify_terminal_contract(
                     port,
                     format!(
                         "its pinned cell ({}, {}, {}) is adjacent to signal-carrying primitive \
-                         `{}` at ({}, {}, {}), which the pin does not name -- REDA builds in the \
-                         handover and nowhere else, so whatever the caller puts in their own cell \
-                         drives nothing it never agreed to touch",
+                         `{}` at ({}, {}, {}), which the pin does not name -- the handover is the \
+                         only signal-carrying REDA neighbour; the other five reject route cells \
+                         and signal-carrying primitive conductors but may contain inert support, \
+                         floor, or fill, so whatever the caller puts in their own cell drives \
+                         nothing it never agreed to touch",
                         at.x,
                         at.y,
                         at.z,
@@ -6141,9 +6145,10 @@ fn verify_terminal_contract(
                 port,
                 format!(
                     "its pinned cell ({}, {}, {}) is adjacent to {whose}'s cell at ({}, {}, {}), \
-                     which the pin does not name -- REDA builds in the handover and nowhere else, \
-                     so whatever the caller puts in their own cell drives nothing it never agreed \
-                     to touch",
+                     which the pin does not name -- the handover is the only signal-carrying REDA \
+                     neighbour; the other five reject route cells and signal-carrying primitive \
+                     conductors but may contain inert support, floor, or fill, so whatever the \
+                     caller puts in their own cell drives nothing it never agreed to touch",
                     at.x, at.y, at.z, neighbour.x, neighbour.y, neighbour.z
                 ),
             ));
