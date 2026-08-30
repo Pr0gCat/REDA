@@ -7307,8 +7307,9 @@ pub fn compile_legacy(netlist: &Netlist) -> Result<CompiledCircuit, CompileError
 /// measurement or a probe -- `compile` cannot tell you *why* the planner
 /// declined a circuit, and this can.
 ///
-/// It is also the only way to place from pinned ports, which `compile` has no
-/// parameter for.
+/// It also places from pinned ports, which `compile` has no parameter for --
+/// as does [`compile_grown`], the entry a caller who wants the generated
+/// circuit pins through.
 ///
 /// The result carries no `LegacyEmission`, because there was none.
 pub fn compile_planned(
@@ -7334,7 +7335,15 @@ pub fn compile_planned(
 /// stays the fast trial-then-fallback it documents, the viewer stays
 /// responsive, and a caller who wants the generated circuit -- and is willing
 /// to pay minutes for it on a decoder-sized netlist -- asks for it by name.
-pub fn compile_grown(netlist: &Netlist) -> Result<CompiledCircuit, CompileError> {
+///
+/// `placements` declares the ports the caller owns as terminals (the growth
+/// loop threaded them end to end from the day it existed; only this signature
+/// hard-coded the default). An empty `PortPlacements` is byte-for-byte
+/// today's behaviour -- the criterion records run through exactly this call.
+pub fn compile_grown(
+    netlist: &Netlist,
+    placements: &planner::PortPlacements,
+) -> Result<CompiledCircuit, CompileError> {
     let _ = checked_topological_order(netlist)?;
     // Two arms, in this order, both measured (2026-08-29):
     //
@@ -7351,16 +7360,15 @@ pub fn compile_grown(netlist: &Netlist) -> Result<CompiledCircuit, CompileError>
     // A circuit both arms refuse pays for both; that is the honest cost of
     // a portfolio whose members win different circuits, and the ledger
     // carries every number behind it.
-    let placements = planner::PortPlacements::default();
     let candidate = planner::plan_from_netlist_with_growth(
         netlist,
-        &placements,
+        placements,
         planner::GROWN_SHIPPING_RULE,
     )
     .or_else(|_| {
         planner::plan_from_netlist_with_growth(
             netlist,
-            &placements,
+            placements,
             planner::GrowthRule {
                 search: planner::SearchModel::StrengthAware,
                 ..planner::GROWN_SHIPPING_RULE
