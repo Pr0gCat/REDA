@@ -329,7 +329,7 @@ mod tests {
             .collect();
         let pinned_at = Anchor { x: 37, y: 1, z: 41 };
         let mut placements = PortPlacements::default();
-        placements.pin("a", pinned_at);
+        placements.pin("a", pinned_at, crate::redstone::world::block::Facing::South);
 
         let placement = relax(&netlist, &graph, &start, &placements, Axes::IN_PLANE, RelaxEffort::default())
             .expect("relaxes");

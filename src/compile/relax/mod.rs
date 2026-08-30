@@ -85,6 +85,7 @@ pub(crate) mod project_for_test {
 use crate::compile::planner::{Anchor, PortPlacements};
 use crate::compile::primitive_graph::PrimitiveGraph;
 use crate::compile::Netlist;
+use crate::redstone::simulator::position::Position;
 
 /// How far a body may still be moving and the relaxation still be finished.
 ///
@@ -543,9 +544,7 @@ fn choose_facings(graph: &mut BodyGraph) -> bool {
         // would never satisfy its convergence test.
         let was = graph.bodies[body].facing;
         let mut best = (was, f64::INFINITY);
-        for index in 0..4u8 {
-            let facing = crate::compile::geometry::CellFacing::from_index(index)
-                .expect("0..4 is horizontal");
+        for facing in terminal_lawful_facings(graph, body) {
             graph.bodies[body].facing = facing;
             let energy = incident_energy(graph, body);
             if energy < best.1 {
@@ -558,6 +557,92 @@ fn choose_facings(graph: &mut BodyGraph) -> bool {
         }
     }
     turned
+}
+
+/// The facings `body` may be built at, which for anything but an input
+/// terminal is all four.
+///
+/// A terminal turns three ways, not four: its output side is where the
+/// normalizing repeater stands, and the `outside` face is the caller's
+/// reserved cell -- a facing that points there would build into the one cell
+/// the contract ships empty.
+///
+/// Between pinned terminals a second rule holds. Two terminals may lawfully
+/// stand a one-cell gap apart (a display glyph's segments), and both are
+/// fully determined, so nothing downstream can move them -- which makes the
+/// facing the one degree of freedom that decides whether one terminal's
+/// repeater or pin lands on, or dust-joins, its neighbour's cells. A facing
+/// that would is struck from the sweep: the conflict cells are the
+/// neighbour's **fixed** claims (dust, floor, outside), so the rule does not
+/// depend on the order bodies happen to turn in. Should packing ever bar all
+/// three facings, the outside rule alone decides and the four invariants
+/// judge the result -- a refusal there beats a panic here.
+fn terminal_lawful_facings(graph: &BodyGraph, body: usize) -> Vec<crate::compile::geometry::CellFacing> {
+    use crate::compile::geometry::CellFacing;
+    let all = || (0..4u8).filter_map(CellFacing::from_index);
+
+    let build::BodyKind::InputTerminal { outside } = graph.bodies[body].what else {
+        return all().collect();
+    };
+    let off_the_outside: Vec<CellFacing> =
+        all().filter(|facing| facing.direction() != outside).collect();
+
+    // Every other pinned terminal's fixed cells, as integers -- a pinned body
+    // sits exactly on its pin, so rounding is exact.
+    let cell = |position: [f64; 3], step: Position| {
+        (
+            position[0].round() as i32 + step.x,
+            position[1].round() as i32 + step.y,
+            position[2].round() as i32 + step.z,
+        )
+    };
+    let origin = Position::new(0, 0, 0);
+    let mut fixed_claims: Vec<(i32, i32, i32)> = Vec::new();
+    let mut foreign_dust: Vec<(i32, i32, i32)> = Vec::new();
+    for (index, other) in graph.bodies.iter().enumerate() {
+        let build::BodyKind::InputTerminal { outside: their_outside } = other.what else {
+            continue;
+        };
+        if index == body {
+            continue;
+        }
+        let dust = cell(other.position, origin);
+        let floor = cell(other.position, origin.down());
+        let reserved = cell(other.position, origin.offset(their_outside));
+        fixed_claims.extend([dust, floor, reserved]);
+        // The pin dust this sweep is placing must not dust-join the
+        // neighbour's terminal dust, nor sit beside the outside cell where
+        // the neighbour's caller attaches a source.
+        foreign_dust.extend([dust, reserved]);
+    }
+    if fixed_claims.is_empty() {
+        return off_the_outside;
+    }
+
+    let joins = |mine: (i32, i32, i32), theirs: (i32, i32, i32)| {
+        (mine.0 - theirs.0).abs() + (mine.2 - theirs.2).abs() == 1
+            && (mine.1 - theirs.1).abs() <= 1
+    };
+    let lawful: Vec<CellFacing> = off_the_outside
+        .iter()
+        .copied()
+        .filter(|&facing| {
+            let step = origin.offset(facing.direction());
+            let repeater = cell(graph.bodies[body].position, step);
+            let pin = cell(
+                graph.bodies[body].position,
+                Position::new(step.x * 2, step.y * 2, step.z * 2),
+            );
+            !fixed_claims.contains(&repeater)
+                && !fixed_claims.contains(&pin)
+                && !foreign_dust.iter().any(|&theirs| joins(pin, theirs))
+        })
+        .collect();
+    if lawful.is_empty() {
+        off_the_outside
+    } else {
+        lawful
+    }
 }
 
 /// The spring energy of every pull touching `body`, with everything else held.
@@ -950,7 +1035,11 @@ mod tests {
             .map(|index| Anchor { x: index as i32 * 20, y: 1, z: index as i32 * 16 })
             .collect();
         let mut placements = PortPlacements::default();
-        placements.pin("a", start[netlist.gates.len()]);
+        placements.pin(
+            "a",
+            start[netlist.gates.len()],
+            crate::redstone::world::block::Facing::South,
+        );
         relax(netlist, &graph, &start, &placements, Axes::IN_PLANE, effort)
             .expect("a two-gate chain relaxes")
     }
@@ -993,9 +1082,12 @@ mod tests {
             Anchor { x: 60, y: 1, z: 0 },  // gate c
             Anchor { x: -20, y: 1, z: 0 }, // input a
         ];
+        // Only the input can be pinned: a pin declares a port's terminal, and
+        // gate pinning is gone with the old meaning. `c` starts far east and
+        // relaxes freely; the springs may pull it closer to `b`, but never
+        // past it, so the torque on `b` still points east.
         let mut placements = PortPlacements::default();
-        placements.pin("a", start[2]);
-        placements.pin("c", start[1]);
+        placements.pin("a", start[2], crate::redstone::world::block::Facing::West);
 
         let placement = relax(
             &netlist,
@@ -1013,6 +1105,86 @@ mod tests {
             crate::redstone::world::block::Facing::East,
             "b's output has to leave towards the only thing reading it"
         );
+    }
+
+    /// The three-way sweep: a terminal pulled hard toward its own outside
+    /// face still keeps its repeater off it, because the outside cell is the
+    /// caller's and the facing enumeration never offers it.
+    #[test]
+    fn a_terminal_pulled_toward_its_outside_keeps_its_repeater_off_it() {
+        use crate::redstone::world::block::Facing;
+
+        let netlist = chain();
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
+        // `a`'s only consumer sits due east, and east is the caller's side.
+        let start = vec![
+            Anchor { x: 60, y: 1, z: 0 }, // gate b
+            Anchor { x: 90, y: 1, z: 0 }, // gate c
+            Anchor { x: 10, y: 1, z: 0 }, // input a
+        ];
+        let mut placements = PortPlacements::default();
+        placements.pin("a", start[2], Facing::East);
+
+        let placement = relax(
+            &netlist,
+            &graph,
+            &start,
+            &placements,
+            Axes::IN_PLANE,
+            RelaxEffort::default(),
+        )
+        .expect("relaxes");
+
+        let terminal = &placement.graph.bodies[placement.graph.anchor_body[2]];
+        assert!(
+            matches!(terminal.what, build::BodyKind::InputTerminal { outside: Facing::East }),
+            "the pinned input is a terminal"
+        );
+        assert_ne!(
+            terminal.facing.direction(),
+            Facing::East,
+            "every pull wants east, and east is not on offer"
+        );
+    }
+
+    /// Two pinned terminals a one-cell gap apart are fully determined, so the
+    /// facing is the one freedom that decides whether one's repeater or pin
+    /// lands on the other's dust -- and the sweep strikes those facings out.
+    #[test]
+    fn neighbouring_terminals_turn_their_repeaters_away_from_each_other() {
+        use crate::redstone::world::block::Facing;
+
+        let netlist = Netlist {
+            inputs: vec!["a".into(), "b".into()],
+            outputs: vec!["y".into()],
+            gates: vec![Gate::nor("y", &["a", "b"])],
+        };
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
+        let start = vec![
+            Anchor { x: 11, y: 1, z: 30 }, // gate y, north of the row
+            Anchor { x: 10, y: 1, z: 40 }, // input a
+            Anchor { x: 12, y: 1, z: 40 }, // input b
+        ];
+        let mut placements = PortPlacements::default();
+        placements.pin("a", start[1], Facing::South);
+        placements.pin("b", start[2], Facing::South);
+
+        let placement = relax(
+            &netlist,
+            &graph,
+            &start,
+            &placements,
+            Axes::IN_PLANE,
+            RelaxEffort::default(),
+        )
+        .expect("two terminals a lawful gap apart relax");
+
+        let a = &placement.graph.bodies[placement.graph.anchor_body[1]];
+        let b = &placement.graph.bodies[placement.graph.anchor_body[2]];
+        assert_ne!(a.facing.direction(), Facing::East, "a's pin would land on b's dust");
+        assert_ne!(a.facing.direction(), Facing::South, "a's outside is the caller's");
+        assert_ne!(b.facing.direction(), Facing::West, "b's pin would land on a's dust");
+        assert_ne!(b.facing.direction(), Facing::South, "b's outside is the caller's");
     }
 
     /// Nothing has to be pinned, and on the netlist-only path nothing is: the
@@ -1104,7 +1276,7 @@ mod tests {
             Anchor { x: 0, y: 1, z: 0 },    // input a
         ];
         let mut placements = PortPlacements::default();
-        placements.pin("a", start[2]);
+        placements.pin("a", start[2], crate::redstone::world::block::Facing::South);
 
         let placement = relax(
             &netlist,
@@ -1249,7 +1421,7 @@ mod tests {
             .map(|index| Anchor { x: index * 20, y: 1, z: index * 16 })
             .collect();
         let mut placements = PortPlacements::default();
-        placements.pin("a", start[2]);
+        placements.pin("a", start[2], crate::redstone::world::block::Facing::South);
         let built = || build::build(&netlist, &graph, &start, &placements).expect("builds");
 
         let mut untouched = built();

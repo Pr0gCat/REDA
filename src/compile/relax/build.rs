@@ -24,7 +24,7 @@ use crate::compile::primitive_graph::{NodeId, PrimitiveGraph, Provenance};
 use crate::compile::topology::{Primitive, TemplateNode};
 use crate::compile::Netlist;
 use crate::redstone::simulator::position::Position;
-use crate::redstone::world::block::BlockKind;
+use crate::redstone::world::block::{BlockKind, Facing};
 
 /// Every signal spring pulls the same.
 ///
@@ -241,6 +241,12 @@ pub enum BodyKind {
     /// A declared wire merge. `expand` produces no primitive for one, and
     /// `place_merge_gate` writes blocks at its anchor regardless.
     Junction { gate: usize },
+    /// A pinned input's terminal: dust on its own floor at the pinned cell,
+    /// normalized by a repeater one cell inward. Always pinned, so it never
+    /// moves -- but it still turns, three ways rather than four, because the
+    /// `outside` face belongs to the caller and the repeater may never stand
+    /// in that reserved cell.
+    InputTerminal { outside: Facing },
 }
 
 /// Where on a body a spring attaches.
@@ -325,15 +331,17 @@ pub struct BodyGraph {
 
 /// How many hops out along a body's output face its pin sits.
 ///
-/// One for everything except a NOR, whose torch stands in the first hop and
-/// whose pin is therefore the second: `place_merge_gate` puts a merge's pin
-/// one hop from its junction, and `place_primary_input` puts a lever's one hop
-/// from the lever. An earlier draft keyed this off [`BodyKind`], which made a
-/// lever's pin two hops out here and one hop out everywhere it is really
-/// written.
+/// One for everything except a NOR and an input terminal, each of which has a
+/// component standing in the first hop -- the NOR's torch, the terminal's
+/// normalizing repeater -- so the pin is the second: `place_merge_gate` puts a
+/// merge's pin one hop from its junction, and `place_primary_input` puts a
+/// lever's one hop from the lever. An earlier draft keyed this off
+/// [`BodyKind`], which made a lever's pin two hops out here and one hop out
+/// everywhere it is really written.
 pub fn pin_hops(body: &Body) -> i32 {
     match body.what {
         BodyKind::Primitive { kind: Primitive::Torch, .. } => 2,
+        BodyKind::InputTerminal { .. } => 2,
         _ => 1,
     }
 }
@@ -477,6 +485,25 @@ pub fn cells(body: &Body) -> Vec<Cell> {
                         carries: Vec::new(),
                     });
                 }
+                // `place_input_terminal` floors all three of its cells --
+                // dust, normalizing repeater, pin -- and its `outside` cell is
+                // claimed while staying empty: it is the caller's attachment
+                // point, and inert here means cell exclusivity is the whole
+                // claim, exactly what an always-empty cell needs.
+                BodyKind::InputTerminal { outside } => {
+                    let out_step = Position::new(0, 0, 0).offset(out);
+                    for hops in 0..=pin_hops(body) {
+                        cells.push(Cell {
+                            offset: (out_step.x * hops, -1, out_step.z * hops),
+                            carries: Vec::new(),
+                        });
+                    }
+                    let reserved = Position::new(0, 0, 0).offset(outside);
+                    cells.push(Cell {
+                        offset: (reserved.x, reserved.y, reserved.z),
+                        carries: Vec::new(),
+                    });
+                }
                 // A NOR floors nothing. `place_nor_gate` writes stone *at* the
                 // support rather than beneath it, hangs the torch on that
                 // support's wall (`wall_torch`, no floor), and leaves its pin's
@@ -570,11 +597,13 @@ pub fn build(
             ));
         }
 
-        // A pin is where the body *is*, not merely a flag on it.
-        let fixed = pinned.get(&gate.output);
-        let at = fixed.unwrap_or(start[gate_index]);
+        // A pin declares a port's terminal, never a gate's position, so a
+        // gate always starts where the starting layout put it and is always
+        // free to move. The old pin-the-gate-by-output-signal lookup is gone
+        // with that meaning.
+        let at = start[gate_index];
         let position = [at.x as f64, at.y as f64, at.z as f64];
-        let is_pinned = fixed.is_some();
+        let is_pinned = false;
 
         // The body that carries this gate's anchor: a merge's junction, or the
         // single torch its library entry instantiated.
@@ -654,6 +683,26 @@ pub fn build(
     }
 
     for (input_index, name) in netlist.inputs.iter().enumerate() {
+        let candidate_node = netlist.gates.len() + input_index;
+
+        // A pinned input is a terminal, not a lever: the primitive graph
+        // still expands a lever node for it, but nothing here consults that
+        // node -- the terminal's shape is its own, and what drives its dust
+        // is the caller's business.
+        if let Some(pin) = pinned.get(name) {
+            bodies.push(Body {
+                what: BodyKind::InputTerminal { outside: pin.outside },
+                position: [pin.at.x as f64, pin.at.y as f64, pin.at.z as f64],
+                inputs: Vec::new(),
+                output: Some(name.clone()),
+                facing: terminal_default_facing(pin.outside),
+                pinned: true,
+            });
+            nodes[candidate_node].push(bodies.len() - 1);
+            anchor_body[candidate_node] = bodies.len() - 1;
+            continue;
+        }
+
         let node = graph.nodes.len();
         let node = (0..node)
             .find(|&candidate| {
@@ -661,9 +710,7 @@ pub fn build(
                     Provenance::PrimaryInput { name: declared } if declared == name)
             })
             .ok_or_else(|| format!("declared input `{name}` has no lever"))?;
-        let candidate_node = netlist.gates.len() + input_index;
-        let fixed = pinned.get(name);
-        let at = fixed.unwrap_or(start[candidate_node]);
+        let at = start[candidate_node];
         let kind = graph.nodes[node].primitive;
         if physical::variants(kind).is_empty() {
             return Err(format!(
@@ -678,13 +725,21 @@ pub fn build(
             inputs: Vec::new(),
             output: Some(name.clone()),
             facing: CellFacing::NORTH,
-            pinned: fixed.is_some(),
+            pinned: false,
         });
         nodes[candidate_node].push(bodies.len() - 1);
         anchor_body[candidate_node] = bodies.len() - 1;
     }
 
     let pulls = signal_pulls(netlist, &anchor_body, &welds);
+
+    debug_assert!(
+        bodies.iter().all(|body| match body.what {
+            BodyKind::InputTerminal { outside } => body.facing.direction() != outside,
+            _ => true,
+        }),
+        "a terminal's repeater side may never be its outside side"
+    );
 
     Ok(BodyGraph {
         bodies,
@@ -693,6 +748,17 @@ pub fn build(
         nodes,
         anchor_body,
     })
+}
+
+/// The lowest-index facing whose output side is not the caller's, which is
+/// where a terminal's normalizing repeater starts before the facing sweep
+/// runs. Any of the three would do; the lowest index is the same tie-break
+/// `choose_facings` uses, so the choice is reproducible for free.
+pub(crate) fn terminal_default_facing(outside: Facing) -> CellFacing {
+    (0..4u8)
+        .filter_map(CellFacing::from_index)
+        .find(|facing| facing.direction() != outside)
+        .expect("four horizontal facings and one reserved side always leave three")
 }
 
 /// One pull per declared gate input: from the producer's outgoing pin to the
@@ -902,27 +968,69 @@ mod tests {
         }
     }
 
-    /// A pinned port takes no force. Recorded here rather than discovered in
-    /// the solve, because the solve's matrix is built by striking pinned
-    /// bodies out of it.
+    /// A pinned port is a **terminal**: a pinned body of its own kind at the
+    /// pinned cell, not a lever somebody nailed down. It takes no force --
+    /// recorded here rather than discovered in the solve, because the solve's
+    /// matrix is built by striking pinned bodies out of it -- and its repeater
+    /// side starts off the caller's reserved face.
     #[test]
-    fn a_pinned_port_is_a_pinned_body() {
+    fn a_pinned_port_is_a_pinned_terminal_body() {
         let netlist = Netlist {
             inputs: vec!["a".into()],
             outputs: vec!["out".into()],
             gates: vec![nor("out", &["a"])],
         };
         let mut placements = PortPlacements::default();
-        placements.pin("a", Anchor { x: 40, y: 1, z: 9 });
+        placements.pin("a", Anchor { x: 40, y: 1, z: 9 }, Facing::South);
 
         let graph = expand(&netlist, &Library::default_library()).expect("expands");
         let start = vec![Anchor { x: 0, y: 1, z: 0 }; 2];
         let built = build(&netlist, &graph, &start, &placements).expect("builds");
 
-        let lever = built.anchor_body[1];
-        assert!(built.bodies[lever].pinned, "a pinned input must be a pinned body");
-        assert_eq!(built.bodies[lever].position, [40.0, 1.0, 9.0]);
+        let terminal = built.anchor_body[1];
+        assert!(built.bodies[terminal].pinned, "a pinned input must be a pinned body");
+        assert_eq!(built.bodies[terminal].position, [40.0, 1.0, 9.0]);
+        assert!(
+            matches!(
+                built.bodies[terminal].what,
+                BodyKind::InputTerminal { outside: Facing::South }
+            ),
+            "a pin declares a terminal, not a lever"
+        );
+        assert_ne!(
+            built.bodies[terminal].facing.direction(),
+            Facing::South,
+            "the normalizing repeater may never start in the reserved outside cell"
+        );
         assert!(!built.bodies[built.anchor_body[0]].pinned, "nothing pinned the gate");
+    }
+
+    /// Pinning by a gate's output signal is the removed behaviour: a pin
+    /// declares a port's terminal, and no gate body ever takes a pin any
+    /// more -- even when a placement names its output. (Reaching `build` with
+    /// such a pin means bypassing validation, which is exactly what this test
+    /// does to prove the old path is gone rather than merely gated.)
+    #[test]
+    fn pinning_an_output_signal_no_longer_pins_the_producing_gate() {
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["out".into()],
+            gates: vec![nor("out", &["a"])],
+        };
+        let mut placements = PortPlacements::default();
+        placements.pin("out", Anchor { x: 40, y: 1, z: 9 }, Facing::South);
+
+        let graph = expand(&netlist, &Library::default_library()).expect("expands");
+        let start = vec![Anchor { x: 0, y: 1, z: 0 }; 2];
+        let built = build(&netlist, &graph, &start, &placements).expect("builds");
+
+        let gate = built.anchor_body[0];
+        assert!(!built.bodies[gate].pinned, "gate pinning was removed with the old meaning");
+        assert_eq!(
+            built.bodies[gate].position,
+            [0.0, 1.0, 0.0],
+            "the gate starts where the starting layout put it, not at the pin"
+        );
     }
 
     /// A lever's pin is one hop out, which is what `place_primary_input`

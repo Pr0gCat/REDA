@@ -1455,10 +1455,13 @@ fn the_extra_edges_are_real_when_the_simulator_runs_the_circuit() {
 /// edge anywhere may be carried by a mediator whose own floor is a lever or a
 /// torch.
 ///
-/// It runs over every circuit on both paths, plus one pinned geometry: relaxation
-/// does not put a route over a lever on its own, and the original measurement
-/// (`lever_footprint`'s doc comment) reproduced it by pinning `full_adder`'s
-/// `cin` at (37, 1, 126). That pin is kept here for exactly that reason.
+/// It runs over every circuit on both paths, plus one pinned geometry. The
+/// original measurement (`lever_footprint`'s doc comment) reproduced the
+/// lever bug by pinning `full_adder`'s `cin` at (37, 1, 126) -- a pin then
+/// meant a nailed-down lever. A pin now declares an input terminal, so that
+/// exact geometry can no longer be pinned into existence; the pin is kept at
+/// the same address so the extraction still inspects a pinned, terminal-
+/// realised plan alongside the free ones.
 ///
 /// **Measured both ways on 2026-08-17.**
 ///
@@ -1495,7 +1498,21 @@ fn no_extra_edge_is_carried_by_the_cell_above_a_lever_or_a_torch() {
             ));
         }
     }
-    // The pinned geometry the lever bug was originally reproduced in.
+    // The coordinates the lever bug was originally reproduced at. A pin now
+    // declares an input **terminal** -- no lever exists at a pinned input any
+    // more, so the route-over-a-lever geometry this case used to construct
+    // cannot be pinned into existence; `lever_footprint`'s hazard-cell claim
+    // is carried by the unpinned levers in the circuits above. What the
+    // pinned case covers since terminals landed is the terminal-realised
+    // circuit itself, inspected by the same extraction as everything else.
+    //
+    // The full shipping budget, not the trial one: this pin puts the terminal
+    // deep in the row the free layout keeps its levers in, and the router
+    // spends real rip-up rounds finding a lawful way out of it (the spiral
+    // staircase it used to take is refused since `self_obstructs` learned a
+    // path may not step directly above its own cells). `compile_planned`
+    // spends the same rounds, so this inspects the plan a caller would
+    // actually get.
     let (netlist, _outputs) = build_full_adder_netlist();
     let mut placements = PortPlacements::default();
     placements.pin(
@@ -1505,9 +1522,10 @@ fn no_extra_edge_is_carried_by_the_cell_above_a_lever_or_a_torch() {
             y: 1,
             z: 126,
         },
+        crate::redstone::world::block::Facing::South,
     );
     let mut lost_coverage = Vec::new();
-    match planner::plan_from_netlist_within(&netlist, &placements, planner::TRIAL_RIP_UP_ROUNDS)
+    match planner::plan_from_netlist_within(&netlist, &placements, planner::RIP_UP_ROUNDS)
         .and_then(|candidate| {
             let size = planner::candidate_world_size(&candidate);
             planner::verify_and_expose(&candidate, &netlist, size)
@@ -1532,8 +1550,8 @@ fn no_extra_edge_is_carried_by_the_cell_above_a_lever_or_a_torch() {
             ));
         }
         Err(error) => lost_coverage.push(format!(
-            "the pinned `cin` geometry -- the only case in this project where a route flies over \
-             a lever -- no longer builds: {error}"
+            "the pinned `cin` case -- the one terminal-realised plan this extraction \
+             inspects -- no longer builds: {error}"
         )),
     }
 

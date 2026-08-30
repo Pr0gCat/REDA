@@ -5,7 +5,7 @@ use crate::compile::primitive_graph::{self, reexpand_gate, EntrySelection, NodeI
 use crate::compile::topology::{Library, Primitive};
 use crate::compile::{self, geometry, relax, CompiledCircuit, LegacyEmission, Netlist};
 use crate::redstone::simulator::position::Position;
-use crate::redstone::world::block::BlockState;
+use crate::redstone::world::block::{BlockState, Facing};
 use crate::redstone::world::storage::World;
 
 /// A fixed coordinate selected by the planner without referring to a world.
@@ -26,6 +26,10 @@ pub struct Anchor {
 pub enum NodeRealisation {
     Primitive(Primitive),
     WireMerge,
+    /// A pinned input's terminal: dust on its own floor block at the pinned
+    /// cell, normalized to full strength by a repeater one cell inward. No
+    /// lever -- what drives the dust is the caller's business.
+    InputTerminal,
 }
 
 /// The node whose primitive is placed at an anchor.  Candidate coordinates
@@ -530,6 +534,14 @@ pub enum PlannerError {
     NoLocalRoute { from: Anchor, to: Anchor },
     /// Somebody fixed this port's position, so no move may change it.
     PortIsPinned(String),
+    /// A pin that can never become a terminal, refused by name before any
+    /// planning happens: an undeclared port, a vertical `outside`, a cell no
+    /// growable world can hold, or two terminals the caller left no gap
+    /// between.
+    InvalidPortPin { port: String, reason: String },
+    /// The pin names a declared output, whose terminal the compiler does not
+    /// build yet. Input terminals only, until the output stage lands.
+    OutputPinNotYetSupported { port: String },
     /// A node's recorded realisation cannot be turned into blocks -- either
     /// the primitive has no emitter yet, or it contradicts the gate it is
     /// supposed to be realising.
@@ -560,6 +572,14 @@ impl std::fmt::Display for PlannerError {
                 from.x, from.y, from.z, to.x, to.y, to.z
             ),
             Self::PortIsPinned(port) => write!(f, "port {port} is pinned and cannot move"),
+            Self::InvalidPortPin { port, reason } => {
+                write!(f, "pin for port `{port}` is invalid: {reason}")
+            }
+            Self::OutputPinNotYetSupported { port } => write!(
+                f,
+                "port `{port}` is a declared output, and output terminals are not built yet \
+                 (this stage builds input terminals only)"
+            ),
             Self::UnrealisableNode { id, reason } => {
                 write!(f, "cannot realise node {id}: {reason}")
             }
@@ -806,6 +826,17 @@ pub fn emit_primitives(
                     ports
                         .input_positions
                         .insert(name.clone(), (lever.x, lever.y, lever.z));
+                }
+                NodeRealisation::InputTerminal => {
+                    let home = Position::new(anchor.x, anchor.y, anchor.z);
+                    let (terminal, _) = compile::place_input_terminal(&mut world, home, facing);
+                    let name = &netlist.inputs[index - netlist.gates.len()];
+                    // The port's cell is the terminal dust, not the repeater
+                    // behind it: that is the coordinate the contract is
+                    // stated over, and what a pinout consumer attaches to.
+                    ports
+                        .input_positions
+                        .insert(name.clone(), (terminal.x, terminal.y, terminal.z));
                 }
                 realisation => {
                     return Err(PlannerError::UnrealisableNode {
@@ -1837,13 +1868,35 @@ fn neighbours(anchor: Anchor) -> Vec<Anchor> {
 /// Whether stepping from `at` to `next` breaks a step this same path already
 /// took, or is broken by one.
 ///
-/// Two mirrored cases, both found the same way -- by asking the simulator
-/// where a route's signal actually stopped:
+/// Three cases, all found the same way -- by asking the simulator where a
+/// route's signal actually stopped:
 ///
 /// * a drop past a cell whose air is occupied by the floor of a cell the path
 ///   already passed through, two levels up;
 /// * a step into a cell whose own floor lands directly above a cell the path
-///   climbed out of, which blocks that climb.
+///   climbed out of, which blocks that climb;
+/// * a step landing **directly above** a cell the path already took. Every
+///   anchor lays a stone floor one below itself and realisation writes
+///   floor-then-block in route order, so the later, upper anchor's floor
+///   lands on the earlier anchor's dust and deletes it. The first pinned
+///   input terminal found this: the route out of full_adder's pinned `cin`
+///   spiralled -- climb east, climb south, step flat back north -- and its
+///   third anchor's floor crushed its first anchor's dust, which no
+///   invariant before signal strength could see. Unlike the first two arms,
+///   the offending step here is flat.
+///
+/// The mirrored order -- a later step landing directly **below** an own cell,
+/// where the new dust replaces the stone the plan committed under the upper
+/// one -- is deliberately *not* refused here. It is the recorded
+/// dust-on-own-committed-stone defect (`a_route_lays_dust_on_its_own_
+/// committed_stone` pins full_adder's three cells of it), the pair still
+/// descend-joins as one net in the world, and refusing it at search time
+/// re-routes every plan that carries the benign order -- measured 2026-08-30:
+/// full_adder's shipping fingerprints, the keep-out footprint record and the
+/// realised-graph record all moved, and `try_move`'s single-shot search (no
+/// rip-up to re-price a poisoned corridor) stopped finding lawful detours
+/// that exist, because `previous` records one best chain per cell and a
+/// refused suffix cannot resurrect the clean equal-cost chain.
 fn self_obstructs(
     previous: &BTreeMap<Anchor, Anchor>,
     at: Anchor,
@@ -1861,6 +1914,10 @@ fn self_obstructs(
         y: next.y - 2,
         z: next.z,
     };
+    // The cell this step's own floor would land on: an own path cell there
+    // holds dust the floor would delete. (An own cell one level *above* is
+    // the recorded benign order instead -- see the doc comment.)
+    let crushed_below = Anchor { y: next.y - 1, ..next };
 
     let mut successor = None;
     let mut walk = Some(at);
@@ -1870,6 +1927,9 @@ fn self_obstructs(
         }
         // `cell` climbed if the step the path took out of it went up.
         if cell == smothered && successor.is_some_and(|after: Anchor| after.y > cell.y) {
+            return true;
+        }
+        if cell == crushed_below {
             return true;
         }
         successor = Some(cell);
@@ -2888,44 +2948,62 @@ impl Reservation {
     }
 }
 
-/// Where the ports somebody has decided about must go.
+/// Where a pinned port's terminal sits, and which side of it belongs to the
+/// caller.
 ///
-/// A port has no position by default. Fixing every lever and lamp before
-/// planning starts is what stops a layout ever being as small as it could be:
-/// the planner can compact everything between the ports and nothing about the
-/// ports themselves. So this is an input, it defaults to empty, and whatever
-/// nobody pins the planner places and `optimise` is free to move.
+/// `outside` must be horizontal. The cell one step that way from `at` is the
+/// caller's attachment point: it ships empty, internal routing never uses it,
+/// and the truth-table harnesses drive a pinned input by putting a temporary
+/// source there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PortPin {
+    pub at: Anchor,
+    pub outside: Facing,
+}
+
+impl PortPin {
+    /// The reserved-but-empty cell where the caller attaches.
+    pub fn outside_cell(&self) -> Anchor {
+        step(self.at, self.outside)
+    }
+}
+
+/// The ports somebody has decided about, each declared as a **terminal**: one
+/// redstone dust on its own floor block at the pinned cell, with the `outside`
+/// neighbour left empty for the caller.
+///
+/// A port has no position by default. Fixing every port before planning starts
+/// is what stops a layout ever being as small as it could be: the planner can
+/// compact everything between the ports and nothing about the ports
+/// themselves. So this is an input, it defaults to empty, and whatever nobody
+/// pins the planner places and `optimise` is free to move -- an unpinned input
+/// keeps its lever body and an unpinned output its lamp, exactly as before
+/// terminals existed.
 #[derive(Debug, Default, Clone)]
 pub struct PortPlacements {
-    fixed: BTreeMap<String, Anchor>,
+    fixed: BTreeMap<String, PortPin>,
 }
 
 impl PortPlacements {
-    /// Require `port` to sit at `anchor`. Nothing may move it afterwards.
-    pub fn pin(&mut self, port: impl Into<String>, anchor: Anchor) -> &mut Self {
-        self.fixed.insert(port.into(), anchor);
+    /// Declare `port`'s terminal at `at`, with `outside` facing the caller's
+    /// world. Nothing may move it afterwards.
+    pub fn pin(&mut self, port: impl Into<String>, at: Anchor, outside: Facing) -> &mut Self {
+        self.fixed.insert(port.into(), PortPin { at, outside });
         self
     }
 
-    pub fn get(&self, port: &str) -> Option<Anchor> {
+    pub fn get(&self, port: &str) -> Option<PortPin> {
         self.fixed.get(port).copied()
     }
 
     pub fn is_empty(&self) -> bool {
         self.fixed.is_empty()
     }
-}
 
-/// Storeys are far enough apart that one's routing cannot reach the next, and
-/// close enough that a route can climb between them on one staircase.
-///
-/// Both bounds are real. A route may rise `CLIMB` levels above its own plane
-/// to cross another, and every cell stands on a floor one below, so a storey
-/// owns that band plus the floor under it -- the pitch must clear it. And a
-/// staircase cell can never hold a repeater, so a climb spends one signal
-/// strength per level with no chance to refresh: a pitch of nine was enough
-/// to kill the signal before it arrived.
-const STOREY_PITCH: i32 = 5;
+    pub fn iter(&self) -> impl Iterator<Item = (&String, &PortPin)> {
+        self.fixed.iter()
+    }
+}
 
 /// Deliberately sparse. A single routing plane with no reserved corridors --
 /// which is what this is, and what channels and tracks exist to avoid -- needs
@@ -3481,7 +3559,9 @@ fn candidate_from_anchors_and_facings(
             },
             footprint,
             conductors,
-            pinned: placements.get(&gate.output).is_some(),
+            // A pin declares a port's terminal, never a gate's position, so
+            // no gate is ever pinned any more.
+            pinned: false,
             output_pin: Some(output_pin),
         });
     }
@@ -3489,16 +3569,30 @@ fn candidate_from_anchors_and_facings(
     for (index, input) in netlist.inputs.iter().enumerate() {
         let node = netlist.gates.len() + index;
         let anchor = anchors[node];
-        let (cells, pin) = compile::lever_footprint(anchor, facings[node]);
-        primitive_nodes.push(PrimitiveNode {
-            id: format!("input:{input}"),
-            anchor,
-            realisation: NodeRealisation::Primitive(Primitive::Lever),
-            footprint: cells.clone(),
-            conductors: cells,
-            pinned: placements.get(input).is_some(),
-            output_pin: Some(pin),
-        });
+        if let Some(pin) = placements.get(input) {
+            let (footprint, conductors, out_pin) =
+                compile::input_terminal_footprint(anchor, facings[node], pin.outside);
+            primitive_nodes.push(PrimitiveNode {
+                id: format!("input:{input}"),
+                anchor,
+                realisation: NodeRealisation::InputTerminal,
+                footprint,
+                conductors,
+                pinned: true,
+                output_pin: Some(out_pin),
+            });
+        } else {
+            let (cells, pin) = compile::lever_footprint(anchor, facings[node]);
+            primitive_nodes.push(PrimitiveNode {
+                id: format!("input:{input}"),
+                anchor,
+                realisation: NodeRealisation::Primitive(Primitive::Lever),
+                footprint: cells.clone(),
+                conductors: cells,
+                pinned: false,
+                output_pin: Some(pin),
+            });
+        }
     }
 
     PlanCandidate::with_facings(anchors, primitive_nodes, Vec::new(), facings)
@@ -3521,8 +3615,9 @@ fn candidate_from_anchors_and_facings(
 /// anchors, inclusive, before and after `relax` plus `snap` under
 /// `Axes::IN_PLANE` with nothing pinned and `RelaxEffort::default()`. Since
 /// Task 11 this function lays exactly one storey -- `Shape` and its
-/// `TALL_COLUMN_LIMIT` are deleted -- so a gate is off the ground plane only
-/// when a pin puts it there, which is what `STOREY_PITCH` still measures.
+/// `TALL_COLUMN_LIMIT` are deleted -- so a gate never leaves the ground plane
+/// here, and since terminals landed a pin cannot move one either: pinning
+/// declares a port's terminal, never a gate's position.
 ///
 /// | | from this layout | relaxed | steps |
 /// |---|---|---|---|
@@ -3559,6 +3654,7 @@ pub(crate) fn starting_layout(
     netlist: &Netlist,
     placements: &PortPlacements,
 ) -> Result<Vec<Anchor>, PlannerError> {
+    validate_port_placements(netlist, placements)?;
     let depths = gate_depths(netlist)?;
     let deepest = depths.iter().copied().max().unwrap_or(0);
     let producer: BTreeMap<&str, usize> = netlist
@@ -3574,7 +3670,7 @@ pub(crate) fn starting_layout(
     for (index, input) in netlist.inputs.iter().enumerate() {
         let x = placements
             .get(input)
-            .map(|anchor| anchor.x)
+            .map(|pin| pin.at.x)
             .unwrap_or(INPUT_COLUMN_X + index as i32 * COLUMN_PITCH);
         input_x.insert(input.as_str(), x);
     }
@@ -3584,13 +3680,13 @@ pub(crate) fn starting_layout(
     // circuit is wide, and a route that long crosses every row between them
     // -- which is what made seven_segment unroutable rather than merely
     // large.
+    //
+    // No gate is ever pinned here: a pin declares a port's terminal, never a
+    // gate's position, and output terminals are refused before planning until
+    // their stage lands. The old pin-the-gate-by-output-signal lookup is gone
+    // with that meaning.
     let mut gate_x: Vec<i32> = vec![0; netlist.gates.len()];
-    // Only a pinned gate is ever off the ground plane now: this function lays
-    // one storey and separation decides whether anything leaves it.
-    let mut gate_storey: Vec<i32> = vec![0; netlist.gates.len()];
-    // A storey's columns are its own: two gates on different storeys may share
-    // an x, and a pin is what puts one there.
-    let mut taken: BTreeMap<(usize, i32), BTreeSet<i32>> = BTreeMap::new();
+    let mut taken: BTreeMap<usize, BTreeSet<i32>> = BTreeMap::new();
     let mut by_depth: Vec<Vec<usize>> = vec![Vec::new(); deepest + 1];
     for (index, &depth) in depths.iter().enumerate() {
         by_depth[depth].push(index);
@@ -3599,15 +3695,6 @@ pub(crate) fn starting_layout(
     for (depth, row_gates) in by_depth.iter().enumerate() {
         let row = deepest - depth;
         for &gate in row_gates {
-            if let Some(anchor) = placements.get(&netlist.gates[gate].output) {
-                gate_x[gate] = anchor.x;
-                gate_storey[gate] = (anchor.y - PLANNER_Y) / STOREY_PITCH;
-                taken
-                    .entry((row, gate_storey[gate]))
-                    .or_default()
-                    .insert(anchor.x);
-                continue;
-            }
             let sources: Vec<i32> = netlist.gates[gate]
                 .inputs
                 .iter()
@@ -3623,23 +3710,23 @@ pub(crate) fn starting_layout(
             } else {
                 sources.iter().sum::<i32>() / sources.len() as i32
             };
-            gate_x[gate] = claim_column(taken.entry((row, 0)).or_default(), wanted);
+            gate_x[gate] = claim_column(taken.entry(row).or_default(), wanted);
         }
     }
 
     let mut anchors = Vec::with_capacity(netlist.gates.len() + netlist.inputs.len());
 
-    for (index, gate) in netlist.gates.iter().enumerate() {
+    for index in 0..netlist.gates.len() {
         let row = deepest - depths[index];
-        anchors.push(placements.get(&gate.output).unwrap_or(Anchor {
+        anchors.push(Anchor {
             x: gate_x[index],
-            y: PLANNER_Y + gate_storey[index] * STOREY_PITCH,
+            y: PLANNER_Y,
             z: GROUND_ROW_Z + row as i32 * ROW_PITCH,
-        }));
+        });
     }
 
     for input in &netlist.inputs {
-        anchors.push(placements.get(input).unwrap_or(Anchor {
+        anchors.push(placements.get(input).map(|pin| pin.at).unwrap_or(Anchor {
             x: input_x[input.as_str()],
             y: PLANNER_Y,
             z: GROUND_ROW_Z + (deepest as i32 + 1) * ROW_PITCH,
@@ -3647,6 +3734,110 @@ pub(crate) fn starting_layout(
     }
 
     Ok(anchors)
+}
+
+/// Refuse, by name and before any planning happens, a pin that can never
+/// become a lawful terminal.
+///
+/// Everything here is decidable from the pins and the netlist alone: which
+/// side the normalizing repeater takes is a realisation variant the relaxation
+/// sweeps later, but the terminal cell, its floor, and its outside cell are
+/// fixed the moment the pin is written, so their conflicts are named at the
+/// door instead of surfacing as a routing failure three stages downstream.
+fn validate_port_placements(
+    netlist: &Netlist,
+    placements: &PortPlacements,
+) -> Result<(), PlannerError> {
+    let invalid = |port: &str, reason: String| PlannerError::InvalidPortPin {
+        port: port.to_string(),
+        reason,
+    };
+
+    for (port, pin) in placements.iter() {
+        if matches!(pin.outside, Facing::Up | Facing::Down) {
+            return Err(invalid(
+                port,
+                format!("`outside` must be horizontal, got {:?}", pin.outside),
+            ));
+        }
+        let declared = netlist.inputs.iter().any(|name| name == port)
+            || netlist.outputs.iter().any(|name| name == port);
+        if !declared {
+            return Err(invalid(
+                port,
+                "the netlist declares no input or output with this name".to_string(),
+            ));
+        }
+        // Worlds start at the origin and only ever grow toward positive
+        // coordinates, so a terminal whose own cells sit below zero -- the
+        // floor one under the dust included -- can never be emitted whole.
+        let outside = pin.outside_cell();
+        if pin.at.x < 0 || pin.at.z < 0 || pin.at.y < 1 || outside.x < 0 || outside.z < 0 {
+            return Err(invalid(
+                port,
+                format!(
+                    "terminal cell ({}, {}, {}) leaves no room for its floor or its outside \
+                     cell inside any growable world",
+                    pin.at.x, pin.at.y, pin.at.z
+                ),
+            ));
+        }
+    }
+
+    let pins: Vec<(&String, &PortPin)> = placements.iter().collect();
+    for (index, &(port, pin)) in pins.iter().enumerate() {
+        for &(other_port, other) in &pins[index + 1..] {
+            // Dust connects to dust one cardinal step away on the same level
+            // or one level up or down, so two terminals of different nets
+            // that close are one net in the world however the netlist reads.
+            // (Two pins never share a net today -- every port drives or is
+            // its own signal -- but the rule is stated over nets so the
+            // output stage inherits it unchanged.)
+            let dx = (pin.at.x - other.at.x).abs();
+            let dy = (pin.at.y - other.at.y).abs();
+            let dz = (pin.at.z - other.at.z).abs();
+            if dx + dz == 1 && dy <= 1 {
+                return Err(invalid(
+                    port,
+                    format!(
+                        "its terminal dust would connect to port `{other_port}`'s -- \
+                         a terminal needs one empty cell between it and its neighbour"
+                    ),
+                ));
+            }
+            // The cells a pin claims before any variant is chosen: the
+            // terminal dust, the floor under it, and the outside cell that
+            // ships empty. Two pins may not share any of them -- an outside
+            // cell on another terminal's dust would power a net the caller
+            // never attached to.
+            let claims = |p: &PortPin| {
+                [p.at, Anchor { y: p.at.y - 1, ..p.at }, p.outside_cell()]
+            };
+            let ours = claims(pin);
+            if claims(other).iter().any(|cell| ours.contains(cell)) {
+                return Err(invalid(
+                    port,
+                    format!(
+                        "its terminal's cells collide with port `{other_port}`'s -- \
+                         each terminal owns its dust, its floor, and its outside cell"
+                    ),
+                ));
+            }
+        }
+    }
+
+    // Shape checks first, so a malformed output pin is named for what is
+    // wrong with it; only a pin that would otherwise be lawful earns the
+    // honest "not yet".
+    for (port, _pin) in placements.iter() {
+        if netlist.outputs.iter().any(|name| name == port) {
+            return Err(PlannerError::OutputPinNotYetSupported {
+                port: port.clone(),
+            });
+        }
+    }
+
+    Ok(())
 }
 
 /// The free column of a row nearest `wanted`, claimed.
@@ -3968,13 +4159,22 @@ fn merge_source_strength(
 ///   stays dust in the world while the books say `Stone`
 ///   ([`Occupancy::Stone`]'s doc);
 /// * dust into the input side of a repeater directly behind it, and a
-///   repeater into its output cell -- the diode's two edges, one-way.
-///
-/// The strongly-powered-block ramp (a repeater aiming into stone drives dust
-/// on every face of that stone) adds no own-cell edge at plan time: a trunk
-/// repeater aims into the next routed cell, which is dust, and a terminal
-/// repeater aims into a gate support whose sides `keep_out` refuses to this
-/// net's own wire -- so it is not walked here.
+///   repeater into its output cell -- the diode's two edges, one-way;
+/// * a repeater whose output cell is **not** an own anchor but ships solid --
+///   the floor under an own anchor directly above it (the refresh-before-a-
+///   climb riser), or committed stone -- into every own wire touching any
+///   face of that block. This is mechanism 3, and it was deliberately not
+///   walked at first on the argument that "a trunk repeater aims into the
+///   next routed cell, which is dust". A refresh before a climb aims into
+///   the **riser**, and the first pinned-input row built the latch that
+///   argument missed (2026-08-30, full_adder with its inputs pinned at
+///   (38..44, 1, 146)): g3's climb repeater fed its riser at (56, 1, 119),
+///   the ride back one storey up descend-joined its own input cell, 101
+///   cells stayed powered with every torch deleted and every lever off, and
+///   the truth table was wrong on four of eight vectors while every static
+///   invariant passed. An output cell that ships open -- no own anchor
+///   above it, no stone commitment -- still radiates nothing, exactly as
+///   `net_signal_strength` records it.
 fn ring_closed_in(route: &Route, reservation: &Reservation) -> Option<(Anchor, BTreeSet<Anchor>)> {
     use crate::redstone::world::block::BlockKind;
 
@@ -3992,6 +4192,44 @@ fn ring_closed_in(route: &Route, reservation: &Reservation) -> Option<(Anchor, B
         (state.kind == BlockKind::Repeater)
             .then(|| state.facing.map(|facing| step(cell, facing)))
             .flatten()
+    };
+
+    // What a repeater's output actually reaches, per the physics: the output
+    // cell itself when it is an own conductor (dust, or the next repeater's
+    // input side), or -- when the output cell is no anchor but ships solid
+    // (an own anchor's floor directly above it, or committed stone) -- every
+    // own wire touching any face of that strongly powered block, mechanism 3.
+    // An output cell that ships open radiates nothing.
+    let repeater_drives = |cell: Anchor, state: &BlockState| -> Vec<Anchor> {
+        let Some(facing) = state.facing else {
+            return Vec::new();
+        };
+        let output = step(cell, facing.opposite());
+        if let Some(next) = kind_of.get(&output) {
+            return match next.kind {
+                BlockKind::RedstoneWire => vec![output],
+                BlockKind::Repeater if repeater_input(output, next) == Some(cell) => vec![output],
+                _ => Vec::new(),
+            };
+        }
+        let above = Anchor { y: output.y + 1, ..output };
+        let ships_solid =
+            kind_of.contains_key(&above) || reservation.stone_owner(&output).is_some();
+        if !ships_solid {
+            return Vec::new();
+        }
+        horizontal_neighbours(output)
+            .into_iter()
+            .chain([
+                Anchor { y: output.y + 1, ..output },
+                Anchor { y: output.y - 1, ..output },
+            ])
+            .filter(|face| {
+                kind_of
+                    .get(face)
+                    .is_some_and(|standing| standing.kind == BlockKind::RedstoneWire)
+            })
+            .collect()
     };
 
     let steps_from = |cell: Anchor| -> Vec<Anchor> {
@@ -4021,18 +4259,7 @@ fn ring_closed_in(route: &Route, reservation: &Reservation) -> Option<(Anchor, B
                 }
             }
             BlockKind::Repeater => {
-                if let Some(facing) = state.facing {
-                    let output = step(cell, facing.opposite());
-                    if let Some(next) = kind_of.get(&output) {
-                        match next.kind {
-                            BlockKind::RedstoneWire => out.push(output),
-                            BlockKind::Repeater if repeater_input(output, next) == Some(cell) => {
-                                out.push(output);
-                            }
-                            _ => {}
-                        }
-                    }
-                }
+                out.extend(repeater_drives(cell, state));
             }
             _ => {}
         }
@@ -4046,15 +4273,16 @@ fn ring_closed_in(route: &Route, reservation: &Reservation) -> Option<(Anchor, B
         if !kind_of.contains_key(&input) {
             continue;
         }
-        let Some(facing) = state.facing else { continue };
-        let output = step(cell, facing.opposite());
-        if !kind_of.contains_key(&output) {
-            continue;
-        }
-        // Flood from the output through this route's own cells, never through
+        // Flood from what the repeater's output really reaches -- its output
+        // cell when that is an own conductor, or the own wires around its
+        // output block when the output cell ships solid (see the doc's
+        // mechanism-3 arm) -- through this route's own cells, never through
         // the repeater itself. Reaching its own input closes a ring.
         let mut seen: BTreeSet<Anchor> = BTreeSet::from([cell]);
-        let mut frontier = vec![output];
+        let mut frontier = repeater_drives(cell, state);
+        if frontier.is_empty() {
+            continue;
+        }
         while let Some(at) = frontier.pop() {
             if !seen.insert(at) {
                 continue;
@@ -7432,6 +7660,47 @@ mod tests {
         vec![seven_segment_expected(bits)[0]]
     }
 
+    /// One toggleable driver position per input, in input order.
+    ///
+    /// An unpinned input's driver is its own lever. A pinned input has none
+    /// -- what drives its terminal is the caller's business -- so the harness
+    /// plays the caller: it installs a fixture lever in the reserved outside
+    /// cell, which the contract guarantees empty, and toggles that. Same
+    /// `.lit` write either way, which is what lets both harnesses drive both
+    /// kinds of port through one loop.
+    fn install_fixture_drivers(
+        world: &mut World,
+        input_positions: &BTreeMap<String, (i32, i32, i32)>,
+        inputs: &[&str],
+        placements: &PortPlacements,
+    ) -> Result<Vec<(i32, i32, i32)>, String> {
+        let mut drivers = Vec::with_capacity(inputs.len());
+        for name in inputs {
+            match placements.get(name) {
+                Some(pin) => {
+                    let outside = pin.outside_cell();
+                    let standing = world.get(outside.x, outside.y, outside.z);
+                    if standing.kind != crate::redstone::world::block::BlockKind::Air {
+                        return Err(format!(
+                            "`{name}`'s outside cell ({}, {}, {}) ships {:?}, not empty -- \
+                             the fixture cannot attach where the contract broke",
+                            outside.x, outside.y, outside.z, standing.kind
+                        ));
+                    }
+                    world.set(outside.x, outside.y, outside.z, compile::lever(false));
+                    drivers.push((outside.x, outside.y, outside.z));
+                }
+                None => match input_positions.get(*name) {
+                    Some(position) => drivers.push(*position),
+                    None => {
+                        return Err(format!("compiled circuit has no lever for input `{name}`"))
+                    }
+                },
+            }
+        }
+        Ok(drivers)
+    }
+
     /// Drive every input combination through the real simulator and compare
     /// each output against `expected`.
     ///
@@ -7444,15 +7713,30 @@ mod tests {
         outputs: &[String],
         expected: fn(&[bool]) -> Vec<bool>,
     ) -> Result<usize, String> {
+        simulated_truth_table_driving_pins(
+            compiled,
+            inputs,
+            outputs,
+            expected,
+            &PortPlacements::default(),
+        )
+    }
+
+    /// [`simulated_truth_table`], driving any pinned input through a fixture
+    /// source in its reserved outside cell -- the way an external caller
+    /// would.
+    fn simulated_truth_table_driving_pins(
+        compiled: &CompiledCircuit,
+        inputs: &[&str],
+        outputs: &[String],
+        expected: fn(&[bool]) -> Vec<bool>,
+        placements: &PortPlacements,
+    ) -> Result<usize, String> {
         const MAX_TICKS: u64 = 2000;
 
-        let mut levers = Vec::with_capacity(inputs.len());
-        for name in inputs {
-            match compiled.input_positions.get(*name) {
-                Some(position) => levers.push(*position),
-                None => return Err(format!("compiled circuit has no lever for input `{name}`")),
-            }
-        }
+        let mut world = compiled.world.clone();
+        let levers =
+            install_fixture_drivers(&mut world, &compiled.input_positions, inputs, placements)?;
         let mut sinks = Vec::with_capacity(outputs.len());
         for signal in outputs {
             match compiled.output_positions.get(signal) {
@@ -7461,7 +7745,7 @@ mod tests {
             }
         }
 
-        let mut simulator = crate::redstone::simulator::Simulator::new(compiled.world.clone());
+        let mut simulator = crate::redstone::simulator::Simulator::new(world);
         if let Err(error) = simulator.run_until_stable(MAX_TICKS) {
             return Err(format!("did not settle before the first reading: {error:?}"));
         }
@@ -10227,15 +10511,17 @@ mod tests {
         );
     }
 
-    /// A port has no position until somebody gives it one.
+    /// A port has no position until somebody gives it one -- and giving it
+    /// one declares a **terminal**, not a nailed-down lever.
     ///
-    /// Fixing where the levers and lamps go before planning starts is what
-    /// stops a layout ever being as small as it could be: the planner can
-    /// compact everything between the ports and nothing about the ports
-    /// themselves. So a placement is an input, it defaults to empty, and what
-    /// nobody pinned the planner decides.
+    /// Fixing where every port goes before planning starts is what stops a
+    /// layout ever being as small as it could be: the planner can compact
+    /// everything between the ports and nothing about the ports themselves.
+    /// So a placement is an input, it defaults to empty, and what nobody
+    /// pinned the planner decides -- as a lever, exactly as before terminals
+    /// existed.
     #[test]
-    fn an_unpinned_port_is_placed_by_the_planner_and_a_pinned_one_is_not() {
+    fn an_unpinned_port_is_placed_by_the_planner_and_a_pinned_one_is_a_terminal() {
         let netlist = Netlist {
             inputs: vec!["a".to_string()],
             outputs: vec!["y".to_string()],
@@ -10245,13 +10531,19 @@ mod tests {
         let free = plan_from_netlist(&netlist, &PortPlacements::default())
             .expect("an unpinned circuit must place");
         verify_candidate(&free, &netlist).expect("and be legal");
+        let free_input = &free.primitive_nodes()[netlist.gates.len()];
+        assert_eq!(
+            free_input.realisation,
+            NodeRealisation::Primitive(Primitive::Lever),
+            "an unpinned input keeps its lever body"
+        );
 
         let elsewhere = Anchor {
-            x: free.port_anchor("a").expect("the lever is a port").x + COLUMN_PITCH,
-            ..free.port_anchor("a").expect("the lever is a port")
+            x: free.port_anchor("a").expect("the input is a port").x + COLUMN_PITCH,
+            ..free.port_anchor("a").expect("the input is a port")
         };
         let mut placements = PortPlacements::default();
-        placements.pin("a", elsewhere);
+        placements.pin("a", elsewhere, Facing::South);
 
         let pinned = plan_from_netlist(&netlist, &placements)
             .expect("a pinned circuit must place too");
@@ -10259,6 +10551,21 @@ mod tests {
             pinned.port_anchor("a"),
             Some(elsewhere),
             "a pinned port goes exactly where it was pinned"
+        );
+        let node = &pinned.primitive_nodes()[netlist.gates.len()];
+        assert_eq!(
+            node.realisation,
+            NodeRealisation::InputTerminal,
+            "a pin declares a terminal, not a lever"
+        );
+        assert!(node.pinned, "and nothing may move it afterwards");
+        assert!(
+            node.footprint.contains(&Anchor { z: elsewhere.z + 1, ..elsewhere }),
+            "the outside cell is claimed so routing keeps out of the caller's attachment point"
+        );
+        assert!(
+            !node.conductors.contains(&Anchor { z: elsewhere.z + 1, ..elsewhere }),
+            "claimed, but nothing conducts there: it ships empty"
         );
         verify_candidate(&pinned, &netlist).expect("and be legal");
     }
@@ -10272,10 +10579,10 @@ mod tests {
             gates: vec![Gate::nor("y", &["a"])],
         };
         let free = plan_from_netlist(&netlist, &PortPlacements::default()).expect("places");
-        let where_it_went = free.port_anchor("a").expect("the lever is a port");
+        let where_it_went = free.port_anchor("a").expect("the input is a port");
 
         let mut placements = PortPlacements::default();
-        placements.pin("a", where_it_went);
+        placements.pin("a", where_it_went, Facing::South);
         let pinned = plan_from_netlist(&netlist, &placements).expect("places");
 
         let best = optimise(
@@ -10286,6 +10593,293 @@ mod tests {
         );
 
         assert_eq!(best.port_anchor("a"), Some(where_it_went));
+    }
+
+    /// The netlist a pin-validation case needs: two inputs to pin against
+    /// each other, one declared output for the not-yet arm.
+    fn two_input_netlist() -> Netlist {
+        Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec!["y".to_string()],
+            gates: vec![Gate::nor("y", &["a", "b"])],
+        }
+    }
+
+    /// A pin that can never become a terminal is refused by name at the door,
+    /// before any planning happens -- not discovered as a routing failure
+    /// three stages downstream.
+    #[test]
+    fn a_pin_for_a_port_the_netlist_does_not_declare_is_refused_by_name() {
+        let netlist = two_input_netlist();
+        let mut placements = PortPlacements::default();
+        placements.pin("d0", Anchor { x: 10, y: 1, z: 10 }, Facing::South);
+
+        let error = plan_from_netlist(&netlist, &placements)
+            .expect_err("an undeclared port cannot be pinned");
+        let PlannerError::InvalidPortPin { port, .. } = &error else {
+            panic!("refused, but not by name: {error}");
+        };
+        assert_eq!(port, "d0");
+    }
+
+    /// `outside` is which side belongs to the caller, and a gate cell has no
+    /// vertical faces to give away.
+    #[test]
+    fn a_vertical_outside_facing_is_refused_by_name() {
+        let netlist = two_input_netlist();
+        let mut placements = PortPlacements::default();
+        placements.pin("a", Anchor { x: 10, y: 1, z: 10 }, Facing::Up);
+
+        let error = plan_from_netlist(&netlist, &placements)
+            .expect_err("a vertical outside has no terminal");
+        assert!(
+            matches!(&error, PlannerError::InvalidPortPin { port, .. } if port == "a"),
+            "refused, but not by name: {error}"
+        );
+    }
+
+    /// Two terminals of different nets one dust-connecting step apart are one
+    /// net in the world however the netlist reads: the caller left no gap.
+    #[test]
+    fn two_terminals_the_caller_left_no_gap_between_are_refused() {
+        let netlist = two_input_netlist();
+        let mut placements = PortPlacements::default();
+        placements.pin("a", Anchor { x: 10, y: 1, z: 10 }, Facing::South);
+        placements.pin("b", Anchor { x: 11, y: 1, z: 10 }, Facing::South);
+
+        let error = plan_from_netlist(&netlist, &placements)
+            .expect_err("adjacent terminal dusts join into one net");
+        assert!(
+            matches!(&error, PlannerError::InvalidPortPin { reason, .. }
+                if reason.contains('a') || reason.contains('b')),
+            "the refusal names the colliding pair: {error}"
+        );
+
+        // One empty cell between them is the contract's gap, and it passes
+        // validation (the world may still refuse it later for other reasons,
+        // so only the door is asserted here).
+        let mut spaced = PortPlacements::default();
+        spaced.pin("a", Anchor { x: 10, y: 1, z: 10 }, Facing::South);
+        spaced.pin("b", Anchor { x: 12, y: 1, z: 10 }, Facing::South);
+        starting_layout(&netlist, &spaced).expect("a one-cell gap is lawful");
+    }
+
+    /// A terminal's outside cell is the caller's attachment point, and two
+    /// terminals may not share one: a source attached for `a` would power
+    /// `b`'s dust too, through a cell both contracts call their own. This is
+    /// the collision the dust-adjacency rule alone cannot see -- the two
+    /// dusts sit a lawful two cells apart.
+    #[test]
+    fn an_outside_cell_colliding_with_another_terminals_cells_is_refused() {
+        let netlist = two_input_netlist();
+        let mut placements = PortPlacements::default();
+        // Both outside cells land on (10, 1, 11).
+        placements.pin("a", Anchor { x: 10, y: 1, z: 10 }, Facing::South);
+        placements.pin("b", Anchor { x: 10, y: 1, z: 12 }, Facing::North);
+
+        let error = plan_from_netlist(&netlist, &placements)
+            .expect_err("two terminals sharing an attachment cell is a collision");
+        assert!(
+            matches!(&error, PlannerError::InvalidPortPin { .. }),
+            "refused, but not as a pin problem: {error}"
+        );
+    }
+
+    /// Worlds start at the origin, so a terminal whose floor or outside cell
+    /// would fall below it can never be emitted whole.
+    #[test]
+    fn a_pin_no_growable_world_can_hold_is_refused_by_name() {
+        let netlist = two_input_netlist();
+        for (at, outside) in [
+            // Floor at y = -1.
+            (Anchor { x: 10, y: 0, z: 10 }, Facing::South),
+            // Outside cell at x = -1.
+            (Anchor { x: 0, y: 1, z: 10 }, Facing::West),
+        ] {
+            let mut placements = PortPlacements::default();
+            placements.pin("a", at, outside);
+            let error = plan_from_netlist(&netlist, &placements)
+                .expect_err("a terminal outside every growable world cannot be built");
+            assert!(
+                matches!(&error, PlannerError::InvalidPortPin { port, .. } if port == "a"),
+                "refused, but not by name: {error}"
+            );
+        }
+    }
+
+    /// An output pin is a lawful shape -- same vocabulary, same validation --
+    /// but its terminal is the next stage's work, so compiling one is an
+    /// honest, named "not yet" instead of the removed pin-the-gate behaviour.
+    #[test]
+    fn an_output_pin_is_a_named_not_yet_error() {
+        let netlist = two_input_netlist();
+        let mut placements = PortPlacements::default();
+        placements.pin("y", Anchor { x: 10, y: 1, z: 10 }, Facing::South);
+
+        let error = plan_from_netlist(&netlist, &placements)
+            .expect_err("output terminals are not built yet");
+        assert!(
+            matches!(&error, PlannerError::OutputPinNotYetSupported { port } if port == "y"),
+            "the refusal must say what is missing, not call the pin invalid: {error}"
+        );
+
+        // And through `compile_planned`, where a caller would meet it, the
+        // port's name survives into the compile error.
+        let Err(compile_error) = crate::compile::compile_planned(&netlist, &placements) else {
+            panic!("compile_planned must refuse an output pin the same way");
+        };
+        assert!(
+            compile_error.to_string().contains("`y`"),
+            "the compile error names the port: {compile_error}"
+        );
+
+        // A malformed output pin is still named for what is wrong with it --
+        // the not-yet answer is only for pins that would otherwise be lawful.
+        let mut malformed = PortPlacements::default();
+        malformed.pin("y", Anchor { x: 10, y: 1, z: 10 }, Facing::Down);
+        let error = plan_from_netlist(&netlist, &malformed)
+            .expect_err("a vertical outside is invalid whoever owns the port");
+        assert!(
+            matches!(&error, PlannerError::InvalidPortPin { port, .. } if port == "y"),
+            "shape checks come before the not-yet arm: {error}"
+        );
+    }
+
+    /// The acceptance shape of the input-terminal stage: a real circuit with
+    /// every input pinned in a row -- one-cell gaps, the contract's tightest
+    /// lawful packing -- compiles through `compile_planned`, each terminal is
+    /// its dust at the pinned cell with the outside cell shipped empty, and
+    /// the truth table passes with the inputs driven through fixture sources
+    /// in the reserved outside cells, exactly as an external caller would
+    /// drive them.
+    ///
+    /// This packing is demanding on purpose. At pitch 2 every terminal is
+    /// forced to face the same way (its neighbours' dust strikes the other
+    /// two facings), so the three pins emerge as parallel lanes with no free
+    /// column between them and the fan-out has to climb to cross. That shape
+    /// found two router bugs on 2026-08-30 -- the spiral staircase that
+    /// crushed its own dust (`self_obstructs`'s third arm) and the
+    /// riser-mediated latch the ring rule could not see
+    /// (`a_ring_through_a_repeaters_own_riser_is_found`) -- which is exactly
+    /// why the tightest row stays the acceptance geometry.
+    #[test]
+    fn a_full_adder_with_pinned_inputs_computes_through_its_terminals() {
+        use crate::circuits::full_adder::{build_full_adder_netlist, INPUT_NAMES};
+
+        let (netlist, outputs) = build_full_adder_netlist();
+        let sinks = vec![outputs["sum"].clone(), outputs["cout"].clone()];
+
+        // A row south of where the free plan keeps its inputs, so the pins
+        // are demanding (the placer must reach them) without being absurd.
+        let free = plan_from_netlist(&netlist, &PortPlacements::default())
+            .expect("full_adder places unpinned");
+        let base = INPUT_NAMES
+            .iter()
+            .map(|name| free.port_anchor(name).expect("every input is a port"))
+            .reduce(|row, anchor| Anchor {
+                x: row.x.min(anchor.x),
+                y: 1,
+                z: row.z.max(anchor.z),
+            })
+            .expect("full_adder has inputs");
+        let mut placements = PortPlacements::default();
+        for (index, name) in INPUT_NAMES.iter().enumerate() {
+            placements.pin(
+                *name,
+                Anchor { x: base.x + 2 * index as i32, y: 1, z: base.z + 4 },
+                Facing::South,
+            );
+        }
+
+        let compiled = crate::compile::compile_planned(&netlist, &placements)
+            .unwrap_or_else(|error| panic!("full_adder compiles through its terminals: {error}"));
+
+        for name in INPUT_NAMES {
+            let pin = placements.get(name).expect("pinned above");
+            assert_eq!(
+                compiled.input_positions.get(name),
+                Some(&(pin.at.x, pin.at.y, pin.at.z)),
+                "`{name}`'s recorded position is its terminal cell"
+            );
+            let terminal = compiled.world.get(pin.at.x, pin.at.y, pin.at.z);
+            assert_eq!(
+                terminal.kind,
+                crate::redstone::world::block::BlockKind::RedstoneWire,
+                "`{name}`'s terminal is one redstone dust at the pinned cell"
+            );
+            let floor = compiled.world.get(pin.at.x, pin.at.y - 1, pin.at.z);
+            assert_ne!(
+                floor.kind,
+                crate::redstone::world::block::BlockKind::Air,
+                "on its own floor block"
+            );
+            let outside = pin.outside_cell();
+            assert_eq!(
+                compiled.world.get(outside.x, outside.y, outside.z).kind,
+                crate::redstone::world::block::BlockKind::Air,
+                "`{name}`'s outside cell ships empty -- it belongs to the caller"
+            );
+            assert_eq!(
+                compiled.world.get(pin.at.x, pin.at.y, pin.at.z).power,
+                0,
+                "and nothing inside the circuit drives the terminal dust"
+            );
+        }
+
+        let vectors = simulated_truth_table_driving_pins(
+            &compiled,
+            &INPUT_NAMES[..],
+            &sinks,
+            full_adder_expected,
+            &placements,
+        )
+        .expect("the truth table holds with fixture-driven terminals");
+        assert_eq!(vectors, 8);
+    }
+
+    /// World sizing follows the pins: a terminal placed past where the free
+    /// layout would ever build still gets a world that holds it, margin
+    /// included, and the circuit still computes.
+    #[test]
+    fn the_world_grows_to_cover_a_far_pin_plus_margin() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["y".to_string()],
+            gates: vec![Gate::nor("y", &["a"])],
+        };
+        let at = Anchor { x: 60, y: 1, z: 40 };
+        let mut placements = PortPlacements::default();
+        placements.pin("a", at, Facing::East);
+
+        let compiled = crate::compile::compile_planned(&netlist, &placements)
+            .unwrap_or_else(|error| panic!("a far pin compiles: {error}"));
+        let (sx, _sy, sz) = compiled.world.size();
+        assert!(
+            sx > at.x + 1 && sz > at.z,
+            "the world ({sx} x {sz}) must hold the pin at ({}, {}) and its outside cell",
+            at.x,
+            at.z
+        );
+        assert_eq!(
+            compiled.world.get(at.x, at.y, at.z).kind,
+            crate::redstone::world::block::BlockKind::RedstoneWire,
+            "the terminal dust really is inside the world, not silently dropped"
+        );
+        assert_eq!(
+            compiled.world.get(at.x + 1, at.y, at.z).kind,
+            crate::redstone::world::block::BlockKind::Air,
+            "and the outside cell east of it ships empty"
+        );
+
+        let vectors = simulated_truth_table_driving_pins(
+            &compiled,
+            &["a"],
+            &netlist.outputs.clone(),
+            |bits| vec![!bits[0]],
+            &placements,
+        )
+        .expect("a NOT gate through a far terminal still computes");
+        assert_eq!(vectors, 2);
     }
 
     /// Six independent gates: six bodies with every reason to sit on one
@@ -16020,16 +16614,35 @@ mod tests {
         outputs: &[String],
         expected: fn(&[bool]) -> Vec<bool>,
     ) -> Result<(u64, String, usize), String> {
+        worst_settle_and_truth_driving_pins(
+            realised,
+            inputs,
+            outputs,
+            expected,
+            &PortPlacements::default(),
+        )
+    }
+
+    /// [`worst_settle_and_truth`], driving any pinned input through a fixture
+    /// source in its reserved outside cell -- the way an external caller
+    /// would.
+    fn worst_settle_and_truth_driving_pins(
+        realised: &RealisedCandidate,
+        inputs: &[&str],
+        outputs: &[String],
+        expected: fn(&[bool]) -> Vec<bool>,
+        placements: &PortPlacements,
+    ) -> Result<(u64, String, usize), String> {
         use crate::redstone::simulator::Simulator;
 
         let width = inputs.len();
-        let mut levers = Vec::with_capacity(width);
-        for name in inputs {
-            match realised.ports.input_positions.get(*name) {
-                Some(at) => levers.push(*at),
-                None => return Err(format!("no lever for input `{name}`")),
-            }
-        }
+        let mut fixture = realised.world.clone();
+        let levers = install_fixture_drivers(
+            &mut fixture,
+            &realised.ports.input_positions,
+            inputs,
+            placements,
+        )?;
         let mut sinks = Vec::with_capacity(outputs.len());
         for signal in outputs {
             match realised.ports.output_positions.get(signal) {
@@ -16061,7 +16674,7 @@ mod tests {
                     continue;
                 }
                 let after = bits_of(to);
-                let mut simulator = Simulator::new(realised.world.clone());
+                let mut simulator = Simulator::new(fixture.clone());
                 for (at, &bit) in levers.iter().zip(before.iter()) {
                     let mut state = simulator.world().get(at.0, at.1, at.2).clone();
                     state.lit = bit;
@@ -16938,8 +17551,10 @@ mod tests {
     ///
     /// * [`staircase_clearance`] returns nothing when `to.y == from.y`, so a
     ///   flat route needs no stair guard and the model omits none;
-    /// * [`self_obstructs`] has two arms and each requires a step in `y`, so a
-    ///   flat path cannot obstruct itself;
+    /// * [`self_obstructs`]'s three arms all need the path to span two `y`
+    ///   levels -- the third fires on a flat step, but only one landing
+    ///   directly above a cell the path already holds -- so a wholly flat
+    ///   path cannot obstruct itself;
     /// * [`anchor_is_free_for`]'s floor arm asks about `y - 1`, which for a flat
     ///   answer is always a *fixed* cell, so it is discharged by the domain
     ///   filter and never becomes a clause.
@@ -17733,6 +18348,71 @@ mod tests {
         for next in plane_neighbours(here) {
             assert!(horizontal_neighbours(here).contains(&next));
         }
+    }
+
+    /// A staircase that curls back **over** its own column is unbuildable:
+    /// every anchor lays a floor one below itself and realisation writes in
+    /// route order, so the later, upper anchor's floor lands on the earlier
+    /// anchor's dust and deletes it.
+    ///
+    /// Found by the first pinned input terminal (full_adder's `cin` at
+    /// (37, 1, 126)): the route out of the pin climbed east, climbed south,
+    /// then stepped flat back north -- (38,2,124), (38,3,125), (38,3,124) --
+    /// and realisation wrote the third anchor's floor over the first anchor's
+    /// dust. Every invariant before signal strength called the plan fine, and
+    /// the strength walk read the branch dead at the crushed cell. The two
+    /// arms `self_obstructs` had both require a step in y at the moment of
+    /// the offence; this spiral's offending step is flat.
+    ///
+    /// The mirrored order -- curling back **under** its own column, where the
+    /// later, lower dust replaces the stone committed under the earlier one --
+    /// is deliberately still allowed: it is the recorded
+    /// dust-on-own-committed-stone defect
+    /// (`a_route_lays_dust_on_its_own_committed_stone`), the pair descend-
+    /// joins as one net, and refusing it at search time measurably re-routes
+    /// every shipping plan that carries it and deadlocks `try_move`'s
+    /// single-shot search -- see `self_obstructs`'s doc. The control here is
+    /// what keeps that decision a decision rather than drift.
+    #[test]
+    fn a_path_may_not_step_directly_above_its_own_cells() {
+        let here = Anchor { x: 20, y: PLANNER_Y, z: 30 };
+
+        // The spiral from the cin route: climb east, climb south, flat north.
+        let up_east = Anchor { x: here.x + 1, y: here.y + 1, z: here.z };
+        let up_south = Anchor { x: here.x + 1, y: here.y + 2, z: here.z + 1 };
+        let over_own_dust = Anchor { x: here.x + 1, y: here.y + 2, z: here.z };
+        let mut climbed: BTreeMap<Anchor, Anchor> = BTreeMap::new();
+        climbed.insert(up_east, here);
+        climbed.insert(up_south, up_east);
+        assert!(
+            neighbours(up_south).contains(&over_own_dust),
+            "the offending step has to be one the router really offers"
+        );
+        assert!(
+            self_obstructs(&climbed, up_south, over_own_dust),
+            "a step whose floor lands on this path's own dust has to be refused"
+        );
+
+        // The mirror stays legal: drop east, drop south, flat north -- the
+        // landing sits directly under a cell this path already took. Its dust
+        // replaces that cell's committed stone, which is the recorded benign
+        // order, not the crush.
+        let start_high = Anchor { x: here.x, y: here.y + 2, z: here.z };
+        let down_east = Anchor { x: here.x + 1, y: here.y + 1, z: here.z };
+        let down_south = Anchor { x: here.x + 1, y: here.y, z: here.z + 1 };
+        let under_own_floor = Anchor { x: here.x + 1, y: here.y, z: here.z };
+        let mut dropped: BTreeMap<Anchor, Anchor> = BTreeMap::new();
+        dropped.insert(down_east, start_high);
+        dropped.insert(down_south, down_east);
+        assert!(
+            neighbours(down_south).contains(&under_own_floor),
+            "the control has to use a step dust can take"
+        );
+        assert!(
+            !self_obstructs(&dropped, down_south, under_own_floor),
+            "a step directly under this path's own dust is the recorded benign \
+             order and stays a search-time non-event"
+        );
     }
 
     /// How a calibration run is tuned. Same shape as [`GrowthSettings`], for the
@@ -23853,6 +24533,78 @@ mod tests {
             ring_closed_in(&climb_ring(), &sealed),
             None,
             "a committed stone lid seals the climb join and the ring cannot close"
+        );
+    }
+
+    /// **THE RING RULE's blind edge, measured on the first pinned-input row
+    /// (2026-08-30).** A refresh-before-a-climb repeater does not aim into
+    /// dust: it aims into the riser -- the landing anchor's own floor -- and
+    /// the strongly powered riser re-drives every wire touching any of its
+    /// faces (mechanism 3). The detector skipped that edge on the argument
+    /// that "a trunk repeater aims into the next routed cell, which is dust",
+    /// and full_adder with its inputs pinned at (38..44, 1, 146) built the
+    /// counterexample: g3's route fed its climb repeater at (56, 1, 120)
+    /// through the riser at (56, 1, 119), ran back one storey up, and
+    /// descend-joined its own input cell -- 101 cells still powered with
+    /// every torch deleted and every lever off, and the truth table wrong on
+    /// four of eight vectors while every static invariant passed.
+    ///
+    /// The fixture is that shape, cell for cell. The control drops the
+    /// return run: same repeater, same riser, no cycle.
+    #[test]
+    fn a_ring_through_a_repeaters_own_riser_is_found() {
+        use crate::redstone::world::block::Facing;
+
+        let dust = compile::dust();
+        let route_of = |cells: Vec<(Anchor, BlockState)>| -> Route {
+            let (anchors, blocks): (Vec<Anchor>, Vec<BlockState>) = cells.into_iter().unzip();
+            let floors = vec![compile::stone(); anchors.len()];
+            Route::from_legacy("g3".to_string(), anchors, Vec::new(), blocks, floors)
+        };
+        let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
+
+        // Signal travels north (toward -z): dust feeds the repeater, the
+        // repeater fires into the riser (56, 1, 119) -- NOT a route anchor,
+        // but the floor under the landing dust at (56, 2, 119) -- and the
+        // return run descends back onto the input cell.
+        let measured = route_of(vec![
+            (at(56, 1, 121), dust.clone()),
+            (at(56, 1, 120), compile::repeater(Facing::North)),
+            (at(56, 2, 119), dust.clone()),
+            (at(57, 2, 119), dust.clone()),
+            (at(57, 2, 120), dust.clone()),
+            (at(57, 2, 121), dust.clone()),
+        ]);
+        let (repeater, ring) = ring_closed_in(&measured, &Reservation::new())
+            .expect("the measured riser-fed shape is a ring");
+        assert_eq!(repeater, at(56, 1, 120));
+        assert!(ring.contains(&at(56, 1, 121)), "the flood reached the input");
+
+        // Control 1: without the return run there is no cycle -- the riser
+        // edge alone must not invent one.
+        let open = route_of(vec![
+            (at(56, 1, 121), dust.clone()),
+            (at(56, 1, 120), compile::repeater(Facing::North)),
+            (at(56, 2, 119), dust.clone()),
+            (at(57, 2, 119), dust.clone()),
+        ]);
+        assert_eq!(ring_closed_in(&open, &Reservation::new()), None, "no closure, no ring");
+
+        // Control 2: a repeater firing into a cell nothing stands over and
+        // nobody committed to stone fires into air, and air drives nothing.
+        // Same return run, but the landing dust is gone, so the output cell
+        // is no anchor's floor: the walk may not treat it as a powered block.
+        let air_gap = route_of(vec![
+            (at(56, 1, 121), dust.clone()),
+            (at(56, 1, 120), compile::repeater(Facing::North)),
+            (at(55, 1, 119), dust.clone()),
+            (at(55, 1, 120), dust.clone()),
+            (at(55, 1, 121), dust.clone()),
+        ]);
+        assert_eq!(
+            ring_closed_in(&air_gap, &Reservation::new()),
+            None,
+            "an output cell that ships open radiates nothing"
         );
     }
 

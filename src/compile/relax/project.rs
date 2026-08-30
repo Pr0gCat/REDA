@@ -491,8 +491,20 @@ fn welded_partners(graph: &BodyGraph) -> Vec<Vec<usize>> {
 /// net ends and another begins: a torch's support carries the signal driving
 /// it and its torch carries the signal it drives, and those are different nets
 /// by definition.
-fn exempt(welded: &[Vec<usize>], left: usize, right: usize) -> bool {
-    welded[left].contains(&right)
+///
+/// Exempt, finally, when **both bodies are pinned**, by the same argument as
+/// the common anchor: their relative position is fully determined before the
+/// pair loop ever sees them, so a separation requirement between them has no
+/// degree of freedom left and is either already true or a deadlock --
+/// [`separate`]'s `(true, true)` arm moves neither, and the pair would spin
+/// out [`PROJECTION_ROUNDS`] for nothing. The pair this clause is for is two
+/// pinned terminals a contract-lawful one-cell gap apart (a display glyph's
+/// segments): whether they couple is refused by pre-planning validation on
+/// dust adjacency and checked again by the four invariants on the realised
+/// blocks, never decided by a radius.
+fn exempt(graph: &BodyGraph, welded: &[Vec<usize>], left: usize, right: usize) -> bool {
+    (graph.bodies[left].pinned && graph.bodies[right].pinned)
+        || welded[left].contains(&right)
         || welded[left]
             .iter()
             .any(|shared| welded[right].contains(shared))
@@ -510,7 +522,7 @@ pub fn worst_violation(graph: &BodyGraph, required: &[f64]) -> Option<Violation>
     let mut worst: Option<Violation> = None;
     for left in 0..graph.bodies.len() {
         for right in (left + 1)..graph.bodies.len() {
-            if exempt(&welded, left, right) {
+            if exempt(graph, &welded, left, right) {
                 continue;
             }
             let need = required[left].max(required[right]);
@@ -555,7 +567,7 @@ pub fn project(graph: &mut BodyGraph, required: &[f64], axes: Axes) -> Result<()
         let cells = placed_cells(graph);
         for left in 0..graph.bodies.len() {
             for right in (left + 1)..graph.bodies.len() {
-                if exempt(&welded, left, right) {
+                if exempt(graph, &welded, left, right) {
                     continue;
                 }
                 let need = required[left].max(required[right]);
@@ -633,8 +645,11 @@ pub fn project(graph: &mut BodyGraph, required: &[f64], axes: Axes) -> Result<()
 /// Its limit, stated rather than guarded: a body pinned directly above one on
 /// the ground cannot be separated along Y at all, and this does not fall through
 /// to the next axis. That pair spins out [`PROJECTION_ROUNDS`] and is reported
-/// by `worst_violation`, which is the same answer two pinned bodies have always
-/// had. Not seen in any reference circuit -- `plan_from_netlist` pins only what
+/// by `worst_violation` -- the answer any held-against-held pair gets, though a
+/// pair held because **both** are pinned no longer reaches here at all:
+/// [`exempt`] strikes it, because its relative position was fully determined
+/// before the pair loop ran. Not seen in any reference circuit --
+/// `plan_from_netlist` pins only what
 /// [`crate::compile::planner::PortPlacements`] was handed, and no test in this
 /// tree pins two ports within clearance of each other in Y.
 fn separate(graph: &mut BodyGraph, left: usize, right: usize, axis: usize, cost: f64) {
@@ -772,6 +787,31 @@ mod tests {
         let gap = (graph.bodies[0].position[0] - graph.bodies[1].position[0]).abs();
         assert!(gap >= 3.0 - 1e-9, "they are still {gap} apart");
         assert!(gap <= 3.0 + 1e-9, "they were pushed to {gap}, further than asked");
+    }
+
+    /// Two pinned bodies inside each other's requirement are the weld-sibling
+    /// shape one constraint over: their relative position is fully determined
+    /// before the pair loop runs, so the requirement has no degree of freedom
+    /// left and pushing on it can only spin out [`PROJECTION_ROUNDS`]. The
+    /// concrete pair is two pinned input terminals a contract-lawful one-cell
+    /// gap apart -- a display glyph's neighbouring segments -- which
+    /// deadlocked the projection until pinned pairs joined the exemption.
+    #[test]
+    fn two_pinned_bodies_are_exempt_from_separation_rather_than_a_deadlock() {
+        let mut graph = graph_of(vec![body(10.0, 1.0, 10.0), body(12.0, 1.0, 10.0)], Vec::new());
+        graph.bodies[0].pinned = true;
+        graph.bodies[1].pinned = true;
+
+        let required = vec![3.25, 3.25];
+        project(&mut graph, &required, Axes::IN_PLANE)
+            .expect("a fully determined pair is not the projection's to fix");
+        assert_eq!(graph.bodies[0].position, [10.0, 1.0, 10.0]);
+        assert_eq!(graph.bodies[1].position, [12.0, 1.0, 10.0]);
+        assert_eq!(
+            worst_violation(&graph, &required),
+            None,
+            "and no violation is reported over a pair nothing could move"
+        );
     }
 
     /// Z is reachable. A pair already most of the way apart along Z is
@@ -1033,24 +1073,38 @@ mod tests {
     /// a real outcome, and it has to be reported rather than looped on for
     /// ever.
     ///
-    /// The fixture is two **pinned** bodies within a required nine of each
-    /// other: `separate` holds a pinned body by design, so the pair is the
-    /// contradiction `separate`'s own doc names as "the same answer two
-    /// pinned bodies have always had". It used to be two repeaters welded
-    /// into one junction's sockets, which stopped being a contradiction the
-    /// day `exempt` learned that weld-determined siblings are the welds'
-    /// business -- see `two_repeaters_welded_into_one_junctions_sockets_place`.
+    /// The fixture has moved twice, each time because `exempt` learned that a
+    /// fully determined pair is not the projection's to fix. It began as two
+    /// repeaters welded into one junction's sockets (weld-determined siblings
+    /// became the welds' business -- see
+    /// `two_repeaters_welded_into_one_junctions_sockets_place`), then two
+    /// pinned bodies inside each other's requirement (a pinned pair became
+    /// exempt the day pinned terminals could lawfully stand a one-cell gap
+    /// apart -- see `two_pinned_bodies_are_exempt_from_separation_rather_than_
+    /// a_deadlock`). What is left genuinely contradictory is a body **welded
+    /// to** a pinned anchor and crowded by a second pinned body: the weld
+    /// puts it back every round, the pin never yields, and the pair is
+    /// neither welded to each other nor both pinned, so no exemption
+    /// applies. `separate` pushes, `satisfy` undoes, and the projection has
+    /// to call it a deadlock rather than spin.
     #[test]
     fn constraints_that_contradict_are_reported_rather_than_spun_on() {
-        let mut left = body(0.0, 1.0, 0.0);
-        let mut right = body(2.0, 1.0, 0.0);
-        left.pinned = true;
-        right.pinned = true;
-        let mut graph = graph_of(vec![left, right], Vec::new());
-        // Wider than two pinned bodies can ever become.
-        let required = vec![9.0; 2];
+        let mut anchor = body(0.0, 1.0, 0.0);
+        anchor.pinned = true;
+        let held = body(-1.0, 1.0, 0.0);
+        let mut crowder = body(2.0, 1.0, 0.0);
+        crowder.pinned = true;
+        let mut graph = graph_of(
+            vec![anchor, held, crowder],
+            vec![Weld::AtSocket { repeater: 1, junction: 0, input_index: 0 }],
+        );
+        // Wider than a welded body and a pinned one can ever become.
+        let required = vec![9.0; 3];
         let deadlock = project(&mut graph, &required, Axes::IN_PLANE)
-            .expect_err("two pinned bodies two apart cannot also be nine apart");
+            .expect_err("a weld-held body three from a pinned one cannot also be nine from it");
         assert!(deadlock.shortfall > 0.0);
+        // The weld still holds -- the deadlock was reported over it, not
+        // resolved by breaking it.
+        assert_eq!(graph.bodies[1].position, [-1.0, 1.0, 0.0]);
     }
 }

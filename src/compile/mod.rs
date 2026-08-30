@@ -344,7 +344,7 @@ pub(crate) fn lamp() -> BlockState {
 /// paste (see `minecraft.wiki/w/Lever`'s blockstate table). `facing` is
 /// purely cosmetic for a floor lever (it only orients the little handle),
 /// so it is fixed to `North` for determinism rather than left unset.
-fn lever(on: bool) -> BlockState {
+pub(crate) fn lever(on: bool) -> BlockState {
     let mut state = BlockState::air();
     state.kind = BlockKind::Lever;
     state.name = "minecraft:lever".to_string();
@@ -2672,6 +2672,36 @@ pub(crate) fn place_primary_input(
     ensure_floor(world, home);
 
     let pin = home.offset(geometry::output_direction(facing));
+    ensure_floor(world, pin);
+    world.set(pin.x, pin.y, pin.z, dust());
+
+    (home, pin)
+}
+
+/// Write a pinned input's terminal: dust on its own floor at `home`, a
+/// normalizing repeater one cell along the facing, and the pin dust the net's
+/// route starts from one cell further. Returns `(terminal, pin)`.
+///
+/// No lever -- the caller powers the terminal dust by any means, at any
+/// strength >= 1, and the repeater reshapes whatever arrives to full strength
+/// so the route's source strength is geometry rather than a guess. The cell on
+/// the port's `outside` face is deliberately not written: it ships empty, and
+/// the facing this is built at never points there
+/// (`input_terminal_footprint` refuses that combination before a plan exists).
+pub(crate) fn place_input_terminal(
+    world: &mut World,
+    home: Position,
+    facing: geometry::CellFacing,
+) -> (Position, Position) {
+    ensure_floor(world, home);
+    world.set(home.x, home.y, home.z, dust());
+
+    let inward = geometry::output_direction(facing);
+    let normalizer = home.offset(inward);
+    ensure_floor(world, normalizer);
+    world.set(normalizer.x, normalizer.y, normalizer.z, repeater(inward));
+
+    let pin = normalizer.offset(inward);
     ensure_floor(world, pin);
     world.set(pin.x, pin.y, pin.z, dust());
 
@@ -6429,6 +6459,41 @@ fn net_signal_strength(
     strength
 }
 
+/// The component a primary input's net truly originates from, given the
+/// position `emit` recorded for it.
+///
+/// An unpinned input records its lever, which is a source on its own. A
+/// pinned input records its terminal dust -- the coordinate the contract is
+/// stated over -- and dust is not a source in this model: the net's true
+/// origin is the normalizing repeater reading from that dust, which is the
+/// neighbour whose stored facing points back at it (`repeater(..)` stores
+/// the Minecraft convention: output-side toward input-side).
+///
+/// One function rather than two copies, because `verify_signal_strength` is
+/// the judge and `strength_differential::walk_by_group` its replica -- a
+/// redirection written into one and not the other is a drift the replica's
+/// own guard test cannot see on unpinned circuits.
+pub(crate) fn input_source_component(
+    world: &World,
+    recorded: Position,
+) -> (Position, &BlockState) {
+    let state = world.get(recorded.x, recorded.y, recorded.z);
+    if state.kind != BlockKind::RedstoneWire {
+        return (recorded, state);
+    }
+    let normalizer = HORIZONTAL
+        .iter()
+        .find_map(|&direction| {
+            let next = recorded.offset(direction);
+            let candidate = world.get(next.x, next.y, next.z);
+            (candidate.kind == BlockKind::Repeater
+                && candidate.facing == Some(direction.opposite()))
+            .then_some(next)
+        })
+        .expect("a terminal dust always has its normalizing repeater one cell inward");
+    (normalizer, world.get(normalizer.x, normalizer.y, normalizer.z))
+}
+
 /// The signal-strength invariant: every net must deliver a non-zero signal
 /// to every one of its own declared gate-input sinks, and every declared
 /// circuit output must receive a non-zero signal from its driving gate's
@@ -6531,8 +6596,8 @@ fn verify_signal_strength(
             Source::Lever(i) => {
                 let &(x, y, z) = input_positions
                     .get(&netlist.inputs[i])
-                    .expect("emit records a lever position for every input");
-                (Position::new(x, y, z), world.get(x, y, z))
+                    .expect("emit records a position for every input");
+                input_source_component(world, Position::new(x, y, z))
             }
             Source::Gate(g) => {
                 let &(x, y, z) = gate_output_positions
@@ -7442,11 +7507,9 @@ pub(crate) fn gate_footprint(
 ///
 /// The cell *below* is left unclaimed. Every lever this planner places sits at
 /// `PLANNER_Y = 1` and relaxation never moves Y, so that cell is the world
-/// floor and no dust can reach it -- but `PortPlacements::pin` accepts any `y`,
-/// and a lever pinned off the ground plane has a hazard below it that this does
-/// not close. Claiming it would not close it either: the dangerous conductor
-/// would then be *above* the route's cell, and `anchor_is_free_for` never looks
-/// up.
+/// floor and no dust can reach it. (A pin used to be the one way a lever could
+/// leave the ground plane; since terminals landed a pin declares an
+/// [`input_terminal_footprint`] instead, and no lever is ever pinned anywhere.)
 pub(crate) fn lever_footprint(
     anchor: Anchor,
     facing: geometry::CellFacing,
@@ -7456,6 +7519,45 @@ pub(crate) fn lever_footprint(
     let pin = Anchor { x: stepped.x, y: stepped.y, z: stepped.z };
     let above = Anchor { y: anchor.y + 1, ..anchor };
     (vec![anchor, pin, above], pin)
+}
+
+/// Every cell a pinned input's terminal occupies -- `(footprint, conductors,
+/// pin)`, in the shape `PrimitiveNode` records.
+///
+/// The terminal dust sits at `anchor`, the normalizing repeater one cell along
+/// the facing, and the pin dust one further: the same two-hop shape as a NOR's
+/// torch-then-pin, with the repeater standing where the torch would. All three
+/// conduct.
+///
+/// The `outside` cell is the fourth entry of the footprint and deliberately
+/// **not** a conductor: it is claimed so no route or body ever takes it, and
+/// `place_input_terminal` never writes it -- the caller's attachment point
+/// ships empty, exactly like `lever_footprint`'s hazard cell is claimed air.
+///
+/// The facing is a realisation variant swept like a gate's, but three-way:
+/// the outside face is the caller's, so a terminal built pointing its
+/// repeater there would build into the one cell the contract reserves. That
+/// is a planning bug, not an input, hence the assert.
+pub(crate) fn input_terminal_footprint(
+    anchor: Anchor,
+    facing: geometry::CellFacing,
+    outside: Facing,
+) -> (Vec<Anchor>, Vec<Anchor>, Anchor) {
+    let inward = geometry::output_direction(facing);
+    assert_ne!(
+        inward, outside,
+        "an input terminal's repeater may not stand in the reserved outside cell"
+    );
+    let home = Position::new(anchor.x, anchor.y, anchor.z);
+    let normalizer = home.offset(inward);
+    let pin = normalizer.offset(inward);
+    let outside_cell = home.offset(outside);
+    let cell = |p: Position| Anchor { x: p.x, y: p.y, z: p.z };
+    (
+        vec![anchor, cell(normalizer), cell(pin), cell(outside_cell)],
+        vec![anchor, cell(normalizer), cell(pin)],
+        cell(pin),
+    )
 }
 
 fn legacy_primitive_nodes(netlist: &Netlist, anchors: &[Anchor]) -> Vec<PrimitiveNode> {
@@ -9839,5 +9941,82 @@ mod tests {
             }
         }
         count
+    }
+
+    /// The strength-1 independence the terminal contract rests on: the caller
+    /// may power the pinned dust at any strength >= 1, and the circuit reads
+    /// full strength regardless, because the normalizing repeater reshapes
+    /// whatever arrives. Pinned by driving the dust at exactly 1 -- a lever
+    /// fourteen dust cells away, the longest run a signal survives -- and
+    /// reading 15 past the repeater through the real simulator.
+    #[test]
+    fn a_terminal_driven_at_strength_one_still_delivers_fifteen_past_its_repeater() {
+        use crate::redstone::simulator::Simulator;
+
+        let mut world = World::new(24, 4, 8);
+        let y = 1;
+        let z = 4;
+        // The caller: a lever at x = 2 and a dust run x = 3..=16, so the
+        // terminal dust at x = 17 receives 15 - 14 = 1.
+        let lever_at = Position::new(2, y, z);
+        ensure_floor(&mut world, lever_at);
+        world.set(lever_at.x, lever_at.y, lever_at.z, lever(true));
+        for x in 3..=16 {
+            let cell = Position::new(x, y, z);
+            ensure_floor(&mut world, cell);
+            world.set(cell.x, cell.y, cell.z, dust());
+        }
+
+        // The terminal, built exactly as realisation builds it: dust at the
+        // pinned cell, repeater one cell inward (east, away from the caller),
+        // pin dust one further.
+        let home = Position::new(17, y, z);
+        let (terminal, pin) = place_input_terminal(&mut world, home, geometry::CellFacing::EAST);
+        assert_eq!(terminal, home);
+        assert_eq!(pin, Position::new(19, y, z));
+
+        let mut simulator = Simulator::new(world);
+        simulator.run_until_stable(2000).expect("settles");
+        assert_eq!(
+            simulator.world().get(terminal.x, terminal.y, terminal.z).power,
+            1,
+            "the fixture must actually deliver strength 1 at the terminal dust, \
+             or this measures nothing"
+        );
+        assert_eq!(
+            simulator.world().get(pin.x, pin.y, pin.z).power,
+            15,
+            "the repeater reshapes a strength-1 arrival to full strength"
+        );
+
+        // And low is low: the caller unpowers the dust, the pin follows.
+        let mut off = simulator.world().get(lever_at.x, lever_at.y, lever_at.z).clone();
+        off.lit = false;
+        simulator.world_mut().set(lever_at.x, lever_at.y, lever_at.z, off);
+        simulator.run_until_stable(2000).expect("settles again");
+        assert_eq!(simulator.world().get(pin.x, pin.y, pin.z).power, 0);
+    }
+
+    /// The terminal footprint's outside cell is claimed and inert: routing
+    /// keeps out of the caller's attachment point, and nothing is emitted
+    /// there. The conducting cells are the two-hop pin shape a NOR has, with
+    /// the repeater standing where the torch would.
+    #[test]
+    fn a_terminal_footprint_claims_its_outside_cell_without_conducting_there() {
+        let anchor = Anchor { x: 10, y: 1, z: 10 };
+        // Facing east, outside south: repeater at x+1, pin at x+2, reserved
+        // cell at z+1.
+        let (footprint, conductors, pin) =
+            input_terminal_footprint(anchor, geometry::CellFacing::EAST, Facing::South);
+
+        assert_eq!(pin, Anchor { x: 12, y: 1, z: 10 });
+        let outside = Anchor { x: 10, y: 1, z: 11 };
+        assert!(footprint.contains(&outside), "the outside cell is claimed");
+        assert!(!conductors.contains(&outside), "and ships empty");
+        assert_eq!(
+            conductors,
+            vec![anchor, Anchor { x: 11, y: 1, z: 10 }, pin],
+            "dust, normalizing repeater, pin -- all conduct"
+        );
     }
 }
