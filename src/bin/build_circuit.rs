@@ -63,22 +63,38 @@ struct PinsFile {
 fn parse_pins_file(text: &str) -> Result<PinsFile, String> {
     let mut cursor = Cursor { bytes: text.as_bytes(), pos: 0 };
     let mut pins = PinsFile { inputs: Vec::new(), outputs: Vec::new() };
+    let (mut saw_inputs, mut saw_outputs) = (false, false);
 
     cursor.expect(b'{')?;
     if cursor.peek() != Some(b'}') {
         loop {
             let section = cursor.string()?;
             cursor.expect(b':')?;
-            let ports = match section.as_str() {
-                "inputs" => &mut pins.inputs,
-                "outputs" => &mut pins.outputs,
+            match section.as_str() {
+                "inputs" => {
+                    if saw_inputs {
+                        return Err(
+                            "section `inputs` contains duplicate key `inputs`".to_string()
+                        );
+                    }
+                    saw_inputs = true;
+                    parse_port_map(&mut cursor, "inputs", &mut pins.inputs)?;
+                }
+                "outputs" => {
+                    if saw_outputs {
+                        return Err(
+                            "section `outputs` contains duplicate key `outputs`".to_string()
+                        );
+                    }
+                    saw_outputs = true;
+                    parse_port_map(&mut cursor, "outputs", &mut pins.outputs)?;
+                }
                 other => {
                     return Err(format!(
                         "unknown key \"{other}\": a pins file has \"inputs\" and \"outputs\""
                     ))
                 }
-            };
-            parse_port_map(&mut cursor, ports)?;
+            }
             if !cursor.take(b',') {
                 break;
             }
@@ -96,15 +112,22 @@ fn parse_pins_file(text: &str) -> Result<PinsFile, String> {
 }
 
 /// One `{"name": {pin}, ...}` section of the pins file.
-fn parse_port_map(cursor: &mut Cursor, ports: &mut Vec<(String, PortPin)>) -> Result<(), String> {
+fn parse_port_map(
+    cursor: &mut Cursor,
+    section: &str,
+    ports: &mut Vec<(String, PortPin)>,
+) -> Result<(), String> {
     cursor.expect(b'{')?;
     if cursor.peek() != Some(b'}') {
         loop {
             let name = cursor.string()?;
             cursor.expect(b':')?;
-            let pin = parse_pin(cursor).map_err(|why| format!("port \"{name}\": {why}"))?;
+            let pin = parse_pin(cursor)
+                .map_err(|why| format!("section \"{section}\", port \"{name}\": {why}"))?;
             if ports.iter().any(|(existing, _)| existing == &name) {
-                return Err(format!("port \"{name}\" is pinned twice"));
+                return Err(format!(
+                    "section \"{section}\", port \"{name}\" is pinned twice"
+                ));
             }
             ports.push((name, pin));
             if !cursor.take(b',') {
@@ -132,6 +155,9 @@ fn parse_pin(cursor: &mut Cursor) -> Result<PortPin, String> {
         cursor.expect(b':')?;
         match key.as_str() {
             "at" => {
+                if at.is_some() {
+                    return Err("duplicate key \"at\"".to_string());
+                }
                 let triple = (|| {
                     cursor.expect(b'[')?;
                     let x = cursor.integer()?;
@@ -148,6 +174,9 @@ fn parse_pin(cursor: &mut Cursor) -> Result<PortPin, String> {
                 at = Some(triple);
             }
             "toward" => {
+                if toward.is_some() {
+                    return Err("duplicate key \"toward\"".to_string());
+                }
                 let name = cursor.string()?;
                 toward = Some(match name.as_str() {
                     "north" => Facing::North,
@@ -901,6 +930,42 @@ mod tests {
             assert!(
                 error.contains(must_mention),
                 "the refusal of `{broken}` must mention `{must_mention}`, got: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn duplicate_sections_and_pin_keys_are_refused_with_full_context() {
+        for (broken, section, port, key) in [
+            (r#"{"inputs": {}, "inputs": {}}"#, "inputs", None, "inputs"),
+            (r#"{"outputs": {}, "outputs": {}}"#, "outputs", None, "outputs"),
+            (
+                r#"{"inputs": {"a": {"at": [1,1,1], "at": [2,2,2], "toward": "south"}}}"#,
+                "inputs",
+                Some("a"),
+                "at",
+            ),
+            (
+                r#"{"outputs": {"y": {"at": [1,1,1], "toward": "south", "toward": "north"}}}"#,
+                "outputs",
+                Some("y"),
+                "toward",
+            ),
+        ] {
+            let error = parse_pins_file(broken).expect_err("duplicate JSON keys must be refused");
+            assert!(
+                error.contains(section),
+                "the refusal must name section `{section}`: {error}"
+            );
+            if let Some(port) = port {
+                assert!(
+                    error.contains(port),
+                    "the refusal must name port `{port}`: {error}"
+                );
+            }
+            assert!(
+                error.contains(key),
+                "the refusal must name duplicate key `{key}`: {error}"
             );
         }
     }

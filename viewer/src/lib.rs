@@ -167,6 +167,68 @@ struct BakedParts {
     pinout: BakedPinout,
 }
 
+/// Refuse a sidecar whose port names do not describe exactly the selected
+/// circuit. This runs before any port is interpreted or any caller fixture is
+/// installed, so malformed metadata cannot add controls or mutate the world.
+fn validate_baked_pinout_ports(
+    circuit_name: &str,
+    source_netlist: &Netlist,
+    declared_outputs: &[(String, String)],
+    baked_inputs: &BTreeMap<String, BakedPort>,
+    baked_outputs: &BTreeMap<String, BakedPort>,
+) -> Result<(), String> {
+    for name in baked_inputs.keys() {
+        if !source_netlist.inputs.contains(name) {
+            return Err(format!(
+                "circuit `{circuit_name}` baked pinout has unknown input port `{name}`"
+            ));
+        }
+    }
+    for name in &source_netlist.inputs {
+        if !baked_inputs.contains_key(name) {
+            return Err(format!(
+                "circuit `{circuit_name}` baked pinout is missing required input port `{name}`"
+            ));
+        }
+    }
+
+    for name in baked_outputs.keys() {
+        let aliases = declared_outputs
+            .iter()
+            .filter(|(display_name, signal_name)| name == display_name || name == signal_name)
+            .count();
+        if aliases == 0 {
+            return Err(format!(
+                "circuit `{circuit_name}` baked pinout has unknown output port `{name}`"
+            ));
+        }
+        if aliases > 1 {
+            return Err(format!(
+                "circuit `{circuit_name}` baked pinout has ambiguous output port alias `{name}`"
+            ));
+        }
+    }
+    for (display_name, signal_name) in declared_outputs {
+        let by_display = baked_outputs.contains_key(display_name);
+        let by_signal = signal_name != display_name && baked_outputs.contains_key(signal_name);
+        match (by_display, by_signal) {
+            (false, false) => {
+                return Err(format!(
+                    "circuit `{circuit_name}` baked pinout is missing required output port `{display_name}`"
+                ));
+            }
+            (true, true) => {
+                return Err(format!(
+                    "circuit `{circuit_name}` baked pinout specifies output port `{display_name}` twice through aliases `{display_name}` and `{signal_name}`"
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum InputControl {
     Lever,
@@ -999,6 +1061,13 @@ impl Session {
                     inputs: baked_inputs,
                     outputs: baked_outputs,
                 } = pinout;
+                validate_baked_pinout_ports(
+                    circuit_name,
+                    &source_netlist,
+                    &outputs,
+                    &baked_inputs,
+                    &baked_outputs,
+                )?;
                 let mut input_positions = BTreeMap::new();
                 let mut input_controls = BTreeMap::new();
                 for (name, port) in baked_inputs {
@@ -1016,23 +1085,6 @@ impl Session {
                     output_positions.insert(name, (at[0], at[1], at[2]));
                     if pinned {
                         pinned_outputs.push((at[0], at[1], at[2]));
-                    }
-                }
-
-                for name in &source_netlist.inputs {
-                    if !input_positions.contains_key(name) {
-                        return Err(format!(
-                            "baked pinout is missing required input port `{name}`"
-                        ));
-                    }
-                }
-                for (display_name, signal_name) in &outputs {
-                    if !output_positions.contains_key(signal_name)
-                        && !output_positions.contains_key(display_name)
-                    {
-                        return Err(format!(
-                            "baked pinout is missing required output port `{display_name}`"
-                        ));
                     }
                 }
 
@@ -2247,10 +2299,97 @@ mod pinned_baked_session_tests {
             Ok(_) => panic!("a baked and4 without output `y` must be refused"),
         };
 
-        assert!(
-            error.contains("`y`"),
-            "the malformed pinout must name its missing output port: {error}"
-        );
+        for context in ["grown:and4", "output", and4::OUTPUT_NAME] {
+            assert!(
+                error.contains(context),
+                "the missing-output refusal must include `{context}`: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn missing_declared_input_is_named_before_any_fixture_is_installed() {
+        let mut parts = pinned_and4_baked_parts();
+        parts.pinout.inputs.remove("a");
+
+        let error = match Session::build_inner("grown:and4", Some(parts)) {
+            Err(error) => error,
+            Ok(_) => panic!("a baked and4 without input `a` must be refused"),
+        };
+
+        for context in ["grown:and4", "input", "a"] {
+            assert!(
+                error.contains(context),
+                "the missing-input refusal must include `{context}`: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_input_is_refused_before_any_fixture_is_installed() {
+        let mut parts = pinned_and4_baked_parts();
+        parts
+            .pinout
+            .inputs
+            .insert("intruder".to_string(), BakedPort::Unpinned([0, 0, 0]));
+
+        let error = match Session::build_inner("grown:and4", Some(parts)) {
+            Err(error) => error,
+            Ok(_) => panic!("a baked and4 with an undeclared input must be refused"),
+        };
+
+        for context in ["grown:and4", "input", "intruder"] {
+            assert!(
+                error.contains(context),
+                "the unknown-input refusal must include `{context}`: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_output_is_refused_before_any_fixture_is_installed() {
+        let mut parts = pinned_and4_baked_parts();
+        parts
+            .pinout
+            .outputs
+            .insert("intruder".to_string(), BakedPort::Unpinned([0, 0, 0]));
+
+        let error = match Session::build_inner("grown:and4", Some(parts)) {
+            Err(error) => error,
+            Ok(_) => panic!("a baked and4 with an undeclared output must be refused"),
+        };
+
+        for context in ["grown:and4", "output", "intruder"] {
+            assert!(
+                error.contains(context),
+                "the unknown-output refusal must include `{context}`: {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn output_display_and_internal_aliases_cannot_both_name_one_declared_port() {
+        let mut parts = pinned_and4_baked_parts();
+        let (_, internal_name) = and4::build_and4_netlist();
+        let duplicate = parts
+            .pinout
+            .outputs
+            .get(and4::OUTPUT_NAME)
+            .expect("the fixture has the display alias")
+            .clone();
+        parts.pinout.outputs.insert(internal_name.clone(), duplicate);
+
+        let error = match Session::build_inner("grown:and4", Some(parts)) {
+            Err(error) => error,
+            Ok(_) => panic!("both aliases for one baked output must be refused"),
+        };
+
+        for context in ["grown:and4", "output", and4::OUTPUT_NAME, &internal_name] {
+            assert!(
+                error.contains(context),
+                "the dual-alias refusal must include `{context}`: {error}"
+            );
+        }
     }
 }
 

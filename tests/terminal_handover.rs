@@ -16,7 +16,10 @@
 //!
 //! A pin is `(at, toward)`. `P` ([`pinned_cell`]) is the caller's cell, and
 //! `toward` is **the direction the signal travels through it**, which is a
-//! requirement and not a hint: it names the single cell REDA may build in.
+//! requirement and not a hint: it names the pin's only signal-carrying REDA
+//! neighbour. The other five face-neighbours admit no routing cell or
+//! signal-carrying primitive conductor, but are not guaranteed empty or
+//! caller-owned; inert support, floor, or fill may occupy them.
 //!
 //! * **Output** -- the signal leaves the circuit heading `toward`, so REDA
 //!   drives `P` from `P - toward` and its own net continues back at
@@ -111,8 +114,8 @@
 //! * `P + d`, for every direction `d` but `h` -- always, because REDA's own
 //!   delivery makes `P` a source for dust; and
 //! * `P + d + h`, the cells flanking the handover -- because a conductive
-//!   block the caller is entitled to place at `P + d` is one step from them,
-//!   and carries a caller source straight into them
+//!   block that may exist at `P + d` is one step from them and carries an
+//!   external source straight into them
 //!   ([`a_caller_conductor_beside_the_pinned_cell_reaches_dust_beside_the_handover`],
 //!   measured in both roles).
 //!
@@ -593,17 +596,18 @@ fn toward_names_one_handover_cell_per_role_and_they_are_opposite() {
             "the two handovers straddle the caller's cell on the `toward` axis"
         );
 
-        // Everything else is the caller's to build in, and REDA may not.
-        let reda = [handover(toward, Role::Output), handover(toward, Role::Input)];
+        // Across both roles, only the `toward` axis contains handover cells.
+        // This says nothing about ownership or inert occupancy elsewhere.
+        let handovers = [handover(toward, Role::Output), handover(toward, Role::Input)];
         for direction in ALL_SIX {
             let neighbour = p.offset(direction);
-            let claimed = reda.contains(&neighbour);
+            let is_handover = handovers.contains(&neighbour);
             assert_eq!(
-                claimed,
+                is_handover,
                 direction == toward || direction == toward.opposite(),
-                "toward {toward:?}: only the `toward` axis may be REDA's, and \
+                "toward {toward:?}: only the `toward` axis contains a handover; \
                  {direction:?} is {}",
-                if claimed { "claimed" } else { "free" }
+                if is_handover { "one" } else { "not one" }
             );
         }
     }
@@ -1488,7 +1492,7 @@ fn a_delivered_pinned_cell_leaks_one_cell_and_a_caller_source_leaks_two() {
 /// Where that second cell actually lands, named as a coordinate rather than
 /// as a depth: the neighbour of `P` perpendicular to `toward` is one step
 /// from the cell beside REDA's own handover, in **either** role. This test
-/// deliberately places a hypothetical caller-owned conductive fixture in a
+/// deliberately places a hypothetical external conductive fixture in a
 /// non-handover cell and powers `P` from the caller's side, demonstrating that
 /// it re-drives any dust REDA left touching the handover. That is a signal
 /// isolation/refusal probe, not a claim that the contract grants this cell to

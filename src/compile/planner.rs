@@ -3111,9 +3111,11 @@ pub enum PortRole {
 /// in it, decided after compilation and outside this compiler's knowledge.
 ///
 /// `toward` must be horizontal, and it is a requirement rather than a hint --
-/// it names the single neighbour REDA may build in ([`PortPin::handover`]).
-/// Of the six face-neighbours, the other five -- excluding the handover -- may
-/// contain no signal-carrying REDA cell.
+/// it names the pin's only signal-carrying REDA neighbour
+/// ([`PortPin::handover`]). Of the six face-neighbours, the other five may
+/// contain neither a routing cell nor a signal-carrying primitive conductor.
+/// They are not guaranteed empty or caller-owned: inert support, floor, or
+/// fill may still occupy them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PortPin {
     pub at: Anchor,
@@ -3121,7 +3123,7 @@ pub struct PortPin {
 }
 
 impl PortPin {
-    /// The one cell REDA may build its handover hardware in.
+    /// The one cell where REDA may place signal-carrying handover hardware.
     ///
     /// An **output**'s signal leaves the circuit heading `toward`, so it is
     /// driven into the caller's cell from the neighbour it comes *from*:
@@ -12479,8 +12481,8 @@ mod tests {
     /// # Why each `toward` is what it is
     ///
     /// `toward` is the direction the signal travels through the caller's
-    /// cell, and it is a requirement, not a hint: it names the single
-    /// neighbour REDA may build in -- `at - toward` for an output,
+    /// cell, and it is a requirement, not a hint: it names the pin's only
+    /// signal-carrying REDA neighbour -- `at - toward` for an output,
     /// `at + toward` for an input. Choosing it *is* choosing which side of
     /// each segment the circuit must arrive on, and there is no sweep left
     /// for the router afterwards. All three choices below are measured on
