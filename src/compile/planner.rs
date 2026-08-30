@@ -12503,9 +12503,11 @@ mod tests {
     /// This is the shipping record, measured 2026-08-31 with --release on
     /// this commit's own content:
     ///
-    /// * `compile_grown` returned **Ok in 56 to 68s** -- three runs on one
-    ///   machine, 62.5 / 67.9 / 55.8; everything below was identical in all
-    ///   three, because only the clock is not deterministic. The portfolio
+    /// * `compile_grown` returned **Ok in about a minute** -- four clean
+    ///   runs on one machine, 55.8 / 62.5 / 67.9 / 72.7s. The clock is the
+    ///   only thing here that is not deterministic; everything below was
+    ///   identical in all four, so treat the spread as this machine's noise
+    ///   and the counts as the record. The portfolio
     ///   pays for both arms as designed, and one instrumented run says how
     ///   the time splits: the distance-only arm refuses this circuit as it
     ///   always has (38.4s to fail its first growth iteration on `no safe
