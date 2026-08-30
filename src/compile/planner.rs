@@ -5983,18 +5983,16 @@ fn verified_parts(
     // realisation actually put at each sink -- a plan claiming directed dust
     // over a repeater is priced wrongly even when the circuit works.
     for (net, route) in candidate.routes.iter().enumerate() {
-        for terminal in &route.terminals {
-            compile::verify_route_terminal(
-                &realised.world,
-                &reservation,
-                netlist,
-                &nets,
-                net,
-                &route.id,
-                terminal,
-            )
-            .map_err(PlannerError::PhysicalInvariant)?;
-        }
+        compile::verify_route_terminals(
+            &realised.world,
+            &reservation,
+            netlist,
+            &nets,
+            net,
+            &route.id,
+            &route.terminals,
+        )
+        .map_err(PlannerError::PhysicalInvariant)?;
     }
 
     compile::verify_realised_world(
@@ -12264,37 +12262,152 @@ mod tests {
         );
     }
 
+    /// A pinned output that also feeds a wire merge fans out beyond that
+    /// merge, so its branch into the merge is isolated -- and the verifier
+    /// has to agree with the router about that.
+    ///
+    /// The two sides derive the same fact from different places. The router
+    /// reads `lay_net`'s `consumers`, which since terminals landed holds the
+    /// output terminal alongside the gate sockets, and correctly refuses to
+    /// call the branch bare. The verifier re-derives it from
+    /// `Net::sinks`, which [`verification_nets`] builds by **skipping**
+    /// `OutputTerminalRepeater` -- so it used to see a net whose only sink
+    /// was the merge, call the branch bare, and refuse the very plan the
+    /// router had just laid correctly. Measured on the glyph acceptance
+    /// (2026-08-31): `terminal style RepeaterIntoSupport does not match its
+    /// realised sink block Repeater ... into g18 input 1 (merge: true)`,
+    /// where `g17` is the decoder's segment `d` and also a feeder of segment
+    /// `a`'s merge. Nothing before pins could reach it: an unpinned output's
+    /// lamp hangs under its producing gate and is on no net at all.
+    #[test]
+    fn a_pinned_output_that_also_feeds_a_merge_keeps_its_isolating_repeater() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: vec!["s".to_string(), "y".to_string()],
+            gates: vec![
+                Gate::nor("s", &["a"]),
+                Gate::nor("t", &["b"]),
+                Gate::merge("m", &["s", "t"]),
+                Gate::nor("y", &["m"]),
+            ],
+        };
+        // `s` is a declared output whose only *gate* sink is the merge, so
+        // the netlist alone reads it as a private branch. The pin is what
+        // makes that reading wrong.
+        let mut placements = PortPlacements::default();
+        placements.pin("s", Anchor { x: 30, y: 1, z: 30 }, Facing::East);
+
+        let compiled = crate::compile::compile_planned(&netlist, &placements)
+            .unwrap_or_else(|error| panic!("the pinned merge feeder compiles: {error}"));
+        assert_terminal_contract_in_the_world(&compiled, &placements, &netlist);
+
+        let vectors = simulated_truth_table_driving_pins(
+            &compiled,
+            &["a", "b"],
+            &["s".to_string(), "y".to_string()],
+            |bits| vec![!bits[0], bits[0] && bits[1]],
+            &placements,
+        )
+        .expect("the isolated branch still computes");
+        assert_eq!(vectors, 4, "both outputs right at every vector");
+    }
+
     /// The glyph acceptance's fixture: the lowered decoder, its seven
     /// segment signals in `a`..`g` order (the order
     /// [`seven_segment_expected`] answers in, resolved here rather than
     /// taken from the labels channel's own ordering), and the eleven pins --
-    /// the digit at y = 1 (left column
-    /// x = 48, spine x = 52, right column x = 56; rows z = 40, the top bar,
-    /// through z = 56, the bottom bar) plus the input row at z = 64, eight
-    /// cells south of the bottom bar.
+    /// the digit at y = 1 (left column x = 68, spine x = 76, right column
+    /// x = 84; top bar z = 24, middle bar z = 40, bottom bar z = 56, with
+    /// the four verticals halfway between at z = 32 and z = 48) plus the
+    /// input row at z = 120, sixty-four cells south of the bottom bar.
+    /// Output pins are keyed by internal signal name; `a`..`g` resolve
+    /// through the output-labels channel, the same resolution the CLI's
+    /// `--pins` performs.
     ///
-    /// One pinned cell per segment at pitch 4 -- far beyond the
-    /// one-empty-cell gap the contract demands -- and every `toward` carries
-    /// the signal away from the digit's spine except `g`, the middle bar,
-    /// which has no outward side and sends its signal into the glyph's open
-    /// interior. The inputs' `toward` is north: their signal enters heading
-    /// into the circuit, which sits north of their row. Output pins are keyed
-    /// by internal signal name; `a`..`g` resolve through the output-labels
-    /// channel, the same resolution the CLI's `--pins` performs.
+    /// # Why these coordinates
     ///
-    /// The band is measured, not aesthetic. Worlds start at the origin and
-    /// only grow toward positive coordinates, and pinned anchors suppress
-    /// the whole-layout drift translation, so the pins choose where the
-    /// 47-gate mass may spread -- and the relaxed decoder wants roughly
-    /// 170 x 140 of plan around them. Measured 2026-08-30 by sweeping this
-    /// pin set's translation through one relaxation each: at the origin
-    /// corner (glyph z 8..24) the mass spills north, `cell (96, 1, -6) is
-    /// outside the world`; at this z band but x 16..24, twelve inflations
-    /// creep ~31 cells west and die at `cell (-17, 1, 65)`; another +32 in
-    /// x and the separation projection deadlocks outright (shortfall ~1.25
-    /// -- the pins' pull must stay within reach of `starting_layout`'s
-    /// absolute rows). This band's snapped mass sat at x 46..141, z 39..116,
-    /// the best west margin of every band that relaxed at all.
+    /// **A pin set that squeezes the circuit is the one that will not
+    /// route.** Worlds start at the origin and only grow toward positive
+    /// coordinates, and pinned anchors suppress the whole-layout drift
+    /// translation, so the pins implicitly decide where the 47-gate mass may
+    /// spread -- there is no board outline to say it out loud, and a badly
+    /// placed glyph fails as `outside the world` or `Deadlocked` rather than
+    /// as a stated refusal (the spec's "Deliberately out" says so).
+    ///
+    /// Measured 2026-08-31, the free decoder's own geometry is the ruler:
+    /// relaxed and snapped with no pins at all it occupies x 52..154,
+    /// z 21..121, its segment-producing gates at `a`(114, 60), `b`(97, 71),
+    /// `c`(103, 99), `d`(122, 56), `e`(142, 90), `f`(154, 21), `g`(134, 51)
+    /// and its four inputs around (94, 106). Pins pull that mass together,
+    /// and a glyph is a *tight* cluster of seven of them:
+    ///
+    /// * the first shipping band (digit x 48..56 at pitch 4, inputs at
+    ///   z = 64 at pitch 4) relaxes to 95 x 77 -- a fifth smaller than the
+    ///   free 102 x 100 -- and never routes. One negotiated attempt burns
+    ///   643s and ends `negotiation did not separate the nets within 32
+    ///   iterations`, under both search models.
+    /// * this band relaxes to 107 x 96 and the strength-aware arm routes it
+    ///   on its **first** iteration, in 25.4s.
+    ///
+    /// The input row's pitch is what decides whether relaxation converges at
+    /// all. Sweeping eighteen glyphs (spine 76/100/124 x half-width 8/16 x
+    /// half-pitch 8/12/16): with the row at z = 104 or z = 112 at pitch 8
+    /// the separation projection deadlocks for **every** one of them
+    /// (`bodies 4 and 70 cannot be 0.500 further apart and stay welded`);
+    /// with the row at z = 120 at pitch 12 every one of the same eighteen
+    /// relaxed. Of those, spine 76 is the one whose plan the router then
+    /// laid first try; spine 100 needed a second growth iteration (267.0s)
+    /// and spine 124 never got a clean one.
+    ///
+    /// # Why each `toward` is what it is
+    ///
+    /// `toward` is the direction the signal travels through the caller's
+    /// cell, and it is a requirement, not a hint: it names the single
+    /// neighbour REDA may build in -- `at - toward` for an output,
+    /// `at + toward` for an input. Choosing it *is* choosing which side of
+    /// each segment the circuit must arrive on, and there is no sweep left
+    /// for the router afterwards. All three choices below are measured on
+    /// this band, each by one strength-aware run:
+    ///
+    /// * **The six outline segments point out of the digit** (`a` north,
+    ///   `b`/`c` east, `d` south, `e`/`f` west). That puts every handover
+    ///   repeater inside the digit's own hollow -- the one region a caller
+    ///   who asked for a digit has already agreed to leave empty -- and
+    ///   leaves the outward face of all seven cells free for whatever they
+    ///   hang there. Turned inward, so the handovers stand outside the ring,
+    ///   the same band still routes but fails verification: `net n13 never
+    ///   delivers a non-zero signal to gate n17's support block
+    ///   (134, 1, 80)`.
+    /// * **`g`, the middle bar, points west.** It is the one segment with no
+    ///   outward side: it lies on the spine with hollow on both sides, so
+    ///   west and east are mirror images and nothing but measurement
+    ///   separates them. Both ship -- 25.4s and 16/16 either way -- and west
+    ///   costs 5,323 blocks against east's 5,331. Eight blocks is the whole
+    ///   argument, and it is stated here so nobody re-derives a symmetry
+    ///   that does not exist.
+    /// * **The four inputs point north**, into the machine: the row is the
+    ///   south edge of the demo and the circuit is north of it, so each
+    ///   signal enters heading north and REDA's reading repeater stands
+    ///   between the caller's cell and the circuit. Pointing them south --
+    ///   reading the row from the far side and carrying every input back
+    ///   around it -- does not route at all: `negotiation did not separate
+    ///   the nets within 32 iterations`, at 140.6s.
+    ///
+    /// The pitches are far beyond the one-empty-cell gap the contract
+    /// demands; what they are really buying is the room measured above.
+    ///
+    /// # What the first campaign's sweep had already found
+    ///
+    /// Kept because it is about the mechanism, not about the band that has
+    /// since been replaced. Sweeping the old pin set's *translation* through
+    /// one relaxation each (2026-08-30): at the origin corner (glyph
+    /// z 8..24) the mass spills north and dies as `cell (96, 1, -6) is
+    /// outside the world`; at the old z band but x 16..24 twelve inflations
+    /// creep some 31 cells west and die at `cell (-17, 1, 65)`; another +32
+    /// in x and the separation projection deadlocks outright. Two rules come
+    /// out of that and still hold: a pin set may not sit so near the origin
+    /// that the mass it pulls has nowhere to go, and its pull must stay
+    /// within reach of [`starting_layout`]'s absolute rows.
     fn pinned_glyph_decoder() -> (Netlist, Vec<String>, PortPlacements) {
         let circuit = crate::circuits::verilog::find("verilog:seven_segment")
             .expect("the catalog has the decoder");
@@ -12303,13 +12416,13 @@ mod tests {
             .expect("the decoder lowers");
 
         let glyph: &[(&str, Anchor, Facing)] = &[
-            ("a", Anchor { x: 52, y: 1, z: 40 }, Facing::North),
-            ("b", Anchor { x: 56, y: 1, z: 44 }, Facing::East),
-            ("c", Anchor { x: 56, y: 1, z: 52 }, Facing::East),
-            ("d", Anchor { x: 52, y: 1, z: 56 }, Facing::South),
-            ("e", Anchor { x: 48, y: 1, z: 52 }, Facing::West),
-            ("f", Anchor { x: 48, y: 1, z: 44 }, Facing::West),
-            ("g", Anchor { x: 52, y: 1, z: 48 }, Facing::West),
+            ("a", Anchor { x: 76, y: 1, z: 24 }, Facing::North),
+            ("b", Anchor { x: 84, y: 1, z: 32 }, Facing::East),
+            ("c", Anchor { x: 84, y: 1, z: 48 }, Facing::East),
+            ("d", Anchor { x: 76, y: 1, z: 56 }, Facing::South),
+            ("e", Anchor { x: 68, y: 1, z: 48 }, Facing::West),
+            ("f", Anchor { x: 68, y: 1, z: 32 }, Facing::West),
+            ("g", Anchor { x: 76, y: 1, z: 40 }, Facing::West),
         ];
         assert_eq!(
             glyph.iter().map(|(label, _, _)| *label).collect::<Vec<_>>(),
@@ -12331,7 +12444,7 @@ mod tests {
         for (index, name) in crate::circuits::seven_segment::INPUT_NAMES.iter().enumerate() {
             placements.pin(
                 *name,
-                Anchor { x: 46 + 4 * index as i32, y: 1, z: 64 },
+                Anchor { x: 76 + 12 * index as i32, y: 1, z: 120 },
                 Facing::North,
             );
         }
@@ -12387,8 +12500,29 @@ mod tests {
     /// This one judges blocks, so a gate body parked beside a pinned cell --
     /// the gap that clause's doc comment names -- fails the record.
     ///
-    /// This is the shipping record, measured 2026-08-30 with --release:
-    /// RECORD_PLACEHOLDER
+    /// This is the shipping record, measured 2026-08-31 with --release on
+    /// this commit's own content:
+    ///
+    /// * `compile_grown` returned **Ok in 56 to 68s** -- three runs on one
+    ///   machine, 62.5 / 67.9 / 55.8; everything below was identical in all
+    ///   three, because only the clock is not deterministic. The portfolio
+    ///   pays for both arms as designed, and one instrumented run says how
+    ///   the time splits: the distance-only arm refuses this circuit as it
+    ///   always has (38.4s to fail its first growth iteration on `no safe
+    ///   local route from (122, 1, 86) to (126, 1, 84)`, then out), and the
+    ///   strength-aware arm routes the plan on its **first** iteration in
+    ///   23.0s.
+    /// * **5,323 blocks** in a **171 x 7 x 124** box.
+    /// * truth table **16/16** through the real `Simulator`, every input
+    ///   driven by a fixture source in the caller's own cell and every
+    ///   output read through a probe lamp in the caller's own cell.
+    /// * **86 ticks** worst settle over the sixteen chained transitions,
+    ///   which move all four inputs at once.
+    ///
+    /// For scale: the same circuit at the first shipping band never routed
+    /// at all -- 643s per growth iteration, twelve of them, under either
+    /// search model. [`pinned_glyph_decoder`]'s doc carries that measurement
+    /// and what it says about where a caller may put a glyph.
     ///
     /// ```bash
     /// cargo test --release --lib \
@@ -12396,7 +12530,7 @@ mod tests {
     ///   -- --ignored --nocapture
     /// ```
     #[test]
-    #[ignore = "the shipping record: compile_grown on the decoder pinned as a digit glyph, minutes"]
+    #[ignore = "the shipping record: compile_grown on the decoder pinned as a digit glyph, a minute"]
     fn the_decoder_computes_as_a_digit_glyph_through_pinned_terminals() {
         use crate::redstone::world::block::BlockKind;
         use std::time::Instant;

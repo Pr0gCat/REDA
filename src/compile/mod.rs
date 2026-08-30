@@ -6955,21 +6955,64 @@ pub(crate) fn verify_realised_world(
     )
 }
 
-/// Check that a route's recorded terminal describes the block realisation
-/// actually put at its sink.
+/// Check that a route's recorded terminals describe the block realisations
+/// actually put at their sinks.
 ///
 /// Terminal style is a planning decision -- dust or repeater into a support
 /// -- and a plan that says one thing while its world holds the other is a
 /// plan nobody can trust the cost of.
-pub(crate) fn verify_route_terminal(
+///
+/// The **whole** route's terminals at once, rather than one at a time,
+/// because one of the facts a terminal is judged against is not local to it:
+/// whether a merge branch is bare depends on the net's entire fan-out, and
+/// one of the things a net can fan out to is a pinned output's handover,
+/// which appears nowhere in [`Net::sinks`].
+pub(crate) fn verify_route_terminals(
     world: &World,
     reservation: &Reservation,
     netlist: &Netlist,
     nets: &[Net],
     net: usize,
     route: &str,
-    terminal: &RouteTerminal,
+    terminals: &[RouteTerminal],
 ) -> Result<(), CompileError> {
+    // A net that also delivers into a pinned output's handover fans out to
+    // something besides any merge it feeds, so that branch is isolated --
+    // which is exactly what `lay_net` decided, reading its own consumer list
+    // where the terminal sits beside the gate sockets. `verification_nets`
+    // drops that terminal from `Net::sinks` on purpose (a port is nobody's
+    // gate input), so a netlist-only reading would call such a branch bare and
+    // refuse the plan the router had just laid correctly.
+    let drives_a_pinned_port = terminals
+        .iter()
+        .any(|terminal| terminal.kind == RouteTerminalKind::OutputTerminalRepeater);
+    for terminal in terminals {
+        verify_one_terminal(
+            world,
+            reservation,
+            netlist,
+            nets,
+            (net, route),
+            terminal,
+            drives_a_pinned_port,
+        )?;
+    }
+    Ok(())
+}
+
+/// One terminal of [`verify_route_terminals`]' route. `owner` is the net's
+/// index and the route's id, which travel together and are only ever used
+/// together.
+fn verify_one_terminal(
+    world: &World,
+    reservation: &Reservation,
+    netlist: &Netlist,
+    nets: &[Net],
+    owner: (usize, &str),
+    terminal: &RouteTerminal,
+    drives_a_pinned_port: bool,
+) -> Result<(), CompileError> {
+    let (net, route) = owner;
     // A pinned output's handover is no gate's socket: its `sink.gate` carries
     // the port name (the producing gate's own output signal), and the only
     // structural claim to check is the contract's -- one delivery repeater at
@@ -7039,7 +7082,7 @@ pub(crate) fn verify_route_terminal(
     // and whether this is a bare merge branch. Not by whether the sink gate
     // is a merge -- a merge branch that is *not* bare lands through
     // `lay_bent_path` like any other, with an ordinary repeater.
-    let bare = merge_branch_is_bare(netlist, &nets[net], gate);
+    let bare = !drives_a_pinned_port && merge_branch_is_bare(netlist, &nets[net], gate);
     let matches = match terminal.kind {
         RouteTerminalKind::RepeaterIntoSupport => actual == BlockKind::Repeater && !bare,
         RouteTerminalKind::DirectedDustIntoSupport => actual == BlockKind::RedstoneWire && !bare,
