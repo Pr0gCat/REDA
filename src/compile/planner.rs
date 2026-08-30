@@ -4048,7 +4048,9 @@ fn validate_port_placements(
             let dx = (pin.at.x - other.at.x).abs();
             let dy = (pin.at.y - other.at.y).abs();
             let dz = (pin.at.z - other.at.z).abs();
-            if dx + dz == 1 && dy <= 1 {
+            let horizontally_touching = dx + dz == 1 && dy <= 1;
+            let vertically_touching = dx == 0 && dz == 0 && dy == 1;
+            if horizontally_touching || vertically_touching {
                 return Err(invalid(
                     port,
                     pin,
@@ -6025,10 +6027,10 @@ fn verified_parts(
 ///   repeater the promise is made of. The five cells the pin does not name
 ///   carry nothing of REDA's, which is what lets the caller build into them.
 ///
-/// "Cells" here are the routes' cells, read off the same reservation
-/// `verify_spacing` proved -- ownership is never guessed by scanning blocks.
-/// Gate bodies are not in that reservation and are kept clear by the
-/// router's own keep-out instead.
+/// "Cells" here are route cells, read off the same reservation
+/// `verify_spacing` proved, and signal-carrying primitive cells, read from the
+/// candidate's recorded conductor classification. Ownership is never guessed
+/// by scanning blocks, and inert primitive floor or fill stays permitted.
 fn verify_terminal_contract(
     candidate: &PlanCandidate,
     world: &World,
@@ -6095,6 +6097,28 @@ fn verify_terminal_contract(
         ] {
             if neighbour == handover {
                 continue;
+            }
+            if let Some(primitive) = candidate
+                .primitive_nodes
+                .iter()
+                .find(|primitive| primitive.conductors.contains(&neighbour))
+            {
+                return Err(violation(
+                    port,
+                    format!(
+                        "its pinned cell ({}, {}, {}) is adjacent to signal-carrying primitive \
+                         `{}` at ({}, {}, {}), which the pin does not name -- REDA builds in the \
+                         handover and nowhere else, so whatever the caller puts in their own cell \
+                         drives nothing it never agreed to touch",
+                        at.x,
+                        at.y,
+                        at.z,
+                        primitive.id,
+                        neighbour.x,
+                        neighbour.y,
+                        neighbour.z
+                    ),
+                ));
             }
             let position = Position::new(neighbour.x, neighbour.y, neighbour.z);
             let Some(&net) = reservation.get(&position) else {
@@ -11626,6 +11650,30 @@ mod tests {
         starting_layout(&netlist, &spaced).expect("a one-cell gap is lawful");
     }
 
+    /// The pin gap reserves every face-neighbour, including the cell directly
+    /// above or below: callers cannot stack two unrelated handovers in one
+    /// column and leave the terminals coupled through vertical adjacency.
+    #[test]
+    fn two_vertically_adjacent_pinned_cells_are_refused() {
+        let netlist = two_input_netlist();
+        let mut placements = PortPlacements::default();
+        placements.pin("a", Anchor { x: 10, y: 1, z: 10 }, Facing::North);
+        placements.pin("b", Anchor { x: 10, y: 2, z: 10 }, Facing::North);
+
+        let error = plan_from_netlist(&netlist, &placements)
+            .expect_err("vertically adjacent pinned cells leave no isolation gap");
+        assert_eq!(
+            error,
+            PlannerError::InvalidPortPin {
+                port: "a".to_string(),
+                at: Anchor { x: 10, y: 1, z: 10 },
+                refusal: PinRefusal::NoGapFrom {
+                    other_pinned_cell: Anchor { x: 10, y: 2, z: 10 },
+                },
+            },
+        );
+    }
+
     /// A pin owns the caller's cell, its one handover and the net cell behind
     /// it, and two pins may share none of them: `a`'s reader standing where
     /// `b`'s reader must stand is the caller over-constraining the board. This
@@ -11830,6 +11878,63 @@ mod tests {
         };
         assert_eq!(port, "a");
         assert!(reason.contains("adjacent"), "the reason names the adjacency: {reason}");
+    }
+
+    /// Terminal isolation is stated over every signal-carrying cell, not only
+    /// route reservations: a primitive body can conduct beside a pinned cell
+    /// even though `verify_spacing` intentionally has no route owner for it.
+    #[test]
+    fn a_primitive_conductor_beside_a_pinned_cell_is_refused() {
+        let netlist = two_input_netlist();
+        let at = Anchor { x: 10, y: 1, z: 40 };
+        let mut placements = PortPlacements::default();
+        placements.pin("a", at, Facing::North);
+
+        let candidate = plan_from_netlist(&netlist, &placements).expect("plans pinned");
+        let mut realised = realise_without_verifying(
+            &candidate,
+            &netlist,
+            candidate_world_size(&candidate),
+        )
+        .expect("the valid candidate emits before the terminal judge runs");
+
+        // A primitive body can carry a signal without being a route anchor.
+        // Put one at a non-handover neighbour and mirror it in the emitted
+        // world, leaving `realised.reservation` unchanged on purpose.
+        let intruder = Anchor { x: at.x, y: 1, z: at.z + 1 };
+        let mut tampered = candidate.clone();
+        tampered.primitive_nodes.push(PrimitiveNode {
+            id: "input:foreign".to_string(),
+            anchor: intruder,
+            realisation: NodeRealisation::Primitive(Primitive::Lever),
+            footprint: vec![intruder],
+            conductors: vec![intruder],
+            pinned: false,
+            output_pin: None,
+        });
+        realised
+            .realised
+            .world
+            .set(intruder.x, intruder.y, intruder.z, compile::lever(false));
+
+        let error = verify_terminal_contract(
+            &tampered,
+            &realised.realised.world,
+            &realised.reservation,
+        )
+        .expect_err("a primitive conductor beside the pinned cell is a violation");
+        let PlannerError::PhysicalInvariant(
+            compile::CompileError::PortTerminalViolation { port, reason },
+        ) = &error
+        else {
+            panic!("refused, but not by the terminal contract: {error}");
+        };
+        assert_eq!(port, "a");
+        assert!(reason.contains("adjacent"), "the reason names the adjacency: {reason}");
+        assert!(
+            reason.contains("(10, 1, 41)"),
+            "the reason names the primitive cell: {reason}"
+        );
     }
 
     /// The same refusal for the port's **own** net, which is the clause the
