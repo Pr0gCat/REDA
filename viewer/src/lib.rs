@@ -193,8 +193,14 @@ fn baked_port_position(
         BakedPort::Unpinned(at) => return Ok((at, false)),
         BakedPort::Pinned { at, toward, handover } => (at, toward, handover),
     };
-    let toward = baked_facing(&toward).ok_or_else(|| {
-        format!("port `{port}` has invalid `toward`; expected north, south, east, or west")
+    let role_name = match role {
+        PortRole::Input => "input",
+        PortRole::Output => "output",
+    };
+    let toward_facing = baked_facing(&toward).ok_or_else(|| {
+        format!(
+            "{role_name} port `{port}` at caller cell {at:?} has invalid `toward` value {toward:?}; expected north, south, east, or west"
+        )
     })?;
     let pin = PortPin {
         at: Anchor {
@@ -202,14 +208,13 @@ fn baked_port_position(
             y: at[1],
             z: at[2],
         },
-        toward,
+        toward: toward_facing,
     };
     let derived = pin.handover(role);
     let derived = [derived.x, derived.y, derived.z];
     if derived != handover {
         return Err(format!(
-            "port `{port}`: reported handover {:?}, but derived/world expected handover {:?}",
-            handover, derived
+            "{role_name} port `{port}`: sidecar reported handover {handover:?}, but {role_name} at {at:?} toward {toward:?} derives handover {derived:?}"
         ));
     }
 
@@ -221,13 +226,11 @@ fn baked_port_position(
     match found {
         Some(found) if [found.x, found.y, found.z] == handover => Ok((at, true)),
         Some(found) => Err(format!(
-            "port `{port}`: the pinout records handover {:?}, but the shipped world holds it at {:?}",
-            handover,
+            "{role_name} port `{port}` at caller cell {at:?}: expected handover {handover:?}, but shipped world {role_name} terminal was found at {:?}",
             [found.x, found.y, found.z]
         )),
         None => Err(format!(
-            "port `{port}`: the pinout records handover {:?}, but the shipped world has none beside caller cell {:?}",
-            handover, at
+            "{role_name} port `{port}` at caller cell {at:?}: expected handover {handover:?}, but shipped world has no {role_name} terminal beside that caller cell"
         )),
     }
 }
@@ -2226,67 +2229,82 @@ mod baked_pinout_format_tests {
     }
 
     #[test]
-    fn wrong_handover_names_reported_and_derived_world_expected_cells() {
-        let mut parts = pinned_and4_baked_parts();
-        let BakedPort::Pinned { handover, .. } = parts
-            .pinout
-            .inputs
-            .get_mut("a")
-            .expect("fixture contains input `a`")
-        else {
-            panic!("fixture input `a` must be pinned");
-        };
-        *handover = [21, 1, 60];
+    fn wrong_handover_names_reported_and_role_derived_cells_without_claiming_world() {
+        for (role, port, reported, expected) in [
+            (
+                PortRole::Input,
+                "a",
+                [21, 1, 60],
+                "input port `a`: sidecar reported handover [21, 1, 60], but input at [21, 1, 62] toward \"north\" derives handover [21, 1, 61]",
+            ),
+            (
+                PortRole::Output,
+                "y",
+                [53, 1, 9],
+                "output port `y`: sidecar reported handover [53, 1, 9], but output at [53, 1, 10] toward \"north\" derives handover [53, 1, 11]",
+            ),
+        ] {
+            let mut parts = pinned_and4_baked_parts();
+            let ports = match role {
+                PortRole::Input => &mut parts.pinout.inputs,
+                PortRole::Output => &mut parts.pinout.outputs,
+            };
+            let BakedPort::Pinned { handover, .. } =
+                ports.get_mut(port).expect("literal fixture port exists")
+            else {
+                panic!("literal fixture port must be pinned");
+            };
+            *handover = reported;
 
-        let error = match Session::build_inner("grown:and4", Some(parts)) {
-            Err(error) => error,
-            Ok(_) => panic!("a sidecar reporting the wrong handover must be refused"),
-        };
+            let error = match Session::build_inner("grown:and4", Some(parts)) {
+                Err(error) => error,
+                Ok(_) => panic!("a sidecar reporting the wrong handover must be refused"),
+            };
 
-        assert!(
-            error.contains("port `a`"),
-            "error must name the port: {error}"
-        );
-        assert!(
-            error.contains("reported handover [21, 1, 60]"),
-            "error must label the sidecar's reported cell: {error}"
-        );
-        assert!(
-            error.contains("derived/world expected handover [21, 1, 61]"),
-            "error must label the cell independently expected by geometry and world: {error}"
-        );
+            assert_eq!(error, expected);
+            assert!(!error.contains("world"));
+        }
     }
 
     #[test]
-    fn invalid_facing_is_a_named_session_construction_error() {
-        let mut parts = pinned_and4_baked_parts();
-        let BakedPort::Pinned { toward, .. } = parts
-            .pinout
-            .inputs
-            .get_mut("a")
-            .expect("fixture contains input `a`")
-        else {
-            panic!("fixture input `a` must be pinned");
-        };
-        *toward = "up".to_string();
+    fn invalid_facing_names_role_port_at_and_received_value() {
+        for (role, port, received, expected) in [
+            (
+                PortRole::Input,
+                "a",
+                "up",
+                "input port `a` at caller cell [21, 1, 62] has invalid `toward` value \"up\"; expected north, south, east, or west",
+            ),
+            (
+                PortRole::Output,
+                "y",
+                "down",
+                "output port `y` at caller cell [53, 1, 10] has invalid `toward` value \"down\"; expected north, south, east, or west",
+            ),
+        ] {
+            let mut parts = pinned_and4_baked_parts();
+            let ports = match role {
+                PortRole::Input => &mut parts.pinout.inputs,
+                PortRole::Output => &mut parts.pinout.outputs,
+            };
+            let BakedPort::Pinned { toward, .. } =
+                ports.get_mut(port).expect("literal fixture port exists")
+            else {
+                panic!("literal fixture port must be pinned");
+            };
+            *toward = received.to_string();
 
-        let error = match Session::build_inner("grown:and4", Some(parts)) {
-            Err(error) => error,
-            Ok(_) => panic!("a sidecar reporting a vertical facing must be refused"),
-        };
+            let error = match Session::build_inner("grown:and4", Some(parts)) {
+                Err(error) => error,
+                Ok(_) => panic!("a sidecar reporting a vertical facing must be refused"),
+            };
 
-        assert!(
-            error.contains("port `a`"),
-            "error must name the port: {error}"
-        );
-        assert!(
-            error.contains("invalid `toward`"),
-            "error must identify the malformed facing field: {error}"
-        );
+            assert_eq!(error, expected);
+        }
     }
 
     #[test]
-    fn world_handover_mismatch_is_a_named_session_construction_error() {
+    fn world_handover_mismatch_names_role_port_at_expected_and_actual_cells() {
         let mut parts = pinned_and4_baked_parts();
         let mut reader = parts.world.get(21, 1, 61).clone();
         parts.world.set(21, 1, 61, BlockState::air());
@@ -2298,17 +2316,25 @@ mod baked_pinout_format_tests {
             Ok(_) => panic!("a sidecar disagreeing with its shipped world must be refused"),
         };
 
-        assert!(
-            error.contains("port `a`"),
-            "error must name the port: {error}"
+        assert_eq!(
+            error,
+            "input port `a` at caller cell [21, 1, 62]: expected handover [21, 1, 61], but shipped world input terminal was found at [21, 1, 63]"
         );
-        assert!(
-            error.contains("pinout records handover [21, 1, 61]"),
-            "error must include the sidecar cell: {error}"
-        );
-        assert!(
-            error.contains("shipped world holds it at [21, 1, 63]"),
-            "error must include the world cell: {error}"
+    }
+
+    #[test]
+    fn absent_world_handover_names_role_port_at_expected_and_absence() {
+        let mut parts = pinned_and4_baked_parts();
+        parts.world.set(53, 1, 11, BlockState::air());
+
+        let error = match Session::build_inner("grown:and4", Some(parts)) {
+            Err(error) => error,
+            Ok(_) => panic!("a sidecar whose shipped world has no handover must be refused"),
+        };
+
+        assert_eq!(
+            error,
+            "output port `y` at caller cell [53, 1, 10]: expected handover [53, 1, 11], but shipped world has no output terminal beside that caller cell"
         );
     }
 }
