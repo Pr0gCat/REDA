@@ -1,11 +1,11 @@
 # IO terminals: the pinned cell is the caller's
 
-**Status: DESIGN, revised 2026-08-30 after the first implementation pass.**
+**Status: IMPLEMENTED (2026-08-31).**
 Motivating failure: a seven-segment display is *defined* by where its outputs
-sit -- seven signals arranged as a digit glyph -- and REDA today cannot be
-told where any IO goes. The decoder compiles and verifies, but its outputs
-land wherever the placer put their driving gates, so the one circuit whose
-meaning is geometric cannot be built as the thing it names.
+sit -- seven signals arranged as a digit glyph -- and REDA could not be told
+where any IO went. The decoder compiled and verified, but its outputs landed
+wherever the placer put their driving gates, so the one circuit whose meaning
+is geometric could not be built as the thing it names.
 
 **The working model is a PCB router's.** The caller finishes the schematic
 (Verilog), then hands the compiler a pin-position file the way an FPGA build
@@ -15,10 +15,12 @@ routing are then the tool's problem. The caller says *where*, never *how*.
 ## The contract (settled first, everything else follows)
 
 A **pin** is `port name -> (Anchor, toward: Facing)`: an absolute cell plus
-**the direction the signal travels through it**. Both halves are
-requirements. A caller who says *where* without saying *which way* has not
-finished specifying the port -- the same way a PCB pad without an entry side
-leaves the router guessing at the one thing the board already decided.
+**the horizontal direction the signal travels through it**. Both halves are
+requirements. `toward` accepts only `North`, `East`, `South`, or `West`;
+`Up` and `Down` are refused as `PinRefusal::VerticalToward`. A caller who says
+*where* without saying *which way* has not finished specifying the port -- the
+same way a PCB pad without an entry side leaves the router guessing at the one
+thing the board already decided.
 
 **The pinned cell belongs to the caller. REDA never puts a block in it.**
 That cell is where the caller's own build lives -- a lamp, a lever, a piston,
@@ -35,7 +37,7 @@ of travel says which side of the caller's cell the circuit is on:
   direction.
 
 Either way REDA occupies exactly one neighbour, named by the pin and not
-chosen by the compiler. **The other three neighbours carry nothing of
+chosen by the compiler. **The other five neighbours carry nothing of
 REDA's**, so nothing but this port's own signal can reach the caller's cell,
 and the caller may build into them freely.
 
@@ -57,10 +59,12 @@ behaviour exactly** (lever bodies for inputs, lamp under the producing gate's
 pin for outputs); every existing circuit and test is untouched by default.
 
 The cost of the pin naming the cell rather than the compiler choosing it is
-stated plainly: the router gets exactly one approach to each terminal instead
-of three. A pin whose one lawful cell cannot be reached is a **refusal by
-name against that pin**, not a silent reroute -- the caller over-constrained
-the board and is told which pin did it.
+stated plainly: the caller's cell, handover cell, and first ordinary net cell
+are fixed. The route may reach that net cell from any lawful direction or
+shape, but it may not move the handover elsewhere. If negotiation cannot reach
+it, routing ends in `PinRefusal::UnreachableHandover`, a **refusal by name
+against that pin**, not a silent reroute -- the caller over-constrained the
+board and is told which pin did it.
 
 The physics behind "powered" is not this document's to assert from memory:
 every claim above is a requirement to be checked against the simulator's own
@@ -71,23 +75,23 @@ prose disagree, the model is right and the prose is the bug.
 
 ## The mechanism: terminals are pinned bodies
 
-The one existing position mechanism, `PortPlacements`
-(src/compile/planner.rs:3166), already threads pins through starting layout,
-the relaxation solve (struck from the matrix), the separation projection
-(neighbours pay), snap (returned exactly), and `try_move` (`PortIsPinned`).
-Its vocabulary changes from a bare `Anchor` to `(Anchor, toward: Facing)`,
-and its *meaning* changes: pinning a port no longer pins the body that
-happens to realise it (the lever, or the producing gate) -- it declares a
-terminal. The old pin-the-gate-by-output-signal behaviour has no shipping
-caller and its tests are re-pointed at terminal semantics.
+The position mechanism, `planner::PortPlacements`, threads pins through
+`planner::starting_layout`, the relaxation solve (struck from the matrix), the
+separation projection (neighbours pay), snap (returned exactly), and
+`planner::try_move` (`PlannerError::PortIsPinned`). Its vocabulary is
+`(Anchor, toward: Facing)`, and pinning a port declares a terminal rather than
+pinning the body that happens to realise it (the lever, or the producing
+gate). The old pin-the-gate-by-output-signal behaviour had no shipping caller
+and its tests now assert terminal semantics.
 
-A terminal is a pinned body whose anchor is the caller's cell and whose whole
-realisation lives in **one** neighbour, the one `toward` names. Its footprint
-claims the caller's cell and emits nothing there -- that cell ships exactly
-as it was. There is no facing sweep and no variant to choose: a terminal has
-a single lawful realisation, which is what makes a pin a specification rather
-than a hint. The remaining three neighbours are claimed only to the extent of
-keeping foreign nets out of them; REDA builds in none of them.
+A terminal is a pinned body whose anchor is the caller's cell and whose
+immediate handover occupies **one** neighbour, the one `toward` names. Its
+footprint claims the caller's cell and emits nothing there -- that cell ships
+exactly as it was. There is no facing sweep and no handover variant to choose:
+a terminal has a single lawful interface realisation, which is what makes a
+pin a specification rather than a hint. The remaining five neighbours are
+claimed only to the extent of keeping signal-carrying cells out of them; REDA
+builds in none of them.
 
 **Input terminal.** The port's body stops being a lever. REDA's reader sits
 in the `toward` neighbour and normalizes: whatever the caller's cell offers,
@@ -99,13 +103,15 @@ construction reads which states of the caller's cell is a question for
 
 **Output terminal.** A new body added as an extra sink on the declared
 output's net, driving the caller's cell from the neighbour opposite `toward`.
-The router treats that cell exactly like a gate socket, with one difference
-that matters: a socket may be approached from several sides and this may not.
-The strength-aware arm reasons about the arrival natively; a distance-only
-plan that starves it is caught by verification and the portfolio's second arm
-retries. The producing gate stays free; the net simply has one more place it
-must reach, at one exact address. No lamp is placed for a pinned output --
-the lamp, if the caller wants one, is theirs to put in their own cell.
+The router must reach the fixed ordinary net cell behind that handover. As
+`PortPin::net_cell` specifies, this net cell may be approached from any lawful
+side, in any lawful shape, at any strength the delivery repeater can read; the
+handover's cell and facing remain fixed. The strength-aware arm reasons about
+the arrival natively; a distance-only plan that starves it is caught by
+verification and the portfolio's second arm retries. The producing gate stays
+free; the net simply has one more place it must reach, at one exact address.
+No lamp is placed for a pinned output -- the lamp, if the caller wants one, is
+theirs to put in their own cell.
 
 Because terminals are bodies with springs to their net partners, the placer
 pulls the circuit *toward* the pinned coordinates during relaxation instead
@@ -113,16 +119,21 @@ of the router discovering the distance after placement froze. Pinned anchors
 suppress the whole-layout drift translation (already true today), and world
 sizing grows to cover every pin plus margin.
 
-**Refused by name, before planning:** a pin outside any growable world
-bound; two pinned cells of different nets in signal-carrying adjacency (the
-caller left no gap -- a glyph needs a gap between segments); a pinned cell
-colliding with another port's cell or handover; one port's handover cell
-sitting where another port needs its own; a pin whose handover cell cannot be
-reached; a pin for a port name the netlist does not declare. Every one of
-these is the caller over-constraining the board, so every one names the pin
-that did it. Output pins are given by display label (`a`..`g`) and resolved
-through the existing output labels channel, because asking the caller for
-internal `gN` names would be absurd.
+**Refused by name at the pin-set door, before planning:** a vertical
+`toward`; a pin outside any growable world bound; two pinned cells of
+different nets in signal-carrying adjacency (the caller left no gap -- a glyph
+needs a gap between segments); a pinned cell colliding with another port's
+cell, handover, or first net cell; and a pin for a port name the netlist does
+not declare. `planner::validate_port_placements` can decide each of these from
+the pin set and netlist alone.
+
+`PinRefusal::UnreachableHandover` is deliberately different: it is a named
+**routing-time** refusal raised by `planner::lay_net` only after search cannot
+reach the fixed terminal and the negotiation loop has had its rip-up and
+re-ordering opportunities. It is not a pre-planning refusal. Output pins are
+given by display label (`a`..`g`) and resolved through the existing output
+labels channel, because asking the caller for internal `gN` names would be
+absurd.
 
 ## Verification follows the contract
 
@@ -132,15 +143,17 @@ world ships, so verification stops measuring REDA's own dust and starts
 require it powered exactly on the high ones. The probe is a fixture, not an
 interface assumption -- it is how the harness stands in for a caller.
 
-- `verify_signal_strength`'s declared-output pass walks, for a pinned output,
-  to the handover cell and states what it must deliver into the caller's
-  cell. Same check, new address, and the address is REDA's own last cell.
-- The lamp invariant (`LampNotAtFixedOffsetFromTorch`) and the lever check
-  in `equivalence` apply only to unpinned ports, which still have lamps and
-  levers.
-- A new invariant, per pinned port: the caller's cell ships empty; the one
-  neighbour the pin names carries this port's own handover; no other
-  neighbour carries any net at all.
+- `compile::verify_signal_strength`'s declared-output pass walks, for a pinned
+  output, to the handover cell and states what it must deliver into the
+  caller's cell. Same check, new address, and the address is REDA's own last
+  cell.
+- The lamp invariant
+  (`equivalence::EquivalenceError::LampNotAtFixedOffsetFromTorch`) and the
+  lever check in `compile::equivalence` apply only to unpinned ports, which
+  still have lamps and levers.
+- `planner::verify_terminal_contract` requires, per pinned port, that the
+  caller's cell ships empty; the one neighbour the pin names carries this
+  port's own handover; and the other five neighbours carry no net at all.
 - The truth-table battery drives a pinned input by placing a fixture source
   in the caller's cell and reads a pinned output by probing the caller's
   cell. Both fixtures are installed into cells the contract guarantees
@@ -159,8 +172,9 @@ Two consequences that are easy to get wrong and expensive to fix later:
 
 - **Validation belongs to the pin set, not to any parser.** A check written
   in the JSON reader protects the file and abandons the editor and the mod.
-  Every named refusal in this document is stated against `PortPlacements`
-  and runs before planning, whoever assembled it.
+  Every structural refusal is stated against `PortPlacements` and runs before
+  planning, whoever assembled it; `UnreachableHandover` remains structured
+  against the same pin but can only be known during routing.
 - **Refusals are structured, not prose.** An editor has to point at the pin
   that is wrong and a mod has to highlight a block; both need the offending
   port name and cell as data. A refusal that only renders as a sentence is a
@@ -168,19 +182,20 @@ Two consequences that are easy to get wrong and expensive to fix later:
 
 ## Plumbing
 
-`compile_planned` already takes `PortPlacements`; `compile_grown` gets the
-parameter it always plumbed internally and hard-coded to default
-(src/compile/mod.rs:7188 -- the growth loop underneath threads placements
-end to end already). `compile()` and the legacy emitter are not touched.
-`build_circuit` learns `--pins <file.json>` -- the first adapter, the
-pin-constraint file of the PCB analogy:
+`compile::compile_planned` and `compile::compile_grown` both take
+`planner::PortPlacements`; `compile_grown` passes them into
+`planner::plan_from_netlist_with_growth` in both portfolio arms. `compile()`
+and the legacy emitter remain unchanged. `build_circuit` accepts
+`--pins <file.json>` -- the first adapter, the pin-constraint file of the PCB
+analogy:
 
     {"inputs":  {"d0": {"at": [x,y,z], "toward": "north"}, ...},
      "outputs": {"a":  {"at": [x,y,z], "toward": "north"}, ...}}
 
-`toward` is the direction the signal travels through that cell, and the
-reader must not have to guess the sign: a round-trip test states, for one
-input and one output, exactly which neighbour each `toward` resolves to.
+`toward` is the horizontal direction the signal travels through that cell;
+vertical values are refused. The reader must not have to guess the sign: a
+round-trip test states, for one input and one output, exactly which neighbour
+each `toward` resolves to.
 
 The pinout sidecar reports back, for a pinned port, the caller's cell, its
 `toward`, and the resolved handover cell. The handover is derivable rather
@@ -207,17 +222,25 @@ would, and touches nothing inside the boundary.
 
 ## Acceptance
 
-The circuit that named the problem: the decoder (verilog:seven_segment, 47
-gates) with its seven outputs pinned as a digit glyph (a gap between
-segments -- the contract does not care which plane the glyph lies in; the
-demo lays it flat on the ground), four inputs pinned in a row, every `toward`
-carrying the signal out of the circuit and into the caller's world, through
-`compile_grown`. Passes when: truth table 16/16 through the real Simulator
-with fixtures in the callers' cells, every pinned cell ships empty, each
-handover sits exactly where its pin says, and the four
-invariants hold -- and the baked demo joins the viewer dropdown, where
-flipping the levers shows the digit on lamps the viewer put in the pinned
-cells themselves.
+The shipped circuit is the decoder (`verilog:seven_segment`, 47 gates) with
+its seven outputs pinned as a digit glyph (a gap between segments -- the
+contract does not care which plane the glyph lies in; the demo lays it flat
+on the ground), four inputs pinned in a row, and every `toward` carrying the
+signal between the circuit and the caller's world through `compile_grown`.
+The shipping input mapping is explicit and MSB-to-LSB: `d3=(76,1,120)`,
+`d2=(88,1,120)`, `d1=(100,1,120)`, and `d0=(112,1,120)`, all with
+`toward=North`. `planner::tests::pinned_glyph_decoder`,
+`viewer/baked/verilog_seven_segment.grown.pins.json`, and
+`viewer/tests/verilog_circuits.rs` hold those coordinates and names.
+
+The native acceptance passes the truth table 16/16 through the real
+`Simulator` with fixtures in the callers' cells; every pinned cell ships
+empty; each handover sits exactly where its pin says; and the four physical
+invariants hold. The baked demo is in the viewer dropdown, where input
+toggles drive caller-installed sources and show the digit on lamps the viewer
+put in the pinned cells themselves. Live browser acceptance on 2026-08-31
+confirmed the initial zero, digit two, 3D caller-source toggle, geometry
+preservation, and reset-to-zero contract.
 
 ## Deliberately out
 
