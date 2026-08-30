@@ -28,11 +28,12 @@
 
 use reda::circuits::seven_segment::TRUTH_TABLE;
 use reda::circuits::verilog;
-use reda::compile::{compile, input_terminal_reader, output_terminal_handover};
 use reda::compile::lowering::lower_optimised;
+use reda::compile::planner::{Anchor, PortPin, PortRole};
+use reda::compile::{compile, input_terminal_reader, output_terminal_handover};
 use reda::formats::litematic;
 use reda::redstone::simulator::position::Position;
-use reda::redstone::world::block::BlockKind;
+use reda::redstone::world::block::{BlockKind, Facing};
 use reda_viewer::{list_circuits, Axis, Session};
 use serde_json::Value;
 use std::collections::BTreeSet;
@@ -104,6 +105,118 @@ fn json_coordinate(value: &Value, field: &str, port: &str) -> [i32; 3] {
         });
     }
     coordinate
+}
+
+fn json_facing(value: &Value, field: &str, port: &str) -> Facing {
+    match value.as_str() {
+        Some("north") => Facing::North,
+        Some("south") => Facing::South,
+        Some("east") => Facing::East,
+        Some("west") => Facing::West,
+        other => panic!("`{port}`'s `{field}` must be a horizontal direction, got {other:?}"),
+    }
+}
+
+/// The authored pins file is the source input; the pinout is generated output.
+/// Compare both files port-by-port so a stale sidecar cannot pass merely by
+/// remaining self-consistent with the litematic that was generated beside it.
+#[test]
+fn checked_in_grown_decoder_pinout_matches_its_literal_pins() {
+    let baked = Path::new(env!("CARGO_MANIFEST_DIR")).join("baked");
+    let pins: Value = serde_json::from_str(
+        &std::fs::read_to_string(baked.join("verilog_seven_segment.grown.pins.json"))
+            .expect("the literal grown decoder pins are checked in"),
+    )
+    .expect("the literal grown decoder pins are JSON");
+    let pinout: Value = serde_json::from_str(
+        &std::fs::read_to_string(baked.join("verilog_seven_segment.grown.pinout.json"))
+            .expect("the generated grown decoder pinout is checked in"),
+    )
+    .expect("the generated grown decoder pinout is JSON");
+
+    let expected_inputs = [
+        ("d3", [76, 1, 120], "north", [76, 1, 119]),
+        ("d2", [88, 1, 120], "north", [88, 1, 119]),
+        ("d1", [100, 1, 120], "north", [100, 1, 119]),
+        ("d0", [112, 1, 120], "north", [112, 1, 119]),
+    ];
+    let expected_outputs = [
+        ("a", [76, 1, 24], "north", [76, 1, 25]),
+        ("b", [84, 1, 32], "east", [83, 1, 32]),
+        ("c", [84, 1, 48], "east", [83, 1, 48]),
+        ("d", [76, 1, 56], "south", [76, 1, 55]),
+        ("e", [68, 1, 48], "west", [69, 1, 48]),
+        ("f", [68, 1, 32], "west", [69, 1, 32]),
+        ("g", [76, 1, 40], "west", [77, 1, 40]),
+    ];
+
+    for (role_name, role, expected) in [
+        ("inputs", PortRole::Input, expected_inputs.as_slice()),
+        ("outputs", PortRole::Output, expected_outputs.as_slice()),
+    ] {
+        let authored = pins[role_name]
+            .as_object()
+            .unwrap_or_else(|| panic!("literal pins `{role_name}` must be an object"));
+        let generated = pinout[role_name]
+            .as_object()
+            .unwrap_or_else(|| panic!("generated pinout `{role_name}` must be an object"));
+        let expected_keys: BTreeSet<&str> = expected.iter().map(|(name, ..)| *name).collect();
+        assert_eq!(
+            authored.keys().map(String::as_str).collect::<BTreeSet<_>>(),
+            expected_keys,
+            "literal `{role_name}` keys changed"
+        );
+        assert_eq!(
+            generated
+                .keys()
+                .map(String::as_str)
+                .collect::<BTreeSet<_>>(),
+            expected_keys,
+            "generated `{role_name}` keys changed"
+        );
+
+        for &(name, literal_at, literal_toward, literal_handover) in expected {
+            let authored_port = &authored[name];
+            let generated_port = &generated[name];
+            let at = json_coordinate(&authored_port["at"], "at", name);
+            let toward = authored_port["toward"]
+                .as_str()
+                .unwrap_or_else(|| panic!("literal `{name}` toward must be a string"));
+
+            assert_eq!(at, literal_at, "literal `{name}` coordinate changed");
+            assert_eq!(toward, literal_toward, "literal `{name}` direction changed");
+            assert_eq!(
+                json_coordinate(&generated_port["at"], "at", name),
+                at,
+                "generated `{name}` coordinate drifted from its source pin"
+            );
+            assert_eq!(
+                generated_port["toward"].as_str(),
+                Some(toward),
+                "generated `{name}` direction drifted from its source pin"
+            );
+
+            let handover = PortPin {
+                at: Anchor {
+                    x: at[0],
+                    y: at[1],
+                    z: at[2],
+                },
+                toward: json_facing(&authored_port["toward"], "toward", name),
+            }
+            .handover(role);
+            let derived_handover = [handover.x, handover.y, handover.z];
+            assert_eq!(
+                derived_handover, literal_handover,
+                "literal `{name}` no longer has its reviewed role-specific handover"
+            );
+            assert_eq!(
+                json_coordinate(&generated_port["handover"], "handover", name),
+                derived_handover,
+                "generated `{name}` reports a handover inconsistent with PortPin"
+            );
+        }
+    }
 }
 
 /// The generated files are shipping artifacts, not test fixtures generated on

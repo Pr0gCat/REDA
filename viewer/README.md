@@ -63,7 +63,8 @@ Yosys, so those are baked at build time and held to fresh synthesis by
 caller and is deliberately Air in that litematic; the artifact contains
 neither input sources nor output lamps. The viewer installs its controllable
 sources and probe lamps in those caller cells only in the runtime session;
-reset starts from the fixture-free checked-in world and installs fresh ones.
+`Session` saves that fixture-installed, settled world as `initial_world`, and
+reset restores the saved world with those runtime fixtures already present.
 
 ### 2D Slice
 

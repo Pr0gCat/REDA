@@ -2058,6 +2058,7 @@ mod pinned_baked_session_tests {
     use super::*;
     use reda::compile::compile_grown;
     use reda::compile::planner::{Anchor, PortPlacements};
+    use std::path::Path;
 
     pub(super) fn pinned_and4_baked_parts() -> BakedParts {
         let (netlist, output_signal) = and4::build_and4_netlist();
@@ -2097,6 +2098,85 @@ mod pinned_baked_session_tests {
                     },
                 )]),
             },
+        }
+    }
+
+    fn checked_in_grown_decoder_baked_parts() -> BakedParts {
+        let baked = Path::new(env!("CARGO_MANIFEST_DIR")).join("baked");
+        let world =
+            reda::formats::litematic::load(&baked.join("verilog_seven_segment.grown.litematic"))
+                .expect("the checked-in grown decoder litematic loads");
+        let pinout = serde_json::from_str(
+            &std::fs::read_to_string(baked.join("verilog_seven_segment.grown.pinout.json"))
+                .expect("the checked-in grown decoder pinout loads"),
+        )
+        .expect("the checked-in grown decoder pinout has the baked schema");
+        BakedParts { world, pinout }
+    }
+
+    fn output_strength_through_slice(session: &Session, at: (i32, i32, i32)) -> u8 {
+        let bytes = session
+            .slice(Axis::Z, at.2)
+            .expect("a declared pinned output is inside the baked world");
+        let size_y = session.size()[1];
+        bytes[2 * ((at.0 * size_y + at.1) as usize) + 1]
+    }
+
+    #[test]
+    fn checked_in_grown_decoder_matches_literal_truth_through_caller_fixtures() {
+        // Deliberately independent of seven_segment::TRUTH_TABLE: corruption
+        // in the shipped binary must be compared with reviewed literal truth,
+        // not with another value produced by the same implementation.
+        let expected = [
+            [true, true, true, true, true, true, false],
+            [false, true, true, false, false, false, false],
+            [true, true, false, true, true, false, true],
+            [true, true, true, true, false, false, true],
+            [false, true, true, false, false, true, true],
+            [true, false, true, true, false, true, true],
+            [true, false, true, true, true, true, true],
+            [true, true, true, false, false, false, false],
+            [true, true, true, true, true, true, true],
+            [true, true, true, true, false, true, true],
+            [false; 7],
+            [false; 7],
+            [false; 7],
+            [false; 7],
+            [false; 7],
+            [false; 7],
+        ];
+        let mut session = Session::build_inner(
+            "grown:verilog:seven_segment",
+            Some(checked_in_grown_decoder_baked_parts()),
+        )
+        .expect("the checked-in grown decoder builds a fixture-installed session");
+
+        let output_names: Vec<&str> = session
+            .output_positions
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(output_names, ["a", "b", "c", "d", "e", "f", "g"]);
+
+        for value in 0..16usize {
+            for (name, mask) in [("d0", 1), ("d1", 2), ("d2", 4), ("d3", 8)] {
+                session
+                    .set_lever(name, value & mask != 0)
+                    .expect("the shipped pinout exposes every BCD caller cell");
+            }
+            session
+                .run_until_stable()
+                .expect("the shipped decoder must settle for every input vector");
+
+            let observed: Vec<bool> = session
+                .output_positions
+                .iter()
+                .map(|(_, at)| output_strength_through_slice(&session, *at) > 0)
+                .collect();
+            assert_eq!(
+                observed, expected[value],
+                "checked-in grown decoder returned the wrong a..g glyph for {value:04b}"
+            );
         }
     }
 
