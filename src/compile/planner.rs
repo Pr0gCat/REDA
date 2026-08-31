@@ -11004,6 +11004,7 @@ mod tests {
                             }
                         }
                         let compiled = compile::CompiledCircuit {
+                            observations: compile::CircuitObservations::default(),
                             world: realised.world,
                             input_positions: realised.ports.input_positions,
                             output_positions: realised.ports.output_positions,
@@ -25492,6 +25493,7 @@ mod tests {
                             // has shipped circuits where those came apart. Both
                             // columns, always.
                             let compiled = compile::CompiledCircuit {
+                                observations: compile::CircuitObservations::default(),
                                 world: realised.world,
                                 input_positions: realised.ports.input_positions,
                                 output_positions: realised.ports.output_positions,
@@ -25630,6 +25632,7 @@ mod tests {
         let realised = emit_candidate(&plan, &netlist, candidate_world_size(&plan))
             .expect("a verified plan realises");
         let compiled = compile::CompiledCircuit {
+            observations: compile::CircuitObservations::default(),
             world: realised.world,
             input_positions: realised.ports.input_positions,
             output_positions: realised.ports.output_positions,
@@ -27218,6 +27221,7 @@ mod tests {
 
         // 4. The simulator, all sixteen vectors: what Q and P carry.
         let compiled = compile::CompiledCircuit {
+            observations: compile::CircuitObservations::default(),
             world: realised.world.clone(),
             input_positions: realised.ports.input_positions.clone(),
             output_positions: realised.ports.output_positions.clone(),
@@ -28135,6 +28139,7 @@ mod tests {
         );
 
         let compiled = compile::CompiledCircuit {
+            observations: compile::CircuitObservations::default(),
             world: realised.world.clone(),
             input_positions: realised.ports.input_positions.clone(),
             output_positions: realised.ports.output_positions.clone(),
@@ -28714,6 +28719,7 @@ mod tests {
             let realised = emit_candidate(&plan, &case.netlist, candidate_world_size(&plan))
                 .expect("a verified plan realises");
             let compiled = compile::CompiledCircuit {
+                observations: compile::CircuitObservations::default(),
                 world: realised.world.clone(),
                 input_positions: realised.ports.input_positions.clone(),
                 output_positions: realised.ports.output_positions.clone(),

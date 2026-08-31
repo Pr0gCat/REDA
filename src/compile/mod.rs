@@ -1539,6 +1539,85 @@ impl std::fmt::Display for CompileError {
 
 impl std::error::Error for CompileError {}
 
+/// Typed observation metadata carried by every compiled circuit. A physical
+/// coordinate may intentionally appear in several maps; identity is the map
+/// key, never the coordinate or display label.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct CircuitObservations {
+    pub primary_inputs:
+        BTreeMap<fragment_synth::identity::PortId, fragment_synth::identity::ObservationSite>,
+    pub primitive_outputs: BTreeMap<
+        fragment_synth::identity::PrimitiveId,
+        fragment_synth::identity::ObservationSite,
+    >,
+    pub instance_outputs: BTreeMap<
+        fragment_synth::identity::InstanceId,
+        fragment_synth::identity::ObservationSite,
+    >,
+    pub junction_outputs: BTreeMap<
+        fragment_synth::identity::InstanceId,
+        fragment_synth::identity::ObservationSite,
+    >,
+    pub declared_outputs:
+        BTreeMap<fragment_synth::identity::PortId, fragment_synth::identity::ObservationSite>,
+}
+
+impl CircuitObservations {
+    pub fn from_expanded(candidate: &fragment_synth::candidate::ExpandedPhysicalCandidate) -> Self {
+        let mut observations = Self::default();
+        for (&id, verified) in &candidate.observations {
+            match id {
+                fragment_synth::identity::ObservationId::PrimaryInput(port) => {
+                    observations.primary_inputs.insert(port, verified.site.clone());
+                }
+                fragment_synth::identity::ObservationId::PrimitiveOutput(primitive) => {
+                    observations.primitive_outputs.insert(primitive, verified.site.clone());
+                }
+                fragment_synth::identity::ObservationId::InstanceOutput(instance) => {
+                    observations.instance_outputs.insert(instance, verified.site.clone());
+                }
+                fragment_synth::identity::ObservationId::JunctionOutput(instance) => {
+                    observations.junction_outputs.insert(instance, verified.site.clone());
+                }
+                fragment_synth::identity::ObservationId::DeclaredOutput(port) => {
+                    observations.declared_outputs.insert(port, verified.site.clone());
+                }
+            }
+        }
+        observations
+    }
+
+    pub fn sites(
+        &self,
+    ) -> BTreeMap<
+        fragment_synth::identity::ObservationId,
+        fragment_synth::identity::ObservationSite,
+    > {
+        let mut sites = BTreeMap::new();
+        sites.extend(self.primary_inputs.values().cloned().map(|site| (site.id, site)));
+        sites.extend(self.primitive_outputs.values().cloned().map(|site| (site.id, site)));
+        sites.extend(self.instance_outputs.values().cloned().map(|site| (site.id, site)));
+        sites.extend(self.junction_outputs.values().cloned().map(|site| (site.id, site)));
+        sites.extend(self.declared_outputs.values().cloned().map(|site| (site.id, site)));
+        sites
+    }
+
+    fn from_plan(
+        netlist: &Netlist,
+        plan: &planner::PlanCandidate,
+        world: &World,
+    ) -> Result<Self, CompileError> {
+        let adapted = fragment_synth::legacy_adapter::LegacyCandidateAdapter::adapt_plan(
+            netlist, plan, world,
+        )
+        .map_err(|error| CompileError::CandidateMetadataViolation {
+            item: "circuit observations".to_string(),
+            reason: error.to_string(),
+        })?;
+        Ok(Self::from_expanded(&adapted.candidate))
+    }
+}
+
 /// 編譯完成的電路。
 pub struct CompiledCircuit {
     pub world: World,
@@ -1570,6 +1649,7 @@ pub struct CompiledCircuit {
     /// junction is dust, and dust has no facing to read. A verifier that
     /// re-derives a gate's socket faces has to be told which faces those are.
     pub gate_facings: Vec<geometry::CellFacing>,
+    pub observations: CircuitObservations,
     /// Explicit ownership data recorded while the legacy emitter places the
     /// world.  This is intentionally not reconstructed from block kinds.
     ///
@@ -7659,8 +7739,10 @@ pub fn compile_legacy(netlist: &Netlist) -> Result<CompiledCircuit, CompileError
 
     let seed = planner::seed_from_legacy_parts(netlist, &legacy_emission).map_err(planner_error)?;
     let realised = planner::realise_and_verify(&seed, netlist, size).map_err(planner_error)?;
+    let observations = CircuitObservations::from_plan(netlist, &seed, &realised.world)?;
 
     Ok(CompiledCircuit {
+        observations,
         world: realised.world,
         input_positions: realised.ports.input_positions,
         output_positions: realised.ports.output_positions,
@@ -7753,8 +7835,10 @@ pub fn compile_grown(
         .collect();
     let size = planner::candidate_world_size(&candidate);
     let realised = planner::realise_and_verify(&candidate, netlist, size).map_err(planner_error)?;
+    let observations = CircuitObservations::from_plan(netlist, &candidate, &realised.world)?;
 
     Ok(CompiledCircuit {
+        observations,
         world: realised.world,
         input_positions: realised.ports.input_positions,
         output_positions: realised.ports.output_positions,
@@ -7789,8 +7873,10 @@ fn compile_planned_within(
         .collect();
     let size = planner::candidate_world_size(&candidate);
     let realised = planner::realise_and_verify(&candidate, netlist, size).map_err(planner_error)?;
+    let observations = CircuitObservations::from_plan(netlist, &candidate, &realised.world)?;
 
     Ok(CompiledCircuit {
+        observations,
         world: realised.world,
         input_positions: realised.ports.input_positions,
         output_positions: realised.ports.output_positions,

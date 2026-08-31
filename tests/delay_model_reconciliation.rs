@@ -39,11 +39,19 @@ use reda::circuits::seven_segment::{
 };
 use reda::circuits::verilog;
 use reda::compile::lowering::{lower, lower_optimised};
+use reda::compile::fragment_synth::legacy_adapter::LegacyCandidateAdapter;
+use reda::compile::fragment_synth::timing_graph::{
+    ExactDelay, RealisedTimingGraph, TimingArcKind, TimingNodeId,
+};
+use reda::compile::fragment_synth::verify::certify_expanded_structure;
 use reda::compile::planner::{seed_from_legacy, NodeRealisation, PlanCandidate};
 use reda::compile::routing_stats::{self, PartTotals, RoutePart, ALL_PARTS};
 use reda::compile::{compile, compile_legacy, CompiledCircuit, Netlist, PlannerKind};
+use reda::compile::topology::Library;
 use reda::redstone::simulator::component::TORCH_DELAY_GAME_TICKS;
+use reda::redstone::simulator::component::repeater_delay_game_ticks;
 use reda::redstone::simulator::Simulator;
+use reda::redstone::world::block::BlockKind;
 use reda::timing::{
     observations_to_result, summarize_worst_case, watch_all_nets, TransitionResult,
 };
@@ -706,6 +714,162 @@ fn report_on(label: &str, netlist: &Netlist, world: &CompiledCircuit, input_name
             );
         }
     }
+}
+
+fn assert_realised_timing_reconciles(label: &str, netlist: &Netlist) {
+    let compiled = compile_legacy(netlist).expect("legacy fixture compiles");
+    let adapted = LegacyCandidateAdapter::adapt(netlist, &compiled).expect("fixture adapts");
+    let library = Library::default_library();
+    let certificate = certify_expanded_structure(&adapted.candidate, netlist, &library)
+        .expect("adapted candidate structurally certifies");
+    let graph = RealisedTimingGraph::derive(&adapted.candidate, &certificate)
+        .expect("certified candidate has a timing DAG");
+
+    for route in adapted.candidate.routes.values() {
+        let cells: BTreeMap<_, _> = route
+            .cells
+            .iter()
+            .map(|block| (block.at, &block.state))
+            .collect();
+        for branch in &route.branches {
+            let expected = branch.path.iter().fold(0u64, |delay, at| {
+                delay
+                    + cells.get(at).map_or(0, |state| {
+                        if state.kind == BlockKind::Repeater {
+                            repeater_delay_game_ticks(state)
+                        } else {
+                            0
+                        }
+                    })
+            });
+            let matching = graph
+                .arcs
+                .values()
+                .filter(|arc| {
+                    arc.kind
+                        == TimingArcKind::Route {
+                            route: route.id,
+                            sink: branch.sink,
+                        }
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(matching.len(), 1, "{label}: one route arc per concrete sink");
+            assert_eq!(matching[0].delay, ExactDelay(expected), "{label}: exact route delay");
+        }
+    }
+
+    for instance in &adapted.candidate.instances.instances {
+        for primitive in &instance.expanded.topology.primitives {
+            let expected = match primitive.primitive {
+                reda::compile::topology::Primitive::Torch => 2,
+                reda::compile::topology::Primitive::Repeater => {
+                    let placement = &adapted.candidate.placements[&primitive.id];
+                    let state = placement
+                        .blocks
+                        .iter()
+                        .find(|block| block.state.kind == BlockKind::Repeater)
+                        .expect("topology repeater has state");
+                    repeater_delay_game_ticks(&state.state)
+                }
+                reda::compile::topology::Primitive::Comparator => 2,
+                reda::compile::topology::Primitive::Lever
+                | reda::compile::topology::Primitive::Lamp => 0,
+            };
+            for connection in instance
+                .expanded
+                .topology
+                .connections
+                .iter()
+                .filter(|connection| {
+                    matches!(
+                        connection.target,
+                        reda::compile::fragment_synth::topology::ConnectionTarget::Primitive(id)
+                            if id == primitive.id
+                    )
+                })
+            {
+                let arc = graph
+                    .arcs
+                    .values()
+                    .find(|arc| {
+                        arc.from == TimingNodeId::Landing(connection.id)
+                            && arc.kind
+                                == TimingArcKind::Primitive {
+                                    primitive: primitive.id,
+                                }
+                    })
+                    .expect("one primitive arc per signal-carrying landing");
+                assert_eq!(arc.delay, ExactDelay(expected), "{label}: topology delay once");
+            }
+        }
+    }
+
+    for &port in &adapted.candidate.instances.declared_outputs {
+        let bindings = graph
+            .arcs
+            .values()
+            .filter(|arc| arc.to == TimingNodeId::DeclaredOutput(port))
+            .collect::<Vec<_>>();
+        assert_eq!(bindings.len(), 1, "{label}: one explicit output binding");
+        assert_eq!(bindings[0].kind, TimingArcKind::OutputBinding);
+        assert_eq!(bindings[0].delay, ExactDelay(0), "{label}: no generic output charge");
+    }
+    let timing = graph.analyse().expect("timing analysis remains acyclic");
+    if label == "full_adder" {
+        use reda::compile::fragment_synth::identity::{ConnectionId, InstanceId};
+        let g21 = adapted
+            .candidate
+            .instances
+            .instances
+            .iter()
+            .find(|instance| instance.id == InstanceId(21))
+            .expect("full adder has g21");
+        let output = match &g21.expanded.topology.output {
+            reda::compile::fragment_synth::topology::OutputSpec::Primitive(id) => *id,
+            _ => panic!("g21 is a primitive-output NOR"),
+        };
+        let predecessor = graph.arcs[&timing.predecessor[&TimingNodeId::PrimitiveOutput(output)]];
+        assert_eq!(
+            predecessor.from,
+            TimingNodeId::Landing(ConnectionId::External {
+                instance: InstanceId(21),
+                input_index: 0,
+            }),
+            "g19's three-repeater edge, not the zero-repeater g20 edge, gates g21"
+        );
+        let g19 = adapted
+            .candidate
+            .instances
+            .instances
+            .iter()
+            .find(|instance| instance.id == InstanceId(19))
+            .expect("full adder has g19");
+        let g19_output = match &g19.expanded.topology.output {
+            reda::compile::fragment_synth::topology::OutputSpec::Primitive(id) => *id,
+            _ => panic!("g19 is a primitive-output NOR"),
+        };
+        let g19_route = graph
+            .arcs
+            .values()
+            .find(|arc| {
+                arc.to == predecessor.from
+                    && arc.from == TimingNodeId::PrimitiveOutput(g19_output)
+            })
+            .expect("g19 route reaches g21 input zero");
+        assert_eq!(g19_route.delay, ExactDelay(6));
+    }
+}
+
+#[test]
+fn realised_timing_graph_reconciles_and4() {
+    let (netlist, _) = build_and4_netlist();
+    assert_realised_timing_reconciles("and4", &netlist);
+}
+
+#[test]
+fn realised_timing_graph_reconciles_full_adder() {
+    let (netlist, _) = build_full_adder_netlist();
+    assert_realised_timing_reconciles("full_adder", &netlist);
 }
 
 #[test]

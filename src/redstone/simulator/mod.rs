@@ -17,10 +17,11 @@ use std::collections::HashMap;
 
 use serde::Serialize;
 
+use crate::compile::fragment_synth::identity::ObservationSite;
 use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::storage::World;
 
-use observer::{Observation, Observer};
+use observer::{Observation, Observer, TypedObservation};
 use position::Position;
 use schedule::{TickPriority, TickQueue};
 
@@ -302,6 +303,17 @@ impl Simulator {
         self.observer = Some(observer);
     }
 
+    /// Attach an identity-preserving observer. Several sites may share one
+    /// coordinate or one display label and still produce independent events.
+    pub fn attach_typed_observer(
+        &mut self,
+        watched: impl IntoIterator<Item = ObservationSite>,
+    ) {
+        let mut observer = Observer::typed(watched);
+        observer.reset(&self.world);
+        self.observer = Some(observer);
+    }
+
     /// Re-baseline the attached observer (if any) against the world's
     /// current state and clear its log.
     ///
@@ -318,6 +330,14 @@ impl Simulator {
     /// if no observer is attached.
     pub fn observations(&self) -> &[Observation] {
         self.observer.as_ref().map(Observer::log).unwrap_or(&[])
+    }
+
+    /// Typed log since the last reset. Empty for the compatibility observer.
+    pub fn typed_observations(&self) -> &[TypedObservation] {
+        self.observer
+            .as_ref()
+            .map(Observer::typed_log)
+            .unwrap_or(&[])
     }
 
     /// 推進一個 game tick。回傳這一刻有多少格的狀態改變了。

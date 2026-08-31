@@ -23,6 +23,7 @@ scalar_id!(PortId, u32);
 scalar_id!(InstanceId, u32);
 scalar_id!(TopologyNodeId, u16);
 scalar_id!(RouteId, u32);
+scalar_id!(TimingArcId, u32);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct InputMask(u64);
@@ -87,6 +88,45 @@ pub enum ObservationId {
     InstanceOutput(InstanceId),
     JunctionOutput(InstanceId),
     DeclaredOutput(PortId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum TimingNodeId {
+    /// Caller-owned state before an optional pinned-input handover repeater.
+    InputBoundary(PortId),
+    PrimaryInput(PortId),
+    Landing(ConnectionId),
+    /// Route-owned delivery point before the caller/output observation.
+    OutputLanding(PortId),
+    PrimitiveOutput(PrimitiveId),
+    InstanceOutput(InstanceId),
+    JunctionOutput(InstanceId),
+    DeclaredOutput(PortId),
+}
+
+impl TimingNodeId {
+    pub const fn observation(self) -> Option<ObservationId> {
+        match self {
+            Self::InputBoundary(_) | Self::Landing(_) | Self::OutputLanding(_) => None,
+            Self::PrimaryInput(id) => Some(ObservationId::PrimaryInput(id)),
+            Self::PrimitiveOutput(id) => Some(ObservationId::PrimitiveOutput(id)),
+            Self::InstanceOutput(id) => Some(ObservationId::InstanceOutput(id)),
+            Self::JunctionOutput(id) => Some(ObservationId::JunctionOutput(id)),
+            Self::DeclaredOutput(id) => Some(ObservationId::DeclaredOutput(id)),
+        }
+    }
+}
+
+impl From<ObservationId> for TimingNodeId {
+    fn from(value: ObservationId) -> Self {
+        match value {
+            ObservationId::PrimaryInput(id) => Self::PrimaryInput(id),
+            ObservationId::PrimitiveOutput(id) => Self::PrimitiveOutput(id),
+            ObservationId::InstanceOutput(id) => Self::InstanceOutput(id),
+            ObservationId::JunctionOutput(id) => Self::JunctionOutput(id),
+            ObservationId::DeclaredOutput(id) => Self::DeclaredOutput(id),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

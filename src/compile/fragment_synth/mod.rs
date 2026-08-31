@@ -6,4 +6,5 @@ pub mod legacy_adapter;
 pub mod manifest;
 pub mod realise;
 pub mod topology;
+pub mod timing_graph;
 pub mod verify;

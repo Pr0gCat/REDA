@@ -28,10 +28,11 @@
 //! on/off state, precisely so this distinction is made once, not
 //! independently at both call sites below.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use serde::Serialize;
 
+use crate::compile::fragment_synth::identity::{ObservationId, ObservationSite};
 use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::storage::World;
 
@@ -91,6 +92,24 @@ pub struct Observation {
     pub value: bool,
 }
 
+/// One identity-preserving observation event. Display labels are metadata:
+/// neither duplicate labels nor multiple identities at one position merge.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TypedObservation {
+    pub tick: u64,
+    pub id: ObservationId,
+    pub position: Position,
+    pub display_label: Option<String>,
+    pub value: bool,
+}
+
+#[derive(Debug, Clone)]
+struct WatchRegistration {
+    id: Option<ObservationId>,
+    label: String,
+    display_label: Option<String>,
+}
+
 /// A fixed set of watched positions, plus a running log of every `lit`
 /// change seen at any of them.
 ///
@@ -99,15 +118,55 @@ pub struct Observation {
 /// labels are not required to be unique -- lookups always go the other way,
 /// from position to label.
 pub struct Observer {
-    watched: HashMap<Position, String>,
+    watched: BTreeMap<Position, Vec<WatchRegistration>>,
     last_value: HashMap<Position, bool>,
     log: Vec<Observation>,
+    typed_log: Vec<TypedObservation>,
 }
 
 impl Observer {
     /// Watch exactly these positions, each carrying a human-readable label.
     pub fn new(watched: impl IntoIterator<Item = (Position, String)>) -> Self {
-        Observer { watched: watched.into_iter().collect(), last_value: HashMap::new(), log: Vec::new() }
+        let mut registrations = BTreeMap::<Position, Vec<WatchRegistration>>::new();
+        for (position, label) in watched {
+            registrations.entry(position).or_default().push(WatchRegistration {
+                id: None,
+                display_label: Some(label.clone()),
+                label,
+            });
+        }
+        Self {
+            watched: registrations,
+            last_value: HashMap::new(),
+            log: Vec::new(),
+            typed_log: Vec::new(),
+        }
+    }
+
+    /// Watch typed sites without using coordinates or labels as identity.
+    pub fn typed(sites: impl IntoIterator<Item = ObservationSite>) -> Self {
+        let mut registrations = BTreeMap::<Position, Vec<WatchRegistration>>::new();
+        for site in sites {
+            let position = Position::new(site.at.x, site.at.y, site.at.z);
+            let label = site
+                .display_label
+                .clone()
+                .unwrap_or_else(|| format!("{:?}", site.id));
+            registrations.entry(position).or_default().push(WatchRegistration {
+                id: Some(site.id),
+                label,
+                display_label: site.display_label,
+            });
+        }
+        for registrations in registrations.values_mut() {
+            registrations.sort_by_key(|registration| registration.id);
+        }
+        Self {
+            watched: registrations,
+            last_value: HashMap::new(),
+            log: Vec::new(),
+            typed_log: Vec::new(),
+        }
     }
 
     /// How many positions this observer watches.
@@ -122,6 +181,7 @@ impl Observer {
     /// the resulting log holds only the changes caused by that transition.
     pub fn reset(&mut self, world: &World) {
         self.log.clear();
+        self.typed_log.clear();
         self.last_value.clear();
         for &position in self.watched.keys() {
             self.last_value.insert(position, signal_of(world, position));
@@ -136,11 +196,27 @@ impl Observer {
     /// world, the same principle that keeps redstone propagation itself
     /// sparse (see `propagate::recompute_dust_strengths`).
     pub(super) fn sample(&mut self, world: &World, tick: u64) {
-        for (&position, label) in &self.watched {
+        for (&position, registrations) in &self.watched {
             let signal = signal_of(world, position);
             if self.last_value.get(&position) != Some(&signal) {
                 self.last_value.insert(position, signal);
-                self.log.push(Observation { tick, position, label: label.clone(), value: signal });
+                for registration in registrations {
+                    self.log.push(Observation {
+                        tick,
+                        position,
+                        label: registration.label.clone(),
+                        value: signal,
+                    });
+                    if let Some(id) = registration.id {
+                        self.typed_log.push(TypedObservation {
+                            tick,
+                            id,
+                            position,
+                            display_label: registration.display_label.clone(),
+                            value: signal,
+                        });
+                    }
+                }
             }
         }
     }
@@ -151,11 +227,19 @@ impl Observer {
     pub fn log(&self) -> &[Observation] {
         &self.log
     }
+
+    pub fn typed_log(&self) -> &[TypedObservation] {
+        &self.typed_log
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compile::fragment_synth::identity::{
+        InstanceId, ObservationId, PrimitiveId, TopologyNodeId,
+    };
+    use crate::compile::geometry::Anchor;
     use crate::redstone::world::block::{BlockKind, BlockState};
 
     fn torch(lit: bool) -> BlockState {
@@ -221,5 +305,38 @@ mod tests {
         observer.sample(&world, 3);
 
         assert!(observer.log().is_empty(), "nothing changed, so nothing should be logged");
+    }
+
+    #[test]
+    fn typed_observer_preserves_same_position_identities_and_duplicate_labels() {
+        let mut world = World::new(3, 3, 3);
+        let position = Position::new(1, 1, 1);
+        world.set(position.x, position.y, position.z, torch(false));
+        let primitive = ObservationId::PrimitiveOutput(PrimitiveId {
+            instance: InstanceId(7),
+            node: TopologyNodeId(0),
+        });
+        let instance = ObservationId::InstanceOutput(InstanceId(7));
+        let sites = [primitive, instance].map(|id| ObservationSite {
+            id,
+            at: Anchor { x: 1, y: 1, z: 1 },
+            logical_owner: Some(InstanceId(7)),
+            display_label: Some("same".to_string()),
+        });
+        let mut observer = Observer::typed(sites);
+        observer.reset(&world);
+
+        world.set(position.x, position.y, position.z, torch(true));
+        observer.sample(&world, 9);
+
+        assert_eq!(observer.watched_count(), 1, "the physical cell is sampled once");
+        assert_eq!(observer.typed_log().len(), 2, "both typed identities survive");
+        assert_eq!(observer.typed_log()[0].id, primitive);
+        assert_eq!(observer.typed_log()[1].id, instance);
+        assert!(observer
+            .typed_log()
+            .iter()
+            .all(|event| event.display_label.as_deref() == Some("same")));
+        assert_eq!(observer.log().len(), 2, "the compatibility projection also stays lossless");
     }
 }
