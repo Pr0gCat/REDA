@@ -298,8 +298,10 @@ pub struct FragmentAcceptanceReport {
     pub baseline_commit: String,
     pub base_shuffle_seed: u64,
     pub derived_shuffle_seeds: Vec<u64>,
-    pub recorded_budget_orders: Vec<Vec<u64>>,
+    pub planned_budget_orders: Vec<Vec<u64>>,
+    pub repeatability_executed: bool,
     pub runs: Vec<FragmentBudgetRun>,
+    pub quality_passing_evaluations: Option<u64>,
     pub replacement_gate_passed: bool,
     pub shipping_evaluations: Option<u64>,
     pub failures: Vec<String>,
@@ -455,12 +457,12 @@ pub fn build_acceptance_report(
 ) -> FragmentAcceptanceReport {
     let orders = deterministic_budget_orders(budgets, 3, base_shuffle_seed);
     let mut runs = Vec::new();
-    let mut shipping_evaluations = None;
+    let mut quality_passing_evaluations = None;
     for &budget in budgets {
         let run = evaluate_fragment_budget(evaluator, baseline, budget);
         let seed_failed = run.cases.iter().any(|case| !case.compiled_and_certified);
-        if run.passed && shipping_evaluations.is_none() {
-            shipping_evaluations = Some(budget);
+        if run.passed && quality_passing_evaluations.is_none() {
+            quality_passing_evaluations = Some(budget);
         }
         runs.push(run);
         if seed_failed {
@@ -490,10 +492,12 @@ pub fn build_acceptance_report(
         derived_shuffle_seeds: (0..3)
             .map(|index| base_shuffle_seed.wrapping_add(index))
             .collect(),
-        recorded_budget_orders: orders,
+        planned_budget_orders: orders,
+        repeatability_executed: false,
         runs,
-        replacement_gate_passed: shipping_evaluations.is_some(),
-        shipping_evaluations,
+        quality_passing_evaluations,
+        replacement_gate_passed: false,
+        shipping_evaluations: None,
         failures,
     }
 }

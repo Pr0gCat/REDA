@@ -58,3 +58,19 @@ fn a_failed_gate_cannot_generate_a_shipping_configuration() {
     assert!(report.shipping_evaluations.is_none());
     assert!(shipping_config_source(&report).is_err());
 }
+
+#[test]
+fn checked_failure_report_names_every_failed_condition_and_no_shipping_source_exists() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let report: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("tests/fixtures/fragment_synth_shipping.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(report["replacement_gate_passed"], false);
+    assert_eq!(report["repeatability_executed"], false);
+    assert!(report["shipping_evaluations"].is_null());
+    assert_eq!(report["failures"].as_array().unwrap().len(), CASES.len());
+    assert!(!root
+        .join("src/compile/fragment_synth/shipping_config.rs")
+        .exists());
+}
