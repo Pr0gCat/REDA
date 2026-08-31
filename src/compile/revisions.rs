@@ -4,8 +4,6 @@
 //! semantic change to the cell library, simulator, or physical verifier must
 //! update the corresponding descriptor in the same commit.
 
-use std::collections::BTreeMap;
-
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -13,7 +11,7 @@ use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
 use crate::compile::topology::{
     EmbeddingHint, GateKind, Library, Primitive, StatefulPrimitiveRole, TemplateNode,
 };
-use crate::redstone::simulator::{component, schedule};
+use crate::redstone::simulator;
 
 #[derive(Serialize)]
 struct CellLibraryRevisionDescriptor {
@@ -78,32 +76,6 @@ struct StatefulNodeDescriptor {
 struct StatefulEdgeDescriptor {
     from: &'static str,
     to: &'static str,
-}
-
-#[derive(Serialize)]
-struct SimulatorRevisionDescriptor {
-    schema_version: u64,
-    supported_component_kinds: Vec<&'static str>,
-    unsupported_component_kinds: Vec<&'static str>,
-    component_delay_game_ticks: BTreeMap<&'static str, u64>,
-    burnout_window_game_ticks: u64,
-    burnout_change_limit: u64,
-    tick_priority_order: Vec<&'static str>,
-    same_priority_order: &'static str,
-    propagation_rule_version: &'static str,
-    wire_observation_policy: &'static str,
-}
-
-#[derive(Serialize)]
-struct PhysicalVerifierRevisionDescriptor {
-    schema_version: u64,
-    rules: Vec<VerifierRuleDescriptor>,
-}
-
-#[derive(Serialize)]
-struct VerifierRuleDescriptor {
-    id: &'static str,
-    semantic_version: u64,
 }
 
 fn canonicalise_json(value: Value) -> Value {
@@ -281,91 +253,6 @@ fn cell_library_descriptor(library: &Library) -> CellLibraryRevisionDescriptor {
     }
 }
 
-fn simulator_descriptor() -> SimulatorRevisionDescriptor {
-    let mut component_delay_game_ticks = BTreeMap::new();
-    component_delay_game_ticks.insert("torch", component::TORCH_DELAY_GAME_TICKS);
-    component_delay_game_ticks.insert("repeater-per-redstone-tick", 2);
-    component_delay_game_ticks.insert("comparator", component::COMPARATOR_DELAY_GAME_TICKS);
-    component_delay_game_ticks.insert("lamp-turn-on", component::LAMP_TURN_ON_DELAY_GAME_TICKS);
-    component_delay_game_ticks.insert("lamp-turn-off", component::LAMP_TURN_OFF_DELAY_GAME_TICKS);
-    component_delay_game_ticks.insert("minimum-schedule", schedule::MIN_SCHEDULE_DELAY_GAME_TICKS);
-
-    SimulatorRevisionDescriptor {
-        schema_version: 1,
-        supported_component_kinds: vec![
-            "air",
-            "solid",
-            "glass",
-            "slab",
-            "redstone-wire",
-            "repeater",
-            "comparator",
-            "torch",
-            "wall-torch",
-            "lever",
-            "redstone-block",
-            "lamp",
-            "other",
-        ],
-        unsupported_component_kinds: vec![
-            "piston",
-            "observer",
-            "button",
-            "pressure-plate",
-            "weighted-pressure-plate",
-            "target",
-            "daylight-detector",
-        ],
-        component_delay_game_ticks,
-        burnout_window_game_ticks: component::BURNOUT_WINDOW_GAME_TICKS,
-        burnout_change_limit: component::BURNOUT_CHANGE_LIMIT as u64,
-        tick_priority_order: vec!["highest", "higher", "high", "normal"],
-        same_priority_order: "stable-insertion-order",
-        propagation_rule_version: "directed-dust-component-propagation-v1",
-        wire_observation_policy: "redstone-wire-is-high-iff-power-greater-than-zero",
-    }
-}
-
-fn physical_verifier_descriptor() -> PhysicalVerifierRevisionDescriptor {
-    PhysicalVerifierRevisionDescriptor {
-        schema_version: 1,
-        rules: vec![
-            VerifierRuleDescriptor {
-                id: "collision",
-                semantic_version: 1,
-            },
-            VerifierRuleDescriptor {
-                id: "coupling",
-                semantic_version: 1,
-            },
-            VerifierRuleDescriptor {
-                id: "connectivity",
-                semantic_version: 1,
-            },
-            VerifierRuleDescriptor {
-                id: "torch-merge-structure",
-                semantic_version: 1,
-            },
-            VerifierRuleDescriptor {
-                id: "signal-strength",
-                semantic_version: 1,
-            },
-            VerifierRuleDescriptor {
-                id: "repeater-direction",
-                semantic_version: 1,
-            },
-            VerifierRuleDescriptor {
-                id: "terminal-style",
-                semantic_version: 1,
-            },
-            VerifierRuleDescriptor {
-                id: "pin-handover-halo",
-                semantic_version: 1,
-            },
-        ],
-    }
-}
-
 /// Semantic revision of one concrete topology library.
 pub fn cell_library_revision(library: &Library) -> Fingerprint {
     descriptor_fingerprint(&cell_library_descriptor(library))
@@ -373,12 +260,12 @@ pub fn cell_library_revision(library: &Library) -> Fingerprint {
 
 /// Semantic revision of the simulator's supported components and rules.
 pub fn simulator_revision() -> Fingerprint {
-    descriptor_fingerprint(&simulator_descriptor())
+    descriptor_fingerprint(&simulator::revision_descriptor())
 }
 
 /// Semantic revision of the ordered physical-verification rule set.
 pub fn physical_verifier_revision() -> Fingerprint {
-    descriptor_fingerprint(&physical_verifier_descriptor())
+    descriptor_fingerprint(&crate::compile::physical_verifier_revision_descriptor())
 }
 
 #[cfg(test)]
@@ -389,11 +276,23 @@ mod tests {
 
     use super::{
         cell_library_descriptor, cell_library_revision, descriptor_fingerprint,
-        physical_verifier_descriptor, physical_verifier_revision, simulator_descriptor,
-        simulator_revision,
+        physical_verifier_revision, simulator_revision,
     };
-    use crate::compile::topology::{
-        GateKind, Library, LibraryEntry, Primitive, Template, TemplateNode,
+    use crate::compile::{
+        physical_verifier_revision_descriptor,
+        topology::{GateKind, Library, LibraryEntry, Primitive, Template, TemplateNode},
+        PhysicalVerifierRuleId,
+    };
+    use crate::redstone::simulator::{
+        self,
+        component::{
+            BurnoutSemantics, ComparatorPriorityCondition, ComparatorPriorityRule,
+            ComponentDelaySemantics, RepeaterPriorityCondition, RepeaterPriorityRule,
+        },
+        observer::{WireObservationPolicy, WireObservationSemantics},
+        propagate::{PropagationPolicy, PropagationSemantics},
+        schedule::{SamePriorityOrder, TickOrderSemantics, TickPriority},
+        ComponentSupport, ComponentSupportRegistration, SimulatorComponentKind,
     };
 
     fn one_node_entry(name: &'static str, primitive: Primitive) -> LibraryEntry {
@@ -484,20 +383,191 @@ mod tests {
     }
 
     #[test]
-    fn changing_one_simulator_descriptor_field_changes_its_revision() {
-        let mut changed = simulator_descriptor();
-        let original = descriptor_fingerprint(&changed);
-        changed.propagation_rule_version = "test-only-mutated-rule";
-
-        assert_ne!(original, descriptor_fingerprint(&changed));
+    fn simulator_descriptor_matches_every_runtime_authority_category() {
+        let descriptor = simulator::revision_descriptor();
+        assert_eq!(
+            descriptor.components,
+            vec![
+                ComponentSupportRegistration::supported(SimulatorComponentKind::Air),
+                ComponentSupportRegistration::supported(SimulatorComponentKind::Solid),
+                ComponentSupportRegistration::supported(SimulatorComponentKind::Glass),
+                ComponentSupportRegistration::supported(SimulatorComponentKind::Slab),
+                ComponentSupportRegistration::supported(SimulatorComponentKind::RedstoneWire),
+                ComponentSupportRegistration::supported(SimulatorComponentKind::Repeater),
+                ComponentSupportRegistration::supported(SimulatorComponentKind::Comparator),
+                ComponentSupportRegistration::supported(SimulatorComponentKind::Torch),
+                ComponentSupportRegistration::supported(SimulatorComponentKind::WallTorch),
+                ComponentSupportRegistration::supported(SimulatorComponentKind::Lever),
+                ComponentSupportRegistration::supported(SimulatorComponentKind::RedstoneBlock),
+                ComponentSupportRegistration::supported(SimulatorComponentKind::Lamp),
+                ComponentSupportRegistration::unsupported(SimulatorComponentKind::Piston),
+                ComponentSupportRegistration::unsupported(SimulatorComponentKind::Button),
+                ComponentSupportRegistration::unsupported(SimulatorComponentKind::PressurePlate),
+                ComponentSupportRegistration::unsupported(
+                    SimulatorComponentKind::WeightedPressurePlate,
+                ),
+                ComponentSupportRegistration::unsupported(SimulatorComponentKind::Observer),
+                ComponentSupportRegistration::unsupported(SimulatorComponentKind::Target),
+                ComponentSupportRegistration::unsupported(
+                    SimulatorComponentKind::DaylightDetector,
+                ),
+                ComponentSupportRegistration::supported(SimulatorComponentKind::Other),
+            ]
+        );
+        assert_eq!(
+            descriptor.delays,
+            ComponentDelaySemantics {
+                torch_game_ticks: 2,
+                repeater_min_redstone_ticks: 1,
+                repeater_game_ticks_per_redstone_tick: 2,
+                comparator_game_ticks: 2,
+                lamp_turn_on_game_ticks: 0,
+                lamp_turn_off_game_ticks: 4,
+            }
+        );
+        assert_eq!(
+            descriptor.burnout,
+            BurnoutSemantics {
+                window_game_ticks: 60,
+                change_limit: 8,
+            }
+        );
+        assert_eq!(
+            descriptor.repeater_priority_rules,
+            vec![
+                RepeaterPriorityRule {
+                    condition: RepeaterPriorityCondition::FeedsDiodeBackOrSide,
+                    priority: TickPriority::Highest,
+                },
+                RepeaterPriorityRule {
+                    condition: RepeaterPriorityCondition::TurningOff,
+                    priority: TickPriority::Higher,
+                },
+                RepeaterPriorityRule {
+                    condition: RepeaterPriorityCondition::Otherwise,
+                    priority: TickPriority::High,
+                },
+            ]
+        );
+        assert_eq!(
+            descriptor.comparator_priority_rules,
+            vec![
+                ComparatorPriorityRule {
+                    condition: ComparatorPriorityCondition::FeedsDiodeBackOrSide,
+                    priority: TickPriority::High,
+                },
+                ComparatorPriorityRule {
+                    condition: ComparatorPriorityCondition::Otherwise,
+                    priority: TickPriority::Normal,
+                },
+            ]
+        );
+        assert_eq!(
+            descriptor.tick_order,
+            TickOrderSemantics {
+                semantic_version: 1,
+                priority_order: vec![
+                    TickPriority::Highest,
+                    TickPriority::Higher,
+                    TickPriority::High,
+                    TickPriority::Normal,
+                ],
+                same_priority_order: SamePriorityOrder::StableInsertion,
+                minimum_schedule_delay_game_ticks: 1,
+            }
+        );
+        assert_eq!(
+            descriptor.propagation,
+            PropagationSemantics {
+                policy: PropagationPolicy::DirectedDustComponent,
+                semantic_version: 1,
+            }
+        );
+        assert_eq!(
+            descriptor.wire_observation,
+            WireObservationSemantics {
+                policy: WireObservationPolicy::PowerGreaterThanZero,
+                semantic_version: 1,
+            }
+        );
     }
 
     #[test]
-    fn changing_one_verifier_descriptor_field_changes_its_revision() {
-        let mut changed = physical_verifier_descriptor();
-        let original = descriptor_fingerprint(&changed);
-        changed.rules[0].semantic_version += 1;
+    fn every_simulator_authority_category_changes_the_revision() {
+        let descriptor = simulator::revision_descriptor();
+        let original = descriptor_fingerprint(&descriptor);
 
-        assert_ne!(original, descriptor_fingerprint(&changed));
+        let mut changed = descriptor.clone();
+        changed.components[0].support = ComponentSupport::Unsupported;
+        assert_ne!(original, descriptor_fingerprint(&changed), "component support");
+
+        let mut changed = descriptor.clone();
+        changed.delays.torch_game_ticks += 1;
+        assert_ne!(original, descriptor_fingerprint(&changed), "component delays");
+
+        let mut changed = descriptor.clone();
+        changed.burnout.change_limit += 1;
+        assert_ne!(original, descriptor_fingerprint(&changed), "torch burnout");
+
+        let mut changed = descriptor.clone();
+        changed.repeater_priority_rules[0].priority = TickPriority::Normal;
+        assert_ne!(original, descriptor_fingerprint(&changed), "repeater priority mapping");
+
+        let mut changed = descriptor.clone();
+        changed.comparator_priority_rules[0].priority = TickPriority::Normal;
+        assert_ne!(original, descriptor_fingerprint(&changed), "comparator priority mapping");
+
+        let mut changed = descriptor.clone();
+        changed.tick_order.semantic_version += 1;
+        assert_ne!(original, descriptor_fingerprint(&changed), "tick ordering");
+
+        let mut changed = descriptor.clone();
+        changed.propagation.semantic_version += 1;
+        assert_ne!(original, descriptor_fingerprint(&changed), "propagation rules");
+
+        let mut changed = descriptor;
+        changed.wire_observation.semantic_version += 1;
+        assert_ne!(original, descriptor_fingerprint(&changed), "wire observation");
+    }
+
+    #[test]
+    fn verifier_descriptor_matches_the_runtime_pipeline_order() {
+        let descriptor = physical_verifier_revision_descriptor();
+        let actual: Vec<_> = descriptor
+            .rules
+            .iter()
+            .map(|rule| (rule.id, rule.semantic_version))
+            .collect();
+        assert_eq!(
+            actual,
+            vec![
+                (PhysicalVerifierRuleId::Collision, 1),
+                (PhysicalVerifierRuleId::RepeaterDirection, 1),
+                (PhysicalVerifierRuleId::PinHandoverHalo, 1),
+                (PhysicalVerifierRuleId::TerminalStyle, 1),
+                (PhysicalVerifierRuleId::Coupling, 1),
+                (PhysicalVerifierRuleId::Connectivity, 1),
+                (PhysicalVerifierRuleId::TorchMergeStructure, 1),
+                (PhysicalVerifierRuleId::SignalStrength, 1),
+            ]
+        );
+    }
+
+    #[test]
+    fn every_verifier_rule_category_changes_the_revision() {
+        let descriptor = physical_verifier_revision_descriptor();
+        let original = descriptor_fingerprint(&descriptor);
+
+        for index in 0..descriptor.rules.len() {
+            let mut changed = descriptor.clone();
+            changed.rules[index].semantic_version += 1;
+
+            assert_ne!(
+                original,
+                descriptor_fingerprint(&changed),
+                "rule {:?}",
+                descriptor.rules[index].id
+            );
+        }
     }
 }

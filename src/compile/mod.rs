@@ -37,6 +37,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 
+use serde::Serialize;
+
 use crate::redstone::rules::taxonomy::{flags_of, BlockPower};
 use crate::redstone::simulator::component::torch_support_position;
 use crate::redstone::simulator::connectivity::{
@@ -91,6 +93,97 @@ pub mod resettle_differential;
 pub mod strength_differential;
 pub mod topology;
 pub mod world_partition;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) enum PhysicalVerifierRuleId {
+    Collision,
+    Coupling,
+    Connectivity,
+    TorchMergeStructure,
+    SignalStrength,
+    RepeaterDirection,
+    TerminalStyle,
+    PinHandoverHalo,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct PhysicalVerifierRuleRegistration {
+    pub id: PhysicalVerifierRuleId,
+    pub semantic_version: u64,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) enum RealisedWorldVerifierCheckId {
+    CouplingAndConnectivity,
+    TorchMergeStructure,
+    SignalStrength,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub(crate) struct RealisedWorldVerifierCheckRegistration {
+    pub check: RealisedWorldVerifierCheckId,
+    pub rules: &'static [PhysicalVerifierRuleRegistration],
+}
+
+const COUPLING_CONNECTIVITY_RULES: [PhysicalVerifierRuleRegistration; 2] = [
+    PhysicalVerifierRuleRegistration {
+        id: PhysicalVerifierRuleId::Coupling,
+        semantic_version: 1,
+    },
+    PhysicalVerifierRuleRegistration {
+        id: PhysicalVerifierRuleId::Connectivity,
+        semantic_version: 1,
+    },
+];
+
+const TORCH_MERGE_RULES: [PhysicalVerifierRuleRegistration; 1] =
+    [PhysicalVerifierRuleRegistration {
+        id: PhysicalVerifierRuleId::TorchMergeStructure,
+        semantic_version: 1,
+    }];
+
+const SIGNAL_STRENGTH_RULES: [PhysicalVerifierRuleRegistration; 1] =
+    [PhysicalVerifierRuleRegistration {
+        id: PhysicalVerifierRuleId::SignalStrength,
+        semantic_version: 1,
+    }];
+
+pub(crate) const REALISED_WORLD_VERIFIER_PIPELINE: [
+    RealisedWorldVerifierCheckRegistration;
+    3
+] = [
+    RealisedWorldVerifierCheckRegistration {
+        check: RealisedWorldVerifierCheckId::CouplingAndConnectivity,
+        rules: &COUPLING_CONNECTIVITY_RULES,
+    },
+    RealisedWorldVerifierCheckRegistration {
+        check: RealisedWorldVerifierCheckId::TorchMergeStructure,
+        rules: &TORCH_MERGE_RULES,
+    },
+    RealisedWorldVerifierCheckRegistration {
+        check: RealisedWorldVerifierCheckId::SignalStrength,
+        rules: &SIGNAL_STRENGTH_RULES,
+    },
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct PhysicalVerifierRevisionDescriptor {
+    pub rules: Vec<PhysicalVerifierRuleRegistration>,
+}
+
+pub(crate) fn physical_verifier_revision_descriptor() -> PhysicalVerifierRevisionDescriptor {
+    let mut rules = Vec::new();
+    for check in planner::physical_verifier_pipeline() {
+        if check.check == planner::PlannerVerifierCheckId::RealisedWorld {
+            for realised_check in REALISED_WORLD_VERIFIER_PIPELINE {
+                rules.extend_from_slice(realised_check.rules);
+            }
+        } else {
+            rules.extend_from_slice(check.rules);
+        }
+    }
+    PhysicalVerifierRevisionDescriptor { rules }
+}
 
 // ---------------------------------------------------------------------
 // 網表
@@ -6945,17 +7038,26 @@ pub(crate) fn verify_realised_world(
     input_positions: &BTreeMap<String, (i32, i32, i32)>,
     output_positions: &BTreeMap<String, (i32, i32, i32)>,
 ) -> Result<(), CompileError> {
-    verify_connectivity(world, reservation, netlist, nets, gate_output_positions)?;
-    verify_torch_merge(world, reservation, netlist, nets, gate_output_positions)?;
-    verify_signal_strength(
-        world,
-        reservation,
-        netlist,
-        nets,
-        gate_output_positions,
-        input_positions,
-        output_positions,
-    )
+    for registration in REALISED_WORLD_VERIFIER_PIPELINE {
+        match registration.check {
+            RealisedWorldVerifierCheckId::CouplingAndConnectivity => {
+                verify_connectivity(world, reservation, netlist, nets, gate_output_positions)?;
+            }
+            RealisedWorldVerifierCheckId::TorchMergeStructure => {
+                verify_torch_merge(world, reservation, netlist, nets, gate_output_positions)?;
+            }
+            RealisedWorldVerifierCheckId::SignalStrength => verify_signal_strength(
+                world,
+                reservation,
+                netlist,
+                nets,
+                gate_output_positions,
+                input_positions,
+                output_positions,
+            )?,
+        }
+    }
+    Ok(())
 }
 
 /// Check that a route's recorded terminals describe the block realisations

@@ -172,6 +172,10 @@ mod tests {
             canonical_fingerprint(b"reda"),
             canonical_fingerprint(b"REDA")
         );
+        assert_eq!(
+            canonical_fingerprint(b"abc").as_str(),
+            "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+        );
     }
 
     #[test]

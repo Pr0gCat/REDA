@@ -15,6 +15,8 @@ pub mod schedule;
 
 use std::collections::HashMap;
 
+use serde::Serialize;
+
 use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::storage::World;
 
@@ -48,22 +50,141 @@ pub enum SimulationError {
     UnsupportedComponent { position: Position, name: String },
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) enum SimulatorComponentKind {
+    Air,
+    Solid,
+    Glass,
+    Slab,
+    RedstoneWire,
+    Repeater,
+    Comparator,
+    Torch,
+    WallTorch,
+    Lever,
+    RedstoneBlock,
+    Lamp,
+    Piston,
+    Button,
+    PressurePlate,
+    WeightedPressurePlate,
+    Observer,
+    Target,
+    DaylightDetector,
+    Other,
+}
+
+impl SimulatorComponentKind {
+    fn block_kind(self) -> BlockKind {
+        match self {
+            SimulatorComponentKind::Air => BlockKind::Air,
+            SimulatorComponentKind::Solid => BlockKind::Solid,
+            SimulatorComponentKind::Glass => BlockKind::Glass,
+            SimulatorComponentKind::Slab => BlockKind::Slab,
+            SimulatorComponentKind::RedstoneWire => BlockKind::RedstoneWire,
+            SimulatorComponentKind::Repeater => BlockKind::Repeater,
+            SimulatorComponentKind::Comparator => BlockKind::Comparator,
+            SimulatorComponentKind::Torch => BlockKind::Torch,
+            SimulatorComponentKind::WallTorch => BlockKind::WallTorch,
+            SimulatorComponentKind::Lever => BlockKind::Lever,
+            SimulatorComponentKind::RedstoneBlock => BlockKind::RedstoneBlock,
+            SimulatorComponentKind::Lamp => BlockKind::Lamp,
+            SimulatorComponentKind::Piston => BlockKind::Piston,
+            SimulatorComponentKind::Button => BlockKind::Button,
+            SimulatorComponentKind::PressurePlate => BlockKind::PressurePlate,
+            SimulatorComponentKind::WeightedPressurePlate => BlockKind::WeightedPressurePlate,
+            SimulatorComponentKind::Observer => BlockKind::Observer,
+            SimulatorComponentKind::Target => BlockKind::Target,
+            SimulatorComponentKind::DaylightDetector => BlockKind::DaylightDetector,
+            SimulatorComponentKind::Other => BlockKind::Other,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) enum ComponentSupport {
+    Supported,
+    Unsupported,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct ComponentSupportRegistration {
+    pub component: SimulatorComponentKind,
+    pub support: ComponentSupport,
+}
+
+impl ComponentSupportRegistration {
+    pub(crate) const fn supported(component: SimulatorComponentKind) -> Self {
+        ComponentSupportRegistration {
+            component,
+            support: ComponentSupport::Supported,
+        }
+    }
+
+    pub(crate) const fn unsupported(component: SimulatorComponentKind) -> Self {
+        ComponentSupportRegistration {
+            component,
+            support: ComponentSupport::Unsupported,
+        }
+    }
+}
+
+const COMPONENT_SUPPORT_REGISTRATIONS: [ComponentSupportRegistration; 20] = [
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Air),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Solid),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Glass),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Slab),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::RedstoneWire),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Repeater),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Comparator),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Torch),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::WallTorch),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Lever),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::RedstoneBlock),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Lamp),
+    ComponentSupportRegistration::unsupported(SimulatorComponentKind::Piston),
+    ComponentSupportRegistration::unsupported(SimulatorComponentKind::Button),
+    ComponentSupportRegistration::unsupported(SimulatorComponentKind::PressurePlate),
+    ComponentSupportRegistration::unsupported(SimulatorComponentKind::WeightedPressurePlate),
+    ComponentSupportRegistration::unsupported(SimulatorComponentKind::Observer),
+    ComponentSupportRegistration::unsupported(SimulatorComponentKind::Target),
+    ComponentSupportRegistration::unsupported(SimulatorComponentKind::DaylightDetector),
+    ComponentSupportRegistration::supported(SimulatorComponentKind::Other),
+];
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub(crate) struct SimulatorRevisionDescriptor {
+    pub schema_version: u64,
+    pub components: Vec<ComponentSupportRegistration>,
+    pub delays: component::ComponentDelaySemantics,
+    pub burnout: component::BurnoutSemantics,
+    pub repeater_priority_rules: Vec<component::RepeaterPriorityRule>,
+    pub comparator_priority_rules: Vec<component::ComparatorPriorityRule>,
+    pub tick_order: schedule::TickOrderSemantics,
+    pub propagation: propagate::PropagationSemantics,
+    pub wire_observation: observer::WireObservationSemantics,
+}
+
+pub(crate) fn revision_descriptor() -> SimulatorRevisionDescriptor {
+    SimulatorRevisionDescriptor {
+        schema_version: 1,
+        components: COMPONENT_SUPPORT_REGISTRATIONS.to_vec(),
+        delays: component::delay_semantics(),
+        burnout: component::burnout_semantics(),
+        repeater_priority_rules: component::REPEATER_PRIORITY_RULES.to_vec(),
+        comparator_priority_rules: component::COMPARATOR_PRIORITY_RULES.to_vec(),
+        tick_order: schedule::tick_order_semantics(),
+        propagation: propagate::PROPAGATION_SEMANTICS.clone(),
+        wire_observation: observer::WIRE_OBSERVATION_SEMANTICS.clone(),
+    }
+}
+
 /// 本階段明確不支援、必須回報而非靜默忽略的元件種類，`find_unsupported_component`
 /// 掃描用。
 ///
 /// 這份清單刻意不含中繼器、比較器 —— 它們的功率規則已經由 `taxonomy`
 /// 完整處理；中繼器與比較器的延遲、鎖存（中繼器獨有）與排程優先權都已經
 /// 接上 `step`。
-const UNSUPPORTED_KINDS: [BlockKind; 7] = [
-    BlockKind::Piston,
-    BlockKind::Observer,
-    BlockKind::Button,
-    BlockKind::PressurePlate,
-    BlockKind::WeightedPressurePlate,
-    BlockKind::Target,
-    BlockKind::DaylightDetector,
-];
-
 /// 世界裡第一個不支援的元件，連同它的原始方塊 ID。
 ///
 /// 用 `World::positions_of`（`World::set` 增量維護的稀疏索引）取代掃過
@@ -71,9 +192,10 @@ const UNSUPPORTED_KINDS: [BlockKind; 7] = [
 /// 正比。取扁平索引最小的那個，跟舊版線性掃描「回傳第一個碰到的」是
 /// 同一個順序（`positions_of` 依扁平索引遞增，也就是 YZX 掃描順序）。
 fn find_unsupported_component(world: &World) -> Option<(Position, String)> {
-    let flat = UNSUPPORTED_KINDS
+    let flat = COMPONENT_SUPPORT_REGISTRATIONS
         .iter()
-        .flat_map(|&kind| world.positions_of(kind))
+        .filter(|registration| registration.support == ComponentSupport::Unsupported)
+        .flat_map(|registration| world.positions_of(registration.component.block_kind()))
         .min()?;
     let (x, y, z) = world.decode(flat);
     let name = world.get(x, y, z).name.clone();

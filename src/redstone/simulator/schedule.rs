@@ -8,6 +8,9 @@
 
 use std::collections::BTreeMap;
 use std::collections::HashSet;
+use std::cmp::Ordering;
+
+use serde::Serialize;
 
 use crate::redstone::simulator::position::Position;
 
@@ -15,12 +18,56 @@ use crate::redstone::simulator::position::Position;
 ///
 /// 數值越小越先執行。這些優先權的存在是為了讓 diode 鏈的行為確定 ——
 /// 少了它們，兩個相鄰中繼器誰先動就變成實作細節。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum TickPriority {
     Highest,
     Higher,
     High,
     Normal,
+}
+
+/// The execution order the queue itself uses for ticks due together.
+pub const TICK_PRIORITY_EXECUTION_ORDER: [TickPriority; 4] = [
+    TickPriority::Highest,
+    TickPriority::Higher,
+    TickPriority::High,
+    TickPriority::Normal,
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum SamePriorityOrder {
+    StableInsertion,
+}
+
+pub const SAME_PRIORITY_ORDER: SamePriorityOrder = SamePriorityOrder::StableInsertion;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct TickOrderSemantics {
+    pub semantic_version: u64,
+    pub priority_order: Vec<TickPriority>,
+    pub same_priority_order: SamePriorityOrder,
+    pub minimum_schedule_delay_game_ticks: u64,
+}
+
+impl TickPriority {
+    fn execution_rank(self) -> usize {
+        TICK_PRIORITY_EXECUTION_ORDER
+            .iter()
+            .position(|&priority| priority == self)
+            .expect("every TickPriority must be registered")
+    }
+}
+
+impl Ord for TickPriority {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.execution_rank().cmp(&other.execution_rank())
+    }
+}
+
+impl PartialOrd for TickPriority {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
 }
 
 /// The queue's own floor on how soon a scheduled change can actually apply:
@@ -41,6 +88,15 @@ pub enum TickPriority {
 /// account for this same floor to predict a lamp turning on correctly (see
 /// `critical_path_settle_model_game_ticks`).
 pub const MIN_SCHEDULE_DELAY_GAME_TICKS: u64 = 1;
+
+pub fn tick_order_semantics() -> TickOrderSemantics {
+    TickOrderSemantics {
+        semantic_version: 1,
+        priority_order: TICK_PRIORITY_EXECUTION_ORDER.to_vec(),
+        same_priority_order: SAME_PRIORITY_ORDER,
+        minimum_schedule_delay_game_ticks: MIN_SCHEDULE_DELAY_GAME_TICKS,
+    }
+}
 
 /// 一筆排程。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -124,8 +180,10 @@ impl TickQueue {
             return Vec::new();
         };
 
-        // Vec::sort 是穩定排序，同優先權的元素維持原本（插入）順序。
-        due.sort_by_key(|tick| tick.priority);
+        match SAME_PRIORITY_ORDER {
+            // Vec::sort 是穩定排序，同優先權的元素維持原本（插入）順序。
+            SamePriorityOrder::StableInsertion => due.sort_by_key(|tick| tick.priority),
+        }
 
         for tick in &due {
             self.scheduled_positions.remove(&tick.position);

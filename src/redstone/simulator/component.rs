@@ -18,6 +18,7 @@ use crate::redstone::simulator::propagate::{
 use crate::redstone::simulator::schedule::TickPriority;
 use crate::redstone::world::block::{BlockKind, BlockState, Facing};
 use crate::redstone::world::storage::World;
+use serde::Serialize;
 
 /// 火把從被迫改變到真正翻轉之間的延遲：2 game tick（1 redstone tick）。
 pub const TORCH_DELAY_GAME_TICKS: u64 = 2;
@@ -27,6 +28,92 @@ pub const BURNOUT_WINDOW_GAME_TICKS: u64 = 60;
 
 /// 視窗內超過這個改變次數就燒毀。
 pub const BURNOUT_CHANGE_LIMIT: usize = 8;
+
+pub const REPEATER_MIN_DELAY_REDSTONE_TICKS: u64 = 1;
+pub const REPEATER_GAME_TICKS_PER_REDSTONE_TICK: u64 = 2;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ComponentDelaySemantics {
+    pub torch_game_ticks: u64,
+    pub repeater_min_redstone_ticks: u64,
+    pub repeater_game_ticks_per_redstone_tick: u64,
+    pub comparator_game_ticks: u64,
+    pub lamp_turn_on_game_ticks: u64,
+    pub lamp_turn_off_game_ticks: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BurnoutSemantics {
+    pub window_game_ticks: u64,
+    pub change_limit: usize,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum RepeaterPriorityCondition {
+    FeedsDiodeBackOrSide,
+    TurningOff,
+    Otherwise,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct RepeaterPriorityRule {
+    pub condition: RepeaterPriorityCondition,
+    pub priority: TickPriority,
+}
+
+pub const REPEATER_PRIORITY_RULES: [RepeaterPriorityRule; 3] = [
+    RepeaterPriorityRule {
+        condition: RepeaterPriorityCondition::FeedsDiodeBackOrSide,
+        priority: TickPriority::Highest,
+    },
+    RepeaterPriorityRule {
+        condition: RepeaterPriorityCondition::TurningOff,
+        priority: TickPriority::Higher,
+    },
+    RepeaterPriorityRule {
+        condition: RepeaterPriorityCondition::Otherwise,
+        priority: TickPriority::High,
+    },
+];
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum ComparatorPriorityCondition {
+    FeedsDiodeBackOrSide,
+    Otherwise,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct ComparatorPriorityRule {
+    pub condition: ComparatorPriorityCondition,
+    pub priority: TickPriority,
+}
+
+pub const COMPARATOR_PRIORITY_RULES: [ComparatorPriorityRule; 2] = [
+    ComparatorPriorityRule {
+        condition: ComparatorPriorityCondition::FeedsDiodeBackOrSide,
+        priority: TickPriority::High,
+    },
+    ComparatorPriorityRule {
+        condition: ComparatorPriorityCondition::Otherwise,
+        priority: TickPriority::Normal,
+    },
+];
+
+fn repeater_priority_for(condition: RepeaterPriorityCondition) -> TickPriority {
+    REPEATER_PRIORITY_RULES
+        .iter()
+        .find(|rule| rule.condition == condition)
+        .map(|rule| rule.priority)
+        .expect("every repeater priority condition must be registered")
+}
+
+fn comparator_priority_for(condition: ComparatorPriorityCondition) -> TickPriority {
+    COMPARATOR_PRIORITY_RULES
+        .iter()
+        .find(|rule| rule.condition == condition)
+        .map(|rule| rule.priority)
+        .expect("every comparator priority condition must be registered")
+}
 
 /// 火把附著在哪一格。
 ///
@@ -191,7 +278,7 @@ pub fn repeater_input_is_powered(world: &World, pos: Position) -> bool {
 pub fn repeater_priority(world: &World, pos: Position, turning_off: bool) -> TickPriority {
     let state = world.get(pos.x, pos.y, pos.z);
     let Some(facing) = state.facing else {
-        return TickPriority::High;
+        return repeater_priority_for(RepeaterPriorityCondition::Otherwise);
     };
 
     // `facing` points from output to input (Minecraft Wiki), so this
@@ -203,13 +290,14 @@ pub fn repeater_priority(world: &World, pos: Position, turning_off: bool) -> Tic
             .facing
             .is_some_and(|target_facing| target_facing != facing.opposite());
 
-    if faces_back_or_side_of_diode {
-        TickPriority::Highest
+    let condition = if faces_back_or_side_of_diode {
+        RepeaterPriorityCondition::FeedsDiodeBackOrSide
     } else if turning_off {
-        TickPriority::Higher
+        RepeaterPriorityCondition::TurningOff
     } else {
-        TickPriority::High
-    }
+        RepeaterPriorityCondition::Otherwise
+    };
+    repeater_priority_for(condition)
 }
 
 /// 中繼器的延遲換算成 game tick。
@@ -217,8 +305,8 @@ pub fn repeater_priority(world: &World, pos: Position, turning_off: bool) -> Tic
 /// `delay` 應該是 1..=4；0 視為 1，因為讀檔可能給出不完整的資料。
 /// 1 個紅石刻 = 2 個 game tick。
 pub fn repeater_delay_game_ticks(state: &BlockState) -> u64 {
-    let redstone_ticks = if state.delay == 0 { 1 } else { state.delay };
-    redstone_ticks as u64 * 2
+    let redstone_ticks = u64::from(state.delay).max(REPEATER_MIN_DELAY_REDSTONE_TICKS);
+    redstone_ticks * REPEATER_GAME_TICKS_PER_REDSTONE_TICK
 }
 
 /// 比較器的後方輸入位置。
@@ -314,7 +402,7 @@ pub fn comparator_output(world: &World, pos: Position) -> u8 {
 pub fn comparator_priority(world: &World, pos: Position) -> TickPriority {
     let state = world.get(pos.x, pos.y, pos.z);
     let Some(facing) = state.facing else {
-        return TickPriority::Normal;
+        return comparator_priority_for(ComparatorPriorityCondition::Otherwise);
     };
 
     // `facing` points from output to input (Minecraft Wiki), so this
@@ -326,16 +414,35 @@ pub fn comparator_priority(world: &World, pos: Position) -> TickPriority {
             .facing
             .is_some_and(|target_facing| target_facing != facing.opposite());
 
-    if faces_back_or_side_of_diode {
-        TickPriority::High
+    let condition = if faces_back_or_side_of_diode {
+        ComparatorPriorityCondition::FeedsDiodeBackOrSide
     } else {
-        TickPriority::Normal
-    }
+        ComparatorPriorityCondition::Otherwise
+    };
+    comparator_priority_for(condition)
 }
 
 /// 比較器從被迫改變到真正輸出之間的延遲：固定 2 game tick（1 redstone
 /// tick），不像中繼器可以調整。
 pub const COMPARATOR_DELAY_GAME_TICKS: u64 = 2;
+
+pub fn delay_semantics() -> ComponentDelaySemantics {
+    ComponentDelaySemantics {
+        torch_game_ticks: TORCH_DELAY_GAME_TICKS,
+        repeater_min_redstone_ticks: REPEATER_MIN_DELAY_REDSTONE_TICKS,
+        repeater_game_ticks_per_redstone_tick: REPEATER_GAME_TICKS_PER_REDSTONE_TICK,
+        comparator_game_ticks: COMPARATOR_DELAY_GAME_TICKS,
+        lamp_turn_on_game_ticks: LAMP_TURN_ON_DELAY_GAME_TICKS,
+        lamp_turn_off_game_ticks: LAMP_TURN_OFF_DELAY_GAME_TICKS,
+    }
+}
+
+pub fn burnout_semantics() -> BurnoutSemantics {
+    BurnoutSemantics {
+        window_game_ticks: BURNOUT_WINDOW_GAME_TICKS,
+        change_limit: BURNOUT_CHANGE_LIMIT,
+    }
+}
 
 #[cfg(test)]
 mod tests {

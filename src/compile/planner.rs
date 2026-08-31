@@ -1,6 +1,8 @@
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::Serialize;
+
 use crate::compile::primitive_graph::{self, reexpand_gate, EntrySelection, NodeId};
 use crate::compile::topology::{Library, Primitive};
 use crate::compile::{self, geometry, relax, CompiledCircuit, LegacyEmission, Netlist};
@@ -5964,6 +5966,68 @@ pub(crate) fn realise_without_verifying(
     })
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) enum PlannerVerifierCheckId {
+    Collision,
+    TerminalContract,
+    RouteTerminals,
+    RealisedWorld,
+}
+
+#[derive(Debug, Clone, Copy, Serialize)]
+pub(crate) struct PlannerVerifierCheckRegistration {
+    pub check: PlannerVerifierCheckId,
+    pub rules: &'static [compile::PhysicalVerifierRuleRegistration],
+}
+
+const COLLISION_RULES: [compile::PhysicalVerifierRuleRegistration; 1] =
+    [compile::PhysicalVerifierRuleRegistration {
+        id: compile::PhysicalVerifierRuleId::Collision,
+        semantic_version: 1,
+    }];
+
+const TERMINAL_CONTRACT_RULES: [compile::PhysicalVerifierRuleRegistration; 2] = [
+    compile::PhysicalVerifierRuleRegistration {
+        id: compile::PhysicalVerifierRuleId::RepeaterDirection,
+        semantic_version: 1,
+    },
+    compile::PhysicalVerifierRuleRegistration {
+        id: compile::PhysicalVerifierRuleId::PinHandoverHalo,
+        semantic_version: 1,
+    },
+];
+
+const TERMINAL_STYLE_RULES: [compile::PhysicalVerifierRuleRegistration; 1] =
+    [compile::PhysicalVerifierRuleRegistration {
+        id: compile::PhysicalVerifierRuleId::TerminalStyle,
+        semantic_version: 1,
+    }];
+
+const REALISED_WORLD_RULES: [compile::PhysicalVerifierRuleRegistration; 0] = [];
+
+const PHYSICAL_VERIFIER_PIPELINE: [PlannerVerifierCheckRegistration; 4] = [
+    PlannerVerifierCheckRegistration {
+        check: PlannerVerifierCheckId::Collision,
+        rules: &COLLISION_RULES,
+    },
+    PlannerVerifierCheckRegistration {
+        check: PlannerVerifierCheckId::TerminalContract,
+        rules: &TERMINAL_CONTRACT_RULES,
+    },
+    PlannerVerifierCheckRegistration {
+        check: PlannerVerifierCheckId::RouteTerminals,
+        rules: &TERMINAL_STYLE_RULES,
+    },
+    PlannerVerifierCheckRegistration {
+        check: PlannerVerifierCheckId::RealisedWorld,
+        rules: &REALISED_WORLD_RULES,
+    },
+];
+
+pub(crate) fn physical_verifier_pipeline() -> &'static [PlannerVerifierCheckRegistration] {
+    &PHYSICAL_VERIFIER_PIPELINE
+}
+
 /// The body [`realise_and_verify`] always had, returning the two values it used
 /// to drop on the floor. A tuple rather than the struct above so that the
 /// shipping build has no field it never reads.
@@ -5972,41 +6036,78 @@ fn verified_parts(
     netlist: &Netlist,
     size: (i32, i32, i32),
 ) -> Result<(RealisedCandidate, compile::Reservation, Vec<compile::Net>), PlannerError> {
-    let reservation = verify_spacing(candidate)?;
-    let nets = verification_nets(candidate, netlist)?;
+    let mut reservation = None;
+    let mut nets = None;
+    let mut realised = None;
 
-    let realised = emit_candidate(candidate, netlist, size)?;
-
-    verify_terminal_contract(candidate, &realised.world, &reservation)?;
-
-    // Terminal style is a planning decision, so it is checked against what
-    // realisation actually put at each sink -- a plan claiming directed dust
-    // over a repeater is priced wrongly even when the circuit works.
-    for (net, route) in candidate.routes.iter().enumerate() {
-        compile::verify_route_terminals(
-            &realised.world,
-            &reservation,
-            netlist,
-            &nets,
-            net,
-            &route.id,
-            &route.terminals,
-        )
-        .map_err(PlannerError::PhysicalInvariant)?;
+    for registration in PHYSICAL_VERIFIER_PIPELINE {
+        match registration.check {
+            PlannerVerifierCheckId::Collision => {
+                reservation = Some(verify_spacing(candidate)?);
+                nets = Some(verification_nets(candidate, netlist)?);
+                realised = Some(emit_candidate(candidate, netlist, size)?);
+            }
+            PlannerVerifierCheckId::TerminalContract => verify_terminal_contract(
+                candidate,
+                &realised
+                    .as_ref()
+                    .expect("collision stage must realise before terminal checks")
+                    .world,
+                reservation
+                    .as_ref()
+                    .expect("collision stage must reserve before terminal checks"),
+            )?,
+            PlannerVerifierCheckId::RouteTerminals => {
+                let realised = realised
+                    .as_ref()
+                    .expect("collision stage must realise before terminal checks");
+                let reservation = reservation
+                    .as_ref()
+                    .expect("collision stage must reserve before terminal checks");
+                let nets = nets
+                    .as_ref()
+                    .expect("collision stage must build nets before terminal checks");
+                // Terminal style is a planning decision, so it is checked
+                // against what realisation actually put at each sink.
+                for (net, route) in candidate.routes.iter().enumerate() {
+                    compile::verify_route_terminals(
+                        &realised.world,
+                        reservation,
+                        netlist,
+                        nets,
+                        net,
+                        &route.id,
+                        &route.terminals,
+                    )
+                    .map_err(PlannerError::PhysicalInvariant)?;
+                }
+            }
+            PlannerVerifierCheckId::RealisedWorld => {
+                let realised = realised
+                    .as_ref()
+                    .expect("collision stage must realise before world checks");
+                compile::verify_realised_world(
+                    &realised.world,
+                    reservation
+                        .as_ref()
+                        .expect("collision stage must reserve before world checks"),
+                    netlist,
+                    nets.as_ref()
+                        .expect("collision stage must build nets before world checks"),
+                    &realised.ports.gate_output_positions,
+                    &realised.ports.input_positions,
+                    &realised.ports.output_positions,
+                )
+                .map_err(PlannerError::PhysicalInvariant)?;
+            }
+        }
     }
 
-    compile::verify_realised_world(
-        &realised.world,
-        &reservation,
-        netlist,
-        &nets,
-        &realised.ports.gate_output_positions,
-        &realised.ports.input_positions,
-        &realised.ports.output_positions,
-    )
-    .map_err(PlannerError::PhysicalInvariant)?;
-
-    Ok((realised, reservation, nets))
+    Ok((
+        realised.expect("verifier pipeline must include collision setup"),
+        reservation.expect("verifier pipeline must include collision setup"),
+        nets.expect("verifier pipeline must include collision setup"),
+    ))
 }
 
 /// The terminal-contract invariant, one clause per promise the spec states

@@ -30,10 +30,39 @@
 
 use std::collections::HashMap;
 
+use serde::Serialize;
+
 use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::storage::World;
 
 use super::position::Position;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum WireObservationPolicy {
+    PowerGreaterThanZero,
+}
+
+impl WireObservationPolicy {
+    fn observes(self, power: u8) -> bool {
+        match self {
+            WireObservationPolicy::PowerGreaterThanZero => power > 0,
+        }
+    }
+}
+
+pub const WIRE_OBSERVATION_POLICY: WireObservationPolicy =
+    WireObservationPolicy::PowerGreaterThanZero;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WireObservationSemantics {
+    pub policy: WireObservationPolicy,
+    pub semantic_version: u64,
+}
+
+pub const WIRE_OBSERVATION_SEMANTICS: WireObservationSemantics = WireObservationSemantics {
+    policy: WIRE_OBSERVATION_POLICY,
+    semantic_version: 1,
+};
 
 /// The on/off signal `position` actually carries, in the sense this module
 /// needs: `lit` for everything this simulator ever sets `lit` on, `power >
@@ -43,7 +72,7 @@ use super::position::Position;
 fn signal_of(world: &World, position: Position) -> bool {
     let state = world.get(position.x, position.y, position.z);
     if state.kind == BlockKind::RedstoneWire {
-        state.power > 0
+        WIRE_OBSERVATION_POLICY.observes(state.power)
     } else {
         state.lit
     }

@@ -7,6 +7,8 @@
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
+use serde::Serialize;
+
 use crate::redstone::rules::taxonomy::{flags_of, power_emitted_by, power_emitted_toward, BlockPower, PowerOutput};
 use crate::redstone::world::block::Facing;
 use crate::redstone::simulator::connectivity::{dust_connections, dust_powers_block_toward};
@@ -16,6 +18,30 @@ use crate::redstone::world::storage::World;
 
 /// 紅石訊號的最大強度。
 pub const MAX_SIGNAL_STRENGTH: u8 = 15;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub enum PropagationPolicy {
+    DirectedDustComponent,
+}
+
+impl PropagationPolicy {
+    fn recompute(self, world: &mut World) -> Vec<Position> {
+        match self {
+            PropagationPolicy::DirectedDustComponent => recompute_directed_dust_component(world),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub struct PropagationSemantics {
+    pub policy: PropagationPolicy,
+    pub semantic_version: u64,
+}
+
+pub const PROPAGATION_SEMANTICS: PropagationSemantics = PropagationSemantics {
+    policy: PropagationPolicy::DirectedDustComponent,
+    semantic_version: 1,
+};
 
 /// 重算「這次可能受影響」的紅石粉網路，回傳強度有改變的位置。
 ///
@@ -41,6 +67,10 @@ pub const MAX_SIGNAL_STRENGTH: u8 = 15;
 /// `active_dust` 的子集，一個大小跟這次受影響的紅石粉數量成正比的 map
 /// 就夠。
 pub fn recompute_dust_strengths(world: &mut World) -> Vec<Position> {
+    PROPAGATION_SEMANTICS.policy.recompute(world)
+}
+
+fn recompute_directed_dust_component(world: &mut World) -> Vec<Position> {
     let dirty = world.take_dirty();
     if dirty.is_empty() {
         return Vec::new();
