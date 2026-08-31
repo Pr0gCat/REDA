@@ -701,10 +701,9 @@ fn verify_junction_closure(
         }
         for &primitive in candidate.placements.keys() {
             let contributor = PhysicalEndpointId::PrimitiveOutput(primitive);
-            if candidate
+            if !candidate
                 .observations
-                .get(&ObservationId::PrimitiveOutput(primitive))
-                .is_none()
+                .contains_key(&ObservationId::PrimitiveOutput(primitive))
             {
                 return Err(ExpandedPhysicalError::JunctionContributorLookupMissing {
                     junction: junction_id,
