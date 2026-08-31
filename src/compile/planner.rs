@@ -7,11 +7,12 @@ use crate::compile::fragment_synth::identity::{
     TopologyNodeId,
 };
 use crate::compile::primitive_graph::{self, reexpand_gate, EntrySelection, NodeId};
+#[cfg(test)]
+use crate::compile::routing::realise_branch_from;
 use crate::compile::routing::{
-    realise_branch_from, LaidBranch, NonEmptyRouteSinks, PhysicalReservationKind,
-    PhysicalReservationOwner, PhysicalReservations, PhysicalRouter, RealisedRouteTree,
-    RouteEndpoint, RouteRequest, RouteSink as TypedRouteSink, RouteTarget,
-    RouterFailure as TypedRouterFailure, RouterLimits, RouterRefusalCategory, TerminalContract,
+    NonEmptyRouteSinks, PhysicalReservationKind, PhysicalReservationOwner, PhysicalReservations,
+    PhysicalRouter, RealisedRouteTree, RouteEndpoint, RouteRequest, RouteSink as TypedRouteSink,
+    RouteTarget, RouterFailure as TypedRouterFailure, RouterLimits, TerminalContract,
     TerminalRequirement,
 };
 use crate::compile::topology::{Library, Primitive};
@@ -1058,122 +1059,159 @@ pub fn try_move(
 
         let owner = route.id.clone();
         let (source, terminals) = moved.route_endpoints(route_index, primitive, from, to);
-        let mut rebuilt = route.clone();
-        rebuilt.anchors.clear();
-        rebuilt.realisation.clear();
-        rebuilt.floors.clear();
-        let mut branches = Vec::with_capacity(terminals.len());
-        for (support, terminal) in terminals {
-            let path = deterministic_astar(
-                source,
-                terminal,
-                support,
-                &owner,
-                &reservation,
-                &OwnJoinCheck::off(),
-                &Prices::RipUp(&Congestion::default()),
-            )
-            .ok_or(PlannerError::NoLocalRoute {
-                from: source,
-                to: terminal,
-            })?;
-            reserve_path(&mut reservation, &owner, &path);
-            let laid = realise_branch(source, &path);
-            // A fanout's branches share a trunk. The first branch to reach a
-            // cell lays it, exactly as the legacy emitter's `claim` records
-            // the first net to conduct through one; appending it again would
-            // give one cell two blocks and two owners.
-            for ((anchor, block), floor) in path.iter().zip(laid.blocks).zip(laid.floors) {
-                if rebuilt.anchors.contains(anchor) {
+        let typed_route = RouteId(route_index as u32);
+        let typed_reservations = typed_reservations(&reservation, typed_route, &owner);
+        let typed_sinks = terminals
+            .iter()
+            .enumerate()
+            .map(|(ordinal, (support, terminal))| {
+                let connection = ConnectionId::Internal {
+                    instance: InstanceId(route_index as u32),
+                    edge_index: ordinal as u16,
+                };
+                let requirement = route
+                    .terminals
+                    .get(ordinal)
+                    .map(|record| match record.kind {
+                        RouteTerminalKind::BareMergeDust | RouteTerminalKind::BareMergeRepeater => {
+                            TerminalRequirement::Exact(record.kind)
+                        }
+                        _ => TerminalRequirement::Automatic,
+                    })
+                    .unwrap_or(TerminalRequirement::DirectedDust);
+                TypedRouteSink {
+                    id: RoutedSinkId {
+                        route: typed_route,
+                        ordinal: ordinal as u16,
+                    },
+                    endpoint: PhysicalEndpointId::Landing(connection),
+                    anchor: *terminal,
+                    allowed_entry: facing_between(*support, *terminal),
+                    terminal: TerminalContract::Sink {
+                        target: RouteTarget::Connection(connection),
+                        support: *support,
+                        requirement,
+                    },
+                }
+            })
+            .collect();
+        let typed_sinks = NonEmptyRouteSinks::new(typed_sinks)
+            .expect("route_endpoints always returns at least one sink");
+        let mut sink_attempts = vec![typed_sinks.clone()];
+        if route.terminals.is_empty() && typed_sinks.as_slice().len() == 1 {
+            for allowed_entry in [Facing::North, Facing::East, Facing::South, Facing::West] {
+                if allowed_entry == typed_sinks.as_slice()[0].allowed_entry {
                     continue;
                 }
-                rebuilt.anchors.push(*anchor);
-                rebuilt.realisation.push(block);
-                rebuilt.floors.push(floor);
+                let mut alternative = typed_sinks.as_slice().to_vec();
+                alternative[0].allowed_entry = allowed_entry;
+                sink_attempts.push(
+                    NonEmptyRouteSinks::new(alternative)
+                        .expect("the synthetic route still has one sink"),
+                );
             }
-            branches.push((path, support, laid.strength_before_terminal, laid.repeaters));
+        }
+        let source_endpoint = RouteEndpoint {
+            id: PhysicalEndpointId::Junction(InstanceId(route_index as u32)),
+            anchor: source,
+            allowed_exit: facing_between(source, typed_sinks.as_slice()[0].anchor),
+            terminal: TerminalContract::Source {
+                signal_strength: crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
+            },
+        };
+        let mut routed = None;
+        let mut last_error = None;
+        for attempt in &sink_attempts {
+            let mut staged_claims = Vec::new();
+            match crate::compile::routing::route_strict_with_policy(
+                RouteRequest {
+                    id: typed_route,
+                    source: source_endpoint.clone(),
+                    sinks: attempt,
+                    reservations: &typed_reservations,
+                    limits: RouterLimits {
+                        max_node_expansions: u64::MAX,
+                        max_queue_entries: u64::MAX,
+                    },
+                },
+                crate::compile::routing::RoutingJoinPolicy::Off,
+                |_| 0,
+                |at, claim_owner, kind| staged_claims.push((at, claim_owner, kind)),
+            ) {
+                Ok(tree) => {
+                    routed = Some((tree, staged_claims));
+                    break;
+                }
+                Err(error) => last_error = Some(error),
+            }
+        }
+        let (tree, claims) = routed.ok_or_else(|| {
+            let error = last_error.expect("at least one typed routing attempt was made");
+            match error {
+                TypedRouterFailure::NoLocalRoute { sink, .. } => PlannerError::NoLocalRoute {
+                    from: source,
+                    to: typed_sinks.as_slice()[usize::from(sink.ordinal)].anchor,
+                },
+                other => PlannerError::PhysicalInvariant(
+                    compile::CompileError::CandidateMetadataViolation {
+                        item: owner.clone(),
+                        reason: other.to_string(),
+                    },
+                ),
+            }
+        })?;
+        for (at, claim_owner, kind) in claims {
+            let occupancy = match (claim_owner, kind) {
+                (PhysicalReservationOwner::Route(_), PhysicalReservationKind::Conductor(_)) => {
+                    Some(Occupancy::Wire)
+                }
+                (
+                    PhysicalReservationOwner::Route(_) | PhysicalReservationOwner::RouteStair(_),
+                    PhysicalReservationKind::Floor(_),
+                ) => Some(Occupancy::Stone),
+                (
+                    PhysicalReservationOwner::RouteStair(_),
+                    PhysicalReservationKind::MandatoryAir,
+                ) => Some(Occupancy::Air),
+                _ => None,
+            };
+            if let Some(occupancy) = occupancy {
+                reservation.insert(at, &owner, occupancy);
+            }
         }
 
-        rebuilt.branch_paths = branches
+        let mut rebuilt = route.clone();
+        rebuilt.anchors = tree.cells.iter().map(|cell| cell.at).collect();
+        rebuilt.realisation = tree.cells.iter().map(|cell| cell.state.clone()).collect();
+        rebuilt.floors = tree
+            .cells
             .iter()
-            .map(|(path, _, _, _)| path.clone())
-            .collect();
-
-        for (terminal, (path, support, strength_before_terminal, branch_repeaters)) in
-            rebuilt.terminals.iter_mut().zip(branches)
-        {
-            // The branch was just re-laid, so its repeater count is a fact
-            // again. Keeping the seed's would leave the primary cost term
-            // blind to exactly the changes the optimiser makes.
-            terminal.repeaters = branch_repeaters;
-            if matches!(
-                terminal.kind,
-                RouteTerminalKind::BareMergeDust | RouteTerminalKind::BareMergeRepeater
-            ) {
-                continue;
-            }
-            let Some(&predecessor) = path.get(path.len().saturating_sub(2)) else {
-                terminal.kind = RouteTerminalKind::RepeaterIntoSupport;
-                continue;
-            };
-            let terminal_anchor = *path.last().expect("A* paths always include their goal");
-            let approach = TerminalApproach::new(
-                predecessor,
-                terminal_anchor,
-                support,
-                strength_before_terminal,
-                terminal_is_isolated(&reservation, &owner, predecessor, terminal_anchor, support),
-            );
-            let style = terminal_style(&approach);
-            terminal.kind = style.into();
-            // The branch ends somewhere new, so the sink's recorded cell has
-            // to move with it: everything downstream -- the reservation, the
-            // terminal check, the invariants -- reads the terminal from here.
-            terminal.sink.anchor = terminal_anchor;
-
-            // And the block there has to be the one the style names. The
-            // strength budget laid this cell before the style was chosen; a
-            // plan that says repeater over dust is the same lie the legacy
-            // emitter used to tell, and the terminal check catches it either
-            // way, so make it true rather than let it be caught.
-            if let Some(index) = rebuilt
-                .anchors
-                .iter()
-                .position(|anchor| *anchor == terminal_anchor)
-            {
-                rebuilt.realisation[index] = match style {
-                    TerminalStyle::RepeaterIntoSupport
-                        if unit_horizontal_direction(predecessor, terminal_anchor).is_some() =>
-                    {
-                        compile::repeater(compile::direction_from(
-                            Position::new(predecessor.x, predecessor.y, predecessor.z),
-                            Position::new(terminal_anchor.x, terminal_anchor.y, terminal_anchor.z),
-                        ))
-                    }
-                    _ => compile::dust(),
+            .map(|cell| {
+                let floor_at = Anchor {
+                    y: cell.at.y - 1,
+                    ..cell.at
                 };
-            }
+                tree.floors
+                    .iter()
+                    .find(|floor| floor.at == floor_at)
+                    .map(|floor| floor.state.clone())
+                    .unwrap_or_else(compile::stone)
+            })
+            .collect();
+        rebuilt.branch_paths = tree
+            .branches
+            .iter()
+            .map(|branch| branch.path.clone())
+            .collect();
+        for (terminal, branch) in rebuilt.terminals.iter_mut().zip(&tree.branches) {
+            terminal.sink.anchor = branch.terminal.at;
+            terminal.kind = branch.terminal.kind;
+            terminal.repeaters = branch.terminal.repeaters;
         }
         moved.routes[route_index] = rebuilt;
     }
 
     Ok(moved)
-}
-
-/// Lay dust along a rerouted branch, refreshing it with repeaters exactly
-/// where the strength budget demands.
-///
-/// This is `compile::plan_bent_path`, the same budget the legacy router
-/// spends -- a second implementation of dust decay would be a second thing to
-/// be wrong about, and the planner already had one: the terminal choice used
-/// to assume a strength of `16 - path length`, which is neither the real
-/// maximum nor aware that a repeater resets it.
-fn realise_branch(source: Anchor, cells: &[Anchor]) -> LaidBranch {
-    realise_branch_from(
-        source,
-        crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
-        cells,
-    )
 }
 
 impl PlanCandidate {
@@ -1389,6 +1427,7 @@ impl PlanCandidate {
     }
 }
 
+#[cfg(test)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct SearchState {
     estimate: u64,
@@ -1396,6 +1435,7 @@ struct SearchState {
     anchor: Anchor,
 }
 
+#[cfg(test)]
 fn deterministic_astar(
     start: Anchor,
     goal: Anchor,
@@ -1561,7 +1601,7 @@ fn deterministic_astar(
 }
 
 /// Legacy reservation/pricing adapter around the durable StrengthAware kernel.
-#[cfg_attr(not(test), allow(dead_code))]
+#[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 fn strength_aware_astar(
     start: Anchor,
@@ -1614,6 +1654,7 @@ fn strength_aware_astar(
     )
 }
 
+#[cfg(test)]
 fn reconstruct_path(previous: BTreeMap<Anchor, Anchor>, goal: Anchor) -> Vec<Anchor> {
     let mut path = vec![goal];
     while let Some(&parent) = previous.get(path.last().expect("path is non-empty")) {
@@ -1629,6 +1670,7 @@ fn reconstruct_path(previous: BTreeMap<Anchor, Anchor>, goal: Anchor) -> Vec<Anc
 /// each of those one level up or one level down. Never the cell directly above
 /// or below -- dust does not stack, it climbs, and a search that thinks
 /// otherwise lays runs that carry nothing.
+#[cfg(test)]
 fn neighbours(anchor: Anchor) -> Vec<Anchor> {
     let mut steps = Vec::with_capacity(12);
     for sideways in horizontal_neighbours(anchor) {
@@ -1677,6 +1719,7 @@ fn neighbours(anchor: Anchor) -> Vec<Anchor> {
 /// rip-up to re-price a poisoned corridor) stopped finding lawful detours
 /// that exist, because `previous` records one best chain per cell and a
 /// refused suffix cannot resurrect the clean equal-cost chain.
+#[cfg(test)]
 fn self_obstructs(previous: &BTreeMap<Anchor, Anchor>, at: Anchor, next: Anchor) -> bool {
     // The cell whose floor would fill the gap this drop needs.
     let drop_blocker = (next.y < at.y).then(|| Anchor {
@@ -1794,6 +1837,7 @@ enum Prices<'a> {
         /// Which searcher lays the branches -- see [`SearchModel`]. Carried
         /// here for the same reason `own_join` is; [`Prices::RipUp`] is
         /// always distance-only, byte for byte the shipping search.
+        #[allow(dead_code)]
         search: SearchModel,
     },
 }
@@ -1832,6 +1876,7 @@ impl Prices<'_> {
     }
 
     /// Which searcher lays this router's branches.
+    #[cfg(test)]
     fn search(&self) -> SearchModel {
         match self {
             Prices::RipUp(_) => SearchModel::DistanceOnly,
@@ -1884,6 +1929,7 @@ pub(crate) enum OwnJoinPolicy {
     /// Refuse an own-net join whose joined cell is beyond a repeater of the
     /// laid route (not dust-reachable from the departure). Gainless parallel
     /// joins stay legal; within-branch loops stay invisible.
+    #[cfg_attr(not(test), allow(dead_code))]
     Narrow,
     /// Own wire is foreign wire everywhere but the attachment prefix: no
     /// re-entry, no join halo. The realised graph equals the intended tree.
@@ -1899,6 +1945,7 @@ pub(crate) const NEGOTIATED_OWN_JOIN: OwnJoinPolicy = OwnJoinPolicy::Wide;
 
 /// One branch's search-time tree rule, built by [`lay_net`] per branch from
 /// what is already laid, and asked once per candidate step.
+#[cfg(test)]
 struct OwnJoinCheck {
     policy: OwnJoinPolicy,
     /// [`OwnJoinPolicy::Narrow`] only: which dust-connected component of the
@@ -1910,6 +1957,7 @@ struct OwnJoinCheck {
     dust_component: BTreeMap<Anchor, u32>,
 }
 
+#[cfg(test)]
 impl OwnJoinCheck {
     /// The rule switched off -- what every [`Prices::RipUp`] caller passes.
     fn off() -> Self {
@@ -2100,6 +2148,7 @@ fn staircase_clearance(from: Anchor, to: Anchor) -> Vec<Anchor> {
     }
 }
 
+#[cfg(test)]
 fn within_bounds(anchor: Anchor, min: Anchor, max: Anchor) -> bool {
     anchor.x >= min.x
         && anchor.x <= max.x
@@ -2109,6 +2158,7 @@ fn within_bounds(anchor: Anchor, min: Anchor, max: Anchor) -> bool {
         && anchor.z <= max.z
 }
 
+#[cfg(test)]
 fn anchor_is_free_for(
     anchor: Anchor,
     start: Anchor,
@@ -2229,6 +2279,7 @@ fn keep_out(anchor: Anchor) -> Vec<Anchor> {
 /// doc comment for the two measurements that stopped it), [`ring_closed_in`]
 /// (the post-lay ring rule), and [`dust_join_neighbours`] (the search-time
 /// tree rule). One statement of the lid, by standing rule 6.
+#[cfg(test)]
 fn join_lid(anchor: Anchor, neighbour: Anchor) -> Option<Anchor> {
     match neighbour.y.cmp(&anchor.y) {
         std::cmp::Ordering::Equal => None,
@@ -2260,6 +2311,7 @@ fn join_lid(anchor: Anchor, neighbour: Anchor) -> Option<Anchor> {
 /// reservation's stone commitment. What "sealed" may mean is the caller's
 /// derivation to defend; what a lid *is* is stated here and in [`join_lid`]
 /// only.
+#[cfg(test)]
 fn dust_join_neighbours(cell: Anchor, sealed: &impl Fn(Anchor) -> bool) -> Vec<Anchor> {
     keep_out(cell)
         .into_iter()
@@ -2453,6 +2505,7 @@ fn preferred_axis_direction(from: Anchor, to: Anchor) -> (i32, i32, i32) {
     }
 }
 
+#[cfg(test)]
 fn terminal_is_isolated(
     reservation: &Reservation,
     owner: &str,
@@ -2634,6 +2687,7 @@ impl Reservation {
 
     /// The owner of a cell that conducts; `None` for an empty cell or one
     /// holding nothing but solid material.
+    #[cfg(test)]
     fn conductor_owner(&self, anchor: &Anchor) -> Option<&str> {
         self.cells.get(anchor).and_then(|(owner, occupancy)| {
             matches!(occupancy, Occupancy::Wire | Occupancy::GateConductor)
@@ -2652,6 +2706,7 @@ impl Reservation {
     /// ([`OwnJoinCheck`]) is a production reader now: it asks which cells hold
     /// *this net's own wire*, and a primitive's `GateConductor` must not
     /// answer -- the join relation is wire against wire.
+    #[cfg(test)]
     fn wire_owner(&self, anchor: &Anchor) -> Option<&str> {
         self.cells.get(anchor).and_then(|(owner, occupancy)| {
             matches!(occupancy, Occupancy::Wire).then_some(owner.as_str())
@@ -2664,6 +2719,7 @@ impl Reservation {
     /// "will not be a conductive full block" -- air, dust, a torch, a lever,
     /// or a cell nobody has claimed at all -- and every one of those leaves a
     /// vertical pair joined, so `None` is a refusal.
+    #[cfg(test)]
     fn stone_owner(&self, anchor: &Anchor) -> Option<&str> {
         self.cells.get(anchor).and_then(|(owner, occupancy)| {
             matches!(occupancy, Occupancy::Stone).then_some(owner.as_str())
@@ -2675,6 +2731,7 @@ impl Reservation {
     /// `stair:` guard. `Some` means a staircase already depends on this cell
     /// being empty, so a floor written here cuts that staircase: the lid rule
     /// in [`anchor_is_free_for`] is the reader.
+    #[cfg(test)]
     fn air_owner(&self, anchor: &Anchor) -> Option<&str> {
         self.cells.get(anchor).and_then(|(owner, occupancy)| {
             matches!(occupancy, Occupancy::Air).then_some(owner.as_str())
@@ -4207,6 +4264,7 @@ fn merge_source_strength(
 ///   invariant passed. An output cell that ships open -- no own anchor
 ///   above it, no stone commitment -- still radiates nothing, exactly as
 ///   `net_signal_strength` records it.
+#[cfg(test)]
 fn ring_closed_in(route: &Route, reservation: &Reservation) -> Option<(Anchor, BTreeSet<Anchor>)> {
     use crate::redstone::world::block::BlockKind;
 
@@ -4360,7 +4418,8 @@ fn ring_closed_in(route: &Route, reservation: &Reservation) -> Option<(Anchor, B
 /// running under both, which is the point: a difference between the two
 /// routers can only come from those two arguments.
 #[allow(clippy::too_many_arguments)]
-fn lay_net(
+#[cfg(test)]
+fn legacy_lay_net_reference(
     signal: &str,
     source: Anchor,
     consumers: &[NetConsumer],
@@ -4743,18 +4802,48 @@ fn lay_net(
     Ok(route)
 }
 
+#[allow(clippy::too_many_arguments)]
+fn lay_net(
+    signal: &str,
+    source: Anchor,
+    consumers: &[NetConsumer],
+    netlist: &Netlist,
+    candidate: &PlanCandidate,
+    reservation: &mut Reservation,
+    prices: &Prices,
+) -> Result<Route, Box<RoutingFailure>> {
+    let route_id = RouteId(0);
+    let (typed_source, typed_sinks) =
+        typed_legacy_request_parts(route_id, signal, source, consumers, netlist, candidate);
+    let typed_reservations = typed_reservations(reservation, route_id, signal);
+    let adapter = LegacyPlannerRouterAdapter::new(signal, consumers, netlist, reservation, prices);
+    match adapter.route(RouteRequest {
+        id: route_id,
+        source: typed_source,
+        sinks: &typed_sinks,
+        reservations: &typed_reservations,
+        limits: RouterLimits {
+            max_node_expansions: u64::MAX,
+            max_queue_entries: u64::MAX,
+        },
+    }) {
+        Ok(tree) => Ok(adapter.convert_to_legacy(tree)),
+        Err(_) => Err(adapter
+            .take_failure()
+            .expect("legacy refusal keeps its exact compatibility envelope")),
+    }
+}
+
 /// Lossless compatibility boundary between the string-labelled shipping
 /// planner and the durable typed physical-router contract.
 ///
-/// The adapter intentionally invokes the existing shipping kernel until Task
-/// 13 changes policy.  Its request and result are nevertheless fully typed,
-/// and the result is converted back from exact `BlockState` records rather
-/// than reconstructed from coordinates.
+/// It preserves the legacy labels and refusal envelope around the shared typed
+/// routing authority, and converts results back from exact `BlockState`
+/// records rather than reconstructing them from coordinates.
 struct LegacyPlannerRouterAdapter<'a> {
     signal: &'a str,
     consumers: &'a [NetConsumer],
     netlist: &'a Netlist,
-    candidate: &'a PlanCandidate,
     reservation: RefCell<&'a mut Reservation>,
     prices: &'a Prices<'a>,
     failure: RefCell<Option<Box<RoutingFailure>>>,
@@ -4765,7 +4854,6 @@ impl<'a> LegacyPlannerRouterAdapter<'a> {
         signal: &'a str,
         consumers: &'a [NetConsumer],
         netlist: &'a Netlist,
-        candidate: &'a PlanCandidate,
         reservation: &'a mut Reservation,
         prices: &'a Prices<'a>,
     ) -> Self {
@@ -4773,7 +4861,6 @@ impl<'a> LegacyPlannerRouterAdapter<'a> {
             signal,
             consumers,
             netlist,
-            candidate,
             reservation: RefCell::new(reservation),
             prices,
             failure: RefCell::new(None),
@@ -4784,7 +4871,7 @@ impl<'a> LegacyPlannerRouterAdapter<'a> {
         self.failure.borrow_mut().take()
     }
 
-    fn into_legacy(&self, tree: RealisedRouteTree) -> Route {
+    fn convert_to_legacy(&self, tree: RealisedRouteTree) -> Route {
         let mut floors = Vec::with_capacity(tree.cells.len());
         for cell in &tree.cells {
             let floor_at = Anchor {
@@ -4838,45 +4925,125 @@ impl<'a> LegacyPlannerRouterAdapter<'a> {
 
 impl PhysicalRouter for LegacyPlannerRouterAdapter<'_> {
     fn route(&self, request: RouteRequest<'_>) -> Result<RealisedRouteTree, TypedRouterFailure> {
-        let first_sink = request.sinks.as_slice()[0].id;
-        if request.limits.max_queue_entries == 0 {
-            return Err(TypedRouterFailure::RouterLimitExceeded {
-                route: request.id,
-                source: request.source.id,
-                sink: first_sink,
-                kind: crate::compile::routing::RouterLimitKind::QueueEntries,
-                limit: 0,
-                work_used: 1,
-            });
-        }
-        if request.limits.max_node_expansions == 0 {
-            return Err(TypedRouterFailure::RouterLimitExceeded {
-                route: request.id,
-                source: request.source.id,
-                sink: first_sink,
-                kind: crate::compile::routing::RouterLimitKind::NodeExpansions,
-                limit: 0,
-                work_used: 1,
-            });
-        }
-        let legacy = lay_net(
-            self.signal,
-            request.source.anchor,
-            self.consumers,
-            self.netlist,
-            self.candidate,
-            &mut self.reservation.borrow_mut(),
-            self.prices,
+        let route = request.id;
+        let source_id = request.source.id;
+        let source = request.source.anchor;
+        let sinks = request.sinks.as_slice().to_vec();
+        let join_policy = match self.prices.own_join() {
+            OwnJoinPolicy::Off => crate::compile::routing::RoutingJoinPolicy::Off,
+            OwnJoinPolicy::Narrow => crate::compile::routing::RoutingJoinPolicy::Narrow,
+            OwnJoinPolicy::Wide => crate::compile::routing::RoutingJoinPolicy::Wide,
+        };
+        let outcome = crate::compile::routing::route_with_policy(
+            request,
+            join_policy,
+            |at| self.prices.price(at),
+            |at, owner, kind| {
+                let (owner, occupancy) = match (owner, kind) {
+                    (PhysicalReservationOwner::Route(_), PhysicalReservationKind::Conductor(_)) => {
+                        (self.signal.to_string(), Occupancy::Wire)
+                    }
+                    (PhysicalReservationOwner::Route(_), PhysicalReservationKind::Floor(_)) => {
+                        (self.signal.to_string(), Occupancy::Stone)
+                    }
+                    (
+                        PhysicalReservationOwner::RouteStair(_),
+                        PhysicalReservationKind::Floor(_),
+                    ) => (stair_guard(self.signal), Occupancy::Stone),
+                    (
+                        PhysicalReservationOwner::RouteStair(_),
+                        PhysicalReservationKind::MandatoryAir,
+                    ) => (stair_guard(self.signal), Occupancy::Air),
+                    (PhysicalReservationOwner::Sink(sink), PhysicalReservationKind::KeepOut) => {
+                        let consumer = &self.consumers[usize::from(sink.ordinal)];
+                        let guard = match consumer {
+                            NetConsumer::Gate { gate, input_index } => format!(
+                                "terminal:{}.in[{input_index}]",
+                                self.netlist.gates[*gate].output
+                            ),
+                            NetConsumer::Terminal { port, .. } => {
+                                format!("terminal:output:{port}")
+                            }
+                        };
+                        (guard, Occupancy::Solid)
+                    }
+                    _ => return,
+                };
+                self.reservation.borrow_mut().insert(at, &owner, occupancy);
+            },
         );
-        match legacy {
-            Ok(route) => Ok(legacy_route_to_typed(route, &request)),
-            Err(failure) => {
-                let category = legacy_refusal_category(&failure.error);
-                *self.failure.borrow_mut() = Some(failure);
+        match outcome {
+            Ok(tree) => Ok(tree),
+            Err(error @ TypedRouterFailure::RouterLimitExceeded { .. }) => Err(error),
+            Err(error) => {
+                let sink_id = match &error {
+                    TypedRouterFailure::NoLocalRoute { sink, .. }
+                    | TypedRouterFailure::RingClosure { sink, .. } => Some(*sink),
+                    TypedRouterFailure::WrongRepeaterAxis { .. }
+                    | TypedRouterFailure::InvalidRequest { .. }
+                    | TypedRouterFailure::Refused { .. } => None,
+                    TypedRouterFailure::RouterLimitExceeded { .. } => unreachable!(),
+                };
+                let sink = sink_id
+                    .and_then(|id| sinks.get(usize::from(id.ordinal)))
+                    .or_else(|| sinks.first());
+                let approach = sink
+                    .map(|sink| step(sink.anchor, sink.allowed_entry))
+                    .unwrap_or(source);
+                let planner_error = match (&error, sink_id) {
+                    (TypedRouterFailure::NoLocalRoute { .. }, Some(id)) => {
+                        match &self.consumers[usize::from(id.ordinal)] {
+                            NetConsumer::Terminal {
+                                port, at, handover, ..
+                            } => PlannerError::InvalidPortPin {
+                                port: port.clone(),
+                                at: *at,
+                                refusal: PinRefusal::UnreachableHandover { cell: *handover },
+                            },
+                            NetConsumer::Gate { .. } => PlannerError::NoLocalRoute {
+                                from: source,
+                                to: approach,
+                            },
+                        }
+                    }
+                    (TypedRouterFailure::RingClosure { repeater, .. }, Some(id)) => {
+                        let label = legacy_sink_label(
+                            &self.consumers[usize::from(id.ordinal)],
+                            self.netlist,
+                        );
+                        PlannerError::PhysicalInvariant(
+                            compile::CompileError::CandidateMetadataViolation {
+                                item: self.signal.to_string(),
+                                reason: format!(
+                                    "the branch to {label} closes a ring: the repeater at ({}, {}, {}) reaches its own input cell through this net's own cells, and a route that feeds its own repeater input is a latch, not a wire",
+                                    repeater.x, repeater.y, repeater.z
+                                ),
+                            },
+                        )
+                    }
+                    _ => PlannerError::PhysicalInvariant(
+                        compile::CompileError::CandidateMetadataViolation {
+                            item: self.signal.to_string(),
+                            reason: error.to_string(),
+                        },
+                    ),
+                };
+                let charge_outright = match &error {
+                    TypedRouterFailure::RingClosure { charged, .. } => charged.clone(),
+                    _ => Vec::new(),
+                };
+                *self.failure.borrow_mut() = Some(Box::new(RoutingFailure {
+                    blocked: self.signal.to_string(),
+                    corridor: (source, approach),
+                    reservation: self.reservation.borrow().clone(),
+                    charge_outright,
+                    error: planner_error,
+                }));
+                let category = error.category();
                 Err(TypedRouterFailure::Refused {
-                    route: request.id,
-                    source: request.source.id,
-                    sink: None,
+                    route,
+                    source: source_id,
+                    sink: sink_id,
                     category,
                 })
             }
@@ -4884,73 +5051,12 @@ impl PhysicalRouter for LegacyPlannerRouterAdapter<'_> {
     }
 }
 
-fn legacy_refusal_category(error: &PlannerError) -> RouterRefusalCategory {
-    match error {
-        PlannerError::NoLocalRoute { .. } => RouterRefusalCategory::NoLocalRoute,
-        PlannerError::PhysicalInvariant(_) => RouterRefusalCategory::PhysicalInvariant,
-        PlannerError::InvalidPortPin { .. } => RouterRefusalCategory::InvalidRequest,
-        _ => RouterRefusalCategory::PhysicalInvariant,
-    }
-}
-
-fn legacy_route_to_typed(route: Route, request: &RouteRequest<'_>) -> RealisedRouteTree {
-    let cells: Vec<_> = route
-        .anchors
-        .iter()
-        .copied()
-        .zip(route.realisation.iter().cloned())
-        .map(|(at, state)| crate::compile::routing::PlacedBlock { at, state })
-        .collect();
-    let floors = route
-        .anchors
-        .iter()
-        .copied()
-        .zip(route.floors.iter().cloned())
-        .map(|(at, state)| crate::compile::routing::PlacedBlock {
-            at: Anchor { y: at.y - 1, ..at },
-            state,
-        })
-        .collect();
-    let branches = request
-        .sinks
-        .as_slice()
-        .iter()
-        .zip(route.terminals.iter())
-        .zip(route.branch_paths.iter())
-        .map(|((sink, terminal), path)| {
-            let state = cells
-                .iter()
-                .find(|cell| cell.at == terminal.sink.anchor)
-                .expect("legacy terminal is one of its exact route cells")
-                .state
-                .clone();
-            crate::compile::routing::RealisedRouteBranch {
-                sink: sink.id,
-                target: sink
-                    .terminal
-                    .target()
-                    .expect("a typed legacy sink carries a target"),
-                root: *path.first().expect("legacy branch paths are non-empty"),
-                path: path.clone(),
-                terminal: crate::compile::routing::TerminalRecord {
-                    sink: sink.id,
-                    at: terminal.sink.anchor,
-                    delayed_owner: (state.kind
-                        == crate::redstone::world::block::BlockKind::Repeater)
-                        .then_some(crate::compile::routing::DelayedOwner::Route(request.id)),
-                    state,
-                    kind: terminal.kind,
-                    repeaters: terminal.repeaters,
-                },
-            }
-        })
-        .collect();
-    RealisedRouteTree {
-        id: request.id,
-        source: request.source.id,
-        cells,
-        floors,
-        branches,
+fn legacy_sink_label(consumer: &NetConsumer, netlist: &Netlist) -> String {
+    match consumer {
+        NetConsumer::Gate { gate, input_index } => {
+            format!("{}.in[{input_index}]", netlist.gates[*gate].output)
+        }
+        NetConsumer::Terminal { port, .. } => format!("output `{port}`'s terminal"),
     }
 }
 
@@ -4963,6 +5069,8 @@ fn typed_reservations(
     for (ordinal, (&at, (owner, occupancy))) in reservation.cells.iter().enumerate() {
         let typed_owner = if owner == signal {
             PhysicalReservationOwner::Route(route)
+        } else if owner == &stair_guard(signal) {
+            PhysicalReservationOwner::RouteStair(route)
         } else {
             PhysicalReservationOwner::KeepOut(ordinal as u32)
         };
@@ -4970,7 +5078,8 @@ fn typed_reservations(
             Occupancy::Wire => PhysicalReservationKind::Conductor(compile::dust()),
             Occupancy::Stone => PhysicalReservationKind::Floor(compile::stone()),
             Occupancy::Air => PhysicalReservationKind::MandatoryAir,
-            Occupancy::GateConductor | Occupancy::Solid => PhysicalReservationKind::KeepOut,
+            Occupancy::GateConductor => PhysicalReservationKind::Conductor(compile::dust()),
+            Occupancy::Solid => PhysicalReservationKind::KeepOut,
         };
         typed.reserve(at, typed_owner, kind);
     }
@@ -5038,6 +5147,17 @@ fn typed_legacy_request_parts(
                     instance: InstanceId(*gate as u32),
                     input_index: *input_index as u16,
                 };
+                let bare_merge = netlist.gates[*gate].is_merge()
+                    && consumers.iter().all(|other| {
+                        matches!(other, NetConsumer::Gate { gate: sink, .. } if sink == gate)
+                    });
+                let requirement = if bare_merge {
+                    TerminalRequirement::Exact(RouteTerminalKind::BareMergeRepeater)
+                } else if netlist.gates[*gate].is_merge() {
+                    TerminalRequirement::Exact(RouteTerminalKind::RepeaterIntoSupport)
+                } else {
+                    TerminalRequirement::Automatic
+                };
                 TypedRouteSink {
                     id,
                     endpoint: PhysicalEndpointId::Landing(connection),
@@ -5046,7 +5166,7 @@ fn typed_legacy_request_parts(
                     terminal: TerminalContract::Sink {
                         target: RouteTarget::Connection(connection),
                         support,
-                        requirement: TerminalRequirement::Automatic,
+                        requirement,
                     },
                 }
             }
@@ -5119,14 +5239,8 @@ fn route_in_order(
         let (typed_source, typed_sinks) =
             typed_legacy_request_parts(route_id, signal, source, &consumers, netlist, &candidate);
         let typed_reservations = typed_reservations(&reservation, route_id, signal);
-        let adapter = LegacyPlannerRouterAdapter::new(
-            signal,
-            &consumers,
-            netlist,
-            &candidate,
-            &mut reservation,
-            &prices,
-        );
+        let adapter =
+            LegacyPlannerRouterAdapter::new(signal, &consumers, netlist, &mut reservation, &prices);
         match adapter.route(RouteRequest {
             id: route_id,
             source: typed_source,
@@ -5139,7 +5253,7 @@ fn route_in_order(
                 max_queue_entries: u64::MAX,
             },
         }) {
-            Ok(tree) => routes.push(adapter.into_legacy(tree)),
+            Ok(tree) => routes.push(adapter.convert_to_legacy(tree)),
             Err(_) => {
                 return Err(adapter
                     .take_failure()
@@ -7055,6 +7169,123 @@ mod tests {
     use crate::circuits::and4::build_and4_netlist;
     use crate::compile::Gate;
 
+    #[test]
+    fn legacy_adapter_counts_nonzero_queue_cap_across_ordered_sinks() {
+        let at = |x, y, z| Anchor { x, y, z };
+        let netlist = Netlist {
+            inputs: vec!["n".to_string()],
+            outputs: vec!["left".to_string(), "right".to_string()],
+            gates: vec![Gate::nor("left", &["n"]), Gate::nor("right", &["n"])],
+        };
+        let candidate = PlanCandidate::with_facings(
+            vec![at(2, 1, 0), at(4, 1, 4)],
+            Vec::new(),
+            Vec::new(),
+            vec![geometry::CellFacing::NORTH, geometry::CellFacing::NORTH],
+        );
+        let consumers = vec![
+            NetConsumer::Gate {
+                gate: 0,
+                input_index: 0,
+            },
+            NetConsumer::Gate {
+                gate: 1,
+                input_index: 0,
+            },
+        ];
+        let source = at(0, 1, 0);
+        let route = RouteId(91);
+        let (typed_source, typed_sinks) =
+            typed_legacy_request_parts(route, "n", source, &consumers, &netlist, &candidate);
+        let mut reservation = Reservation::new();
+        let typed_reservations = typed_reservations(&reservation, route, "n");
+        let congestion = Congestion::default();
+        let prices = Prices::RipUp(&congestion);
+        let adapter =
+            LegacyPlannerRouterAdapter::new("n", &consumers, &netlist, &mut reservation, &prices);
+
+        let failure = adapter
+            .route(RouteRequest {
+                id: route,
+                source: typed_source.clone(),
+                sinks: &typed_sinks,
+                reservations: &typed_reservations,
+                limits: RouterLimits {
+                    max_node_expansions: u64::MAX,
+                    max_queue_entries: 1,
+                },
+            })
+            .expect_err("the second sink must spend the request's third expansion");
+
+        assert_eq!(
+            failure,
+            TypedRouterFailure::RouterLimitExceeded {
+                route,
+                source: typed_source.id,
+                sink: typed_sinks.as_slice()[1].id,
+                kind: crate::compile::routing::RouterLimitKind::QueueEntries,
+                limit: 1,
+                work_used: 2,
+            }
+        );
+    }
+
+    #[test]
+    fn typed_gate_conductor_reservation_remains_foreign_to_the_route() {
+        let route = RouteId(92);
+        let blocked = Anchor { x: 1, y: 1, z: 0 };
+        let mut legacy = Reservation::new();
+        legacy.insert(blocked, "primitive:gate", Occupancy::GateConductor);
+        let reservations = typed_reservations(&legacy, route, "n");
+        assert!(matches!(
+            reservations.get(&blocked),
+            Some(crate::compile::routing::PhysicalReservation {
+                owner: PhysicalReservationOwner::KeepOut(_),
+                kind: PhysicalReservationKind::Conductor(_),
+            })
+        ));
+
+        let source = RouteEndpoint {
+            id: PhysicalEndpointId::PrimaryInput(PortId(0)),
+            anchor: Anchor { x: 0, y: 1, z: 0 },
+            allowed_exit: Facing::East,
+            terminal: TerminalContract::Source {
+                signal_strength: 15,
+            },
+        };
+        let connection = ConnectionId::External {
+            instance: InstanceId(0),
+            input_index: 0,
+        };
+        let sinks = NonEmptyRouteSinks::new(vec![TypedRouteSink {
+            id: RoutedSinkId { route, ordinal: 0 },
+            endpoint: PhysicalEndpointId::Landing(connection),
+            anchor: Anchor { x: 4, y: 1, z: 0 },
+            allowed_entry: Facing::West,
+            terminal: TerminalContract::Sink {
+                target: RouteTarget::Connection(connection),
+                support: Anchor { x: 5, y: 1, z: 0 },
+                requirement: TerminalRequirement::Repeater,
+            },
+        }])
+        .unwrap();
+
+        let tree = crate::compile::routing::DurablePhysicalRouter
+            .route(RouteRequest {
+                id: route,
+                source,
+                sinks: &sinks,
+                reservations: &reservations,
+                limits: RouterLimits {
+                    max_node_expansions: 10_000,
+                    max_queue_entries: 50_000,
+                },
+            })
+            .expect("the route detours around a gate-owned conductor");
+
+        assert!(!tree.cells.iter().any(|cell| cell.at == blocked));
+    }
+
     fn local_move_fixture() -> PlanCandidate {
         let anchors = vec![
             Anchor { x: 0, y: 0, z: 0 },
@@ -7786,6 +8017,229 @@ mod tests {
         };
         let compiled = compile::compile_legacy(&netlist).expect("fanout fixture must compile");
         seed_from_legacy(&netlist, &compiled).expect("fanout fixture must seed")
+    }
+
+    fn freshly_placed(netlist: &Netlist) -> PlanCandidate {
+        let placements = PortPlacements::default();
+        let placement = relaxed_placement(netlist, &placements, SHIPPING_AXES).expect("places");
+        let snapped = relax::snap(&placement).expect("snaps");
+        candidate_from_snapped(netlist, &placements, &snapped)
+    }
+
+    fn route_in_order_with_reference(
+        mut candidate: PlanCandidate,
+        netlist: &Netlist,
+        order: &[String],
+        congestion: &Congestion,
+    ) -> Result<PlanCandidate, Box<RoutingFailure>> {
+        let mut reservation = reserve_primitives(&candidate.primitive_nodes);
+        let sinks = net_consumers(netlist, &candidate);
+        preclaim_socket_approaches(&mut reservation, &candidate, netlist);
+        preclaim_pinned_cell_halos(&mut reservation, &candidate);
+        let prices = Prices::RipUp(congestion);
+        let mut routes = Vec::with_capacity(sinks.len());
+        for signal in order {
+            let consumers = sinks
+                .get(signal)
+                .cloned()
+                .expect("the order is built from these sinks");
+            let source = net_source(&candidate, signal)?;
+            routes.push(legacy_lay_net_reference(
+                signal,
+                source,
+                &consumers,
+                netlist,
+                &candidate,
+                &mut reservation,
+                &prices,
+            )?);
+        }
+        candidate.routes = routes;
+        Ok(candidate)
+    }
+
+    #[test]
+    fn legacy_adapter_keeps_and4_and_fanout_routes_byte_exact() {
+        let fanout = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["left".to_string(), "right".to_string()],
+            gates: vec![Gate::nor("left", &["a"]), Gate::nor("right", &["a"])],
+        };
+        for (name, netlist) in [("and4", build_and4_netlist().0), ("fanout", fanout)] {
+            let candidate = freshly_placed(&netlist);
+            let order: Vec<_> = net_consumers(&netlist, &candidate).into_keys().collect();
+            let expected = route_in_order_with_reference(
+                candidate.clone(),
+                &netlist,
+                &order,
+                &Congestion::default(),
+            )
+            .unwrap_or_else(|failure| panic!("{name} reference routes: {}", failure.error));
+            let actual = route_in_order(candidate, &netlist, &order, &Congestion::default())
+                .unwrap_or_else(|failure| panic!("{name} typed adapter routes: {}", failure.error));
+
+            assert_eq!(actual.routes, expected.routes, "{name} exact route parity");
+        }
+    }
+
+    #[test]
+    fn legacy_adapter_keeps_the_all_pinned_full_adder_routes_byte_exact() {
+        use crate::circuits::full_adder::{build_full_adder_netlist, INPUT_NAMES};
+
+        let (netlist, outputs) = build_full_adder_netlist();
+        let output_signals = [&outputs["sum"], &outputs["cout"]];
+        let free = plan_from_netlist(&netlist, &PortPlacements::default())
+            .expect("full_adder places unpinned");
+        let (mut min_z, mut base_x, mut max_z) = (i32::MAX, i32::MAX, i32::MIN);
+        for anchor in free.anchors() {
+            min_z = min_z.min(anchor.z);
+            max_z = max_z.max(anchor.z);
+            base_x = base_x.min(anchor.x);
+        }
+
+        let mut placements = PortPlacements::default();
+        for (index, name) in INPUT_NAMES.iter().enumerate() {
+            placements.pin(
+                *name,
+                Anchor {
+                    x: base_x + 2 * index as i32,
+                    y: 1,
+                    z: max_z + 4,
+                },
+                Facing::North,
+            );
+        }
+        for (index, signal) in output_signals.iter().enumerate() {
+            placements.pin(
+                signal.as_str(),
+                Anchor {
+                    x: base_x + 2 * index as i32,
+                    y: 1,
+                    z: (min_z - 4).max(1),
+                },
+                Facing::North,
+            );
+        }
+
+        let placement = relaxed_placement(&netlist, &placements, SHIPPING_AXES).expect("places");
+        let snapped = relax::snap(&placement).expect("snaps");
+        let candidate = candidate_from_snapped(&netlist, &placements, &snapped);
+        fn route_every_net_with_reference(
+            candidate: PlanCandidate,
+            netlist: &Netlist,
+        ) -> Result<PlanCandidate, PlannerError> {
+            let mut order: Vec<String> = net_consumers(netlist, &candidate).into_keys().collect();
+            let mut congestion = Congestion::default();
+            let mut last = None;
+            for _ in 0..RIP_UP_ROUNDS {
+                match route_in_order_with_reference(candidate.clone(), netlist, &order, &congestion)
+                {
+                    Ok(routed) => return Ok(routed),
+                    Err(failure) => {
+                        let RoutingFailure {
+                            blocked,
+                            corridor,
+                            reservation,
+                            charge_outright,
+                            error,
+                        } = *failure;
+                        last = Some(error);
+                        let charged_air = congestion.charge_cells(&charge_outright);
+                        let charged =
+                            congestion.charge(&reservation, corridor.0, corridor.1, &blocked);
+                        let mut promoted = vec![blocked.clone()];
+                        promoted.extend(order.iter().filter(|name| **name != blocked).cloned());
+                        let reordered = promoted != order;
+                        order = promoted;
+                        if !charged && !reordered && !charged_air {
+                            break;
+                        }
+                    }
+                }
+            }
+            Err(last.expect("a failed reference round records why"))
+        }
+
+        let expected = route_every_net_with_reference(candidate.clone(), &netlist)
+            .unwrap_or_else(|error| panic!("reference routes: {error}"));
+        let actual = route_every_net(candidate, &netlist, RIP_UP_ROUNDS)
+            .unwrap_or_else(|error| panic!("typed adapter routes: {error}"));
+
+        for (expected, actual) in expected.routes.iter().zip(&actual.routes) {
+            assert_eq!(actual, expected, "{} exact route parity", expected.id);
+        }
+    }
+
+    fn negotiate_once_with_reference(
+        mut candidate: PlanCandidate,
+        netlist: &Netlist,
+    ) -> Result<PlanCandidate, PlannerError> {
+        let sinks = net_consumers(netlist, &candidate);
+        let order: Vec<_> = sinks.keys().cloned().collect();
+        let hard = hard_furniture(&candidate, netlist);
+        let mut table = Negotiation::default();
+        table.present = PresentSchedule::SHIPPING.term(0);
+        let mut laid = BTreeMap::new();
+        for signal in &order {
+            table.release(signal);
+            let source = net_source(&candidate, signal).map_err(|failure| failure.error)?;
+            let consumers = sinks.get(signal).cloned().unwrap();
+            let mut reservation = hard.clone();
+            let route = {
+                let prices = Prices::Negotiated {
+                    table: &table,
+                    mine: signal,
+                    own_join: OwnJoinPolicy::Wide,
+                    search: SearchModel::DistanceOnly,
+                };
+                legacy_lay_net_reference(
+                    signal,
+                    source,
+                    &consumers,
+                    netlist,
+                    &candidate,
+                    &mut reservation,
+                    &prices,
+                )
+                .map_err(|failure| failure.error)?
+            };
+            table.claim(signal, claim_of(signal, &route, &reservation));
+            laid.insert(signal.clone(), route);
+        }
+        if !table.contested().is_empty() {
+            return Err(PlannerError::NoLocalRoute {
+                from: Anchor { x: 0, y: 0, z: 0 },
+                to: Anchor { x: 0, y: 0, z: 0 },
+            });
+        }
+        candidate.routes = order
+            .iter()
+            .map(|signal| laid.remove(signal).unwrap())
+            .collect();
+        Ok(candidate)
+    }
+
+    #[test]
+    fn negotiated_legacy_adapter_keeps_single_net_route_byte_exact() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec!["y".to_string()],
+            gates: vec![Gate::nor("y", &["a"])],
+        };
+        let candidate = freshly_placed(&netlist);
+        let expected = negotiate_once_with_reference(candidate.clone(), &netlist)
+            .expect("single-net reference negotiation converges in one iteration");
+        let mut trace = Vec::new();
+        let actual = negotiate_with_policy(
+            candidate,
+            &netlist,
+            1,
+            PresentSchedule::SHIPPING,
+            OwnJoinPolicy::Wide,
+            &mut trace,
+        )
+        .expect("single-net typed negotiation converges in one iteration");
+        assert_eq!(actual.routes, expected.routes);
     }
 
     #[test]
@@ -27320,6 +27774,23 @@ mod tests {
         support1: Anchor,
         prices: &Prices,
     ) -> Result<Route, Box<RoutingFailure>> {
+        lay_through_walled_corridor_with(open, support1, prices, false)
+    }
+
+    fn lay_through_walled_corridor_reference(
+        open: &BTreeSet<Anchor>,
+        support1: Anchor,
+        prices: &Prices,
+    ) -> Result<Route, Box<RoutingFailure>> {
+        lay_through_walled_corridor_with(open, support1, prices, true)
+    }
+
+    fn lay_through_walled_corridor_with(
+        open: &BTreeSet<Anchor>,
+        support1: Anchor,
+        prices: &Prices,
+        reference: bool,
+    ) -> Result<Route, Box<RoutingFailure>> {
         let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
         let trunk_end = 20;
         let netlist = Netlist {
@@ -27361,15 +27832,28 @@ mod tests {
             }
         }
 
-        lay_net(
-            "n",
-            at(0, 1, 0),
-            &as_gate_consumers(&[(0, 0), (1, 0)]),
-            &netlist,
-            &candidate,
-            &mut walled,
-            prices,
-        )
+        let consumers = as_gate_consumers(&[(0, 0), (1, 0)]);
+        if reference {
+            legacy_lay_net_reference(
+                "n",
+                at(0, 1, 0),
+                &consumers,
+                &netlist,
+                &candidate,
+                &mut walled,
+                prices,
+            )
+        } else {
+            lay_net(
+                "n",
+                at(0, 1, 0),
+                &consumers,
+                &netlist,
+                &candidate,
+                &mut walled,
+                prices,
+            )
+        }
     }
 
     /// The corridor's fixed furniture: the trunk, the climb, and whatever
@@ -27404,7 +27888,8 @@ mod tests {
     fn control_corridor() -> (BTreeSet<Anchor>, Anchor) {
         let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
         let mut control_upper: Vec<Anchor> = vec![at(20, 2, 1)];
-        control_upper.extend((16..=20).map(|x| at(x, 2, 2)));
+        control_upper.extend((17..=20).map(|x| at(x, 2, 2)));
+        control_upper.push(at(17, 2, 1)); // turn before the terminal, never through it
         control_upper.push(at(16, 2, 1)); // the descent-join, and the approach
         control_upper.push(at(16, 2, 0)); // its open lid
         (trunk_climb_and(&control_upper), at(16, 2, 3))
@@ -27436,6 +27921,12 @@ mod tests {
             !failure.charge_outright.is_empty(),
             "the refused branch charges the cells that closed the ring, \
              so the next iteration prices this corridor"
+        );
+        let reference = lay_through_walled_corridor_reference(&ring_open, ring_support, &rip_up)
+            .expect_err("the frozen reference also refuses the same ring");
+        assert_eq!(
+            failure.charge_outright, reference.charge_outright,
+            "the typed router must charge only the second branch suffix, exactly like the frozen authority"
         );
 
         // The control corridor: return run two cells over, one open lid at

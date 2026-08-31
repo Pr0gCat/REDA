@@ -1,6 +1,6 @@
 # Task 5 implementation report
 
-Status: `DONE_WITH_CONCERNS`
+Status: `DONE`
 
 ## RED evidence
 
@@ -18,7 +18,7 @@ Status: `DONE_WITH_CONCERNS`
 ## GREEN evidence
 
 - `cargo test --lib compile::routing::tests -- --nocapture`
-  - 7 passed, 0 failed.
+  - 8 passed, 0 failed.
   - Covers non-empty ordered typed sinks, request-scoped zero limits, full-state fanout, distinct fragment sink IDs, exact repeater rear/front axis, `WrongRepeaterAxis { ConnectionId, Anchor }`, non-default delay preservation, and immutable shared-trunk state across later branches.
 - `cargo test --lib compile::fragment_synth::realise::tests -- --nocapture`
   - 14 passed, 0 failed.
@@ -41,7 +41,11 @@ Status: `DONE_WITH_CONCERNS`
 - The legacy front door now constructs typed endpoint/sink IDs, a typed reservation snapshot, and a `RouteRequest`, calls `LegacyPlannerRouterAdapter` through `PhysicalRouter`, then converts the exact typed tree back to the compatibility `Route`.
 - Diagnostic field-by-field comparison during implementation confirmed anchors, full cell states, floors, terminals, and branch paths were unchanged across legacy -> typed -> legacy conversion.
 - `compile_end_to_end` passed both `legacy_and4_extracts_to_a_legal_candidate_with_unit_seed_score` and `extracted_fanout_terminal_metadata_keeps_each_sink_identity`, plus exact legacy world re-emission.
+- A permanent all-pinned full-adder differential runs the complete frozen rip-up loop and compares every legacy route against the typed adapter byte for byte. It caught an ownership-only socket preclaim being misread as exact dust; the fix preserves strict typed exact-state semantics without changing legacy output.
 - Ring refusal tests passed without changing the existing `PhysicalInvariant` behavior.
+- Complete current-source library regression: `cargo test --lib -- --nocapture` passed 695 tests with 0 failed and 63 ignored (758 total).
+- Full delay reconciliation: `cargo test --test delay_model_reconciliation -- --nocapture` passed 15 tests with 0 failed and 1 ignored.
+- `cargo clippy --lib` reports no Task-5 warning; the only warning is the pre-existing simulator `clone_on_copy` at `src/redstone/simulator/mod.rs:177`.
 
 ## Authority extraction evidence
 
@@ -49,8 +53,9 @@ Status: `DONE_WITH_CONCERNS`
   - `PhysicalRouter`, `RouteRequest`, `RouterLimits`, typed endpoints/sinks, `NonEmptyRouteSinks`, typed physical reservations and failures.
   - `RealisedRouteTree`, branches, terminal records, placed blocks, delayed ownership, and terminal policy types (candidate/planner re-export them).
   - `route_step_is_legal`, exact full-state branch realisation, and StrengthAware state/dominance/reconstruction.
-- Production `realise_branch_from` exists only in `routing.rs`.
+- Production branch realisation exists only in `routing.rs`; the public `realise_branch_from` compatibility wrapper and frozen legacy reference are test-only.
 - Production StrengthAware expansion exists only in `routing.rs`; planner's `strength_aware_astar` is a thin reservation/own-join/pricing adapter.
+- Production DistanceOnly expansion, exact-state insertion, ring closure, request work accounting and local path certification are all owned by `routing.rs`. `planner::lay_net` and `try_move` issue typed requests instead of running another search/realisation kernel.
 - Dust stair/support proof remains world-dependent and is not represented as complete proof by the local four-argument legality function.
 
 ## Modified files
@@ -67,14 +72,13 @@ No production/test files outside the brief allow-list were modified.
 ## Self-review
 
 - CodeRabbit CLI was unavailable (`coderabbit` not found), so no external CodeRabbit result exists.
-- Local review found and fixed a shared-trunk bug: a later fanout branch could reconstruct and overwrite an already-owned exact `BlockState`; existing state now wins and a regression test pins delay/facing preservation.
-- Exact-file rustfmt used `skip_children=true`; no broad recursive formatting was run.
+- Two Claude read-only review rounds found search-time exact-repeater legality, ring charge attribution and later-branch state overwrite defects; each was fixed and regression-tested. Claude and Codex subagent quotas were exhausted for the final pass, so the last review was a controller review backed by the complete regression run above.
+- Local review found and fixed a shared-trunk bug: a later fanout branch could reconstruct and overwrite an already-owned exact `BlockState`; existing state now wins and the production insertion helper is directly regression-tested.
+- `git diff --check` is clean. A mistaken repository-wide `cargo fmt` invocation was reverted outside the three Task-5 work files; no unrelated file remains modified.
 
-## Concerns
+## Closed review concerns
 
-1. **Major: the extraction is not yet the single complete physical authority required by the brief.** Shipping DistanceOnly routing, `try_move`, `OwnJoinCheck`, `anchor_is_free_for`, `reserve_path`, legacy `Reservation`/`Occupancy`, `ring_closed_in`, and the body of `lay_net` remain in `planner.rs`. `LegacyPlannerRouterAdapter` passes through the typed API and preserves parity, but still invokes that legacy kernel. This is a typed seam plus partial authority extraction, not removal of both physics copies.
-2. **Major: legacy limits are compatibility sentinels, not full work accounting.** The durable router accumulates queue/expansion counters across ordered sinks and deterministically rejects zero. The legacy adapter uses fixed `u64::MAX` values to preserve the Task-13 shipping front door and only enforces zero directly; it does not count every legacy A* insertion/expansion.
-3. **Major: `try_move` still calls the legacy DistanceOnly search directly.** It has not been converted to issue one complete typed request through `LegacyPlannerRouterAdapter`.
-4. The brief requests the shared local legality function in expanded verification, but `src/compile/verification.rs` is outside this task's write allow-list. Moving the check earlier into candidate validation changed a legacy refusal/certification category and was reverted. The durable router uses the shared rule; legacy emitted-world verification retains its existing equivalent axis logic.
-
-These concerns are why this report is `DONE_WITH_CONCERNS`, not `DONE`.
+1. Shipping DistanceOnly routing and `try_move` now use the typed routing authority. Frozen `legacy_lay_net_reference` and old search adapters compile only for differential tests.
+2. Queue and expansion accounting is request-scoped and accumulates across ordered sinks. The shipping compatibility caller deliberately supplies `u64::MAX`; Task 13, not Task 5, owns any production cap policy change.
+3. Expanded strict verification calls the same `route_step_is_legal` authority as strict routing. Legacy emitted-world verification retains its established classification order so extraction remains byte- and refusal-compatible.
+4. Strict fragment routing forbids terminal transit, certifies exact repeater rear/front traversal during search and after realisation, and cannot replace an existing non-prefix trunk state. Legacy compatibility behavior remains isolated behind `route_with_policy` until Task 13 acceptance.
