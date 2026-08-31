@@ -1,0 +1,155 @@
+{
+  "baseline_commit": "4572f995ea1407fc952d55760f8781c21dc97fba",
+  "build_profile": "release",
+  "cargo_features": [],
+  "cell_library_revision": "8464278284d1e5d95a3c71fa492f419e823ad9dcf4b348854c8d128cb48ff15d",
+  "simulator_revision": "660f63999105ea17bd4e1b87af838c1b36e64af816ac345c31fcce50dbaa617d",
+  "verifier_revision": "1af206042a48baa880e3a8c19a3ab9018b5636788d5b4bf42bb2073d730e7b6b",
+  "cases": [
+    {
+      "name": "and4",
+      "lowered_netlist_hash": "48690daa56e47fa93724683adaf4bc221892d0ebee4540401d7bb2073cf2c930",
+      "pin_manifest_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "transition_manifest_hash": "c7ef8696a6aa9c8e2191dc6d82412b1bb05c0d5ae66ce477adf0b53d453d9a7c",
+      "generated_world_fingerprint": "91a9608cab628fbf17bdc1c655a3a708793eb2bb82af51703fc7c0c03fb6a23c",
+      "certified": true,
+      "physical": {
+        "non_air_blocks": 472,
+        "occupied_min": {
+          "x": 10,
+          "y": 0,
+          "z": 3
+        },
+        "occupied_max": {
+          "x": 58,
+          "y": 3,
+          "z": 49
+        },
+        "occupied_volume": 9212,
+        "blocks_per_lowered_gate": {
+          "numerator": 472,
+          "denominator": 7
+        }
+      },
+      "max_observed_settle_game_ticks_on_manifest": 18
+    },
+    {
+      "name": "verilog:and4",
+      "lowered_netlist_hash": "1f6c9d86dec1f567dd1a8f481f7c7053545646d06523318b01757539c8a2461a",
+      "pin_manifest_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "transition_manifest_hash": "c7ef8696a6aa9c8e2191dc6d82412b1bb05c0d5ae66ce477adf0b53d453d9a7c",
+      "generated_world_fingerprint": "014ef1e88dba18726a97ca46a604b983e2aad38515b15068b725022017d6167c",
+      "certified": true,
+      "physical": {
+        "non_air_blocks": 480,
+        "occupied_min": {
+          "x": 10,
+          "y": 0,
+          "z": 3
+        },
+        "occupied_max": {
+          "x": 56,
+          "y": 3,
+          "z": 49
+        },
+        "occupied_volume": 8836,
+        "blocks_per_lowered_gate": {
+          "numerator": 480,
+          "denominator": 9
+        }
+      },
+      "max_observed_settle_game_ticks_on_manifest": 22
+    },
+    {
+      "name": "full_adder",
+      "lowered_netlist_hash": "468bc6ec156d7d5a16675fc6c2c874d147a74aca11e1807a49c9c2ce19026d46",
+      "pin_manifest_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "transition_manifest_hash": "e0d82a5d1129a80df92df1c58aee77b8f5cf35eeb151005883f9700cd91ac182",
+      "generated_world_fingerprint": "b63a5ec50f60b11e08a9eeb566089d3482f7f77525b51e1a089ba08fdb6759b9",
+      "certified": true,
+      "physical": {
+        "non_air_blocks": 1784,
+        "occupied_min": {
+          "x": 8,
+          "y": 0,
+          "z": 3
+        },
+        "occupied_max": {
+          "x": 60,
+          "y": 5,
+          "z": 127
+        },
+        "occupied_volume": 39750,
+        "blocks_per_lowered_gate": {
+          "numerator": 1784,
+          "denominator": 22
+        }
+      },
+      "max_observed_settle_game_ticks_on_manifest": 46
+    },
+    {
+      "name": "segment_a",
+      "lowered_netlist_hash": "89a9c42ef146fa0b5b1f5f94d033682bc3490590a8687fe3d572e52e4df35534",
+      "pin_manifest_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "transition_manifest_hash": "d3c9f8cbd86d64edd5637a6baccf03de9be05a3ee0ab7f87082dde7f4f71e15a",
+      "generated_world_fingerprint": "8a39ee22f6bfd78dc667c28184f504980a80b2b5b536adb1cccf24ad8765b74e",
+      "certified": true,
+      "physical": {
+        "non_air_blocks": 6416,
+        "occupied_min": {
+          "x": 8,
+          "y": 0,
+          "z": 3
+        },
+        "occupied_max": {
+          "x": 144,
+          "y": 5,
+          "z": 184
+        },
+        "occupied_volume": 149604,
+        "blocks_per_lowered_gate": {
+          "numerator": 6416,
+          "denominator": 46
+        }
+      },
+      "max_observed_settle_game_ticks_on_manifest": 72
+    },
+    {
+      "name": "seven_segment",
+      "lowered_netlist_hash": "1c75f9d2fb310a9c604831139fd08aef71770c3a2d4b0b3db6a6744c52d344f1",
+      "pin_manifest_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+      "transition_manifest_hash": "d3c9f8cbd86d64edd5637a6baccf03de9be05a3ee0ab7f87082dde7f4f71e15a",
+      "generated_world_fingerprint": "082112f1ec90786b9159f272c71f8ac5b0bd739f678c5659d7666db2b8accd02",
+      "certified": true,
+      "physical": {
+        "non_air_blocks": 16244,
+        "occupied_min": {
+          "x": 8,
+          "y": 0,
+          "z": 3
+        },
+        "occupied_max": {
+          "x": 226,
+          "y": 5,
+          "z": 253
+        },
+        "occupied_volume": 329814,
+        "blocks_per_lowered_gate": {
+          "numerator": 16244,
+          "denominator": 84
+        }
+      },
+      "max_observed_settle_game_ticks_on_manifest": 98
+    },
+    {
+      "name": "pinned:verilog:seven_segment",
+      "lowered_netlist_hash": "70dc245241850ecbb17d30adc0f33db23dcc94b1d8d61751b2dbba65875d261e",
+      "pin_manifest_hash": "3722a3ec51968d3ce4b3751d117d9df780930bcc2346a36d06271dcc7c3b1d31",
+      "transition_manifest_hash": "d3c9f8cbd86d64edd5637a6baccf03de9be05a3ee0ab7f87082dde7f4f71e15a",
+      "generated_world_fingerprint": null,
+      "certified": false,
+      "physical": null,
+      "max_observed_settle_game_ticks_on_manifest": null
+    }
+  ]
+}
