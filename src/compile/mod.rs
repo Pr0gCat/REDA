@@ -68,6 +68,7 @@ pub mod coupling;
 #[cfg(test)]
 pub mod energising;
 pub mod equivalence;
+pub mod fragment_synth;
 pub mod geometry;
 pub mod lowering;
 pub mod metrics;
