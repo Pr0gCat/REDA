@@ -129,26 +129,48 @@ mod tests {
     #[test]
     fn more_than_four_inputs_emit_only_ordered_single_bit_toggles_of_policy_vectors() {
         let manifest = TransitionManifest::new(names(5));
+        let z = vec![false, false, false, false, false];
+        let o = vec![true, true, true, true, true];
+        let h0 = vec![true, false, false, false, false];
+        let h1 = vec![false, true, false, false, false];
+        let h2 = vec![false, false, true, false, false];
+        let h3 = vec![false, false, false, true, false];
+        let h4 = vec![false, false, false, false, true];
+        let c0 = vec![false, true, true, true, true];
+        let c1 = vec![true, false, true, true, true];
+        let c2 = vec![true, true, false, true, true];
+        let c3 = vec![true, true, true, false, true];
+        let c4 = vec![true, true, true, true, false];
+        let expected = vec![
+            (z.clone(), h0.clone()),
+            (z.clone(), h1.clone()),
+            (z.clone(), h2.clone()),
+            (z.clone(), h3.clone()),
+            (z.clone(), h4.clone()),
+            (o.clone(), c0.clone()),
+            (o.clone(), c1.clone()),
+            (o.clone(), c2.clone()),
+            (o.clone(), c3.clone()),
+            (o.clone(), c4.clone()),
+            (h0, z.clone()),
+            (h1, z.clone()),
+            (h2, z.clone()),
+            (h3, z.clone()),
+            (h4, z),
+            (c0, o.clone()),
+            (c1, o.clone()),
+            (c2, o.clone()),
+            (c3, o.clone()),
+            (c4, o),
+        ];
 
-        assert_eq!(manifest.transitions().len(), 20);
-        assert!(manifest.transitions().iter().all(|transition| {
-            transition
-                .from
+        assert_eq!(
+            manifest
+                .transitions()
                 .iter()
-                .zip(&transition.to)
-                .filter(|(from, to)| from != to)
-                .count()
-                == 1
-        }));
-        assert_eq!(manifest.transitions()[0].from, vec![false; 5]);
-        assert_eq!(
-            manifest.transitions()[0].to,
-            vec![true, false, false, false, false]
-        );
-        assert_eq!(manifest.transitions()[1].from, vec![false; 5]);
-        assert_eq!(
-            manifest.transitions()[1].to,
-            vec![false, true, false, false, false]
+                .map(|transition| (transition.from.clone(), transition.to.clone()))
+                .collect::<Vec<_>>(),
+            expected
         );
     }
 

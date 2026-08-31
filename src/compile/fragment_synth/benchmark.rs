@@ -1,5 +1,9 @@
-use std::path::Path;
+use std::collections::BTreeSet;
+use std::fs::{File, OpenOptions};
+use std::io::Write;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -25,6 +29,7 @@ pub const MAX_TRANSITION_GAME_TICKS: u64 = 2_048;
 #[serde(deny_unknown_fields)]
 pub struct BenchmarkCase {
     pub name: String,
+    pub transition_count: usize,
     pub lowered_netlist_hash: Fingerprint,
     pub pin_manifest_hash: Fingerprint,
     pub transition_manifest_hash: Fingerprint,
@@ -48,13 +53,29 @@ pub struct BenchmarkBaseline {
 
 type ExpectedOutputs = fn(&[bool]) -> Vec<bool>;
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BenchmarkOutput {
+    pub label: String,
+    pub signal: String,
+}
+
+impl BenchmarkOutput {
+    pub fn new(label: impl Into<String>, signal: impl Into<String>) -> Self {
+        BenchmarkOutput {
+            label: label.into(),
+            signal: signal.into(),
+        }
+    }
+}
+
 pub struct BenchmarkFixture {
     name: String,
     lowered_netlist: Netlist,
     input_ports: Vec<String>,
-    output_signals: Vec<String>,
+    outputs: Vec<BenchmarkOutput>,
     expected: ExpectedOutputs,
     placements: PortPlacements,
+    explicit_legacy_new_coverage: bool,
 }
 
 impl BenchmarkFixture {
@@ -62,7 +83,7 @@ impl BenchmarkFixture {
         name: impl Into<String>,
         lowered_netlist: Netlist,
         input_ports: Vec<String>,
-        output_signals: Vec<String>,
+        outputs: Vec<BenchmarkOutput>,
         expected: ExpectedOutputs,
         placements: PortPlacements,
     ) -> Self {
@@ -70,10 +91,16 @@ impl BenchmarkFixture {
             name: name.into(),
             lowered_netlist,
             input_ports,
-            output_signals,
+            outputs,
             expected,
             placements,
+            explicit_legacy_new_coverage: false,
         }
+    }
+
+    fn with_explicit_legacy_new_coverage(mut self) -> Self {
+        self.explicit_legacy_new_coverage = true;
+        self
     }
 
     pub fn name(&self) -> &str {
@@ -89,11 +116,13 @@ impl BenchmarkFixture {
     }
 
     fn blank_case(&self) -> BenchmarkCase {
+        let manifest = self.transition_manifest();
         BenchmarkCase {
             name: self.name.clone(),
+            transition_count: manifest.transitions().len(),
             lowered_netlist_hash: canonical_netlist_fingerprint(&self.lowered_netlist),
             pin_manifest_hash: canonical_pin_manifest_fingerprint(&self.placements),
-            transition_manifest_hash: self.transition_manifest().fingerprint(),
+            transition_manifest_hash: manifest.fingerprint(),
             generated_world_fingerprint: None,
             certified: false,
             physical: None,
@@ -131,13 +160,13 @@ impl AcceptanceEvaluator {
         if manifest.transitions().is_empty() {
             return Err(format!("`{name}` has an empty transition manifest"));
         }
+        let sinks = validate_output_identities(compiled, fixture)?;
 
         let mut worst = 0;
         for transition in manifest.transitions() {
             let mut world = compiled.world.clone();
             let drivers = install_drivers(&mut world, compiled, fixture)?;
             install_probes(&mut world, fixture)?;
-            let sinks = output_sinks(compiled, fixture)?;
             let mut simulator = Simulator::new(world);
             simulator
                 .run_until_stable(MAX_TRANSITION_GAME_TICKS)
@@ -178,27 +207,18 @@ impl AcceptanceEvaluator {
         Ok(case)
     }
 
-    pub fn capture_legacy(&self, baseline_commit: String) -> BenchmarkBaseline {
-        let cases = self
-            .fixtures
-            .iter()
-            .map(|fixture| {
-                if !fixture.placements.is_empty() {
-                    return fixture.blank_case();
-                }
-                match compile::compile_legacy(&fixture.lowered_netlist)
-                    .map_err(|error| error.to_string())
-                    .and_then(|compiled| self.evaluate_world(&fixture.name, &compiled))
-                {
-                    Ok(case) => case,
-                    Err(error) => {
-                        eprintln!("{}: new coverage ({error})", fixture.name);
-                        fixture.blank_case()
-                    }
-                }
-            })
-            .collect();
-        self.baseline_with_cases(baseline_commit, cases)
+    pub fn capture_legacy(&self, baseline_commit: String) -> Result<BenchmarkBaseline, String> {
+        let mut cases = Vec::with_capacity(self.fixtures.len());
+        for fixture in &self.fixtures {
+            if fixture.explicit_legacy_new_coverage {
+                cases.push(fixture.blank_case());
+                continue;
+            }
+            let compiled = compile::compile_legacy(&fixture.lowered_netlist)
+                .map_err(|error| format!("{} legacy compile failed: {error}", fixture.name))?;
+            cases.push(self.evaluate_world(&fixture.name, &compiled)?);
+        }
+        Ok(self.baseline_with_cases(baseline_commit, cases))
     }
 
     pub fn baseline(&self, baseline_commit: String) -> BenchmarkBaseline {
@@ -258,9 +278,9 @@ fn install_drivers(
 }
 
 fn install_probes(world: &mut World, fixture: &BenchmarkFixture) -> Result<(), String> {
-    for name in &fixture.output_signals {
-        if let Some(pin) = fixture.placements.get(name) {
-            require_empty_caller_cell(world, name, pin.at)?;
+    for output in &fixture.outputs {
+        if let Some(pin) = fixture.placements.get(&output.signal) {
+            require_empty_caller_cell(world, &output.signal, pin.at)?;
             compile::probe_caller_cell(world, (pin.at.x, pin.at.y, pin.at.z));
         }
     }
@@ -279,19 +299,89 @@ fn require_empty_caller_cell(world: &World, name: &str, at: Anchor) -> Result<()
     }
 }
 
-fn output_sinks(
+fn validate_output_identities(
     compiled: &CompiledCircuit,
     fixture: &BenchmarkFixture,
 ) -> Result<Vec<(i32, i32, i32)>, String> {
-    fixture
-        .output_signals
+    let mut labels = BTreeSet::new();
+    let mut signals = BTreeSet::new();
+    for output in &fixture.outputs {
+        if output.label.is_empty() {
+            return Err(format!("{} has an unresolved output label", fixture.name));
+        }
+        if output.signal.is_empty() {
+            return Err(format!("{} has an unresolved output signal", fixture.name));
+        }
+        if !labels.insert(output.label.as_str()) {
+            return Err(format!(
+                "{} has duplicate output label `{}`",
+                fixture.name, output.label
+            ));
+        }
+        if !signals.insert(output.signal.as_str()) {
+            return Err(format!(
+                "{} has duplicate output signal `{}`",
+                fixture.name, output.signal
+            ));
+        }
+    }
+
+    let fixture_signals: Vec<_> = fixture
+        .outputs
         .iter()
-        .map(|name| {
+        .map(|output| output.signal.as_str())
+        .collect();
+    let netlist_signals: Vec<_> = fixture
+        .lowered_netlist
+        .outputs
+        .iter()
+        .map(String::as_str)
+        .collect();
+    if fixture_signals != netlist_signals {
+        return Err(format!(
+            "{} fixture output order {:?} does not match netlist outputs {:?}",
+            fixture.name, fixture_signals, netlist_signals
+        ));
+    }
+
+    let compiled_signals: BTreeSet<_> = compiled
+        .output_positions
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let netlist_signal_set: BTreeSet<_> = netlist_signals.iter().copied().collect();
+    if let Some(missing) = netlist_signal_set.difference(&compiled_signals).next() {
+        return Err(format!(
+            "{} is missing compiled output `{missing}`",
+            fixture.name
+        ));
+    }
+    if let Some(extra) = compiled_signals.difference(&netlist_signal_set).next() {
+        return Err(format!(
+            "{} has extra compiled output `{extra}`",
+            fixture.name
+        ));
+    }
+
+    let expected_count = (fixture.expected)(&vec![false; fixture.input_ports.len()]).len();
+    if expected_count != fixture.outputs.len() {
+        return Err(format!(
+            "{} expected-output count {} does not match {} declared outputs",
+            fixture.name,
+            expected_count,
+            fixture.outputs.len()
+        ));
+    }
+
+    fixture
+        .outputs
+        .iter()
+        .map(|output| {
             compiled
                 .output_positions
-                .get(name)
+                .get(&output.signal)
                 .copied()
-                .ok_or_else(|| format!("compiled circuit has no output `{name}`"))
+                .ok_or_else(|| format!("compiled circuit has no output `{}`", output.signal))
         })
         .collect()
 }
@@ -324,12 +414,12 @@ fn check_outputs(
             sinks.len()
         ));
     }
-    for ((name, &(x, y, z)), &want) in fixture.output_signals.iter().zip(sinks).zip(&expected) {
+    for ((output, &(x, y, z)), &want) in fixture.outputs.iter().zip(sinks).zip(&expected) {
         let got = world.get(x, y, z).lit;
         if got != want {
             return Err(format!(
-                "{} {:?} -> `{name}` expected {want}, got {got}",
-                fixture.name, bits
+                "{} {:?} -> `{}` ({}) expected {want}, got {got}",
+                fixture.name, bits, output.label, output.signal
             ));
         }
     }
@@ -361,14 +451,17 @@ fn segment_a_expected(bits: &[bool]) -> Vec<bool> {
     vec![seven_segment_expected(bits)[0]]
 }
 
-fn labels_in_order(labels: &[(String, String)], names: &[&str]) -> Result<Vec<String>, String> {
+fn labels_in_order(
+    labels: &[(String, String)],
+    names: &[&str],
+) -> Result<Vec<BenchmarkOutput>, String> {
     names
         .iter()
         .map(|name| {
             labels
                 .iter()
                 .find(|(label, _)| label == name)
-                .map(|(_, signal)| signal.clone())
+                .map(|(_, signal)| BenchmarkOutput::new(*name, signal))
                 .ok_or_else(|| format!("Verilog output `{name}` is missing"))
         })
         .collect()
@@ -399,8 +492,8 @@ pub fn legacy_benchmark_evaluator() -> Result<AcceptanceEvaluator, String> {
         labels_in_order(&verilog_decoder_labels, &seven_segment::SEGMENT_NAMES)?;
 
     let mut pinned_decoder_ports = PortPlacements::default();
-    for ((_, at, toward), signal) in pinned_glyph().iter().zip(&verilog_decoder_outputs) {
-        pinned_decoder_ports.pin(signal.clone(), *at, *toward);
+    for ((_, at, toward), output) in pinned_glyph().iter().zip(&verilog_decoder_outputs) {
+        pinned_decoder_ports.pin(output.signal.clone(), *at, *toward);
     }
     for (index, name) in seven_segment::INPUT_NAMES.iter().enumerate() {
         pinned_decoder_ports.pin(
@@ -417,11 +510,11 @@ pub fn legacy_benchmark_evaluator() -> Result<AcceptanceEvaluator, String> {
     let inputs = |names: &[&str]| names.iter().map(|name| (*name).to_string()).collect();
     let decoder_output_signals = seven_segment::SEGMENT_NAMES
         .iter()
-        .map(|name| decoder_outputs[*name].clone())
+        .map(|name| BenchmarkOutput::new(*name, &decoder_outputs[*name]))
         .collect();
     let adder_output_signals = full_adder::OUTPUT_NAMES
         .iter()
-        .map(|name| adder_outputs[name].clone())
+        .map(|name| BenchmarkOutput::new(*name, &adder_outputs[name]))
         .collect();
 
     Ok(AcceptanceEvaluator::new(vec![
@@ -429,7 +522,7 @@ pub fn legacy_benchmark_evaluator() -> Result<AcceptanceEvaluator, String> {
             "and4",
             and4_netlist,
             inputs(&and4::INPUT_NAMES),
-            vec![and4_output],
+            vec![BenchmarkOutput::new(and4::OUTPUT_NAME, and4_output)],
             and4_expected,
             PortPlacements::default(),
         ),
@@ -453,7 +546,7 @@ pub fn legacy_benchmark_evaluator() -> Result<AcceptanceEvaluator, String> {
             "segment_a",
             segment_netlist,
             inputs(&seven_segment::INPUT_NAMES),
-            vec![segment_output],
+            vec![BenchmarkOutput::new("a", segment_output)],
             segment_a_expected,
             PortPlacements::default(),
         ),
@@ -472,7 +565,8 @@ pub fn legacy_benchmark_evaluator() -> Result<AcceptanceEvaluator, String> {
             verilog_decoder_outputs,
             seven_segment_expected,
             pinned_decoder_ports,
-        ),
+        )
+        .with_explicit_legacy_new_coverage(),
     ]))
 }
 
@@ -505,6 +599,10 @@ struct CanonicalGate<'a> {
 }
 
 fn canonical_netlist_fingerprint(netlist: &Netlist) -> Fingerprint {
+    canonical_fingerprint(&canonical_netlist_bytes(netlist))
+}
+
+fn canonical_netlist_bytes(netlist: &Netlist) -> Vec<u8> {
     let canonical = CanonicalNetlist {
         inputs: &netlist.inputs,
         outputs: &netlist.outputs,
@@ -520,7 +618,7 @@ fn canonical_netlist_fingerprint(netlist: &Netlist) -> Fingerprint {
             })
             .collect(),
     };
-    canonical_fingerprint(&serde_json::to_vec(&canonical).expect("a netlist must serialize"))
+    serde_json::to_vec(&canonical).expect("a netlist must serialize")
 }
 
 #[derive(Serialize)]
@@ -533,6 +631,10 @@ struct CanonicalPin<'a> {
 }
 
 fn canonical_pin_manifest_fingerprint(placements: &PortPlacements) -> Fingerprint {
+    canonical_fingerprint(&canonical_pin_manifest_bytes(placements))
+}
+
+fn canonical_pin_manifest_bytes(placements: &PortPlacements) -> Vec<u8> {
     let pins: Vec<_> = placements
         .iter()
         .map(|(port, pin)| CanonicalPin {
@@ -543,7 +645,7 @@ fn canonical_pin_manifest_fingerprint(placements: &PortPlacements) -> Fingerprin
             toward: facing_name(pin.toward),
         })
         .collect();
-    canonical_fingerprint(&serde_json::to_vec(&pins).expect("a pin manifest must serialize"))
+    serde_json::to_vec(&pins).expect("a pin manifest must serialize")
 }
 
 #[derive(Serialize)]
@@ -644,25 +746,127 @@ fn block_kind_name(kind: BlockKind) -> &'static str {
     }
 }
 
-pub fn current_git_commit() -> Result<String, String> {
+fn git_output(repository: &Path, arguments: &[&str]) -> Result<String, String> {
     let output = Command::new("git")
-        .args(["rev-parse", "HEAD"])
+        .arg("-C")
+        .arg(git_compatible_path(repository))
+        .args(arguments)
         .output()
         .map_err(|error| format!("could not invoke git: {error}"))?;
     if !output.status.success() {
         return Err(format!(
-            "git rev-parse HEAD failed: {}",
+            "git -C {} {} failed: {}",
+            repository.display(),
+            arguments.join(" "),
             String::from_utf8_lossy(&output.stderr).trim()
         ));
     }
-    let revision = String::from_utf8(output.stdout)
-        .map_err(|error| format!("git returned a non-UTF-8 revision: {error}"))?;
-    let revision = revision.trim().to_string();
-    if revision.is_empty() {
-        Err("git returned an empty revision".to_string())
+    String::from_utf8(output.stdout)
+        .map(|stdout| stdout.trim_end_matches(['\r', '\n']).to_string())
+        .map_err(|error| format!("git returned non-UTF-8 output: {error}"))
+}
+
+#[cfg(windows)]
+fn git_compatible_path(path: &Path) -> PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+        PathBuf::from(format!(r"\\{unc}"))
+    } else if let Some(local) = text.strip_prefix(r"\\?\") {
+        PathBuf::from(local)
     } else {
-        Ok(revision)
+        path.to_path_buf()
     }
+}
+
+#[cfg(not(windows))]
+fn git_compatible_path(path: &Path) -> PathBuf {
+    path.to_path_buf()
+}
+
+fn canonical_existing_directory(path: &Path, description: &str) -> Result<PathBuf, String> {
+    path.canonicalize().map_err(|error| {
+        format!(
+            "could not resolve {description} {}: {error}",
+            path.display()
+        )
+    })
+}
+
+fn canonical_absent_path(path: &Path) -> Result<PathBuf, String> {
+    let file_name = path
+        .file_name()
+        .ok_or_else(|| format!("capture output {} has no file name", path.display()))?;
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    Ok(canonical_existing_directory(parent, "capture output parent")?.join(file_name))
+}
+
+fn allowed_absent_output_status(repository: &Path, output: &Path) -> Option<String> {
+    let relative = output.strip_prefix(repository).ok()?;
+    let relative = relative.to_string_lossy().replace('\\', "/");
+    Some(format!(" D {relative}"))
+}
+
+pub fn verified_capture_commit(
+    manifest_root: &Path,
+    current_directory: &Path,
+    requested_output: &Path,
+) -> Result<String, String> {
+    let repository = canonical_existing_directory(manifest_root, "CARGO_MANIFEST_DIR")?;
+    let current_directory = canonical_existing_directory(current_directory, "current directory")?;
+    if current_directory != repository {
+        return Err(format!(
+            "capture must run from the exact repository root {}; current directory is {}",
+            repository.display(),
+            current_directory.display()
+        ));
+    }
+    if !git_output(&repository, &["rev-parse", "--show-prefix"])?.is_empty() {
+        return Err(format!(
+            "CARGO_MANIFEST_DIR {} is not the Git repository root",
+            repository.display()
+        ));
+    }
+    if requested_output.exists() {
+        return Err(format!(
+            "capture output {} must be absent before provenance verification",
+            requested_output.display()
+        ));
+    }
+    let requested_output = canonical_absent_path(requested_output)?;
+    let allowed = allowed_absent_output_status(&repository, &requested_output);
+    let verify_clean = || -> Result<(), String> {
+        let status = git_output(
+            &repository,
+            &["status", "--porcelain=v1", "--untracked-files=all"],
+        )?;
+        if status.is_empty() || allowed.as_deref() == Some(status.as_str()) {
+            Ok(())
+        } else {
+            Err(format!(
+                "capture requires a clean tracked/untracked repository; status was:\n{status}"
+            ))
+        }
+    };
+    verify_clean()?;
+    let head = git_output(&repository, &["rev-parse", "HEAD"])?;
+    if head.is_empty() {
+        return Err("git returned an empty HEAD".to_string());
+    }
+    verify_clean()?;
+    Ok(head)
+}
+
+pub fn current_git_commit(requested_output: &Path) -> Result<String, String> {
+    let current_directory = std::env::current_dir()
+        .map_err(|error| format!("could not read current directory: {error}"))?;
+    verified_capture_commit(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        &current_directory,
+        requested_output,
+    )
 }
 
 pub fn refuse_existing_output(path: &Path, replace: bool) -> Result<(), String> {
@@ -682,6 +886,49 @@ pub fn write_baseline_json(
     replace: bool,
 ) -> Result<(), String> {
     refuse_existing_output(path, replace)?;
+    stage_baseline_json(path, baseline)?.persist(replace)
+}
+
+static TEMPORARY_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+struct StagedBaselineJson {
+    temporary: PathBuf,
+    destination: PathBuf,
+    persisted: bool,
+}
+
+impl StagedBaselineJson {
+    fn persist(mut self, replace: bool) -> Result<(), String> {
+        atomic_publish(&self.temporary, &self.destination, replace).map_err(|error| {
+            if !replace && self.destination.exists() {
+                format!(
+                    "{} already exists; refusing to overwrite raced destination: {error}",
+                    self.destination.display()
+                )
+            } else {
+                format!(
+                    "could not atomically publish {}: {error}",
+                    self.destination.display()
+                )
+            }
+        })?;
+        self.persisted = true;
+        Ok(())
+    }
+}
+
+impl Drop for StagedBaselineJson {
+    fn drop(&mut self) {
+        if !self.persisted {
+            let _ = std::fs::remove_file(&self.temporary);
+        }
+    }
+}
+
+fn stage_baseline_json(
+    path: &Path,
+    baseline: &BenchmarkBaseline,
+) -> Result<StagedBaselineJson, String> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
@@ -689,26 +936,119 @@ pub fn write_baseline_json(
     let mut bytes = serde_json::to_vec_pretty(baseline)
         .map_err(|error| format!("could not serialize baseline: {error}"))?;
     bytes.push(b'\n');
-    std::fs::write(path, bytes)
-        .map_err(|error| format!("could not write {}: {error}", path.display()))
+    let parent = path
+        .parent()
+        .filter(|parent| !parent.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| format!("output {} has no UTF-8 file name", path.display()))?;
+    for _ in 0..100 {
+        let sequence = TEMPORARY_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let temporary = parent.join(format!(
+            ".{file_name}.{}.{}.tmp",
+            std::process::id(),
+            sequence
+        ));
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)
+        {
+            Ok(mut file) => {
+                if let Err(error) = write_and_sync(&mut file, &bytes) {
+                    drop(file);
+                    let _ = std::fs::remove_file(&temporary);
+                    return Err(format!("could not stage {}: {error}", path.display()));
+                }
+                drop(file);
+                return Ok(StagedBaselineJson {
+                    temporary,
+                    destination: path.to_path_buf(),
+                    persisted: false,
+                });
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => {
+                return Err(format!(
+                    "could not stage {} in {}: {error}",
+                    path.display(),
+                    parent.display()
+                ));
+            }
+        }
+    }
+    Err(format!(
+        "could not allocate a same-directory temporary file for {}",
+        path.display()
+    ))
+}
+
+fn write_and_sync(file: &mut File, bytes: &[u8]) -> std::io::Result<()> {
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+#[cfg(windows)]
+fn atomic_publish(source: &Path, destination: &Path, replace: bool) -> std::io::Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+
+    const MOVEFILE_REPLACE_EXISTING: u32 = 0x1;
+    const MOVEFILE_WRITE_THROUGH: u32 = 0x8;
+    extern "system" {
+        fn MoveFileExW(existing: *const u16, new: *const u16, flags: u32) -> i32;
+    }
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let flags = MOVEFILE_WRITE_THROUGH
+        | if replace {
+            MOVEFILE_REPLACE_EXISTING
+        } else {
+            0
+        };
+    if unsafe { MoveFileExW(source.as_ptr(), destination.as_ptr(), flags) } == 0 {
+        Err(std::io::Error::last_os_error())
+    } else {
+        Ok(())
+    }
+}
+
+#[cfg(unix)]
+fn atomic_publish(source: &Path, destination: &Path, replace: bool) -> std::io::Result<()> {
+    if replace {
+        std::fs::rename(source, destination)
+    } else {
+        std::fs::hard_link(source, destination)?;
+        std::fs::remove_file(source)
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use std::process::Command;
 
     use super::{
-        canonical_world_fingerprint, write_baseline_json, AcceptanceEvaluator, BenchmarkBaseline,
-        BenchmarkFixture,
+        canonical_netlist_bytes, canonical_pin_manifest_bytes, canonical_world_fingerprint,
+        stage_baseline_json, verified_capture_commit, write_baseline_json, AcceptanceEvaluator,
+        BenchmarkBaseline, BenchmarkFixture, BenchmarkOutput,
     };
     use crate::compile::fragment_synth::manifest::TransitionManifest;
+    use crate::compile::geometry::Anchor;
     use crate::compile::metrics::canonical_fingerprint;
+    use crate::compile::planner::PortPlacements;
     use crate::compile::revisions::{
         cell_library_revision, physical_verifier_revision, simulator_revision,
     };
     use crate::compile::topology::Library;
     use crate::compile::{compile_legacy, Gate, Netlist};
-    use crate::redstone::world::block::{BlockKind, BlockState, Facing};
+    use crate::redstone::world::block::{BlockKind, BlockState, Face, Facing};
     use crate::redstone::world::storage::World;
 
     #[test]
@@ -723,6 +1063,7 @@ mod tests {
             "cases": [
                 {
                     "name": "and4",
+                    "transition_count": 240,
                     "lowered_netlist_hash": "and4-netlist",
                     "pin_manifest_hash": "and4-pins",
                     "transition_manifest_hash": "and4-transitions",
@@ -739,6 +1080,7 @@ mod tests {
                 },
                 {
                     "name": "verilog:and4",
+                    "transition_count": 240,
                     "lowered_netlist_hash": "verilog-and4-netlist",
                     "pin_manifest_hash": "verilog-and4-pins",
                     "transition_manifest_hash": "verilog-and4-transitions",
@@ -749,6 +1091,7 @@ mod tests {
                 },
                 {
                     "name": "full_adder",
+                    "transition_count": 56,
                     "lowered_netlist_hash": "full-adder-netlist",
                     "pin_manifest_hash": "full-adder-pins",
                     "transition_manifest_hash": "full-adder-transitions",
@@ -759,6 +1102,7 @@ mod tests {
                 },
                 {
                     "name": "segment_a",
+                    "transition_count": 240,
                     "lowered_netlist_hash": "segment-a-netlist",
                     "pin_manifest_hash": "segment-a-pins",
                     "transition_manifest_hash": "segment-a-transitions",
@@ -769,6 +1113,7 @@ mod tests {
                 },
                 {
                     "name": "seven_segment",
+                    "transition_count": 240,
                     "lowered_netlist_hash": "seven-segment-netlist",
                     "pin_manifest_hash": "seven-segment-pins",
                     "transition_manifest_hash": "seven-segment-transitions",
@@ -779,6 +1124,7 @@ mod tests {
                 },
                 {
                     "name": "pinned:verilog:seven_segment",
+                    "transition_count": 240,
                     "lowered_netlist_hash": "pinned-seven-segment-netlist",
                     "pin_manifest_hash": "pinned-seven-segment-pins",
                     "transition_manifest_hash": "pinned-seven-segment-transitions",
@@ -827,6 +1173,18 @@ mod tests {
             );
             assert!(case.max_observed_settle_game_ticks_on_manifest.is_some());
         }
+        for case in &baseline.cases {
+            let input_count = if case.name == "full_adder" { 3 } else { 4 };
+            assert_eq!(
+                case.transition_count,
+                TransitionManifest::new(
+                    (0..input_count).map(|index| format!("i{index}")).collect()
+                )
+                .transitions()
+                .len()
+            );
+            assert!(case.transition_count > 0);
+        }
     }
 
     fn tiny_fixture(expected: fn(&[bool]) -> Vec<bool>) -> BenchmarkFixture {
@@ -838,7 +1196,7 @@ mod tests {
                 gates: vec![Gate::nor("y", &["a"])],
             },
             vec!["a".into()],
-            vec!["y".into()],
+            vec![BenchmarkOutput::new("y", "y")],
             expected,
             Default::default(),
         )
@@ -858,6 +1216,7 @@ mod tests {
         assert!(case.generated_world_fingerprint.is_some());
         assert!(case.physical.as_ref().unwrap().non_air_blocks > 0);
         assert!(case.max_observed_settle_game_ticks_on_manifest.is_some());
+        assert_eq!(case.transition_count, 2);
         assert_eq!(
             TransitionManifest::new(vec!["a".into()])
                 .transitions()
@@ -889,8 +1248,103 @@ mod tests {
         );
     }
 
+    fn identity_error(
+        mutate_fixture: impl FnOnce(&mut BenchmarkFixture),
+        mutate_compiled: impl FnOnce(&mut crate::compile::CompiledCircuit),
+    ) -> String {
+        let mut fixture = tiny_fixture(|bits| vec![!bits[0]]);
+        mutate_fixture(&mut fixture);
+        let mut compiled = compile_legacy(fixture.lowered_netlist()).unwrap();
+        mutate_compiled(&mut compiled);
+        AcceptanceEvaluator::new(vec![fixture])
+            .evaluate_world("not", &compiled)
+            .unwrap_err()
+    }
+
     #[test]
-    fn canonical_world_hash_uses_size_yzx_cells_and_electrical_block_state() {
+    fn evaluator_rejects_missing_compiled_output_before_truth_sweep() {
+        let error = identity_error(|_| {}, |compiled| compiled.output_positions.clear());
+        assert!(error.contains("missing compiled output"), "{error}");
+    }
+
+    #[test]
+    fn evaluator_rejects_extra_compiled_output_before_truth_sweep() {
+        let error = identity_error(
+            |_| {},
+            |compiled| {
+                compiled.output_positions.insert("extra".into(), (0, 0, 0));
+            },
+        );
+        assert!(error.contains("extra compiled output"), "{error}");
+    }
+
+    #[test]
+    fn evaluator_rejects_duplicate_output_labels_before_truth_sweep() {
+        let error = identity_error(
+            |fixture| fixture.outputs.push(BenchmarkOutput::new("y", "other")),
+            |_| {},
+        );
+        assert!(error.contains("duplicate output label"), "{error}");
+    }
+
+    #[test]
+    fn evaluator_rejects_duplicate_output_signals_before_truth_sweep() {
+        let error = identity_error(
+            |fixture| fixture.outputs.push(BenchmarkOutput::new("other", "y")),
+            |_| {},
+        );
+        assert!(error.contains("duplicate output signal"), "{error}");
+    }
+
+    #[test]
+    fn evaluator_rejects_unresolved_output_provenance_before_truth_sweep() {
+        let error = identity_error(
+            |fixture| fixture.outputs[0] = BenchmarkOutput::new("", "y"),
+            |_| {},
+        );
+        assert!(error.contains("unresolved output label"), "{error}");
+    }
+
+    #[test]
+    fn evaluator_rejects_fixture_netlist_output_order_mismatch_before_truth_sweep() {
+        let error = identity_error(
+            |fixture| fixture.outputs[0] = BenchmarkOutput::new("y", "other"),
+            |_| {},
+        );
+        assert!(error.contains("fixture output order"), "{error}");
+    }
+
+    #[test]
+    fn canonical_netlist_and_pin_bytes_are_literal_and_order_independent() {
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["y".into()],
+            gates: vec![Gate::nor("y", &["a"])],
+        };
+        assert_eq!(
+            canonical_netlist_bytes(&netlist),
+            br#"{"inputs":["a"],"outputs":["y"],"gates":[{"name":"y","inputs":["a"],"output":"y","kind":"nor","arity":1}]}"#
+        );
+
+        let mut pins = PortPlacements::default();
+        pins.pin("z", Anchor { x: -8, y: 2, z: 19 }, Facing::South);
+        pins.pin("a", Anchor { x: 41, y: 7, z: -3 }, Facing::West);
+        assert_eq!(
+            canonical_pin_manifest_bytes(&pins),
+            br#"[{"port":"a","x":41,"y":7,"z":-3,"toward":"west"},{"port":"z","x":-8,"y":2,"z":19,"toward":"south"}]"#
+        );
+
+        let mut reverse = PortPlacements::default();
+        reverse.pin("a", Anchor { x: 41, y: 7, z: -3 }, Facing::West);
+        reverse.pin("z", Anchor { x: -8, y: 2, z: 19 }, Facing::South);
+        assert_eq!(
+            canonical_pin_manifest_bytes(&pins),
+            canonical_pin_manifest_bytes(&reverse)
+        );
+    }
+
+    #[test]
+    fn canonical_world_hash_uses_every_electrical_field_and_ignores_palette_history() {
         let mut first = World::new(3, 2, 4);
         let mut repeater = BlockState::air();
         repeater.kind = BlockKind::Repeater;
@@ -899,6 +1353,7 @@ mod tests {
         repeater.power = 15;
         repeater.lit = true;
         repeater.delay = 2;
+        repeater.face = Some(Face::Floor);
         first.set(2, 1, 3, repeater.clone());
 
         let mut same_cells_different_palette_history = World::new(3, 2, 4);
@@ -914,17 +1369,101 @@ mod tests {
             canonical_world_fingerprint(&same_cells_different_palette_history)
         );
 
-        let mut changed_state = first.clone();
-        repeater.delay = 3;
-        changed_state.set(2, 1, 3, repeater);
-        assert_ne!(
-            canonical_world_fingerprint(&first),
-            canonical_world_fingerprint(&changed_state)
-        );
+        let original = first.get(2, 1, 3).clone();
+        let mutations: Vec<BlockState> = vec![
+            BlockState {
+                kind: BlockKind::Comparator,
+                ..original.clone()
+            },
+            BlockState {
+                facing: Some(Facing::West),
+                ..original.clone()
+            },
+            BlockState {
+                power: 14,
+                ..original.clone()
+            },
+            BlockState {
+                lit: false,
+                ..original.clone()
+            },
+            BlockState {
+                delay: 3,
+                ..original.clone()
+            },
+            BlockState {
+                face: Some(Face::Ceiling),
+                ..original.clone()
+            },
+        ];
+        for mutation in mutations {
+            let mut changed = first.clone();
+            changed.set(2, 1, 3, mutation);
+            assert_ne!(
+                canonical_world_fingerprint(&first),
+                canonical_world_fingerprint(&changed)
+            );
+        }
         assert_ne!(
             canonical_world_fingerprint(&first),
             canonical_world_fingerprint(&World::new(4, 2, 4))
         );
+    }
+
+    #[test]
+    fn verified_capture_requires_exact_clean_repository_root_and_uses_its_head() {
+        let repository = temporary_directory("provenance");
+        run_git(&repository, &["init"]);
+        run_git(
+            &repository,
+            &["config", "user.email", "reda@example.invalid"],
+        );
+        run_git(&repository, &["config", "user.name", "REDA Test"]);
+        std::fs::write(repository.join("tracked"), b"clean").unwrap();
+        run_git(&repository, &["add", "tracked"]);
+        run_git(&repository, &["commit", "-m", "fixture"]);
+        let head = git_stdout(&repository, &["rev-parse", "HEAD"]);
+        let requested = repository.join("capture.json");
+
+        assert_eq!(
+            verified_capture_commit(&repository, &repository, &requested).unwrap(),
+            head
+        );
+        let subdirectory = repository.join("subdir");
+        std::fs::create_dir(&subdirectory).unwrap();
+        assert!(
+            verified_capture_commit(&repository, &subdirectory, &requested)
+                .unwrap_err()
+                .contains("repository root")
+        );
+
+        std::fs::write(repository.join("untracked"), b"dirty").unwrap();
+        assert!(
+            verified_capture_commit(&repository, &repository, &requested)
+                .unwrap_err()
+                .contains("clean")
+        );
+        std::fs::remove_file(repository.join("untracked")).unwrap();
+
+        std::fs::write(repository.join("tracked"), b"dirty tracked content").unwrap();
+        assert!(
+            verified_capture_commit(&repository, &repository, &requested)
+                .unwrap_err()
+                .contains("clean")
+        );
+        std::fs::write(repository.join("tracked"), b"clean").unwrap();
+
+        std::fs::write(&requested, b"tracked old fixture").unwrap();
+        run_git(&repository, &["add", "capture.json"]);
+        run_git(&repository, &["commit", "-m", "old capture"]);
+        std::fs::remove_file(&requested).unwrap();
+        let new_head = git_stdout(&repository, &["rev-parse", "HEAD"]);
+        assert_eq!(
+            verified_capture_commit(&repository, &repository, &requested).unwrap(),
+            new_head
+        );
+
+        std::fs::remove_dir_all(repository).unwrap();
     }
 
     fn literal_empty_baseline() -> BenchmarkBaseline {
@@ -946,6 +1485,42 @@ mod tests {
         ))
     }
 
+    fn temporary_directory(name: &str) -> PathBuf {
+        let path = temporary_output(name).with_extension("dir");
+        let _ = std::fs::remove_dir_all(&path);
+        std::fs::create_dir(&path).unwrap();
+        path
+    }
+
+    fn run_git(repository: &Path, arguments: &[&str]) {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    fn git_stdout(repository: &Path, arguments: &[&str]) -> String {
+        let output = Command::new("git")
+            .arg("-C")
+            .arg(repository)
+            .args(arguments)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().into()
+    }
+
     #[test]
     fn baseline_writer_refuses_overwrite_until_replace_is_explicit() {
         let output = temporary_output("overwrite");
@@ -964,6 +1539,28 @@ mod tests {
             serde_json::from_slice(&std::fs::read(&output).unwrap()).unwrap();
         assert_eq!(written.baseline_commit, "commit");
         std::fs::remove_file(output).unwrap();
+    }
+
+    #[test]
+    fn staged_no_clobber_publish_cannot_overwrite_a_raced_destination() {
+        let output = temporary_output("race");
+        let _ = std::fs::remove_file(&output);
+        let staged = stage_baseline_json(&output, &literal_empty_baseline()).unwrap();
+        std::fs::write(&output, b"raced winner").unwrap();
+
+        let error = staged.persist(false).unwrap_err();
+        assert!(error.contains("already exists"), "{error}");
+        assert_eq!(std::fs::read(&output).unwrap(), b"raced winner");
+        std::fs::remove_file(output).unwrap();
+    }
+
+    #[test]
+    fn dropped_staged_write_never_leaves_a_partial_final_file() {
+        let output = temporary_output("interrupted");
+        let _ = std::fs::remove_file(&output);
+        let staged = stage_baseline_json(&output, &literal_empty_baseline()).unwrap();
+        drop(staged);
+        assert!(!output.exists());
     }
 
     #[test]

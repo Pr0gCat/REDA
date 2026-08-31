@@ -37,8 +37,9 @@ fn parse_arguments() -> Result<Arguments, String> {
 fn run() -> Result<(), String> {
     let arguments = parse_arguments()?;
     refuse_existing_output(&arguments.output, arguments.replace)?;
+    let baseline_commit = current_git_commit(&arguments.output)?;
     let evaluator = legacy_benchmark_evaluator()?;
-    let baseline = evaluator.capture_legacy(current_git_commit()?);
+    let baseline = evaluator.capture_legacy(baseline_commit)?;
     write_baseline_json(&arguments.output, &baseline, arguments.replace)?;
 
     for case in &baseline.cases {
@@ -50,11 +51,14 @@ fn run() -> Result<(), String> {
                 .unwrap_or(0);
             let ticks = case.max_observed_settle_game_ticks_on_manifest.unwrap_or(0);
             println!(
-                "{:<34} certified  blocks={blocks}  max_ticks={ticks}",
-                case.name
+                "{:<34} certified  transitions={}  blocks={blocks}  max_ticks={ticks}",
+                case.name, case.transition_count
             );
         } else {
-            println!("{:<34} new-coverage", case.name);
+            println!(
+                "{:<34} new-coverage  transitions={}",
+                case.name, case.transition_count
+            );
         }
     }
     Ok(())
