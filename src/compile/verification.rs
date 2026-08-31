@@ -840,6 +840,10 @@ fn reverse_junction_contributors(
 
             match emitted.owner_at(at) {
                 Some(PhysicalBlockRole::RouteTerminal { sink, target, .. }) => {
+                    let source = route_source(candidate, junction, target, sink.route, at)?;
+                    if source == PhysicalEndpointId::Junction(junction) {
+                        continue;
+                    }
                     if matches!(target, PhysicalEndpointId::Landing(_)) {
                         if !listed.contains_key(&target) {
                             return Err(ExpandedPhysicalError::UnlistedJunctionContributor {
@@ -851,10 +855,6 @@ fn reverse_junction_contributors(
                             });
                         }
                         observed.insert(target);
-                        continue;
-                    }
-                    let source = route_source(candidate, junction, target, sink.route, at)?;
-                    if source == PhysicalEndpointId::Junction(junction) {
                         continue;
                     }
                     return Err(ExpandedPhysicalError::UnlistedJunctionContributor {
@@ -1725,6 +1725,78 @@ mod tests {
         .expect("fixture emits");
 
         assert_eq!(verify_junction_closure(&candidate, &emitted), Ok(()));
+    }
+
+    #[test]
+    fn adjacent_outbound_landing_terminal_is_not_an_incoming_contributor() {
+        let junction = InstanceId(0);
+        let route = RouteId(0);
+        let sink = RoutedSinkId { route, ordinal: 0 };
+        let connection = ConnectionId::External {
+            instance: InstanceId(1),
+            input_index: 0,
+        };
+        let junction_at = Anchor { x: 3, y: 1, z: 3 };
+        let terminal_at = Anchor { x: 4, y: 1, z: 3 };
+        let terminal = crate::compile::dust();
+        let mut candidate = candidate_with_path(vec![(terminal_at, terminal.clone())]);
+        let outbound = candidate.routes.get_mut(&route).expect("route exists");
+        outbound.source = PhysicalEndpointId::Junction(junction);
+        outbound.branches[0].target = RouteTarget::Connection(connection);
+        outbound.branches[0].terminal.kind = RouteTerminalKind::BareMergeDust;
+        candidate.connections.insert(
+            connection,
+            ConnectionBinding {
+                id: connection,
+                source: PhysicalEndpointId::Junction(junction),
+                landing: PhysicalEndpointId::Landing(connection),
+                route,
+                sink,
+            },
+        );
+        candidate.junctions.insert(
+            junction,
+            RealisedJunction {
+                id: junction,
+                at: junction_at,
+                facing: crate::compile::geometry::CellFacing::NORTH,
+                contributors: Vec::new(),
+                cells: vec![PlacedBlock {
+                    at: junction_at,
+                    state: crate::compile::dust(),
+                }],
+            },
+        );
+        let emitted = emit_typed(
+            &ShortedRoutes {
+                blocks: vec![
+                    (
+                        junction_at,
+                        crate::compile::dust(),
+                        PhysicalBlockRole::Junction(junction),
+                    ),
+                    (
+                        terminal_at,
+                        terminal,
+                        PhysicalBlockRole::RouteTerminal {
+                            sink,
+                            target: PhysicalEndpointId::Landing(connection),
+                            kind: crate::compile::emission::TerminalKind::BareMergeDust,
+                            repeaters: 0,
+                        },
+                    ),
+                ],
+            },
+            (8, 4, 8),
+        )
+        .expect("fixture emits");
+
+        let actual = verify_junction_closure(&candidate, &emitted);
+        assert_eq!(
+            actual,
+            Ok(()),
+            "outbound landing terminal was classified as incoming: {actual:?}"
+        );
     }
 
     #[test]
