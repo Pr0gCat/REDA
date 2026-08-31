@@ -14,6 +14,7 @@
 
 - This milestone accepts lowered, combinational netlists only. Return `UnsupportedStatefulTopology` before `InstanceGraph` construction and preserve the existing named errors for combinational cycles and undriven signals.
 - The new generator must not call `compile_legacy`, `compile_planned`, `compile_grown`, `seed_from_legacy`, `plan_from_netlist`, spring relaxation, or the old optimiser after Task 7's independent seed exists. The legacy adapter in Tasks 3-4 is migration and differential-test code only.
+- Do not migrate `PrimitiveId` into `relax/build.rs` or `relax/snap.rs`. Those files remain part of the legacy oracle until deletion; the new `SparseSeedBuilder` owns typed primitive placement directly. The one-to-one migration adapter observes a completed legacy seed and never makes legacy relaxation part of new candidate construction.
 - Every externally visible candidate is complete, independently re-instantiated from the immutable library, physically verified, functionally certified, and transition-measured. Rejected transaction state never mutates the accepted parent.
 - Logical ownership, electrical endpoint identity, and physical coordinates are separate fields. No map key may infer one from another.
 - Every topology primitive and internal edge is materialised, routed, timed, observed when delayed, and structurally verified. `Template::output = None` creates a junction, never a fictional gate body.
@@ -343,6 +344,18 @@ pub struct ExpandedPhysicalCandidate {
 
 `PrimitivePlacement` carries the selected physical variant, anchor, and full emitted `BlockState` data. `ConnectionBinding` names the typed source, landing, route tree, and concrete routed sink. `RealisedRouteTree` owns a shared trunk once, ordered branches, full route/floor `BlockState`s, and one terminal record per `RoutedSinkId`; fanout branches must not duplicate their common trunk in candidate identity or block metrics. Canonical gate positions/facings are derived compatibility views only.
 
+Delayed-component ownership is explicit and exclusive:
+
+```rust
+pub enum DelayedOwner {
+    Primitive(PrimitiveId),
+    Route(RouteId),
+    InputBinding(PortId),
+}
+```
+
+A topology repeater is never also charged to a route terminal, and a pinned input reader is never charged to its downstream route.
+
 - [ ] **Step 3: Implement the migration adapter and byte-identical test**
 
 Map one legacy seed into one-to-one instances, including bare/mixed merge ownership and terminal repeaters. Re-emit the adapted candidate and compare every world cell and compatibility coordinate with the original legacy result for NOT, and4, fanout, bare merge, and mixed merge. Exercise the two-node BUF directly through the new candidate constructor because the legacy lowered front door does not accept BUF as a final cell-level gate.
@@ -393,7 +406,7 @@ git commit -m "feat(synthesis): represent complete typed candidates"
 
 - [ ] **Step 1: Write the required non-ignored corruption matrix**
 
-Start from one certified candidate containing a two-node BUF and mixed merge. Clone and independently mutate it eight ways: remove an internal connection, change a primitive kind, reverse a primitive facing, add an extra primitive, mismatch implementation key/topology, reassign one sink, swap junction logical owner/contributor, and falsify an observation point. Require a named `StructuralMismatch` carrying the affected stable ID before functional simulation starts.
+Start from one certified candidate containing a two-node BUF and mixed merge. Clone and independently mutate it: remove an internal connection, redirect an internal connection to the wrong sink, remove and duplicate a primitive, change a primitive kind, reverse a primitive facing, add an extra primitive, mismatch implementation key/topology, reassign one external sink, omit a junction contributor, swap junction logical owner/contributor, delete a declared-output terminal, and falsify an observation point. Require a named `StructuralMismatch` carrying the affected stable ID before functional simulation starts.
 
 - [ ] **Step 2: Run the corruption tests and verify RED**
 
@@ -528,11 +541,13 @@ Build one route arc per concrete sink, one primitive arc per signal-carrying lan
 
 - [ ] **Step 4: Make observation identity typed end to end**
 
-Add typed observer registration through `Simulator::attach_observer`, raw observation events, and a typed transition result so timelines are keyed by `ObservationId`, with human labels as metadata. Keep the existing string-labelled timing API as a compatibility wrapper rather than collapsing typed identities. Extend every `CompiledCircuit` constructor with primitive, concrete instance, and junction observation maps keyed by typed IDs; retain the current gate-output map as the canonical compatibility projection. Retain every transition index tied for worst settle time, while keeping the lowest index as the compatibility scalar. Two duplicates with the same display label must retain independent event sequences.
+Add typed observer registration through `Simulator::attach_observer`, raw observation events, and a typed transition result so timelines are keyed by `ObservationId`, with human labels as metadata. Store observation sites as `Position -> Vec<ObservationSite>` so an ordinary instance output may alias its selected primitive at the same coordinate without either identity disappearing. Keep the existing string-labelled timing API as a compatibility wrapper rather than collapsing typed identities. Extend every `CompiledCircuit` constructor with a `CircuitObservations` value containing primitive, concrete instance, and junction maps keyed by typed IDs; retain the current gate-output map as the canonical compatibility projection. Retain every transition index tied for worst settle time, while keeping the lowest index as the compatibility scalar. Two duplicates with the same display label, and two typed identities at the same position, must retain independent event sequences.
 
 - [ ] **Step 5: Reconcile metadata, graph, and simulator**
 
 Add non-ignored tests for and4, full_adder, two-node BUF, mixed merge, pinned input, and pinned output. Assert every route-owned repeater is charged once, every topology repeater is charged once, and the old pinned-output double count is absent.
+
+Add witness regressions requiring every tied-worst transition to remain available; when a declared output does not change, choose the latest changing internal primitive or primary input, and prefer an active witness over `StaticFallback`.
 
 ```powershell
 cargo test --lib compile::fragment_synth::timing_graph::tests -- --nocapture
