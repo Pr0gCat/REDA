@@ -668,6 +668,10 @@ struct CanonicalCell {
 }
 
 pub fn canonical_world_fingerprint(world: &World) -> Fingerprint {
+    canonical_fingerprint(&canonical_world_bytes(world))
+}
+
+fn canonical_world_bytes(world: &World) -> Vec<u8> {
     let cells = world
         .cells()
         .iter()
@@ -684,7 +688,7 @@ pub fn canonical_world_fingerprint(world: &World) -> Fingerprint {
         size: world.size(),
         cells,
     };
-    canonical_fingerprint(&serde_json::to_vec(&canonical).expect("a world must serialize"))
+    serde_json::to_vec(&canonical).expect("a world must serialize")
 }
 
 fn canonical_cell(world: &World, flat: usize, state: &BlockState) -> CanonicalCell {
@@ -1035,10 +1039,12 @@ mod tests {
     use std::process::Command;
 
     use super::{
-        canonical_netlist_bytes, canonical_pin_manifest_bytes, canonical_world_fingerprint,
+        canonical_netlist_bytes, canonical_netlist_fingerprint, canonical_pin_manifest_bytes,
+        canonical_pin_manifest_fingerprint, canonical_world_bytes, canonical_world_fingerprint,
         stage_baseline_json, verified_capture_commit, write_baseline_json, AcceptanceEvaluator,
         BenchmarkBaseline, BenchmarkFixture, BenchmarkOutput,
     };
+    use crate::circuits::and4;
     use crate::compile::fragment_synth::manifest::TransitionManifest;
     use crate::compile::geometry::Anchor;
     use crate::compile::metrics::canonical_fingerprint;
@@ -1315,98 +1321,189 @@ mod tests {
     }
 
     #[test]
-    fn canonical_netlist_and_pin_bytes_are_literal_and_order_independent() {
+    fn canonical_netlist_bytes_pin_every_ordered_boundary() {
         let netlist = Netlist {
-            inputs: vec!["a".into()],
-            outputs: vec!["y".into()],
-            gates: vec![Gate::nor("y", &["a"])],
+            inputs: vec!["left".into(), "right".into()],
+            outputs: vec!["sum".into(), "carry".into()],
+            gates: vec![
+                Gate::nor("sum", &["left", "right"]),
+                Gate::nor("carry", &["right"]),
+            ],
         };
         assert_eq!(
             canonical_netlist_bytes(&netlist),
-            br#"{"inputs":["a"],"outputs":["y"],"gates":[{"name":"y","inputs":["a"],"output":"y","kind":"nor","arity":1}]}"#
+            br#"{"inputs":["left","right"],"outputs":["sum","carry"],"gates":[{"name":"sum","inputs":["left","right"],"output":"sum","kind":"nor","arity":2},{"name":"carry","inputs":["right"],"output":"carry","kind":"nor","arity":1}]}"#
         );
 
+        let original = canonical_netlist_bytes(&netlist);
+        let mut swapped_inputs = netlist.clone();
+        swapped_inputs.inputs.swap(0, 1);
+        assert_ne!(canonical_netlist_bytes(&swapped_inputs), original);
+
+        let mut swapped_outputs = netlist.clone();
+        swapped_outputs.outputs.swap(0, 1);
+        assert_ne!(canonical_netlist_bytes(&swapped_outputs), original);
+
+        let mut swapped_gates = netlist.clone();
+        swapped_gates.gates.swap(0, 1);
+        assert_ne!(canonical_netlist_bytes(&swapped_gates), original);
+
+        let mut swapped_gate_inputs = netlist.clone();
+        swapped_gate_inputs.gates[0].inputs.swap(0, 1);
+        assert_ne!(canonical_netlist_bytes(&swapped_gate_inputs), original);
+    }
+
+    fn two_pin_manifest(
+        first_role: &str,
+        first_label: &str,
+        first_at: Anchor,
+        first_toward: Facing,
+    ) -> PortPlacements {
         let mut pins = PortPlacements::default();
-        pins.pin("z", Anchor { x: -8, y: 2, z: 19 }, Facing::South);
-        pins.pin("a", Anchor { x: 41, y: 7, z: -3 }, Facing::West);
+        pins.pin(
+            "output:sum",
+            Anchor { x: 37, y: 8, z: -5 },
+            Facing::North,
+        );
+        pins.pin(
+            format!("{first_role}:{first_label}"),
+            first_at,
+            first_toward,
+        );
+        pins
+    }
+
+    #[test]
+    fn canonical_pin_bytes_pin_identity_role_geometry_and_map_order() {
+        let input_at = Anchor { x: -11, y: 4, z: 29 };
+        let pins = two_pin_manifest("input", "left", input_at, Facing::East);
         assert_eq!(
             canonical_pin_manifest_bytes(&pins),
-            br#"[{"port":"a","x":41,"y":7,"z":-3,"toward":"west"},{"port":"z","x":-8,"y":2,"z":19,"toward":"south"}]"#
+            br#"[{"port":"input:left","x":-11,"y":4,"z":29,"toward":"east"},{"port":"output:sum","x":37,"y":8,"z":-5,"toward":"north"}]"#
         );
 
         let mut reverse = PortPlacements::default();
-        reverse.pin("a", Anchor { x: 41, y: 7, z: -3 }, Facing::West);
-        reverse.pin("z", Anchor { x: -8, y: 2, z: 19 }, Facing::South);
+        reverse.pin("input:left", input_at, Facing::East);
+        reverse.pin(
+            "output:sum",
+            Anchor { x: 37, y: 8, z: -5 },
+            Facing::North,
+        );
         assert_eq!(
             canonical_pin_manifest_bytes(&pins),
             canonical_pin_manifest_bytes(&reverse)
         );
+
+        let original = canonical_pin_manifest_bytes(&pins);
+        let mutations = [
+            two_pin_manifest("input", "left", Anchor { x: -10, ..input_at }, Facing::East),
+            two_pin_manifest("input", "left", Anchor { y: 5, ..input_at }, Facing::East),
+            two_pin_manifest("input", "left", Anchor { z: 30, ..input_at }, Facing::East),
+            two_pin_manifest("input", "left", input_at, Facing::West),
+            two_pin_manifest("output", "left", input_at, Facing::East),
+            two_pin_manifest("input", "other", input_at, Facing::East),
+        ];
+        for mutation in mutations {
+            assert_ne!(canonical_pin_manifest_bytes(&mutation), original);
+        }
     }
 
-    #[test]
-    fn canonical_world_hash_uses_every_electrical_field_and_ignores_palette_history() {
-        let mut first = World::new(3, 2, 4);
+    fn canonical_world_fixture(size: (i32, i32, i32), palette_noise: bool) -> World {
+        let mut world = World::new(size.0, size.1, size.2);
+        if palette_noise {
+            let mut temporary = BlockState::air();
+            temporary.kind = BlockKind::Solid;
+            temporary.name = "minecraft:stone".into();
+            world.set(3, 3, 4, temporary);
+            world.set(3, 3, 4, BlockState::air());
+        }
+
+        let mut comparator = BlockState::air();
+        comparator.kind = BlockKind::Comparator;
+        comparator.name = "minecraft:comparator".into();
+        comparator.facing = Some(Facing::North);
+        comparator.power = 12;
+        comparator.delay = 2;
+        comparator.face = Some(Face::Ceiling);
+
+        let mut lever = BlockState::air();
+        lever.kind = BlockKind::Lever;
+        lever.name = "minecraft:lever".into();
+        lever.facing = Some(Facing::South);
+        lever.lit = true;
+        lever.face = Some(Face::Wall);
+
         let mut repeater = BlockState::air();
         repeater.kind = BlockKind::Repeater;
         repeater.name = "minecraft:repeater".into();
         repeater.facing = Some(Facing::East);
-        repeater.power = 15;
+        repeater.power = 7;
         repeater.lit = true;
-        repeater.delay = 2;
+        repeater.delay = 3;
         repeater.face = Some(Face::Floor);
-        first.set(2, 1, 3, repeater.clone());
+        if palette_noise {
+            world.set(1, 0, 1, repeater);
+            world.set(2, 0, 3, lever);
+            world.set(0, 2, 0, comparator);
+        } else {
+            world.set(0, 2, 0, comparator);
+            world.set(2, 0, 3, lever);
+            world.set(1, 0, 1, repeater);
+        }
+        world
+    }
 
-        let mut same_cells_different_palette_history = World::new(3, 2, 4);
-        let mut temporary = BlockState::air();
-        temporary.kind = BlockKind::Solid;
-        temporary.name = "minecraft:stone".into();
-        same_cells_different_palette_history.set(0, 0, 0, temporary);
-        same_cells_different_palette_history.set(0, 0, 0, BlockState::air());
-        same_cells_different_palette_history.set(2, 1, 3, repeater.clone());
-
+    #[test]
+    fn canonical_world_bytes_pin_yzx_order_size_and_every_electrical_field() {
+        let world = canonical_world_fixture((4, 4, 5), false);
         assert_eq!(
-            canonical_world_fingerprint(&first),
-            canonical_world_fingerprint(&same_cells_different_palette_history)
+            canonical_world_bytes(&world),
+            br#"{"size":[4,4,5],"cells":[{"x":1,"y":0,"z":1,"kind":"repeater","facing":"east","power":7,"lit":true,"delay":3,"face":"floor"},{"x":2,"y":0,"z":3,"kind":"lever","facing":"south","power":0,"lit":true,"delay":0,"face":"wall"},{"x":0,"y":2,"z":0,"kind":"comparator","facing":"north","power":12,"lit":false,"delay":2,"face":"ceiling"}]}"#
         );
 
-        let original = first.get(2, 1, 3).clone();
-        let mutations: Vec<BlockState> = vec![
-            BlockState {
-                kind: BlockKind::Comparator,
-                ..original.clone()
-            },
-            BlockState {
-                facing: Some(Facing::West),
-                ..original.clone()
-            },
-            BlockState {
-                power: 14,
-                ..original.clone()
-            },
-            BlockState {
-                lit: false,
-                ..original.clone()
-            },
-            BlockState {
-                delay: 3,
-                ..original.clone()
-            },
-            BlockState {
-                face: Some(Face::Ceiling),
-                ..original.clone()
-            },
+        let same_cells_different_palette_history = canonical_world_fixture((4, 4, 5), true);
+        assert_eq!(
+            canonical_world_bytes(&world),
+            canonical_world_bytes(&same_cells_different_palette_history)
+        );
+
+        let original = canonical_world_bytes(&world);
+        for size in [(5, 4, 5), (4, 5, 5), (4, 4, 6)] {
+            assert_ne!(canonical_world_bytes(&canonical_world_fixture(size, false)), original);
+        }
+
+        let original_state = world.get(1, 0, 1).clone();
+        let mutations = [
+            BlockState { kind: BlockKind::Comparator, ..original_state.clone() },
+            BlockState { facing: Some(Facing::West), ..original_state.clone() },
+            BlockState { power: 8, ..original_state.clone() },
+            BlockState { lit: false, ..original_state.clone() },
+            BlockState { delay: 4, ..original_state.clone() },
+            BlockState { face: Some(Face::Ceiling), ..original_state },
         ];
         for mutation in mutations {
-            let mut changed = first.clone();
-            changed.set(2, 1, 3, mutation);
-            assert_ne!(
-                canonical_world_fingerprint(&first),
-                canonical_world_fingerprint(&changed)
-            );
+            let mut changed = world.clone();
+            changed.set(1, 0, 1, mutation);
+            assert_ne!(canonical_world_bytes(&changed), original);
         }
-        assert_ne!(
-            canonical_world_fingerprint(&first),
-            canonical_world_fingerprint(&World::new(4, 2, 4))
+    }
+
+    #[test]
+    fn checked_fixture_fingerprints_remain_byte_compatible() {
+        let (netlist, _) = and4::build_and4_netlist();
+        assert_eq!(
+            canonical_netlist_fingerprint(&netlist).as_str(),
+            "48690daa56e47fa93724683adaf4bc221892d0ebee4540401d7bb2073cf2c930"
+        );
+        assert_eq!(
+            canonical_pin_manifest_fingerprint(&PortPlacements::default()).as_str(),
+            "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945"
+        );
+
+        let compiled = compile_legacy(&netlist).expect("checked and4 netlist compiles");
+        assert_eq!(
+            canonical_world_fingerprint(&compiled.world).as_str(),
+            "91a9608cab628fbf17bdc1c655a3a708793eb2bb82af51703fc7c0c03fb6a23c"
         );
     }
 
