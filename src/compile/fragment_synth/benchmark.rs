@@ -1442,13 +1442,13 @@ mod tests {
         repeater.delay = 3;
         repeater.face = Some(Face::Floor);
         if palette_noise {
-            world.set(1, 0, 1, repeater);
-            world.set(2, 0, 3, lever);
+            world.set(2, 0, 1, repeater);
+            world.set(1, 0, 3, lever);
             world.set(0, 2, 0, comparator);
         } else {
             world.set(0, 2, 0, comparator);
-            world.set(2, 0, 3, lever);
-            world.set(1, 0, 1, repeater);
+            world.set(1, 0, 3, lever);
+            world.set(2, 0, 1, repeater);
         }
         world
     }
@@ -1458,7 +1458,7 @@ mod tests {
         let world = canonical_world_fixture((4, 4, 5), false);
         assert_eq!(
             canonical_world_bytes(&world),
-            br#"{"size":[4,4,5],"cells":[{"x":1,"y":0,"z":1,"kind":"repeater","facing":"east","power":7,"lit":true,"delay":3,"face":"floor"},{"x":2,"y":0,"z":3,"kind":"lever","facing":"south","power":0,"lit":true,"delay":0,"face":"wall"},{"x":0,"y":2,"z":0,"kind":"comparator","facing":"north","power":12,"lit":false,"delay":2,"face":"ceiling"}]}"#
+            br#"{"size":[4,4,5],"cells":[{"x":2,"y":0,"z":1,"kind":"repeater","facing":"east","power":7,"lit":true,"delay":3,"face":"floor"},{"x":1,"y":0,"z":3,"kind":"lever","facing":"south","power":0,"lit":true,"delay":0,"face":"wall"},{"x":0,"y":2,"z":0,"kind":"comparator","facing":"north","power":12,"lit":false,"delay":2,"face":"ceiling"}]}"#
         );
 
         let same_cells_different_palette_history = canonical_world_fixture((4, 4, 5), true);
@@ -1472,7 +1472,7 @@ mod tests {
             assert_ne!(canonical_world_bytes(&canonical_world_fixture(size, false)), original);
         }
 
-        let original_state = world.get(1, 0, 1).clone();
+        let original_state = world.get(2, 0, 1).clone();
         let mutations = [
             BlockState { kind: BlockKind::Comparator, ..original_state.clone() },
             BlockState { facing: Some(Facing::West), ..original_state.clone() },
@@ -1483,7 +1483,7 @@ mod tests {
         ];
         for mutation in mutations {
             let mut changed = world.clone();
-            changed.set(1, 0, 1, mutation);
+            changed.set(2, 0, 1, mutation);
             assert_ne!(canonical_world_bytes(&changed), original);
         }
     }
