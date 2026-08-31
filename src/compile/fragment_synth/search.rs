@@ -2,8 +2,11 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
+use crate::compile::fragment_synth::certification::CertifiedCandidate;
 use crate::compile::fragment_synth::certification::QualityKey;
-use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
+#[cfg(test)]
+use crate::compile::metrics::canonical_fingerprint;
+use crate::compile::metrics::Fingerprint;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SynthesisBudget {
@@ -51,15 +54,42 @@ pub struct ProposalTrace {
     pub accepted: bool,
 }
 
+pub(crate) trait SearchCandidate {
+    fn candidate_fingerprint(&self) -> &Fingerprint;
+    fn quality(&self) -> QualityKey;
+}
+
+impl SearchCandidate for CertifiedCandidate {
+    fn candidate_fingerprint(&self) -> &Fingerprint {
+        &self.metrics().candidate_fingerprint
+    }
+
+    fn quality(&self) -> QualityKey {
+        self.metrics().quality
+    }
+}
+
+#[cfg(test)]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SearchSeed {
     pub candidate_fingerprint: Fingerprint,
     pub quality: QualityKey,
 }
 
+#[cfg(test)]
+impl SearchCandidate for SearchSeed {
+    fn candidate_fingerprint(&self) -> &Fingerprint {
+        &self.candidate_fingerprint
+    }
+
+    fn quality(&self) -> QualityKey {
+        self.quality
+    }
+}
+
 #[derive(Debug)]
-pub(crate) struct SearchSummary {
-    pub best: SearchSeed,
+pub(crate) struct SearchSummary<T> {
+    pub best: T,
     pub trace: Vec<ProposalTrace>,
     pub evaluations_used: u64,
     pub stop_reason: StopReason,
@@ -69,28 +99,28 @@ pub(crate) trait MonotonicClock {
     fn elapsed(&self) -> Duration;
 }
 
-pub(crate) struct ProposalEvaluation {
+pub(crate) struct ProposalEvaluation<T> {
     pub fragment_fingerprint: Fingerprint,
     pub choice_fingerprint: Fingerprint,
     pub terminal: ProposalTerminal,
     pub cap_work: CapWorkCounters,
-    pub certified: Option<SearchSeed>,
+    pub certified: Option<T>,
 }
 
-impl ProposalEvaluation {
+impl<T: SearchCandidate> ProposalEvaluation<T> {
     #[cfg(test)]
-    fn certified(candidate: SearchSeed) -> Self {
+    fn certified(candidate: T) -> Self {
         let fragment_fingerprint = canonical_fingerprint(
             format!(
                 "certified-fragment:{}",
-                candidate.candidate_fingerprint.as_str()
+                candidate.candidate_fingerprint().as_str()
             )
             .as_bytes(),
         );
         let choice_fingerprint = canonical_fingerprint(
             format!(
                 "certified-choice:{}",
-                candidate.candidate_fingerprint.as_str()
+                candidate.candidate_fingerprint().as_str()
             )
             .as_bytes(),
         );
@@ -104,8 +134,8 @@ impl ProposalEvaluation {
     }
 }
 
-pub(crate) trait ProposalStream {
-    fn next(&mut self, proposal_index: u64, incumbent: &SearchSeed) -> Option<ProposalEvaluation>;
+pub(crate) trait ProposalStream<T: SearchCandidate> {
+    fn next(&mut self, proposal_index: u64, incumbent: &T) -> Option<ProposalEvaluation<T>>;
 }
 
 pub(crate) struct SystemMonotonicClock {
@@ -126,11 +156,13 @@ impl MonotonicClock for SystemMonotonicClock {
     }
 }
 
+#[cfg(test)]
 pub(crate) struct DeterministicNoOpProposalStream {
     case_fingerprint: Fingerprint,
     remaining: u64,
 }
 
+#[cfg(test)]
 impl DeterministicNoOpProposalStream {
     pub(crate) fn new(case_fingerprint: Fingerprint, proposal_count: u64) -> Self {
         Self {
@@ -140,8 +172,9 @@ impl DeterministicNoOpProposalStream {
     }
 }
 
-impl ProposalStream for DeterministicNoOpProposalStream {
-    fn next(&mut self, proposal_index: u64, incumbent: &SearchSeed) -> Option<ProposalEvaluation> {
+#[cfg(test)]
+impl<T: SearchCandidate> ProposalStream<T> for DeterministicNoOpProposalStream {
+    fn next(&mut self, proposal_index: u64, incumbent: &T) -> Option<ProposalEvaluation<T>> {
         if self.remaining == 0 {
             return None;
         }
@@ -157,7 +190,7 @@ impl ProposalStream for DeterministicNoOpProposalStream {
             format!(
                 "noop-choice-v1:{}:{proposal_index}:{}",
                 self.case_fingerprint.as_str(),
-                incumbent.candidate_fingerprint.as_str()
+                incumbent.candidate_fingerprint().as_str()
             )
             .as_bytes(),
         );
@@ -171,12 +204,12 @@ impl ProposalStream for DeterministicNoOpProposalStream {
     }
 }
 
-pub(crate) fn run_budgeted_proposals(
-    mut best: SearchSeed,
+pub(crate) fn run_budgeted_proposals<T: SearchCandidate>(
+    mut best: T,
     budget: SynthesisBudget,
     clock: &dyn MonotonicClock,
-    proposals: &mut dyn ProposalStream,
-) -> SearchSummary {
+    proposals: &mut dyn ProposalStream<T>,
+) -> SearchSummary<T> {
     let started = clock.elapsed();
     let mut trace = Vec::new();
     let mut evaluations_used = 0u64;
@@ -192,20 +225,17 @@ pub(crate) fn run_budgeted_proposals(
             SynthesisBudget::Evaluations(_) | SynthesisBudget::Time(_) => {}
         }
 
-        let parent_fingerprint = best.candidate_fingerprint.clone();
+        let parent_fingerprint = best.candidate_fingerprint().clone();
         let Some(mut evaluation) = proposals.next(evaluations_used, &best) else {
             break StopReason::ProposalStreamExhausted;
         };
         evaluations_used = evaluations_used.saturating_add(1);
 
-        let certified_quality = evaluation
-            .certified
-            .as_ref()
-            .map(|candidate| candidate.quality);
+        let certified_quality = evaluation.certified.as_ref().map(SearchCandidate::quality);
         let accepted = evaluation
             .certified
             .as_ref()
-            .is_some_and(|candidate| candidate.quality < best.quality);
+            .is_some_and(|candidate| candidate.quality() < best.quality());
         if let Some(candidate) = evaluation.certified.take() {
             if accepted {
                 best = candidate;
@@ -236,13 +266,13 @@ pub(crate) fn run_budgeted_proposals(
 
 #[cfg(test)]
 pub(crate) struct ScriptedProposalStream {
-    proposals: std::vec::IntoIter<ProposalEvaluation>,
+    proposals: std::vec::IntoIter<ProposalEvaluation<SearchSeed>>,
     after_each: Option<Box<dyn FnMut()>>,
 }
 
 #[cfg(test)]
 impl ScriptedProposalStream {
-    pub(crate) fn new(proposals: Vec<ProposalEvaluation>) -> Self {
+    pub(crate) fn new(proposals: Vec<ProposalEvaluation<SearchSeed>>) -> Self {
         Self {
             proposals: proposals.into_iter(),
             after_each: None,
@@ -251,7 +281,7 @@ impl ScriptedProposalStream {
 
     #[cfg(test)]
     fn with_after_each(
-        proposals: Vec<ProposalEvaluation>,
+        proposals: Vec<ProposalEvaluation<SearchSeed>>,
         after_each: impl FnMut() + 'static,
     ) -> Self {
         Self {
@@ -262,12 +292,12 @@ impl ScriptedProposalStream {
 }
 
 #[cfg(test)]
-impl ProposalStream for ScriptedProposalStream {
+impl ProposalStream<SearchSeed> for ScriptedProposalStream {
     fn next(
         &mut self,
         _proposal_index: u64,
         _incumbent: &SearchSeed,
-    ) -> Option<ProposalEvaluation> {
+    ) -> Option<ProposalEvaluation<SearchSeed>> {
         let proposal = self.proposals.next()?;
         if let Some(after_each) = &mut self.after_each {
             after_each();
@@ -307,7 +337,7 @@ mod tests {
         }
     }
 
-    fn outcomes(count: usize) -> Vec<ProposalEvaluation> {
+    fn outcomes(count: usize) -> Vec<ProposalEvaluation<SearchSeed>> {
         (0..count)
             .map(|index| ProposalEvaluation {
                 fragment_fingerprint: canonical_fingerprint(format!("fragment-{index}").as_bytes()),

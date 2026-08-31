@@ -92,6 +92,8 @@ pub enum SynthesisError {
     UnsupportedStatefulTopology { gate: GateIndex },
     #[error("gate {gate:?} has no registered implementation")]
     NoLibraryEntry { gate: GateIndex },
+    #[error("implementation override names unknown instance {instance:?}")]
+    UnknownImplementationOverride { instance: InstanceId },
     #[error("gate or port count exceeds typed identity width")]
     IdentityOverflow,
     #[error("signal `{signal}` has no primary-input or gate driver")]
@@ -158,6 +160,14 @@ pub enum SynthesisError {
 
 impl InstanceGraph {
     pub fn one_to_one(netlist: &Netlist, library: &Library) -> Result<Self, SynthesisError> {
+        Self::one_to_one_with_implementations(netlist, library, &BTreeMap::new())
+    }
+
+    pub(crate) fn one_to_one_with_implementations(
+        netlist: &Netlist,
+        library: &Library,
+        implementations: &BTreeMap<InstanceId, ImplementationKey>,
+    ) -> Result<Self, SynthesisError> {
         let mut instances = Vec::with_capacity(netlist.gates.len());
         for (index, gate) in netlist.gates.iter().enumerate() {
             let gate_index = gate_index(index)?;
@@ -165,7 +175,7 @@ impl InstanceGraph {
                 return Err(SynthesisError::UnsupportedStatefulTopology { gate: gate_index });
             }
             let instance = InstanceId(gate_index.0);
-            let implementation = if matches!(gate.kind, GateKind::Or(_)) {
+            let default_implementation = if matches!(gate.kind, GateKind::Or(_)) {
                 ImplementationKey::Merge {
                     isolation_mask: merge_isolation_mask(netlist, gate_index)
                         .map_err(|_| SynthesisError::NoLibraryEntry { gate: gate_index })?,
@@ -177,6 +187,10 @@ impl InstanceGraph {
                         .ok_or(SynthesisError::NoLibraryEntry { gate: gate_index })?,
                 )
             };
+            let implementation = implementations
+                .get(&instance)
+                .copied()
+                .unwrap_or(default_implementation);
             let expanded =
                 instantiate(library, gate, instance, &implementation).map_err(|source| {
                     SynthesisError::Topology {
@@ -191,6 +205,12 @@ impl InstanceGraph {
                 implementation,
                 expanded,
             });
+        }
+        if let Some(&instance) = implementations
+            .keys()
+            .find(|instance| !instances.iter().any(|item| item.id == **instance))
+        {
+            return Err(SynthesisError::UnknownImplementationOverride { instance });
         }
 
         let (signals, primary_inputs) = signal_table(netlist)?;
@@ -512,7 +532,11 @@ fn validate_driver(
 
 #[cfg(test)]
 mod tests {
-    use crate::compile::fragment_synth::identity::{GateIndex, InstanceId, PortId};
+    use std::collections::BTreeMap;
+
+    use crate::compile::fragment_synth::identity::{
+        GateIndex, ImplementationKey, InputMask, InstanceId, PortId,
+    };
     use crate::compile::topology::{GateKind, Library};
     use crate::compile::{Gate, Netlist};
 
@@ -581,6 +605,29 @@ mod tests {
             graph.assignments[5].sink,
             PhysicalSink::DeclaredOutput(PortId(1))
         );
+        graph.validate(&netlist).unwrap();
+    }
+
+    #[test]
+    fn an_explicit_implementation_override_rebuilds_the_selected_instance_before_assignments() {
+        let netlist = Netlist {
+            inputs: vec!["a".into(), "b".into()],
+            outputs: vec!["y".into()],
+            gates: vec![Gate::merge("y", &["a", "b"])],
+        };
+        let implementation = ImplementationKey::Merge {
+            isolation_mask: InputMask::new(0b11),
+        };
+        let graph = InstanceGraph::one_to_one_with_implementations(
+            &netlist,
+            &Library::default_library(),
+            &BTreeMap::from([(InstanceId(0), implementation)]),
+        )
+        .unwrap();
+
+        assert_eq!(graph.instances[0].implementation, implementation);
+        assert_eq!(graph.instances[0].expanded.topology.primitives.len(), 2);
+        assert_eq!(graph.assignments.len(), 3);
         graph.validate(&netlist).unwrap();
     }
 

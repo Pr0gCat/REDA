@@ -3,10 +3,10 @@ use thiserror::Error;
 
 use crate::compile::fragment_synth::certification::{CandidateMetrics, CompleteCandidateCertifier};
 use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
+use crate::compile::fragment_synth::fragment::SingleInstanceProposalStream;
 use crate::compile::fragment_synth::manifest::TransitionManifest;
 use crate::compile::fragment_synth::search::{
-    run_budgeted_proposals, DeterministicNoOpProposalStream, ProposalTrace, SearchSeed, StopReason,
-    SynthesisBudget, SystemMonotonicClock,
+    run_budgeted_proposals, ProposalTrace, StopReason, SynthesisBudget, SystemMonotonicClock,
 };
 use crate::compile::fragment_synth::seed::{
     compile_sparse_seed_with_services, SeedInput, SeedServices,
@@ -85,34 +85,24 @@ fn compile_fragment_synth_with_config(
     let case_fingerprint =
         synthesis_case_fingerprint(&input, search_config, &certification_config, &library);
 
-    let certified = compile_sparse_seed_with_services(
-        SeedInput::from(&input),
-        SeedServices {
-            library: &library,
-            router: &DurablePhysicalRouter,
-            emitter: &DurableSeedEmitter,
-            verifier: &DurableSeedVerifier,
-            certifier: &CompleteCandidateCertifier,
-            search_config,
-        },
-    )
-    .map_err(|error| SynthesisError::Seed(error.to_string()))?;
-
-    let seed = SearchSeed {
-        candidate_fingerprint: certified.metrics().candidate_fingerprint.clone(),
-        quality: certified.metrics().quality,
+    let seed_input = SeedInput::from(&input);
+    let seed_services = SeedServices {
+        library: &library,
+        router: &DurablePhysicalRouter,
+        emitter: &DurableSeedEmitter,
+        verifier: &DurableSeedVerifier,
+        certifier: &CompleteCandidateCertifier,
+        search_config,
     };
-    let clock = SystemMonotonicClock::start();
-    let proposal_count = u64::try_from(search_config.fragment_instance_schedule.len())
-        .unwrap_or(u64::MAX)
-        .saturating_mul(2);
-    let mut proposals =
-        DeterministicNoOpProposalStream::new(case_fingerprint.0.clone(), proposal_count);
-    let summary = run_budgeted_proposals(seed.clone(), budget, &clock, &mut proposals);
-    debug_assert_eq!(summary.best, seed);
+    let certified = compile_sparse_seed_with_services(seed_input, seed_services)
+        .map_err(|error| SynthesisError::Seed(error.to_string()))?;
 
-    let compiled = compiled_from_certified(&certified, input.lowered)?;
-    let metrics = certified.metrics().clone();
+    let clock = SystemMonotonicClock::start();
+    let mut proposals = SingleInstanceProposalStream::new(seed_input, seed_services);
+    let summary = run_budgeted_proposals(certified, budget, &clock, &mut proposals);
+
+    let compiled = compiled_from_certified(&summary.best, input.lowered)?;
+    let metrics = summary.best.metrics().clone();
     let candidate_fingerprint = metrics.candidate_fingerprint.clone();
     Ok(SynthesisResult {
         compiled,
@@ -282,8 +272,34 @@ mod tests {
             assert_eq!(result.evaluations_used, budget);
             assert_eq!(result.trace, complete.trace[..budget as usize]);
             assert_eq!(result.case_fingerprint, complete.case_fingerprint);
-            assert_eq!(result.metrics.quality, complete.metrics.quality);
+            assert!(complete.metrics.quality <= result.metrics.quality);
         }
+    }
+
+    #[test]
+    fn the_first_budgeted_proposal_is_a_real_certified_fragment_transaction() {
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["y".into()],
+            gates: vec![Gate::nor("y", &["a"])],
+        };
+        let config = SearchConfig::checked_defaults();
+        let result = compile_fragment_synth_with_config(
+            SynthesisInput {
+                lowered: &netlist,
+                source_provenance: None,
+                pins: None,
+            },
+            crate::compile::fragment_synth::search::SynthesisBudget::Evaluations(1),
+            &config,
+        )
+        .unwrap();
+
+        assert!(matches!(
+            result.trace[0].terminal,
+            crate::compile::fragment_synth::search::ProposalTerminal::NoImprovement
+                | crate::compile::fragment_synth::search::ProposalTerminal::Accepted
+        ));
     }
 
     #[test]

@@ -17,8 +17,8 @@ use crate::compile::fragment_synth::certification::{
 };
 use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
 use crate::compile::fragment_synth::identity::{
-    ConnectionId, InstanceId, ObservationId, ObservationSite, PhysicalEndpointId, PortId,
-    PrimitiveId, RouteId, RoutedSinkId,
+    ConnectionId, ImplementationKey, InstanceId, ObservationId, ObservationSite,
+    PhysicalEndpointId, PortId, PrimitiveId, RouteId, RoutedSinkId,
 };
 use crate::compile::fragment_synth::instance_graph::{
     InstanceGraph, PhysicalDriver, PhysicalSink, SynthesisError,
@@ -57,6 +57,7 @@ pub(crate) struct SeedInput<'a> {
     pub pins: Option<&'a PortPlacements>,
 }
 
+#[derive(Clone, Copy)]
 pub(crate) struct SeedServices<'a> {
     pub library: &'a Library,
     pub router: &'a dyn PhysicalRouter,
@@ -64,6 +65,19 @@ pub(crate) struct SeedServices<'a> {
     pub verifier: &'a dyn SeedVerifier,
     pub certifier: &'a dyn ExpandedCandidateCertifier,
     pub search_config: &'a SearchConfig,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct InstancePlacementOverride {
+    pub facing: CellFacing,
+    pub dx: i32,
+    pub dz: i32,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct SeedVariant {
+    pub implementations: BTreeMap<InstanceId, ImplementationKey>,
+    pub placements: BTreeMap<InstanceId, InstancePlacementOverride>,
 }
 
 #[derive(Debug, Error)]
@@ -111,6 +125,14 @@ pub(crate) fn compile_sparse_seed_with_services(
     services: SeedServices<'_>,
 ) -> Result<CertifiedCandidate, SeedError> {
     SparseSeedBuilder::build(input, services)
+}
+
+pub(crate) fn compile_sparse_seed_variant_with_services(
+    input: SeedInput<'_>,
+    services: SeedServices<'_>,
+    variant: &SeedVariant,
+) -> Result<CertifiedCandidate, SeedError> {
+    SparseSeedBuilder::build_variant(input, services, variant)
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -199,6 +221,14 @@ impl SparseSeedBuilder {
         input: SeedInput<'_>,
         services: SeedServices<'_>,
     ) -> Result<CertifiedCandidate, SeedError> {
+        Self::build_variant(input, services, &SeedVariant::default())
+    }
+
+    fn build_variant(
+        input: SeedInput<'_>,
+        services: SeedServices<'_>,
+        variant: &SeedVariant,
+    ) -> Result<CertifiedCandidate, SeedError> {
         if let Some(provenance) = input.source_provenance {
             if provenance.len() != input.lowered.gates.len() {
                 return Err(SeedError::ProvenanceWidth {
@@ -207,7 +237,11 @@ impl SparseSeedBuilder {
                 });
             }
         }
-        let instances = InstanceGraph::one_to_one(input.lowered, services.library)?;
+        let instances = InstanceGraph::one_to_one_with_implementations(
+            input.lowered,
+            services.library,
+            &variant.implementations,
+        )?;
         if let Some(first) = instances
             .instances
             .iter()
@@ -252,6 +286,7 @@ impl SparseSeedBuilder {
             &mut candidate,
             input.lowered,
             services.search_config,
+            &variant.placements,
             &mut occupied,
             &mut sources,
             &mut targets,
@@ -322,6 +357,37 @@ fn reserve_route_endpoints(
         .map(|source| source.route_anchor)
         .chain(targets.values().map(|target| target.terminal))
         .collect::<BTreeSet<_>>();
+    for (&primitive, placement) in &candidate.placements {
+        let Some(specification) = candidate
+            .instances
+            .instances
+            .iter()
+            .flat_map(|instance| &instance.expanded.topology.primitives)
+            .find(|specification| specification.id == primitive)
+        else {
+            continue;
+        };
+        if specification.primitive != Primitive::Torch {
+            continue;
+        }
+        let variant = &physical::variants(specification.primitive)[usize::from(placement.variant)];
+        let support = translate(
+            placement.anchor,
+            variant.port(PortKind::TorchInput).position,
+        );
+        for direction in geometry::input_directions(placement.facing) {
+            let socket = step(support, direction);
+            if !endpoints.contains(&socket) && reservations.get(&socket).is_none() {
+                reservations.reserve(
+                    socket,
+                    PhysicalReservationOwner::KeepOut(
+                        primitive.instance.0 ^ u32::from(primitive.node.0),
+                    ),
+                    PhysicalReservationKind::KeepOut,
+                );
+            }
+        }
+    }
     for junction in candidate.junctions.values() {
         for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
             let neighbour = step(junction.at, direction);
@@ -611,6 +677,7 @@ fn place_instances(
     candidate: &mut ExpandedPhysicalCandidate,
     netlist: &Netlist,
     search_config: &SearchConfig,
+    placement_overrides: &BTreeMap<InstanceId, InstancePlacementOverride>,
     occupied: &mut BTreeSet<Anchor>,
     sources: &mut BTreeMap<PhysicalEndpointId, SourceGeometry>,
     targets: &mut BTreeMap<PhysicalSink, TargetGeometry>,
@@ -644,34 +711,52 @@ fn place_instances(
             )?,
             z: INSTANCE_BASE_Z + ordinal * INSTANCE_Z_PITCH,
         };
+        let placement_override = placement_overrides.get(&instance.id).copied();
+        let base = Anchor {
+            x: base
+                .x
+                .saturating_add(placement_override.map_or(0, |choice| choice.dx)),
+            z: base
+                .z
+                .saturating_add(placement_override.map_or(0, |choice| choice.dz)),
+            ..base
+        };
         let gate = &netlist.gates
             [usize::try_from(instance.logical_gate.0).map_err(|_| SeedError::IdentityOverflow)?];
 
         match &instance.expanded.topology.output {
             OutputSpec::Junction { contributors, .. } => {
+                let facing = placement_override
+                    .map(|choice| choice.facing)
+                    .unwrap_or(CellFacing::NORTH);
                 place_junction_instance(
                     candidate,
                     &instance,
                     gate,
                     contributors,
                     base,
+                    facing,
                     occupied,
                     sources,
                     targets,
                 )?;
             }
             OutputSpec::Primitive(output) => {
+                let facing = placement_override
+                    .map(|choice| choice.facing)
+                    .unwrap_or(CellFacing::EAST);
                 for specification in &instance.expanded.topology.primitives {
                     let node = i32::from(specification.id.node.0);
-                    let anchor = Anchor {
-                        x: base.x + node * PRIMITIVE_X_PITCH,
-                        ..base
-                    };
+                    let anchor = step_many(
+                        base,
+                        geometry::output_direction(facing),
+                        node.saturating_mul(PRIMITIVE_X_PITCH),
+                    );
                     place_primitive_searched(
                         candidate,
                         specification.id,
                         specification.primitive,
-                        CellFacing::EAST,
+                        facing,
                         anchor,
                         Some(instance.id),
                         instance.id,
@@ -746,6 +831,7 @@ fn place_junction_instance(
     gate: &crate::compile::Gate,
     contributors: &[ContributorSpec],
     at: Anchor,
+    facing: CellFacing,
     occupied: &mut BTreeSet<Anchor>,
     sources: &mut BTreeMap<PhysicalEndpointId, SourceGeometry>,
     targets: &mut BTreeMap<PhysicalSink, TargetGeometry>,
@@ -766,7 +852,7 @@ fn place_junction_instance(
         RealisedJunction {
             id: instance.id,
             at,
-            facing: CellFacing::NORTH,
+            facing,
             contributors: contributors.iter().map(contributor_endpoint).collect(),
             cells: cells.clone(),
         },
@@ -793,12 +879,12 @@ fn place_junction_instance(
     sources.insert(
         PhysicalEndpointId::Junction(instance.id),
         SourceGeometry {
-            route_anchor: step(at, Facing::North),
-            allowed_exit: Facing::North,
+            route_anchor: step(at, geometry::output_direction(facing)),
+            allowed_exit: geometry::output_direction(facing),
         },
     );
 
-    let directions = geometry::input_directions(CellFacing::NORTH);
+    let directions = geometry::input_directions(facing);
     let mut primitive_slot = 0usize;
     for (input_index, contributor) in contributors.iter().enumerate() {
         let direction = directions[input_index];
@@ -1587,6 +1673,35 @@ fn step(at: Anchor, direction: Facing) -> Anchor {
     }
 }
 
+fn step_many(at: Anchor, direction: Facing, distance: i32) -> Anchor {
+    match direction {
+        Facing::North => Anchor {
+            z: at.z.saturating_sub(distance),
+            ..at
+        },
+        Facing::South => Anchor {
+            z: at.z.saturating_add(distance),
+            ..at
+        },
+        Facing::East => Anchor {
+            x: at.x.saturating_add(distance),
+            ..at
+        },
+        Facing::West => Anchor {
+            x: at.x.saturating_sub(distance),
+            ..at
+        },
+        Facing::Up => Anchor {
+            y: at.y.saturating_add(distance),
+            ..at
+        },
+        Facing::Down => Anchor {
+            y: at.y.saturating_sub(distance),
+            ..at
+        },
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::cell::Cell;
@@ -1720,6 +1835,55 @@ mod tests {
                 search_config: &config,
             },
         )
+    }
+
+    #[test]
+    fn one_instance_variant_rebuilds_and_certifies_the_requested_facing_and_offset() {
+        let netlist = not_netlist();
+        let library = Library::default_library();
+        let config = SearchConfig::checked_defaults();
+        let baseline = build(&netlist).unwrap();
+        let variant = compile_sparse_seed_variant_with_services(
+            SeedInput {
+                lowered: &netlist,
+                source_provenance: None,
+                pins: None,
+            },
+            SeedServices {
+                library: &library,
+                router: &DurablePhysicalRouter,
+                emitter: &DurableSeedEmitter,
+                verifier: &DurableSeedVerifier,
+                certifier: &CompleteCandidateCertifier,
+                search_config: &config,
+            },
+            &SeedVariant {
+                placements: BTreeMap::from([(
+                    InstanceId(0),
+                    InstancePlacementOverride {
+                        facing: CellFacing::NORTH,
+                        dx: 4,
+                        dz: -3,
+                    },
+                )]),
+                ..SeedVariant::default()
+            },
+        )
+        .unwrap();
+        let primitive = PrimitiveId {
+            instance: InstanceId(0),
+            node: crate::compile::fragment_synth::identity::TopologyNodeId(0),
+        };
+        let original = &baseline.candidate().placements[&primitive];
+        let changed = &variant.candidate().placements[&primitive];
+
+        assert_eq!(changed.facing, CellFacing::NORTH);
+        assert_eq!(changed.anchor.x, original.anchor.x + 4);
+        assert_eq!(changed.anchor.z, original.anchor.z - 3);
+        assert_ne!(
+            variant.metrics().candidate_fingerprint,
+            baseline.metrics().candidate_fingerprint
+        );
     }
 
     #[derive(Default)]

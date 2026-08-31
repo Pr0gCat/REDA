@@ -296,6 +296,7 @@ fn validate_instance_graph(
             SynthesisError::DuplicateInputMismatch { instance, .. }
             | SynthesisError::DuplicateInstanceId { instance }
             | SynthesisError::ExpandedInstanceMismatch { instance }
+            | SynthesisError::UnknownImplementationOverride { instance }
             | SynthesisError::UnknownLogicalGate { instance, .. }
             | SynthesisError::UnknownDriverInstance { instance } => {
                 StableStructuralId::Instance(instance)
