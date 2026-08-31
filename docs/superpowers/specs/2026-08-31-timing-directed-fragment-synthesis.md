@@ -14,10 +14,11 @@ objective is a small physical circuit.
 
 The generator is not a repair loop around the current algorithm. It owns its own
 seed construction, search state, and optimisation schedule. It reuses REDA's
-trusted physical cell descriptions, routing primitives, world realiser, physical
+trusted cell-topology library, routing primitives, world realiser, physical
 verifier, and simulator because those components define what a valid Minecraft
 circuit is; it does not inherit the current generator's placement policy or
-fallback chain.
+fallback chain. A cell topology is consumed as a signal-flow graph of primitive
+nodes and internal edges, not collapsed into one opaque gate-cost number.
 
 The old generator may remain temporarily as a differential oracle during the
 migration. The shipping path must not call it once the replacement gate in
@@ -59,10 +60,15 @@ This preserves a simple invariant:
 ### Non-goals
 
 - No fixed routing corridors, regions, timing islands, or routing-macro library.
-- No change to the logical optimiser, cell implementation library, or existing
-  physical truth rules as part of this project.
-- No sequential-cell duplication. Stateful gates remain one logical gate to one
-  physical instance.
+- No new cell topology, logical optimisation rule, or physical truth rule as part
+  of this project. The existing implementation library remains the authority;
+  this project may add validation and query APIs needed to instantiate and time
+  its existing structure, but does not replace that structure with generator
+  policy.
+- No stateful synthesis in this replacement milestone. A netlist containing a
+  stateful gate returns `UnsupportedStatefulTopology` before `InstanceGraph`
+  construction; clock, initial-state, and sequential-equivalence semantics require
+  a separate design before support is enabled.
 - No probabilistic acceptance, wall-clock assertions, or unverified preview
   candidate presented as a result.
 - No promise that a numerically low packing ratio is good. Empty padding can make
@@ -76,6 +82,7 @@ The new production lifecycle is:
 source Netlist
   -> existing assignment-aware lowering
   -> InstanceGraph
+  -> deterministic cell-topology instantiation
   -> SparseSeedBuilder
   -> certified PlanCandidate
   -> TimingDirectedSearch
@@ -88,6 +95,13 @@ source Netlist
 Minecraft. The simulator remains the authority for functional correctness and
 observed settle latency. The new generator must not add a second world emitter or
 a weaker verifier.
+
+Topology instantiation is a pure boundary between logical and physical identity.
+It expands each selected `ImplementationKey` into primitive instances, topology
+input landings, output semantics, and internal routing obligations. It
+assigns no coordinates or facings. `SparseSeedBuilder` and fragment transactions
+embed that expanded graph; they never infer a cell's primitive connectivity from
+the current placer.
 
 Lowering remains owned by the caller, as it is today. The generator accepts the
 exact lowered netlist whose gate identities appear in timing, viewer annotations,
@@ -127,7 +141,38 @@ struct Instance {
     id: InstanceId,
     logical_gate: GateIndex,
     role: InstanceRole,
-    implementation: LibraryEntryId,
+    implementation: ImplementationKey,
+}
+
+enum ImplementationKey {
+    Library(LibraryEntryId),
+    Merge { isolation_mask: InputMask },
+}
+
+struct TopologyNodeId(u16);
+
+struct PrimitiveId {
+    instance: InstanceId,
+    node: TopologyNodeId,
+}
+
+enum ConnectionId {
+    External {
+        instance: InstanceId,
+        input_index: u16,
+    },
+    Internal {
+        instance: InstanceId,
+        edge_index: u16,
+    },
+}
+
+enum PhysicalEndpointId {
+    PrimaryInput(PortId),
+    DeclaredOutput(PortId),
+    PrimitiveOutput(PrimitiveId),
+    Landing(ConnectionId),
+    Junction(InstanceId),
 }
 
 enum InstanceRole {
@@ -140,9 +185,16 @@ struct InstanceInput {
     input_index: u16,
 }
 
-struct InstanceDriver {
-    instance: InstanceId,
-    terminals: NonEmpty<PrimitiveOutputRef>,
+enum InstanceDriver {
+    Primitive {
+        logical_owner: InstanceId,
+        terminals: NonEmpty<PrimitiveOutputRef>,
+    },
+    Junction {
+        logical_owner: InstanceId,
+        contributors: NonEmpty<JunctionContributorRef>,
+        observation: JunctionObservationRef,
+    },
 }
 
 enum PhysicalDriver {
@@ -161,29 +213,125 @@ struct SinkAssignment {
 }
 ```
 
+### 5.1 Topology instantiation
+
+`Instance` selects a technique; it is not itself one placeable primitive. The
+cell library exposes one pure operation conceptually equivalent to:
+
+```rust
+fn instantiate(
+    gate: &Gate,
+    instance: InstanceId,
+    implementation: &ImplementationKey,
+) -> Result<ExpandedInstance, TopologyError>;
+
+struct ExpandedInstance {
+    instance: InstanceId,
+    implementation: ImplementationKey,
+    topology: ValidatedTopology,
+}
+
+struct ValidatedTopology {
+    fingerprint: Fingerprint,
+    primitives: Vec<PrimitiveSpec>,
+    connections: Vec<ConnectionSpec>,
+    output: OutputSpec,
+}
+
+enum ContributorSpec {
+    Landing(ConnectionId),
+    Primitive(PrimitiveId),
+}
+
+enum OutputSpec {
+    Primitive(PrimitiveId),
+    Junction {
+        logical_owner: InstanceId,
+        contributors: NonEmpty<ContributorSpec>,
+    },
+}
+
+struct PhysicalState {
+    placements: BTreeMap<PrimitiveId, PrimitivePlacement>,
+    connections: BTreeMap<ConnectionId, RealisedConnection>,
+    junctions: BTreeMap<InstanceId, RealisedJunction>,
+}
+```
+
+`instantiate` returns an `ExpandedInstance` whose `ValidatedTopology` assigns
+dense, deterministic `TopologyNodeId`s, retains `TemplateNode` as semantic
+metadata, and contains primitive specs, external and internal connection specs,
+output semantics, and a topology fingerprint. It validates before any placement
+that node IDs are unique and that every input, connection, output, and timing arc
+resolves to an existing node.
+
+For an ordinary combinational library entry, every `(TemplateNode, Primitive)`
+becomes one `PrimitiveId`; every declared topology input creates one external
+`ConnectionId`; every ordered `Template::internal_edges` entry creates one
+internal `ConnectionId`; and `Template::output = Some(role)` maps the instance
+output to that primitive. `Template::output = None` creates no fictional
+primitive and instead requires explicit junction output semantics.
+
+`ImplementationKey::Merge` is the library-owned parameterised form of the merge
+rule the current compiler already uses. Its `isolation_mask` says which logical
+input branches instantiate an isolating repeater. The all-clear and all-set masks
+correspond to today's bare and isolated entries; mixed masks represent the
+existing per-branch expansion exactly. A clear bit is legal only when that input
+may share the junction without stealing another consumer's signal. The mask and
+expanded-topology fingerprint participate in candidate identity and proposal
+ordering.
+
+The expanded view is derived from `Instance` plus the immutable library and is
+not a second mutable topology database. A candidate stores physical placement,
+facing, route, emitted-terminal, and observation state keyed by `PrimitiveId` and
+`ConnectionId`. An implementation change discards and re-expands the affected
+instance inside private transaction state; a full candidate rebuild prevents
+stale nodes, landings, routes, observations, or timing arcs from surviving.
+
+`Template::embedding_hints` may order otherwise legal embeddings. It is a soft
+search hint only: it carries no absolute position, creates no rigid edge, and
+cannot make an electrically invalid embedding valid. This is deliberately not a
+routing-macro system.
+
 The required invariants are:
 
 - every logical combinational gate has at least one physical instance;
-- every stateful gate has exactly one physical instance;
 - every instance input and declared output has exactly one explicit driver
   assignment, including primary inputs as physical drivers;
 - every assigned driver implements the same logical signal as the sink expects;
 - a duplicate may only read the same logical inputs as its canonical gate;
+- every selected implementation key is instantiated exactly: no validated
+  primitive node or internal edge may be omitted, added, or inferred from a
+  placer-specific shape;
+- every primitive placement, facing, physical variant, primitive timing arc, and
+  primitive verification record is owned by a `PrimitiveId`; `InstanceId`
+  remains the atomic logical-copy and fragment-ownership boundary;
+- candidate primitive and connection sets are exactly isomorphic to their
+  `ValidatedTopology`; every external input has one explicit connection contract
+  and every internal edge has one sink landing and one realised route record;
+- every topology internal edge is a real routing obligation included in
+  collision, strength, direction, timing, route-tree closure, and verification;
 - logical outputs and viewer annotations can map one logical gate to many
   instances while retaining a deterministic canonical instance for compatibility;
-- physical node ownership, every route source and terminal, placement, facing,
-  timing attribution, and verification use `InstanceId`, never a position in a
-  logical-gate vector;
+- every electrical source, landing, junction, and declared boundary uses a
+  `PhysicalEndpointId`; primitive state additionally uses `PrimitiveId`, while
+  logical ownership is carried separately as `Option<InstanceId>` and is never
+  inferred from endpoint kind or a position in a logical-gate vector;
 - the verifier checks each duplicate's own input ports, cell implementation,
   output terminals, and assigned routes independently;
 - a canonical position, facing, or output is a compatibility view only and is
   never used to verify or time all instances of a logical gate.
 
-`InstanceDriver.terminals` is deliberately a non-empty set rather than a single
-cell. A bare wire merge may have no primitive node and may expose the union of
-its producers as its output. The first duplication milestone supports only
-instances whose selected topology has one concrete output primitive. Bare and
-isolated merges retain one canonical junction instance until a separate,
+`InstanceDriver` separates logical ownership from electrical origin. An ordinary
+driver's terminals are derived from the selected topology output, not from a
+canonical gate position. A junction driver is logically owned by the merge
+instance, but its contributors may be upstream primitive or primary-input route
+endpoints that the merge does not own. Its verified observation point proves
+where those contributors form one physical net. Route-tree closure follows
+electrical contributors while fragment and annotation ownership follow
+`logical_owner`; neither is inferred from the other. The first duplication
+milestone supports only instances whose selected topology has one concrete output
+primitive. Merge instances retain one canonical junction until a separate,
 verified junction-duplication model exists.
 
 Migration begins with a one-to-one `InstanceGraph`. Duplication is enabled only
@@ -211,29 +359,38 @@ equal-level non-critical gates.
 
 ### 6.2 Placement
 
-For each instance, the builder enumerates a deterministic shell of legal anchors
-and all legal facings around the weighted median of already placed neighbours.
-Critical predecessors receive the highest weight, followed by pinned boundary
-distance and fanout. A location is not committed merely because its estimated
-distance is good: all already closed nets incident to the new instance must route
-and pass construction-time local legality checks for collision, reservation,
-terminal direction, and signal-strength reachability.
+For each instance, the builder first expands the selected topology, then embeds
+its primitive nodes in stable topology order. The first primitive enumerates a
+deterministic shell of legal anchors and facings around the weighted median of
+already placed external neighbours. Later primitives also weight already placed
+topology neighbours. Critical predecessors receive the highest weight, followed
+by pinned boundary distance, internal-edge distance, and fanout. Topology roles
+and internal-edge indices are the final tie-breaks.
+
+The partial embedding exists only inside the seed builder's bounded backtracking
+state. A primitive location is not committed merely because its estimated
+distance is good: every newly closed external or internal topology edge must
+route and pass construction-time local legality checks for collision,
+reservation, terminal direction, and signal-strength reachability. Failure may
+backtrack within the instance or to an earlier instance.
 
 The shell grows only when every anchor in the current shell is refused. This
 produces intentional whitespace where routing needs it without reserving global
 corridors or regions. Candidate order is coordinate-, facing-, implementation-,
-then instance-ID order so the same input always creates the same seed. Placement
-is a bounded deterministic depth-first search, not an irrevocable greedy walk:
-if the current instance exhausts its shell limit, the builder backtracks to the
-most recent instance with an untried legal candidate. The seed limits record the
-maximum shell radius and backtrack count in the result.
+instance-ID, then topology-role order so the same input always creates the same
+seed. Placement is a bounded deterministic depth-first search, not an irrevocable
+greedy walk: if the current primitive exhausts its shell limit, the builder
+backtracks to the most recent primitive with an untried legal candidate. The seed
+limits record the maximum shell radius and backtrack count in the result.
 
 ### 6.3 Routing
 
-Each newly closed net is routed immediately against live reservations. A net is
-closed when all currently known sinks whose placement is fixed can be connected.
-When later fanout adds a sink, the whole affected tree may be rebuilt; appending a
-branch is not assumed safe.
+Each newly closed net is routed immediately against live reservations. This
+includes every mandatory signal connection in `ValidatedTopology`; internal edges
+are not hidden inside an opaque cell delay. A net is closed when all currently
+known sinks whose placement is fixed can be connected. When later fanout adds a
+sink, the whole affected tree may be rebuilt; appending a branch is not assumed
+safe.
 
 The router is strength-aware. Repeater conduction and refresh use
 `BlockState.facing`: a route may enter only the input face and leave only the
@@ -257,15 +414,16 @@ cause deterministic backtracking.
 The search does not use the logical netlist's depth as a substitute for physical
 timing. After the seed is certified, it derives an immutable
 `RealisedTimingGraph` from that candidate's explicit instances, implementations,
-sink assignments, and routed terminal metadata. This graph is guidance for where
-to search; simulator-observed settle time remains the quality score.
+expanded topology nodes and edges, sink assignments, and routed terminal
+metadata. This graph is guidance for where to search; simulator-observed settle
+time remains the quality score.
 
 ### 7.1 Authority and lifetime
 
-`InstanceGraph` and the certified `PlanCandidate` are the source of truth. A
-timing graph is derived data and may never write placement or routing state back
-into either one. The complete graph is rebuilt after every accepted candidate.
-Rejected proposals do not alter it.
+`InstanceGraph`, the immutable cell library, and the certified `PlanCandidate` are
+the source of truth. A timing graph is derived data and may never write placement
+or routing state back into them. The complete graph is rebuilt after every
+accepted candidate. Rejected proposals do not alter it.
 
 Full rebuild is intentional. A fragment may add instances, change sink drivers,
 change cell implementations, and replace entire route trees at once. Incremental
@@ -276,13 +434,21 @@ transition sweep.
 
 ### 7.2 Nodes and arcs
 
-Timing identity is physical and port-specific:
+Timing identity is physical, primitive-specific, and landing-specific. A topology
+may contain several delayed primitives, so an `InstanceInput -> InstanceOutput`
+black-box arc is not an authoritative timing model.
 
 ```rust
+enum RoutedSinkId {
+    Connection(ConnectionId),
+    DeclaredOutput(PortId),
+}
+
 enum TimingNodeId {
     PrimaryInput(PortId),
     InputNet(PortId),
-    InstanceInput(InstanceId, u16),
+    Landing(ConnectionId),
+    PrimitiveOutput(PrimitiveId),
     InstanceOutput(InstanceId),
     JunctionOutput(InstanceId),
     DeclaredOutput(PortId),
@@ -298,8 +464,9 @@ struct TimingArc {
 
 enum TimingArcId {
     InputBinding(PortId),
-    Route(RouteId, PhysicalSink),
-    Cell(InstanceId, u16),
+    Route(RouteId, RoutedSinkId),
+    Primitive(PrimitiveId, ConnectionId),
+    TopologyOutput(InstanceId),
     Junction(InstanceId, u16),
     OutputBinding(PortId),
 }
@@ -311,17 +478,20 @@ enum TimingArcKind {
     },
     Route {
         route: RouteId,
-        sink: PhysicalSink,
+        sink: RoutedSinkId,
         repeaters: u64,
     },
-    Cell {
+    Primitive {
+        primitive: PrimitiveId,
+        landing: ConnectionId,
+        implementation: ImplementationKey,
+    },
+    TopologyOutput {
         instance: InstanceId,
-        input_index: u16,
-        implementation: LibraryEntryId,
     },
     Junction {
         instance: InstanceId,
-        input_index: u16,
+        contributor_index: u16,
     },
     OutputBinding {
         port: PortId,
@@ -334,17 +504,45 @@ input net. It costs one repeater for a pinned input's normalizing reader and
 zero for an unpinned input. Route arcs driven by a primary input start at
 `InputNet`, because their terminal repeater counts begin after that reader.
 
-A `Route` arc connects one routed physical driver to one concrete
-`InstanceInput` or pinned declared output. Fanout therefore creates one timing
-arc per sink branch; it never assigns one delay to the whole net. Duplicate
-instances have distinct input and output nodes even when they implement the same
-logical gate.
+A `Route` arc connects one routed physical driver to one concrete signal landing
+or pinned declared output. An assigned instance input maps through the
+`ValidatedTopology` external connection; an internal topology edge maps through
+its stable `ConnectionId`. Both therefore terminate at a `Landing` node. Fanout
+creates one timing arc per sink branch, and an internal topology edge creates its
+own route arc; neither assigns one delay to a whole logical net or cell. A bare
+merge connection has no target primitive: its landing feeds a verified junction
+contribution instead of a `Primitive` arc.
 
-A `Cell` arc connects each input port of a concrete instance to that instance's
-output. A bare merge has no output component, so its contributors feed a
-`JunctionOutput` through zero-cell-delay `Junction` arcs; any isolated branch
-repeater remains charged on the routed branch that enters the junction. Merge
-duplication remains excluded as specified in section 5.
+Only signal-carrying `ConnectionSpec`s produce timing landings and route arcs.
+
+A `Primitive` arc connects each landing on one topology primitive to that
+primitive's output. Multiple declared inputs may land on the same primitive and
+therefore produce distinct arcs to one output. A multi-node topology forms a real
+alternating path of primitive and route arcs. For example, the two-torch `BUF` is
+modelled as:
+
+```text
+external landing -> first torch -> internal-edge route
+                 -> second landing -> second torch -> instance output
+```
+
+`TopologyOutput` is a zero-delay ownership boundary from the primitive named by
+the validated topology output to `InstanceOutput`. It lets compatibility and
+observation remain keyed by `InstanceId` without hiding the primitive path that
+produced the signal. Ordinary downstream route arcs start at `InstanceOutput`;
+topology internal-edge routes start directly at their source `PrimitiveOutput`.
+Duplicate instances have distinct landing, primitive-output, and instance output
+nodes even when they implement the same logical gate.
+
+A bare merge has no output primitive, so its routed contributors feed a
+`JunctionOutput` through zero-delay `Junction` arcs. An isolated merge's topology
+repeaters appear as `Primitive` arcs before those junction arcs. Merge duplication
+remains excluded as specified in section 5. Route metadata and topology ownership
+must agree on every emitted repeater so an isolating repeater is charged exactly
+once, never once as a topology primitive and again as a route terminal. A
+`RealisedJunction` may contain only zero-delay conductive material; any delayed
+component on a contributor path must appear as a topology primitive or routed
+connection before the junction arc.
 
 An unpinned output lamp is placed directly from its driver and has no route
 terminal in today's candidate. A zero-delay `OutputBinding` arc connects that
@@ -354,26 +552,34 @@ real route arc, whose terminal repeater count includes the delivery repeater, an
 does not receive an additional output binding.
 
 Every node and arc has a stable identity assembled only from port, instance,
-route, sink, and input indices. `TimingArcId` is separate from `TimingArcKind`:
-repeater count, implementation choice, delay, coordinates, and map iteration
-order are payload or derived data and never participate in identity.
+topology role or edge index, route, sink, and declared input indices.
+`TimingArcId` is separate from `TimingArcKind`: repeater count, implementation
+choice, primitive kind, delay, coordinates, and map iteration order are payload or
+derived data and never participate in identity. Changing an implementation may
+add or remove derived identities; the complete graph rebuild in section 7.1 is
+what makes that safe.
 
 ### 7.3 Delay weights
 
 All graph weights use integer simulator game ticks.
 
-- A route arc costs `TORCH_DELAY_GAME_TICKS * terminal.repeaters`. The count is
-  the selected sink terminal's complete branch-specific repeater count.
+- A route arc costs the sum of delays of its route-owned repeaters. The selected
+  sink terminal's metadata is branch-specific and must exclude any repeater that
+  is already represented by a topology-owned `Primitive` arc.
 - A pinned input binding costs exactly one minimum-delay repeater; this is the
   normalizing reader before the route source and is not present in any downstream
   `RouteTerminal::repeaters`. An unpinned input binding costs zero.
 - Dust distance, turns, stairs, and ordinary conductive blocks cost zero game
   ticks in the current model. They remain block-count, strength, congestion, and
   routability costs; they are not converted into invented timing delay.
-- A cell arc reads its input-to-output delay from the selected cell-library
-  implementation. The current NOR/torch implementation costs two game ticks and
-  a bare merge costs zero. New cell implementations must declare their timing
-  arcs rather than inherit a universal one-gate delay.
+- A primitive arc reads delay from the realised primitive and its emitted state.
+  A torch currently costs `TORCH_DELAY_GAME_TICKS`; a topology-owned repeater uses
+  its actual configured delay. Dust and junction arcs cost zero. A future
+  primitive with input-specific timing must declare those arcs in the cell
+  library rather than inherit a universal one-gate delay.
+- `entry_cost` or an equivalent whole-entry summary may order unmaterialised
+  proposals, but it is only a lower-bound estimate. Certified timing is rebuilt
+  from expanded primitive and actual routed arcs.
 - The delivery repeater of a pinned output belongs to its route and is counted.
   Delay from a caller-owned probe or an unpinned display lamp is excluded from
   fragment ranking because the generator cannot optimise it. The simulator's
@@ -392,9 +598,9 @@ the legacy double count.
 
 ### 7.4 Static analysis
 
-The graph must be a DAG after sequential boundaries are cut. Encountering a
-combinational cycle or an unassigned port is a named graph-construction error,
-not a zero-delay fallback.
+The accepted input is combinational, so the graph must be a DAG. Encountering a
+stateful gate, combinational cycle, or unassigned port is a named construction
+error, not a cut edge or zero-delay fallback.
 
 Forward arrival is a max-plus traversal:
 
@@ -441,12 +647,13 @@ enum WitnessKind {
 }
 ```
 
-Realisation records one verified observation position for every concrete
-instance output and junction output. `CompiledCircuit` exposes those positions
-by `InstanceId` in addition to its existing logical compatibility maps, so two
-duplicates cannot collapse into one observed gate. The position is the concrete
-output primitive for an ordinary instance and the verified junction observation
-point for a merge.
+Realisation records one verified observation position for every delayed primitive
+output, concrete instance output, and junction output. Primitive observations are
+keyed by `PrimitiveId`; `CompiledCircuit` additionally exposes instance and
+junction output positions by `InstanceId` for compatibility, so two duplicates
+cannot collapse into one observed gate. An ordinary instance output aliases its
+selected primitive's observation position, while a merge uses its separately
+verified junction observation point.
 
 Observation identity is typed end to end. The observer registration, raw event,
 per-transition result, and summary use `TimingNodeId` (or an equivalent typed
@@ -455,14 +662,16 @@ display metadata only and may not key or merge timelines. In particular, two
 duplicates of one logical gate must produce two independently retained event
 sequences even when their human-readable labels match.
 
-The observer records primary inputs, concrete instance and junction outputs, and
-declared output probes. Input-port nodes are intentionally not observed. For
-dynamic backtrace, an incoming candidate to an ordinary `InstanceOutput` is the
-complete two-arc hop `driver output -> InstanceInput -> InstanceOutput`; its
-score is the observed driver arrival plus that route delay plus that cell delay.
-Junction and declared output nodes use their corresponding zero-cell or
-route-only hop. This preserves the port-level graph without pretending an
-unobserved input socket has its own measured arrival.
+The observer records primary inputs, every delayed primitive output, concrete
+instance and junction outputs, and declared output probes. Landings remain
+unobserved. For dynamic backtrace, an incoming candidate to an observed node is a
+complete physical corridor from one observed upstream output through any
+unobserved route, landing, and zero-delay ownership arcs. Its score is the
+observed predecessor arrival plus the sum of every arc on that corridor. Junction
+and declared output nodes use the same rule with their corresponding junction,
+route, or binding arcs. Observing internal delayed outputs avoids reducing a
+branched or reconvergent cell topology to static fallback while still avoiding
+fictional observations at input sockets.
 
 For every transition tied at the current maximum settle time, the selector:
 
@@ -470,8 +679,8 @@ For every transition tied at the current maximum settle time, the selector:
    output changed, it takes the latest changed instance, junction, or primary
    input; stable timing identity resolves equal arrival ticks;
 2. restricts the physical graph to output nodes present in
-   `arrival_game_ticks`, while retaining the unobserved input-port nodes on hops
-   between them;
+   `arrival_game_ticks`, while retaining unobserved landing and primitive nodes
+   on corridors between them;
 3. walks backwards using observed driver arrival plus complete physical hop
    delay;
 4. records the resulting active physical cone as one witness.
@@ -499,8 +708,8 @@ reorder transitions in the immutable manifest.
 
 ### 7.6 Hotspot ranking
 
-The first hotspot is the highest-ranked timing arc or instance under this stable
-tuple:
+The first hotspot is the highest-ranked timing arc, primitive, or instance under
+this stable tuple:
 
 ```text
 (appears in any active witness, true first,
@@ -512,7 +721,7 @@ tuple:
 ```
 
 `controllable game-tick delay` excludes caller/display delay and includes only
-cell or routed repeater delay the transaction can change. A previous physical
+primitive or routed repeater delay the transaction can change. A previous physical
 refusal may suppress retrying the identical fragment-choice fingerprint, but it
 does not change timing weights or reorder unrelated choices.
 
@@ -521,8 +730,10 @@ hotspot's minimal instance plus touched-route-tree closure. A shared trunk is
 counted once in that closure, not once per fanout timing arc.
 
 A fragment starts at that hotspot and expands over physical timing predecessors,
-successors, and instance ownership until one deterministic cap is reached:
-instance count, boundary-net count, or Manhattan radius.
+successors, and primitive ownership until one deterministic cap is reached:
+instance count, boundary-net count, or Manhattan radius. Selecting an internal
+primitive or topology edge always absorbs its owning `InstanceId`; a transaction
+never edits half a selected cell topology while leaving the other half frozen.
 
 Expansion uses a priority queue ordered by physical timing distance from the
 hotspot, zero-slack before nonzero-slack, controllable delay descending, then
@@ -537,12 +748,18 @@ cap priority and cannot depend on collection iteration order.
 
 The current `Route` representation owns one source net's complete route tree, not
 independent branches. A fragment therefore closes over whole touched route trees:
-changing an instance, sink assignment, or terminal absorbs every route tree that
-touches it into the transaction. All cells of those trees are removed and rebuilt
-atomically. Instances outside the logical fragment stay fixed and expose frozen
-source and sink terminals at the boundary; unrelated route trees remain
-byte-identical. There is no branch-level cut or partially retained trunk in this
-design.
+changing an instance, sink assignment, terminal, or topology internal edge
+absorbs every route tree that touches it into the transaction. Every internal
+route owned by an affected instance is included even if it does not cross the
+fragment boundary. All cells of those trees are removed and rebuilt atomically.
+Instances outside the logical fragment stay fixed and expose frozen source and
+sink terminals at the boundary; unrelated route trees remain byte-identical.
+There is no branch-level cut or partially retained trunk in this design.
+
+For a junction driver, closure follows each electrical contributor's route tree.
+That does not transfer ownership of an upstream primitive to the merge instance:
+an upstream instance outside the fragment remains frozen at its source terminal,
+while the absorbed contributor route is rebuilt to the new verified junction.
 
 The fragment boundary freezes:
 
@@ -577,10 +794,22 @@ Before fragment search is enabled, non-ignored tests must prove:
 - duplicate instances never collapse to one timing node, observation point, or
   event timeline, including when their logical labels are equal and their
   observed arrival ticks differ;
-- bare merge traversal adds zero cell delay and does not double-charge an
-  isolated branch repeater;
+- a direct new-instantiator test of the two-torch `BUF`, independent of the
+  shipping lowered corpus, expands to two distinct primitive outputs and one
+  internal routed landing; its static path charges both torch delays and every
+  actual internal-route repeater exactly once;
+- a mixed two-input merge with one bare and one isolated branch has the exact
+  isolation-mask fingerprint, no fictional output primitive, a non-empty verified
+  contributor set, and one charge for the isolating repeater;
+- changing a selected implementation key may change the primitive-node and
+  internal-edge sets, and a rejected change leaves no derived identity, route, or
+  placement behind;
+- bare merge traversal adds zero primitive delay and does not double-charge an
+  isolated topology repeater as both a primitive and route component;
 - rebuilding the same candidate yields an identical graph fingerprint and
   critical predecessor map;
+- duplicating the two-torch `BUF` produces disjoint primitive IDs, connections,
+  placements, observation points, and event timelines for both copies;
 - graph critical delay reconciles with the existing candidate delay model and
   full simulator sweeps on every reference circuit where the path is sensitised;
 - two transitions tied for maximum settle time but traversing different active
@@ -602,11 +831,12 @@ A proposal transaction clones the current certified candidate into private state
 and materialises exactly one tuple from a deterministic best-first enumeration of
 these choices:
 
-1. cell-library implementation for each included logical gate;
+1. cell-library implementation for each included physical instance;
 2. zero or more combinational duplicates, subject to a fragment-local cap;
 3. explicit assignment of boundary and interior sinks to valid instances;
-4. anchor and facing for every affected physical instance;
-5. complete rerouting of every net touched by those assignments.
+4. anchor and facing for every affected derived primitive node;
+5. complete rerouting of every external net and topology internal edge touched by
+   those choices.
 
 The next tuple is ordered by an admissible lower-bound tuple:
 
@@ -625,7 +855,8 @@ or simulation.
 The words transaction, proposal, and evaluation name the same budget unit: one
 complete materialised tuple and its terminal outcome. One evaluation performs:
 
-1. materialise every chosen instance and route in private transaction state;
+1. expand every selected topology and materialise every chosen primitive,
+   external route, and topology-internal route in private transaction state;
 2. call the existing physical realiser and verifier;
 3. reject on collision, coupling, signal-strength, directionality, pin-halo, or
    connectivity failure;
@@ -638,7 +869,23 @@ complete materialised tuple and its terminal outcome. One evaluation performs:
 A refusal consumes one evaluation and records a structured reason. Partial
 placement, partial rerouting, and unverified score improvements are discarded.
 
-### 8.2 Duplication
+### 8.2 Implementation replacement
+
+An implementation choice is an `ImplementationKey`; it never names a placement
+macro. The library validates and expands that key, and the transaction enumerates
+legal primitive embeddings using the same physical variants and routing
+primitives as the seed. It may change primitive count, topology roles, internal
+edges, external input landings, merge-isolation mask, and output semantics
+atomically. It may not preserve an old primitive or internal route merely because
+its coordinates happen to remain usable.
+
+Only keys admitted by the library for the logical gate kind are enumerable.
+Existing implementation-specific legality still applies: for example, a clear
+merge-isolation bit is illegal when that producer has another consumer. Estimates
+may use immutable library costs, but acceptance always uses the fully expanded,
+realised candidate.
+
+### 8.3 Duplication
 
 Duplication is proposed only for combinational gates with multiple sinks. It is
 useful when separating a fanout tree removes repeaters or shortens a critical
@@ -646,8 +893,10 @@ branch enough to pay for the copied cell.
 
 The transaction partitions sinks among the canonical instance and duplicates,
 then reroutes all affected input and output nets. It does not copy a routed world
-fragment. The copied instance is rebuilt from the cell implementation library and
-must pass the same verification as every other instance.
+fragment. A duplicate receives a new `InstanceId`; all of its
+`PrimitiveId`s, connections, landings, internal edges, placements, and routes are
+derived afresh from its selected implementation key and must pass the same
+verification as every other instance.
 
 ## 9. Certification and best retention
 
@@ -655,14 +904,45 @@ There are two certification levels.
 
 ### 9.1 Structural certification on every proposal
 
+This project reuses the existing physical rule implementations, not the old
+gate-level candidate shape. `realise_and_verify` receives an
+`ExpandedPhysicalCandidate`, or a lossless adapter with equivalent information,
+containing the complete `InstanceGraph`, ordered `SinkAssignment`s, primitive
+placement and facing, connection routes, junction contracts, observations, and
+pin contracts. The candidate's carried `ValidatedTopology` is not trusted as an
+authority: for every instance, the verifier independently calls the immutable
+library instantiator with `(logical gate, InstanceId, ImplementationKey)`, then
+compares the complete expected node, connection, output, and fingerprint sets
+against candidate state. Only after that equality succeeds does it emit and run
+the existing collision, coupling, strength, direction, and connectivity rules. A
+projection that hides internal connections or merges duplicate identities is not
+a valid adapter.
+
+For a junction, this comparison and the physical connectivity pass jointly prove
+the full transfer closure: every expected ordered contributor reaches the one
+verified observation point, no unlisted contributor reaches it, and every outgoing
+route tree assigned to that logical signal starts from that junction driver.
+
 Every proposal must pass `realise_and_verify`, including:
 
 - no illegal physical overlap;
 - no unintended redstone coupling;
+- exact expansion of every selected topology node, primitive kind, declared input
+  mapping, internal edge, and output or junction mapping;
+- no missing or extra primitive, connection, route, observation, or timing owner;
+- every `output = None` instance has a non-empty contributor set and a verified
+  junction observation point, with logical and electrical ownership kept distinct;
 - exact sink and source connectivity;
 - valid signal strength along every route;
 - repeater input/output direction;
 - pinned IO cell, handover, and halo rules.
+
+Non-ignored corruption tests take an otherwise certified multi-node candidate and
+independently remove one internal connection, change one primitive kind, reverse
+one primitive facing, add one extra primitive, mismatch an `ImplementationKey`
+and topology, reassign one sink, swap a junction's logical owner with a contributor,
+and falsify one observation point. Structural certification must reject every
+mutation before functional simulation.
 
 ### 9.2 Functional and timing certification
 
@@ -729,10 +1009,10 @@ The quality key is lexicographic:
 ```
 
 Functional correctness is a prerequisite, not a score term. A deterministic
-world fingerprint chooses the canonical representative only when the complete
-quality key is equal. A fingerprint-only replacement is not an accepted quality
-improvement. This comparator ranks certified candidates during search; it does
-not waive the independent replacement conditions in section 13.
+candidate fingerprint chooses the canonical representative only when the
+complete quality key is equal. A fingerprint-only replacement is not an accepted
+quality improvement. This comparator ranks certified candidates during search;
+it does not waive the independent replacement conditions in section 13.
 
 The implementation adds one shared emitted-world metrics API and one candidate
 metrics record:
@@ -758,6 +1038,15 @@ struct CandidateMetrics {
 `static_routed_delay` is the `RealisedTimingGraph`'s `critical_delay` converted
 through the existing exact delay type; it is not recomputed from logical depth or
 geometric wire length.
+
+The canonical candidate fingerprint covers the complete `InstanceGraph` including
+logical owner and canonical/duplicate role, every `ImplementationKey` including
+merge parameters, every validated-topology fingerprint, ordered
+`SinkAssignment`s, typed endpoint identities, ordered junction contributors,
+primitive placement, facing and physical variant, observation identity, pin
+contract, and all internal and external routes. The emitted-world fingerprint
+remains separately recorded. Two candidates that emit the same blocks accidentally
+but disagree about ownership, assignment, or topology are not the same candidate.
 
 `World::size()` is allocated storage size and must not stand in for occupied
 bounding volume. Packing ratio may be reported as a diagnostic, but it is not an
@@ -785,9 +1074,9 @@ ranking, fragment selection, proposal enumeration, certification, or acceptance.
 Every proposal has fixed deterministic internal caps and reaches one terminal
 outcome.
 
-Each `ProposalTrace` entry records its index, parent-world fingerprint, fragment
-identity, choice fingerprint, terminal outcome, certified quality key when one
-exists, and whether it was accepted. For independently started
+Each `ProposalTrace` entry records its index, parent-candidate fingerprint,
+fragment identity, choice fingerprint, terminal outcome, certified quality key
+when one exists, and whether it was accepted. For independently started
 `Evaluations(a)` and `Evaluations(b)` where `a < b`, entries below `a` must be
 byte-identical unless both runs exhaust the proposal space earlier. The best
 quality at budget `b` therefore cannot be worse than at budget `a`.
@@ -808,7 +1097,8 @@ The result reports:
 - proposals refused by category;
 - accepted improvements;
 - seed and final metrics;
-- synthesis-case fingerprint and complete proposal trace;
+- synthesis-case, canonical candidate, and emitted-world fingerprints plus the
+  complete proposal trace;
 - elapsed time as observation only;
 - stop reason.
 
@@ -888,10 +1178,10 @@ recorded as new coverage rather than a percentage comparison.
   the budget grows.
 - Every checked evaluation budget runs in at least three fresh processes and in
   shuffled budget order. The acceptance evaluator compares the complete trace,
-  certified metrics, and canonical world fingerprint, excluding elapsed time. If
-  parallel evaluation is added, the same check runs with one worker and the
-  shipping worker count; proposal commitment remains index-ordered and
-  byte-identical.
+  certified metrics, canonical candidate fingerprint, and separately recorded
+  emitted-world fingerprint, excluding elapsed time. If parallel evaluation is
+  added, the same check runs with one worker and the shipping worker count;
+  proposal commitment remains index-ordered and byte-identical.
 
 ### 13.3 Switchover
 
@@ -926,22 +1216,30 @@ generator that covers the rest of the corpus.
 
 1. Add shared world metrics and deterministic benchmark records.
 2. Measure and commit the immutable legacy baseline before optimisation tuning.
-3. Introduce `InstanceId`, one-to-one `InstanceGraph`, explicit sink assignments,
-   and compatibility views; prove byte-identical one-to-one re-emission.
-4. Add instance observation positions and `RealisedTimingGraph`; reconcile its
-   weighted paths with candidate metadata and simulator sweeps before using it to
-   steer search.
-5. Fix the strength-aware routing representation so repeater `BlockState.facing`
+3. Introduce `ImplementationKey`, `InstanceId`, `TopologyNodeId`, `PrimitiveId`,
+   `ConnectionId`, `PhysicalEndpointId`, a one-to-one `InstanceGraph`, and pure
+   validated-topology expansion. Prove directly against the new instantiator that
+   NOR, two-node `BUF`, bare merge, mixed bare/isolated merge, and fully isolated
+   merge expand with exact nodes, input mappings, internal relations, and output
+   semantics.
+4. Move candidate placement, facing, route ownership, sink assignments,
+   verification provenance, and compatibility views onto the derived primitive
+   identities; prove byte-identical one-to-one re-emission.
+5. Add instance observation positions and the primitive-level
+   `RealisedTimingGraph`; reconcile its weighted paths with candidate metadata and
+   simulator sweeps before using it to steer search.
+6. Fix the strength-aware routing representation so repeater `BlockState.facing`
    survives every planning and verification step.
-6. Implement and certify `SparseSeedBuilder` without the legacy generator.
-7. Add evaluation budgets, best-certified retention, and deterministic proposal
+7. Implement and certify topology-aware `SparseSeedBuilder` without the legacy
+   generator.
+8. Add evaluation budgets, best-certified retention, and deterministic proposal
    accounting with a no-op fragment enumerator.
-8. Implement timing-witness hotspot selection, single-instance fragment
+9. Implement timing-witness hotspot selection, single-instance fragment
    replacement, and complete rerouting.
-9. Add multi-instance fragments and combinational duplication.
-10. Run the replacement gate and tune only through explicit configuration recorded
+10. Add multi-instance fragments and combinational duplication.
+11. Run the replacement gate and tune only through explicit configuration recorded
    by the benchmark.
-11. Switch front doors, regenerate artifacts, and delete the old generator only if
+12. Switch front doors, regenerate artifacts, and delete the old generator only if
    every replacement condition passes.
 
 Each step is test-driven and lands as a reviewable commit. Representation changes
@@ -952,9 +1250,10 @@ one invariant rather than an entire rewrite.
 
 Every refusal names its stage and stable identity:
 
-- seed exhaustion names the instance and radius;
+- seed exhaustion names the instance, topology primitive, and radius;
 - fragment materialisation names the fragment and choice fingerprint;
-- routing failure names the net, source instance, sink, and last router refusal;
+- routing failure names the net or topology edge, source and sink
+  `PhysicalEndpointId`s, and last router refusal;
 - verification failure names the physical rule and relevant anchors;
 - functional failure names the transition and disagreeing outputs;
 - budget exhaustion reports the best certified metrics and completed count.
