@@ -20,6 +20,7 @@ use super::fragment_synth::realise::ExpandedCandidateAdapter;
 use super::fragment_synth::topology::ConnectionTarget;
 use super::fragment_synth::verify::certify_expanded_structure;
 use super::planner::{self, PlanCandidate, PlannerError, RealisedCandidate};
+use super::routing::route_step_is_legal;
 use super::topology::Library;
 use super::{Net, Netlist, Reservation};
 use crate::compile::geometry::Anchor;
@@ -517,12 +518,36 @@ fn verify_route_continuity(
                     });
                 }
             }
-            for pair in branch.path.windows(2) {
+            for triple in branch.path.windows(3) {
+                let previous = triple[0];
+                let at = triple[1];
+                let next = triple[2];
+                let state = emitted.world.get(at.x, at.y, at.z);
+                if !route_step_is_legal(previous, at, next, state) {
+                    return if state.kind == BlockKind::Repeater
+                        && horizontal_direction(at, previous) != state.facing
+                    {
+                        Err(ExpandedPhysicalError::WrongRepeaterAxis {
+                            sink: branch.sink,
+                            at,
+                        })
+                    } else {
+                        Err(ExpandedPhysicalError::DisconnectedRouteStep {
+                            route: route.id,
+                            sink: branch.sink,
+                            from: at,
+                            to: next,
+                        })
+                    };
+                }
+            }
+            for (index, pair) in branch.path.windows(2).enumerate() {
                 let from = pair[0];
                 let to = pair[1];
                 let from_state = emitted.world.get(from.x, from.y, from.z);
                 let to_state = emitted.world.get(to.x, to.y, to.z);
-                if from_state.kind == BlockKind::Repeater
+                if index == 0
+                    && from_state.kind == BlockKind::Repeater
                     && horizontal_direction(from, to) != from_state.facing.map(Facing::opposite)
                 {
                     return Err(ExpandedPhysicalError::DisconnectedRouteStep {
@@ -532,7 +557,8 @@ fn verify_route_continuity(
                         to,
                     });
                 }
-                if to_state.kind == BlockKind::Repeater
+                if index + 2 == branch.path.len()
+                    && to_state.kind == BlockKind::Repeater
                     && horizontal_direction(to, from) != to_state.facing
                 {
                     return Err(ExpandedPhysicalError::WrongRepeaterAxis {
