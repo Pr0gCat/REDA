@@ -17,7 +17,7 @@ use crate::compile::geometry::{Anchor, CellFacing};
 use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
 use crate::compile::planner::{PortPin, PortPlacements, PortRole, RouteTerminalKind};
 use crate::compile::Netlist;
-use crate::redstone::world::block::BlockState;
+use crate::redstone::world::block::{BlockKind, BlockState};
 use crate::redstone::world::storage::World;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
@@ -159,20 +159,6 @@ impl RealisedRouteTree {
                         sink: branch.sink,
                         from: pair[0],
                         to: pair[1],
-                    });
-                }
-            }
-            for &at in branch
-                .path
-                .iter()
-                .skip(1)
-                .take(branch.path.len().saturating_sub(2))
-            {
-                if !cells.contains_key(&at) {
-                    return Err(CandidateError::MissingRoutePathCell {
-                        route: self.id,
-                        sink: branch.sink,
-                        at,
                     });
                 }
             }
@@ -344,6 +330,8 @@ pub enum CandidateError {
         expected: Option<DelayedOwner>,
         actual: DelayedOwner,
     },
+    #[error("delayed component at {at:?} is missing its required owner {expected:?}")]
+    MissingDelayedOwner { at: Anchor, expected: DelayedOwner },
     #[error("candidate {collection} IDs do not match its expanded instance graph")]
     CandidateShapeMismatch { collection: &'static str },
     #[error("pin `{name}` is not one unambiguous declared input or output")]
@@ -551,6 +539,15 @@ impl ExpandedPhysicalCandidate {
                     });
                 }
                 claim_delayed(&mut delayed_at, delayed.at, delayed.owner)?;
+            } else if let Some(block) = placement
+                .blocks
+                .iter()
+                .find(|block| block.state.kind == BlockKind::Repeater)
+            {
+                return Err(CandidateError::MissingDelayedOwner {
+                    at: block.at,
+                    expected: DelayedOwner::Primitive(key),
+                });
             }
         }
         for (&endpoint, placement) in &self.boundaries {
@@ -654,6 +651,25 @@ impl ExpandedPhysicalCandidate {
                     key,
                     id: junction.id,
                 });
+            }
+        }
+        let ledger = self.physical_ledger()?;
+        for route in self.routes.values() {
+            for branch in &route.branches {
+                for &at in branch
+                    .path
+                    .iter()
+                    .skip(1)
+                    .take(branch.path.len().saturating_sub(2))
+                {
+                    if !ledger.contains_key(&at) {
+                        return Err(CandidateError::MissingRoutePathCell {
+                            route: route.id,
+                            sink: branch.sink,
+                            at,
+                        });
+                    }
+                }
             }
         }
         Ok(())
@@ -940,13 +956,18 @@ impl ExpandedPhysicalCandidate {
                 }
             };
             let source_at = self
-                .observations
-                .get(&source_observation)
+                .pin_contracts
+                .get(&route.source)
+                .filter(|_| matches!(route.source, PhysicalEndpointId::PrimaryInput(_)))
+                .map(|pin| pin.net_cell(PortRole::Input))
+                .or_else(|| {
+                    self.observations
+                        .get(&source_observation)
+                        .map(|observation| observation.site.at)
+                })
                 .ok_or(CandidateError::CandidateShapeMismatch {
                     collection: "route source observation",
-                })?
-                .site
-                .at;
+                })?;
             for branch in &route.branches {
                 let source_gap = u64::from(source_at.x.abs_diff(branch.root.x))
                     + u64::from(source_at.y.abs_diff(branch.root.y))
@@ -965,8 +986,18 @@ impl ExpandedPhysicalCandidate {
                             sink: branch.sink,
                         });
                     };
+                    let is_this_branches_target_primitive = at == branch.terminal.at
+                        && matches!(
+                            branch.terminal.delayed_owner,
+                            Some(DelayedOwner::Primitive(_))
+                        );
+                    let is_delivery_terminal = at == branch.terminal.at
+                        && branch.terminal.kind == RouteTerminalKind::OutputTerminalRepeater;
                     if state.kind == crate::redstone::world::block::BlockKind::Repeater
-                        && *owner == PhysicalOwner::Route(route.id)
+                        && (*owner == PhysicalOwner::Route(route.id)
+                            || matches!(owner, PhysicalOwner::Primitive(_)))
+                        && !is_this_branches_target_primitive
+                        && !is_delivery_terminal
                     {
                         owned_repeaters += 1;
                     }
@@ -978,7 +1009,19 @@ impl ExpandedPhysicalCandidate {
                             route: route.id,
                             sink: branch.sink,
                         })?;
+                let terminal_kind_matches = match branch.terminal.kind {
+                    RouteTerminalKind::RepeaterIntoSupport
+                    | RouteTerminalKind::BareMergeRepeater
+                    | RouteTerminalKind::OutputTerminalRepeater => {
+                        actual_terminal.0.kind == BlockKind::Repeater
+                    }
+                    RouteTerminalKind::DirectedDustIntoSupport
+                    | RouteTerminalKind::BareMergeDust => {
+                        actual_terminal.0.kind == BlockKind::RedstoneWire
+                    }
+                };
                 if actual_terminal.0 != branch.terminal.state
+                    || !terminal_kind_matches
                     || owned_repeaters != branch.terminal.repeaters
                 {
                     return Err(CandidateError::RouteTimingMismatch {
@@ -1017,6 +1060,40 @@ impl ExpandedPhysicalCandidate {
         }
         self.pin_contracts = resolved;
         self.pin_name_bindings = names;
+        Ok(())
+    }
+
+    pub fn validate_pin_contracts_against(&self, netlist: &Netlist) -> Result<(), CandidateError> {
+        self.validate_pin_contracts()?;
+        crate::compile::planner::validate_port_placements(netlist, &self.pins).map_err(|_| {
+            CandidateError::CandidateShapeMismatch {
+                collection: "pin placement",
+            }
+        })?;
+        for (name, pin) in self.pins.iter() {
+            let input = netlist
+                .inputs
+                .iter()
+                .position(|candidate| candidate == name);
+            let output = netlist
+                .outputs
+                .iter()
+                .position(|candidate| candidate == name);
+            let endpoint = match (input, output) {
+                (Some(index), None) => PhysicalEndpointId::PrimaryInput(PortId(
+                    u32::try_from(index).map_err(|_| CandidateError::IdentityOverflow)?,
+                )),
+                (None, Some(index)) => PhysicalEndpointId::DeclaredOutput(PortId(
+                    u32::try_from(index).map_err(|_| CandidateError::IdentityOverflow)?,
+                )),
+                _ => return Err(CandidateError::UnknownPinName { name: name.clone() }),
+            };
+            if self.pin_name_bindings.get(name) != Some(&endpoint)
+                || self.pin_contracts.get(&endpoint) != Some(pin)
+            {
+                return Err(CandidateError::PinContractMismatch { endpoint });
+            }
+        }
         Ok(())
     }
 
@@ -1071,6 +1148,41 @@ impl ExpandedPhysicalCandidate {
                 return Err(CandidateError::PinContractMismatch { endpoint });
             }
             let handover = pin.handover(role);
+            let forbidden_conductor = [
+                Anchor {
+                    x: pin.at.x - 1,
+                    ..pin.at
+                },
+                Anchor {
+                    x: pin.at.x + 1,
+                    ..pin.at
+                },
+                Anchor {
+                    y: pin.at.y - 1,
+                    ..pin.at
+                },
+                Anchor {
+                    y: pin.at.y + 1,
+                    ..pin.at
+                },
+                Anchor {
+                    z: pin.at.z - 1,
+                    ..pin.at
+                },
+                Anchor {
+                    z: pin.at.z + 1,
+                    ..pin.at
+                },
+            ]
+            .into_iter()
+            .filter(|at| *at != handover)
+            .any(|at| {
+                self.all_owned_blocks()
+                    .any(|block| block.at == at && is_signal_carrying(block.state.kind))
+            });
+            if forbidden_conductor {
+                return Err(CandidateError::PinContractMismatch { endpoint });
+            }
             match role {
                 PortRole::Input => {
                     let boundary = self
@@ -1086,7 +1198,7 @@ impl ExpandedPhysicalCandidate {
                             block.at == handover
                                 && block.state.kind
                                     == crate::redstone::world::block::BlockKind::Repeater
-                                && block.state.facing == Some(pin.toward)
+                                && block.state.facing == Some(pin.toward.opposite())
                         })
                     {
                         return Err(CandidateError::PinContractMismatch { endpoint });
@@ -1106,7 +1218,7 @@ impl ExpandedPhysicalCandidate {
                                 && branch.terminal.at == handover
                                 && branch.terminal.state.kind
                                     == crate::redstone::world::block::BlockKind::Repeater
-                                && branch.terminal.state.facing == Some(pin.toward)
+                                && branch.terminal.state.facing == Some(pin.toward.opposite())
                                 && branch.terminal.delayed_owner
                                     == Some(DelayedOwner::Route(route.id))
                         })
@@ -1296,6 +1408,13 @@ impl ExpandedPhysicalCandidate {
             gate_facings,
         })
     }
+}
+
+fn is_signal_carrying(kind: BlockKind) -> bool {
+    !matches!(
+        kind,
+        BlockKind::Air | BlockKind::Solid | BlockKind::Glass | BlockKind::Slab
+    )
 }
 
 pub(crate) fn endpoint_for_driver(driver: &PhysicalDriver) -> Option<PhysicalEndpointId> {
@@ -1628,7 +1747,7 @@ mod tests {
         let pin = candidate.pin_contracts[&endpoint];
         let handover = pin.handover(crate::compile::planner::PortRole::Input);
         let mut repeater = state(BlockKind::Repeater, "minecraft:repeater");
-        repeater.facing = Some(pin.toward);
+        repeater.facing = Some(pin.toward.opposite());
         candidate.boundaries.insert(
             endpoint,
             BoundaryPlacement {
@@ -1673,6 +1792,85 @@ mod tests {
             rotated.validate_pin_contracts(),
             Err(CandidateError::PinContractMismatch { endpoint })
         );
+    }
+
+    #[test]
+    fn pinned_input_contract_rejects_a_conductor_on_any_non_handover_face() {
+        let mut candidate = two_gate_candidate();
+        let caller = Anchor { x: 2, y: 1, z: 3 };
+        candidate
+            .pins
+            .pin("a", caller, crate::redstone::world::block::Facing::North);
+        candidate.bind_pin_contracts(&two_gate_netlist()).unwrap();
+        let endpoint = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let pin = candidate.pin_contracts[&endpoint];
+        let handover = pin.handover(crate::compile::planner::PortRole::Input);
+        let mut repeater = state(BlockKind::Repeater, "minecraft:repeater");
+        repeater.facing = Some(pin.toward.opposite());
+        candidate.boundaries.insert(
+            endpoint,
+            BoundaryPlacement {
+                endpoint,
+                delayed: Some(DelayedComponent {
+                    at: handover,
+                    owner: DelayedOwner::InputBinding(PortId(0)),
+                }),
+                blocks: vec![
+                    PlacedBlock {
+                        at: handover,
+                        state: repeater,
+                    },
+                    PlacedBlock {
+                        at: Anchor { x: 3, ..caller },
+                        state: state(BlockKind::RedstoneWire, "minecraft:redstone_wire"),
+                    },
+                ],
+            },
+        );
+        candidate.observations.insert(
+            ObservationId::PrimaryInput(PortId(0)),
+            VerifiedObservation {
+                site: ObservationSite {
+                    id: ObservationId::PrimaryInput(PortId(0)),
+                    at: caller,
+                    logical_owner: None,
+                    display_label: Some("a".to_string()),
+                },
+                state: BlockState::air(),
+            },
+        );
+
+        assert_eq!(
+            candidate.validate_pin_contracts(),
+            Err(CandidateError::PinContractMismatch { endpoint })
+        );
+    }
+
+    #[test]
+    fn repeater_primitive_cannot_omit_its_delayed_owner() {
+        let mut candidate = two_gate_candidate();
+        let primitive = candidate.instances.instances[0]
+            .expanded
+            .topology
+            .primitives[0]
+            .id;
+        let at = Anchor { x: 3, y: 1, z: 3 };
+        candidate.placements.insert(
+            primitive,
+            PrimitivePlacement {
+                id: primitive,
+                variant: 0,
+                facing: CellFacing::NORTH,
+                anchor: at,
+                delayed: None,
+                blocks: vec![PlacedBlock {
+                    at,
+                    state: state(BlockKind::Repeater, "minecraft:repeater"),
+                }],
+            },
+        );
+
+        assert!(candidate.validate_physical_ownership().is_err());
     }
 
     #[test]
@@ -1760,13 +1958,14 @@ mod tests {
             },
         );
         let output_endpoint = PhysicalEndpointId::DeclaredOutput(PortId(0));
+        let output_lamp_at = Anchor { x: 6, y: 0, z: 1 };
         candidate.boundaries.insert(
             output_endpoint,
             BoundaryPlacement {
                 endpoint: output_endpoint,
                 delayed: None,
                 blocks: vec![PlacedBlock {
-                    at: Anchor { x: 6, y: 1, z: 1 },
+                    at: output_lamp_at,
                     state: state(BlockKind::Lamp, "minecraft:redstone_lamp"),
                 }],
             },
@@ -1851,7 +2050,10 @@ mod tests {
             RealisedRouteTree {
                 id: output_route,
                 source: PhysicalEndpointId::PrimitiveOutput(second),
-                cells: Vec::new(),
+                cells: vec![PlacedBlock {
+                    at: output_at,
+                    state: state(BlockKind::RedstoneWire, "minecraft:redstone_wire"),
+                }],
                 floors: Vec::new(),
                 branches: vec![RealisedRouteBranch {
                     sink: output_sink,
@@ -1861,7 +2063,7 @@ mod tests {
                     terminal: TerminalRecord {
                         sink: output_sink,
                         at: output_at,
-                        state: state(BlockKind::Lamp, "minecraft:redstone_lamp"),
+                        state: state(BlockKind::RedstoneWire, "minecraft:redstone_wire"),
                         kind: crate::compile::planner::RouteTerminalKind::DirectedDustIntoSupport,
                         repeaters: 0,
                         delayed_owner: None,
@@ -1893,7 +2095,7 @@ mod tests {
             ),
             (
                 ObservationId::DeclaredOutput(PortId(0)),
-                Anchor { x: 6, y: 1, z: 1 },
+                output_lamp_at,
                 Some(instance.id),
             ),
         ];
