@@ -1102,6 +1102,21 @@ git commit -m "test(synthesis): record replacement gate failure"
 - Replace from exact generated output: `viewer/baked/verilog_seven_segment.grown.litematic`
 - Replace from exact generated output: `viewer/baked/verilog_seven_segment.grown.pinout.json`
 - Read unchanged as the checked pin input: `viewer/baked/verilog_seven_segment.grown.pins.json`
+- Non-staged temporary root: `.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts`
+- Non-staged temporary run directory: `.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts/run-1`
+- Non-staged temporary file: `.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts/run-1/segment_a.grown.litematic`
+- Non-staged temporary file: `.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts/run-1/segment_a.grown.pinout.json`
+- Non-staged temporary file: `.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts/run-1/segment_a.grown.blocks.txt`
+- Non-staged temporary file: `.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts/run-1/verilog_seven_segment.grown.litematic`
+- Non-staged temporary file: `.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts/run-1/verilog_seven_segment.grown.pinout.json`
+- Non-staged temporary file: `.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts/run-1/verilog_seven_segment.grown.blocks.txt`
+- Non-staged temporary run directory: `.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts/run-2`
+- Non-staged temporary file: `.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts/run-2/segment_a.grown.litematic`
+- Non-staged temporary file: `.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts/run-2/segment_a.grown.pinout.json`
+- Non-staged temporary file: `.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts/run-2/segment_a.grown.blocks.txt`
+- Non-staged temporary file: `.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts/run-2/verilog_seven_segment.grown.litematic`
+- Non-staged temporary file: `.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts/run-2/verilog_seven_segment.grown.pinout.json`
+- Non-staged temporary file: `.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts/run-2/verilog_seven_segment.grown.blocks.txt`
 - Move definitions before deleting their source: `PinRefusal`, `PortRole`, `PortPin`, `PortPlacements`, and their pin-validation/handover helpers from `src/compile/planner.rs` to `src/compile/ports.rs`
 - Delete after the switchover commit: `src/bin/fragment_baseline.rs`
 - Delete after the switchover commit: `src/bin/routing_cost_report.rs`
@@ -1123,7 +1138,7 @@ git commit -m "test(synthesis): record replacement gate failure"
 - Delete after the switchover commit: `viewer/tests/fixtures/segment_a_placement_bits.txt`
 - Delete after the switchover commit: `viewer/tests/fixtures/seven_segment_placement_bits.txt`
 
-This is the complete Task 13 path allow-list for the current architecture. Do not modify, move, delete, or stage any other path in this task. The four generated output names above and the one checked pin-input name are fixed now, so Task 13 must not discover artifact paths dynamically or accept additional generated files.
+This is the complete Task 13 path allow-list for the current architecture. Do not modify, move, delete, or stage any other path in this task. The four checked destinations, one checked pin input, two temporary run directories, and twelve temporary files are fixed now. Every temporary path is ignored and explicitly non-staged; Task 13 must reject any additional staging entry or generated filesystem entry.
 
 **Interfaces:**
 - Durable internal seam, defined in `src/compile/fragment_synth/api.rs`:
@@ -1188,6 +1203,8 @@ compile_fragment_synth_configured(
 
 `build_circuit`, `mc_dump`, and viewer must use a provenance-preserving lowering variant whenever they start from source gates. Preserve already-lowered input semantics, supplied pins, structured errors, and caller-owned pin cells. Update viewer annotations so one logical gate may list multiple instance outputs while the canonical instance remains the compatibility position. Move the port contract only through the named `src/compile/planner.rs` to `src/compile/ports.rs` mapping above; temporarily re-export it from `planner` until the deletion commit so the pre-deletion tree remains buildable.
 
+In `src/bin/build_circuit.rs`, add `--artifact-dir <existing-directory>` for this auditable generation path. It writes the selected circuit's `.litematic`, `.pinout.json`, and `.blocks.txt` directly into that directory and does not create a child directory. Extend `tests/build_circuit_pins.rs` to prove the option preserves supplied pins, uses the exact requested directory, and creates exactly those three named files for one invocation.
+
 - [ ] **Step 3: Regenerate artifacts and run complete pre-deletion verification**
 
 ```powershell
@@ -1197,19 +1214,141 @@ cargo test --manifest-path viewer/Cargo.toml
 cargo build --manifest-path viewer/Cargo.toml --target wasm32-unknown-unknown
 ```
 
-Regenerate and copy only the four allow-listed outputs:
+Prepare the fixed ignored staging root. This cleanup is bounded: first resolve the worktree root, require the staging root to equal the one literal path listed above and remain beneath the worktree, enumerate every existing descendant, and fail on anything outside the two run directories and twelve exact temporary files. Only after that validation may the commands remove the twelve exact files and then the three exact empty directories without recursion. Finally assert the staging root is absent before recreating the two run directories:
 
 ```powershell
-cargo run --release --bin build_circuit -- segment_a --grown
-Copy-Item -LiteralPath output/segment_a.grown.litematic -Destination viewer/baked/segment_a.grown.litematic
-Copy-Item -LiteralPath output/segment_a.grown.pinout.json -Destination viewer/baked/segment_a.grown.pinout.json
-cargo run --release --bin build_circuit -- verilog:seven_segment --grown --pins viewer/baked/verilog_seven_segment.grown.pins.json
-Copy-Item -LiteralPath output/verilog_seven_segment.grown.litematic -Destination viewer/baked/verilog_seven_segment.grown.litematic
-Copy-Item -LiteralPath output/verilog_seven_segment.grown.pinout.json -Destination viewer/baked/verilog_seven_segment.grown.pinout.json
-git diff -- viewer/baked/segment_a.grown.litematic viewer/baked/segment_a.grown.pinout.json viewer/baked/verilog_seven_segment.grown.litematic viewer/baked/verilog_seven_segment.grown.pinout.json viewer/baked/verilog_seven_segment.grown.pins.json
+$task13Repo = (Resolve-Path -LiteralPath .).Path
+$task13StageRelative = '.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts'
+$task13Stage = [System.IO.Path]::GetFullPath((Join-Path $task13Repo $task13StageRelative))
+$task13RequiredStage = [System.IO.Path]::GetFullPath((Join-Path $task13Repo '.superpowers/sdd/2026-08-31-timing-directed-fragment-synthesis/task13-artifacts'))
+if ($task13Stage -ne $task13RequiredStage) { throw 'unexpected Task 13 staging root' }
+if (-not $task13Stage.StartsWith($task13Repo + [System.IO.Path]::DirectorySeparatorChar, [System.StringComparison]::OrdinalIgnoreCase)) { throw 'Task 13 staging root escaped the worktree' }
+
+$task13TempRelativeFiles = @(
+    'run-1/segment_a.grown.litematic',
+    'run-1/segment_a.grown.pinout.json',
+    'run-1/segment_a.grown.blocks.txt',
+    'run-1/verilog_seven_segment.grown.litematic',
+    'run-1/verilog_seven_segment.grown.pinout.json',
+    'run-1/verilog_seven_segment.grown.blocks.txt',
+    'run-2/segment_a.grown.litematic',
+    'run-2/segment_a.grown.pinout.json',
+    'run-2/segment_a.grown.blocks.txt',
+    'run-2/verilog_seven_segment.grown.litematic',
+    'run-2/verilog_seven_segment.grown.pinout.json',
+    'run-2/verilog_seven_segment.grown.blocks.txt'
+)
+$task13AllowedRelativeEntries = @('run-1', 'run-2') + $task13TempRelativeFiles
+
+if (Test-Path -LiteralPath $task13Stage) {
+    $task13Existing = @(Get-ChildItem -LiteralPath $task13Stage -Force -Recurse | ForEach-Object {
+        [System.IO.Path]::GetRelativePath($task13Stage, $_.FullName).Replace('\', '/')
+    })
+    $task13Unexpected = @($task13Existing | Where-Object { $_ -notin $task13AllowedRelativeEntries })
+    if ($task13Unexpected.Count -ne 0) { throw "unexpected pre-existing Task 13 staging entries: $($task13Unexpected -join ', ')" }
+    foreach ($task13RelativeFile in $task13TempRelativeFiles) {
+        $task13File = Join-Path $task13Stage $task13RelativeFile
+        if (Test-Path -LiteralPath $task13File -PathType Leaf) { Remove-Item -LiteralPath $task13File }
+    }
+    foreach ($task13RunName in @('run-1', 'run-2')) {
+        $task13Run = Join-Path $task13Stage $task13RunName
+        if (Test-Path -LiteralPath $task13Run) {
+            if (@(Get-ChildItem -LiteralPath $task13Run -Force).Count -ne 0) { throw "Task 13 run directory is not empty: $task13Run" }
+            Remove-Item -LiteralPath $task13Run
+        }
+    }
+    if (@(Get-ChildItem -LiteralPath $task13Stage -Force).Count -ne 0) { throw 'Task 13 staging root is not empty' }
+    Remove-Item -LiteralPath $task13Stage
+}
+if (Test-Path -LiteralPath $task13Stage) { throw 'Task 13 staging root must be absent before generation' }
+
+$task13Run1 = New-Item -ItemType Directory -Path (Join-Path $task13Stage 'run-1')
+$task13Run2 = New-Item -ItemType Directory -Path (Join-Path $task13Stage 'run-2')
 ```
 
-Require `viewer/baked/verilog_seven_segment.grown.pins.json` to remain byte-identical. Inspect the complete diff of each named output and reject any additional generated file; diagnostic files under `output/` are not staged.
+Generate the exact set twice. Both invocations in each run write directly to that run directory; preserve both runs through review:
+
+```powershell
+$task13Pins = Join-Path $task13Repo 'viewer/baked/verilog_seven_segment.grown.pins.json'
+$task13PinsHashBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $task13Pins).Hash
+foreach ($task13Run in @($task13Run1.FullName, $task13Run2.FullName)) {
+    cargo run --release --bin build_circuit -- segment_a --grown --artifact-dir $task13Run
+    if ($LASTEXITCODE -ne 0) { throw "segment_a generation failed for $task13Run" }
+    cargo run --release --bin build_circuit -- verilog:seven_segment --grown --pins $task13Pins --artifact-dir $task13Run
+    if ($LASTEXITCODE -ne 0) { throw "verilog:seven_segment generation failed for $task13Run" }
+}
+```
+
+Enumerate each run independently and require the exact six-file leaf set with no child directory or extra file of any kind:
+
+```powershell
+$task13ExpectedLeaves = @(
+    'segment_a.grown.blocks.txt',
+    'segment_a.grown.litematic',
+    'segment_a.grown.pinout.json',
+    'verilog_seven_segment.grown.blocks.txt',
+    'verilog_seven_segment.grown.litematic',
+    'verilog_seven_segment.grown.pinout.json'
+) | Sort-Object
+foreach ($task13Run in @($task13Run1.FullName, $task13Run2.FullName)) {
+    $task13ChildDirectories = @(Get-ChildItem -LiteralPath $task13Run -Force -Directory)
+    if ($task13ChildDirectories.Count -ne 0) { throw "unexpected directory in $task13Run" }
+    $task13ActualLeaves = @(Get-ChildItem -LiteralPath $task13Run -Force -File | ForEach-Object Name | Sort-Object)
+    $task13SetDifference = @(Compare-Object -ReferenceObject $task13ExpectedLeaves -DifferenceObject $task13ActualLeaves)
+    if ($task13SetDifference.Count -ne 0) { throw "wrong generated file set in ${task13Run}: $($task13SetDifference | Out-String)" }
+}
+```
+
+SHA-256 compare run 1 with run 2 for every one of the six files, including the two exact `.blocks.txt` diagnostics. Then require all twelve temporary files to be ignored and absent from the index:
+
+```powershell
+foreach ($task13Leaf in $task13ExpectedLeaves) {
+    $task13Run1Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $task13Run1.FullName $task13Leaf)).Hash
+    $task13Run2Hash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $task13Run2.FullName $task13Leaf)).Hash
+    Write-Host "$task13Leaf SHA256 $task13Run1Hash"
+    if ($task13Run1Hash -ne $task13Run2Hash) { throw "non-deterministic artifact: $task13Leaf" }
+}
+foreach ($task13RelativeFile in $task13TempRelativeFiles) {
+    $task13RepoRelativeFile = "$task13StageRelative/$task13RelativeFile"
+    git check-ignore --quiet -- $task13RepoRelativeFile
+    if ($LASTEXITCODE -ne 0) { throw "temporary artifact is not ignored: $task13RepoRelativeFile" }
+    $task13Staged = @(git diff --cached --name-only -- $task13RepoRelativeFile)
+    if ($task13Staged.Count -ne 0) { throw "temporary artifact is staged: $task13RepoRelativeFile" }
+}
+```
+
+Finally compare each selected run-1 artifact with its checked destination before overwriting anything. Print and inspect both SHA-256 values for every pair. For changed JSON sidecars, also run the readable `git diff --no-index --text` comparison before copying. Copy only a differing run-1 file, then require byte identity by matching SHA-256; show the normal readable working-tree diff for both sidecars afterward. Binary `.litematic` audit is the recorded before/source hash pair plus the required after-copy hash equality, not an ordinary binary diff:
+
+```powershell
+$task13DestinationPairs = @(
+    [pscustomobject]@{ Leaf = 'segment_a.grown.litematic'; Destination = 'viewer/baked/segment_a.grown.litematic'; Text = $false },
+    [pscustomobject]@{ Leaf = 'segment_a.grown.pinout.json'; Destination = 'viewer/baked/segment_a.grown.pinout.json'; Text = $true },
+    [pscustomobject]@{ Leaf = 'verilog_seven_segment.grown.litematic'; Destination = 'viewer/baked/verilog_seven_segment.grown.litematic'; Text = $false },
+    [pscustomobject]@{ Leaf = 'verilog_seven_segment.grown.pinout.json'; Destination = 'viewer/baked/verilog_seven_segment.grown.pinout.json'; Text = $true }
+)
+foreach ($task13Pair in $task13DestinationPairs) {
+    $task13Source = Join-Path $task13Run1.FullName $task13Pair.Leaf
+    $task13Destination = Join-Path $task13Repo $task13Pair.Destination
+    $task13SourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $task13Source).Hash
+    $task13DestinationHashBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $task13Destination).Hash
+    Write-Host "$($task13Pair.Destination) checked=$task13DestinationHashBefore generated=$task13SourceHash"
+    if ($task13SourceHash -ne $task13DestinationHashBefore) {
+        if ($task13Pair.Text) {
+            git diff --no-index --text -- $task13Destination $task13Source
+            $task13TextDiffExit = $LASTEXITCODE
+            if ($task13TextDiffExit -gt 1) { throw "text sidecar comparison failed: $($task13Pair.Destination)" }
+        }
+        Copy-Item -LiteralPath $task13Source -Destination $task13Destination
+    }
+    $task13DestinationHashAfter = (Get-FileHash -Algorithm SHA256 -LiteralPath $task13Destination).Hash
+    if ($task13SourceHash -ne $task13DestinationHashAfter) { throw "checked destination differs from generated bytes: $($task13Pair.Destination)" }
+}
+git diff --text -- viewer/baked/segment_a.grown.pinout.json viewer/baked/verilog_seven_segment.grown.pinout.json
+$task13PinsHashAfter = (Get-FileHash -Algorithm SHA256 -LiteralPath $task13Pins).Hash
+if ($task13PinsHashBefore -ne $task13PinsHashAfter) { throw 'checked pin input changed during artifact generation' }
+```
+
+Require `viewer/baked/verilog_seven_segment.grown.pins.json` to remain byte-identical. Record the six repeat-generation hashes and four destination before/source/after hash results with the Task 13 commit evidence. The twelve ignored temporary files remain non-staged until review is complete; the file-by-file staging commands below contain only checked repository destinations and source/test changes.
 
 - [ ] **Step 4: Commit the front-door switch separately**
 
