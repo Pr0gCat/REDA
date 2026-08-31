@@ -153,10 +153,13 @@ pub struct Route {
     /// than derived: the emitter floors cells it then leaves empty, and a
     /// finished world cannot say which stone was laid for which reason.
     floors: Vec<BlockState>,
+    /// Ordered source-to-terminal paths, parallel to `terminals` when the
+    /// producer recorded branch topology.
+    branch_paths: Vec<Vec<Anchor>>,
 }
 
 /// The physical component selected at a route's final socket.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum RouteTerminalKind {
     RepeaterIntoSupport,
     DirectedDustIntoSupport,
@@ -256,6 +259,7 @@ impl Route {
             terminals: Vec::new(),
             realisation: Vec::new(),
             floors: Vec::new(),
+            branch_paths: Vec::new(),
         }
     }
 
@@ -265,12 +269,14 @@ impl Route {
         terminals: Vec<RouteTerminal>,
         realisation: Vec<BlockState>,
         floors: Vec<BlockState>,
+        branch_paths: Vec<Vec<Anchor>>,
     ) -> Self {
         let mut route = Self::new(id.clone(), anchors);
         route.owner = Some(id);
         route.terminals = terminals;
         route.realisation = realisation;
         route.floors = floors;
+        route.branch_paths = branch_paths;
         route
     }
 
@@ -282,7 +288,7 @@ impl Route {
         anchors: Vec<Anchor>,
         terminals: Vec<RouteTerminal>,
     ) -> Self {
-        Self::from_legacy(id, anchors, terminals, Vec::new(), Vec::new())
+        Self::from_legacy(id, anchors, terminals, Vec::new(), Vec::new(), Vec::new())
     }
 
     /// The block this route puts in each of its anchors, in anchor order.
@@ -318,6 +324,15 @@ impl Route {
     /// The sink identity and physical terminal for every fanout branch.
     pub fn terminals(&self) -> &[RouteTerminal] {
         &self.terminals
+    }
+
+    /// Final block states one cell below each route anchor.
+    pub fn floors(&self) -> &[BlockState] {
+        &self.floors
+    }
+
+    pub fn branch_paths(&self) -> &[Vec<Anchor>] {
+        &self.branch_paths
     }
 }
 
@@ -5862,6 +5877,7 @@ pub(crate) fn seed_from_legacy_parts(
                 route.terminals().to_vec(),
                 route.blocks().to_vec(),
                 route.floors().to_vec(),
+                route.branch_paths().to_vec(),
             )
         })
         .collect();
@@ -26475,7 +26491,14 @@ mod tests {
         let route_of = |cells: Vec<(Anchor, BlockState)>| -> Route {
             let (anchors, blocks): (Vec<Anchor>, Vec<BlockState>) = cells.into_iter().unzip();
             let floors = vec![compile::stone(); anchors.len()];
-            Route::from_legacy("g0".to_string(), anchors, Vec::new(), blocks, floors)
+            Route::from_legacy(
+                "g0".to_string(),
+                anchors,
+                Vec::new(),
+                blocks,
+                floors,
+                Vec::new(),
+            )
         };
         let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
 
@@ -26571,7 +26594,14 @@ mod tests {
         let route_of = |cells: Vec<(Anchor, BlockState)>| -> Route {
             let (anchors, blocks): (Vec<Anchor>, Vec<BlockState>) = cells.into_iter().unzip();
             let floors = vec![compile::stone(); anchors.len()];
-            Route::from_legacy("g3".to_string(), anchors, Vec::new(), blocks, floors)
+            Route::from_legacy(
+                "g3".to_string(),
+                anchors,
+                Vec::new(),
+                blocks,
+                floors,
+                Vec::new(),
+            )
         };
         let at = |x: i32, y: i32, z: i32| Anchor { x, y, z };
 

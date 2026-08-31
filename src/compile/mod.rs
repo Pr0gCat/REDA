@@ -1712,6 +1712,8 @@ pub(crate) struct LegacyRoute {
     blocks: Vec<BlockState>,
     /// The block one cell below each anchor, parallel to `anchors`.
     floors: Vec<BlockState>,
+    /// One ordered source-to-terminal path per `terminals` entry.
+    branch_paths: Vec<Vec<Anchor>>,
 }
 
 impl LegacyRoute {
@@ -1733,6 +1735,10 @@ impl LegacyRoute {
 
     pub(crate) fn floors(&self) -> &[BlockState] {
         &self.floors
+    }
+
+    pub(crate) fn branch_paths(&self) -> &[Vec<Anchor>] {
+        &self.branch_paths
     }
 }
 
@@ -1838,7 +1844,7 @@ fn lay_dust_run(
         } else {
             world.set(pos.x, pos.y, pos.z, dust());
         }
-        route.claim(pos);
+        route.claim_signal(pos);
         pos = pos.offset(direction);
     }
     ending_strength
@@ -1993,7 +1999,7 @@ fn lay_bent_path(
         } else {
             world.set(pos.x, pos.y, pos.z, dust());
         }
-        route.claim(pos);
+        route.claim_signal(pos);
         prev = pos;
     }
 
@@ -2182,7 +2188,7 @@ fn lay_bent_path_bare(
         } else {
             world.set(pos.x, pos.y, pos.z, dust());
         }
-        route.claim(pos);
+        route.claim_signal(pos);
         prev = pos;
     }
     (
@@ -2284,6 +2290,13 @@ struct Footprint {
     route_terminals: Vec<Vec<RouteTerminal>>,
     /// Every repeater this pass laid, attributed to the [`Leg`] carrying it.
     repeaters: BTreeMap<(usize, Leg), u64>,
+    /// Ordered electrical cells written while one named leg is active.
+    leg_cells: BTreeMap<(usize, Leg), Vec<Anchor>>,
+    /// Track cells are shared prefixes, so they are recorded by slot and
+    /// sliced toward each tap only after all exits are known.
+    track_cells: BTreeMap<(usize, usize), Vec<Anchor>>,
+    /// One source-to-terminal path, parallel to `route_terminals`.
+    branch_paths: Vec<Vec<Vec<Anchor>>>,
 }
 
 impl Footprint {
@@ -2294,6 +2307,9 @@ impl Footprint {
             route_anchors: Vec::new(),
             route_terminals: Vec::new(),
             repeaters: BTreeMap::new(),
+            leg_cells: BTreeMap::new(),
+            track_cells: BTreeMap::new(),
+            branch_paths: Vec::new(),
         }
     }
 
@@ -2304,6 +2320,9 @@ impl Footprint {
             route_anchors: Vec::new(),
             route_terminals: Vec::new(),
             repeaters: BTreeMap::new(),
+            leg_cells: BTreeMap::new(),
+            track_cells: BTreeMap::new(),
+            branch_paths: Vec::new(),
         }
     }
 
@@ -2340,6 +2359,36 @@ impl Footprint {
 
     fn note_repeater(&mut self, net: usize, leg: Leg) {
         *self.repeaters.entry((net, leg)).or_default() += 1;
+    }
+
+    fn claim_leg_cell(&mut self, pos: Position, net: usize, leg: Leg) {
+        self.claim(pos, net);
+        if self.recording {
+            let cell = Anchor {
+                x: pos.x,
+                y: pos.y,
+                z: pos.z,
+            };
+            let cells = self.leg_cells.entry((net, leg)).or_default();
+            if cells.last() != Some(&cell) {
+                cells.push(cell);
+            }
+        }
+    }
+
+    fn claim_track_cell(&mut self, pos: Position, net: usize, slot: usize) {
+        self.claim(pos, net);
+        if self.recording {
+            let cell = Anchor {
+                x: pos.x,
+                y: pos.y,
+                z: pos.z,
+            };
+            let cells = self.track_cells.entry((net, slot)).or_default();
+            if !cells.contains(&cell) {
+                cells.push(cell);
+            }
+        }
     }
 
     /// Record that `count` repeaters stand between slot `slot`'s track entry
@@ -2421,6 +2470,7 @@ impl Footprint {
                     terminals: self.route_terminals.get(net).cloned().unwrap_or_default(),
                     blocks,
                     floors,
+                    branch_paths: self.branch_paths.get(net).cloned().unwrap_or_default(),
                 }
             })
             .collect()
@@ -2445,6 +2495,17 @@ struct Route<'a> {
 impl Route<'_> {
     fn claim(&mut self, pos: Position) {
         self.footprint.claim(pos, self.net);
+    }
+
+    fn claim_signal(&mut self, pos: Position) {
+        let leg = self
+            .leg
+            .expect("every electrical route cell outside a track belongs to a named leg");
+        self.footprint.claim_leg_cell(pos, self.net, leg);
+    }
+
+    fn claim_track(&mut self, pos: Position, slot: usize) {
+        self.footprint.claim_track_cell(pos, self.net, slot);
     }
 
     /// Attribute every repeater written from here on to `leg`.
@@ -2606,7 +2667,7 @@ fn move_between_layers(
             route.claim(rest.down());
             world.set(rest.x, rest.y, rest.z, repeater(direction));
             route.note_repeater();
-            route.claim(rest);
+            route.claim_signal(rest);
             if !route.footprint.recording {
                 seal_cross_talk(world, rest, direction, route);
             }
@@ -2614,7 +2675,7 @@ fn move_between_layers(
             ensure_floor(world, rest_output);
             route.claim(rest_output.down());
             world.set(rest_output.x, rest_output.y, rest_output.z, dust());
-            route.claim(rest_output);
+            route.claim_signal(rest_output);
             if !route.footprint.recording {
                 seal_cross_talk(world, rest_output, direction, route);
             }
@@ -2623,10 +2684,10 @@ fn move_between_layers(
         if climbing {
             let riser = current.offset(direction);
             world.set(riser.x, riser.y, riser.z, stone());
-            route.claim(riser);
+            route.claim_signal(riser);
             let landing = riser.up();
             world.set(landing.x, landing.y, landing.z, dust());
-            route.claim(landing);
+            route.claim_signal(landing);
             if !route.footprint.recording {
                 seal_cross_talk(world, landing, direction, route);
             }
@@ -2637,7 +2698,7 @@ fn move_between_layers(
             ensure_floor(world, landing);
             route.claim(landing.down());
             world.set(landing.x, landing.y, landing.z, dust());
-            route.claim(landing);
+            route.claim_signal(landing);
             if !route.footprint.recording {
                 seal_cross_talk(world, landing, direction, route);
             }
@@ -2800,7 +2861,7 @@ fn lay_track(
             } else {
                 world.set(pos.x, pos.y, pos.z, dust());
             }
-            route.claim(pos);
+            route.claim_track(pos, slot);
             if taps.contains(&x) {
                 exit_strength.insert(x, strengths[k]);
                 route.note_track_tap(slot, x, laid);
@@ -4423,7 +4484,7 @@ fn emit(
                 ensure_floor(world, start);
                 world.set(start.x, start.y, start.z, dust());
                 route.claim(start.down());
-                route.claim(start);
+                route.claim_signal(start);
                 net_source_strength[n].saturating_sub(1)
             } else {
                 net_source_strength[n]
@@ -4697,6 +4758,13 @@ fn resolve_terminal_repeaters(
 
     for (n, net) in nets.iter().enumerate() {
         let mut priced: BTreeMap<(String, usize), u64> = BTreeMap::new();
+        let mut paths: BTreeMap<(String, usize), Vec<Anchor>> = BTreeMap::new();
+        let source = footprint
+            .route_anchors
+            .get(n)
+            .and_then(|anchors| anchors.first())
+            .copied()
+            .expect("every routed net records its source pin");
         let mut charge = |gate: usize, input_index: usize, total: u64| {
             let previous = priced.insert(
                 (netlist.gates[gate].output.clone(), input_index),
@@ -4711,6 +4779,12 @@ fn resolve_terminal_repeaters(
 
         if bypass[n] {
             let (gate, input_index) = net.sinks[0][0];
+            let mut path = vec![source];
+            append_route_path(
+                &mut path,
+                footprint.leg_cells.get(&(n, Leg::Branch { gate, input_index })),
+            );
+            paths.insert((netlist.gates[gate].output.clone(), input_index), path);
             charge(
                 gate,
                 input_index,
@@ -4722,31 +4796,71 @@ fn resolve_terminal_repeaters(
             // later slot the running total carried across the feed-through
             // that led here.
             let mut arriving = 0u64;
+            let mut arriving_path = vec![source];
             for slot in 0..net.channels.len() {
                 let on_the_track = arriving
                     + footprint.leg_repeaters(n, Leg::Column { slot })
                     + footprint.leg_repeaters(n, Leg::RampDown { slot });
+                let mut on_the_track_path = arriving_path.clone();
+                append_route_path(
+                    &mut on_the_track_path,
+                    footprint.leg_cells.get(&(n, Leg::Column { slot })),
+                );
+                append_route_path(
+                    &mut on_the_track_path,
+                    footprint.leg_cells.get(&(n, Leg::RampDown { slot })),
+                );
                 let mut carried = None;
+                let mut carried_path = None;
                 for exit in net.exits(slot, centre_x) {
                     let tap_x = exit.x();
                     let at_landing = on_the_track
                         + footprint.leg_repeaters(n, Leg::Track { slot, tap_x })
                         + footprint.leg_repeaters(n, Leg::RampUp { slot, tap_x });
+                    let mut at_landing_path = on_the_track_path.clone();
+                    append_track_prefix(
+                        &mut at_landing_path,
+                        footprint.track_cells.get(&(n, slot)),
+                        net.entry_column(slot),
+                        tap_x,
+                    );
+                    append_route_path(
+                        &mut at_landing_path,
+                        footprint.leg_cells.get(&(n, Leg::RampUp { slot, tap_x })),
+                    );
                     match exit {
                         Exit::Socket {
                             gate, input_index, ..
-                        } => charge(
-                            gate,
-                            input_index,
-                            at_landing
-                                + footprint.leg_repeaters(n, Leg::Branch { gate, input_index }),
-                        ),
+                        } => {
+                            let mut path = at_landing_path;
+                            append_route_path(
+                                &mut path,
+                                footprint
+                                    .leg_cells
+                                    .get(&(n, Leg::Branch { gate, input_index })),
+                            );
+                            paths.insert(
+                                (netlist.gates[gate].output.clone(), input_index),
+                                path,
+                            );
+                            charge(
+                                gate,
+                                input_index,
+                                at_landing
+                                    + footprint
+                                        .leg_repeaters(n, Leg::Branch { gate, input_index }),
+                            );
+                        }
                         // At most one per slot, by construction: `Net::exits`
                         // pushes `hops[slot]` and nothing else.
-                        Exit::Feedthrough { .. } => carried = Some(at_landing),
+                        Exit::Feedthrough { .. } => {
+                            carried = Some(at_landing);
+                            carried_path = Some(at_landing_path);
+                        }
                     }
                 }
                 arriving = carried.unwrap_or(0);
+                arriving_path = carried_path.unwrap_or_default();
             }
         }
 
@@ -4765,6 +4879,7 @@ fn resolve_terminal_repeaters(
             terminals.len(),
             priced.len()
         );
+        let mut terminal_paths = Vec::with_capacity(terminals.len());
         for terminal in terminals.iter_mut() {
             let key = (terminal.sink.gate.clone(), terminal.sink.input_index);
             terminal.repeaters = *priced.get(&key).unwrap_or_else(|| {
@@ -4773,6 +4888,52 @@ fn resolve_terminal_repeaters(
                     terminal.sink.gate, terminal.sink.input_index
                 )
             });
+            terminal_paths.push(paths.remove(&key).unwrap_or_else(|| {
+                panic!(
+                    "net {n} recorded no physical path for `{}.in[{}]`",
+                    terminal.sink.gate, terminal.sink.input_index
+                )
+            }));
+        }
+        if footprint.branch_paths.len() <= n {
+            footprint.branch_paths.resize_with(n + 1, Vec::new);
+        }
+        footprint.branch_paths[n] = terminal_paths;
+    }
+}
+
+fn append_route_path(path: &mut Vec<Anchor>, cells: Option<&Vec<Anchor>>) {
+    for &cell in cells.into_iter().flatten() {
+        if path.last() != Some(&cell) {
+            path.push(cell);
+        }
+    }
+}
+
+fn append_track_prefix(
+    path: &mut Vec<Anchor>,
+    cells: Option<&Vec<Anchor>>,
+    source_x: i32,
+    tap_x: i32,
+) {
+    let direction = (tap_x - source_x).signum();
+    if direction == 0 {
+        return;
+    }
+    let distance = (tap_x - source_x).abs();
+    let mut prefix = cells
+        .into_iter()
+        .flatten()
+        .copied()
+        .filter(|cell| {
+            (cell.x - source_x).signum() == direction
+                && (cell.x - source_x).abs() <= distance
+        })
+        .collect::<Vec<_>>();
+    prefix.sort_by_key(|cell| (cell.x - source_x).abs());
+    for cell in prefix {
+        if path.last() != Some(&cell) {
+            path.push(cell);
         }
     }
 }

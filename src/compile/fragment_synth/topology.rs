@@ -54,7 +54,7 @@ pub enum OutputSpec {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ValidatedTopology {
     pub fingerprint: Fingerprint,
     pub primitives: Vec<PrimitiveSpec>,
@@ -63,7 +63,7 @@ pub struct ValidatedTopology {
     pub embedding_hints: Vec<EmbeddingHint>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ExpandedInstance {
     pub instance: InstanceId,
     pub implementation: ImplementationKey,
@@ -113,6 +113,8 @@ pub enum TopologyError {
     UnsupportedStatefulTopology { kind: GateKind },
     #[error("topology has too many {what} to assign a u16 identity")]
     IdentityOverflow { what: &'static str },
+    #[error("merge arity {arity} exceeds the 64-bit isolation mask")]
+    MergeArityExceedsInputMask { arity: usize },
 }
 
 #[derive(Serialize)]
@@ -311,7 +313,14 @@ fn instantiate_merge(
             })
         }
     };
-    let legal_bits = (1u64 << arity) - 1;
+    if arity > u64::BITS as usize {
+        return Err(TopologyError::MergeArityExceedsInputMask { arity });
+    }
+    let legal_bits = if arity == u64::BITS as usize {
+        u64::MAX
+    } else {
+        (1u64 << arity) - 1
+    };
     if isolation_mask.bits() & !legal_bits != 0 {
         return Err(TopologyError::IllegalIsolationMask {
             bits: isolation_mask.bits(),
@@ -699,6 +708,52 @@ mod tests {
             ),
             Err(TopologyError::UnsupportedStatefulTopology { .. })
         ));
+    }
+
+    #[test]
+    fn a_64_input_merge_uses_the_full_mask_without_shift_overflow() {
+        let inputs = (0..64).map(|index| format!("i{index}")).collect::<Vec<_>>();
+        let merge = Gate {
+            name: "merge64".to_string(),
+            inputs,
+            output: "out".to_string(),
+            kind: GateKind::Or(64),
+        };
+        let expanded = instantiate(
+            &Library::default_library(),
+            &merge,
+            InstanceId(0),
+            &ImplementationKey::Merge {
+                isolation_mask: InputMask::new(u64::MAX),
+            },
+        )
+        .unwrap();
+
+        assert_eq!(expanded.topology.primitives.len(), 64);
+        assert_eq!(expanded.topology.connections.len(), 64);
+    }
+
+    #[test]
+    fn a_65_input_merge_is_named_instead_of_shifting_past_the_mask() {
+        let inputs = (0..65).map(|index| format!("i{index}")).collect::<Vec<_>>();
+        let merge = Gate {
+            name: "merge65".to_string(),
+            inputs,
+            output: "out".to_string(),
+            kind: GateKind::Or(65),
+        };
+
+        assert_eq!(
+            instantiate(
+                &Library::default_library(),
+                &merge,
+                InstanceId(0),
+                &ImplementationKey::Merge {
+                    isolation_mask: InputMask::new(u64::MAX),
+                },
+            ),
+            Err(TopologyError::MergeArityExceedsInputMask { arity: 65 })
+        );
     }
 
     #[test]
