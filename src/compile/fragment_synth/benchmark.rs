@@ -8,7 +8,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde::{Deserialize, Serialize};
 
 use crate::circuits::{and4, full_adder, seven_segment, verilog};
+use crate::compile::fragment_synth::certification::QualityKey;
 use crate::compile::fragment_synth::manifest::TransitionManifest;
+use crate::compile::fragment_synth::{
+    compile_fragment_synth, ProposalTrace, SynthesisBudget, SynthesisInput,
+};
 use crate::compile::geometry::Anchor;
 use crate::compile::metrics::{
     canonical_fingerprint, physical_metrics, Fingerprint, PhysicalMetrics,
@@ -109,6 +113,10 @@ impl BenchmarkFixture {
 
     pub fn lowered_netlist(&self) -> &Netlist {
         &self.lowered_netlist
+    }
+
+    pub fn placements(&self) -> &PortPlacements {
+        &self.placements
     }
 
     pub fn transition_manifest(&self) -> TransitionManifest {
@@ -245,6 +253,311 @@ impl AcceptanceEvaluator {
             cases,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FragmentAcceptanceCase {
+    pub name: String,
+    pub budget: u64,
+    pub compiled_and_certified: bool,
+    pub error: Option<String>,
+    pub baseline: BenchmarkCase,
+    pub measured: Option<BenchmarkCase>,
+    pub quality: Option<QualityKey>,
+    pub evaluations_used: Option<u64>,
+    pub case_fingerprint: Option<String>,
+    pub candidate_fingerprint: Option<Fingerprint>,
+    pub trace: Vec<ProposalTrace>,
+    pub new_coverage: bool,
+    pub no_tick_regression: bool,
+    pub no_block_regression: bool,
+    pub pinned_ten_percent_tick_improvement: Option<bool>,
+    pub strict_block_improvement: Option<bool>,
+}
+
+impl FragmentAcceptanceCase {
+    fn passed(&self) -> bool {
+        self.compiled_and_certified
+            && self.no_tick_regression
+            && self.no_block_regression
+            && self.pinned_ten_percent_tick_improvement.unwrap_or(true)
+            && self.strict_block_improvement.unwrap_or(true)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FragmentBudgetRun {
+    pub budget: u64,
+    pub cases: Vec<FragmentAcceptanceCase>,
+    pub passed: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FragmentAcceptanceReport {
+    pub schema_version: u32,
+    pub baseline_commit: String,
+    pub base_shuffle_seed: u64,
+    pub derived_shuffle_seeds: Vec<u64>,
+    pub recorded_budget_orders: Vec<Vec<u64>>,
+    pub runs: Vec<FragmentBudgetRun>,
+    pub replacement_gate_passed: bool,
+    pub shipping_evaluations: Option<u64>,
+    pub failures: Vec<String>,
+}
+
+pub fn deterministic_budget_orders(
+    budgets: &[u64],
+    repetitions: usize,
+    base_seed: u64,
+) -> Vec<Vec<u64>> {
+    (0..repetitions)
+        .map(|repetition| {
+            let mut state = base_seed.wrapping_add(repetition as u64);
+            let mut order = budgets.to_vec();
+            for index in (1..order.len()).rev() {
+                state ^= state << 13;
+                state ^= state >> 7;
+                state ^= state << 17;
+                let selected = usize::try_from(state % (index as u64 + 1)).unwrap_or(0);
+                order.swap(index, selected);
+            }
+            order
+        })
+        .collect()
+}
+
+pub fn evaluate_fragment_budget(
+    evaluator: &AcceptanceEvaluator,
+    baseline: &BenchmarkBaseline,
+    budget: u64,
+) -> FragmentBudgetRun {
+    let mut cases = Vec::with_capacity(evaluator.fixtures.len());
+    for fixture in &evaluator.fixtures {
+        let baseline_case = baseline
+            .cases
+            .iter()
+            .find(|case| case.name == fixture.name)
+            .cloned()
+            .unwrap_or_else(|| fixture.blank_case());
+        let result = compile_fragment_synth(
+            SynthesisInput {
+                lowered: &fixture.lowered_netlist,
+                source_provenance: None,
+                pins: Some(&fixture.placements),
+            },
+            SynthesisBudget::Evaluations(budget),
+        );
+        let case = match result {
+            Err(error) => FragmentAcceptanceCase {
+                name: fixture.name.clone(),
+                budget,
+                compiled_and_certified: false,
+                error: Some(error.to_string()),
+                baseline: baseline_case,
+                measured: None,
+                quality: None,
+                evaluations_used: None,
+                case_fingerprint: None,
+                candidate_fingerprint: None,
+                trace: Vec::new(),
+                new_coverage: false,
+                no_tick_regression: false,
+                no_block_regression: false,
+                pinned_ten_percent_tick_improvement: None,
+                strict_block_improvement: None,
+            },
+            Ok(result) => match evaluator.evaluate_world(&fixture.name, &result.compiled) {
+                Err(error) => FragmentAcceptanceCase {
+                    name: fixture.name.clone(),
+                    budget,
+                    compiled_and_certified: false,
+                    error: Some(error),
+                    baseline: baseline_case,
+                    measured: None,
+                    quality: Some(result.metrics.quality),
+                    evaluations_used: Some(result.evaluations_used),
+                    case_fingerprint: Some(result.case_fingerprint.as_str().to_string()),
+                    candidate_fingerprint: Some(result.candidate_fingerprint),
+                    trace: result.trace,
+                    new_coverage: false,
+                    no_tick_regression: false,
+                    no_block_regression: false,
+                    pinned_ten_percent_tick_improvement: None,
+                    strict_block_improvement: None,
+                },
+                Ok(measured) => {
+                    let new_coverage = !baseline_case.certified;
+                    let baseline_ticks = baseline_case.max_observed_settle_game_ticks_on_manifest;
+                    let measured_ticks = measured.max_observed_settle_game_ticks_on_manifest;
+                    let baseline_blocks = baseline_case
+                        .physical
+                        .as_ref()
+                        .map(|physical| physical.non_air_blocks);
+                    let measured_blocks = measured
+                        .physical
+                        .as_ref()
+                        .map(|physical| physical.non_air_blocks);
+                    let no_tick_regression = baseline_ticks
+                        .zip(measured_ticks)
+                        .is_none_or(|(old, new)| new <= old);
+                    let no_block_regression = baseline_blocks
+                        .zip(measured_blocks)
+                        .is_none_or(|(old, new)| new <= old);
+                    let is_pinned = fixture.name == "pinned:verilog:seven_segment";
+                    let pinned_ten_percent_tick_improvement = is_pinned.then(|| {
+                        baseline_ticks
+                            .zip(measured_ticks)
+                            .is_some_and(|(old, new)| {
+                                10_u128 * u128::from(new) <= 9_u128 * u128::from(old)
+                            })
+                    });
+                    let strict_block_improvement = is_pinned.then(|| {
+                        baseline_blocks
+                            .zip(measured_blocks)
+                            .is_some_and(|(old, new)| new < old)
+                    });
+                    FragmentAcceptanceCase {
+                        name: fixture.name.clone(),
+                        budget,
+                        compiled_and_certified: true,
+                        error: None,
+                        baseline: baseline_case,
+                        measured: Some(measured),
+                        quality: Some(result.metrics.quality),
+                        evaluations_used: Some(result.evaluations_used),
+                        case_fingerprint: Some(result.case_fingerprint.as_str().to_string()),
+                        candidate_fingerprint: Some(result.candidate_fingerprint),
+                        trace: result.trace,
+                        new_coverage,
+                        no_tick_regression,
+                        no_block_regression,
+                        pinned_ten_percent_tick_improvement,
+                        strict_block_improvement,
+                    }
+                }
+            },
+        };
+        cases.push(case);
+    }
+    let passed = cases.iter().all(FragmentAcceptanceCase::passed);
+    FragmentBudgetRun {
+        budget,
+        cases,
+        passed,
+    }
+}
+
+pub fn build_acceptance_report(
+    evaluator: &AcceptanceEvaluator,
+    baseline: &BenchmarkBaseline,
+    budgets: &[u64],
+    base_shuffle_seed: u64,
+) -> FragmentAcceptanceReport {
+    let orders = deterministic_budget_orders(budgets, 3, base_shuffle_seed);
+    let mut runs = Vec::new();
+    let mut shipping_evaluations = None;
+    for &budget in budgets {
+        let run = evaluate_fragment_budget(evaluator, baseline, budget);
+        let seed_failed = run.cases.iter().any(|case| !case.compiled_and_certified);
+        if run.passed && shipping_evaluations.is_none() {
+            shipping_evaluations = Some(budget);
+        }
+        runs.push(run);
+        if seed_failed {
+            break;
+        }
+    }
+    let failures = runs
+        .iter()
+        .flat_map(|run| {
+            run.cases
+                .iter()
+                .filter(|case| !case.passed())
+                .map(move |case| {
+                    format!(
+                        "budget {} case {} failed: {}",
+                        run.budget,
+                        case.name,
+                        case.error.as_deref().unwrap_or("quality gate")
+                    )
+                })
+        })
+        .collect();
+    FragmentAcceptanceReport {
+        schema_version: 1,
+        baseline_commit: baseline.baseline_commit.clone(),
+        base_shuffle_seed,
+        derived_shuffle_seeds: (0..3)
+            .map(|index| base_shuffle_seed.wrapping_add(index))
+            .collect(),
+        recorded_budget_orders: orders,
+        runs,
+        replacement_gate_passed: shipping_evaluations.is_some(),
+        shipping_evaluations,
+        failures,
+    }
+}
+
+pub fn write_acceptance_json(path: &Path, report: &FragmentAcceptanceReport) -> Result<(), String> {
+    refuse_existing_output(path, false)?;
+    let mut bytes = serde_json::to_vec_pretty(report)
+        .map_err(|error| format!("could not serialize acceptance report: {error}"))?;
+    bytes.push(b'\n');
+    stage_json_bytes(path, &bytes)?.persist(false)
+}
+
+pub fn write_generated_text(path: &Path, text: &str) -> Result<(), String> {
+    refuse_existing_output(path, false)?;
+    stage_json_bytes(path, text.as_bytes())?.persist(false)
+}
+
+pub fn shipping_config_source(report: &FragmentAcceptanceReport) -> Result<String, String> {
+    let evaluations = report
+        .shipping_evaluations
+        .filter(|_| report.replacement_gate_passed)
+        .ok_or_else(|| "replacement gate did not pass".to_string())?;
+    let cases = report
+        .runs
+        .iter()
+        .find(|run| run.budget == evaluations)
+        .ok_or_else(|| "passing budget run is missing".to_string())?
+        .cases
+        .iter()
+        .map(|case| {
+            format!(
+                "    ({:?}, {:?}),",
+                case.name,
+                case.case_fingerprint.as_deref().unwrap_or("")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    Ok(format!(
+        "// @generated by fragment_acceptance; do not edit.\n\
+         use crate::compile::fragment_synth::config::{{CertificationConfig, SearchConfig}};\n\
+         use crate::compile::fragment_synth::manifest::TransitionManifestKind;\n\
+         use crate::compile::routing::RouterLimits;\n\n\
+         pub const SHIPPING_EVALUATIONS: u64 = {evaluations};\n\
+         pub const SHIPPING_BASE_SHUFFLE_SEED: u64 = 0x{:016x};\n\
+         pub const SHIPPING_CASE_FINGERPRINTS: &[(&str, &str)] = &[\n{}\n];\n\n\
+         pub fn shipping_search_config() -> SearchConfig {{\n\
+             SearchConfig {{\n\
+                 router_limits: RouterLimits {{ max_node_expansions: 262_144, max_queue_entries: 262_144 }},\n\
+                 max_seed_shell_radius: 64, max_fragment_shell_radius: 32,\n\
+                 max_seed_backtracks: 1_000_000, max_fragment_backtracks_per_proposal: 100_000,\n\
+                 max_equivalence_proof_steps: 1_000_000, max_certification_transitions: 65_536,\n\
+                 max_simulator_events_per_transition: 1_000_000, max_game_ticks_per_transition: 2_048,\n\
+                 fragment_instance_schedule: vec![1, 2, 4, 8], max_boundary_nets: 32,\n\
+                 max_fragment_manhattan_radius: 48,\n\
+             }}\n\
+         }}\n\n\
+         pub fn shipping_certification_config() -> CertificationConfig {{\n\
+             CertificationConfig {{ exhaustive_input_threshold: 8, transition_manifest_kind: TransitionManifestKind::FixedV1,\n\
+                 max_equivalence_proof_steps: 1_000_000, max_certification_transitions: 65_536,\n\
+                 max_simulator_events_per_transition: 1_000_000, max_game_ticks_per_transition: 2_048 }}\n\
+         }}\n",
+        report.base_shuffle_seed, cases
+    ))
 }
 
 #[derive(Clone, Copy)]
@@ -940,6 +1253,14 @@ fn stage_baseline_json(
     let mut bytes = serde_json::to_vec_pretty(baseline)
         .map_err(|error| format!("could not serialize baseline: {error}"))?;
     bytes.push(b'\n');
+    stage_json_bytes(path, &bytes)
+}
+
+fn stage_json_bytes(path: &Path, bytes: &[u8]) -> Result<StagedBaselineJson, String> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|error| format!("could not create {}: {error}", parent.display()))?;
+    }
     let parent = path
         .parent()
         .filter(|parent| !parent.as_os_str().is_empty())
@@ -961,7 +1282,7 @@ fn stage_baseline_json(
             .open(&temporary)
         {
             Ok(mut file) => {
-                if let Err(error) = write_and_sync(&mut file, &bytes) {
+                if let Err(error) = write_and_sync(&mut file, bytes) {
                     drop(file);
                     let _ = std::fs::remove_file(&temporary);
                     return Err(format!("could not stage {}: {error}", path.display()));
@@ -1360,11 +1681,7 @@ mod tests {
         first_toward: Facing,
     ) -> PortPlacements {
         let mut pins = PortPlacements::default();
-        pins.pin(
-            "output:sum",
-            Anchor { x: 37, y: 8, z: -5 },
-            Facing::North,
-        );
+        pins.pin("output:sum", Anchor { x: 37, y: 8, z: -5 }, Facing::North);
         pins.pin(
             format!("{first_role}:{first_label}"),
             first_at,
@@ -1375,7 +1692,11 @@ mod tests {
 
     #[test]
     fn canonical_pin_bytes_pin_identity_role_geometry_and_map_order() {
-        let input_at = Anchor { x: -11, y: 4, z: 29 };
+        let input_at = Anchor {
+            x: -11,
+            y: 4,
+            z: 29,
+        };
         let pins = two_pin_manifest("input", "left", input_at, Facing::East);
         assert_eq!(
             canonical_pin_manifest_bytes(&pins),
@@ -1384,11 +1705,7 @@ mod tests {
 
         let mut reverse = PortPlacements::default();
         reverse.pin("input:left", input_at, Facing::East);
-        reverse.pin(
-            "output:sum",
-            Anchor { x: 37, y: 8, z: -5 },
-            Facing::North,
-        );
+        reverse.pin("output:sum", Anchor { x: 37, y: 8, z: -5 }, Facing::North);
         assert_eq!(
             canonical_pin_manifest_bytes(&pins),
             canonical_pin_manifest_bytes(&reverse)
@@ -1469,17 +1786,38 @@ mod tests {
 
         let original = canonical_world_bytes(&world);
         for size in [(5, 4, 5), (4, 5, 5), (4, 4, 6)] {
-            assert_ne!(canonical_world_bytes(&canonical_world_fixture(size, false)), original);
+            assert_ne!(
+                canonical_world_bytes(&canonical_world_fixture(size, false)),
+                original
+            );
         }
 
         let original_state = world.get(2, 0, 1).clone();
         let mutations = [
-            BlockState { kind: BlockKind::Comparator, ..original_state.clone() },
-            BlockState { facing: Some(Facing::West), ..original_state.clone() },
-            BlockState { power: 8, ..original_state.clone() },
-            BlockState { lit: false, ..original_state.clone() },
-            BlockState { delay: 4, ..original_state.clone() },
-            BlockState { face: Some(Face::Ceiling), ..original_state },
+            BlockState {
+                kind: BlockKind::Comparator,
+                ..original_state.clone()
+            },
+            BlockState {
+                facing: Some(Facing::West),
+                ..original_state.clone()
+            },
+            BlockState {
+                power: 8,
+                ..original_state.clone()
+            },
+            BlockState {
+                lit: false,
+                ..original_state.clone()
+            },
+            BlockState {
+                delay: 4,
+                ..original_state.clone()
+            },
+            BlockState {
+                face: Some(Face::Ceiling),
+                ..original_state
+            },
         ];
         for mutation in mutations {
             let mut changed = world.clone();
