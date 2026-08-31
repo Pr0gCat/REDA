@@ -1183,4 +1183,116 @@ mod tests {
             "unlisted branchless route {new_route:?} joined the junction at {spur_at:?}: {actual:?}"
         );
     }
+
+    #[test]
+    fn listed_route_id_does_not_authorise_an_extra_branchless_spur() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: Vec::new(),
+            gates: vec![Gate::merge("y", &["a", "b"])],
+        };
+        let compiled = compile_legacy(&netlist).expect("fixture compiles");
+        let mut adapted =
+            LegacyCandidateAdapter::adapt(&netlist, &compiled).expect("fixture adapts");
+        let (&junction_id, junction) = adapted
+            .candidate
+            .junctions
+            .iter()
+            .next()
+            .expect("bare merge has a junction");
+        let junction_at = junction.at;
+        let listed_connection = junction
+            .contributors
+            .iter()
+            .find_map(|contributor| match contributor {
+                PhysicalEndpointId::Landing(connection) => Some(*connection),
+                _ => None,
+            })
+            .expect("bare merge has a listed landing");
+        let listed_route = adapted.candidate.connections[&listed_connection].route;
+        let source = adapted.candidate.routes[&listed_route].source;
+        let occupied = adapted
+            .candidate
+            .placements
+            .values()
+            .flat_map(|placement| placement.blocks.iter())
+            .chain(
+                adapted
+                    .candidate
+                    .boundaries
+                    .values()
+                    .flat_map(|placement| placement.blocks.iter()),
+            )
+            .chain(
+                adapted
+                    .candidate
+                    .junctions
+                    .values()
+                    .flat_map(|junction| junction.cells.iter()),
+            )
+            .chain(
+                adapted
+                    .candidate
+                    .routes
+                    .values()
+                    .flat_map(|route| route.cells.iter().chain(route.floors.iter())),
+            )
+            .map(|block| block.at)
+            .collect::<std::collections::BTreeSet<_>>();
+        let spur_at = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+            .into_iter()
+            .map(|(dx, dz)| Anchor {
+                x: junction_at.x + dx,
+                y: junction_at.y,
+                z: junction_at.z + dz,
+            })
+            .find(|at| {
+                !occupied.contains(at)
+                    && !occupied.contains(&Anchor {
+                        x: at.x,
+                        y: at.y - 1,
+                        z: at.z,
+                    })
+            })
+            .expect("junction has a free supported spur direction");
+        let route = adapted
+            .candidate
+            .routes
+            .get_mut(&listed_route)
+            .expect("listed route exists");
+        route.cells.push(PlacedBlock {
+            at: spur_at,
+            state: crate::compile::dust(),
+        });
+        route.floors.push(PlacedBlock {
+            at: Anchor {
+                x: spur_at.x,
+                y: spur_at.y - 1,
+                z: spur_at.z,
+            },
+            state: crate::compile::stone(),
+        });
+
+        let actual =
+            realise_and_verify_expanded(&adapted.candidate, &netlist, &Library::default_library());
+        assert!(
+            matches!(
+                actual,
+                Err(CertificationError::Physical(
+                    ExpandedPhysicalError::UnlistedJunctionContributor {
+                        junction,
+                        contributor,
+                        route: Some(rejected_route),
+                        contributor_at,
+                        junction_at: rejected_junction_at,
+                    }
+                )) if junction == junction_id
+                    && contributor == source
+                    && rejected_route == listed_route
+                    && contributor_at == spur_at
+                    && rejected_junction_at == junction_at
+            ),
+            "extra branchless spur on listed route {listed_route:?} was accepted: {actual:?}"
+        );
+    }
 }

@@ -23,9 +23,11 @@ use super::planner::{self, PlanCandidate, PlannerError, RealisedCandidate};
 use super::topology::Library;
 use super::{Net, Netlist, Reservation};
 use crate::compile::geometry::Anchor;
+use crate::redstone::rules::taxonomy::BlockPower;
 use crate::redstone::simulator::connectivity::dust_connections;
 use crate::redstone::simulator::position::Position;
 use crate::redstone::world::block::{BlockKind, Facing};
+use crate::redstone::world::storage::World;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(crate) enum PhysicalVerifierRuleId {
@@ -414,6 +416,15 @@ pub enum ExpandedPhysicalError {
         contributor_at: Anchor,
         junction_at: Anchor,
     },
+    #[error(
+        "junction {junction:?} cannot resolve contributor {contributor:?} on route {route:?} at {at:?}"
+    )]
+    JunctionContributorLookupMissing {
+        junction: InstanceId,
+        contributor: PhysicalEndpointId,
+        route: Option<RouteId>,
+        at: Anchor,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -660,59 +671,14 @@ fn verify_junction_closure(
     emitted: &EmittedWorld,
 ) -> Result<(), ExpandedPhysicalError> {
     for (&junction_id, junction) in &candidate.junctions {
-        let listed_routes = junction
-            .contributors
-            .iter()
-            .filter_map(|contributor| match contributor {
-                PhysicalEndpointId::Landing(connection) => candidate
-                    .connections
-                    .get(connection)
-                    .map(|binding| binding.route),
-                _ => None,
-            })
-            .collect::<BTreeSet<_>>();
-        let listed_primitives = junction
-            .contributors
-            .iter()
-            .filter_map(|contributor| match contributor {
-                PhysicalEndpointId::PrimitiveOutput(primitive) => Some(*primitive),
-                _ => None,
-            })
-            .collect::<BTreeSet<_>>();
+        let mut listed = BTreeMap::new();
         for &contributor in &junction.contributors {
-            let (route, contributor_at) = match contributor {
-                PhysicalEndpointId::Landing(connection) => {
-                    let Some(binding) = candidate.connections.get(&connection) else {
-                        continue;
-                    };
-                    let Some(branch) = candidate.routes.get(&binding.route).and_then(|route| {
-                        route.branches.iter().find(|branch| {
-                            branch.sink == binding.sink
-                                && branch.target
-                                    == super::fragment_synth::candidate::RouteTarget::Connection(
-                                        connection,
-                                    )
-                        })
-                    }) else {
-                        continue;
-                    };
-                    (Some(binding.route), branch.terminal.at)
-                }
-                PhysicalEndpointId::PrimitiveOutput(primitive) => {
-                    let Some(observation) = candidate
-                        .observations
-                        .get(&ObservationId::PrimitiveOutput(primitive))
-                    else {
-                        continue;
-                    };
-                    (None, observation.site.at)
-                }
-                _ => continue,
-            };
+            let (route, contributor_at) =
+                resolve_junction_contributor(candidate, junction_id, junction.at, contributor)?;
+            listed.insert(contributor, (route, contributor_at));
             let seed = Position::new(contributor_at.x, contributor_at.y, contributor_at.z);
             let junction_position = Position::new(junction.at.x, junction.at.y, junction.at.z);
-            let (network, powered) = super::net_network_and_reach(&emitted.world, &[seed]);
-            if !network.contains(&junction_position) && !powered.contains(&junction_position) {
+            if !directed_conductor_reach(&emitted.world, seed).contains(&junction_position) {
                 return Err(ExpandedPhysicalError::JunctionContributorDoesNotReach {
                     junction: junction_id,
                     contributor,
@@ -723,55 +689,350 @@ fn verify_junction_closure(
             }
         }
 
-        let junction_position = Position::new(junction.at.x, junction.at.y, junction.at.z);
-        let (network, powered) = super::net_network_and_reach(&emitted.world, &[junction_position]);
-        for (at, role) in emitted.owners() {
-            let Some(route) = route_owner(Some(role)) else {
+        let mut primitive_outputs = BTreeMap::<Anchor, Vec<PrimitiveId>>::new();
+        for (&observation_id, observation) in &candidate.observations {
+            let ObservationId::PrimitiveOutput(primitive) = observation_id else {
                 continue;
             };
-            let position = Position::new(at.x, at.y, at.z);
-            if !network.contains(&position) && !powered.contains(&position) {
-                continue;
-            }
-            let source = candidate.routes[&route].source;
-            if source == PhysicalEndpointId::Junction(junction_id) || listed_routes.contains(&route)
-            {
-                continue;
-            }
-            return Err(ExpandedPhysicalError::UnlistedJunctionContributor {
-                junction: junction_id,
-                contributor: source,
-                route: Some(route),
-                contributor_at: at,
-                junction_at: junction.at,
-            });
+            primitive_outputs
+                .entry(observation.site.at)
+                .or_default()
+                .push(primitive);
         }
-
         for &primitive in candidate.placements.keys() {
-            if primitive.instance != junction_id || listed_primitives.contains(&primitive) {
-                continue;
-            }
-            let Some(observation) = candidate
+            let contributor = PhysicalEndpointId::PrimitiveOutput(primitive);
+            if candidate
                 .observations
                 .get(&ObservationId::PrimitiveOutput(primitive))
-            else {
-                continue;
-            };
-            let at = observation.site.at;
-            let seed = Position::new(at.x, at.y, at.z);
-            let (network, powered) = super::net_network_and_reach(&emitted.world, &[seed]);
-            if network.contains(&junction_position) || powered.contains(&junction_position) {
-                return Err(ExpandedPhysicalError::UnlistedJunctionContributor {
+                .is_none()
+            {
+                return Err(ExpandedPhysicalError::JunctionContributorLookupMissing {
                     junction: junction_id,
-                    contributor: PhysicalEndpointId::PrimitiveOutput(primitive),
+                    contributor,
                     route: None,
-                    contributor_at: at,
+                    at: junction.at,
+                });
+            }
+        }
+
+        let observed = reverse_junction_contributors(
+            candidate,
+            emitted,
+            junction_id,
+            junction.at,
+            &listed,
+            &primitive_outputs,
+        )?;
+        for (&contributor, &(route, contributor_at)) in &listed {
+            if !observed.contains(&contributor) {
+                return Err(ExpandedPhysicalError::JunctionContributorDoesNotReach {
+                    junction: junction_id,
+                    contributor,
+                    route,
+                    contributor_at,
                     junction_at: junction.at,
                 });
             }
         }
     }
     Ok(())
+}
+
+fn resolve_junction_contributor(
+    candidate: &ExpandedPhysicalCandidate,
+    junction: InstanceId,
+    junction_at: Anchor,
+    contributor: PhysicalEndpointId,
+) -> Result<(Option<RouteId>, Anchor), ExpandedPhysicalError> {
+    match contributor {
+        PhysicalEndpointId::Landing(connection) => {
+            let Some(binding) = candidate.connections.get(&connection) else {
+                return Err(ExpandedPhysicalError::JunctionContributorLookupMissing {
+                    junction,
+                    contributor,
+                    route: None,
+                    at: junction_at,
+                });
+            };
+            let Some(route) = candidate.routes.get(&binding.route) else {
+                return Err(ExpandedPhysicalError::JunctionContributorLookupMissing {
+                    junction,
+                    contributor,
+                    route: Some(binding.route),
+                    at: junction_at,
+                });
+            };
+            let Some(branch) = route.branches.iter().find(|branch| {
+                branch.sink == binding.sink
+                    && branch.target
+                        == super::fragment_synth::candidate::RouteTarget::Connection(connection)
+            }) else {
+                return Err(ExpandedPhysicalError::JunctionContributorLookupMissing {
+                    junction,
+                    contributor,
+                    route: Some(binding.route),
+                    at: junction_at,
+                });
+            };
+            Ok((Some(binding.route), branch.terminal.at))
+        }
+        PhysicalEndpointId::PrimitiveOutput(primitive) => {
+            let Some(observation) = candidate
+                .observations
+                .get(&ObservationId::PrimitiveOutput(primitive))
+            else {
+                return Err(ExpandedPhysicalError::JunctionContributorLookupMissing {
+                    junction,
+                    contributor,
+                    route: None,
+                    at: junction_at,
+                });
+            };
+            Ok((None, observation.site.at))
+        }
+        _ => Err(ExpandedPhysicalError::JunctionContributorLookupMissing {
+            junction,
+            contributor,
+            route: None,
+            at: junction_at,
+        }),
+    }
+}
+
+fn reverse_junction_contributors(
+    candidate: &ExpandedPhysicalCandidate,
+    emitted: &EmittedWorld,
+    junction: InstanceId,
+    junction_at: Anchor,
+    listed: &BTreeMap<PhysicalEndpointId, (Option<RouteId>, Anchor)>,
+    primitive_outputs: &BTreeMap<Anchor, Vec<PrimitiveId>>,
+) -> Result<BTreeSet<PhysicalEndpointId>, ExpandedPhysicalError> {
+    let start = Position::new(junction_at.x, junction_at.y, junction_at.z);
+    if !is_signal_path_kind(emitted.world.get(start.x, start.y, start.z).kind) {
+        return Ok(BTreeSet::new());
+    }
+    let mut observed = BTreeSet::new();
+    let mut visited = HashSet::from([start]);
+    let mut queue = VecDeque::from([start]);
+    while let Some(position) = queue.pop_front() {
+        let at = Anchor {
+            x: position.x,
+            y: position.y,
+            z: position.z,
+        };
+        if position != start {
+            if let Some(primitives) = primitive_outputs.get(&at) {
+                for &primitive in primitives {
+                    let contributor = PhysicalEndpointId::PrimitiveOutput(primitive);
+                    if !listed.contains_key(&contributor) {
+                        return Err(ExpandedPhysicalError::UnlistedJunctionContributor {
+                            junction,
+                            contributor,
+                            route: None,
+                            contributor_at: at,
+                            junction_at,
+                        });
+                    }
+                    observed.insert(contributor);
+                }
+                continue;
+            }
+
+            match emitted.owner_at(at) {
+                Some(PhysicalBlockRole::RouteTerminal { sink, target, .. }) => {
+                    if matches!(target, PhysicalEndpointId::Landing(_)) {
+                        if !listed.contains_key(&target) {
+                            return Err(ExpandedPhysicalError::UnlistedJunctionContributor {
+                                junction,
+                                contributor: target,
+                                route: Some(sink.route),
+                                contributor_at: at,
+                                junction_at,
+                            });
+                        }
+                        observed.insert(target);
+                        continue;
+                    }
+                    let source = route_source(candidate, junction, target, sink.route, at)?;
+                    if source == PhysicalEndpointId::Junction(junction) {
+                        continue;
+                    }
+                    return Err(ExpandedPhysicalError::UnlistedJunctionContributor {
+                        junction,
+                        contributor: source,
+                        route: Some(sink.route),
+                        contributor_at: at,
+                        junction_at,
+                    });
+                }
+                Some(PhysicalBlockRole::RouteConductor(route)) => {
+                    let source = route_source(
+                        candidate,
+                        junction,
+                        PhysicalEndpointId::Junction(junction),
+                        route,
+                        at,
+                    )?;
+                    if source == PhysicalEndpointId::Junction(junction) {
+                        continue;
+                    }
+                    return Err(ExpandedPhysicalError::UnlistedJunctionContributor {
+                        junction,
+                        contributor: source,
+                        route: Some(route),
+                        contributor_at: at,
+                        junction_at,
+                    });
+                }
+                Some(PhysicalBlockRole::Boundary(contributor))
+                | Some(PhysicalBlockRole::DeclaredOutputLamp(contributor)) => {
+                    return Err(ExpandedPhysicalError::UnlistedJunctionContributor {
+                        junction,
+                        contributor,
+                        route: None,
+                        contributor_at: at,
+                        junction_at,
+                    });
+                }
+                Some(PhysicalBlockRole::Junction(other)) if other != junction => {
+                    return Err(ExpandedPhysicalError::UnlistedJunctionContributor {
+                        junction,
+                        contributor: PhysicalEndpointId::Junction(other),
+                        route: None,
+                        contributor_at: at,
+                        junction_at,
+                    });
+                }
+                _ => {}
+            }
+        }
+
+        for predecessor in potential_predecessors(position) {
+            if visited.contains(&predecessor)
+                || !directed_conductor_step(&emitted.world, predecessor, position)
+            {
+                continue;
+            }
+            visited.insert(predecessor);
+            queue.push_back(predecessor);
+        }
+    }
+    Ok(observed)
+}
+
+fn route_source(
+    candidate: &ExpandedPhysicalCandidate,
+    junction: InstanceId,
+    contributor: PhysicalEndpointId,
+    route: RouteId,
+    at: Anchor,
+) -> Result<PhysicalEndpointId, ExpandedPhysicalError> {
+    candidate
+        .routes
+        .get(&route)
+        .map(|route| route.source)
+        .ok_or(ExpandedPhysicalError::JunctionContributorLookupMissing {
+            junction,
+            contributor,
+            route: Some(route),
+            at,
+        })
+}
+
+fn directed_conductor_reach(world: &World, seed: Position) -> HashSet<Position> {
+    if !is_signal_path_kind(world.get(seed.x, seed.y, seed.z).kind) {
+        return HashSet::new();
+    }
+    let mut reached = HashSet::from([seed]);
+    let mut queue = VecDeque::from([seed]);
+    while let Some(position) = queue.pop_front() {
+        for next in potential_predecessors(position) {
+            if reached.contains(&next) || !directed_conductor_step(world, position, next) {
+                continue;
+            }
+            reached.insert(next);
+            queue.push_back(next);
+        }
+    }
+    reached
+}
+
+fn potential_predecessors(position: Position) -> Vec<Position> {
+    let mut positions = Vec::with_capacity(14);
+    for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
+        let horizontal = position.offset(direction);
+        positions.push(horizontal.down());
+        positions.push(horizontal);
+        positions.push(horizontal.up());
+    }
+    positions.push(position.down());
+    positions.push(position.up());
+    positions
+}
+
+fn directed_conductor_step(world: &World, from: Position, to: Position) -> bool {
+    let from_state = world.get(from.x, from.y, from.z);
+    let to_state = world.get(to.x, to.y, to.z);
+    if !is_signal_path_kind(from_state.kind) || !is_signal_path_kind(to_state.kind) {
+        return false;
+    }
+    if from_state.kind == BlockKind::RedstoneWire && to_state.kind == BlockKind::RedstoneWire {
+        let from_at = Anchor {
+            x: from.x,
+            y: from.y,
+            z: from.z,
+        };
+        let to_at = Anchor {
+            x: to.x,
+            y: to.y,
+            z: to.z,
+        };
+        return dust_step_connects(world, from_at, to_at);
+    }
+    let Some(direction) = adjacent_direction(from, to) else {
+        return false;
+    };
+    let (drives_dust, block_power) =
+        super::structural_output_in_world(world, from, from_state, direction);
+    match to_state.kind {
+        BlockKind::RedstoneWire => drives_dust,
+        BlockKind::Repeater | BlockKind::Comparator => {
+            to_state.facing == Some(direction.opposite())
+                && (drives_dust || block_power != BlockPower::None)
+        }
+        _ => false,
+    }
+}
+
+fn adjacent_direction(from: Position, to: Position) -> Option<Facing> {
+    match (to.x - from.x, to.y - from.y, to.z - from.z) {
+        (-1, 0, 0) => Some(Facing::West),
+        (1, 0, 0) => Some(Facing::East),
+        (0, -1, 0) => Some(Facing::Down),
+        (0, 1, 0) => Some(Facing::Up),
+        (0, 0, -1) => Some(Facing::North),
+        (0, 0, 1) => Some(Facing::South),
+        _ => None,
+    }
+}
+
+fn is_signal_path_kind(kind: BlockKind) -> bool {
+    matches!(
+        kind,
+        BlockKind::RedstoneWire
+            | BlockKind::Repeater
+            | BlockKind::Comparator
+            | BlockKind::Torch
+            | BlockKind::WallTorch
+            | BlockKind::Lever
+            | BlockKind::RedstoneBlock
+            | BlockKind::Button
+            | BlockKind::PressurePlate
+            | BlockKind::WeightedPressurePlate
+            | BlockKind::DaylightDetector
+            | BlockKind::Observer
+            | BlockKind::Target
+    )
 }
 
 fn verify_typed_coupling(
@@ -993,7 +1254,8 @@ fn union_routes(parent: &mut BTreeMap<RouteId, RouteId>, left: RouteId, right: R
 #[cfg(test)]
 mod tests {
     use super::{
-        candidate_verifier_pipeline, expanded_strict_physical_verifier_revision_descriptor,
+        candidate_verifier_pipeline, directed_conductor_reach, directed_conductor_step,
+        expanded_strict_physical_verifier_revision_descriptor,
         physical_verifier_revision_descriptor, verify_expanded_candidate, verify_junction_closure,
         verify_route_continuity, verify_typed_connectivity, verify_typed_coupling,
         CandidateVerifierCheckId, ExpandedPhysicalError, PhysicalVerifierPolicy,
@@ -1003,11 +1265,12 @@ mod tests {
         emit_candidate as emit_typed, PhysicalBlockRef, PhysicalBlockRole, PhysicalCandidateView,
     };
     use crate::compile::fragment_synth::candidate::{
-        ExpandedPhysicalCandidate, PlacedBlock, RealisedRouteBranch, RealisedRouteTree,
-        RouteTarget, TerminalRecord,
+        ConnectionBinding, ExpandedPhysicalCandidate, PlacedBlock, RealisedJunction,
+        RealisedRouteBranch, RealisedRouteTree, RouteTarget, TerminalRecord,
     };
     use crate::compile::fragment_synth::identity::{
-        InstanceId, PhysicalEndpointId, PortId, PrimitiveId, RouteId, RoutedSinkId,
+        ConnectionId, InstanceId, ObservationId, PhysicalEndpointId, PortId, PrimitiveId, RouteId,
+        RoutedSinkId, TopologyNodeId,
     };
     use crate::compile::fragment_synth::instance_graph::InstanceGraph;
     use crate::compile::fragment_synth::legacy_adapter::LegacyCandidateAdapter;
@@ -1015,6 +1278,7 @@ mod tests {
     use crate::compile::geometry::Anchor;
     use crate::compile::planner::{PortPlacements, RouteTerminalKind};
     use crate::compile::{compile_legacy, Gate, Netlist};
+    use crate::redstone::simulator::position::Position;
     use crate::redstone::world::block::{BlockKind, BlockState, Facing};
 
     struct ShortedRoutes {
@@ -1336,6 +1600,364 @@ mod tests {
                 "valid merge was rejected: {netlist:?}"
             );
         }
+    }
+
+    #[test]
+    fn junction_contributor_cannot_reach_only_a_powered_support() {
+        let route = RouteId(0);
+        let sink = RoutedSinkId { route, ordinal: 0 };
+        let connection = ConnectionId::External {
+            instance: InstanceId(0),
+            input_index: 0,
+        };
+        let terminal_at = Anchor { x: 3, y: 2, z: 3 };
+        let junction_at = Anchor { x: 3, y: 1, z: 3 };
+        let terminal = crate::compile::dust();
+        let support = crate::compile::stone();
+        let mut candidate = candidate_with_path(vec![(terminal_at, terminal.clone())]);
+        candidate.routes.get_mut(&route).unwrap().branches[0].target =
+            RouteTarget::Connection(connection);
+        candidate.routes.get_mut(&route).unwrap().branches[0]
+            .terminal
+            .kind = RouteTerminalKind::BareMergeDust;
+        candidate.connections.insert(
+            connection,
+            ConnectionBinding {
+                id: connection,
+                source: PhysicalEndpointId::PrimaryInput(PortId(0)),
+                landing: PhysicalEndpointId::Landing(connection),
+                route,
+                sink,
+            },
+        );
+        let junction = InstanceId(0);
+        candidate.junctions.insert(
+            junction,
+            RealisedJunction {
+                id: junction,
+                at: junction_at,
+                facing: crate::compile::geometry::CellFacing::NORTH,
+                contributors: vec![PhysicalEndpointId::Landing(connection)],
+                cells: vec![PlacedBlock {
+                    at: junction_at,
+                    state: support.clone(),
+                }],
+            },
+        );
+        let emitted = emit_typed(
+            &ShortedRoutes {
+                blocks: vec![
+                    (
+                        terminal_at,
+                        terminal,
+                        PhysicalBlockRole::RouteTerminal {
+                            sink,
+                            target: PhysicalEndpointId::Landing(connection),
+                            kind: crate::compile::emission::TerminalKind::BareMergeDust,
+                            repeaters: 0,
+                        },
+                    ),
+                    (junction_at, support, PhysicalBlockRole::Junction(junction)),
+                ],
+            },
+            (8, 4, 8),
+        )
+        .expect("fixture emits");
+
+        let actual = verify_junction_closure(&candidate, &emitted);
+        assert!(
+            matches!(
+                actual,
+                Err(ExpandedPhysicalError::JunctionContributorDoesNotReach {
+                    junction: rejected_junction,
+                    contributor: PhysicalEndpointId::Landing(rejected_connection),
+                    route: Some(rejected_route),
+                    contributor_at: rejected_at,
+                    junction_at: rejected_junction_at,
+                }) if rejected_junction == junction
+                    && rejected_connection == connection
+                    && rejected_route == route
+                    && rejected_at == terminal_at
+                    && rejected_junction_at == junction_at
+            ),
+            "powered support counted as conductive reach: {actual:?}"
+        );
+    }
+
+    #[test]
+    fn route_owned_powered_support_is_not_an_unlisted_contributor() {
+        let route = RouteId(0);
+        let junction = InstanceId(0);
+        let junction_at = Anchor { x: 3, y: 2, z: 3 };
+        let support_at = Anchor { x: 3, y: 1, z: 3 };
+        let mut candidate =
+            candidate_with_path(vec![(Anchor { x: 6, y: 1, z: 6 }, crate::compile::dust())]);
+        candidate.junctions.insert(
+            junction,
+            RealisedJunction {
+                id: junction,
+                at: junction_at,
+                facing: crate::compile::geometry::CellFacing::NORTH,
+                contributors: Vec::new(),
+                cells: vec![PlacedBlock {
+                    at: junction_at,
+                    state: crate::compile::dust(),
+                }],
+            },
+        );
+        let emitted = emit_typed(
+            &ShortedRoutes {
+                blocks: vec![
+                    (
+                        junction_at,
+                        crate::compile::dust(),
+                        PhysicalBlockRole::Junction(junction),
+                    ),
+                    (
+                        support_at,
+                        crate::compile::stone(),
+                        PhysicalBlockRole::RouteConductor(route),
+                    ),
+                ],
+            },
+            (8, 4, 8),
+        )
+        .expect("fixture emits");
+
+        assert_eq!(verify_junction_closure(&candidate, &emitted), Ok(()));
+    }
+
+    #[test]
+    fn missing_landing_branch_fails_closed_with_typed_context() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: Vec::new(),
+            gates: vec![Gate::merge("y", &["a", "b"])],
+        };
+        let compiled = compile_legacy(&netlist).expect("fixture compiles");
+        let mut adapted =
+            LegacyCandidateAdapter::adapt(&netlist, &compiled).expect("fixture adapts");
+        let adapter = ExpandedCandidateAdapter::new(&adapted.candidate).expect("candidate adapts");
+        let emitted = emit_typed(&adapter, compiled.world.size()).expect("candidate emits");
+        let (&junction, realised) = adapted
+            .candidate
+            .junctions
+            .iter()
+            .next()
+            .expect("bare merge has a junction");
+        let junction_at = realised.at;
+        let connection = realised
+            .contributors
+            .iter()
+            .find_map(|contributor| match contributor {
+                PhysicalEndpointId::Landing(connection) => Some(*connection),
+                _ => None,
+            })
+            .expect("bare merge has a landing");
+        let binding = adapted.candidate.connections[&connection].clone();
+        adapted
+            .candidate
+            .routes
+            .get_mut(&binding.route)
+            .expect("landing route exists")
+            .branches
+            .retain(|branch| branch.sink != binding.sink);
+
+        let actual = verify_junction_closure(&adapted.candidate, &emitted);
+        assert!(
+            matches!(
+                actual,
+                Err(ExpandedPhysicalError::JunctionContributorLookupMissing {
+                    junction: rejected_junction,
+                    contributor: PhysicalEndpointId::Landing(rejected_connection),
+                    route: Some(rejected_route),
+                    at,
+                }) if rejected_junction == junction
+                    && rejected_connection == connection
+                    && rejected_route == binding.route
+                    && at == junction_at
+            ),
+            "missing landing branch failed open: {actual:?}"
+        );
+    }
+
+    #[test]
+    fn foreign_instance_primitive_direct_join_is_unlisted() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: Vec::new(),
+            gates: vec![
+                Gate::merge("y", &["a", "b"]),
+                Gate::nor("xa", &["a"]),
+                Gate::nor("xb", &["b"]),
+            ],
+        };
+        let compiled = compile_legacy(&netlist).expect("fixture compiles");
+        let mut adapted =
+            LegacyCandidateAdapter::adapt(&netlist, &compiled).expect("fixture adapts");
+        let adapter = ExpandedCandidateAdapter::new(&adapted.candidate).expect("candidate adapts");
+        let emitted = emit_typed(&adapter, compiled.world.size()).expect("candidate emits");
+        let (&junction, realised) = adapted
+            .candidate
+            .junctions
+            .iter_mut()
+            .find(|(_, junction)| {
+                junction
+                    .contributors
+                    .iter()
+                    .all(|endpoint| matches!(endpoint, PhysicalEndpointId::PrimitiveOutput(_)))
+            })
+            .expect("fixture has an all-isolated merge");
+        let expected_junction_at = realised.at;
+        let original = match realised.contributors.pop().expect("has contributor") {
+            PhysicalEndpointId::PrimitiveOutput(primitive) => primitive,
+            other => panic!("expected primitive contributor, got {other:?}"),
+        };
+        let foreign = PrimitiveId {
+            instance: InstanceId(junction.0 + 100),
+            node: original.node,
+        };
+        let at = adapted
+            .candidate
+            .observations
+            .remove(&ObservationId::PrimitiveOutput(original))
+            .expect("primitive observation exists")
+            .site
+            .at;
+        let mut placement = adapted
+            .candidate
+            .placements
+            .remove(&original)
+            .expect("primitive placement exists");
+        placement.id = foreign;
+        adapted.candidate.placements.insert(foreign, placement);
+        let observation = crate::compile::fragment_synth::candidate::VerifiedObservation {
+            site: crate::compile::fragment_synth::identity::ObservationSite {
+                id: ObservationId::PrimitiveOutput(foreign),
+                at,
+                logical_owner: Some(foreign.instance),
+                display_label: None,
+            },
+            state: emitted.world.get(at.x, at.y, at.z).clone(),
+        };
+        adapted
+            .candidate
+            .observations
+            .insert(ObservationId::PrimitiveOutput(foreign), observation);
+
+        let actual = verify_junction_closure(&adapted.candidate, &emitted);
+        assert!(
+            matches!(
+                actual,
+                Err(ExpandedPhysicalError::UnlistedJunctionContributor {
+                    junction: rejected_junction,
+                    contributor: PhysicalEndpointId::PrimitiveOutput(rejected),
+                    route: None,
+                    contributor_at,
+                    junction_at,
+                }) if rejected_junction == junction
+                    && rejected == foreign
+                    && contributor_at == at
+                    && junction_at == expected_junction_at
+            ),
+            "foreign-instance primitive direct join was accepted: {actual:?}"
+        );
+    }
+
+    #[test]
+    fn repeater_output_face_cannot_be_walked_in_reverse_to_a_junction() {
+        let junction = InstanceId(0);
+        let primitive = PrimitiveId {
+            instance: junction,
+            node: TopologyNodeId(0),
+        };
+        let repeater_at = Anchor { x: 3, y: 1, z: 3 };
+        let junction_at = Anchor { x: 4, y: 1, z: 3 };
+        let mut candidate =
+            candidate_with_path(vec![(Anchor { x: 1, y: 1, z: 1 }, crate::compile::dust())]);
+        candidate.routes.clear();
+        candidate.junctions.insert(
+            junction,
+            RealisedJunction {
+                id: junction,
+                at: junction_at,
+                facing: crate::compile::geometry::CellFacing::NORTH,
+                contributors: vec![PhysicalEndpointId::PrimitiveOutput(primitive)],
+                cells: vec![PlacedBlock {
+                    at: junction_at,
+                    state: crate::compile::dust(),
+                }],
+            },
+        );
+        candidate.observations.insert(
+            ObservationId::PrimitiveOutput(primitive),
+            crate::compile::fragment_synth::candidate::VerifiedObservation {
+                site: crate::compile::fragment_synth::identity::ObservationSite {
+                    id: ObservationId::PrimitiveOutput(primitive),
+                    at: repeater_at,
+                    logical_owner: Some(junction),
+                    display_label: None,
+                },
+                state: crate::compile::repeater(Facing::East),
+            },
+        );
+
+        let emit = |repeater| {
+            emit_typed(
+                &ShortedRoutes {
+                    blocks: vec![
+                        (
+                            repeater_at,
+                            repeater,
+                            PhysicalBlockRole::Primitive(primitive),
+                        ),
+                        (
+                            junction_at,
+                            crate::compile::dust(),
+                            PhysicalBlockRole::Junction(junction),
+                        ),
+                    ],
+                },
+                (8, 4, 8),
+            )
+            .expect("fixture emits")
+        };
+        let forward = emit(crate::compile::repeater(Facing::East));
+        assert!(directed_conductor_step(
+            &forward.world,
+            Position::new(repeater_at.x, repeater_at.y, repeater_at.z),
+            Position::new(junction_at.x, junction_at.y, junction_at.z),
+        ));
+        assert!(directed_conductor_reach(
+            &forward.world,
+            Position::new(repeater_at.x, repeater_at.y, repeater_at.z),
+        )
+        .contains(&Position::new(junction_at.x, junction_at.y, junction_at.z,)));
+        assert_eq!(verify_junction_closure(&candidate, &forward), Ok(()));
+
+        let reverse = emit(crate::compile::repeater(Facing::West));
+        assert!(!directed_conductor_step(
+            &reverse.world,
+            Position::new(repeater_at.x, repeater_at.y, repeater_at.z),
+            Position::new(junction_at.x, junction_at.y, junction_at.z),
+        ));
+        let actual = verify_junction_closure(&candidate, &reverse);
+        assert!(
+            matches!(
+                actual,
+                Err(ExpandedPhysicalError::JunctionContributorDoesNotReach {
+                    junction: rejected_junction,
+                    contributor: PhysicalEndpointId::PrimitiveOutput(rejected),
+                    route: None,
+                    contributor_at,
+                    junction_at: rejected_junction_at,
+                }) if rejected_junction == junction
+                    && rejected == primitive
+                    && contributor_at == repeater_at
+                    && rejected_junction_at == junction_at
+            ),
+            "repeater output face was traversed in reverse: {actual:?}"
+        );
     }
 
     #[test]
