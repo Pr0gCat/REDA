@@ -291,6 +291,7 @@ fn validate_instance_graph(
             | SynthesisError::DuplicateAssignment { sink }
             | SynthesisError::UnexpectedAssignment { sink }
             | SynthesisError::WrongLogicalSignal { sink, .. }
+            | SynthesisError::DuplicateSinkSignalMismatch { sink, .. }
             | SynthesisError::DriverSignalMismatch { sink, .. }
             | SynthesisError::WrongPhysicalDriver { sink } => stable_sink(sink),
             SynthesisError::DuplicateInputMismatch { instance, .. }
@@ -301,12 +302,17 @@ fn validate_instance_graph(
             | SynthesisError::UnknownDriverInstance { instance } => {
                 StableStructuralId::Instance(instance)
             }
+            SynthesisError::MissingDuplicateCanonical { canonical }
+            | SynthesisError::UnsupportedDuplicateTopology { canonical } => {
+                StableStructuralId::Instance(canonical)
+            }
             SynthesisError::UnsupportedStatefulTopology { gate }
             | SynthesisError::NoLibraryEntry { gate }
             | SynthesisError::MissingCanonicalInstance { gate }
             | SynthesisError::DuplicateCanonicalInstance { gate }
             | SynthesisError::Topology { gate, .. }
-            | SynthesisError::DuplicateInstanceRole { gate, .. } => {
+            | SynthesisError::DuplicateInstanceRole { gate, .. }
+            | SynthesisError::RepeatedDuplicateRequest { gate, .. } => {
                 StableStructuralId::Instance(InstanceId(gate.0))
             }
             SynthesisError::IdentityOverflow

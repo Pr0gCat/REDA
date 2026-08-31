@@ -3,7 +3,7 @@ use thiserror::Error;
 
 use crate::compile::fragment_synth::certification::{CandidateMetrics, CompleteCandidateCertifier};
 use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
-use crate::compile::fragment_synth::fragment::SingleInstanceProposalStream;
+use crate::compile::fragment_synth::fragment::FragmentProposalStream;
 use crate::compile::fragment_synth::manifest::TransitionManifest;
 use crate::compile::fragment_synth::search::{
     run_budgeted_proposals, ProposalTrace, StopReason, SynthesisBudget, SystemMonotonicClock,
@@ -98,7 +98,7 @@ fn compile_fragment_synth_with_config(
         .map_err(|error| SynthesisError::Seed(error.to_string()))?;
 
     let clock = SystemMonotonicClock::start();
-    let mut proposals = SingleInstanceProposalStream::new(seed_input, seed_services);
+    let mut proposals = FragmentProposalStream::new(seed_input, seed_services);
     let summary = run_budgeted_proposals(certified, budget, &clock, &mut proposals);
 
     let compiled = compiled_from_certified(&summary.best, input.lowered)?;

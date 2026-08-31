@@ -13,6 +13,9 @@ use crate::compile::fragment_synth::identity::{
     ConnectionId, ImplementationKey, InputMask, InstanceId, PhysicalEndpointId, PortId, RouteId,
     TimingArcId, TimingNodeId,
 };
+use crate::compile::fragment_synth::instance_graph::{
+    DuplicateRequest, InstanceDriver, InstanceRole, PhysicalDriver,
+};
 use crate::compile::fragment_synth::manifest::Transition;
 use crate::compile::fragment_synth::search::{
     CapWorkCounters, ProposalEvaluation, ProposalStream, ProposalTerminal,
@@ -50,23 +53,34 @@ pub(crate) struct FragmentChoice {
     pub shell_ordinal: u64,
 }
 
-pub(crate) struct SingleInstanceProposalStream<'a> {
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DuplicateChoice {
+    pub fragment: FragmentId,
+    pub hotspot: TimingArcId,
+    pub request: DuplicateRequest,
+}
+
+pub(crate) struct FragmentProposalStream<'a> {
     input: SeedInput<'a>,
     services: SeedServices<'a>,
     variants: BTreeMap<Fingerprint, SeedVariant>,
+    next_single_index: u64,
+    next_duplicate_index: u64,
 }
 
-impl<'a> SingleInstanceProposalStream<'a> {
+impl<'a> FragmentProposalStream<'a> {
     pub(crate) fn new(input: SeedInput<'a>, services: SeedServices<'a>) -> Self {
         Self {
             input,
             services,
             variants: BTreeMap::new(),
+            next_single_index: 0,
+            next_duplicate_index: 0,
         }
     }
 }
 
-impl ProposalStream<CertifiedCandidate> for SingleInstanceProposalStream<'_> {
+impl ProposalStream<CertifiedCandidate> for FragmentProposalStream<'_> {
     fn next(
         &mut self,
         proposal_index: u64,
@@ -77,49 +91,77 @@ impl ProposalStream<CertifiedCandidate> for SingleInstanceProposalStream<'_> {
             .get(&incumbent.metrics().candidate_fingerprint)
             .cloned()
             .unwrap_or_default();
-        let choice = match single_instance_choice(
-            incumbent,
-            self.input.lowered,
-            self.services.library,
-            self.services.search_config,
-            &variant,
-            proposal_index,
-        ) {
-            Ok(Some(choice)) => choice,
-            Ok(None) => return None,
-            Err(_) => return None,
+        let duplicate = if proposal_index % 2 == 1 {
+            duplication_choice(
+                incumbent,
+                self.input.lowered,
+                self.services.search_config,
+                &variant,
+                self.next_duplicate_index,
+            )
+            .ok()
+            .flatten()
+        } else {
+            None
         };
-        let fragment_fingerprint = choice.fragment.fingerprint();
-        let choice_fingerprint = choice.fingerprint();
-        let mut cap_work = CapWorkCounters {
-            backtracks: choice.shell_ordinal,
-            ..CapWorkCounters::default()
-        };
-        if choice.shell_ordinal
-            >= self
-                .services
-                .search_config
-                .max_fragment_backtracks_per_proposal
-        {
-            return Some(ProposalEvaluation {
-                fragment_fingerprint,
-                choice_fingerprint,
-                terminal: ProposalTerminal::BacktrackCapExhausted,
-                cap_work,
-                certified: None,
-            });
-        }
-        variant
-            .implementations
-            .insert(choice.instance, choice.implementation);
-        variant.placements.insert(
-            choice.instance,
-            InstancePlacementOverride {
-                facing: choice.facing,
-                dx: choice.dx,
-                dz: choice.dz,
-            },
-        );
+        let (fragment_fingerprint, choice_fingerprint, mut cap_work) =
+            if let Some(choice) = duplicate {
+                self.next_duplicate_index = self.next_duplicate_index.saturating_add(1);
+                let fragment_fingerprint = choice.fragment.fingerprint();
+                let choice_fingerprint = choice.fingerprint();
+                variant.duplicates.push(choice.request);
+                (
+                    fragment_fingerprint,
+                    choice_fingerprint,
+                    CapWorkCounters::default(),
+                )
+            } else {
+                let choice = match single_instance_choice(
+                    incumbent,
+                    self.input.lowered,
+                    self.services.library,
+                    self.services.search_config,
+                    &variant,
+                    self.next_single_index,
+                ) {
+                    Ok(Some(choice)) => choice,
+                    Ok(None) => return None,
+                    Err(_) => return None,
+                };
+                self.next_single_index = self.next_single_index.saturating_add(1);
+                let fragment_fingerprint = choice.fragment.fingerprint();
+                let choice_fingerprint = choice.fingerprint();
+                let cap_work = CapWorkCounters {
+                    backtracks: choice.shell_ordinal,
+                    ..CapWorkCounters::default()
+                };
+                if choice.shell_ordinal
+                    >= self
+                        .services
+                        .search_config
+                        .max_fragment_backtracks_per_proposal
+                {
+                    return Some(ProposalEvaluation {
+                        fragment_fingerprint,
+                        choice_fingerprint,
+                        terminal: ProposalTerminal::BacktrackCapExhausted,
+                        cap_work,
+                        certified: None,
+                    });
+                }
+                variant
+                    .implementations
+                    .insert(choice.instance, choice.implementation);
+                variant.placements.insert(
+                    choice.instance,
+                    InstancePlacementOverride {
+                        facing: choice.facing,
+                        dx: choice.dx,
+                        dz: choice.dz,
+                    },
+                );
+                (fragment_fingerprint, choice_fingerprint, cap_work)
+            };
         match compile_sparse_seed_variant_with_services(self.input, self.services, &variant) {
             Ok(certified) => {
                 self.variants
@@ -213,6 +255,25 @@ impl FragmentChoice {
                 shell_ordinal: self.shell_ordinal,
             })
             .expect("fragment choice must serialize canonically"),
+        )
+    }
+}
+
+impl DuplicateChoice {
+    pub(crate) fn fingerprint(&self) -> Fingerprint {
+        #[derive(Serialize)]
+        struct ChoiceDescriptor<'a> {
+            fragment: &'a FragmentId,
+            hotspot: TimingArcId,
+            request: &'a DuplicateRequest,
+        }
+        canonical_fingerprint(
+            &serde_json::to_vec(&ChoiceDescriptor {
+                fragment: &self.fragment,
+                hotspot: self.hotspot,
+                request: &self.request,
+            })
+            .expect("duplicate choice must serialize canonically"),
         )
     }
 }
@@ -410,7 +471,9 @@ pub(crate) fn single_instance_choice(
             .instances
             .instances
             .iter()
-            .find(|candidate| candidate.id == instance)
+            .find(|candidate| {
+                candidate.id == instance && candidate.role == InstanceRole::Canonical
+            })
         else {
             continue;
         };
@@ -456,6 +519,104 @@ pub(crate) fn single_instance_choice(
         }
     }
     Ok(None)
+}
+
+pub(crate) fn duplication_choice(
+    incumbent: &CertifiedCandidate,
+    lowered: &Netlist,
+    config: &SearchConfig,
+    incumbent_variant: &SeedVariant,
+    proposal_index: u64,
+) -> Result<Option<DuplicateChoice>, FragmentError> {
+    let mut dynamically_active = BTreeSet::new();
+    for &index in &incumbent.metrics().worst_transition_indices {
+        if let Some(transition) = incumbent.manifest().transitions().get(index) {
+            dynamically_active.extend(active_arcs_for_transition(
+                incumbent.candidate(),
+                incumbent.timing_graph(),
+                lowered,
+                transition,
+            )?);
+        }
+    }
+    let ranked = rank_hotspots(incumbent.timing_graph(), &dynamically_active)?;
+    let mut canonical_seen = BTreeSet::new();
+    let mut remaining = proposal_index;
+    for hotspot in ranked {
+        let arc = incumbent.timing_graph().arcs[&hotspot];
+        let fragment = match FragmentId::from_hotspot(incumbent.candidate(), arc) {
+            Ok(fragment) => fragment,
+            Err(FragmentError::UnownedHotspot { .. }) => continue,
+            Err(error) => return Err(error),
+        };
+        if fragment.boundary_endpoints.len() > usize::from(config.max_boundary_nets) {
+            continue;
+        }
+        for &canonical in &fragment.instances {
+            if !canonical_seen.insert(canonical) {
+                continue;
+            }
+            let Some(instance) =
+                incumbent
+                    .candidate()
+                    .instances
+                    .instances
+                    .iter()
+                    .find(|instance| {
+                        instance.id == canonical && instance.role == InstanceRole::Canonical
+                    })
+            else {
+                continue;
+            };
+            if !matches!(instance.expanded.topology.output, OutputSpec::Primitive(_)) {
+                continue;
+            }
+            let sinks = incumbent
+                .candidate()
+                .instances
+                .assignments
+                .iter()
+                .filter(|assignment| driver_owner(&assignment.driver) == Some(canonical))
+                .map(|assignment| assignment.sink)
+                .collect::<Vec<_>>();
+            if sinks.len() < 2 {
+                continue;
+            }
+            let ordinal = incumbent_variant
+                .duplicates
+                .iter()
+                .filter(|request| request.canonical == canonical)
+                .map(|request| request.ordinal)
+                .max()
+                .unwrap_or(0)
+                .saturating_add(1);
+            for split in 1..sinks.len() {
+                if remaining == 0 {
+                    return Ok(Some(DuplicateChoice {
+                        fragment,
+                        hotspot,
+                        request: DuplicateRequest {
+                            canonical,
+                            ordinal,
+                            sinks: sinks[split..].iter().copied().collect(),
+                        },
+                    }));
+                }
+                remaining = remaining.saturating_sub(1);
+            }
+        }
+    }
+    Ok(None)
+}
+
+fn driver_owner(driver: &PhysicalDriver) -> Option<InstanceId> {
+    match driver {
+        PhysicalDriver::PrimaryInput(_) => None,
+        PhysicalDriver::Instance(InstanceDriver::Primitive { logical_owner, .. })
+        | PhysicalDriver::Instance(InstanceDriver::Junction { logical_owner, .. }) => {
+            Some(*logical_owner)
+        }
+    }
 }
 
 fn implementation_choices(kind: GateKind, library: &Library) -> Vec<ImplementationKey> {
@@ -666,7 +827,10 @@ fn endpoint_instance(endpoint: PhysicalEndpointId) -> Option<InstanceId> {
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::{active_arcs_for_transition, rank_hotspots, single_instance_choice, FragmentId};
+    use super::{
+        active_arcs_for_transition, duplication_choice, rank_hotspots, single_instance_choice,
+        FragmentId,
+    };
     use crate::compile::equivalence::EquivalenceError;
     use crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate;
     use crate::compile::fragment_synth::certification::{
@@ -954,7 +1118,7 @@ mod tests {
         let parent = compile_sparse_seed_with_services(input, services).unwrap();
         let parent_fingerprint = parent.metrics().candidate_fingerprint.clone();
         let parent_quality = parent.metrics().quality;
-        let mut proposals = super::SingleInstanceProposalStream::new(input, services);
+        let mut proposals = super::FragmentProposalStream::new(input, services);
 
         let result = run_budgeted_proposals(
             parent,
@@ -997,7 +1161,7 @@ mod tests {
             pins: None,
         };
         let parent = compile_sparse_seed_with_services(input, services).unwrap();
-        let mut proposals = super::SingleInstanceProposalStream::new(input, services);
+        let mut proposals = super::FragmentProposalStream::new(input, services);
         let first = proposals.next(0, &parent).unwrap().certified.unwrap();
         let first_variant = proposals.variants[&first.metrics().candidate_fingerprint].clone();
         let first_instance = *first_variant.placements.keys().next().unwrap();
@@ -1009,15 +1173,106 @@ mod tests {
             })
             .expect("the bounded stream must eventually visit the other instance");
 
-        let second = proposals
-            .next(second_index, &first)
-            .unwrap()
-            .certified
-            .unwrap();
+        proposals.next_single_index = second_index;
+        let second = proposals.next(2, &first).unwrap().certified.unwrap();
         let accumulated = &proposals.variants[&second.metrics().candidate_fingerprint];
 
         assert_eq!(accumulated.placements.len(), 2);
         assert!(accumulated.placements.contains_key(&first_instance));
+    }
+
+    #[test]
+    fn duplicate_choices_partition_fanout_stably_and_run_as_certified_transactions() {
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["left".into(), "right".into()],
+            gates: vec![
+                Gate::nor("shared", &["a"]),
+                Gate::nor("left", &["shared"]),
+                Gate::nor("right", &["shared"]),
+            ],
+        };
+        let library = Library::default_library();
+        let config = SearchConfig::checked_defaults();
+        let services = SeedServices {
+            library: &library,
+            router: &DurablePhysicalRouter,
+            emitter: &DurableSeedEmitter,
+            verifier: &DurableSeedVerifier,
+            certifier: &CompleteCandidateCertifier,
+            search_config: &config,
+        };
+        let input = SeedInput {
+            lowered: &netlist,
+            source_provenance: None,
+            pins: None,
+        };
+        let parent = compile_sparse_seed_with_services(input, services).unwrap();
+        let variant = super::SeedVariant::default();
+        let first = duplication_choice(&parent, &netlist, &config, &variant, 0)
+            .unwrap()
+            .unwrap();
+        let repeated = duplication_choice(&parent, &netlist, &config, &variant, 0)
+            .unwrap()
+            .unwrap();
+
+        assert_eq!(first.fingerprint(), repeated.fingerprint());
+        assert_eq!(first.request.canonical, InstanceId(0));
+        assert_eq!(first.request.ordinal, 1);
+        assert!(!first.request.sinks.is_empty());
+
+        let mut proposals = super::FragmentProposalStream::new(input, services);
+        let certified = proposals.next(1, &parent).unwrap().certified.unwrap();
+        let committed = &proposals.variants[&certified.metrics().candidate_fingerprint];
+
+        assert_eq!(committed.duplicates, vec![first.request]);
+        assert_eq!(certified.candidate().instances.instances.len(), 4);
+        assert!(
+            certified.metrics().quality.observed_settle < parent.metrics().quality.observed_settle
+        );
+        assert!(certified.metrics().quality < parent.metrics().quality);
+
+        let parent = compile_sparse_seed_with_services(input, services).unwrap();
+        let parent_quality = parent.metrics().quality;
+        let mut budgeted = super::FragmentProposalStream::new(input, services);
+        let result = run_budgeted_proposals(
+            parent,
+            SynthesisBudget::Evaluations(2),
+            &SystemMonotonicClock::start(),
+            &mut budgeted,
+        );
+        assert!(result.trace.iter().any(|trace| trace.accepted));
+        assert!(result.best.metrics().quality < parent_quality);
+    }
+
+    #[test]
+    fn compact_fanout_duplication_is_certified_but_not_an_improvement() {
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["y".into(), "y".into()],
+            gates: vec![Gate::nor("y", &["a"])],
+        };
+        let library = Library::default_library();
+        let config = SearchConfig::checked_defaults();
+        let services = SeedServices {
+            library: &library,
+            router: &DurablePhysicalRouter,
+            emitter: &DurableSeedEmitter,
+            verifier: &DurableSeedVerifier,
+            certifier: &CompleteCandidateCertifier,
+            search_config: &config,
+        };
+        let input = SeedInput {
+            lowered: &netlist,
+            source_provenance: None,
+            pins: None,
+        };
+        let parent = compile_sparse_seed_with_services(input, services).unwrap();
+        let mut proposals = super::FragmentProposalStream::new(input, services);
+        let duplicate = proposals.next(1, &parent).unwrap().certified.unwrap();
+
+        assert_eq!(duplicate.candidate().instances.instances.len(), 2);
+        assert!(duplicate.metrics().quality >= parent.metrics().quality);
     }
 
     struct CappedRouter;
@@ -1111,7 +1366,7 @@ mod tests {
         .unwrap();
         let parent_candidate = parent.metrics().candidate_fingerprint.clone();
         let parent_timing_graph = parent.metrics().realised_timing_graph_fingerprint.clone();
-        let mut proposals = super::SingleInstanceProposalStream::new(
+        let mut proposals = super::FragmentProposalStream::new(
             input,
             SeedServices {
                 library: &library,

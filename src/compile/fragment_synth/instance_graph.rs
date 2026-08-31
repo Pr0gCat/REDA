@@ -86,6 +86,13 @@ pub struct InstanceGraph {
     pub declared_outputs: Vec<PortId>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub(crate) struct DuplicateRequest {
+    pub canonical: InstanceId,
+    pub ordinal: u16,
+    pub sinks: BTreeSet<PhysicalSink>,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum SynthesisError {
     #[error("stateful gate {gate:?} is not supported")]
@@ -94,6 +101,17 @@ pub enum SynthesisError {
     NoLibraryEntry { gate: GateIndex },
     #[error("implementation override names unknown instance {instance:?}")]
     UnknownImplementationOverride { instance: InstanceId },
+    #[error("duplicate request names missing canonical instance {canonical:?}")]
+    MissingDuplicateCanonical { canonical: InstanceId },
+    #[error("duplicate request repeats logical gate {gate:?} ordinal {ordinal}")]
+    RepeatedDuplicateRequest { gate: GateIndex, ordinal: u16 },
+    #[error("canonical instance {canonical:?} has no duplicable concrete output primitive")]
+    UnsupportedDuplicateTopology { canonical: InstanceId },
+    #[error("sink {sink:?} does not carry canonical {canonical:?}'s output signal")]
+    DuplicateSinkSignalMismatch {
+        canonical: InstanceId,
+        sink: PhysicalSink,
+    },
     #[error("gate or port count exceeds typed identity width")]
     IdentityOverflow,
     #[error("signal `{signal}` has no primary-input or gate driver")]
@@ -168,6 +186,15 @@ impl InstanceGraph {
         library: &Library,
         implementations: &BTreeMap<InstanceId, ImplementationKey>,
     ) -> Result<Self, SynthesisError> {
+        Self::with_variants(netlist, library, implementations, &[])
+    }
+
+    pub(crate) fn with_variants(
+        netlist: &Netlist,
+        library: &Library,
+        implementations: &BTreeMap<InstanceId, ImplementationKey>,
+        duplicates: &[DuplicateRequest],
+    ) -> Result<Self, SynthesisError> {
         let mut instances = Vec::with_capacity(netlist.gates.len());
         for (index, gate) in netlist.gates.iter().enumerate() {
             let gate_index = gate_index(index)?;
@@ -213,6 +240,61 @@ impl InstanceGraph {
             return Err(SynthesisError::UnknownImplementationOverride { instance });
         }
 
+        let mut ordered_duplicates = duplicates.to_vec();
+        ordered_duplicates.sort();
+        let mut duplicate_ids = BTreeMap::new();
+        for request in &ordered_duplicates {
+            let canonical = instances
+                .iter()
+                .find(|instance| {
+                    instance.id == request.canonical && instance.role == InstanceRole::Canonical
+                })
+                .cloned()
+                .ok_or(SynthesisError::MissingDuplicateCanonical {
+                    canonical: request.canonical,
+                })?;
+            if !matches!(canonical.expanded.topology.output, OutputSpec::Primitive(_)) {
+                return Err(SynthesisError::UnsupportedDuplicateTopology {
+                    canonical: request.canonical,
+                });
+            }
+            let role = InstanceRole::Duplicate {
+                ordinal: request.ordinal,
+            };
+            if duplicate_ids.contains_key(&(canonical.logical_gate, request.ordinal)) {
+                return Err(SynthesisError::RepeatedDuplicateRequest {
+                    gate: canonical.logical_gate,
+                    ordinal: request.ordinal,
+                });
+            }
+            let id = InstanceId(
+                u32::try_from(netlist.gates.len())
+                    .map_err(|_| SynthesisError::IdentityOverflow)?
+                    .checked_add(
+                        u32::try_from(duplicate_ids.len())
+                            .map_err(|_| SynthesisError::IdentityOverflow)?,
+                    )
+                    .ok_or(SynthesisError::IdentityOverflow)?,
+            );
+            let gate = &netlist.gates[usize::try_from(canonical.logical_gate.0).unwrap()];
+            let expanded =
+                instantiate(library, gate, id, &canonical.implementation).map_err(|source| {
+                    SynthesisError::Topology {
+                        gate: canonical.logical_gate,
+                        source,
+                    }
+                })?;
+            duplicate_ids.insert((canonical.logical_gate, request.ordinal), id);
+            instances.push(Instance {
+                id,
+                logical_gate: canonical.logical_gate,
+                role,
+                implementation: canonical.implementation,
+                expanded,
+            });
+        }
+        instances.sort_by_key(|instance| (instance.logical_gate, instance.role, instance.id));
+
         let (signals, primary_inputs) = signal_table(netlist)?;
         let mut assignments = Vec::new();
         for instance in &instances {
@@ -252,6 +334,38 @@ impl InstanceGraph {
                 driver: driver_for_signal(signal, &instances)?,
             });
         }
+
+        for request in &ordered_duplicates {
+            let canonical = instances
+                .iter()
+                .find(|instance| instance.id == request.canonical)
+                .ok_or(SynthesisError::MissingDuplicateCanonical {
+                    canonical: request.canonical,
+                })?;
+            let duplicate_id = duplicate_ids[&(canonical.logical_gate, request.ordinal)];
+            let duplicate = instances
+                .iter()
+                .find(|instance| instance.id == duplicate_id)
+                .expect("derived duplicate identity must exist");
+            let expected_signal = LogicalSignalId::GateOutput(canonical.logical_gate);
+            for &sink in &request.sinks {
+                let assignment = assignments
+                    .iter_mut()
+                    .find(|assignment| assignment.sink == sink)
+                    .ok_or(SynthesisError::DuplicateSinkSignalMismatch {
+                        canonical: request.canonical,
+                        sink,
+                    })?;
+                if assignment.signal != expected_signal {
+                    return Err(SynthesisError::DuplicateSinkSignalMismatch {
+                        canonical: request.canonical,
+                        sink,
+                    });
+                }
+                assignment.driver = PhysicalDriver::Instance(instance_driver(duplicate));
+            }
+        }
+        assignments.sort_by_key(|assignment| assignment.sink);
 
         let graph = InstanceGraph {
             instances,
@@ -509,16 +623,13 @@ fn validate_driver(
             actual,
         });
     }
-    let expected = match assignment.signal {
-        LogicalSignalId::PrimaryInput(port) => PhysicalDriver::PrimaryInput(port),
-        LogicalSignalId::GateOutput(gate) => {
+    let expected = match &assignment.driver {
+        PhysicalDriver::PrimaryInput(port) => PhysicalDriver::PrimaryInput(*port),
+        PhysicalDriver::Instance(driver) => {
+            let owner = driver.logical_owner();
             let instance = instance_by_id
-                .values()
-                .copied()
-                .find(|instance| {
-                    instance.logical_gate == gate && instance.role == InstanceRole::Canonical
-                })
-                .ok_or(SynthesisError::MissingCanonicalInstance { gate })?;
+                .get(&owner)
+                .ok_or(SynthesisError::UnknownDriverInstance { instance: owner })?;
             PhysicalDriver::Instance(instance_driver(instance))
         }
     };
@@ -532,7 +643,7 @@ fn validate_driver(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use crate::compile::fragment_synth::identity::{
         GateIndex, ImplementationKey, InputMask, InstanceId, PortId,
@@ -629,6 +740,121 @@ mod tests {
         assert_eq!(graph.instances[0].expanded.topology.primitives.len(), 2);
         assert_eq!(graph.assignments.len(), 3);
         graph.validate(&netlist).unwrap();
+    }
+
+    #[test]
+    fn a_duplicate_request_derives_fresh_ids_and_partitions_sinks_deterministically() {
+        let netlist = Netlist {
+            inputs: vec!["a".into(), "b".into()],
+            outputs: vec!["left".into(), "right".into()],
+            gates: vec![
+                Gate::nor("shared", &["a", "b"]),
+                Gate::nor("left", &["shared"]),
+                Gate::nor("right", &["shared"]),
+            ],
+        };
+        let partition = BTreeSet::from([PhysicalSink::InstanceInput {
+            instance: InstanceId(2),
+            input_index: 0,
+        }]);
+        let graph = InstanceGraph::with_variants(
+            &netlist,
+            &Library::default_library(),
+            &BTreeMap::new(),
+            &[super::DuplicateRequest {
+                canonical: InstanceId(0),
+                ordinal: 1,
+                sinks: partition.clone(),
+            }],
+        )
+        .unwrap();
+        let duplicate = graph
+            .instances
+            .iter()
+            .find(|instance| instance.role == super::InstanceRole::Duplicate { ordinal: 1 })
+            .unwrap();
+        let assignment = graph
+            .assignments
+            .iter()
+            .find(|assignment| partition.contains(&assignment.sink))
+            .unwrap();
+        let super::PhysicalDriver::Instance(super::InstanceDriver::Primitive {
+            logical_owner,
+            terminals,
+        }) = &assignment.driver
+        else {
+            panic!("partitioned sink must use the duplicate primitive")
+        };
+
+        assert_eq!(duplicate.id, InstanceId(3));
+        assert_eq!(duplicate.logical_gate, GateIndex(0));
+        assert_eq!(duplicate.expanded.instance, duplicate.id);
+        assert!(duplicate
+            .expanded
+            .topology
+            .connections
+            .iter()
+            .all(|connection| {
+                matches!(
+                    connection.id,
+                    crate::compile::fragment_synth::identity::ConnectionId::External {
+                        instance,
+                        ..
+                    } | crate::compile::fragment_synth::identity::ConnectionId::Internal {
+                        instance,
+                        ..
+                    } if instance == duplicate.id
+                )
+            }));
+        assert_eq!(*logical_owner, duplicate.id);
+        let crate::compile::fragment_synth::topology::OutputSpec::Primitive(output) =
+            duplicate.expanded.topology.output
+        else {
+            panic!("duplicate must retain one concrete output primitive")
+        };
+        assert_eq!(terminals, &vec![output]);
+        graph.validate(&netlist).unwrap();
+    }
+
+    #[test]
+    fn duplication_rejects_junction_outputs_and_non_owned_sink_partitions() {
+        let merge = Netlist {
+            inputs: vec!["a".into(), "b".into()],
+            outputs: vec!["y".into()],
+            gates: vec![Gate::merge("y", &["a", "b"])],
+        };
+        let request = super::DuplicateRequest {
+            canonical: InstanceId(0),
+            ordinal: 1,
+            sinks: BTreeSet::from([PhysicalSink::DeclaredOutput(PortId(0))]),
+        };
+        assert!(matches!(
+            InstanceGraph::with_variants(
+                &merge,
+                &Library::default_library(),
+                &BTreeMap::new(),
+                &[request]
+            ),
+            Err(SynthesisError::UnsupportedDuplicateTopology {
+                canonical: InstanceId(0)
+            })
+        ));
+
+        let netlist = fanout_netlist();
+        let wrong_partition = super::DuplicateRequest {
+            canonical: InstanceId(1),
+            ordinal: 1,
+            sinks: BTreeSet::from([PhysicalSink::DeclaredOutput(PortId(1))]),
+        };
+        assert!(matches!(
+            InstanceGraph::with_variants(
+                &netlist,
+                &Library::default_library(),
+                &BTreeMap::new(),
+                &[wrong_partition]
+            ),
+            Err(SynthesisError::DuplicateSinkSignalMismatch { .. })
+        ));
     }
 
     #[test]

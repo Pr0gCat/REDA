@@ -21,7 +21,7 @@ use crate::compile::fragment_synth::identity::{
     PhysicalEndpointId, PortId, PrimitiveId, RouteId, RoutedSinkId,
 };
 use crate::compile::fragment_synth::instance_graph::{
-    InstanceGraph, PhysicalDriver, PhysicalSink, SynthesisError,
+    DuplicateRequest, InstanceGraph, InstanceRole, PhysicalDriver, PhysicalSink, SynthesisError,
 };
 use crate::compile::fragment_synth::realise::{ExpandedAdapterError, ExpandedCandidateAdapter};
 use crate::compile::fragment_synth::services::{SeedEmitter, SeedVerifier};
@@ -78,6 +78,7 @@ pub(crate) struct InstancePlacementOverride {
 pub(crate) struct SeedVariant {
     pub implementations: BTreeMap<InstanceId, ImplementationKey>,
     pub placements: BTreeMap<InstanceId, InstancePlacementOverride>,
+    pub duplicates: Vec<DuplicateRequest>,
 }
 
 #[derive(Debug, Error)]
@@ -237,10 +238,11 @@ impl SparseSeedBuilder {
                 });
             }
         }
-        let instances = InstanceGraph::one_to_one_with_implementations(
+        let instances = InstanceGraph::with_variants(
             input.lowered,
             services.library,
             &variant.implementations,
+            &variant.duplicates,
         )?;
         if let Some(first) = instances
             .instances
@@ -578,11 +580,20 @@ fn automatic_input_home(
     port: PortId,
     port_index: usize,
 ) -> Result<Anchor, SeedError> {
-    let order = topological_instance_order(&candidate.instances);
-    let rank = order
+    let rank = candidate
+        .instances
+        .instances
         .iter()
-        .enumerate()
-        .map(|(index, &instance)| (instance, index))
+        .map(|instance| {
+            (
+                instance.id,
+                usize::try_from(match instance.role {
+                    InstanceRole::Canonical => instance.logical_gate.0,
+                    InstanceRole::Duplicate { .. } => instance.id.0,
+                })
+                .unwrap_or(usize::MAX),
+            )
+        })
         .collect::<BTreeMap<_, _>>();
     let target_rank = candidate
         .instances
@@ -609,7 +620,7 @@ fn automatic_input_home(
         x: pin_extent
             .saturating_add(INSTANCE_BASE_X - INPUT_STANDOFF)
             .saturating_add(target_rank_i32 * INSTANCE_X_PITCH),
-        y: instance_layer_y(candidate, target_rank)?,
+        y: instance_layer_y(candidate, target_rank, canonical_instance_count(candidate))?,
         z: INSTANCE_BASE_Z
             + target_rank_i32 * INSTANCE_Z_PITCH
             + i32::try_from(port_index % 3).map_err(|_| SeedError::IdentityOverflow)? * 3,
@@ -621,11 +632,20 @@ fn automatic_output_home(
     port: PortId,
     port_index: usize,
 ) -> Result<Anchor, SeedError> {
-    let order = topological_instance_order(&candidate.instances);
-    let rank = order
+    let rank = candidate
+        .instances
+        .instances
         .iter()
-        .enumerate()
-        .map(|(index, &instance)| (instance, index))
+        .map(|instance| {
+            (
+                instance.id,
+                usize::try_from(match instance.role {
+                    InstanceRole::Canonical => instance.logical_gate.0,
+                    InstanceRole::Duplicate { .. } => instance.id.0,
+                })
+                .unwrap_or(usize::MAX),
+            )
+        })
         .collect::<BTreeMap<_, _>>();
     let assignment = candidate
         .instances
@@ -665,6 +685,7 @@ fn automatic_output_home(
         y: instance_layer_y(
             candidate,
             usize::try_from(driver_rank).map_err(|_| SeedError::IdentityOverflow)?,
+            canonical_instance_count(candidate),
         )?,
         z: INSTANCE_BASE_Z
             + driver_rank * INSTANCE_Z_PITCH
@@ -692,7 +713,7 @@ fn place_instances(
         .unwrap_or(0)
         .max(0);
 
-    for (ordinal, instance_id) in order.into_iter().enumerate() {
+    for instance_id in order {
         let instance = candidate
             .instances
             .instances
@@ -700,7 +721,12 @@ fn place_instances(
             .find(|instance| instance.id == instance_id)
             .ok_or(SeedError::Incomplete("topological instance"))?
             .clone();
-        let ordinal = i32::try_from(ordinal).map_err(|_| SeedError::IdentityOverflow)?;
+        let ordinal =
+            i32::try_from(instance.logical_gate.0).map_err(|_| SeedError::IdentityOverflow)?;
+        let duplicate_lane = match instance.role {
+            InstanceRole::Canonical => 0,
+            InstanceRole::Duplicate { ordinal } => i32::from(ordinal),
+        };
         let base = Anchor {
             x: pin_extent
                 .saturating_add(INSTANCE_BASE_X)
@@ -708,8 +734,12 @@ fn place_instances(
             y: instance_layer_y(
                 candidate,
                 usize::try_from(ordinal).map_err(|_| SeedError::IdentityOverflow)?,
-            )?,
-            z: INSTANCE_BASE_Z + ordinal * INSTANCE_Z_PITCH,
+                netlist.gates.len(),
+            )?
+            .saturating_add(duplicate_lane * INSTANCE_Y_PITCH),
+            z: INSTANCE_BASE_Z
+                + ordinal * INSTANCE_Z_PITCH
+                + duplicate_lane * (INSTANCE_Z_PITCH / 2),
         };
         let placement_override = placement_overrides.get(&instance.id).copied();
         let base = Anchor {
@@ -742,9 +772,13 @@ fn place_instances(
                 )?;
             }
             OutputSpec::Primitive(output) => {
-                let facing = placement_override
-                    .map(|choice| choice.facing)
-                    .unwrap_or(CellFacing::EAST);
+                let facing =
+                    placement_override
+                        .map(|choice| choice.facing)
+                        .unwrap_or(match instance.role {
+                            InstanceRole::Canonical => CellFacing::EAST,
+                            InstanceRole::Duplicate { .. } => CellFacing::NORTH,
+                        });
                 for specification in &instance.expanded.topology.primitives {
                     let node = i32::from(specification.id.node.0);
                     let anchor = step_many(
@@ -789,8 +823,11 @@ fn place_instances(
     Ok(())
 }
 
-fn instance_layer_y(candidate: &ExpandedPhysicalCandidate, rank: usize) -> Result<i32, SeedError> {
-    let count = candidate.instances.instances.len();
+fn instance_layer_y(
+    candidate: &ExpandedPhysicalCandidate,
+    rank: usize,
+    count: usize,
+) -> Result<i32, SeedError> {
     let pinned_output_y = candidate
         .pin_contracts
         .iter()
@@ -822,6 +859,15 @@ fn instance_layer_y(candidate: &ExpandedPhysicalCandidate, rank: usize) -> Resul
         (Some(input_y), None) => input_y.saturating_add(rank * INSTANCE_Y_PITCH),
         (None, None) => 4 + rank * INSTANCE_Y_PITCH,
     })
+}
+
+fn canonical_instance_count(candidate: &ExpandedPhysicalCandidate) -> usize {
+    candidate
+        .instances
+        .instances
+        .iter()
+        .filter(|instance| instance.role == InstanceRole::Canonical)
+        .count()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1713,6 +1759,7 @@ mod tests {
     use crate::compile::fragment_synth::legacy_adapter::{LegacyCandidateAdapter, LegacyOracle};
     use crate::compile::fragment_synth::services::{DurableSeedEmitter, DurableSeedVerifier};
     use crate::compile::routing::{DurablePhysicalRouter, RealisedRouteTree};
+    use crate::compile::Gate;
 
     #[test]
     fn placement_search_visits_stable_manhattan_shells_and_skips_collisions() {
@@ -1884,6 +1931,66 @@ mod tests {
             variant.metrics().candidate_fingerprint,
             baseline.metrics().candidate_fingerprint
         );
+    }
+
+    #[test]
+    fn a_combinational_duplicate_is_independently_placed_routed_and_certified() {
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["left".into(), "right".into()],
+            gates: vec![
+                Gate::nor("shared", &["a"]),
+                Gate::nor("left", &["shared"]),
+                Gate::nor("right", &["shared"]),
+            ],
+        };
+        let library = Library::default_library();
+        let config = SearchConfig::checked_defaults();
+        let duplicate_sink =
+            crate::compile::fragment_synth::instance_graph::PhysicalSink::InstanceInput {
+                instance: InstanceId(2),
+                input_index: 0,
+            };
+        let certified = compile_sparse_seed_variant_with_services(
+            SeedInput {
+                lowered: &netlist,
+                source_provenance: None,
+                pins: None,
+            },
+            SeedServices {
+                library: &library,
+                router: &DurablePhysicalRouter,
+                emitter: &DurableSeedEmitter,
+                verifier: &DurableSeedVerifier,
+                certifier: &CompleteCandidateCertifier,
+                search_config: &config,
+            },
+            &SeedVariant {
+                duplicates: vec![
+                    crate::compile::fragment_synth::instance_graph::DuplicateRequest {
+                        canonical: InstanceId(0),
+                        ordinal: 1,
+                        sinks: BTreeSet::from([duplicate_sink]),
+                    },
+                ],
+                ..SeedVariant::default()
+            },
+        )
+        .unwrap();
+
+        assert_eq!(certified.candidate().instances.instances.len(), 4);
+        assert!(certified
+            .candidate()
+            .instances
+            .instances
+            .iter()
+            .any(|instance| {
+                instance.role
+                    == crate::compile::fragment_synth::instance_graph::InstanceRole::Duplicate {
+                        ordinal: 1,
+                    }
+            }));
+        certified.candidate().validate_shape().unwrap();
     }
 
     #[derive(Default)]
