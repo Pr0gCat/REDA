@@ -82,6 +82,7 @@ pub mod relax;
 #[cfg(test)]
 pub mod resettle_differential;
 pub mod revisions;
+pub mod routing;
 pub mod routing_stats;
 /// A CDCL SAT solver and a tagged CNF builder, used by `planner`'s windowed
 /// model. Test-only, so it ships in nothing and takes no dependency.

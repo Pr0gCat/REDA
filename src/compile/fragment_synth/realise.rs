@@ -620,6 +620,54 @@ mod tests {
     }
 
     #[test]
+    fn non_default_repeater_delay_survives_candidate_emission_and_verification() {
+        let netlist = not_netlist();
+        let compiled = compile_legacy(&netlist).expect("fixture compiles");
+        let mut adapted =
+            LegacyCandidateAdapter::adapt(&netlist, &compiled).expect("legacy fixture adapts");
+        let (terminal_at, exact) = {
+            let route = adapted
+                .candidate
+                .routes
+                .values_mut()
+                .find(|route| {
+                    route
+                        .branches
+                        .iter()
+                        .any(|branch| branch.terminal.state.kind == BlockKind::Repeater)
+                })
+                .expect("fixture has a repeater terminal");
+            let branch = route
+                .branches
+                .iter_mut()
+                .find(|branch| branch.terminal.state.kind == BlockKind::Repeater)
+                .expect("selected route has a repeater terminal");
+            branch.terminal.state.delay = 4;
+            let terminal_at = branch.terminal.at;
+            let exact = branch.terminal.state.clone();
+            route
+                .cells
+                .iter_mut()
+                .find(|block| block.at == terminal_at)
+                .expect("terminal state is stored in the route arena")
+                .state = exact.clone();
+            (terminal_at, exact)
+        };
+
+        let certified =
+            realise_and_verify_expanded(&adapted.candidate, &netlist, &Library::default_library())
+                .expect("delay does not alter the already-certified conduction axis");
+
+        assert_eq!(
+            certified
+                .world()
+                .get(terminal_at.x, terminal_at.y, terminal_at.z),
+            &exact
+        );
+        assert_eq!(exact.delay, 4);
+    }
+
+    #[test]
     fn expanded_adapter_matches_the_candidates_previous_exact_emission() {
         let netlist = not_netlist();
         let compiled = compile_legacy(&netlist).expect("fixture compiles");

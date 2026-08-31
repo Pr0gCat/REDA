@@ -16,28 +16,13 @@ use crate::compile::fragment_synth::topology::{ConnectionSource, OutputSpec};
 use crate::compile::geometry::{Anchor, CellFacing};
 use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
 use crate::compile::planner::{PortPin, PortPlacements, PortRole, RouteTerminalKind};
+pub use crate::compile::routing::{
+    DelayedComponent, DelayedOwner, PlacedBlock, RealisedRouteBranch, RealisedRouteTree,
+    RouteTarget, TerminalRecord,
+};
 use crate::compile::Netlist;
 use crate::redstone::world::block::{BlockKind, BlockState};
 use crate::redstone::world::storage::World;
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub enum DelayedOwner {
-    Primitive(PrimitiveId),
-    Route(RouteId),
-    InputBinding(PortId),
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub struct DelayedComponent {
-    pub at: Anchor,
-    pub owner: DelayedOwner,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct PlacedBlock {
-    pub at: Anchor,
-    pub state: BlockState,
-}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PrimitivePlacement {
@@ -49,52 +34,7 @@ pub struct PrimitivePlacement {
     pub blocks: Vec<PlacedBlock>,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct TerminalRecord {
-    pub sink: RoutedSinkId,
-    pub at: Anchor,
-    pub state: BlockState,
-    pub kind: RouteTerminalKind,
-    pub repeaters: u64,
-    pub delayed_owner: Option<DelayedOwner>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RealisedRouteBranch {
-    pub sink: RoutedSinkId,
-    pub target: RouteTarget,
-    pub root: Anchor,
-    pub path: Vec<Anchor>,
-    pub terminal: TerminalRecord,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
-pub enum RouteTarget {
-    Connection(ConnectionId),
-    DeclaredOutput(PortId),
-}
-
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
-pub struct RealisedRouteTree {
-    pub id: RouteId,
-    pub source: PhysicalEndpointId,
-    /// Every physical conductor cell this whole route tree owns, exactly once.
-    ///
-    /// Fanout branches are terminal-indexed views over this arena. Keeping
-    /// physical state here supports trees with partially shared subpaths,
-    /// rather than forcing one universal trunk plus disjoint tails.
-    pub cells: Vec<PlacedBlock>,
-    /// Final states below route cells, also owned once per coordinate.
-    pub floors: Vec<PlacedBlock>,
-    /// Stable sink order and terminal metadata; branches do not own cells again.
-    pub branches: Vec<RealisedRouteBranch>,
-}
-
 impl RealisedRouteTree {
-    pub fn owned_blocks(&self) -> impl Iterator<Item = PlacedBlock> + '_ {
-        self.cells.iter().chain(self.floors.iter()).cloned()
-    }
-
     pub fn validate(&self) -> Result<(), CandidateError> {
         let mut cells = BTreeMap::new();
         for block in &self.cells {

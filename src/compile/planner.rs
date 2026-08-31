@@ -1,9 +1,19 @@
+use std::cell::RefCell;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::Serialize;
-
+use crate::compile::fragment_synth::identity::{
+    ConnectionId, InstanceId, PhysicalEndpointId, PortId, PrimitiveId, RouteId, RoutedSinkId,
+    TopologyNodeId,
+};
 use crate::compile::primitive_graph::{self, reexpand_gate, EntrySelection, NodeId};
+use crate::compile::routing::{
+    realise_branch_from, LaidBranch, NonEmptyRouteSinks, PhysicalReservationKind,
+    PhysicalReservationOwner, PhysicalReservations, PhysicalRouter, RealisedRouteTree,
+    RouteEndpoint, RouteRequest, RouteSink as TypedRouteSink, RouteTarget,
+    RouterFailure as TypedRouterFailure, RouterLimits, RouterRefusalCategory, TerminalContract,
+    TerminalRequirement,
+};
 use crate::compile::topology::{Library, Primitive};
 use crate::compile::{self, geometry, relax, CompiledCircuit, LegacyEmission, Netlist};
 use crate::redstone::simulator::position::Position;
@@ -11,6 +21,9 @@ use crate::redstone::world::block::{BlockState, Facing};
 use crate::redstone::world::storage::World;
 
 pub use crate::compile::geometry::Anchor;
+pub use crate::compile::routing::{
+    terminal_style, RouteTerminalKind, TerminalApproach, TerminalStyle,
+};
 
 /// What a node becomes when a candidate is turned back into blocks.
 ///
@@ -160,90 +173,6 @@ pub struct Route {
     /// Ordered source-to-terminal paths, parallel to `terminals` when the
     /// producer recorded branch topology.
     branch_paths: Vec<Vec<Anchor>>,
-}
-
-/// The physical component selected at a route's final socket.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
-pub enum RouteTerminalKind {
-    RepeaterIntoSupport,
-    DirectedDustIntoSupport,
-    /// A private branch ending directly in a declared wire merge's dust.
-    BareMergeDust,
-    /// A private merge branch whose strength budget still needs a final
-    /// repeater; it terminates at merge dust, never at a NOR support.
-    BareMergeRepeater,
-    /// A pinned declared output's handover: the branch ends in the delivery
-    /// repeater that drives the caller's cell. Always a repeater -- measured
-    /// (`tests/terminal_handover.rs`) as the only construction that powers a
-    /// lamp, a solid block and dust alike, whatever shape the wire behind it
-    /// takes. Its `RouteSink::gate` carries the port name (the producing
-    /// gate's own output signal) and its `input_index` is zero by convention;
-    /// consumers that resolve sinks against gate inputs skip this kind.
-    OutputTerminalRepeater,
-}
-
-/// The conservative choice for an ordinary route's final cell.
-///
-/// A dust terminal is valid only when the route proves a straight, live and
-/// isolated approach into the support.  The physical emitter performs the
-/// simulator-backed check as well; this planner-level record prevents a
-/// local move from assuming that an old terminal decision remains valid.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum TerminalStyle {
-    DirectedDustIntoSupport,
-    RepeaterIntoSupport,
-}
-
-impl From<TerminalStyle> for RouteTerminalKind {
-    fn from(style: TerminalStyle) -> Self {
-        match style {
-            TerminalStyle::DirectedDustIntoSupport => Self::DirectedDustIntoSupport,
-            TerminalStyle::RepeaterIntoSupport => Self::RepeaterIntoSupport,
-        }
-    }
-}
-
-/// The three cells which establish whether dust can directly power a support.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct TerminalApproach {
-    pub predecessor: Anchor,
-    pub terminal: Anchor,
-    pub support: Anchor,
-    pub predecessor_strength: u8,
-    pub isolation_proven: bool,
-}
-
-impl TerminalApproach {
-    pub fn new(
-        predecessor: Anchor,
-        terminal: Anchor,
-        support: Anchor,
-        predecessor_strength: u8,
-        isolation_proven: bool,
-    ) -> Self {
-        Self {
-            predecessor,
-            terminal,
-            support,
-            predecessor_strength,
-            isolation_proven,
-        }
-    }
-}
-
-/// Choose dust only for a fully proven directed terminal.
-pub fn terminal_style(approach: &TerminalApproach) -> TerminalStyle {
-    let incoming = unit_horizontal_direction(approach.predecessor, approach.terminal);
-    let outgoing = unit_horizontal_direction(approach.terminal, approach.support);
-    if approach.predecessor_strength > 1
-        && approach.isolation_proven
-        && incoming.is_some()
-        && incoming == outgoing
-    {
-        TerminalStyle::DirectedDustIntoSupport
-    } else {
-        TerminalStyle::RepeaterIntoSupport
-    }
 }
 
 impl Route {
@@ -1231,28 +1160,6 @@ pub fn try_move(
     Ok(moved)
 }
 
-/// One rerouted branch, turned into the blocks that branch actually needs.
-struct LaidBranch {
-    blocks: Vec<BlockState>,
-    floors: Vec<BlockState>,
-    /// The signal strength arriving at the cell before the terminal -- read
-    /// off the same repeater plan that produced `blocks`, not estimated from
-    /// the path's length.
-    strength_before_terminal: u8,
-    /// Repeaters this branch lays between the source and its terminal.
-    repeaters: u64,
-    /// Whether the signal is still alive when it reaches the last cell.
-    ///
-    /// A refresh can only stand on a flat cell, and a path that climbs and
-    /// drops repeatedly leaves nowhere to put one -- so the budget asks for a
-    /// refresh, finds every candidate is a stair, and the run carries on
-    /// decaying. The route is laid, connected and dead. Saying so here turns
-    /// it into a routing failure, which the negotiation loop already knows how
-    /// to answer: charge what pushed this path into the air and take a flatter
-    /// one.
-    carries: bool,
-}
-
 /// Lay dust along a rerouted branch, refreshing it with repeaters exactly
 /// where the strength budget demands.
 ///
@@ -1267,130 +1174,6 @@ fn realise_branch(source: Anchor, cells: &[Anchor]) -> LaidBranch {
         crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
         cells,
     )
-}
-
-/// [`realise_branch`], continuing from a signal that has already travelled.
-///
-/// A fanout's branches share a trunk, and the trunk keeps the blocks the first
-/// branch laid. A later branch that plans its refreshes from full strength
-/// across its whole path is therefore planning refreshes it will not get: the
-/// ones it wanted on the trunk are discarded, and its tail runs from wherever
-/// the trunk actually left the signal. So it is told.
-fn realise_branch_from(previous_cell: Anchor, incoming: u8, cells: &[Anchor]) -> LaidBranch {
-    let source = previous_cell;
-    let mut bends: BTreeSet<usize> = cells
-        .windows(3)
-        .enumerate()
-        .filter(|(_, window)| direction(window[0], window[1]) != direction(window[1], window[2]))
-        .map(|(index, _)| index + 1)
-        .collect();
-    // A repeater needs a flat cell to stand on and a horizontal facing, so a
-    // staircase step can never hold one. `bend_indices` already means exactly
-    // "no repeater here", so saying it there lets `plan_bent_path` put the
-    // refresh somewhere it fits -- rather than placing one on a stair and
-    // having realisation quietly downgrade it to dust and lose the refresh.
-    let mut previous = source;
-    for (index, cell) in cells.iter().enumerate() {
-        if cell.y != previous.y {
-            bends.insert(index);
-        }
-        previous = *cell;
-    }
-
-    // Reserve for the stairs. Every cell of a climb spends strength and none
-    // of them can hold a repeater, so the refreshes have to be far enough
-    // ahead to carry the run through them -- which is exactly what `reserve`
-    // means to `plan_bent_path`. Pricing climbs in the search instead was
-    // tried and moved them to where the signal could no longer afford them.
-    let stairs = bends
-        .iter()
-        .filter(|&&index| {
-            let before = if index == 0 { source } else { cells[index - 1] };
-            cells[index].y != before.y
-        })
-        .count();
-    let reserve = (stairs as i32).min(compile::MAX_DUST_RUN - 2);
-    let (is_repeater, _) = compile::plan_bent_path(cells.len(), &bends, incoming, reserve);
-
-    // A refresh immediately before every climb. A staircase spends one
-    // strength per level and can hold no repeater anywhere along it, so a
-    // climb entered on a tired signal arrives dead however short it is --
-    // which is what left segment_a connected and unpowered. Entered at full
-    // strength it is affordable, and this is the only cell that can make it
-    // so: the last flat one before the stairs.
-    let mut is_repeater = is_repeater;
-    let mut previous = source;
-    for (index, cell) in cells.iter().enumerate() {
-        if cell.y != previous.y && index > 0 {
-            let before = index - 1;
-            if !bends.contains(&before) {
-                is_repeater[before] = true;
-            }
-        }
-        previous = *cell;
-    }
-
-    let mut blocks = Vec::with_capacity(cells.len());
-    let mut previous = source;
-    for (index, cell) in cells.iter().enumerate() {
-        // A repeater needs a horizontal facing, so a cell reached by a step
-        // in Y can only be dust -- that is what a dust staircase is. The
-        // strength budget may have wanted a refresh here; if losing it
-        // matters, `verify_signal_strength` says so rather than this guessing.
-        let step = unit_horizontal_direction(previous, *cell);
-        let block = match (is_repeater[index], step) {
-            (true, Some(_)) => compile::repeater(compile::direction_from(
-                Position::new(previous.x, previous.y, previous.z),
-                Position::new(cell.x, cell.y, cell.z),
-            )),
-            _ => compile::dust(),
-        };
-        blocks.push(block);
-        previous = *cell;
-    }
-
-    // Strength at the cell before the terminal: full again if that cell is a
-    // repeater, otherwise the maximum less one per dust cell since the last
-    // refresh.
-    let strength_before_terminal = match cells.len().checked_sub(2) {
-        None => incoming,
-        Some(index) => {
-            let last_refresh = (0..=index).rev().find(|&i| is_repeater[i]);
-            match last_refresh {
-                Some(refresh) => crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH
-                    .saturating_sub((index - refresh) as u8),
-                None => incoming.saturating_sub((index + 1) as u8),
-            }
-        }
-    };
-
-    // Walk the blocks that were actually laid, not the plan that asked for
-    // them: a refresh the plan wanted and could not place is exactly the case
-    // this has to catch.
-    let mut carried = incoming;
-    let mut carries = true;
-    for block in &blocks {
-        if block.kind == crate::redstone::world::block::BlockKind::Repeater {
-            carried = crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
-            continue;
-        }
-        carried = carried.saturating_sub(1);
-        if carried == 0 {
-            carries = false;
-            break;
-        }
-    }
-
-    LaidBranch {
-        floors: vec![compile::stone(); blocks.len()],
-        repeaters: blocks
-            .iter()
-            .filter(|block| block.kind == crate::redstone::world::block::BlockKind::Repeater)
-            .count() as u64,
-        blocks,
-        strength_before_terminal,
-        carries,
-    }
 }
 
 impl PlanCandidate {
@@ -1777,63 +1560,7 @@ fn deterministic_astar(
     None
 }
 
-/// One state of the strength-aware search: where the signal is, which way it
-/// entered, and how much of it is left.
-///
-/// `entered` is the horizontal step direction encoded 0..=3, or 4 for "no
-/// horizontal entry" -- the branch source, or a cell entered by a climb or a
-/// descent. It is part of the state because it decides the one thing the
-/// distance-only search cannot see: whether THIS cell could hold a refresh
-/// (a repeater needs the signal to pass straight through, horizontally).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-struct StrengthSearchState {
-    estimate: u64,
-    travelled: u64,
-    anchor: Anchor,
-    entered: u8,
-    carried: u8,
-}
-
-fn entered_code(from: Anchor, to: Anchor) -> u8 {
-    match unit_horizontal_direction(from, to) {
-        Some((1, 0, 0)) => 0,
-        Some((-1, 0, 0)) => 1,
-        Some((0, 0, 1)) => 2,
-        Some((0, 0, -1)) => 3,
-        _ => 4,
-    }
-}
-
-/// [`deterministic_astar`], with the strength budget in the state.
-///
-/// The distance-only search prices distance and cannot see decay, and one
-/// night measured what that blindness costs from both sides: it proposes
-/// paths that arrive electrically dead (`the route ... decays to nothing`),
-/// and every attempt to widen its move set -- stair reuse, bounded or not --
-/// re-rolled whole growth trajectories into plans that verified nowhere
-/// (three kills, 2026-08-28, the ledger's record). Here the state is
-/// `(anchor, entry direction, carried strength)`:
-///
-/// - a step costs one strength, climbs included -- `realise_branch_from`'s
-///   own arithmetic;
-/// - a cell passed straight through horizontally may hold a refresh, so the
-///   signal leaves it at full strength -- the same cells `plan_bent_path`
-///   can put a repeater on (not a bend, not a stair), so what this search
-///   admits, realisation can build;
-/// - a cell of this branch's own already-laid trunk is ridden at the trunk's
-///   own arithmetic: its block KIND is handed in as `trunk`, a repeater
-///   restores and dust decays -- the same walk the shared-prefix accounting
-///   applies to a ridden line, cell for cell (the first draft handed in
-///   per-cell strengths from a positional walk of the whole route, which
-///   crosses branch boundaries and is wrong on both sides of every one);
-/// - a state that would arrive with nothing is not generated at all.
-///
-/// **Not on any shipping path.** The shipping searches stay distance-only
-/// until this one measures strictly better beside them -- the criterion-4
-/// gauntlet is the law. Dominance: a state is skipped when another visit to
-/// the same `(anchor, entered)` was both cheaper and stronger; the frontier
-/// per key is tiny (strength has 15 values) and the search stays
-/// deterministic, every tie broken by the state's own ordering.
+/// Legacy reservation/pricing adapter around the durable StrengthAware kernel.
 #[cfg_attr(not(test), allow(dead_code))]
 #[allow(clippy::too_many_arguments)]
 fn strength_aware_astar(
@@ -1844,11 +1571,10 @@ fn strength_aware_astar(
     reservation: &Reservation,
     own_join: &OwnJoinCheck,
     prices: &Prices,
-    trunk: &BTreeMap<Anchor, crate::redstone::world::block::BlockKind>,
+    trunk: &BTreeMap<Anchor, BlockState>,
     source_strength: u8,
 ) -> Option<Vec<Anchor>> {
     let margin = manhattan_distance(start, goal).saturating_add(2) as i32;
-    const CLIMB: i32 = 3;
     let min = Anchor {
         x: start.x.min(goal.x).saturating_sub(margin),
         y: start.y.min(goal.y),
@@ -1856,166 +1582,36 @@ fn strength_aware_astar(
     };
     let max = Anchor {
         x: start.x.max(goal.x).saturating_add(margin),
-        y: start.y.max(goal.y).saturating_add(CLIMB),
+        y: start.y.max(goal.y).saturating_add(3),
         z: start.z.max(goal.z).saturating_add(margin),
     };
-
-    let start_state = StrengthSearchState {
-        estimate: manhattan_distance(start, goal),
-        travelled: 0,
-        anchor: start,
-        entered: 4,
-        carried: source_strength,
-    };
-    let mut frontier = BTreeSet::from([start_state]);
-    // Per (anchor, entered): the (travelled, carried) pairs already accepted.
-    // A new visit dominated on both axes is skipped.
-    let mut visited: BTreeMap<(Anchor, u8), Vec<(u64, u8)>> = BTreeMap::new();
-    visited.insert((start, 4), vec![(0, start_state.carried)]);
-    // Keyed WITH travelled: a generation edge always goes to a strictly
-    // smaller travelled, so the chain below can never cycle however often a
-    // better path re-claims the same (anchor, entered, carried).
-    type StateKey = (Anchor, u8, u8, u64);
-    let mut parent: BTreeMap<StateKey, StateKey> = BTreeMap::new();
-
-    while let Some(state) = frontier.iter().next().copied() {
-        frontier.remove(&state);
-        if state.anchor == goal {
-            // Rebuild the anchor path off the state chain.
-            let mut path = vec![state.anchor];
-            let mut walk = (state.anchor, state.entered, state.carried, state.travelled);
-            while let Some(&up) = parent.get(&walk) {
-                path.push(up.0);
-                walk = up;
-            }
-            path.reverse();
-            return Some(path);
-        }
-
-        // The chain this state actually took, materialised anchor-by-anchor
-        // for the two path-shape rules that read a parent map.
-        let chain: BTreeMap<Anchor, Anchor> = {
-            let mut chain = BTreeMap::new();
-            let mut walk = (state.anchor, state.entered, state.carried, state.travelled);
-            while let Some(&up) = parent.get(&walk) {
-                chain.insert(walk.0, up.0);
-                walk = up;
-            }
-            chain
-        };
-
-        for next in neighbours(state.anchor) {
-            // One branch, one visit per cell. Dust is a conductor: a path
-            // that returns to its own cell has already joined it, so the
-            // doubled tail carries nothing the first pass did not -- and a
-            // simple path is what lets `chain` above stay an acyclic map
-            // (an anchor revisited would fold it into a cycle, and the two
-            // path-shape rules below walk it).
-            if next == start || chain.contains_key(&next) {
-                continue;
-            }
-            if self_obstructs(&chain, state.anchor, next) {
-                continue;
-            }
-            if own_join.blocks(next, state.anchor, start, goal, owner, reservation, &chain) {
-                continue;
-            }
-            if !within_bounds(next, min, max)
+    crate::compile::routing::strength_aware_astar(
+        start,
+        goal,
+        trunk,
+        source_strength,
+        |chain, at, next| {
+            if self_obstructs(chain, at, next)
+                || own_join.blocks(next, at, start, goal, owner, reservation, chain)
+                || !within_bounds(next, min, max)
                 || !anchor_is_free_for(next, start, goal, terminal_support, owner, reservation)
-                || staircase_clearance(state.anchor, next)
-                    .into_iter()
-                    .any(|cell| {
-                        let foreign = reservation.owner(&cell).is_some_and(|occupied_by| {
-                            occupied_by != owner && occupied_by != stair_guard(owner)
-                        });
-                        let is_riser = next.y > state.anchor.y && cell.y == state.anchor.y;
-                        if is_riser {
-                            return foreign || reservation.conductor_owner(&cell).is_some();
-                        }
-                        // The reuse the distance-only search must refuse is safe
-                        // here: strength is in the state, so a ride that decays
-                        // dies in the arithmetic instead of in the built world.
-                        reservation.owner(&cell).is_some()
-                            && reservation.air_owner(&cell) != Some(stair_guard(owner).as_str())
-                    })
             {
-                continue;
+                return false;
             }
-
-            // The strength arithmetic. Riding a trunk cell follows the
-            // trunk's own realisation -- a repeater restores, dust decays --
-            // which is the shared-prefix walk, cell for cell. Off the trunk,
-            // leaving strength is full when THIS cell can hold a refresh:
-            // entered and left straight through, horizontally, and not a
-            // cell whose block is already built.
-            let carried = match trunk.get(&next) {
-                Some(kind) => {
-                    if *kind == crate::redstone::world::block::BlockKind::Repeater {
-                        crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH
-                    } else {
-                        match state.carried.checked_sub(1) {
-                            None | Some(0) => continue,
-                            Some(left) => left,
-                        }
-                    }
+            !staircase_clearance(at, next).into_iter().any(|cell| {
+                let foreign = reservation.owner(&cell).is_some_and(|occupied_by| {
+                    occupied_by != owner && occupied_by != stair_guard(owner)
+                });
+                let is_riser = next.y > at.y && cell.y == at.y;
+                if is_riser {
+                    return foreign || reservation.conductor_owner(&cell).is_some();
                 }
-                None => {
-                    let step = entered_code(state.anchor, next);
-                    let straight_through = state.entered == step
-                        && step != 4
-                        && !trunk.contains_key(&state.anchor)
-                        && state.anchor != start;
-                    let leaving = if straight_through {
-                        crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH
-                    } else {
-                        state.carried
-                    };
-                    match leaving.checked_sub(1) {
-                        None | Some(0) => continue,
-                        Some(left) => left,
-                    }
-                }
-            };
-
-            const CLIMB_COST: u64 = 3;
-            let closer_in_y = (next.y - goal.y).abs() < (state.anchor.y - goal.y).abs();
-            let step_cost = if next.y == state.anchor.y || closer_in_y {
-                1
-            } else {
-                CLIMB_COST
-            };
-            let next_travelled = state
-                .travelled
-                .saturating_add(step_cost)
-                .saturating_add(prices.price(&next));
-
-            let entered = entered_code(state.anchor, next);
-            let seen = visited.entry((next, entered)).or_default();
-            if seen
-                .iter()
-                .any(|&(travelled, strength)| travelled <= next_travelled && strength >= carried)
-            {
-                continue;
-            }
-            seen.retain(|&(travelled, strength)| {
-                !(next_travelled <= travelled && carried >= strength)
-            });
-            seen.push((next_travelled, carried));
-
-            parent.insert(
-                (next, entered, carried, next_travelled),
-                (state.anchor, state.entered, state.carried, state.travelled),
-            );
-            frontier.insert(StrengthSearchState {
-                estimate: next_travelled.saturating_add(manhattan_distance(next, goal)),
-                travelled: next_travelled,
-                anchor: next,
-                entered,
-                carried,
-            });
-        }
-    }
-    None
+                reservation.owner(&cell).is_some()
+                    && reservation.air_owner(&cell) != Some(stair_guard(owner).as_str())
+            })
+        },
+        |next| prices.price(next),
+    )
 }
 
 fn reconstruct_path(previous: BTreeMap<Anchor, Anchor>, goal: Anchor) -> Vec<Anchor> {
@@ -4833,11 +4429,11 @@ fn lay_net(
         // aware searcher rides them at the shared-prefix arithmetic
         // (repeater restores, dust decays) along its own path, which is
         // exactly the walk the accounting below applies to a ridden line.
-        let trunk: BTreeMap<Anchor, crate::redstone::world::block::BlockKind> = route
+        let trunk: BTreeMap<Anchor, BlockState> = route
             .anchors
             .iter()
             .zip(&route.realisation)
-            .map(|(anchor, block)| (*anchor, block.kind))
+            .map(|(anchor, block)| (*anchor, block.clone()))
             .collect();
         let mut found: Option<Vec<Anchor>> = None;
         let mut aimed_at = approaches[0];
@@ -5147,6 +4743,357 @@ fn lay_net(
     Ok(route)
 }
 
+/// Lossless compatibility boundary between the string-labelled shipping
+/// planner and the durable typed physical-router contract.
+///
+/// The adapter intentionally invokes the existing shipping kernel until Task
+/// 13 changes policy.  Its request and result are nevertheless fully typed,
+/// and the result is converted back from exact `BlockState` records rather
+/// than reconstructed from coordinates.
+struct LegacyPlannerRouterAdapter<'a> {
+    signal: &'a str,
+    consumers: &'a [NetConsumer],
+    netlist: &'a Netlist,
+    candidate: &'a PlanCandidate,
+    reservation: RefCell<&'a mut Reservation>,
+    prices: &'a Prices<'a>,
+    failure: RefCell<Option<Box<RoutingFailure>>>,
+}
+
+impl<'a> LegacyPlannerRouterAdapter<'a> {
+    fn new(
+        signal: &'a str,
+        consumers: &'a [NetConsumer],
+        netlist: &'a Netlist,
+        candidate: &'a PlanCandidate,
+        reservation: &'a mut Reservation,
+        prices: &'a Prices<'a>,
+    ) -> Self {
+        Self {
+            signal,
+            consumers,
+            netlist,
+            candidate,
+            reservation: RefCell::new(reservation),
+            prices,
+            failure: RefCell::new(None),
+        }
+    }
+
+    fn take_failure(&self) -> Option<Box<RoutingFailure>> {
+        self.failure.borrow_mut().take()
+    }
+
+    fn into_legacy(&self, tree: RealisedRouteTree) -> Route {
+        let mut floors = Vec::with_capacity(tree.cells.len());
+        for cell in &tree.cells {
+            let floor_at = Anchor {
+                y: cell.at.y - 1,
+                ..cell.at
+            };
+            floors.push(
+                tree.floors
+                    .iter()
+                    .find(|floor| floor.at == floor_at)
+                    .map(|floor| floor.state.clone())
+                    .unwrap_or_else(compile::stone),
+            );
+        }
+        let terminals = tree
+            .branches
+            .iter()
+            .zip(self.consumers)
+            .map(|(branch, consumer)| RouteTerminal {
+                sink: match consumer {
+                    NetConsumer::Gate { gate, input_index } => RouteSink {
+                        gate: self.netlist.gates[*gate].output.clone(),
+                        input_index: *input_index,
+                        anchor: branch.terminal.at,
+                    },
+                    NetConsumer::Terminal { port, .. } => RouteSink {
+                        gate: port.clone(),
+                        input_index: 0,
+                        anchor: branch.terminal.at,
+                    },
+                },
+                kind: branch.terminal.kind,
+                repeaters: branch.terminal.repeaters,
+            })
+            .collect();
+        Route {
+            id: self.signal.to_string(),
+            anchors: tree.cells.iter().map(|cell| cell.at).collect(),
+            owner: Some(self.signal.to_string()),
+            terminals,
+            realisation: tree.cells.into_iter().map(|cell| cell.state).collect(),
+            floors,
+            branch_paths: tree
+                .branches
+                .into_iter()
+                .map(|branch| branch.path)
+                .collect(),
+        }
+    }
+}
+
+impl PhysicalRouter for LegacyPlannerRouterAdapter<'_> {
+    fn route(&self, request: RouteRequest<'_>) -> Result<RealisedRouteTree, TypedRouterFailure> {
+        let first_sink = request.sinks.as_slice()[0].id;
+        if request.limits.max_queue_entries == 0 {
+            return Err(TypedRouterFailure::RouterLimitExceeded {
+                route: request.id,
+                source: request.source.id,
+                sink: first_sink,
+                kind: crate::compile::routing::RouterLimitKind::QueueEntries,
+                limit: 0,
+                work_used: 1,
+            });
+        }
+        if request.limits.max_node_expansions == 0 {
+            return Err(TypedRouterFailure::RouterLimitExceeded {
+                route: request.id,
+                source: request.source.id,
+                sink: first_sink,
+                kind: crate::compile::routing::RouterLimitKind::NodeExpansions,
+                limit: 0,
+                work_used: 1,
+            });
+        }
+        let legacy = lay_net(
+            self.signal,
+            request.source.anchor,
+            self.consumers,
+            self.netlist,
+            self.candidate,
+            &mut self.reservation.borrow_mut(),
+            self.prices,
+        );
+        match legacy {
+            Ok(route) => Ok(legacy_route_to_typed(route, &request)),
+            Err(failure) => {
+                let category = legacy_refusal_category(&failure.error);
+                *self.failure.borrow_mut() = Some(failure);
+                Err(TypedRouterFailure::Refused {
+                    route: request.id,
+                    source: request.source.id,
+                    sink: None,
+                    category,
+                })
+            }
+        }
+    }
+}
+
+fn legacy_refusal_category(error: &PlannerError) -> RouterRefusalCategory {
+    match error {
+        PlannerError::NoLocalRoute { .. } => RouterRefusalCategory::NoLocalRoute,
+        PlannerError::PhysicalInvariant(_) => RouterRefusalCategory::PhysicalInvariant,
+        PlannerError::InvalidPortPin { .. } => RouterRefusalCategory::InvalidRequest,
+        _ => RouterRefusalCategory::PhysicalInvariant,
+    }
+}
+
+fn legacy_route_to_typed(route: Route, request: &RouteRequest<'_>) -> RealisedRouteTree {
+    let cells: Vec<_> = route
+        .anchors
+        .iter()
+        .copied()
+        .zip(route.realisation.iter().cloned())
+        .map(|(at, state)| crate::compile::routing::PlacedBlock { at, state })
+        .collect();
+    let floors = route
+        .anchors
+        .iter()
+        .copied()
+        .zip(route.floors.iter().cloned())
+        .map(|(at, state)| crate::compile::routing::PlacedBlock {
+            at: Anchor { y: at.y - 1, ..at },
+            state,
+        })
+        .collect();
+    let branches = request
+        .sinks
+        .as_slice()
+        .iter()
+        .zip(route.terminals.iter())
+        .zip(route.branch_paths.iter())
+        .map(|((sink, terminal), path)| {
+            let state = cells
+                .iter()
+                .find(|cell| cell.at == terminal.sink.anchor)
+                .expect("legacy terminal is one of its exact route cells")
+                .state
+                .clone();
+            crate::compile::routing::RealisedRouteBranch {
+                sink: sink.id,
+                target: sink
+                    .terminal
+                    .target()
+                    .expect("a typed legacy sink carries a target"),
+                root: *path.first().expect("legacy branch paths are non-empty"),
+                path: path.clone(),
+                terminal: crate::compile::routing::TerminalRecord {
+                    sink: sink.id,
+                    at: terminal.sink.anchor,
+                    delayed_owner: (state.kind
+                        == crate::redstone::world::block::BlockKind::Repeater)
+                        .then_some(crate::compile::routing::DelayedOwner::Route(request.id)),
+                    state,
+                    kind: terminal.kind,
+                    repeaters: terminal.repeaters,
+                },
+            }
+        })
+        .collect();
+    RealisedRouteTree {
+        id: request.id,
+        source: request.source.id,
+        cells,
+        floors,
+        branches,
+    }
+}
+
+fn typed_reservations(
+    reservation: &Reservation,
+    route: RouteId,
+    signal: &str,
+) -> PhysicalReservations {
+    let mut typed = PhysicalReservations::new();
+    for (ordinal, (&at, (owner, occupancy))) in reservation.cells.iter().enumerate() {
+        let typed_owner = if owner == signal {
+            PhysicalReservationOwner::Route(route)
+        } else {
+            PhysicalReservationOwner::KeepOut(ordinal as u32)
+        };
+        let kind = match occupancy {
+            Occupancy::Wire => PhysicalReservationKind::Conductor(compile::dust()),
+            Occupancy::Stone => PhysicalReservationKind::Floor(compile::stone()),
+            Occupancy::Air => PhysicalReservationKind::MandatoryAir,
+            Occupancy::GateConductor | Occupancy::Solid => PhysicalReservationKind::KeepOut,
+        };
+        typed.reserve(at, typed_owner, kind);
+    }
+    typed
+}
+
+fn typed_endpoint_id(netlist: &Netlist, signal: &str) -> PhysicalEndpointId {
+    if let Some(index) = netlist.inputs.iter().position(|input| input == signal) {
+        return PhysicalEndpointId::PrimaryInput(PortId(index as u32));
+    }
+    let gate = netlist
+        .gates
+        .iter()
+        .position(|gate| gate.output == signal)
+        .expect("every routed signal has an input or gate source");
+    if netlist.gates[gate].is_merge() {
+        PhysicalEndpointId::Junction(InstanceId(gate as u32))
+    } else {
+        PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance: InstanceId(gate as u32),
+            node: TopologyNodeId(0),
+        })
+    }
+}
+
+fn facing_between(from: Anchor, to: Anchor) -> Facing {
+    match unit_horizontal_direction(from, to) {
+        Some((1, 0, 0)) => Facing::East,
+        Some((-1, 0, 0)) => Facing::West,
+        Some((0, 0, 1)) => Facing::South,
+        Some((0, 0, -1)) => Facing::North,
+        _ => Facing::East,
+    }
+}
+
+fn typed_legacy_request_parts(
+    route: RouteId,
+    signal: &str,
+    source: Anchor,
+    consumers: &[NetConsumer],
+    netlist: &Netlist,
+    candidate: &PlanCandidate,
+) -> (RouteEndpoint, NonEmptyRouteSinks) {
+    let mut sinks = Vec::with_capacity(consumers.len());
+    let mut first_approach = None;
+    for (ordinal, consumer) in consumers.iter().enumerate() {
+        let id = RoutedSinkId {
+            route,
+            ordinal: ordinal as u16,
+        };
+        let typed = match consumer {
+            NetConsumer::Gate { gate, input_index } => {
+                let support = candidate.anchors[*gate];
+                let socket = step(
+                    support,
+                    compile::geometry::input_directions(candidate.facing_of(*gate))[*input_index],
+                );
+                let approach = Anchor {
+                    x: socket.x + (socket.x - support.x),
+                    y: socket.y + (socket.y - support.y),
+                    z: socket.z + (socket.z - support.z),
+                };
+                first_approach.get_or_insert(approach);
+                let connection = ConnectionId::External {
+                    instance: InstanceId(*gate as u32),
+                    input_index: *input_index as u16,
+                };
+                TypedRouteSink {
+                    id,
+                    endpoint: PhysicalEndpointId::Landing(connection),
+                    anchor: socket,
+                    allowed_entry: facing_between(socket, approach),
+                    terminal: TerminalContract::Sink {
+                        target: RouteTarget::Connection(connection),
+                        support,
+                        requirement: TerminalRequirement::Automatic,
+                    },
+                }
+            }
+            NetConsumer::Terminal {
+                at,
+                toward: _,
+                handover,
+                net_cell,
+                ..
+            } => {
+                first_approach.get_or_insert(*net_cell);
+                let port = netlist
+                    .outputs
+                    .iter()
+                    .position(|output| output == signal)
+                    .unwrap_or(ordinal);
+                TypedRouteSink {
+                    id,
+                    endpoint: PhysicalEndpointId::DeclaredOutput(PortId(port as u32)),
+                    anchor: *handover,
+                    allowed_entry: facing_between(*handover, *net_cell),
+                    terminal: TerminalContract::Sink {
+                        target: RouteTarget::DeclaredOutput(PortId(port as u32)),
+                        support: *at,
+                        requirement: TerminalRequirement::Exact(
+                            RouteTerminalKind::OutputTerminalRepeater,
+                        ),
+                    },
+                }
+            }
+        };
+        sinks.push(typed);
+    }
+    let endpoint = RouteEndpoint {
+        id: typed_endpoint_id(netlist, signal),
+        anchor: source,
+        allowed_exit: facing_between(source, first_approach.unwrap_or(source)),
+        terminal: TerminalContract::Source {
+            signal_strength: merge_source_strength(netlist, candidate, signal, source),
+        },
+    };
+    (
+        endpoint,
+        NonEmptyRouteSinks::new(sinks).expect("the routed net map contains only non-empty nets"),
+    )
+}
+
 fn route_in_order(
     mut candidate: PlanCandidate,
     netlist: &Netlist,
@@ -5162,21 +5109,43 @@ fn route_in_order(
 
     let prices = Prices::RipUp(congestion);
     let mut routes = Vec::with_capacity(sinks.len());
-    for signal in order {
+    for (route_ordinal, signal) in order.iter().enumerate() {
         let consumers = sinks
             .get(signal)
             .cloned()
             .expect("the order is built from these very keys");
         let source = net_source(&candidate, signal)?;
-        routes.push(lay_net(
+        let route_id = RouteId(route_ordinal as u32);
+        let (typed_source, typed_sinks) =
+            typed_legacy_request_parts(route_id, signal, source, &consumers, netlist, &candidate);
+        let typed_reservations = typed_reservations(&reservation, route_id, signal);
+        let adapter = LegacyPlannerRouterAdapter::new(
             signal,
-            source,
             &consumers,
             netlist,
             &candidate,
             &mut reservation,
             &prices,
-        )?);
+        );
+        match adapter.route(RouteRequest {
+            id: route_id,
+            source: typed_source,
+            sinks: &typed_sinks,
+            reservations: &typed_reservations,
+            // Task 13 owns any shipping cap change.  `u64::MAX` is fixed and
+            // deterministic here; zero-limit behavior is still typed above.
+            limits: RouterLimits {
+                max_node_expansions: u64::MAX,
+                max_queue_entries: u64::MAX,
+            },
+        }) {
+            Ok(tree) => routes.push(adapter.into_legacy(tree)),
+            Err(_) => {
+                return Err(adapter
+                    .take_failure()
+                    .expect("legacy refusal keeps its exact compatibility envelope"));
+            }
+        }
     }
 
     candidate.routes = routes;
@@ -9423,10 +9392,8 @@ mod tests {
         ] {
             reservation.insert(cell, "primitive:99", Occupancy::Solid);
         }
-        let trunk: BTreeMap<Anchor, crate::redstone::world::block::BlockKind> = laid
-            .iter()
-            .map(|&cell| (cell, crate::redstone::world::block::BlockKind::RedstoneWire))
-            .collect();
+        let trunk: BTreeMap<Anchor, BlockState> =
+            laid.iter().map(|&cell| (cell, compile::dust())).collect();
 
         let goal = Anchor { x: 8, y: 2, z: 5 };
         let route = Route::new("me".to_string(), laid.clone());
