@@ -1,5 +1,5 @@
 {
-  "baseline_commit": "4572f995ea1407fc952d55760f8781c21dc97fba",
+  "baseline_commit": "afe577d9d04c98f18c65f7d9fca1c5634629d237",
   "build_profile": "release",
   "cargo_features": [],
   "cell_library_revision": "8464278284d1e5d95a3c71fa492f419e823ad9dcf4b348854c8d128cb48ff15d",
@@ -8,6 +8,7 @@
   "cases": [
     {
       "name": "and4",
+      "transition_count": 240,
       "lowered_netlist_hash": "48690daa56e47fa93724683adaf4bc221892d0ebee4540401d7bb2073cf2c930",
       "pin_manifest_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "transition_manifest_hash": "c7ef8696a6aa9c8e2191dc6d82412b1bb05c0d5ae66ce477adf0b53d453d9a7c",
@@ -35,6 +36,7 @@
     },
     {
       "name": "verilog:and4",
+      "transition_count": 240,
       "lowered_netlist_hash": "1f6c9d86dec1f567dd1a8f481f7c7053545646d06523318b01757539c8a2461a",
       "pin_manifest_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "transition_manifest_hash": "c7ef8696a6aa9c8e2191dc6d82412b1bb05c0d5ae66ce477adf0b53d453d9a7c",
@@ -62,6 +64,7 @@
     },
     {
       "name": "full_adder",
+      "transition_count": 56,
       "lowered_netlist_hash": "468bc6ec156d7d5a16675fc6c2c874d147a74aca11e1807a49c9c2ce19026d46",
       "pin_manifest_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "transition_manifest_hash": "e0d82a5d1129a80df92df1c58aee77b8f5cf35eeb151005883f9700cd91ac182",
@@ -89,6 +92,7 @@
     },
     {
       "name": "segment_a",
+      "transition_count": 240,
       "lowered_netlist_hash": "89a9c42ef146fa0b5b1f5f94d033682bc3490590a8687fe3d572e52e4df35534",
       "pin_manifest_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "transition_manifest_hash": "d3c9f8cbd86d64edd5637a6baccf03de9be05a3ee0ab7f87082dde7f4f71e15a",
@@ -116,6 +120,7 @@
     },
     {
       "name": "seven_segment",
+      "transition_count": 240,
       "lowered_netlist_hash": "1c75f9d2fb310a9c604831139fd08aef71770c3a2d4b0b3db6a6744c52d344f1",
       "pin_manifest_hash": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
       "transition_manifest_hash": "d3c9f8cbd86d64edd5637a6baccf03de9be05a3ee0ab7f87082dde7f4f71e15a",
@@ -143,6 +148,7 @@
     },
     {
       "name": "pinned:verilog:seven_segment",
+      "transition_count": 240,
       "lowered_netlist_hash": "70dc245241850ecbb17d30adc0f33db23dcc94b1d8d61751b2dbba65875d261e",
       "pin_manifest_hash": "3722a3ec51968d3ce4b3751d117d9df780930bcc2346a36d06271dcc7c3b1d31",
       "transition_manifest_hash": "d3c9f8cbd86d64edd5637a6baccf03de9be05a3ee0ab7f87082dde7f4f71e15a",

@@ -2,14 +2,14 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 use std::sync::OnceLock;
 
-use reda::compile::fragment_synth::benchmark::BenchmarkBaseline;
+use reda::compile::fragment_synth::benchmark::{verified_capture_commit, BenchmarkBaseline};
 use reda::compile::fragment_synth::manifest::TransitionManifest;
 use reda::compile::revisions::{
     cell_library_revision, physical_verifier_revision, simulator_revision,
 };
 use reda::compile::topology::Library;
 
-const EVALUATOR_COMMIT: &str = "4572f995ea1407fc952d55760f8781c21dc97fba";
+const EVALUATOR_COMMIT: &str = "afe577d9d04c98f18c65f7d9fca1c5634629d237";
 const CASE_NAMES: [&str; 6] = [
     "and4",
     "verilog:and4",
@@ -66,6 +66,8 @@ fn assert_schema(baseline: &BenchmarkBaseline) {
     for case in &baseline.cases {
         let manifest = manifest_for_case(&case.name);
         assert!(!manifest.transitions().is_empty());
+        assert_eq!(case.transition_count, manifest.transitions().len());
+        assert!(case.transition_count > 0);
         assert_eq!(case.transition_manifest_hash, manifest.fingerprint());
         assert!(!case.lowered_netlist_hash.as_str().is_empty());
         assert!(!case.pin_manifest_hash.as_str().is_empty());
@@ -145,6 +147,19 @@ fn run_capture(output: &Path, replace: bool) -> Output {
         .expect("fragment_baseline process launches")
 }
 
+fn certification_vector(baseline: &BenchmarkBaseline) -> Vec<bool> {
+    baseline.cases.iter().map(|case| case.certified).collect()
+}
+
+fn verified_repository_head(absent_output: &Path) -> String {
+    verified_capture_commit(
+        Path::new(env!("CARGO_MANIFEST_DIR")),
+        &std::env::current_dir().expect("current directory is readable"),
+        absent_output,
+    )
+    .expect("the test runs from the exact clean repository root")
+}
+
 #[test]
 fn checked_fixture_keeps_schema_order_revisions_hashes_and_new_coverage() {
     let baseline = read_baseline(&fixture_path());
@@ -197,11 +212,27 @@ fn two_fresh_capture_processes_are_byte_identical() {
         CASE_NAMES.len(),
         "capture prints one summary row per case"
     );
+    let first_bytes = std::fs::read(&first_path).unwrap();
+    let second_bytes = std::fs::read(&second_path).unwrap();
+    assert_eq!(first_bytes, second_bytes);
+
+    let checked = read_baseline(&fixture_path());
+    let first_baseline = read_baseline(&first_path);
+    let second_baseline = read_baseline(&second_path);
+    assert_schema(&first_baseline);
+    assert_schema(&second_baseline);
     assert_eq!(
-        std::fs::read(&first_path).unwrap(),
-        std::fs::read(&second_path).unwrap()
+        certification_vector(&first_baseline),
+        certification_vector(&checked),
+        "fresh capture must preserve all five certified legacy cases and explicit pinned coverage"
     );
-    assert_schema(&read_baseline(&first_path));
+    assert_eq!(
+        certification_vector(&second_baseline),
+        certification_vector(&checked)
+    );
+    let head = verified_repository_head(&temporary.join("absent-head-check.json"));
+    assert_eq!(first_baseline.baseline_commit, head);
+    assert_eq!(second_baseline.baseline_commit, head);
 
     std::fs::remove_dir_all(temporary).unwrap();
 }
