@@ -74,10 +74,22 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
 
+use serde::Serialize;
+
 use super::geometry::{self, CellFacing};
 use super::primitive_graph::{NodeId, PrimitiveGraph, Provenance};
 use super::topology::TemplateNode;
 use super::{input_socket_feeds_support, CompiledCircuit, Netlist};
+use crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate;
+use crate::compile::fragment_synth::identity::{GateIndex, InstanceId, PortId};
+use crate::compile::fragment_synth::instance_graph::{
+    InstanceRole, LogicalSignalId, PhysicalSink, SynthesisError,
+};
+use crate::compile::fragment_synth::topology::{
+    instantiate, prove_topology_semantics, TopologyError, TopologySemanticsError,
+};
+use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
+use crate::compile::topology::{GateKind, Library};
 use crate::redstone::rules::taxonomy::flags_of;
 use crate::redstone::simulator::component::torch_support_position;
 use crate::redstone::simulator::position::Position;
@@ -86,6 +98,19 @@ use crate::redstone::world::block::BlockKind;
 /// Why the compiled world does not match what `expand` says it should be.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EquivalenceError {
+    UnsupportedStatefulProof { gate: GateIndex },
+    CombinationalCycle,
+    InstanceGraphProofFailure { source: SynthesisError },
+    TopologyInstantiationFailure {
+        instance: InstanceId,
+        source: TopologyError,
+    },
+    SelectedImplementationMismatch { instance: InstanceId },
+    EquivalenceProofFailure {
+        instance: InstanceId,
+        source: TopologySemanticsError,
+    },
+    ProofExhausted { used: u64, limit: u64 },
     /// The graph's total node count does not match what [`resolve_
     /// contributors`] implies from `Netlist` alone (levers + lamps + one
     /// node per `Nor`/`Buf` gate + one `IsolatingRepeater` per non-bare
@@ -162,6 +187,244 @@ impl std::fmt::Display for EquivalenceError {
 }
 
 impl std::error::Error for EquivalenceError {}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub enum EquivalenceProofStep {
+    InputAxiom { port: PortId },
+    Instance {
+        instance: InstanceId,
+        logical_gate: GateIndex,
+        role: InstanceRole,
+        topology: Fingerprint,
+    },
+    Assignment {
+        sink: PhysicalSink,
+        signal: LogicalSignalId,
+    },
+    Output {
+        port: PortId,
+        signal: LogicalSignalId,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct EquivalenceCertificate {
+    pub lowered_netlist_hash: Fingerprint,
+    pub candidate_fingerprint: Fingerprint,
+    pub library_revision: Fingerprint,
+    pub ordered_input_axioms: Vec<PortId>,
+    pub proof_steps: Vec<EquivalenceProofStep>,
+    pub work_used: u64,
+    pub fingerprint: Fingerprint,
+}
+
+#[derive(Serialize)]
+struct NetlistFingerprintGate<'a> {
+    name: &'a str,
+    inputs: &'a [String],
+    output: &'a str,
+    kind: GateKind,
+}
+
+#[derive(Serialize)]
+struct NetlistFingerprintPayload<'a> {
+    inputs: &'a [String],
+    outputs: &'a [String],
+    gates: Vec<NetlistFingerprintGate<'a>>,
+}
+
+#[derive(Serialize)]
+struct CertificateFingerprintPayload<'a> {
+    lowered_netlist_hash: &'a Fingerprint,
+    candidate_fingerprint: &'a Fingerprint,
+    library_revision: &'a Fingerprint,
+    ordered_input_axioms: &'a [PortId],
+    proof_steps: &'a [EquivalenceProofStep],
+    work_used: u64,
+}
+
+fn lowered_netlist_fingerprint(netlist: &Netlist) -> Fingerprint {
+    let payload = NetlistFingerprintPayload {
+        inputs: &netlist.inputs,
+        outputs: &netlist.outputs,
+        gates: netlist
+            .gates
+            .iter()
+            .map(|gate| NetlistFingerprintGate {
+                name: &gate.name,
+                inputs: &gate.inputs,
+                output: &gate.output,
+                kind: gate.kind,
+            })
+            .collect(),
+    };
+    canonical_fingerprint(
+        &serde_json::to_vec(&payload).expect("a lowered netlist must serialize"),
+    )
+}
+
+fn append_proof_step(
+    steps: &mut Vec<EquivalenceProofStep>,
+    step: EquivalenceProofStep,
+    limit: u64,
+) -> Result<(), EquivalenceError> {
+    let used = u64::try_from(steps.len())
+        .ok()
+        .and_then(|count| count.checked_add(1))
+        .ok_or(EquivalenceError::ProofExhausted {
+            used: u64::MAX,
+            limit,
+        })?;
+    if used > limit {
+        return Err(EquivalenceError::ProofExhausted { used, limit });
+    }
+    steps.push(step);
+    Ok(())
+}
+
+/// Prove the typed physical instance graph implements the lowered Boolean DAG.
+///
+/// This proof never enumerates input vectors. Each selected implementation is
+/// instantiated independently, then stable graph assignments preserve the
+/// already-proved symbolic meaning of each logical signal.
+pub fn prove_combinational_equivalence(
+    lowered: &Netlist,
+    candidate: &ExpandedPhysicalCandidate,
+    library: &Library,
+    max_equivalence_proof_steps: u64,
+) -> Result<EquivalenceCertificate, EquivalenceError> {
+    for (index, gate) in lowered.gates.iter().enumerate() {
+        if gate.kind.is_sequential() {
+            return Err(EquivalenceError::UnsupportedStatefulProof {
+                gate: GateIndex(
+                    u32::try_from(index)
+                        .map_err(|_| EquivalenceError::InstanceGraphProofFailure {
+                            source: SynthesisError::IdentityOverflow,
+                        })?,
+                ),
+            });
+        }
+    }
+    let topological_order = lowered
+        .combinational_order()
+        .ok_or(EquivalenceError::CombinationalCycle)?;
+    candidate
+        .instances
+        .validate(lowered)
+        .map_err(|source| EquivalenceError::InstanceGraphProofFailure { source })?;
+
+    let ordered_input_axioms = candidate.instances.primary_inputs.clone();
+    let mut proof_steps = Vec::new();
+    for &port in &ordered_input_axioms {
+        append_proof_step(
+            &mut proof_steps,
+            EquivalenceProofStep::InputAxiom { port },
+            max_equivalence_proof_steps,
+        )?;
+    }
+
+    for gate_index in topological_order {
+        let gate_id = GateIndex(
+            u32::try_from(gate_index)
+                .map_err(|_| EquivalenceError::InstanceGraphProofFailure {
+                    source: SynthesisError::IdentityOverflow,
+                })?,
+        );
+        for instance in candidate
+            .instances
+            .instances
+            .iter()
+            .filter(|instance| instance.logical_gate == gate_id)
+        {
+            let independently_instantiated = instantiate(
+                library,
+                &lowered.gates[gate_index],
+                instance.id,
+                &instance.implementation,
+            )
+            .map_err(|source| EquivalenceError::TopologyInstantiationFailure {
+                instance: instance.id,
+                source,
+            })?;
+            if independently_instantiated != instance.expanded {
+                return Err(EquivalenceError::SelectedImplementationMismatch {
+                    instance: instance.id,
+                });
+            }
+            prove_topology_semantics(
+                &independently_instantiated.topology,
+                lowered.gates[gate_index].kind,
+            )
+            .map_err(|source| EquivalenceError::EquivalenceProofFailure {
+                instance: instance.id,
+                source,
+            })?;
+            append_proof_step(
+                &mut proof_steps,
+                EquivalenceProofStep::Instance {
+                    instance: instance.id,
+                    logical_gate: instance.logical_gate,
+                    role: instance.role,
+                    topology: independently_instantiated.topology.fingerprint,
+                },
+                max_equivalence_proof_steps,
+            )?;
+        }
+    }
+
+    for assignment in &candidate.instances.assignments {
+        append_proof_step(
+            &mut proof_steps,
+            EquivalenceProofStep::Assignment {
+                sink: assignment.sink,
+                signal: assignment.signal,
+            },
+            max_equivalence_proof_steps,
+        )?;
+    }
+    for assignment in &candidate.instances.assignments {
+        if let PhysicalSink::DeclaredOutput(port) = assignment.sink {
+            append_proof_step(
+                &mut proof_steps,
+                EquivalenceProofStep::Output {
+                    port,
+                    signal: assignment.signal,
+                },
+                max_equivalence_proof_steps,
+            )?;
+        }
+    }
+
+    let lowered_netlist_hash = lowered_netlist_fingerprint(lowered);
+    let candidate_fingerprint = candidate.fingerprint();
+    let library_revision = library.revision_fingerprint();
+    let work_used = u64::try_from(proof_steps.len()).map_err(|_| {
+        EquivalenceError::ProofExhausted {
+            used: u64::MAX,
+            limit: max_equivalence_proof_steps,
+        }
+    })?;
+    let fingerprint = canonical_fingerprint(
+        &serde_json::to_vec(&CertificateFingerprintPayload {
+            lowered_netlist_hash: &lowered_netlist_hash,
+            candidate_fingerprint: &candidate_fingerprint,
+            library_revision: &library_revision,
+            ordered_input_axioms: &ordered_input_axioms,
+            proof_steps: &proof_steps,
+            work_used,
+        })
+        .expect("an equivalence certificate must serialize"),
+    );
+    Ok(EquivalenceCertificate {
+        lowered_netlist_hash,
+        candidate_fingerprint,
+        library_revision,
+        ordered_input_axioms,
+        proof_steps,
+        work_used,
+        fingerprint,
+    })
+}
 
 // ---------------------------------------------------------------------
 // Independent restatement of `expand`'s own bare-chain resolution
@@ -800,8 +1063,15 @@ mod tests {
     use crate::circuits::full_adder::build_full_adder_netlist;
     use crate::circuits::seven_segment::{build_seven_segment_netlist, build_single_segment_netlist};
     use crate::compile::compile;
+    use crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate;
+    use crate::compile::fragment_synth::identity::{ImplementationKey, LibraryEntryId};
+    use crate::compile::fragment_synth::instance_graph::{
+        Instance, InstanceGraph, InstanceRole, LogicalSignalId, PhysicalDriver, PhysicalSink,
+        SinkAssignment,
+    };
+    use crate::compile::planner::PortPlacements;
     use crate::compile::primitive_graph::expand;
-    use crate::compile::topology::Library;
+    use crate::compile::topology::{Library, LibraryEntry, Primitive, Template};
 
     fn check(netlist: &Netlist) {
         let compiled = compile(netlist).expect("reference circuits compile");
@@ -809,6 +1079,199 @@ mod tests {
         let graph = expand(netlist, &library).expect("reference circuits only use NOR gates of fan-in 1..=3");
         verify_expansion_matches_compiled(netlist, &graph, &compiled)
             .expect("the expanded graph must account for exactly what compile() built");
+    }
+
+    fn symbolic_candidate(netlist: &Netlist, library: &Library) -> ExpandedPhysicalCandidate {
+        ExpandedPhysicalCandidate::empty(
+            InstanceGraph::one_to_one(netlist, library).expect("fixture graph"),
+            PortPlacements::default(),
+        )
+    }
+
+    fn nine_input_tree() -> Netlist {
+        let inputs = (0..9).map(|index| format!("i{index}")).collect::<Vec<_>>();
+        let mut gates = Vec::new();
+        let mut previous = inputs[0].clone();
+        for (index, input) in inputs.iter().enumerate().skip(1) {
+            let output = format!("g{index}");
+            gates.push(crate::compile::Gate::nor(
+                output.clone(),
+                &[previous.as_str(), input.as_str()],
+            ));
+            previous = output;
+        }
+        Netlist {
+            inputs,
+            outputs: vec![previous],
+            gates,
+        }
+    }
+
+    #[test]
+    fn nine_input_tree_uses_a_bounded_symbolic_proof_without_truth_enumeration() {
+        let netlist = nine_input_tree();
+        let library = Library::default_library();
+        let candidate = symbolic_candidate(&netlist, &library);
+
+        let certificate = prove_combinational_equivalence(
+            &netlist,
+            &candidate,
+            &library,
+            1_000_000,
+        )
+        .expect("nine inputs must use the compositional path");
+
+        assert_eq!(certificate.ordered_input_axioms.len(), 9);
+        assert_eq!(certificate.candidate_fingerprint, candidate.fingerprint());
+        assert!(!certificate.fingerprint.as_str().is_empty());
+        assert!(certificate.work_used < 100, "proof is structural, not 2^9 rows");
+    }
+
+    #[test]
+    fn wrong_assignment_and_selected_implementation_cannot_receive_a_certificate() {
+        let netlist = nine_input_tree();
+        let library = Library::default_library();
+        let mut wrong_assignment = symbolic_candidate(&netlist, &library);
+        let assignment = wrong_assignment
+            .instances
+            .assignments
+            .iter_mut()
+            .find(|assignment| {
+                assignment.sink
+                    == PhysicalSink::InstanceInput {
+                        instance: InstanceId(0),
+                        input_index: 0,
+                    }
+            })
+            .expect("first gate input");
+        assignment.signal = LogicalSignalId::PrimaryInput(PortId(8));
+        assert!(matches!(
+            prove_combinational_equivalence(
+                &netlist,
+                &wrong_assignment,
+                &library,
+                1_000_000
+            ),
+            Err(EquivalenceError::InstanceGraphProofFailure { .. })
+        ));
+
+        let mut wrong_implementation = symbolic_candidate(&netlist, &library);
+        let wrong_key = ImplementationKey::Library(LibraryEntryId {
+            kind: GateKind::Buf,
+            ordinal: 0,
+        });
+        wrong_implementation.instances.instances[0].implementation = wrong_key;
+        wrong_implementation.instances.instances[0]
+            .expanded
+            .implementation = wrong_key;
+        assert!(matches!(
+            prove_combinational_equivalence(
+                &netlist,
+                &wrong_implementation,
+                &library,
+                1_000_000
+            ),
+            Err(EquivalenceError::TopologyInstantiationFailure { .. })
+        ));
+    }
+
+    #[test]
+    fn proof_cap_is_a_structured_refusal() {
+        let netlist = nine_input_tree();
+        let library = Library::default_library();
+        let candidate = symbolic_candidate(&netlist, &library);
+
+        assert_eq!(
+            prove_combinational_equivalence(&netlist, &candidate, &library, 0),
+            Err(EquivalenceError::ProofExhausted { used: 1, limit: 0 })
+        );
+    }
+
+    #[test]
+    fn independently_instantiated_wrong_topology_semantics_are_rejected() {
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["y".into()],
+            gates: vec![crate::compile::Gate::nor("y", &["a"])],
+        };
+        let mut library = Library::default_library();
+        library.replace_entries_for_testing(
+            GateKind::Nor(1),
+            vec![LibraryEntry {
+                name: "wrong identity implementation",
+                template: Template {
+                    nodes: vec![(TemplateNode::Torch, Primitive::Repeater)],
+                    internal_edges: Vec::new(),
+                    inputs: vec![TemplateNode::Torch],
+                    output: Some(TemplateNode::Torch),
+                    embedding_hints: Vec::new(),
+                },
+            }],
+        );
+        let candidate = symbolic_candidate(&netlist, &library);
+
+        assert!(matches!(
+            prove_combinational_equivalence(&netlist, &candidate, &library, 100),
+            Err(EquivalenceError::EquivalenceProofFailure {
+                source: TopologySemanticsError::GateSemanticsMismatch { .. },
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn duplicate_with_different_ordered_inputs_is_not_promotable() {
+        let netlist = Netlist {
+            inputs: vec!["a".into(), "b".into()],
+            outputs: vec!["y".into()],
+            gates: vec![crate::compile::Gate::nor("y", &["a", "b"])],
+        };
+        let library = Library::default_library();
+        let mut candidate = symbolic_candidate(&netlist, &library);
+        let canonical = candidate.instances.instances[0].clone();
+        let duplicate_id = InstanceId(1);
+        candidate.instances.instances.push(Instance {
+            id: duplicate_id,
+            logical_gate: canonical.logical_gate,
+            role: InstanceRole::Duplicate { ordinal: 0 },
+            implementation: canonical.implementation,
+            expanded: instantiate(
+                &library,
+                &netlist.gates[0],
+                duplicate_id,
+                &canonical.implementation,
+            )
+            .expect("duplicate topology"),
+        });
+        candidate.instances.assignments.extend([
+            SinkAssignment {
+                sink: PhysicalSink::InstanceInput {
+                    instance: duplicate_id,
+                    input_index: 0,
+                },
+                signal: LogicalSignalId::PrimaryInput(PortId(1)),
+                driver: PhysicalDriver::PrimaryInput(PortId(1)),
+            },
+            SinkAssignment {
+                sink: PhysicalSink::InstanceInput {
+                    instance: duplicate_id,
+                    input_index: 1,
+                },
+                signal: LogicalSignalId::PrimaryInput(PortId(1)),
+                driver: PhysicalDriver::PrimaryInput(PortId(1)),
+            },
+        ]);
+        candidate
+            .instances
+            .assignments
+            .sort_by_key(|assignment| assignment.sink);
+
+        assert!(matches!(
+            prove_combinational_equivalence(&netlist, &candidate, &library, 100),
+            Err(EquivalenceError::InstanceGraphProofFailure {
+                source: SynthesisError::DuplicateInputMismatch { .. }
+            })
+        ));
     }
 
     #[test]

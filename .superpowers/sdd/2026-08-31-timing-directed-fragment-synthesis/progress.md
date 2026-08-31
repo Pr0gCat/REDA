@@ -232,3 +232,11 @@ Task 6 final closure:
 - Final verification: library 708 passed / 0 failed / 63 ignored; delay reconciliation 17 passed / 0 failed / 1 ignored; compile end-to-end 14/14; timing graph 7/7; timing module 13/13; observer 5/5; timing integration 3/3; `cargo check --all-targets` passed; `git diff --check` clean.
 - External reviewer capacity remained unavailable. Controller review found and fixed output-boundary conflation, repeated route-coordinate charging, and unstable test lookup.
 - Task 6: complete. Task 7 may seal timing and structural artifacts behind candidate certification.
+
+Task 7 final closure:
+
+- Added immutable transition manifests, fixed fingerprinted search/certification caps, compositional all-input equivalence, fresh-simulator transition sweeps, complete metrics, and the sealed `CertifiedCandidate` promotion boundary.
+- Controller review caught and fixed wrong-topology semantic certification, post-hoc event limiting, split source/destination event budgets, fingerprint-as-improvement ambiguity, and a symbolic identity panic.
+- Final verification: library 724 passed / 0 failed / 63 ignored; manifest 4/4; config 3/3; certification 6/6; equivalence 9/9; compile end-to-end 14/14; reference circuits 10/10; seven-segment 3/3; simulator 19/19; all targets check passed; diff check clean.
+- Clippy has only the two pre-existing unrelated warnings. External reviewer capacity remained unavailable, so the final pass was a controller review.
+- Task 7: complete. Task 8 may build the independent topology-aware sparse seed and must not call legacy generation.

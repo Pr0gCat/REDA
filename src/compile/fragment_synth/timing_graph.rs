@@ -14,7 +14,7 @@ use crate::compile::fragment_synth::identity::{
 };
 use crate::compile::fragment_synth::topology::{ConnectionTarget, ContributorSpec, OutputSpec};
 use crate::compile::fragment_synth::verify::StructuralCertificate;
-use crate::compile::metrics::Fingerprint;
+use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
 use crate::compile::topology::Primitive;
 use crate::redstone::simulator::component::{
     repeater_delay_game_ticks, COMPARATOR_DELAY_GAME_TICKS, TORCH_DELAY_GAME_TICKS,
@@ -99,6 +99,12 @@ pub struct RealisedTimingGraph {
 }
 
 impl RealisedTimingGraph {
+    pub fn fingerprint(&self) -> Fingerprint {
+        canonical_fingerprint(
+            &serde_json::to_vec(self).expect("a realised timing graph must serialize"),
+        )
+    }
+
     /// Derive timing only from a structurally certified candidate. The
     /// certificate fingerprint prevents callers from certifying one value
     /// and then timing a mutated clone.

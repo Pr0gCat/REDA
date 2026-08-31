@@ -117,6 +117,167 @@ pub enum TopologyError {
     MergeArityExceedsInputMask { arity: usize },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum TopologySemanticsError {
+    #[error("primitive {primitive:?} has no supported combinational semantics")]
+    UnknownPrimitiveSemantics { primitive: PrimitiveId },
+    #[error("primitive {primitive:?} has {actual} inputs, expected {expected}")]
+    PrimitiveInputCount {
+        primitive: PrimitiveId,
+        expected: usize,
+        actual: usize,
+    },
+    #[error("topology contains a primitive cycle or unresolved source")]
+    UnresolvedPrimitiveSemantics,
+    #[error("topology output names an unresolved contributor")]
+    UnresolvedOutputSemantics,
+    #[error("topology semantics do not implement {kind:?}")]
+    GateSemanticsMismatch { kind: GateKind },
+    #[error("gate kind {kind:?} is not supported by primitive-level equivalence")]
+    UnsupportedGateSemantics { kind: GateKind },
+    #[error("gate arity exceeds symbolic input identity width")]
+    InputIdentityOverflow,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+enum BooleanMeaning {
+    Input(u16),
+    Not(Box<BooleanMeaning>),
+    Or(Vec<BooleanMeaning>),
+}
+
+fn negate(meaning: BooleanMeaning) -> BooleanMeaning {
+    match meaning {
+        BooleanMeaning::Not(inner) => *inner,
+        other => BooleanMeaning::Not(Box::new(other)),
+    }
+}
+
+fn disjoin(meanings: impl IntoIterator<Item = BooleanMeaning>) -> BooleanMeaning {
+    let mut flattened = Vec::new();
+    for meaning in meanings {
+        match meaning {
+            BooleanMeaning::Or(children) => flattened.extend(children),
+            other => flattened.push(other),
+        }
+    }
+    flattened.sort();
+    flattened.dedup();
+    if flattened.len() == 1 {
+        flattened.pop().expect("one disjunct")
+    } else {
+        BooleanMeaning::Or(flattened)
+    }
+}
+
+fn source_meaning(
+    source: ConnectionSource,
+    values: &BTreeMap<PrimitiveId, BooleanMeaning>,
+) -> Option<BooleanMeaning> {
+    match source {
+        ConnectionSource::ExternalInput { input_index } => {
+            Some(BooleanMeaning::Input(input_index))
+        }
+        ConnectionSource::Primitive(primitive) => values.get(&primitive).cloned(),
+    }
+}
+
+/// Symbolically compose a validated topology and prove its exact gate meaning.
+/// The expression is canonical for the NOR/OR/BUF primitive vocabulary and
+/// therefore does not enumerate input vectors.
+pub fn prove_topology_semantics(
+    topology: &ValidatedTopology,
+    kind: GateKind,
+) -> Result<(), TopologySemanticsError> {
+    let mut values = BTreeMap::<PrimitiveId, BooleanMeaning>::new();
+    while values.len() < topology.primitives.len() {
+        let mut progressed = false;
+        for specification in &topology.primitives {
+            if values.contains_key(&specification.id) {
+                continue;
+            }
+            let sources = topology
+                .connections
+                .iter()
+                .filter(|connection| {
+                    connection.target == ConnectionTarget::Primitive(specification.id)
+                })
+                .map(|connection| source_meaning(connection.source, &values))
+                .collect::<Option<Vec<_>>>();
+            let Some(sources) = sources else {
+                continue;
+            };
+            let meaning = match specification.primitive {
+                Primitive::Torch => {
+                    if sources.is_empty() {
+                        return Err(TopologySemanticsError::PrimitiveInputCount {
+                            primitive: specification.id,
+                            expected: 1,
+                            actual: 0,
+                        });
+                    }
+                    negate(disjoin(sources))
+                }
+                Primitive::Repeater => {
+                    if sources.len() != 1 {
+                        return Err(TopologySemanticsError::PrimitiveInputCount {
+                            primitive: specification.id,
+                            expected: 1,
+                            actual: sources.len(),
+                        });
+                    }
+                    sources.into_iter().next().expect("one repeater input")
+                }
+                Primitive::Comparator | Primitive::Lever | Primitive::Lamp => {
+                    return Err(TopologySemanticsError::UnknownPrimitiveSemantics {
+                        primitive: specification.id,
+                    });
+                }
+            };
+            values.insert(specification.id, meaning);
+            progressed = true;
+        }
+        if !progressed {
+            return Err(TopologySemanticsError::UnresolvedPrimitiveSemantics);
+        }
+    }
+
+    let output = match &topology.output {
+        OutputSpec::Primitive(primitive) => values.get(primitive).cloned(),
+        OutputSpec::Junction { contributors, .. } => contributors
+            .iter()
+            .map(|contributor| match *contributor {
+                ContributorSpec::Primitive(primitive) => values.get(&primitive).cloned(),
+                ContributorSpec::Landing(connection) => topology
+                    .connections
+                    .iter()
+                    .find(|candidate| candidate.id == connection)
+                    .and_then(|connection| source_meaning(connection.source, &values)),
+            })
+            .collect::<Option<Vec<_>>>()
+            .map(disjoin),
+    }
+    .ok_or(TopologySemanticsError::UnresolvedOutputSemantics)?;
+
+    let inputs = (0..kind.arity())
+        .map(|index| {
+            u16::try_from(index)
+                .map(BooleanMeaning::Input)
+                .map_err(|_| TopologySemanticsError::InputIdentityOverflow)
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    let expected = match kind {
+        GateKind::Nor(_) => negate(disjoin(inputs)),
+        GateKind::Or(_) => disjoin(inputs),
+        GateKind::Buf => inputs[0].clone(),
+        _ => return Err(TopologySemanticsError::UnsupportedGateSemantics { kind }),
+    };
+    if output != expected {
+        return Err(TopologySemanticsError::GateSemanticsMismatch { kind });
+    }
+    Ok(())
+}
+
 #[derive(Serialize)]
 struct FingerprintPayload<'a> {
     primitives: &'a [PrimitiveSpec],

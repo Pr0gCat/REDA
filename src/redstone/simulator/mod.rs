@@ -51,6 +51,12 @@ pub enum SimulationError {
     UnsupportedComponent { position: Position, name: String },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BoundedSimulationError {
+    Simulation(SimulationError),
+    WorkLimitExceeded { used: u64, limit: u64 },
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub(crate) enum SimulatorComponentKind {
     Air,
@@ -290,6 +296,10 @@ impl Simulator {
         self.queue.current_tick()
     }
 
+    pub fn work_done(&self) -> u64 {
+        self.work_done
+    }
+
     /// Attach a dynamic-timing-analysis observer watching exactly these
     /// positions, each carrying a human-readable label (typically a netlist
     /// signal name). Replaces any previously attached observer.
@@ -388,6 +398,52 @@ impl Simulator {
         }
     }
 
+    /// Settle with both a game-tick cap and a request-scoped processed-event
+    /// cap. The next due event is refused before it is applied once the cap is
+    /// exhausted.
+    pub fn run_until_stable_bounded(
+        &mut self,
+        max_game_ticks: u64,
+        max_events: u64,
+    ) -> Result<u64, BoundedSimulationError> {
+        if let Some((position, name)) = find_unsupported_component(&self.world) {
+            return Err(BoundedSimulationError::Simulation(
+                SimulationError::UnsupportedComponent { position, name },
+            ));
+        }
+        let work_at_start = self.work_done;
+        let mut game_ticks_run = 0u64;
+        loop {
+            self.settle_from_current_state();
+            if self.queue.is_empty() {
+                return Ok(game_ticks_run);
+            }
+            if game_ticks_run >= max_game_ticks {
+                return Err(BoundedSimulationError::Simulation(
+                    SimulationError::Diverged {
+                        game_ticks: game_ticks_run,
+                        pending: self.queue.pending_count(),
+                    },
+                ));
+            }
+            let used = self
+                .work_done
+                .checked_sub(work_at_start)
+                .unwrap_or(u64::MAX);
+            let remaining = max_events.saturating_sub(used);
+            if self.advance_one_tick_bounded(remaining).is_err() {
+                return Err(BoundedSimulationError::WorkLimitExceeded {
+                    used: self
+                        .work_done
+                        .checked_sub(work_at_start)
+                        .unwrap_or(u64::MAX),
+                    limit: max_events,
+                });
+            }
+            game_ticks_run += 1;
+        }
+    }
+
     /// 從目前的世界狀態安定下來：先重算紅石粉強度，再排程任何因此變得
     /// 跟輸入不一致的元件。
     ///
@@ -449,6 +505,29 @@ impl Simulator {
         }
 
         changed
+    }
+
+    fn advance_one_tick_bounded(&mut self, max_events: u64) -> Result<usize, ()> {
+        let due = self.queue.advance();
+        let now = self.queue.current_tick();
+        let mut changed = 0usize;
+        let allowed = usize::try_from(max_events).unwrap_or(usize::MAX);
+        let exhausted = due.len() > allowed;
+
+        for tick in due.iter().take(allowed) {
+            self.work_done += 1;
+            if self.apply_scheduled_tick(tick.position, now) {
+                changed += 1;
+            }
+        }
+        if exhausted {
+            return Err(());
+        }
+        changed += propagate::recompute_dust_strengths(&mut self.world).len();
+        if let Some(observer) = self.observer.as_mut() {
+            observer.sample(&self.world, now);
+        }
+        Ok(changed)
     }
 
     /// 套用一筆到期的排程，依方塊種類分派給對應的元件邏輯。

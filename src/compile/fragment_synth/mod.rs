@@ -1,5 +1,7 @@
 pub mod benchmark;
 pub mod candidate;
+pub mod certification;
+pub mod config;
 pub mod identity;
 pub mod instance_graph;
 pub mod legacy_adapter;

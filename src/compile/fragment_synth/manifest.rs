@@ -4,6 +4,11 @@ use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
 
 const MANIFEST_POLICY_VERSION: u64 = 1;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransitionManifestKind {
+    FixedV1,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Transition {
     pub from: Vec<bool>,
@@ -19,11 +24,16 @@ pub struct TransitionManifest {
 
 impl TransitionManifest {
     pub fn new(input_ports: Vec<String>) -> Self {
+        Self::for_kind(input_ports, TransitionManifestKind::FixedV1)
+    }
+
+    pub fn for_kind(input_ports: Vec<String>, kind: TransitionManifestKind) -> Self {
         let input_count = input_ports.len();
-        let transitions = if input_count <= 4 {
-            exhaustive_transitions(input_count)
-        } else {
-            sparse_transitions(input_count)
+        let transitions = match kind {
+            TransitionManifestKind::FixedV1 if input_count <= 4 => {
+                exhaustive_transitions(input_count)
+            }
+            TransitionManifestKind::FixedV1 => sparse_transitions(input_count),
         };
         TransitionManifest {
             policy_version: MANIFEST_POLICY_VERSION,
@@ -124,6 +134,12 @@ mod tests {
         assert_eq!(manifest.transitions()[1].to, vec![true, false]);
         assert_eq!(manifest.transitions()[11].from, vec![true, true]);
         assert_eq!(manifest.transitions()[11].to, vec![true, false]);
+    }
+
+    #[test]
+    fn zero_and_four_inputs_have_exact_exhaustive_counts() {
+        assert!(TransitionManifest::new(Vec::new()).transitions().is_empty());
+        assert_eq!(TransitionManifest::new(names(4)).transitions().len(), 240);
     }
 
     #[test]

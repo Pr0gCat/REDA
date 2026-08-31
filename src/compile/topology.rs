@@ -675,6 +675,15 @@ impl Library {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn replace_entries_for_testing(
+        &mut self,
+        kind: GateKind,
+        entries: Vec<LibraryEntry>,
+    ) {
+        self.entries.insert(kind, entries);
+    }
+
     /// Every technique known for `kind`, in the order they were registered.
     /// Empty (not absent) for a `kind` this library has never heard of.
     pub fn entries_for(&self, kind: GateKind) -> &[LibraryEntry] {
