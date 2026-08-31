@@ -39,6 +39,17 @@ pub struct AdaptedLegacyCandidate {
 
 pub struct LegacyCandidateAdapter;
 
+/// Test-only explicit baseline seam.  The independent seed builder has no
+/// value of this type in its constructor, so legacy generation cannot be
+/// injected into production seed construction by accident.
+#[cfg(test)]
+pub(super) trait LegacyOracle {
+    fn compile_legacy(
+        &self,
+        netlist: &Netlist,
+    ) -> Result<CompiledCircuit, crate::compile::CompileError>;
+}
+
 #[derive(Debug, Error)]
 pub enum LegacyAdapterError {
     #[error("compiled circuit does not carry a matching legacy seed: {0}")]
@@ -60,6 +71,17 @@ pub enum LegacyAdapterError {
 }
 
 impl LegacyCandidateAdapter {
+    #[cfg(test)]
+    pub(super) fn adapt_from_oracle(
+        netlist: &Netlist,
+        oracle: &dyn LegacyOracle,
+    ) -> Result<AdaptedLegacyCandidate, LegacyAdapterError> {
+        let compiled = oracle
+            .compile_legacy(netlist)
+            .map_err(planner::PlannerError::PhysicalInvariant)?;
+        Self::adapt(netlist, &compiled)
+    }
+
     pub fn adapt(
         netlist: &Netlist,
         compiled: &CompiledCircuit,

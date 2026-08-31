@@ -160,10 +160,21 @@ impl CertifiedCandidate {
     }
 }
 
-pub struct ExpandedCandidateCertifier;
+pub trait ExpandedCandidateCertifier {
+    fn certify(
+        &self,
+        candidate: ExpandedPhysicalCandidate,
+        lowered: &Netlist,
+        library: &Library,
+        config: &CertificationConfig,
+    ) -> Result<CertifiedCandidate, CandidateCertificationError>;
+}
 
-impl ExpandedCandidateCertifier {
-    pub fn certify(
+pub struct CompleteCandidateCertifier;
+
+impl ExpandedCandidateCertifier for CompleteCandidateCertifier {
+    fn certify(
+        &self,
         candidate: ExpandedPhysicalCandidate,
         lowered: &Netlist,
         library: &Library,
@@ -582,8 +593,8 @@ fn bits_of(mask: usize, width: usize) -> Vec<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        external_signal_is_high, settle, CandidateCertificationError, ExpandedCandidateCertifier,
-        TransitionPhase,
+        external_signal_is_high, settle, CandidateCertificationError, CompleteCandidateCertifier,
+        ExpandedCandidateCertifier, TransitionPhase,
     };
     use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
     use crate::compile::fragment_synth::legacy_adapter::LegacyCandidateAdapter;
@@ -621,7 +632,8 @@ mod tests {
         let library = Library::default_library();
         let config = CertificationConfig::from_search(&SearchConfig::checked_defaults());
 
-        let certified = ExpandedCandidateCertifier::certify(candidate, &netlist, &library, &config)
+        let certified = CompleteCandidateCertifier
+            .certify(candidate, &netlist, &library, &config)
             .expect("a valid NOT must receive complete certification");
 
         assert_eq!(certified.metrics().candidate_fingerprint, fingerprint);
@@ -658,7 +670,7 @@ mod tests {
         config.max_certification_transitions = 1;
 
         assert!(matches!(
-            ExpandedCandidateCertifier::certify(
+            CompleteCandidateCertifier.certify(
                 candidate,
                 &netlist,
                 &Library::default_library(),
@@ -679,7 +691,7 @@ mod tests {
         config.max_simulator_events_per_transition = 0;
 
         assert!(matches!(
-            ExpandedCandidateCertifier::certify(
+            CompleteCandidateCertifier.certify(
                 candidate,
                 &netlist,
                 &Library::default_library(),

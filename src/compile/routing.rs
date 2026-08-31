@@ -295,6 +295,38 @@ impl PhysicalReservations {
         );
     }
 
+    /// Turn one protected source endpoint into an exact route-owned refresh.
+    ///
+    /// Sparse placement reserves every future source before any route runs so
+    /// an earlier net cannot consume it.  A dust junction has no guaranteed
+    /// output strength beyond non-zero, so its outgoing route promotes that
+    /// protection to a normalising repeater when the route is finally laid.
+    /// No other reservation kind or endpoint may be overwritten.
+    pub fn promote_endpoint_conductor(
+        &mut self,
+        at: Anchor,
+        endpoint: PhysicalEndpointId,
+        route: RouteId,
+        state: BlockState,
+    ) -> bool {
+        let Some(existing) = self.cells.get(&at) else {
+            return false;
+        };
+        if existing.owner != PhysicalReservationOwner::Endpoint(endpoint)
+            || existing.kind != PhysicalReservationKind::KeepOut
+        {
+            return false;
+        }
+        self.cells.insert(
+            at,
+            PhysicalReservation {
+                owner: PhysicalReservationOwner::Route(route),
+                kind: PhysicalReservationKind::Conductor(state),
+            },
+        );
+        true
+    }
+
     pub fn get(&self, at: &Anchor) -> Option<&PhysicalReservation> {
         self.cells.get(at)
     }
@@ -1955,6 +1987,35 @@ mod tests {
                 requirement: TerminalRequirement::Repeater,
             },
         }
+    }
+
+    #[test]
+    fn only_the_named_endpoint_can_be_promoted_to_an_exact_route_refresh() {
+        let at = at(3, 1, 4);
+        let endpoint = PhysicalEndpointId::Junction(InstanceId(7));
+        let route = RouteId(9);
+        let mut reservations = PhysicalReservations::new();
+        reservations.reserve(
+            at,
+            PhysicalReservationOwner::Endpoint(endpoint),
+            PhysicalReservationKind::KeepOut,
+        );
+        let exact = crate::compile::repeater(Facing::North);
+
+        assert!(!reservations.promote_endpoint_conductor(
+            at,
+            PhysicalEndpointId::Junction(InstanceId(8)),
+            route,
+            exact.clone(),
+        ));
+        assert!(reservations.promote_endpoint_conductor(at, endpoint, route, exact.clone(),));
+        assert_eq!(
+            reservations.get(&at),
+            Some(&PhysicalReservation {
+                owner: PhysicalReservationOwner::Route(route),
+                kind: PhysicalReservationKind::Conductor(exact),
+            })
+        );
     }
 
     #[test]
