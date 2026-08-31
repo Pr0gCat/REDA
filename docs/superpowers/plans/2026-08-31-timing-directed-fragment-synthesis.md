@@ -761,22 +761,46 @@ git commit -m "feat(synthesis): certify fixed transition workloads"
 
 **Files:**
 - Create: `src/compile/fragment_synth/seed.rs`
+- Create: `src/compile/fragment_synth/services.rs`
 - Modify: `src/compile/fragment_synth/legacy_adapter.rs`
 - Modify: `src/compile/fragment_synth/mod.rs`
 - Modify: `src/compile/planner.rs`
 - Test: `src/compile/fragment_synth/seed.rs` (`tests` module)
+- Test: `src/compile/fragment_synth/legacy_adapter.rs` (`tests` module)
 - Create: `tests/fragment_synth_architecture.rs`
 - Test: `tests/build_circuit_pins.rs`
 
 **Interfaces:**
-- Produces `SparseSeedBuilder::build(SynthesisInput) -> Result<CertifiedCandidate, SeedError>`.
-- Consumes Task 7's fixed `SearchConfig`, durable `PhysicalRouter`, and expanded realisation/certification, but has no old-generator service or old placement-policy type in its constructor or module API.
+- Produces Task-8-owned `SeedInput<'a>`, sealed `SeedServices<'a>`, `SeedEmitter`, `SeedVerifier`, `SparseSeedBuilder::build(SeedInput<'_>, SeedServices<'_>)`, and `compile_sparse_seed_with_services(SeedInput<'_>, SeedServices<'_>) -> Result<CertifiedCandidate, SeedError>` in `seed.rs`/`services.rs`.
+- `SeedInput<'a>` carries `lowered: &'a Netlist`, `source_provenance: Option<&'a [usize]>`, and `pins: Option<&'a PortPlacements>`; it has no dependency on Task 9's `SynthesisInput`.
+- `SeedServices<'a>` contains exactly `library: &'a Library`, `router: &'a dyn PhysicalRouter`, `emitter: &'a dyn SeedEmitter`, `verifier: &'a dyn SeedVerifier`, `certifier: &'a dyn ExpandedCandidateCertifier`, and `search_config: &'a SearchConfig`. `SeedEmitter` and `SeedVerifier` are sealed Task-8 service facades that delegate one-to-one to Task 4's durable `compile::emission` and `compile::verification` authorities over `PhysicalCandidateView`; they contain no legacy planner or oracle type.
+- Consumes Task 7's fixed `SearchConfig` and `ExpandedCandidateCertifier`, Task 5's durable `PhysicalRouter`, and Task 4's durable emitter/verifier authorities, but has no old-generator service or old placement-policy type in its production constructor, seam, or module API.
 
 - [ ] **Step 1: Enforce a compile-time API boundary and behavioral no-legacy test**
 
-Define the seed constructor over a sealed `SeedServices<'a>` that contains only `&Library`, `&dyn PhysicalRouter`, `&dyn ExpandedCandidateCertifier`, and `&SearchConfig`. Keep `LegacyCandidateAdapter` and a private `LegacyOracle` trait in `fragment_synth::legacy_adapter`, compiled only for baseline/differential migration use and not re-exported from `fragment_synth`; `seed` receives neither type. `tests/fragment_synth_architecture.rs` is a normal compile-time public-API test that constructs `SparseSeedBuilder` solely from the durable services. Do not inspect Rust source text.
+Define these exact Task-8-local production seams using only Task-8 files and types; this task must not reference any Task-9-owned API module or function:
 
-Add an injected `CountingLegacyOracle` in `legacy_adapter.rs`'s internal test module, where private migration APIs are visible. Run `compile_fragment_synth` at budget zero through spy router/certifier services and require `legacy_oracle.calls() == 0`; then invoke the explicit differential adapter once and require exactly one call. This behavioral test fails if the new front door delegates seed construction to the old generator, while the sealed public API makes accidental injection into `SparseSeedBuilder` a compile-time type error.
+```rust
+pub(crate) struct SeedServices<'a> {
+    pub library: &'a Library,
+    pub router: &'a dyn PhysicalRouter,
+    pub emitter: &'a dyn SeedEmitter,
+    pub verifier: &'a dyn SeedVerifier,
+    pub certifier: &'a dyn ExpandedCandidateCertifier,
+    pub search_config: &'a SearchConfig,
+}
+
+pub(crate) fn compile_sparse_seed_with_services(
+    input: SeedInput<'_>,
+    services: SeedServices<'_>,
+) -> Result<CertifiedCandidate, SeedError>;
+```
+
+`SparseSeedBuilder::build` is the implementation called by `compile_sparse_seed_with_services`. The router creates every route, `SeedEmitter` delegates emission of the complete `PhysicalCandidateView`, `SeedVerifier` delegates authoritative physical verification of that emitted world, and `ExpandedCandidateCertifier` completes the fixed functional/equivalence workload before the seam returns `CertifiedCandidate`.
+
+Keep `LegacyCandidateAdapter` and a private `LegacyOracle` trait in `fragment_synth::legacy_adapter`, compiled only for baseline/differential migration use and not re-exported from `fragment_synth`; neither `SeedServices` nor the seed seam receives either type. `tests/fragment_synth_architecture.rs` is a normal compile-time public-API test that constructs `SparseSeedBuilder` solely from the durable services. Do not inspect Rust source text.
+
+Add an injected `CountingLegacyOracle` in `legacy_adapter.rs`'s internal test module, where private migration APIs are visible, plus `CountingRouter`, `CountingEmitter`, `CountingVerifier`, and `CountingCertifier` implementations of the Task-8 durable service boundaries. Execute `compile_sparse_seed_with_services` directly on a fixed and4 `SeedInput`; require a certified independent seed, every per-entrypoint legacy-generation counter and `legacy_oracle.calls()` to equal zero, and strictly positive call counts for the durable router, emitter, verifier, and certifier spies. Then invoke the explicit differential adapter once and require exactly its expected per-entrypoint counter plus `legacy_oracle.calls()` to equal one while all other legacy counters remain zero, proving the oracle spy is wired while the production seed seam cannot reach it. This behavioral test fails if Task 8 delegates construction to old generation or skips a durable authority, while the sealed production API makes accidental legacy injection a compile-time type error.
 
 - [ ] **Step 2: Write deterministic seed tests**
 
@@ -800,9 +824,9 @@ Every trial checks physical-variant footprint and keep-out constraints locally. 
 
 Route external and internal `ConnectionId`s in stable critical-estimate/fanout/ID order using Task 5's typed `PhysicalRouter` and its fixed `router_limits`. Internal edges are ordinary routing obligations. Materialise junction contributors explicitly. After all routes exist, call `realise_and_verify_expanded` and full certification; only that result is the seed.
 
-- [ ] **Step 6: Prove zero-budget behaviour and run pin regressions**
+- [ ] **Step 6: Prove the independent seam and run pin regressions**
 
-Expose a temporary `compile_sparse_seed` test helper and require it to return the certified seed without starting optimisation.
+Call the production `compile_sparse_seed_with_services` seam from seed and legacy-adapter tests and require it to return the certified seed without any optimisation loop. Re-run the router/emitter/verifier/certifier spy assertions and the zero-call legacy assertion here; Task 9 will consume this seam rather than replacing it.
 
 ```powershell
 cargo test --lib compile::fragment_synth::seed::tests -- --nocapture
@@ -816,7 +840,7 @@ Expected: all pass.
 - [ ] **Step 7: Commit Task 8**
 
 ```powershell
-git add src/compile/fragment_synth src/compile/planner.rs tests/fragment_synth_architecture.rs tests/build_circuit_pins.rs
+git add src/compile/fragment_synth/seed.rs src/compile/fragment_synth/services.rs src/compile/fragment_synth/legacy_adapter.rs src/compile/fragment_synth/mod.rs src/compile/planner.rs tests/fragment_synth_architecture.rs tests/build_circuit_pins.rs
 git commit -m "feat(synthesis): build independent sparse seeds"
 ```
 
@@ -834,6 +858,7 @@ git commit -m "feat(synthesis): build independent sparse seeds"
 **Interfaces:**
 - Produces `SynthesisInput`, `SynthesisBudget`, `SynthesisCaseFingerprint`, `SynthesisResult`, `StopReason`, `ProposalTrace`, and explicit `compile_fragment_synth`.
 - Consumes the complete Task 7 `SearchConfig` and `CertificationConfig`; every cap is part of the case fingerprint and remains constant across evaluation/time budgets.
+- Consumes and wraps Task 8's existing `compile_sparse_seed_with_services(SeedInput<'_>, SeedServices<'_>)`; Task 9 does not add a second seed builder or bypass its durable service calls.
 - Initially enumerates deterministic no-op/refused proposals so budget semantics land before search policy.
 
 - [ ] **Step 1: Write budget-prefix and best-retention tests**
@@ -870,6 +895,8 @@ pub struct SynthesisInput<'a> {
     pub pins: Option<&'a PortPlacements>,
 }
 ```
+
+Implement the lossless Task-9 conversion `impl<'a> From<&SynthesisInput<'a>> for SeedInput<'a>`. `compile_fragment_synth` constructs the production `SeedServices`, calls `compile_sparse_seed_with_services(SeedInput::from(&input), seed_services)` exactly once to establish `best_certified`, and only then enters the budgeted proposal loop. Budget zero therefore returns the Task 8 certified seed without rebuilding or adapting it through legacy generation.
 
 `SynthesisResult` owns `pub compiled: CompiledCircuit` together with metrics, trace, budget use, fingerprints, and stop reason, so compatibility front doors can return `.compiled` without rerunning synthesis. Keep `compile`, `compile_grown`, CLI, baker, and viewer unchanged. Add `PlannerKind::FragmentSynth` only to results from this explicit API.
 
@@ -1331,7 +1358,7 @@ foreach ($task13Leaf in $task13ExpectedLeaves) {
 }
 ```
 
-Finally compare each selected run-1 artifact with its checked destination before overwriting anything. Print and inspect both SHA-256 values for every pair. For changed JSON sidecars, also run the readable `git diff --no-index --text` comparison before copying. Copy only a differing run-1 file, then require byte identity by matching SHA-256. Only after that equality assertion, append one ordered evidence record containing exact source and destination paths, before/source/after hashes, and `changed`. Emit the four records in the fixed destination order as JSON to the one exact ignored evidence path, print the same JSON, parse it back, and independently re-hash every recorded source and destination. This makes either binary `.litematic` independently auditable from the preserved source path and durable hash record rather than an ordinary binary diff:
+Finally compare each selected run-1 artifact with its checked destination before overwriting anything. Print and inspect both SHA-256 values for every pair. For changed JSON sidecars, also run the readable `git diff --no-index --text` comparison before copying. Copy only a differing run-1 file, then require byte identity by matching SHA-256. Only after that equality assertion, append one ordered evidence record containing exact source and destination paths, before/source/after hashes, and `changed`. Emit the four records in the fixed destination order as JSON to the one exact ignored evidence path and print the same JSON. On readback, use the fixed destination-pair array as the expected order/mapping and reject the wrong record count, missing/extra/renamed fields, reordered records, duplicate sources or destinations, wrong path mapping, a before hash unequal to the captured pre-copy value, a source hash unequal to current run 1, an after hash unequal to either the current destination or source hash, and a `changed` value unequal to `(before_sha256 != source_sha256)`. This makes either binary `.litematic` independently auditable from the preserved source path and durable hash record rather than an ordinary binary diff:
 
 ```powershell
 $task13DestinationPairs = @(
@@ -1341,12 +1368,15 @@ $task13DestinationPairs = @(
     [pscustomobject]@{ Leaf = 'verilog_seven_segment.grown.pinout.json'; Destination = 'viewer/baked/verilog_seven_segment.grown.pinout.json'; Text = $true }
 )
 $task13EvidenceRecords = [System.Collections.Generic.List[object]]::new()
+$task13BeforeHashByDestination = [ordered]@{}
 foreach ($task13Pair in $task13DestinationPairs) {
     $task13SourceRelative = "$task13StageRelative/run-1/$($task13Pair.Leaf)"
     $task13Source = Join-Path $task13Repo $task13SourceRelative
     $task13Destination = Join-Path $task13Repo $task13Pair.Destination
     $task13SourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath $task13Source).Hash
     $task13DestinationHashBefore = (Get-FileHash -Algorithm SHA256 -LiteralPath $task13Destination).Hash
+    if ($task13BeforeHashByDestination.Contains($task13Pair.Destination)) { throw "Task13DuplicateExpectedDestination: $($task13Pair.Destination)" }
+    $task13BeforeHashByDestination.Add($task13Pair.Destination, $task13DestinationHashBefore)
     $task13Changed = $task13SourceHash -ne $task13DestinationHashBefore
     Write-Host "$($task13Pair.Destination) checked=$task13DestinationHashBefore generated=$task13SourceHash"
     if ($task13Changed) {
@@ -1376,11 +1406,34 @@ Write-Output $task13EvidenceJson
 
 $task13EvidenceRoundTrip = @(Get-Content -LiteralPath $task13EvidencePath -Raw | ConvertFrom-Json)
 if ($task13EvidenceRoundTrip.Count -ne 4) { throw 'Task13ArtifactEvidenceRoundTripCountMismatch' }
-foreach ($task13Record in $task13EvidenceRoundTrip) {
-    $task13RecordedSourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $task13Repo $task13Record.source)).Hash
-    $task13RecordedDestinationHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $task13Repo $task13Record.destination)).Hash
-    if ($task13RecordedSourceHash -ne $task13Record.source_sha256) { throw "Task13RecordedSourceHashMismatch: $($task13Record.source)" }
-    if ($task13RecordedDestinationHash -ne $task13Record.after_sha256) { throw "Task13RecordedDestinationHashMismatch: $($task13Record.destination)" }
+$task13ExpectedEvidenceFields = @('after_sha256', 'before_sha256', 'changed', 'destination', 'source', 'source_sha256') | Sort-Object
+$task13SeenSources = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+$task13SeenDestinations = [System.Collections.Generic.HashSet[string]]::new([System.StringComparer]::Ordinal)
+for ($task13Index = 0; $task13Index -lt $task13DestinationPairs.Count; $task13Index++) {
+    $task13Record = $task13EvidenceRoundTrip[$task13Index]
+    $task13ActualEvidenceFields = @($task13Record.PSObject.Properties.Name | Sort-Object)
+    $task13FieldDifference = @(Compare-Object -ReferenceObject $task13ExpectedEvidenceFields -DifferenceObject $task13ActualEvidenceFields)
+    if ($task13FieldDifference.Count -ne 0) { throw "Task13ArtifactEvidenceFieldSetMismatchAtIndex: $task13Index" }
+
+    $task13ExpectedPair = $task13DestinationPairs[$task13Index]
+    $task13ExpectedSource = "$task13StageRelative/run-1/$($task13ExpectedPair.Leaf)"
+    if (-not [string]::Equals([string]$task13Record.destination, [string]$task13ExpectedPair.Destination, [System.StringComparison]::Ordinal)) { throw "Task13ArtifactEvidenceDestinationOrderOrMappingMismatch: $task13Index" }
+    if (-not [string]::Equals([string]$task13Record.source, $task13ExpectedSource, [System.StringComparison]::Ordinal)) { throw "Task13ArtifactEvidenceSourceOrderOrMappingMismatch: $task13Index" }
+    if (-not $task13SeenDestinations.Add([string]$task13Record.destination)) { throw "Task13ArtifactEvidenceDuplicateDestination: $($task13Record.destination)" }
+    if (-not $task13SeenSources.Add([string]$task13Record.source)) { throw "Task13ArtifactEvidenceDuplicateSource: $($task13Record.source)" }
+
+    if (-not $task13BeforeHashByDestination.Contains($task13ExpectedPair.Destination)) { throw "Task13ArtifactEvidenceMissingCapturedBeforeHash: $($task13ExpectedPair.Destination)" }
+    $task13ExpectedBeforeHash = [string]$task13BeforeHashByDestination[$task13ExpectedPair.Destination]
+    $task13RecordedSourceHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $task13Repo $task13ExpectedSource)).Hash
+    $task13RecordedDestinationHash = (Get-FileHash -Algorithm SHA256 -LiteralPath (Join-Path $task13Repo $task13ExpectedPair.Destination)).Hash
+
+    if (-not [string]::Equals([string]$task13Record.before_sha256, $task13ExpectedBeforeHash, [System.StringComparison]::Ordinal)) { throw "Task13ArtifactEvidenceBeforeHashMismatch: $($task13ExpectedPair.Destination)" }
+    if (-not [string]::Equals([string]$task13Record.source_sha256, $task13RecordedSourceHash, [System.StringComparison]::Ordinal)) { throw "Task13ArtifactEvidenceSourceHashMismatch: $($task13ExpectedPair.Destination)" }
+    if (-not [string]::Equals([string]$task13Record.after_sha256, $task13RecordedDestinationHash, [System.StringComparison]::Ordinal)) { throw "Task13ArtifactEvidenceAfterHashMismatch: $($task13ExpectedPair.Destination)" }
+    if (-not [string]::Equals([string]$task13Record.after_sha256, [string]$task13Record.source_sha256, [System.StringComparison]::Ordinal)) { throw "Task13ArtifactEvidenceAfterSourceMismatch: $($task13ExpectedPair.Destination)" }
+
+    $task13ExpectedChanged = -not [string]::Equals([string]$task13Record.before_sha256, [string]$task13Record.source_sha256, [System.StringComparison]::Ordinal)
+    if ($task13Record.changed -isnot [bool] -or [bool]$task13Record.changed -ne $task13ExpectedChanged) { throw "Task13ArtifactEvidenceChangedMismatch: $($task13ExpectedPair.Destination)" }
 }
 
 $task13ExpectedRootEntries = @('artifact-hash-evidence.json', 'run-1', 'run-2') | Sort-Object
