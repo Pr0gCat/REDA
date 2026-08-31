@@ -1,6 +1,6 @@
 # Timing-Directed Fragment Synthesis
 
-**Status:** Proposed for implementation
+**Status:** Approved for implementation
 
 **Date:** 2026-08-31
 
