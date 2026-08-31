@@ -766,8 +766,6 @@ git commit -m "feat(synthesis): certify fixed transition workloads"
 - Modify: `src/compile/fragment_synth/mod.rs`
 - Modify: `src/compile/planner.rs`
 - Test: `src/compile/fragment_synth/seed.rs` (`tests` module)
-- Test: `src/compile/fragment_synth/legacy_adapter.rs` (`tests` module)
-- Create: `tests/fragment_synth_architecture.rs`
 - Test: `tests/build_circuit_pins.rs`
 
 **Interfaces:**
@@ -798,9 +796,9 @@ pub(crate) fn compile_sparse_seed_with_services(
 
 `SparseSeedBuilder::build` is the implementation called by `compile_sparse_seed_with_services`. The router creates every route, `SeedEmitter` delegates emission of the complete `PhysicalCandidateView`, `SeedVerifier` delegates authoritative physical verification of that emitted world, and `ExpandedCandidateCertifier` completes the fixed functional/equivalence workload before the seam returns `CertifiedCandidate`.
 
-Keep `LegacyCandidateAdapter` and a private `LegacyOracle` trait in `fragment_synth::legacy_adapter`, compiled only for baseline/differential migration use and not re-exported from `fragment_synth`; neither `SeedServices` nor the seed seam receives either type. `tests/fragment_synth_architecture.rs` is a normal compile-time public-API test that constructs `SparseSeedBuilder` solely from the durable services. Do not inspect Rust source text.
+Keep `LegacyCandidateAdapter` and `LegacyOracle` in `fragment_synth::legacy_adapter`, compiled only for baseline/differential migration use and not re-exported from `fragment_synth`; give only the adapter hooks needed by the sibling `seed.rs` unit-test module `pub(super)` visibility. Neither `SeedServices` nor the seed seam receives either legacy type. Task 8 creates no integration test and performs no source-text inspection: every construction of crate-private `SeedServices`, `SeedEmitter`, `SeedVerifier`, or `compile_sparse_seed_with_services` remains inside `src/compile/fragment_synth/seed.rs`'s `#[cfg(test)] mod tests`.
 
-Add an injected `CountingLegacyOracle` in `legacy_adapter.rs`'s internal test module, where private migration APIs are visible, plus `CountingRouter`, `CountingEmitter`, `CountingVerifier`, and `CountingCertifier` implementations of the Task-8 durable service boundaries. Execute `compile_sparse_seed_with_services` directly on a fixed and4 `SeedInput`; require a certified independent seed, every per-entrypoint legacy-generation counter and `legacy_oracle.calls()` to equal zero, and strictly positive call counts for the durable router, emitter, verifier, and certifier spies. Then invoke the explicit differential adapter once and require exactly its expected per-entrypoint counter plus `legacy_oracle.calls()` to equal one while all other legacy counters remain zero, proving the oracle spy is wired while the production seed seam cannot reach it. This behavioral test fails if Task 8 delegates construction to old generation or skips a durable authority, while the sealed production API makes accidental legacy injection a compile-time type error.
+Inside `seed.rs`'s unit-test module, define `CountingLegacyOracle`, `CountingRouter`, `CountingEmitter`, `CountingVerifier`, and `CountingCertifier`; this is the sole Task-8 owner of service injection and call-spy assertions. Construct crate-private `SeedServices` there and execute `compile_sparse_seed_with_services` directly on a fixed and4 `SeedInput`. Require a certified independent seed, every per-entrypoint legacy-generation counter and `legacy_oracle.calls()` to equal zero, and strictly positive call counts for the durable router, emitter, verifier, and certifier spies. Then, from the same unit-test module, invoke the `pub(super)` explicit differential adapter once with that `CountingLegacyOracle` and require exactly its expected per-entrypoint counter plus `legacy_oracle.calls()` to equal one while all other legacy counters remain zero. This separate adapter assertion proves the oracle spy is wired; reset all counters before the production-seam assertion so any legacy call made while building the seed fails the zero-call check. The behavioral test therefore fails if Task 8 delegates construction to old generation or skips a durable authority, while the sealed crate-private production API makes accidental legacy injection a compile-time type error.
 
 - [ ] **Step 2: Write deterministic seed tests**
 
@@ -826,11 +824,10 @@ Route external and internal `ConnectionId`s in stable critical-estimate/fanout/I
 
 - [ ] **Step 6: Prove the independent seam and run pin regressions**
 
-Call the production `compile_sparse_seed_with_services` seam from seed and legacy-adapter tests and require it to return the certified seed without any optimisation loop. Re-run the router/emitter/verifier/certifier spy assertions and the zero-call legacy assertion here; Task 9 will consume this seam rather than replacing it.
+Call the production `compile_sparse_seed_with_services` seam only from `seed.rs` unit tests and require it to return the certified seed without any optimisation loop. Re-run the router/emitter/verifier/certifier spy assertions and the zero-call legacy assertion in that same unit-test module; Task 9 will consume this seam rather than replacing it.
 
 ```powershell
 cargo test --lib compile::fragment_synth::seed::tests -- --nocapture
-cargo test --test fragment_synth_architecture -- --nocapture
 cargo test --test build_circuit_pins -- --nocapture
 cargo test --test terminal_handover -- --nocapture
 ```
@@ -840,7 +837,7 @@ Expected: all pass.
 - [ ] **Step 7: Commit Task 8**
 
 ```powershell
-git add src/compile/fragment_synth/seed.rs src/compile/fragment_synth/services.rs src/compile/fragment_synth/legacy_adapter.rs src/compile/fragment_synth/mod.rs src/compile/planner.rs tests/fragment_synth_architecture.rs tests/build_circuit_pins.rs
+git add src/compile/fragment_synth/seed.rs src/compile/fragment_synth/services.rs src/compile/fragment_synth/legacy_adapter.rs src/compile/fragment_synth/mod.rs src/compile/planner.rs tests/build_circuit_pins.rs
 git commit -m "feat(synthesis): build independent sparse seeds"
 ```
 
@@ -854,16 +851,20 @@ git commit -m "feat(synthesis): build independent sparse seeds"
 - Modify: `src/compile/fragment_synth/mod.rs`
 - Modify: `src/compile/mod.rs`
 - Test: `src/compile/fragment_synth/search.rs` (`tests` module)
+- Create: `tests/fragment_synth_architecture.rs`
 
 **Interfaces:**
 - Produces `SynthesisInput`, `SynthesisBudget`, `SynthesisCaseFingerprint`, `SynthesisResult`, `StopReason`, `ProposalTrace`, and explicit `compile_fragment_synth`.
 - Consumes the complete Task 7 `SearchConfig` and `CertificationConfig`; every cap is part of the case fingerprint and remains constant across evaluation/time budgets.
 - Consumes and wraps Task 8's existing `compile_sparse_seed_with_services(SeedInput<'_>, SeedServices<'_>)`; Task 9 does not add a second seed builder or bypass its durable service calls.
 - Initially enumerates deterministic no-op/refused proposals so budget semantics land before search policy.
+- Produces `tests/fragment_synth_architecture.rs` only after `compile_fragment_synth` is public. That integration test imports and executes only public REDA APIs; it must not name, construct, or inject crate-private `SeedServices`, `SeedEmitter`, `SeedVerifier`, `compile_sparse_seed_with_services`, `LegacyOracle`, `CountingLegacyOracle`, or any durable-service spy.
 
 - [ ] **Step 1: Write budget-prefix and best-retention tests**
 
 Run fresh syntheses at evaluation budgets 0, 1, 2, 4, and 8 under one explicit `SearchConfig`. Require budget 0 to return the certified seed; traces at smaller budgets to be byte-identical prefixes of larger traces; completed evaluations never exceed budget; and final quality never worsen. Inject refused, router-cap-exhausted, backtrack-cap-exhausted, proof-cap-exhausted, verification-failed, and certification-cap-exhausted proposals and require each to record one deterministic terminal outcome without erasing `best_certified`. Mutate each internal-cap field separately and require a different `SynthesisCaseFingerprint` before comparing traces.
+
+Create `tests/fragment_synth_architecture.rs` as an outside-the-crate consumer. Build fixed and4 with the public `reda::circuits::and4::build_and4_netlist`, call public `compile_fragment_synth` twice with public `SynthesisInput` and `SynthesisBudget::Evaluations(0)`, and assert through the public `SynthesisResult` data produced by this task that both successful certified-result calls return `compiled.planner_kind() == PlannerKind::FragmentSynth`, consume zero proposal evaluations, have empty proposal traces, and expose identical case/candidate fingerprints and byte-identical compiled worlds. Exercise each returned `CompiledCircuit` with the existing public simulator truth-table path. Restrict the file's imports to public `reda::circuits`, `reda::compile`, and simulator exports; do not add a test-only feature or import a private module to reach Task 8 services or spies.
 
 - [ ] **Step 2: Write time-budget equivalence tests around a fake clock**
 
@@ -873,9 +874,10 @@ Use an injected monotonic clock in unit tests with the identical `SearchConfig`,
 
 ```powershell
 cargo test --lib compile::fragment_synth::search::tests -- --nocapture
+cargo test --test fragment_synth_architecture -- --nocapture
 ```
 
-Expected: compilation fails because the state machine does not exist.
+Expected: compilation fails because the state machine and public `compile_fragment_synth` API do not exist.
 
 - [ ] **Step 4: Implement the loop-boundary budget state machine**
 
@@ -904,6 +906,7 @@ Implement the lossless Task-9 conversion `impl<'a> From<&SynthesisInput<'a>> for
 
 ```powershell
 cargo test --lib compile::fragment_synth::search::tests -- --nocapture
+cargo test --test fragment_synth_architecture -- --nocapture
 cargo test --test compile_end_to_end -- --nocapture
 ```
 
@@ -912,7 +915,7 @@ Expected: all pass and existing production planner-kind expectations remain unch
 - [ ] **Step 7: Commit Task 9**
 
 ```powershell
-git add src/compile/mod.rs src/compile/fragment_synth
+git add src/compile/mod.rs src/compile/fragment_synth/search.rs src/compile/fragment_synth/api.rs src/compile/fragment_synth/mod.rs tests/fragment_synth_architecture.rs
 git commit -m "feat(synthesis): add deterministic budgeted search API"
 ```
 
@@ -1465,7 +1468,7 @@ git commit -m "feat(compile): ship timing-directed fragment synthesis"
 
 - [ ] **Step 5: Prove durable dependencies are independent, then delete only legacy policy**
 
-Before deleting anything, extend `tests/fragment_synth_architecture.rs` so fragment synthesis, `compile::routing`, `compile::emission`, and `compile::verification` compile and run without importing a legacy planner-policy module. Confirm the fragment path reaches each durable router/emitter/verifier call spy once on a certified seed. The required helper ownership is fixed: Task 4 moves candidate emission from `src/compile/planner.rs` to `src/compile/emission.rs` and verifier orchestration from `src/compile/planner.rs` plus its rules in `src/compile/mod.rs` to `src/compile/verification.rs`; Task 5 moves typed route/reservation/terminal physics from `src/compile/planner.rs` to `src/compile/routing.rs`; this task moves only the named port contract from `src/compile/planner.rs` to `src/compile/ports.rs`. If the architecture test finds any other shared dependency, stop and repair the earlier owning task instead of making an unlisted move in Task 13.
+Before deleting anything, extend the Task-9-created `tests/fragment_synth_architecture.rs` only through public REDA APIs so an outside-the-crate caller compiles a certified fragment result after the front-door switch without importing a legacy planner-policy module. Keep that integration test free of crate-private service types and spies. Separately re-run `cargo test --lib compile::fragment_synth::seed::tests -- --nocapture`; the Task 8 unit tests remain the sole owner of injected router/emitter/verifier/certifier call-spy checks and must still prove positive durable calls plus zero legacy-generation calls. The required helper ownership is fixed: Task 4 moves candidate emission from `src/compile/planner.rs` to `src/compile/emission.rs` and verifier orchestration from `src/compile/planner.rs` plus its rules in `src/compile/mod.rs` to `src/compile/verification.rs`; Task 5 moves typed route/reservation/terminal physics from `src/compile/planner.rs` to `src/compile/routing.rs`; this task moves only the named port contract from `src/compile/planner.rs` to `src/compile/ports.rs`. If either test finds any other shared dependency, stop and repair the earlier owning task instead of making an unlisted move in Task 13.
 
 Then delete exactly the paths marked for deletion in the Files allow-list. In `src/compile/routing.rs`, `src/compile/emission.rs`, and `src/compile/verification.rs`, remove only the legacy planner adapters while retaining the durable fragment views and authorities. In `src/compile/metrics.rs`, remove the temporary `planner::Anchor` re-export test now that `geometry::Anchor` is the sole owner. Delete `src/bin/fragment_baseline.rs`, which is the one-shot legacy recapture executable, and update `tests/fragment_synth_baseline.rs` to retain fixture schema/immutability checks without launching that deleted executable; Task 12's acceptance report remains the reproducible comparison record. In the other named surviving files, remove `compile_legacy`, old planner-selection fallback, spring/growth/negotiated placement and optimisation policy references, `LegacyCandidateAdapter` use, old routing-stat compatibility, and old planner imports; retain or rewrite their durable fragment-synthesis, port-contract, timing-graph, channel-safety, differential, reference-circuit, seven-segment, Verilog, and viewer assertions. `tests/review_fingerprint.rs`, `viewer/tests/placement_agrees_with_native.rs`, and the six named placement fixtures are deleted because they exist only to fingerprint the superseded planner. Retain `geometry::Anchor`, typed routing physics, emission, verifier rules, simulator, topology library, physical variants, and diagnostic APIs used by the new synthesiser. The deletion diff must contain only the allow-listed policy/adapters/fallback files and the allow-listed surviving-file rewrites; do not combine this deletion with the front-door switch commit.
 
