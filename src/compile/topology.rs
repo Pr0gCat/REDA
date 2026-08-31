@@ -690,6 +690,25 @@ impl Library {
         self.entries_for(kind).first()
     }
 
+    /// Registered combinational techniques in deterministic gate-kind order.
+    /// Entry slices preserve their registration order.
+    pub(crate) fn revision_entries(
+        &self,
+    ) -> impl Iterator<Item = (GateKind, &[LibraryEntry])> + '_ {
+        self.entries
+            .iter()
+            .map(|(&kind, entries)| (kind, entries.as_slice()))
+    }
+
+    /// Registered stateful topologies in deterministic gate-kind order.
+    pub(crate) fn revision_stateful_entries(
+        &self,
+    ) -> impl Iterator<Item = (GateKind, &StatefulTopology)> + '_ {
+        self.stateful_entries
+            .iter()
+            .map(|(&kind, topology)| (kind, topology))
+    }
+
     /// The fixed stateful topology for `kind`, if this library knows one.
     /// Stateful entries intentionally do not appear in [`Self::entries_for`]:
     /// they are not interchangeable combinational templates and cannot be

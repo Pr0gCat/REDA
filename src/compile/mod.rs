@@ -68,11 +68,13 @@ pub mod energising;
 pub mod equivalence;
 pub mod geometry;
 pub mod lowering;
+pub mod metrics;
 pub mod physical;
 pub mod planner;
 pub mod polarity;
 pub mod primitive_graph;
 pub mod relax;
+pub mod revisions;
 pub mod routing_stats;
 /// A CDCL SAT solver and a tagged CNF builder, used by `planner`'s windowed
 /// model. Test-only, so it ships in nothing and takes no dependency.

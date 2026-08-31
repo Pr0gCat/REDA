@@ -8,13 +8,7 @@ use crate::redstone::simulator::position::Position;
 use crate::redstone::world::block::{BlockState, Facing};
 use crate::redstone::world::storage::World;
 
-/// A fixed coordinate selected by the planner without referring to a world.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct Anchor {
-    pub x: i32,
-    pub y: i32,
-    pub z: i32,
-}
+pub use crate::compile::geometry::Anchor;
 
 /// What a node becomes when a candidate is turned back into blocks.
 ///

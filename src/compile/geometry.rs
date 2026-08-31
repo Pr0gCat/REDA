@@ -10,6 +10,15 @@
 
 use crate::redstone::simulator::position::{Position, HORIZONTAL};
 use crate::redstone::world::block::Facing;
+use serde::{Deserialize, Serialize};
+
+/// A fixed coordinate selected without referring to an allocated world.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct Anchor {
+    pub x: i32,
+    pub y: i32,
+    pub z: i32,
+}
 
 /// One of the four horizontal orientations a gate cell can be built in.
 ///
