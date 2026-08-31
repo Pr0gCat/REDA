@@ -394,6 +394,26 @@ pub enum ExpandedPhysicalError {
         foreign: StablePhysicalOwnerId,
         at: Anchor,
     },
+    #[error(
+        "junction {junction:?} contributor {contributor:?} on route {route:?} at {contributor_at:?} does not reach observation at {junction_at:?}"
+    )]
+    JunctionContributorDoesNotReach {
+        junction: InstanceId,
+        contributor: PhysicalEndpointId,
+        route: Option<RouteId>,
+        contributor_at: Anchor,
+        junction_at: Anchor,
+    },
+    #[error(
+        "junction {junction:?} has unlisted contributor {contributor:?} on route {route:?} at {contributor_at:?}; observation is at {junction_at:?}"
+    )]
+    UnlistedJunctionContributor {
+        junction: InstanceId,
+        contributor: PhysicalEndpointId,
+        route: Option<RouteId>,
+        contributor_at: Anchor,
+        junction_at: Anchor,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -422,7 +442,10 @@ pub(crate) fn verify_expanded_candidate(
         match registration.id {
             PhysicalVerifierRuleId::ObservationEquality => verify_observations(candidate, emitted)?,
             PhysicalVerifierRuleId::RouteContinuity => verify_route_continuity(candidate, emitted)?,
-            PhysicalVerifierRuleId::Connectivity => verify_typed_connectivity(candidate, emitted)?,
+            PhysicalVerifierRuleId::Connectivity => {
+                verify_junction_closure(candidate, emitted)?;
+                verify_typed_connectivity(candidate, emitted)?;
+            }
             PhysicalVerifierRuleId::Coupling => verify_typed_coupling(candidate, emitted)?,
             PhysicalVerifierRuleId::Collision
             | PhysicalVerifierRuleId::TorchMergeStructure
@@ -627,6 +650,125 @@ fn verify_typed_connectivity(
                     first_at
                 },
             });
+        }
+    }
+    Ok(())
+}
+
+fn verify_junction_closure(
+    candidate: &ExpandedPhysicalCandidate,
+    emitted: &EmittedWorld,
+) -> Result<(), ExpandedPhysicalError> {
+    for (&junction_id, junction) in &candidate.junctions {
+        let listed_routes = junction
+            .contributors
+            .iter()
+            .filter_map(|contributor| match contributor {
+                PhysicalEndpointId::Landing(connection) => candidate
+                    .connections
+                    .get(connection)
+                    .map(|binding| binding.route),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let listed_primitives = junction
+            .contributors
+            .iter()
+            .filter_map(|contributor| match contributor {
+                PhysicalEndpointId::PrimitiveOutput(primitive) => Some(*primitive),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        for &contributor in &junction.contributors {
+            let (route, contributor_at) = match contributor {
+                PhysicalEndpointId::Landing(connection) => {
+                    let Some(binding) = candidate.connections.get(&connection) else {
+                        continue;
+                    };
+                    let Some(branch) = candidate.routes.get(&binding.route).and_then(|route| {
+                        route.branches.iter().find(|branch| {
+                            branch.sink == binding.sink
+                                && branch.target
+                                    == super::fragment_synth::candidate::RouteTarget::Connection(
+                                        connection,
+                                    )
+                        })
+                    }) else {
+                        continue;
+                    };
+                    (Some(binding.route), branch.terminal.at)
+                }
+                PhysicalEndpointId::PrimitiveOutput(primitive) => {
+                    let Some(observation) = candidate
+                        .observations
+                        .get(&ObservationId::PrimitiveOutput(primitive))
+                    else {
+                        continue;
+                    };
+                    (None, observation.site.at)
+                }
+                _ => continue,
+            };
+            let seed = Position::new(contributor_at.x, contributor_at.y, contributor_at.z);
+            let junction_position = Position::new(junction.at.x, junction.at.y, junction.at.z);
+            let (network, powered) = super::net_network_and_reach(&emitted.world, &[seed]);
+            if !network.contains(&junction_position) && !powered.contains(&junction_position) {
+                return Err(ExpandedPhysicalError::JunctionContributorDoesNotReach {
+                    junction: junction_id,
+                    contributor,
+                    route,
+                    contributor_at,
+                    junction_at: junction.at,
+                });
+            }
+        }
+
+        let junction_position = Position::new(junction.at.x, junction.at.y, junction.at.z);
+        let (network, powered) = super::net_network_and_reach(&emitted.world, &[junction_position]);
+        for (at, role) in emitted.owners() {
+            let Some(route) = route_owner(Some(role)) else {
+                continue;
+            };
+            let position = Position::new(at.x, at.y, at.z);
+            if !network.contains(&position) && !powered.contains(&position) {
+                continue;
+            }
+            let source = candidate.routes[&route].source;
+            if source == PhysicalEndpointId::Junction(junction_id) || listed_routes.contains(&route)
+            {
+                continue;
+            }
+            return Err(ExpandedPhysicalError::UnlistedJunctionContributor {
+                junction: junction_id,
+                contributor: source,
+                route: Some(route),
+                contributor_at: at,
+                junction_at: junction.at,
+            });
+        }
+
+        for &primitive in candidate.placements.keys() {
+            if primitive.instance != junction_id || listed_primitives.contains(&primitive) {
+                continue;
+            }
+            let Some(observation) = candidate
+                .observations
+                .get(&ObservationId::PrimitiveOutput(primitive))
+            else {
+                continue;
+            };
+            let at = observation.site.at;
+            let seed = Position::new(at.x, at.y, at.z);
+            let (network, powered) = super::net_network_and_reach(&emitted.world, &[seed]);
+            if network.contains(&junction_position) || powered.contains(&junction_position) {
+                return Err(ExpandedPhysicalError::UnlistedJunctionContributor {
+                    junction: junction_id,
+                    contributor: PhysicalEndpointId::PrimitiveOutput(primitive),
+                    route: None,
+                    contributor_at: at,
+                    junction_at: junction.at,
+                });
+            }
         }
     }
     Ok(())
@@ -852,10 +994,10 @@ fn union_routes(parent: &mut BTreeMap<RouteId, RouteId>, left: RouteId, right: R
 mod tests {
     use super::{
         candidate_verifier_pipeline, expanded_strict_physical_verifier_revision_descriptor,
-        physical_verifier_revision_descriptor, verify_expanded_candidate, verify_route_continuity,
-        verify_typed_connectivity, verify_typed_coupling, CandidateVerifierCheckId,
-        ExpandedPhysicalError, PhysicalVerifierPolicy, PhysicalVerifierRuleId,
-        StablePhysicalOwnerId,
+        physical_verifier_revision_descriptor, verify_expanded_candidate, verify_junction_closure,
+        verify_route_continuity, verify_typed_connectivity, verify_typed_coupling,
+        CandidateVerifierCheckId, ExpandedPhysicalError, PhysicalVerifierPolicy,
+        PhysicalVerifierRuleId, StablePhysicalOwnerId,
     };
     use crate::compile::emission::{
         emit_candidate as emit_typed, PhysicalBlockRef, PhysicalBlockRole, PhysicalCandidateView,
@@ -868,8 +1010,11 @@ mod tests {
         InstanceId, PhysicalEndpointId, PortId, PrimitiveId, RouteId, RoutedSinkId,
     };
     use crate::compile::fragment_synth::instance_graph::InstanceGraph;
+    use crate::compile::fragment_synth::legacy_adapter::LegacyCandidateAdapter;
+    use crate::compile::fragment_synth::realise::ExpandedCandidateAdapter;
     use crate::compile::geometry::Anchor;
     use crate::compile::planner::{PortPlacements, RouteTerminalKind};
+    use crate::compile::{compile_legacy, Gate, Netlist};
     use crate::redstone::world::block::{BlockKind, BlockState, Facing};
 
     struct ShortedRoutes {
@@ -1160,6 +1305,37 @@ mod tests {
         let emitted = emit_typed(&view, (16, 8, 16)).unwrap();
 
         assert_eq!(verify_typed_coupling(&candidate, &emitted), Ok(()));
+    }
+
+    #[test]
+    fn junction_closure_preserves_valid_legacy_bare_and_mixed_merges() {
+        let fixtures = [
+            Netlist {
+                inputs: vec!["a".to_string(), "b".to_string()],
+                outputs: vec!["y".to_string()],
+                gates: vec![Gate::merge("y", &["a", "b"])],
+            },
+            Netlist {
+                inputs: vec!["a".to_string(), "b".to_string()],
+                outputs: vec!["y".to_string(), "xa".to_string()],
+                gates: vec![Gate::merge("y", &["a", "b"]), Gate::nor("xa", &["a"])],
+            },
+        ];
+
+        for netlist in fixtures {
+            let compiled = compile_legacy(&netlist).expect("legacy merge fixture compiles");
+            let adapted = LegacyCandidateAdapter::adapt(&netlist, &compiled)
+                .expect("legacy merge fixture adapts");
+            let adapter =
+                ExpandedCandidateAdapter::new(&adapted.candidate).expect("candidate adapts");
+            let emitted = emit_typed(&adapter, compiled.world.size()).expect("candidate emits");
+
+            assert_eq!(
+                verify_junction_closure(&adapted.candidate, &emitted),
+                Ok(()),
+                "valid merge was rejected: {netlist:?}"
+            );
+        }
     }
 
     #[test]

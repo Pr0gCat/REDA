@@ -935,4 +935,252 @@ mod tests {
         )
         .is_err());
     }
+
+    #[test]
+    fn listed_landing_must_physically_reach_its_junction_observation() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: Vec::new(),
+            gates: vec![Gate::merge("y", &["a", "b"])],
+        };
+        let compiled = compile_legacy(&netlist).expect("fixture compiles");
+        let mut adapted =
+            LegacyCandidateAdapter::adapt(&netlist, &compiled).expect("fixture adapts");
+        let (&junction_id, junction) = adapted
+            .candidate
+            .junctions
+            .iter_mut()
+            .next()
+            .expect("bare merge has a junction");
+        let decoy_at = Anchor {
+            x: junction.at.x + 64,
+            y: junction.at.y,
+            z: junction.at.z,
+        };
+        let decoy_state = crate::compile::dust();
+        junction.at = decoy_at;
+        junction.cells.push(PlacedBlock {
+            at: decoy_at,
+            state: decoy_state.clone(),
+        });
+        for observation_id in [
+            crate::compile::fragment_synth::identity::ObservationId::JunctionOutput(junction_id),
+            crate::compile::fragment_synth::identity::ObservationId::InstanceOutput(junction_id),
+        ] {
+            let observation = adapted
+                .candidate
+                .observations
+                .get_mut(&observation_id)
+                .expect("junction observation exists");
+            observation.site.at = decoy_at;
+            observation.state = decoy_state.clone();
+        }
+
+        let actual =
+            realise_and_verify_expanded(&adapted.candidate, &netlist, &Library::default_library());
+        assert!(
+            matches!(
+                actual,
+                Err(CertificationError::Physical(
+                    ExpandedPhysicalError::JunctionContributorDoesNotReach {
+                        junction,
+                        contributor: PhysicalEndpointId::Landing(_),
+                        route: Some(_),
+                        junction_at,
+                        ..
+                    }
+                )) if junction == junction_id && junction_at == decoy_at
+            ),
+            "listed landing whose physical route misses the verified junction was accepted: {actual:?}"
+        );
+    }
+
+    #[test]
+    fn listed_primitive_output_must_physically_reach_its_junction_observation() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: Vec::new(),
+            gates: vec![
+                Gate::merge("y", &["a", "b"]),
+                Gate::nor("xa", &["a"]),
+                Gate::nor("xb", &["b"]),
+            ],
+        };
+        let compiled = compile_legacy(&netlist).expect("fixture compiles");
+        let mut adapted =
+            LegacyCandidateAdapter::adapt(&netlist, &compiled).expect("fixture adapts");
+        let (&junction_id, junction) = adapted
+            .candidate
+            .junctions
+            .iter_mut()
+            .find(|(_, junction)| {
+                junction
+                    .contributors
+                    .iter()
+                    .all(|endpoint| matches!(endpoint, PhysicalEndpointId::PrimitiveOutput(_)))
+            })
+            .expect("fanout inputs produce an all-isolated merge");
+        let decoy_at = Anchor {
+            x: junction.at.x + 64,
+            y: junction.at.y,
+            z: junction.at.z,
+        };
+        let decoy_state = crate::compile::dust();
+        junction.at = decoy_at;
+        junction.cells.push(PlacedBlock {
+            at: decoy_at,
+            state: decoy_state.clone(),
+        });
+        for observation_id in [
+            crate::compile::fragment_synth::identity::ObservationId::JunctionOutput(junction_id),
+            crate::compile::fragment_synth::identity::ObservationId::InstanceOutput(junction_id),
+        ] {
+            let observation = adapted
+                .candidate
+                .observations
+                .get_mut(&observation_id)
+                .expect("junction observation exists");
+            observation.site.at = decoy_at;
+            observation.state = decoy_state.clone();
+        }
+
+        let actual =
+            realise_and_verify_expanded(&adapted.candidate, &netlist, &Library::default_library());
+        assert!(
+            matches!(
+                actual,
+                Err(CertificationError::Physical(
+                    ExpandedPhysicalError::JunctionContributorDoesNotReach {
+                        junction,
+                        contributor: PhysicalEndpointId::PrimitiveOutput(_),
+                        route: None,
+                        junction_at,
+                        ..
+                    }
+                )) if junction == junction_id && junction_at == decoy_at
+            ),
+            "listed primitive whose output misses the verified junction was accepted: {actual:?}"
+        );
+    }
+
+    #[test]
+    fn unlisted_same_source_branchless_route_cannot_join_a_junction() {
+        let netlist = Netlist {
+            inputs: vec!["a".to_string(), "b".to_string()],
+            outputs: Vec::new(),
+            gates: vec![Gate::merge("y", &["a", "b"])],
+        };
+        let compiled = compile_legacy(&netlist).expect("fixture compiles");
+        let mut adapted =
+            LegacyCandidateAdapter::adapt(&netlist, &compiled).expect("fixture adapts");
+        let (&junction_id, junction) = adapted
+            .candidate
+            .junctions
+            .iter()
+            .next()
+            .expect("bare merge has a junction");
+        let junction_at = junction.at;
+        let listed_connection = match junction.contributors[0] {
+            PhysicalEndpointId::Landing(connection) => connection,
+            other => panic!("bare merge contributor is not a landing: {other:?}"),
+        };
+        let listed_route = adapted.candidate.connections[&listed_connection].route;
+        let source = adapted.candidate.routes[&listed_route].source;
+        let new_route = RouteId(
+            adapted
+                .candidate
+                .routes
+                .keys()
+                .map(|route| route.0)
+                .max()
+                .unwrap_or(0)
+                + 1,
+        );
+        let occupied = adapted
+            .candidate
+            .placements
+            .values()
+            .flat_map(|placement| placement.blocks.iter())
+            .chain(
+                adapted
+                    .candidate
+                    .boundaries
+                    .values()
+                    .flat_map(|placement| placement.blocks.iter()),
+            )
+            .chain(
+                adapted
+                    .candidate
+                    .junctions
+                    .values()
+                    .flat_map(|junction| junction.cells.iter()),
+            )
+            .chain(
+                adapted
+                    .candidate
+                    .routes
+                    .values()
+                    .flat_map(|route| route.cells.iter().chain(route.floors.iter())),
+            )
+            .map(|block| block.at)
+            .collect::<std::collections::BTreeSet<_>>();
+        let spur_at = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+            .into_iter()
+            .map(|(dx, dz)| Anchor {
+                x: junction.at.x + dx,
+                y: junction.at.y,
+                z: junction.at.z + dz,
+            })
+            .find(|at| {
+                !occupied.contains(at)
+                    && !occupied.contains(&Anchor {
+                        x: at.x,
+                        y: at.y - 1,
+                        z: at.z,
+                    })
+            })
+            .expect("junction has a free supported spur direction");
+        adapted.candidate.routes.insert(
+            new_route,
+            crate::compile::fragment_synth::candidate::RealisedRouteTree {
+                id: new_route,
+                source,
+                cells: vec![PlacedBlock {
+                    at: spur_at,
+                    state: crate::compile::dust(),
+                }],
+                floors: vec![PlacedBlock {
+                    at: Anchor {
+                        x: spur_at.x,
+                        y: spur_at.y - 1,
+                        z: spur_at.z,
+                    },
+                    state: crate::compile::stone(),
+                }],
+                branches: Vec::new(),
+            },
+        );
+
+        let actual =
+            realise_and_verify_expanded(&adapted.candidate, &netlist, &Library::default_library());
+        assert!(
+            matches!(
+                actual,
+                Err(CertificationError::Physical(
+                    ExpandedPhysicalError::UnlistedJunctionContributor {
+                        junction,
+                        contributor,
+                        route: Some(route),
+                        contributor_at,
+                        junction_at: rejected_junction_at,
+                    }
+                )) if junction == junction_id
+                    && contributor == source
+                    && route == new_route
+                    && contributor_at == spur_at
+                    && rejected_junction_at == junction_at
+            ),
+            "unlisted branchless route {new_route:?} joined the junction at {spur_at:?}: {actual:?}"
+        );
+    }
 }
