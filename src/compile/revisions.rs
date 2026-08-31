@@ -268,6 +268,13 @@ pub fn physical_verifier_revision() -> Fingerprint {
     descriptor_fingerprint(&crate::compile::physical_verifier_revision_descriptor())
 }
 
+/// Semantic revision of the strict verifier used by expanded fragment candidates.
+pub fn expanded_physical_verifier_revision() -> Fingerprint {
+    descriptor_fingerprint(
+        &crate::compile::verification::expanded_strict_physical_verifier_revision_descriptor(),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, HashMap};
@@ -276,7 +283,7 @@ mod tests {
 
     use super::{
         cell_library_descriptor, cell_library_revision, descriptor_fingerprint,
-        physical_verifier_revision, simulator_revision,
+        expanded_physical_verifier_revision, physical_verifier_revision, simulator_revision,
     };
     use crate::compile::{
         physical_verifier_revision_descriptor,
@@ -551,6 +558,14 @@ mod tests {
                 (PhysicalVerifierRuleId::SignalStrength, 1),
             ]
         );
+    }
+
+    #[test]
+    fn expanded_and_legacy_verifier_authorities_have_distinct_stable_revisions() {
+        let expanded = expanded_physical_verifier_revision();
+
+        assert_ne!(expanded, physical_verifier_revision());
+        assert_eq!(expanded, expanded_physical_verifier_revision());
     }
 
     #[test]

@@ -96,6 +96,11 @@ pub mod topology;
 pub mod verification;
 pub mod world_partition;
 
+pub use fragment_synth::{
+    compile_fragment_synth, CapWorkCounters, ProposalTerminal, ProposalTrace, StopReason,
+    SynthesisBudget, SynthesisCaseFingerprint, SynthesisError, SynthesisInput, SynthesisResult,
+};
+
 pub(crate) use verification::physical_verifier_revision_descriptor;
 #[cfg(test)]
 pub(crate) use verification::PhysicalVerifierRuleId;
@@ -7908,13 +7913,12 @@ fn planner_error(error: planner::PlannerError) -> CompileError {
     }
 }
 
-/// Which of `compile`'s two paths produced the world a `CompiledCircuit`
-/// carries.
+/// Which placement path produced the world a `CompiledCircuit` carries.
 ///
-/// **This names the placer, not the realiser.** Both paths end in
-/// `planner::realise_and_verify`, so the world is the planner's realisation
-/// either way and the four physical invariants ran on it either way; what
-/// differs is where the anchors came from and who routed between them.
+/// **This names the placer, not the realiser.** The legacy and unified paths
+/// end in `planner::realise_and_verify`; fragment synthesis has its own typed
+/// realisation authority. Every path still returns only after its complete
+/// physical invariant set passes.
 ///
 /// It exists so a fallback is visible. `compile` swallows the planner's error
 /// by design -- a trial that failed is not a compile that failed -- and
@@ -7929,6 +7933,8 @@ pub enum PlannerKind {
     /// Placed by spring relaxation and routed by A* with rip-up, both in
     /// `compile::planner`. `compile_planned`, and `compile` where it works.
     Unified3d,
+    /// Built independently by the timing-directed fragment synthesiser.
+    FragmentSynth,
 }
 
 /// Every cell a gate's own realisation occupies, found by realising it into a

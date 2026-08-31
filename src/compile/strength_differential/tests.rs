@@ -73,6 +73,9 @@ fn shipping_case(name: &'static str, netlist: Netlist) -> Case {
                 .expect("the planner path reproduces"),
             "planner, rip-up".to_string(),
         ),
+        PlannerKind::FragmentSynth => panic!(
+            "compile() must not silently select the explicit fragment-synthesis API before the replacement gate"
+        ),
     };
     Case {
         name,
