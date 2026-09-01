@@ -1490,6 +1490,7 @@ fn route_all(
                 .map(|target| {
                     let target_level = route_target_level(&target, analysis, output_level);
                     TargetObligation {
+                        promoted: false,
                         structural_slack_ticks: route_target_slack(source, &target, analysis),
                         forward_distance: target_level.saturating_sub(source_level),
                         key: target.key(),
