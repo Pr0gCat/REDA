@@ -1972,7 +1972,7 @@ fn step_many(at: Anchor, direction: Facing, distance: i32) -> Anchor {
 
 #[cfg(test)]
 mod tests {
-    use std::cell::Cell;
+    use std::cell::{Cell, RefCell};
 
     use super::*;
     use crate::circuits::and4::build_and4_netlist;
@@ -2856,5 +2856,157 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct RecordedRouteRequest {
+        id: RouteId,
+        source: PhysicalEndpointId,
+        source_anchor: Anchor,
+        sinks: Vec<(PhysicalEndpointId, Anchor)>,
+        limits: crate::compile::routing::RouterLimits,
+    }
+
+    /// Forwards every request to the production router unchanged while keeping
+    /// the evidence: request identity, typed endpoints in caller order, limits,
+    /// and a snapshot of the first request's reservations.
+    #[derive(Default)]
+    struct RecordingRouter {
+        requests: RefCell<Vec<RecordedRouteRequest>>,
+        first_reservations: RefCell<Option<PhysicalReservations>>,
+    }
+
+    impl PhysicalRouter for RecordingRouter {
+        fn route(&self, request: RouteRequest<'_>) -> Result<RealisedRouteTree, RouterFailure> {
+            self.first_reservations
+                .borrow_mut()
+                .get_or_insert_with(|| request.reservations.clone());
+            self.requests.borrow_mut().push(RecordedRouteRequest {
+                id: request.id,
+                source: request.source.id,
+                source_anchor: request.source.anchor,
+                sinks: request
+                    .sinks
+                    .as_slice()
+                    .iter()
+                    .map(|sink| (sink.endpoint, sink.anchor))
+                    .collect(),
+                limits: request.limits,
+            });
+            DurablePhysicalRouter.route(request)
+        }
+    }
+
+    #[test]
+    fn and4_schedule_reaches_the_router_in_order_over_pre_reserved_terminals() {
+        let (netlist, _) = build_and4_netlist();
+        let library = Library::default_library();
+        let config = SearchConfig::checked_defaults();
+        let router = RecordingRouter::default();
+
+        compile_sparse_seed_with_services(
+            SeedInput {
+                lowered: &netlist,
+                source_provenance: None,
+                pins: None,
+            },
+            SeedServices {
+                library: &library,
+                placer: &TopologyAwareSeedPlacer,
+                router: &router,
+                emitter: &DurableSeedEmitter,
+                verifier: &DurableSeedVerifier,
+                certifier: &CompleteCandidateCertifier,
+                search_config: &config,
+            },
+        )
+        .unwrap();
+
+        let requests = router.requests.borrow();
+        let observed = requests
+            .iter()
+            .map(|request| {
+                (
+                    request.source,
+                    request
+                        .sinks
+                        .iter()
+                        .map(|(endpoint, _)| *endpoint)
+                        .collect::<Vec<_>>(),
+                )
+            })
+            .collect::<Vec<_>>();
+        fn primitive_output(instance: u32) -> PhysicalEndpointId {
+            PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+                instance: InstanceId(instance),
+                node: crate::compile::fragment_synth::identity::TopologyNodeId(0),
+            })
+        }
+        fn external_landing(instance: u32, input_index: u16) -> PhysicalEndpointId {
+            PhysicalEndpointId::Landing(ConnectionId::External {
+                instance: InstanceId(instance),
+                input_index,
+            })
+        }
+        let expected = vec![
+            (primitive_output(0), vec![external_landing(3, 0)]),
+            (primitive_output(1), vec![external_landing(3, 1)]),
+            (primitive_output(2), vec![external_landing(3, 2)]),
+            (primitive_output(3), vec![external_landing(4, 0)]),
+            (primitive_output(4), vec![external_landing(6, 0)]),
+            (
+                primitive_output(6),
+                vec![PhysicalEndpointId::DeclaredOutput(PortId(0))],
+            ),
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(0)),
+                vec![external_landing(0, 0)],
+            ),
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(1)),
+                vec![external_landing(1, 0)],
+            ),
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(2)),
+                vec![external_landing(2, 0)],
+            ),
+            (primitive_output(5), vec![external_landing(6, 1)]),
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(3)),
+                vec![external_landing(5, 0)],
+            ),
+        ];
+        assert_eq!(observed, expected);
+
+        for (scheduled_index, request) in requests.iter().enumerate() {
+            assert_eq!(
+                request.id,
+                RouteId(u32::try_from(scheduled_index).unwrap()),
+                "scheduled request {scheduled_index} carries a non-sequential RouteId"
+            );
+            assert_eq!(
+                request.limits, config.router_limits,
+                "scheduled request {scheduled_index} altered the configured router limits"
+            );
+        }
+
+        let first_reservations = router.first_reservations.borrow();
+        let first_reservations = first_reservations
+            .as_ref()
+            .expect("the certifying build must issue at least one route request");
+        for request in requests.iter() {
+            assert!(
+                first_reservations.get(&request.source_anchor).is_some(),
+                "source terminal {:?} of {:?} was not reserved before routing began",
+                request.source_anchor,
+                request.source,
+            );
+            for (endpoint, anchor) in &request.sinks {
+                assert!(
+                    first_reservations.get(anchor).is_some(),
+                    "sink terminal {anchor:?} of {endpoint:?} was not reserved before routing began",
+                );
+            }
+        }
     }
 }
