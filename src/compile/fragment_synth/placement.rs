@@ -6,16 +6,25 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::compile::fragment_synth::identity::{InstanceId, PrimitiveId};
+use crate::compile::fragment_synth::identity::{PhysicalEndpointId, PortId};
 use crate::compile::fragment_synth::instance_graph::{
-    InstanceDriver, InstanceGraph, PhysicalDriver, PhysicalSink,
+    Instance, InstanceDriver, InstanceGraph, LogicalSignalId, PhysicalDriver, PhysicalSink,
 };
 use crate::compile::fragment_synth::topology::{
     ConnectionSource, ConnectionTarget, ContributorSpec, OutputSpec, ValidatedTopology,
 };
+use crate::compile::geometry::{Anchor, CellFacing};
+use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
+use crate::compile::physical::PortKind;
+use crate::compile::planner::{PortPin, PortRole};
 use crate::compile::topology::Primitive;
+use crate::compile::topology::{EmbeddingHint, TemplateNode};
+use crate::compile::{geometry, physical};
 use crate::redstone::simulator::component::{
     COMPARATOR_DELAY_GAME_TICKS, REPEATER_GAME_TICKS_PER_REDSTONE_TICK, TORCH_DELAY_GAME_TICKS,
 };
+use crate::redstone::simulator::position::Position;
+use crate::redstone::world::block::Facing;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub(crate) struct NodeFacts {
@@ -54,6 +63,842 @@ pub(crate) enum SeedPlacementError {
     UnresolvedTopology { instance: InstanceId },
     #[error("structural timing delay overflowed u64 game ticks")]
     TimingOverflow,
+    #[error("placement coordinate overflowed i32")]
+    CoordinateOverflow,
+    #[error("primitive {primitive:?} has no physical variant")]
+    MissingPhysicalVariant { primitive: Primitive },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PlacementFrame {
+    pub forward: Facing,
+    pub lateral: Facing,
+    pub origin: Anchor,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct SeedPlacementRequest<'a> {
+    pub graph: &'a InstanceGraph,
+    pub pins: &'a BTreeMap<PhysicalEndpointId, PortPin>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct PreferredInstancePose {
+    pub preferred_origin: Anchor,
+    pub facing: CellFacing,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SeedPlacementPlan {
+    pub instances: BTreeMap<InstanceId, PreferredInstancePose>,
+    pub automatic_inputs: BTreeMap<PortId, Anchor>,
+    pub automatic_outputs: BTreeMap<PortId, Anchor>,
+    pub fingerprint: Fingerprint,
+}
+
+pub(crate) trait SeedPlacer {
+    fn plan(
+        &self,
+        request: SeedPlacementRequest<'_>,
+    ) -> Result<SeedPlacementPlan, SeedPlacementError>;
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct TopologyAwareSeedPlacer;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NetInterval {
+    signal: LogicalSignalId,
+    start: u64,
+    end: u64,
+    fanout: usize,
+    slack: u64,
+}
+
+const ROUTING_CHANNEL: i32 = 6;
+const TRACK_PITCH: i32 = 6;
+
+impl SeedPlacer for TopologyAwareSeedPlacer {
+    fn plan(
+        &self,
+        request: SeedPlacementRequest<'_>,
+    ) -> Result<SeedPlacementPlan, SeedPlacementError> {
+        let analysis = analyse_instance_dag(request.graph)?;
+        let frame = derive_frame(request.pins);
+        let intervals = net_intervals(request.graph, &analysis);
+        let tracks = colour_intervals(&intervals);
+        let track_laterals = track_laterals(request.graph, request.pins, frame, &tracks);
+        let envelopes = request
+            .graph
+            .instances
+            .iter()
+            .map(|instance| macro_envelope(instance).map(|size| (instance.id, size)))
+            .collect::<Result<BTreeMap<_, _>, _>>()?;
+
+        let mut level_widths = BTreeMap::<u64, i32>::new();
+        for instance in &request.graph.instances {
+            let level = analysis.nodes[&instance.id].forward_level;
+            level_widths
+                .entry(level)
+                .and_modify(|width| *width = (*width).max(envelopes[&instance.id].0))
+                .or_insert(envelopes[&instance.id].0);
+        }
+        let mut columns = BTreeMap::new();
+        let mut cursor = 0i32;
+        for (&level, &width) in &level_widths {
+            columns.insert(level, cursor);
+            cursor = cursor
+                .checked_add(width)
+                .and_then(|value| value.checked_add(ROUTING_CHANNEL))
+                .ok_or(SeedPlacementError::CoordinateOverflow)?;
+        }
+
+        let mut lanes = initial_lanes(request.graph, &track_laterals, &analysis);
+        barycentric_sweep(&analysis, &mut lanes, true);
+        barycentric_sweep(&analysis, &mut lanes, false);
+
+        let mut frame_origins = BTreeMap::<InstanceId, (i32, i32)>::new();
+        for (&level, &column) in &columns {
+            let mut ids = analysis
+                .order
+                .iter()
+                .copied()
+                .filter(|id| analysis.nodes[id].forward_level == level)
+                .collect::<Vec<_>>();
+            ids.sort_by_key(|id| (lanes[id], *id));
+            let mut lateral_end = i32::MIN / 4;
+            for id in ids {
+                let depth = envelopes[&id].1;
+                let preferred = lanes[&id]
+                    .checked_mul(TRACK_PITCH)
+                    .ok_or(SeedPlacementError::CoordinateOverflow)?;
+                let lateral = preferred.max(lateral_end);
+                frame_origins.insert(id, (column, lateral));
+                lateral_end = lateral
+                    .checked_add(depth)
+                    .and_then(|value| value.checked_add(ROUTING_CHANNEL))
+                    .ok_or(SeedPlacementError::CoordinateOverflow)?;
+            }
+        }
+
+        let mut instances = BTreeMap::new();
+        for instance in &request.graph.instances {
+            let (forward, lateral) = frame_origins[&instance.id];
+            let origin = frame_to_world(frame, forward, lateral);
+            let source = frame_to_world(frame, forward - ROUTING_CHANNEL, lateral);
+            let target = frame_to_world(
+                frame,
+                forward + envelopes[&instance.id].0 + ROUTING_CHANNEL,
+                lateral,
+            );
+            let facing = choose_instance_facing(instance, origin, source, target, frame.forward)?;
+            instances.insert(
+                instance.id,
+                PreferredInstancePose {
+                    preferred_origin: origin,
+                    facing,
+                },
+            );
+        }
+
+        let max_level = level_widths.keys().next_back().copied().unwrap_or(0);
+        let input_forward = -ROUTING_CHANNEL;
+        let output_forward =
+            cursor.max(columns.get(&max_level).copied().unwrap_or(0) + ROUTING_CHANNEL);
+        let automatic_inputs = request
+            .graph
+            .primary_inputs
+            .iter()
+            .copied()
+            .filter(|port| {
+                !request
+                    .pins
+                    .contains_key(&PhysicalEndpointId::PrimaryInput(*port))
+            })
+            .map(|port| {
+                let signal = LogicalSignalId::PrimaryInput(port);
+                (
+                    port,
+                    frame_to_world(frame, input_forward, track_laterals[&signal]),
+                )
+            })
+            .collect();
+        let automatic_outputs = request
+            .graph
+            .declared_outputs
+            .iter()
+            .copied()
+            .filter(|port| {
+                !request
+                    .pins
+                    .contains_key(&PhysicalEndpointId::DeclaredOutput(*port))
+            })
+            .map(|port| {
+                let signal = request
+                    .graph
+                    .assignments
+                    .iter()
+                    .find(|assignment| assignment.sink == PhysicalSink::DeclaredOutput(port))
+                    .map(|assignment| assignment.signal);
+                let lateral = signal
+                    .and_then(|signal| track_laterals.get(&signal).copied())
+                    .unwrap_or(0);
+                (port, frame_to_world(frame, output_forward, lateral))
+            })
+            .collect();
+
+        let fingerprint = plan_fingerprint(&instances, &automatic_inputs, &automatic_outputs);
+        Ok(SeedPlacementPlan {
+            instances,
+            automatic_inputs,
+            automatic_outputs,
+            fingerprint,
+        })
+    }
+}
+
+fn derive_frame(pins: &BTreeMap<PhysicalEndpointId, PortPin>) -> PlacementFrame {
+    let inputs = pins
+        .iter()
+        .filter_map(|(endpoint, pin)| {
+            matches!(endpoint, PhysicalEndpointId::PrimaryInput(_)).then_some(*pin)
+        })
+        .collect::<Vec<_>>();
+    let outputs = pins
+        .iter()
+        .filter_map(|(endpoint, pin)| {
+            matches!(endpoint, PhysicalEndpointId::DeclaredOutput(_)).then_some(*pin)
+        })
+        .collect::<Vec<_>>();
+    let forward = if !inputs.is_empty() && !outputs.is_empty() {
+        let from = median_anchor(inputs.iter().map(|pin| pin.net_cell(PortRole::Input)));
+        let to = median_anchor(outputs.iter().map(|pin| pin.net_cell(PortRole::Output)));
+        dominant_direction(from, to)
+    } else if !inputs.is_empty() {
+        majority_direction(inputs.iter().map(|pin| pin.toward))
+    } else if !outputs.is_empty() {
+        majority_direction(outputs.iter().map(|pin| pin.toward)).opposite()
+    } else {
+        Facing::East
+    };
+    let origin = if !inputs.is_empty() {
+        median_anchor(inputs.iter().map(|pin| pin.net_cell(PortRole::Input)))
+    } else if !outputs.is_empty() {
+        median_anchor(outputs.iter().map(|pin| pin.net_cell(PortRole::Output)))
+    } else {
+        Anchor { x: 0, y: 1, z: 0 }
+    };
+    PlacementFrame {
+        forward,
+        lateral: clockwise(forward),
+        origin,
+    }
+}
+
+fn median_anchor(anchors: impl Iterator<Item = Anchor>) -> Anchor {
+    let anchors = anchors.collect::<Vec<_>>();
+    let mut xs = anchors.iter().map(|anchor| anchor.x).collect::<Vec<_>>();
+    let mut ys = anchors.iter().map(|anchor| anchor.y).collect::<Vec<_>>();
+    let mut zs = anchors.iter().map(|anchor| anchor.z).collect::<Vec<_>>();
+    xs.sort();
+    ys.sort();
+    zs.sort();
+    Anchor {
+        x: xs[xs.len() / 2],
+        y: ys[ys.len() / 2],
+        z: zs[zs.len() / 2],
+    }
+}
+
+fn majority_direction(directions: impl Iterator<Item = Facing>) -> Facing {
+    let order = [Facing::North, Facing::East, Facing::South, Facing::West];
+    let directions = directions.collect::<Vec<_>>();
+    order
+        .into_iter()
+        .max_by_key(|candidate| {
+            (
+                directions
+                    .iter()
+                    .filter(|direction| *direction == candidate)
+                    .count(),
+                std::cmp::Reverse(
+                    order
+                        .iter()
+                        .position(|direction| direction == candidate)
+                        .unwrap(),
+                ),
+            )
+        })
+        .unwrap_or(Facing::East)
+}
+
+fn dominant_direction(from: Anchor, to: Anchor) -> Facing {
+    let dx = i64::from(to.x) - i64::from(from.x);
+    let dz = i64::from(to.z) - i64::from(from.z);
+    if dz.abs() >= dx.abs() && dz != 0 {
+        if dz < 0 {
+            Facing::North
+        } else {
+            Facing::South
+        }
+    } else if dx < 0 {
+        Facing::West
+    } else {
+        Facing::East
+    }
+}
+
+const fn clockwise(direction: Facing) -> Facing {
+    match direction {
+        Facing::North => Facing::East,
+        Facing::East => Facing::South,
+        Facing::South => Facing::West,
+        Facing::West => Facing::North,
+        Facing::Up | Facing::Down => unreachable!(),
+    }
+}
+
+fn frame_to_world(frame: PlacementFrame, forward: i32, lateral: i32) -> Anchor {
+    let (fx, fz) = horizontal_unit(frame.forward);
+    let (lx, lz) = horizontal_unit(frame.lateral);
+    Anchor {
+        x: frame.origin.x + fx * forward + lx * lateral,
+        y: frame.origin.y,
+        z: frame.origin.z + fz * forward + lz * lateral,
+    }
+}
+
+const fn horizontal_unit(direction: Facing) -> (i32, i32) {
+    match direction {
+        Facing::North => (0, -1),
+        Facing::South => (0, 1),
+        Facing::East => (1, 0),
+        Facing::West => (-1, 0),
+        Facing::Up | Facing::Down => unreachable!(),
+    }
+}
+
+fn net_intervals(graph: &InstanceGraph, analysis: &SeedPlacementAnalysis) -> Vec<NetInterval> {
+    let max_level = analysis
+        .nodes
+        .values()
+        .map(|node| node.forward_level)
+        .max()
+        .unwrap_or(0);
+    let mut grouped = BTreeMap::<
+        LogicalSignalId,
+        Vec<&crate::compile::fragment_synth::instance_graph::SinkAssignment>,
+    >::new();
+    for assignment in &graph.assignments {
+        grouped
+            .entry(assignment.signal)
+            .or_default()
+            .push(assignment);
+    }
+    grouped
+        .into_iter()
+        .map(|(signal, assignments)| {
+            let start = assignments
+                .iter()
+                .filter_map(|assignment| match &assignment.driver {
+                    PhysicalDriver::PrimaryInput(_) => Some(0),
+                    PhysicalDriver::Instance(driver) => {
+                        Some(analysis.nodes[&instance_driver_owner(driver)].forward_level)
+                    }
+                })
+                .min()
+                .unwrap_or(0);
+            let end = assignments
+                .iter()
+                .map(|assignment| match assignment.sink {
+                    PhysicalSink::InstanceInput { instance, .. } => {
+                        analysis.nodes[&instance].forward_level
+                    }
+                    PhysicalSink::DeclaredOutput(_) => max_level + 1,
+                })
+                .max()
+                .unwrap_or(start);
+            let slack = assignments
+                .iter()
+                .filter_map(|assignment| {
+                    let PhysicalDriver::Instance(driver) = &assignment.driver else {
+                        return None;
+                    };
+                    let PhysicalSink::InstanceInput { instance, .. } = assignment.sink else {
+                        return None;
+                    };
+                    analysis
+                        .edges
+                        .iter()
+                        .find(|edge| {
+                            edge.source == instance_driver_owner(driver) && edge.sink == instance
+                        })
+                        .map(|edge| edge.structural_slack_ticks)
+                })
+                .min()
+                .unwrap_or(0);
+            NetInterval {
+                signal,
+                start,
+                end,
+                fanout: assignments.len(),
+                slack,
+            }
+        })
+        .collect()
+}
+
+fn colour_intervals(intervals: &[NetInterval]) -> BTreeMap<LogicalSignalId, usize> {
+    let mut ordered = intervals.to_vec();
+    ordered.sort_by_key(|interval| {
+        (
+            std::cmp::Reverse(interval.end - interval.start),
+            std::cmp::Reverse(interval.fanout),
+            interval.slack,
+            interval.signal,
+        )
+    });
+    let mut occupied = Vec::<Vec<(u64, u64)>>::new();
+    let mut tracks = BTreeMap::new();
+    for interval in ordered {
+        let track = occupied
+            .iter()
+            .position(|uses| {
+                uses.iter()
+                    .all(|&(start, end)| interval.end < start || end < interval.start)
+            })
+            .unwrap_or(occupied.len());
+        if track == occupied.len() {
+            occupied.push(Vec::new());
+        }
+        occupied[track].push((interval.start, interval.end));
+        tracks.insert(interval.signal, track);
+    }
+    tracks
+}
+
+fn track_lateral(tracks: &BTreeMap<LogicalSignalId, usize>, signal: LogicalSignalId) -> i32 {
+    i32::try_from(tracks.get(&signal).copied().unwrap_or(0)).unwrap_or(i32::MAX / TRACK_PITCH)
+        * TRACK_PITCH
+}
+
+fn track_laterals(
+    graph: &InstanceGraph,
+    pins: &BTreeMap<PhysicalEndpointId, PortPin>,
+    frame: PlacementFrame,
+    tracks: &BTreeMap<LogicalSignalId, usize>,
+) -> BTreeMap<LogicalSignalId, i32> {
+    let mut laterals = tracks
+        .keys()
+        .copied()
+        .map(|signal| (signal, track_lateral(tracks, signal)))
+        .collect::<BTreeMap<_, _>>();
+    for (endpoint, pin) in pins {
+        let (signal, role) = match *endpoint {
+            PhysicalEndpointId::PrimaryInput(port) => {
+                (Some(LogicalSignalId::PrimaryInput(port)), PortRole::Input)
+            }
+            PhysicalEndpointId::DeclaredOutput(port) => (
+                graph
+                    .assignments
+                    .iter()
+                    .find(|assignment| assignment.sink == PhysicalSink::DeclaredOutput(port))
+                    .map(|assignment| assignment.signal),
+                PortRole::Output,
+            ),
+            _ => continue,
+        };
+        if let Some(signal) = signal {
+            laterals.insert(signal, lateral_projection(frame, pin.net_cell(role)));
+        }
+    }
+    laterals
+}
+
+fn lateral_projection(frame: PlacementFrame, anchor: Anchor) -> i32 {
+    let dx = anchor.x - frame.origin.x;
+    let dz = anchor.z - frame.origin.z;
+    let (lx, lz) = horizontal_unit(frame.lateral);
+    dx * lx + dz * lz
+}
+
+fn initial_lanes(
+    graph: &InstanceGraph,
+    track_laterals: &BTreeMap<LogicalSignalId, i32>,
+    analysis: &SeedPlacementAnalysis,
+) -> BTreeMap<InstanceId, i32> {
+    let fanout = graph.assignments.iter().fold(
+        BTreeMap::<LogicalSignalId, usize>::new(),
+        |mut counts, assignment| {
+            *counts.entry(assignment.signal).or_default() += 1;
+            counts
+        },
+    );
+    graph.instances.iter().map(|instance| {
+        let mut values = Vec::new();
+        for assignment in graph.assignments.iter().filter(|assignment| {
+            matches!(assignment.sink, PhysicalSink::InstanceInput { instance: sink, .. } if sink == instance.id)
+                || matches!(&assignment.driver, PhysicalDriver::Instance(driver) if instance_driver_owner(driver) == instance.id)
+        }) {
+            let critical = match (&assignment.driver, assignment.sink) {
+                (PhysicalDriver::Instance(driver), PhysicalSink::InstanceInput { instance: sink, .. }) => analysis.edges.iter().any(|edge| edge.source == instance_driver_owner(driver) && edge.sink == sink && edge.structural_slack_ticks == 0),
+                _ => false,
+            };
+            let weight = 1 + fanout[&assignment.signal] + usize::from(critical) * 4;
+            values.extend(std::iter::repeat_n(track_laterals[&assignment.signal], weight));
+        }
+        values.sort();
+        (instance.id, values.get(values.len() / 2).copied().unwrap_or(0))
+    }).collect()
+}
+
+fn barycentric_sweep(
+    analysis: &SeedPlacementAnalysis,
+    lanes: &mut BTreeMap<InstanceId, i32>,
+    forward: bool,
+) {
+    let ids: Vec<_> = if forward {
+        analysis.order.clone()
+    } else {
+        analysis.order.iter().rev().copied().collect()
+    };
+    for id in ids {
+        let neighbours = if forward {
+            &analysis.nodes[&id].predecessors
+        } else {
+            &analysis.nodes[&id].successors
+        };
+        if neighbours.is_empty() {
+            continue;
+        }
+        let sum: i64 = neighbours.iter().map(|other| i64::from(lanes[other])).sum();
+        let barycentre = (sum / i64::try_from(neighbours.len()).unwrap_or(1)) as i32;
+        let incident = lanes[&id];
+        lanes.insert(id, (barycentre + incident) / 2);
+    }
+}
+
+fn primitive_positions(instance: &Instance) -> BTreeMap<PrimitiveId, Position> {
+    let topology = &instance.expanded.topology;
+    let mut levels = BTreeMap::<PrimitiveId, i32>::new();
+    while levels.len() < topology.primitives.len() {
+        let before = levels.len();
+        for primitive in &topology.primitives {
+            if levels.contains_key(&primitive.id) {
+                continue;
+            }
+            let incoming = topology
+                .connections
+                .iter()
+                .filter(|edge| edge.target == ConnectionTarget::Primitive(primitive.id))
+                .filter_map(|edge| match edge.source {
+                    ConnectionSource::Primitive(source) => Some(source),
+                    ConnectionSource::ExternalInput { .. } => None,
+                })
+                .collect::<Vec<_>>();
+            if incoming.iter().all(|source| levels.contains_key(source)) {
+                levels.insert(
+                    primitive.id,
+                    incoming
+                        .iter()
+                        .map(|source| levels[source] + 1)
+                        .max()
+                        .unwrap_or(0),
+                );
+            }
+        }
+        if levels.len() == before {
+            break;
+        }
+    }
+    let mut per_level = BTreeMap::<i32, i32>::new();
+    topology
+        .primitives
+        .iter()
+        .map(|primitive| {
+            let level = levels.get(&primitive.id).copied().unwrap_or(0);
+            let lane = per_level.entry(level).or_insert(0);
+            let position = Position::new(level * 4, 0, *lane * 4);
+            *lane += 1;
+            (primitive.id, position)
+        })
+        .collect()
+}
+
+fn macro_envelope(instance: &Instance) -> Result<(i32, i32), SeedPlacementError> {
+    let positions = primitive_positions(instance);
+    let mut width = 1;
+    let mut depth = 1;
+    for facing in [
+        CellFacing::NORTH,
+        CellFacing::EAST,
+        CellFacing::SOUTH,
+        CellFacing::WEST,
+    ] {
+        let mut min_x = 0;
+        let mut max_x = 0;
+        let mut min_z = 0;
+        let mut max_z = 0;
+        for primitive in &instance.expanded.topology.primitives {
+            let variants = physical::variants(primitive.primitive);
+            if variants.is_empty() {
+                return Err(SeedPlacementError::MissingPhysicalVariant {
+                    primitive: primitive.primitive,
+                });
+            }
+            let local = positions[&primitive.id];
+            let (base_x, _, base_z) = geometry::rotate((local.x, local.y, local.z), facing);
+            let variant = &variants[usize::from(facing.index())];
+            for point in variant
+                .blocks
+                .iter()
+                .map(|block| block.position)
+                .chain(variant.ports.iter().map(|port| port.position))
+            {
+                min_x = min_x.min(base_x + point.x);
+                max_x = max_x.max(base_x + point.x);
+                min_z = min_z.min(base_z + point.z);
+                max_z = max_z.max(base_z + point.z);
+            }
+        }
+        width = width.max(max_x - min_x + 1);
+        depth = depth.max(max_z - min_z + 1);
+    }
+    Ok((width, depth))
+}
+
+fn choose_instance_facing(
+    instance: &Instance,
+    origin: Anchor,
+    source: Anchor,
+    target: Anchor,
+    forward: Facing,
+) -> Result<CellFacing, SeedPlacementError> {
+    let positions = primitive_positions(instance);
+    let roles = instance
+        .expanded
+        .topology
+        .primitives
+        .iter()
+        .map(|primitive| (primitive.role, positions[&primitive.id]))
+        .collect::<BTreeMap<_, _>>();
+    let mut best = None;
+    for (rank, facing) in [
+        CellFacing::NORTH,
+        CellFacing::EAST,
+        CellFacing::SOUTH,
+        CellFacing::WEST,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let mut score = hint_penalty(
+            &roles,
+            &instance.expanded.topology.embedding_hints,
+            facing,
+            forward,
+        ) * 8;
+        for primitive in &instance.expanded.topology.primitives {
+            let local = positions[&primitive.id];
+            let at = primitive_world(origin, local, facing);
+            score += manhattan(source, input_terminal(primitive.primitive, facing, at));
+            score += manhattan(output_terminal(primitive.primitive, facing, at), target);
+        }
+        for connection in &instance.expanded.topology.connections {
+            let ConnectionSource::Primitive(source_id) = connection.source else {
+                continue;
+            };
+            let ConnectionTarget::Primitive(target_id) = connection.target else {
+                continue;
+            };
+            let source_spec = instance
+                .expanded
+                .topology
+                .primitives
+                .iter()
+                .find(|primitive| primitive.id == source_id)
+                .expect("validated source");
+            let target_spec = instance
+                .expanded
+                .topology
+                .primitives
+                .iter()
+                .find(|primitive| primitive.id == target_id)
+                .expect("validated target");
+            let source_at = primitive_world(origin, positions[&source_id], facing);
+            let target_at = primitive_world(origin, positions[&target_id], facing);
+            let source_port = output_terminal(source_spec.primitive, facing, source_at);
+            let target_port = input_terminal(target_spec.primitive, facing, target_at);
+            score += manhattan(source_port, target_port);
+            if forward_projection(target_port, forward) <= forward_projection(source_port, forward)
+            {
+                score += 4;
+            }
+        }
+        let key = (score, rank);
+        if best.map(|(old, _)| key < old).unwrap_or(true) {
+            best = Some((key, facing));
+        }
+    }
+    Ok(best
+        .map(|(_, facing)| facing)
+        .unwrap_or_else(|| facing_for_direction(forward)))
+}
+
+fn primitive_world(origin: Anchor, local: Position, facing: CellFacing) -> Anchor {
+    let (x, y, z) = geometry::rotate((local.x, local.y, local.z), facing);
+    Anchor {
+        x: origin.x + x,
+        y: origin.y + y,
+        z: origin.z + z,
+    }
+}
+
+fn forward_projection(anchor: Anchor, forward: Facing) -> i64 {
+    match forward {
+        Facing::North => -i64::from(anchor.z),
+        Facing::South => i64::from(anchor.z),
+        Facing::East => i64::from(anchor.x),
+        Facing::West => -i64::from(anchor.x),
+        Facing::Up | Facing::Down => 0,
+    }
+}
+
+fn choose_physical_facing(
+    primitive: Primitive,
+    origin: Anchor,
+    source: Anchor,
+    target: Anchor,
+) -> CellFacing {
+    [
+        CellFacing::NORTH,
+        CellFacing::EAST,
+        CellFacing::SOUTH,
+        CellFacing::WEST,
+    ]
+    .into_iter()
+    .min_by_key(|facing| {
+        manhattan(source, input_terminal(primitive, *facing, origin))
+            + manhattan(output_terminal(primitive, *facing, origin), target)
+    })
+    .unwrap()
+}
+
+fn input_terminal(primitive: Primitive, facing: CellFacing, origin: Anchor) -> Anchor {
+    let kind = match primitive {
+        Primitive::Torch => PortKind::TorchInput,
+        Primitive::Repeater => PortKind::RepeaterRear,
+        Primitive::Comparator => PortKind::ComparatorRear,
+        Primitive::Lamp => PortKind::LampInput,
+        Primitive::Lever => PortKind::LeverOutput,
+    };
+    physical_terminal(primitive, facing, origin, kind)
+}
+
+fn output_terminal(primitive: Primitive, facing: CellFacing, origin: Anchor) -> Anchor {
+    let kind = match primitive {
+        Primitive::Torch => PortKind::TorchOutput,
+        Primitive::Repeater => PortKind::RepeaterFront,
+        Primitive::Comparator => PortKind::ComparatorFront,
+        Primitive::Lever => PortKind::LeverOutput,
+        Primitive::Lamp => PortKind::LampInput,
+    };
+    physical_terminal(primitive, facing, origin, kind)
+}
+
+fn physical_terminal(
+    primitive: Primitive,
+    facing: CellFacing,
+    origin: Anchor,
+    kind: PortKind,
+) -> Anchor {
+    let port = physical::variants(primitive)[usize::from(facing.index())].port(kind);
+    let at = Anchor {
+        x: origin.x + port.position.x,
+        y: origin.y + port.position.y,
+        z: origin.z + port.position.z,
+    };
+    step_anchor(at, port.direction)
+}
+
+fn step_anchor(at: Anchor, direction: Facing) -> Anchor {
+    match direction {
+        Facing::North => Anchor { z: at.z - 1, ..at },
+        Facing::South => Anchor { z: at.z + 1, ..at },
+        Facing::East => Anchor { x: at.x + 1, ..at },
+        Facing::West => Anchor { x: at.x - 1, ..at },
+        Facing::Up => Anchor { y: at.y + 1, ..at },
+        Facing::Down => Anchor { y: at.y - 1, ..at },
+    }
+}
+
+fn hint_penalty(
+    nodes: &BTreeMap<TemplateNode, Position>,
+    hints: &[EmbeddingHint],
+    facing: CellFacing,
+    forward: Facing,
+) -> i64 {
+    hints
+        .iter()
+        .map(|hint| {
+            let (left, right, opposite) = match *hint {
+                EmbeddingHint::OppositeSides(left, right) => (left, right, true),
+                EmbeddingHint::Coplanar(left, right) => (left, right, false),
+            };
+            let Some(left) = nodes.get(&left) else {
+                return 0;
+            };
+            let Some(right) = nodes.get(&right) else {
+                return 0;
+            };
+            let left = geometry::rotate((left.x, left.y, left.z), facing);
+            let right = geometry::rotate((right.x, right.y, right.z), facing);
+            let projection = match forward {
+                Facing::East | Facing::West => (left.0 - right.0).abs(),
+                Facing::North | Facing::South => (left.2 - right.2).abs(),
+                Facing::Up | Facing::Down => 0,
+            };
+            if opposite {
+                if projection == 0 {
+                    8
+                } else {
+                    0
+                }
+            } else {
+                i64::from(projection)
+            }
+        })
+        .sum()
+}
+
+fn manhattan(left: Anchor, right: Anchor) -> i64 {
+    i64::from((left.x - right.x).abs())
+        + i64::from((left.y - right.y).abs())
+        + i64::from((left.z - right.z).abs())
+}
+
+fn facing_for_direction(direction: Facing) -> CellFacing {
+    match direction {
+        Facing::North => CellFacing::NORTH,
+        Facing::South => CellFacing::SOUTH,
+        Facing::East => CellFacing::EAST,
+        Facing::West => CellFacing::WEST,
+        Facing::Up | Facing::Down => CellFacing::NORTH,
+    }
+}
+
+fn plan_fingerprint(
+    instances: &BTreeMap<InstanceId, PreferredInstancePose>,
+    automatic_inputs: &BTreeMap<PortId, Anchor>,
+    automatic_outputs: &BTreeMap<PortId, Anchor>,
+) -> Fingerprint {
+    let poses = instances
+        .iter()
+        .map(|(id, pose)| (*id, pose.preferred_origin, pose.facing.index()))
+        .collect::<Vec<_>>();
+    let bytes = serde_json::to_vec(&(poses, automatic_inputs, automatic_outputs))
+        .expect("placement plan payload serializes");
+    canonical_fingerprint(&bytes)
 }
 
 pub(crate) fn analyse_instance_dag(
@@ -341,14 +1186,25 @@ const fn primitive_delay_ticks(primitive: Primitive) -> u64 {
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use crate::compile::fragment_synth::identity::{GateIndex, InstanceId, PortId};
+    use crate::compile::fragment_synth::identity::{
+        GateIndex, InstanceId, PhysicalEndpointId, PortId,
+    };
     use crate::compile::fragment_synth::instance_graph::{
         DuplicateRequest, InstanceGraph, LogicalSignalId, PhysicalDriver, PhysicalSink,
     };
+    use crate::compile::geometry::{Anchor, CellFacing};
+    use crate::compile::planner::{PortPin, PortRole};
+    use crate::compile::topology::{EmbeddingHint, Primitive, TemplateNode};
     use crate::compile::topology::{GateKind, Library};
     use crate::compile::{Gate, Netlist};
+    use crate::redstone::simulator::position::Position;
+    use crate::redstone::world::block::Facing;
 
-    use super::{analyse_instance_dag, EdgeFacts, SeedPlacementError};
+    use super::{
+        analyse_instance_dag, choose_instance_facing, choose_physical_facing, colour_intervals,
+        derive_frame, hint_penalty, EdgeFacts, NetInterval, SeedPlacementError,
+        SeedPlacementRequest, SeedPlacer, TopologyAwareSeedPlacer,
+    };
 
     fn nor(output: &str, inputs: &[&str]) -> Gate {
         Gate::nor(output, inputs)
@@ -579,5 +1435,211 @@ mod tests {
             analyse_instance_dag(&cycle),
             Err(SeedPlacementError::DependencyCycle { .. })
         ));
+    }
+
+    fn pin(at: Anchor, toward: Facing) -> PortPin {
+        PortPin { at, toward }
+    }
+
+    #[test]
+    fn placement_frame_covers_no_both_input_only_and_output_only_pins() {
+        assert_eq!(derive_frame(&BTreeMap::new()).forward, Facing::East);
+
+        let both = BTreeMap::from([
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(0)),
+                pin(Anchor { x: 8, y: 1, z: 120 }, Facing::North),
+            ),
+            (
+                PhysicalEndpointId::DeclaredOutput(PortId(0)),
+                pin(Anchor { x: 8, y: 1, z: 24 }, Facing::North),
+            ),
+        ]);
+        assert_eq!(derive_frame(&both).forward, Facing::North);
+        assert_eq!(
+            both[&PhysicalEndpointId::PrimaryInput(PortId(0))].net_cell(PortRole::Input),
+            Anchor { x: 8, y: 1, z: 118 }
+        );
+        assert_eq!(
+            both[&PhysicalEndpointId::DeclaredOutput(PortId(0))].net_cell(PortRole::Output),
+            Anchor { x: 8, y: 1, z: 26 }
+        );
+
+        let inputs = BTreeMap::from([
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(0)),
+                pin(Anchor { x: 0, y: 1, z: 0 }, Facing::North),
+            ),
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(1)),
+                pin(Anchor { x: 2, y: 1, z: 0 }, Facing::North),
+            ),
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(2)),
+                pin(Anchor { x: 4, y: 1, z: 0 }, Facing::East),
+            ),
+        ]);
+        assert_eq!(derive_frame(&inputs).forward, Facing::North);
+
+        let outputs = BTreeMap::from([
+            (
+                PhysicalEndpointId::DeclaredOutput(PortId(0)),
+                pin(Anchor { x: 0, y: 1, z: 0 }, Facing::South),
+            ),
+            (
+                PhysicalEndpointId::DeclaredOutput(PortId(1)),
+                pin(Anchor { x: 2, y: 1, z: 0 }, Facing::South),
+            ),
+            (
+                PhysicalEndpointId::DeclaredOutput(PortId(2)),
+                pin(Anchor { x: 4, y: 1, z: 0 }, Facing::West),
+            ),
+        ]);
+        assert_eq!(derive_frame(&outputs).forward, Facing::North);
+    }
+
+    #[test]
+    fn interval_colouring_separates_overlaps_and_reuses_disjoint_tracks() {
+        let intervals = [
+            NetInterval {
+                signal: LogicalSignalId::GateOutput(GateIndex(0)),
+                start: 0,
+                end: 3,
+                fanout: 2,
+                slack: 0,
+            },
+            NetInterval {
+                signal: LogicalSignalId::GateOutput(GateIndex(1)),
+                start: 1,
+                end: 2,
+                fanout: 1,
+                slack: 2,
+            },
+            NetInterval {
+                signal: LogicalSignalId::GateOutput(GateIndex(2)),
+                start: 4,
+                end: 5,
+                fanout: 1,
+                slack: 3,
+            },
+        ];
+
+        let tracks = colour_intervals(&intervals);
+
+        assert_eq!(tracks[&LogicalSignalId::GateOutput(GateIndex(0))], 0);
+        assert_eq!(tracks[&LogicalSignalId::GateOutput(GateIndex(1))], 1);
+        assert_eq!(tracks[&LogicalSignalId::GateOutput(GateIndex(2))], 0);
+    }
+
+    #[test]
+    fn torch_facing_uses_literal_input_and_output_world_ports() {
+        let origin = Anchor { x: 10, y: 4, z: 10 };
+        let facing = choose_physical_facing(
+            Primitive::Torch,
+            origin,
+            Anchor { x: 10, y: 4, z: 14 },
+            Anchor { x: 10, y: 4, z: 5 },
+        );
+
+        assert_eq!(facing, CellFacing::NORTH);
+        assert_eq!(
+            super::input_terminal(Primitive::Torch, facing, origin),
+            Anchor { x: 10, y: 4, z: 11 }
+        );
+        assert_eq!(
+            super::output_terminal(Primitive::Torch, facing, origin),
+            Anchor { x: 10, y: 4, z: 8 }
+        );
+    }
+
+    #[test]
+    fn repeater_facing_uses_literal_rear_and_front_world_ports() {
+        let origin = Anchor { x: 10, y: 4, z: 10 };
+        let facing = choose_physical_facing(
+            Primitive::Repeater,
+            origin,
+            Anchor { x: 10, y: 4, z: 5 },
+            Anchor { x: 10, y: 4, z: 14 },
+        );
+
+        assert_eq!(facing, CellFacing::NORTH);
+        assert_eq!(
+            super::input_terminal(Primitive::Repeater, facing, origin),
+            Anchor { x: 10, y: 4, z: 9 }
+        );
+        assert_eq!(
+            super::output_terminal(Primitive::Repeater, facing, origin),
+            Anchor { x: 10, y: 4, z: 11 }
+        );
+    }
+
+    #[test]
+    fn embedding_hint_penalty_changes_the_expected_pose() {
+        let nodes = BTreeMap::from([
+            (TemplateNode::Torch, Position::new(0, 0, 0)),
+            (TemplateNode::SecondTorch, Position::new(4, 0, 0)),
+        ]);
+        let hint = EmbeddingHint::Coplanar(TemplateNode::Torch, TemplateNode::SecondTorch);
+
+        assert_eq!(
+            hint_penalty(&nodes, &[], CellFacing::NORTH, Facing::East),
+            0
+        );
+        assert!(hint_penalty(&nodes, &[hint], CellFacing::NORTH, Facing::East) > 0);
+        assert_eq!(
+            hint_penalty(&nodes, &[hint], CellFacing::EAST, Facing::East),
+            0
+        );
+        let origin = Anchor { x: 0, y: 1, z: 0 };
+        let source = Anchor { x: -4, y: 1, z: 4 };
+        let target = Anchor { x: 4, y: 1, z: -4 };
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["y".into()],
+            gates: vec![Gate {
+                name: "y".into(),
+                inputs: vec!["a".into()],
+                output: "y".into(),
+                kind: GateKind::Buf,
+            }],
+        };
+        let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
+        let without_hint = &graph.instances[0];
+        assert_eq!(
+            choose_instance_facing(without_hint, origin, source, target, Facing::East).unwrap(),
+            CellFacing::NORTH
+        );
+        let mut with_hint = without_hint.clone();
+        with_hint.expanded.topology.embedding_hints = vec![hint];
+        assert_eq!(
+            choose_instance_facing(&with_hint, origin, source, target, Facing::East).unwrap(),
+            CellFacing::EAST
+        );
+    }
+
+    #[test]
+    fn complete_plans_and_fingerprints_repeat_exactly() {
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["y".into()],
+            gates: vec![nor("middle", &["a"]), nor("y", &["middle"])],
+        };
+        let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
+        let pins = BTreeMap::new();
+        let placer = TopologyAwareSeedPlacer;
+        let request = || SeedPlacementRequest {
+            graph: &graph,
+            pins: &pins,
+        };
+
+        let first = placer.plan(request()).unwrap();
+        let second = placer.plan(request()).unwrap();
+
+        assert_eq!(first, second);
+        assert_eq!(first.fingerprint, second.fingerprint);
+        assert!(
+            first.instances[&InstanceId(1)].preferred_origin.x
+                > first.instances[&InstanceId(0)].preferred_origin.x
+        );
     }
 }
