@@ -8,6 +8,7 @@ pub mod identity;
 pub mod instance_graph;
 pub mod legacy_adapter;
 pub mod manifest;
+pub(crate) mod placement;
 pub mod realise;
 mod search;
 pub(crate) mod seed;
