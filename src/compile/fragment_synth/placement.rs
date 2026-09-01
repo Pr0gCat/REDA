@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::compile::fragment_synth::identity::{InstanceId, PrimitiveId};
+use crate::compile::fragment_synth::identity::{ConnectionId, InstanceId, PrimitiveId};
 use crate::compile::fragment_synth::identity::{PhysicalEndpointId, PortId};
 use crate::compile::fragment_synth::instance_graph::{
     Instance, InstanceDriver, InstanceGraph, LogicalSignalId, PhysicalDriver, PhysicalSink,
@@ -67,6 +67,12 @@ pub(crate) enum SeedPlacementError {
     CoordinateOverflow,
     #[error("primitive {primitive:?} has no physical variant")]
     MissingPhysicalVariant { primitive: Primitive },
+    #[error("seed placer does not support layout repairs")]
+    UnsupportedRepairs,
+    #[error("layout repair cannot move pinned or missing owner {owner:?}")]
+    ImmovableRepairOwner { owner: LayoutOwner },
+    #[error("layout repair cannot separate the same owner {owner:?}")]
+    SameRepairOwner { owner: LayoutOwner },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -81,6 +87,27 @@ pub(crate) struct SeedPlacementRequest<'a> {
     pub graph: &'a InstanceGraph,
     pub analysis: &'a SeedPlacementAnalysis,
     pub pins: &'a BTreeMap<PhysicalEndpointId, PortPin>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub(crate) enum LayoutOwner {
+    Boundary(PhysicalEndpointId),
+    Instance(InstanceId),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub(crate) enum LayoutRepair {
+    ExclusiveGuardedTrack {
+        source: PhysicalEndpointId,
+    },
+    EarlyTreeSinkAndEscape {
+        source: PhysicalEndpointId,
+        sink: PhysicalEndpointId,
+    },
+    SeparateOwners {
+        source_owner: LayoutOwner,
+        sink_owner: LayoutOwner,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,6 +129,18 @@ pub(crate) trait SeedPlacer {
         &self,
         request: SeedPlacementRequest<'_>,
     ) -> Result<SeedPlacementPlan, SeedPlacementError>;
+
+    fn plan_with_repairs(
+        &self,
+        request: SeedPlacementRequest<'_>,
+        repairs: &[LayoutRepair],
+    ) -> Result<SeedPlacementPlan, SeedPlacementError> {
+        if repairs.is_empty() {
+            self.plan(request)
+        } else {
+            Err(SeedPlacementError::UnsupportedRepairs)
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -333,7 +372,7 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
             })
             .collect();
 
-        let fingerprint = plan_fingerprint(&instances, &automatic_inputs, &automatic_outputs);
+        let fingerprint = plan_fingerprint(&instances, &automatic_inputs, &automatic_outputs, &[]);
         Ok(SeedPlacementPlan {
             instances,
             automatic_inputs,
@@ -341,6 +380,166 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
             fingerprint,
         })
     }
+
+    fn plan_with_repairs(
+        &self,
+        request: SeedPlacementRequest<'_>,
+        repairs: &[LayoutRepair],
+    ) -> Result<SeedPlacementPlan, SeedPlacementError> {
+        let mut plan = self.plan(request)?;
+        let repairs = repairs.iter().copied().collect::<BTreeSet<_>>();
+        if repairs.is_empty() {
+            return Ok(plan);
+        }
+        let frame = derive_frame(request.pins);
+        for repair in &repairs {
+            match *repair {
+                LayoutRepair::ExclusiveGuardedTrack { source } => {
+                    let owner = endpoint_layout_owner(source);
+                    require_move_owner(
+                        &mut plan,
+                        owner,
+                        request.pins,
+                        frame.lateral,
+                        TRACK_PITCH.saturating_mul(2),
+                    )?;
+                }
+                LayoutRepair::EarlyTreeSinkAndEscape { source, sink } => {
+                    let source_owner = endpoint_layout_owner(source);
+                    if !move_owner(
+                        &mut plan,
+                        source_owner,
+                        request.pins,
+                        frame.lateral,
+                        TRACK_PITCH.saturating_mul(2),
+                    )? {
+                        require_move_owner(
+                            &mut plan,
+                            endpoint_layout_owner(sink),
+                            request.pins,
+                            frame.lateral,
+                            TRACK_PITCH.saturating_mul(2),
+                        )?;
+                    }
+                }
+                LayoutRepair::SeparateOwners {
+                    source_owner,
+                    sink_owner,
+                } => {
+                    if source_owner == sink_owner {
+                        return Err(SeedPlacementError::SameRepairOwner {
+                            owner: source_owner,
+                        });
+                    }
+                    if !move_owner(
+                        &mut plan,
+                        sink_owner,
+                        request.pins,
+                        frame.lateral,
+                        TRACK_PITCH,
+                    )? {
+                        require_move_owner(
+                            &mut plan,
+                            source_owner,
+                            request.pins,
+                            frame.lateral,
+                            -TRACK_PITCH,
+                        )?;
+                    }
+                }
+            }
+        }
+        let repairs = repairs.into_iter().collect::<Vec<_>>();
+        plan.fingerprint = plan_fingerprint(
+            &plan.instances,
+            &plan.automatic_inputs,
+            &plan.automatic_outputs,
+            &repairs,
+        );
+        Ok(plan)
+    }
+}
+
+fn endpoint_layout_owner(endpoint: PhysicalEndpointId) -> LayoutOwner {
+    match endpoint {
+        PhysicalEndpointId::PrimaryInput(_) | PhysicalEndpointId::DeclaredOutput(_) => {
+            LayoutOwner::Boundary(endpoint)
+        }
+        PhysicalEndpointId::PrimitiveOutput(primitive) => LayoutOwner::Instance(primitive.instance),
+        PhysicalEndpointId::Junction(instance) => LayoutOwner::Instance(instance),
+        PhysicalEndpointId::Landing(connection) => LayoutOwner::Instance(match connection {
+            ConnectionId::External { instance, .. } | ConnectionId::Internal { instance, .. } => {
+                instance
+            }
+        }),
+    }
+}
+
+fn require_move_owner(
+    plan: &mut SeedPlacementPlan,
+    owner: LayoutOwner,
+    pins: &BTreeMap<PhysicalEndpointId, PortPin>,
+    lateral: Facing,
+    distance: i32,
+) -> Result<(), SeedPlacementError> {
+    if move_owner(plan, owner, pins, lateral, distance)? {
+        Ok(())
+    } else {
+        Err(SeedPlacementError::ImmovableRepairOwner { owner })
+    }
+}
+
+fn move_owner(
+    plan: &mut SeedPlacementPlan,
+    owner: LayoutOwner,
+    pins: &BTreeMap<PhysicalEndpointId, PortPin>,
+    lateral: Facing,
+    distance: i32,
+) -> Result<bool, SeedPlacementError> {
+    let anchor = match owner {
+        LayoutOwner::Instance(instance) => plan
+            .instances
+            .get_mut(&instance)
+            .map(|pose| &mut pose.preferred_origin),
+        LayoutOwner::Boundary(endpoint) if pins.contains_key(&endpoint) => None,
+        LayoutOwner::Boundary(PhysicalEndpointId::PrimaryInput(port)) => {
+            plan.automatic_inputs.get_mut(&port)
+        }
+        LayoutOwner::Boundary(PhysicalEndpointId::DeclaredOutput(port)) => {
+            plan.automatic_outputs.get_mut(&port)
+        }
+        LayoutOwner::Boundary(_) => None,
+    };
+    let Some(anchor) = anchor else {
+        return Ok(false);
+    };
+    *anchor = checked_step_many(*anchor, lateral, distance)?;
+    Ok(true)
+}
+
+fn checked_step_many(
+    anchor: Anchor,
+    direction: Facing,
+    distance: i32,
+) -> Result<Anchor, SeedPlacementError> {
+    let (dx, dz) = match direction {
+        Facing::North => (0, -distance),
+        Facing::South => (0, distance),
+        Facing::East => (distance, 0),
+        Facing::West => (-distance, 0),
+        Facing::Up | Facing::Down => (0, 0),
+    };
+    Ok(Anchor {
+        x: anchor
+            .x
+            .checked_add(dx)
+            .ok_or(SeedPlacementError::CoordinateOverflow)?,
+        z: anchor
+            .z
+            .checked_add(dz)
+            .ok_or(SeedPlacementError::CoordinateOverflow)?,
+        ..anchor
+    })
 }
 
 fn derive_frame(pins: &BTreeMap<PhysicalEndpointId, PortPin>) -> PlacementFrame {
@@ -1000,13 +1199,24 @@ fn plan_fingerprint(
     instances: &BTreeMap<InstanceId, PreferredInstancePose>,
     automatic_inputs: &BTreeMap<PortId, Anchor>,
     automatic_outputs: &BTreeMap<PortId, Anchor>,
+    repairs: &[LayoutRepair],
 ) -> Fingerprint {
     let poses = instances
         .iter()
         .map(|(id, pose)| (*id, pose.preferred_origin, pose.facing.index()))
         .collect::<Vec<_>>();
-    let bytes = serde_json::to_vec(&(poses, automatic_inputs, automatic_outputs))
-        .expect("placement plan payload serializes");
+    let bytes = if repairs.is_empty() {
+        serde_json::to_vec(&(poses, automatic_inputs, automatic_outputs))
+    } else {
+        serde_json::to_vec(&(
+            "topology-aware-seed-repairs-v1",
+            poses,
+            automatic_inputs,
+            automatic_outputs,
+            repairs,
+        ))
+    }
+    .expect("placement plan payload serializes");
     canonical_fingerprint(&bytes)
 }
 
@@ -1297,6 +1507,7 @@ mod tests {
 
     use crate::compile::fragment_synth::identity::{
         GateIndex, ImplementationKey, InputMask, InstanceId, PhysicalEndpointId, PortId,
+        PrimitiveId, TopologyNodeId,
     };
     use crate::compile::fragment_synth::instance_graph::{
         DuplicateRequest, InstanceGraph, LogicalSignalId, PhysicalDriver, PhysicalSink,
@@ -1311,12 +1522,183 @@ mod tests {
 
     use super::{
         analyse_instance_dag, choose_instance_facing, colour_intervals, derive_frame, hint_penalty,
-        legalize_laterals, EdgeFacts, MacroBounds, NetInterval, SeedPlacementError,
-        SeedPlacementRequest, SeedPlacer, TopologyAwareSeedPlacer,
+        legalize_laterals, EdgeFacts, LayoutOwner, LayoutRepair, MacroBounds, NetInterval,
+        SeedPlacementError, SeedPlacementRequest, SeedPlacer, TopologyAwareSeedPlacer, TRACK_PITCH,
     };
 
     fn nor(output: &str, inputs: &[&str]) -> Gate {
         Gate::nor(output, inputs)
+    }
+
+    fn two_stage_graph() -> InstanceGraph {
+        InstanceGraph::one_to_one(
+            &Netlist {
+                inputs: vec!["a".into()],
+                outputs: vec!["y".into()],
+                gates: vec![nor("middle", &["a"]), nor("y", &["middle"])],
+            },
+            &Library::default_library(),
+        )
+        .unwrap()
+    }
+
+    fn primitive_source(instance: u32) -> PhysicalEndpointId {
+        PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance: InstanceId(instance),
+            node: TopologyNodeId(0),
+        })
+    }
+
+    fn landing(instance: u32) -> PhysicalEndpointId {
+        PhysicalEndpointId::Landing(
+            crate::compile::fragment_synth::identity::ConnectionId::External {
+                instance: InstanceId(instance),
+                input_index: 0,
+            },
+        )
+    }
+
+    #[test]
+    fn canonical_layout_repairs_move_exact_owners_and_bind_the_fingerprint() {
+        let graph = two_stage_graph();
+        let analysis = analyse_instance_dag(&graph).unwrap();
+        let pins = BTreeMap::new();
+        let request = SeedPlacementRequest {
+            graph: &graph,
+            analysis: &analysis,
+            pins: &pins,
+        };
+        let baseline = TopologyAwareSeedPlacer.plan(request).unwrap();
+        assert_eq!(
+            baseline,
+            TopologyAwareSeedPlacer
+                .plan_with_repairs(request, &[])
+                .unwrap()
+        );
+
+        let exclusive = TopologyAwareSeedPlacer
+            .plan_with_repairs(
+                request,
+                &[LayoutRepair::ExclusiveGuardedTrack {
+                    source: primitive_source(0),
+                }],
+            )
+            .unwrap();
+        assert_eq!(
+            exclusive.instances[&InstanceId(0)].preferred_origin.z,
+            baseline.instances[&InstanceId(0)].preferred_origin.z + 2 * TRACK_PITCH
+        );
+        assert_eq!(
+            exclusive.instances[&InstanceId(1)],
+            baseline.instances[&InstanceId(1)]
+        );
+        assert_ne!(exclusive.fingerprint, baseline.fingerprint);
+
+        let early = TopologyAwareSeedPlacer
+            .plan_with_repairs(
+                request,
+                &[LayoutRepair::EarlyTreeSinkAndEscape {
+                    source: primitive_source(0),
+                    sink: landing(1),
+                }],
+            )
+            .unwrap();
+        assert_eq!(
+            early.instances[&InstanceId(0)].preferred_origin.z,
+            baseline.instances[&InstanceId(0)].preferred_origin.z + 2 * TRACK_PITCH
+        );
+        assert_ne!(early.fingerprint, exclusive.fingerprint);
+
+        let separated = TopologyAwareSeedPlacer
+            .plan_with_repairs(
+                request,
+                &[LayoutRepair::SeparateOwners {
+                    source_owner: LayoutOwner::Instance(InstanceId(0)),
+                    sink_owner: LayoutOwner::Instance(InstanceId(1)),
+                }],
+            )
+            .unwrap();
+        assert_eq!(
+            separated.instances[&InstanceId(1)].preferred_origin.z,
+            baseline.instances[&InstanceId(1)].preferred_origin.z + TRACK_PITCH
+        );
+        assert_eq!(
+            separated.instances[&InstanceId(0)],
+            baseline.instances[&InstanceId(0)]
+        );
+    }
+
+    #[test]
+    fn repair_order_is_canonical_and_same_owner_separation_is_named() {
+        let graph = two_stage_graph();
+        let analysis = analyse_instance_dag(&graph).unwrap();
+        let pins = BTreeMap::new();
+        let request = SeedPlacementRequest {
+            graph: &graph,
+            analysis: &analysis,
+            pins: &pins,
+        };
+        let first = LayoutRepair::ExclusiveGuardedTrack {
+            source: primitive_source(0),
+        };
+        let second = LayoutRepair::SeparateOwners {
+            source_owner: LayoutOwner::Instance(InstanceId(0)),
+            sink_owner: LayoutOwner::Instance(InstanceId(1)),
+        };
+        assert_eq!(
+            TopologyAwareSeedPlacer
+                .plan_with_repairs(request, &[first, second])
+                .unwrap(),
+            TopologyAwareSeedPlacer
+                .plan_with_repairs(request, &[second, first])
+                .unwrap()
+        );
+        assert_eq!(
+            TopologyAwareSeedPlacer.plan_with_repairs(
+                request,
+                &[LayoutRepair::SeparateOwners {
+                    source_owner: LayoutOwner::Instance(InstanceId(0)),
+                    sink_owner: LayoutOwner::Instance(InstanceId(0)),
+                }],
+            ),
+            Err(SeedPlacementError::SameRepairOwner {
+                owner: LayoutOwner::Instance(InstanceId(0))
+            })
+        );
+    }
+
+    #[test]
+    fn pinned_boundary_repair_keeps_the_pin_and_moves_the_sink_owner() {
+        let graph = two_stage_graph();
+        let analysis = analyse_instance_dag(&graph).unwrap();
+        let input = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let pins = BTreeMap::from([(input, pin(Anchor { x: 20, y: 1, z: 40 }, Facing::North))]);
+        let request = SeedPlacementRequest {
+            graph: &graph,
+            analysis: &analysis,
+            pins: &pins,
+        };
+        let baseline = TopologyAwareSeedPlacer.plan(request).unwrap();
+        let repaired = TopologyAwareSeedPlacer
+            .plan_with_repairs(
+                request,
+                &[LayoutRepair::EarlyTreeSinkAndEscape {
+                    source: input,
+                    sink: landing(0),
+                }],
+            )
+            .unwrap();
+
+        assert!(!baseline.automatic_inputs.contains_key(&PortId(0)));
+        assert!(!repaired.automatic_inputs.contains_key(&PortId(0)));
+        assert_eq!(
+            pins[&input],
+            pin(Anchor { x: 20, y: 1, z: 40 }, Facing::North)
+        );
+        assert_eq!(
+            repaired.instances[&InstanceId(0)].preferred_origin.x,
+            baseline.instances[&InstanceId(0)].preferred_origin.x + 2 * TRACK_PITCH
+        );
     }
 
     #[test]
