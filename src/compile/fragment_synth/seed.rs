@@ -24,20 +24,25 @@ use crate::compile::fragment_synth::instance_graph::{
     DuplicateRequest, InstanceGraph, PhysicalDriver, PhysicalSink, SynthesisError,
 };
 use crate::compile::fragment_synth::placement::{
-    analyse_instance_dag, SeedPlacementPlan, SeedPlacementRequest, SeedPlacer,
+    analyse_instance_dag, SeedPlacementAnalysis, SeedPlacementPlan, SeedPlacementRequest,
+    SeedPlacer,
 };
 use crate::compile::fragment_synth::realise::{ExpandedAdapterError, ExpandedCandidateAdapter};
+use crate::compile::fragment_synth::route_schedule::{
+    RouteObligation, RouteSchedule, TargetObligation,
+};
 use crate::compile::fragment_synth::services::{SeedEmitter, SeedVerifier};
 use crate::compile::fragment_synth::topology::{
     ConnectionSource, ConnectionTarget, ContributorSpec, OutputSpec,
 };
 use crate::compile::geometry::{self, Anchor, CellFacing};
+use crate::compile::metrics::Fingerprint;
 use crate::compile::physical::{self, PortKind};
 use crate::compile::planner::{PortPlacements, PortRole};
 use crate::compile::routing::{
     DelayedComponent, DelayedOwner, NonEmptyRouteSinks, PhysicalReservationKind,
     PhysicalReservationOwner, PhysicalReservations, PhysicalRouter, RouteEndpoint, RouteRequest,
-    RouteSink, RouterFailure, TerminalContract, TerminalRequirement,
+    RouteSink, RouterFailure, RouterRefusalCategory, TerminalContract, TerminalRequirement,
 };
 use crate::compile::topology::{Library, Primitive};
 use crate::compile::verification::ExpandedPhysicalError;
@@ -101,7 +106,7 @@ pub(crate) enum SeedError {
         radius: u32,
     },
     #[error("typed route construction failed: {0}")]
-    Routing(#[from] RouterFailure),
+    Routing(#[source] SeedRoutingFailure),
     #[error("typed route sink set was unexpectedly empty")]
     EmptyRoute,
     #[error("expanded candidate adaptation failed: {0}")]
@@ -117,6 +122,38 @@ pub(crate) enum SeedError {
     #[error("seed topology is internally incomplete: {0}")]
     Incomplete(&'static str),
 }
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SeedRoutingFailure {
+    pub scheduled_index: usize,
+    pub route: RouteId,
+    pub source: PhysicalEndpointId,
+    pub sink: RoutedSinkId,
+    pub category: RouterRefusalCategory,
+    pub limit: Option<u64>,
+    pub work_used: Option<u64>,
+    pub plan_fingerprint: Fingerprint,
+    pub source_at: Anchor,
+    pub sink_at: Anchor,
+}
+
+impl std::fmt::Display for SeedRoutingFailure {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "scheduled route {} ({:?}) from {:?} at {:?} failed at {:?} at {:?} as {:?}",
+            self.scheduled_index,
+            self.route,
+            self.source,
+            self.source_at,
+            self.sink,
+            self.sink_at,
+            self.category
+        )
+    }
+}
+
+impl std::error::Error for SeedRoutingFailure {}
 
 pub(crate) struct SparseSeedBuilder;
 
@@ -350,6 +387,8 @@ impl SparseSeedBuilder {
             &mut candidate,
             services.router,
             services.search_config,
+            &placement_analysis,
+            &placement_plan.fingerprint,
             &sources,
             &targets,
             &mut reservations,
@@ -1266,10 +1305,77 @@ fn primitive_input_geometry(
     }
 }
 
+fn route_source_instance(source: PhysicalEndpointId) -> Option<InstanceId> {
+    match source {
+        PhysicalEndpointId::PrimitiveOutput(primitive) => Some(primitive.instance),
+        PhysicalEndpointId::Junction(instance) => Some(instance),
+        PhysicalEndpointId::PrimaryInput(_)
+        | PhysicalEndpointId::DeclaredOutput(_)
+        | PhysicalEndpointId::Landing(_) => None,
+    }
+}
+
+fn route_target_instance(target: &PendingTarget) -> Option<InstanceId> {
+    match target {
+        PendingTarget::Connection(ConnectionId::External { instance, .. }, _)
+        | PendingTarget::Connection(ConnectionId::Internal { instance, .. }, _) => Some(*instance),
+        PendingTarget::DeclaredOutput(_, _) => None,
+    }
+}
+
+fn route_source_level(source: PhysicalEndpointId, analysis: &SeedPlacementAnalysis) -> u64 {
+    route_source_instance(source)
+        .and_then(|instance| analysis.nodes.get(&instance))
+        .map(|facts| facts.forward_level)
+        .unwrap_or(0)
+}
+
+fn route_target_level(
+    target: &PendingTarget,
+    analysis: &SeedPlacementAnalysis,
+    output_level: u64,
+) -> u64 {
+    route_target_instance(target)
+        .and_then(|instance| analysis.nodes.get(&instance))
+        .map(|facts| facts.forward_level)
+        .unwrap_or(output_level)
+}
+
+fn instance_structural_slack(instance: InstanceId, analysis: &SeedPlacementAnalysis) -> u64 {
+    analysis.nodes.get(&instance).map_or(0, |facts| {
+        analysis
+            .critical_delay_ticks
+            .saturating_sub(facts.head_ticks.saturating_add(facts.tail_ticks))
+    })
+}
+
+fn route_target_slack(
+    source: PhysicalEndpointId,
+    target: &PendingTarget,
+    analysis: &SeedPlacementAnalysis,
+) -> u64 {
+    let source_instance = route_source_instance(source);
+    let target_instance = route_target_instance(target);
+    match (source_instance, target_instance) {
+        (Some(source), Some(target)) if source == target => 0,
+        (Some(source), Some(target)) => analysis
+            .edges
+            .iter()
+            .find(|edge| edge.source == source && edge.sink == target)
+            .map(|edge| edge.structural_slack_ticks)
+            .unwrap_or_else(|| instance_structural_slack(target, analysis)),
+        (None, Some(target)) => instance_structural_slack(target, analysis),
+        (Some(source), None) => instance_structural_slack(source, analysis),
+        (None, None) => 0,
+    }
+}
+
 fn route_all(
     candidate: &mut ExpandedPhysicalCandidate,
     router: &dyn PhysicalRouter,
     config: &SearchConfig,
+    analysis: &SeedPlacementAnalysis,
+    plan_fingerprint: &Fingerprint,
     sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
     targets: &BTreeMap<PhysicalSink, TargetGeometry>,
     reservations: &mut PhysicalReservations,
@@ -1358,40 +1464,66 @@ fn route_all(
         }
     }
 
-    let rank = topological_instance_order(&candidate.instances)
+    let output_level = analysis
+        .nodes
+        .values()
+        .map(|facts| facts.forward_level)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1);
+    let obligations = grouped
         .into_iter()
-        .enumerate()
-        .map(|(index, instance)| (instance, index))
-        .collect::<BTreeMap<_, _>>();
-    let output_rank = rank.len();
-    let mut scheduled = grouped.into_iter().collect::<Vec<_>>();
-    scheduled.sort_by_key(|(source, pending)| {
-        let first_target = pending
-            .iter()
-            .map(|target| match target {
-                PendingTarget::Connection(ConnectionId::External { instance, .. }, _)
-                | PendingTarget::Connection(ConnectionId::Internal { instance, .. }, _) => {
-                    rank.get(instance).copied().unwrap_or(output_rank)
-                }
-                PendingTarget::DeclaredOutput(_, _) => output_rank,
-            })
-            .min()
-            .unwrap_or(output_rank);
-        (first_target, *source)
-    });
+        .map(|(source, pending)| {
+            let source_level = route_source_level(source, analysis);
+            let targets = pending
+                .into_iter()
+                .map(|target| {
+                    let target_level = route_target_level(&target, analysis, output_level);
+                    TargetObligation {
+                        structural_slack_ticks: route_target_slack(source, &target, analysis),
+                        forward_distance: target_level.saturating_sub(source_level),
+                        key: target.key(),
+                        target,
+                    }
+                })
+                .collect::<Vec<_>>();
+            let structural_slack_ticks = targets
+                .iter()
+                .map(|target| target.structural_slack_ticks)
+                .min()
+                .unwrap_or(0);
+            let level_span = targets
+                .iter()
+                .map(|target| target.forward_distance)
+                .max()
+                .unwrap_or(0);
+            RouteObligation {
+                source,
+                pinned_boundary_escape: matches!(source, PhysicalEndpointId::PrimaryInput(_))
+                    && candidate.pin_contracts.contains_key(&source),
+                structural_slack_ticks,
+                fanout: targets.len(),
+                level_span,
+                targets,
+            }
+        })
+        .collect();
+    let schedule = RouteSchedule::build(obligations);
     let protected = sources
         .values()
         .map(|source| source.route_anchor)
         .chain(
-            scheduled
+            schedule
+                .routes
                 .iter()
-                .flat_map(|(_, pending)| pending.iter().map(PendingTarget::geometry))
+                .flat_map(|route| route.targets.iter().map(PendingTarget::geometry))
                 .map(|geometry| geometry.terminal),
         )
         .collect::<BTreeSet<_>>();
 
-    for (route_index, (source_id, mut pending)) in scheduled.into_iter().enumerate() {
-        pending.sort_by_key(PendingTarget::key);
+    for (route_index, scheduled_route) in schedule.routes.into_iter().enumerate() {
+        let source_id = scheduled_route.source;
+        let pending = scheduled_route.targets;
         let route = RouteId(u32::try_from(route_index).map_err(|_| SeedError::IdentityOverflow)?);
         let source = *sources
             .get(&source_id)
@@ -1429,8 +1561,9 @@ fn route_all(
             })
             .collect::<Result<Vec<_>, SeedError>>()?;
         let sinks = NonEmptyRouteSinks::new(sinks).map_err(|_| SeedError::EmptyRoute)?;
+        let mut attempt_reservations = reservations.clone();
         if matches!(source_id, PhysicalEndpointId::Junction(_))
-            && !reservations.promote_endpoint_conductor(
+            && !attempt_reservations.promote_endpoint_conductor(
                 source.route_anchor,
                 source_id,
                 route,
@@ -1445,8 +1578,8 @@ fn route_all(
                     continue;
                 }
                 let side = step(source.route_anchor, direction);
-                if reservations.get(&side).is_none() {
-                    reservations.reserve(
+                if attempt_reservations.get(&side).is_none() {
+                    attempt_reservations.reserve(
                         side,
                         PhysicalReservationOwner::KeepOut(route.0),
                         PhysicalReservationKind::KeepOut,
@@ -1454,7 +1587,7 @@ fn route_all(
                 }
             }
         }
-        let mut tree = router.route(RouteRequest {
+        let mut tree = match router.route(RouteRequest {
             id: route,
             source: RouteEndpoint {
                 id: source_id,
@@ -1465,9 +1598,22 @@ fn route_all(
                 },
             },
             sinks: &sinks,
-            reservations,
+            reservations: &attempt_reservations,
             limits: config.router_limits,
-        })?;
+        }) {
+            Ok(tree) => tree,
+            Err(failure) => {
+                return Err(SeedError::Routing(seed_routing_failure(
+                    route_index,
+                    route,
+                    source_id,
+                    source.route_anchor,
+                    &sinks,
+                    &failure,
+                    plan_fingerprint,
+                )))
+            }
+        };
         refresh_exact_route_delays(&mut tree);
 
         for (target, branch) in pending.iter().zip(&tree.branches) {
@@ -1484,10 +1630,64 @@ fn route_all(
                 );
             }
         }
-        reserve_route(reservations, &tree, &protected);
+        reserve_route(&mut attempt_reservations, &tree, &protected);
+        *reservations = attempt_reservations;
         candidate.routes.insert(route, tree);
     }
     Ok(())
+}
+
+fn seed_routing_failure(
+    scheduled_index: usize,
+    route: RouteId,
+    source: PhysicalEndpointId,
+    source_at: Anchor,
+    sinks: &NonEmptyRouteSinks,
+    failure: &RouterFailure,
+    plan_fingerprint: &Fingerprint,
+) -> SeedRoutingFailure {
+    let explicit_sink = match failure {
+        RouterFailure::RouterLimitExceeded { sink, .. }
+        | RouterFailure::NoLocalRoute { sink, .. }
+        | RouterFailure::RingClosure { sink, .. } => Some(*sink),
+        RouterFailure::InvalidRequest { sink, .. } | RouterFailure::Refused { sink, .. } => *sink,
+        RouterFailure::WrongRepeaterAxis { connection, .. } => sinks
+            .as_slice()
+            .iter()
+            .find(|sink| {
+                sink.terminal.target()
+                    == Some(crate::compile::routing::RouteTarget::Connection(
+                        *connection,
+                    ))
+            })
+            .map(|sink| sink.id),
+    };
+    let fallback = &sinks.as_slice()[0];
+    let sink = explicit_sink.unwrap_or(fallback.id);
+    let sink_at = sinks
+        .as_slice()
+        .iter()
+        .find(|candidate| candidate.id == sink)
+        .map(|candidate| candidate.anchor)
+        .unwrap_or(fallback.anchor);
+    let (limit, work_used) = match failure {
+        RouterFailure::RouterLimitExceeded {
+            limit, work_used, ..
+        } => (Some(*limit), Some(*work_used)),
+        _ => (None, None),
+    };
+    SeedRoutingFailure {
+        scheduled_index,
+        route,
+        source,
+        sink,
+        category: failure.category(),
+        limit,
+        work_used,
+        plan_fingerprint: plan_fingerprint.clone(),
+        source_at,
+        sink_at,
+    }
 }
 
 fn refresh_exact_route_delays(tree: &mut crate::compile::routing::RealisedRouteTree) {
@@ -1868,6 +2068,99 @@ mod tests {
                 kind: crate::compile::topology::GateKind::Nor(1),
             }],
         }
+    }
+
+    fn one_typed_sink(route: RouteId) -> NonEmptyRouteSinks {
+        NonEmptyRouteSinks::new(vec![RouteSink {
+            id: RoutedSinkId { route, ordinal: 0 },
+            endpoint: PhysicalEndpointId::DeclaredOutput(PortId(0)),
+            anchor: Anchor { x: 9, y: 2, z: 7 },
+            allowed_entry: Facing::West,
+            terminal: TerminalContract::Sink {
+                target: crate::compile::routing::RouteTarget::DeclaredOutput(PortId(0)),
+                support: Anchor { x: 10, y: 2, z: 7 },
+                requirement: TerminalRequirement::Exact(
+                    crate::compile::routing::RouteTerminalKind::OutputTerminalRepeater,
+                ),
+            },
+        }])
+        .unwrap()
+    }
+
+    #[test]
+    fn router_limit_failure_keeps_exact_schedule_geometry_and_cap_work() {
+        let route = RouteId(3);
+        let source = PhysicalEndpointId::PrimaryInput(PortId(2));
+        let source_at = Anchor { x: 2, y: 2, z: 7 };
+        let sinks = one_typed_sink(route);
+        let plan_fingerprint = canonical_fingerprint(b"typed-limit-plan");
+        let failure = RouterFailure::RouterLimitExceeded {
+            route,
+            source,
+            sink: RoutedSinkId { route, ordinal: 0 },
+            kind: crate::compile::routing::RouterLimitKind::QueueEntries,
+            limit: 262_144,
+            work_used: 262_145,
+        };
+
+        let evidence = seed_routing_failure(
+            7,
+            route,
+            source,
+            source_at,
+            &sinks,
+            &failure,
+            &plan_fingerprint,
+        );
+
+        assert_eq!(evidence.scheduled_index, 7);
+        assert_eq!(evidence.route, route);
+        assert_eq!(evidence.source, source);
+        assert_eq!(evidence.sink, RoutedSinkId { route, ordinal: 0 });
+        assert_eq!(
+            evidence.category,
+            crate::compile::routing::RouterRefusalCategory::InvalidRequest
+        );
+        assert_eq!(evidence.limit, Some(262_144));
+        assert_eq!(evidence.work_used, Some(262_145));
+        assert_eq!(evidence.plan_fingerprint, plan_fingerprint);
+        assert_eq!(evidence.source_at, source_at);
+        assert_eq!(evidence.sink_at, Anchor { x: 9, y: 2, z: 7 });
+    }
+
+    #[test]
+    fn ring_closure_failure_has_physical_category_without_cap_work() {
+        let route = RouteId(4);
+        let source = PhysicalEndpointId::Junction(InstanceId(6));
+        let source_at = Anchor { x: 3, y: 1, z: 5 };
+        let sinks = one_typed_sink(route);
+        let plan_fingerprint = canonical_fingerprint(b"typed-ring-plan");
+        let failure = RouterFailure::RingClosure {
+            route,
+            source,
+            sink: RoutedSinkId { route, ordinal: 0 },
+            repeater: Anchor { x: 7, y: 1, z: 5 },
+            charged: vec![Anchor { x: 8, y: 1, z: 5 }],
+        };
+
+        let evidence = seed_routing_failure(
+            2,
+            route,
+            source,
+            source_at,
+            &sinks,
+            &failure,
+            &plan_fingerprint,
+        );
+
+        assert_eq!(
+            evidence.category,
+            crate::compile::routing::RouterRefusalCategory::PhysicalInvariant
+        );
+        assert_eq!(evidence.limit, None);
+        assert_eq!(evidence.work_used, None);
+        assert_eq!(evidence.sink_at, Anchor { x: 9, y: 2, z: 7 });
+        assert_eq!(evidence.plan_fingerprint, plan_fingerprint);
     }
 
     struct LiteralSeedPlacer {

@@ -22,7 +22,7 @@ use crate::compile::fragment_synth::search::{
 };
 use crate::compile::fragment_synth::seed::{
     compile_sparse_seed_variant_with_services, InstancePlacementOverride, SeedError, SeedInput,
-    SeedServices, SeedVariant,
+    SeedRoutingFailure, SeedServices, SeedVariant,
 };
 use crate::compile::fragment_synth::timing_graph::{
     RealisedTimingGraph, TimingArc, TimingArcKind, TimingGraphError,
@@ -30,7 +30,6 @@ use crate::compile::fragment_synth::timing_graph::{
 use crate::compile::fragment_synth::topology::OutputSpec;
 use crate::compile::geometry::CellFacing;
 use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
-use crate::compile::routing::RouterFailure;
 use crate::compile::topology::{GateKind, Library};
 use crate::compile::Netlist;
 
@@ -190,7 +189,10 @@ impl ProposalStream<CertifiedCandidate> for FragmentProposalStream<'_> {
 
 fn terminal_for_seed_error(error: &SeedError, work: &mut CapWorkCounters) -> ProposalTerminal {
     match error {
-        SeedError::Routing(RouterFailure::RouterLimitExceeded { work_used, .. }) => {
+        SeedError::Routing(SeedRoutingFailure {
+            work_used: Some(work_used),
+            ..
+        }) => {
             work.router_expansions = *work_used;
             ProposalTerminal::RouterCapExhausted
         }

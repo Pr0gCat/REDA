@@ -10,6 +10,7 @@ pub mod legacy_adapter;
 pub mod manifest;
 pub(crate) mod placement;
 pub mod realise;
+pub(crate) mod route_schedule;
 mod search;
 pub(crate) mod seed;
 pub(crate) mod services;
