@@ -851,7 +851,7 @@ mod tests {
         compile_sparse_seed_with_services, SeedInput, SeedServices,
     };
     use crate::compile::fragment_synth::services::{
-        DurableSeedEmitter, DurableSeedVerifier, SeedVerifier,
+        DurableSeedEmitter, DurableSeedVerifier, SeedVerifier, TopologyAwareSeedPlacer,
     };
     use crate::compile::fragment_synth::timing_graph::{
         ExactDelay, RealisedTimingGraph, TimingArc, TimingArcKind,
@@ -924,6 +924,7 @@ mod tests {
             },
             SeedServices {
                 library: &library,
+                placer: &TopologyAwareSeedPlacer,
                 router: &DurablePhysicalRouter,
                 emitter: &DurableSeedEmitter,
                 verifier: &DurableSeedVerifier,
@@ -984,6 +985,7 @@ mod tests {
             },
             SeedServices {
                 library: &library,
+                placer: &TopologyAwareSeedPlacer,
                 router: &DurablePhysicalRouter,
                 emitter: &DurableSeedEmitter,
                 verifier: &DurableSeedVerifier,
@@ -1043,6 +1045,7 @@ mod tests {
             },
             SeedServices {
                 library: &library,
+                placer: &TopologyAwareSeedPlacer,
                 router: &DurablePhysicalRouter,
                 emitter: &DurableSeedEmitter,
                 verifier: &DurableSeedVerifier,
@@ -1104,6 +1107,7 @@ mod tests {
         config.max_fragment_manhattan_radius = 1;
         let services = SeedServices {
             library: &library,
+            placer: &TopologyAwareSeedPlacer,
             router: &DurablePhysicalRouter,
             emitter: &DurableSeedEmitter,
             verifier: &DurableSeedVerifier,
@@ -1149,6 +1153,7 @@ mod tests {
         config.max_fragment_manhattan_radius = 1;
         let services = SeedServices {
             library: &library,
+            placer: &TopologyAwareSeedPlacer,
             router: &DurablePhysicalRouter,
             emitter: &DurableSeedEmitter,
             verifier: &DurableSeedVerifier,
@@ -1196,6 +1201,7 @@ mod tests {
         let config = SearchConfig::checked_defaults();
         let services = SeedServices {
             library: &library,
+            placer: &TopologyAwareSeedPlacer,
             router: &DurablePhysicalRouter,
             emitter: &DurableSeedEmitter,
             verifier: &DurableSeedVerifier,
@@ -1256,6 +1262,7 @@ mod tests {
         let config = SearchConfig::checked_defaults();
         let services = SeedServices {
             library: &library,
+            placer: &TopologyAwareSeedPlacer,
             router: &DurablePhysicalRouter,
             emitter: &DurableSeedEmitter,
             verifier: &DurableSeedVerifier,
@@ -1356,6 +1363,7 @@ mod tests {
             input,
             SeedServices {
                 library: &library,
+                placer: &TopologyAwareSeedPlacer,
                 router: &DurablePhysicalRouter,
                 emitter: &DurableSeedEmitter,
                 verifier: &DurableSeedVerifier,
@@ -1370,6 +1378,7 @@ mod tests {
             input,
             SeedServices {
                 library: &library,
+                placer: &TopologyAwareSeedPlacer,
                 router,
                 emitter: &DurableSeedEmitter,
                 verifier,

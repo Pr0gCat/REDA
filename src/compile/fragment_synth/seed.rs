@@ -21,11 +21,16 @@ use crate::compile::fragment_synth::identity::{
     PhysicalEndpointId, PortId, PrimitiveId, RouteId, RoutedSinkId,
 };
 use crate::compile::fragment_synth::instance_graph::{
-    DuplicateRequest, InstanceGraph, InstanceRole, PhysicalDriver, PhysicalSink, SynthesisError,
+    DuplicateRequest, InstanceGraph, PhysicalDriver, PhysicalSink, SynthesisError,
+};
+use crate::compile::fragment_synth::placement::{
+    analyse_instance_dag, SeedPlacementPlan, SeedPlacementRequest, SeedPlacer,
 };
 use crate::compile::fragment_synth::realise::{ExpandedAdapterError, ExpandedCandidateAdapter};
 use crate::compile::fragment_synth::services::{SeedEmitter, SeedVerifier};
-use crate::compile::fragment_synth::topology::{ConnectionTarget, ContributorSpec, OutputSpec};
+use crate::compile::fragment_synth::topology::{
+    ConnectionSource, ConnectionTarget, ContributorSpec, OutputSpec,
+};
 use crate::compile::geometry::{self, Anchor, CellFacing};
 use crate::compile::physical::{self, PortKind};
 use crate::compile::planner::{PortPlacements, PortRole};
@@ -41,14 +46,7 @@ use crate::redstone::simulator::position::Position;
 use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
 use crate::redstone::world::block::{BlockKind, BlockState, Facing};
 
-const INSTANCE_BASE_X: i32 = 40;
-const INSTANCE_BASE_Z: i32 = 40;
-const INSTANCE_X_PITCH: i32 = 40;
-const INSTANCE_Y_PITCH: i32 = 3;
-const INSTANCE_Z_PITCH: i32 = 24;
-const PRIMITIVE_X_PITCH: i32 = 8;
-const INPUT_STANDOFF: i32 = 10;
-const OUTPUT_STANDOFF: i32 = 24;
+const ORIGIN_WORLD_MARGIN: i32 = 16;
 
 #[derive(Clone, Copy)]
 pub(crate) struct SeedInput<'a> {
@@ -60,6 +58,7 @@ pub(crate) struct SeedInput<'a> {
 #[derive(Clone, Copy)]
 pub(crate) struct SeedServices<'a> {
     pub library: &'a Library,
+    pub placer: &'a dyn SeedPlacer,
     pub router: &'a dyn PhysicalRouter,
     pub emitter: &'a dyn SeedEmitter,
     pub verifier: &'a dyn SeedVerifier,
@@ -148,6 +147,41 @@ struct TargetGeometry {
     allowed_entry: Facing,
     support: Anchor,
     requirement: TerminalRequirement,
+}
+
+#[derive(Debug, Clone, Copy, Default)]
+struct PlanTranslation {
+    dx: i32,
+    dz: i32,
+}
+
+impl PlanTranslation {
+    fn for_unpinned(plan: &SeedPlacementPlan, has_pins: bool) -> Self {
+        if has_pins {
+            return Self::default();
+        }
+        let anchors = plan
+            .instances
+            .values()
+            .map(|pose| pose.preferred_origin)
+            .chain(plan.automatic_inputs.values().copied())
+            .chain(plan.automatic_outputs.values().copied())
+            .collect::<Vec<_>>();
+        let min_x = anchors.iter().map(|anchor| anchor.x).min().unwrap_or(0);
+        let min_z = anchors.iter().map(|anchor| anchor.z).min().unwrap_or(0);
+        Self {
+            dx: ORIGIN_WORLD_MARGIN.saturating_sub(min_x).max(0),
+            dz: ORIGIN_WORLD_MARGIN.saturating_sub(min_z).max(0),
+        }
+    }
+
+    fn apply(self, anchor: Anchor) -> Anchor {
+        Anchor {
+            x: anchor.x.saturating_add(self.dx),
+            z: anchor.z.saturating_add(self.dz),
+            ..anchor
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -273,6 +307,18 @@ impl SparseSeedBuilder {
         candidate.bind_pin_contracts(input.lowered)?;
         crate::compile::planner::validate_port_placements(input.lowered, &candidate.pins)
             .map_err(SeedError::InvalidPins)?;
+        let placement_analysis = analyse_instance_dag(&candidate.instances)
+            .map_err(|_| SeedError::Incomplete("seed placement analysis"))?;
+        let placement_plan = services
+            .placer
+            .plan(SeedPlacementRequest {
+                graph: &candidate.instances,
+                analysis: &placement_analysis,
+                pins: &candidate.pin_contracts,
+            })
+            .map_err(|_| SeedError::Incomplete("seed placement plan"))?;
+        let plan_translation =
+            PlanTranslation::for_unpinned(&placement_plan, !candidate.pin_contracts.is_empty());
 
         let mut occupied = BTreeSet::new();
         let mut sources = BTreeMap::new();
@@ -280,6 +326,8 @@ impl SparseSeedBuilder {
         place_boundaries(
             &mut candidate,
             input.lowered,
+            &placement_plan,
+            plan_translation,
             &mut occupied,
             &mut sources,
             &mut targets,
@@ -288,6 +336,8 @@ impl SparseSeedBuilder {
             &mut candidate,
             input.lowered,
             services.search_config,
+            &placement_plan,
+            plan_translation,
             &variant.placements,
             &mut occupied,
             &mut sources,
@@ -407,6 +457,8 @@ fn reserve_route_endpoints(
 fn place_boundaries(
     candidate: &mut ExpandedPhysicalCandidate,
     netlist: &Netlist,
+    plan: &SeedPlacementPlan,
+    plan_translation: PlanTranslation,
     occupied: &mut BTreeSet<Anchor>,
     sources: &mut BTreeMap<PhysicalEndpointId, SourceGeometry>,
     targets: &mut BTreeMap<PhysicalSink, TargetGeometry>,
@@ -444,8 +496,14 @@ fn place_boundaries(
                 )
             }
             None => {
-                let home = automatic_input_home(candidate, port, index)?;
-                let root = step(home, Facing::East);
+                let home = plan
+                    .automatic_inputs
+                    .get(&port)
+                    .copied()
+                    .ok_or(SeedError::Incomplete("automatic input placement"))?;
+                let toward = automatic_boundary_direction(candidate);
+                let home = plan_translation.apply(home);
+                let root = step(home, toward);
                 (
                     vec![
                         PlacedBlock {
@@ -463,7 +521,7 @@ fn place_boundaries(
                     None,
                     home,
                     root,
-                    Facing::East,
+                    toward,
                 )
             }
         };
@@ -518,8 +576,14 @@ fn place_boundaries(
                 )
             }
             None => {
-                let lamp = automatic_output_home(candidate, port, index)?;
-                let terminal = step(lamp, Facing::West);
+                let lamp = plan
+                    .automatic_outputs
+                    .get(&port)
+                    .copied()
+                    .ok_or(SeedError::Incomplete("automatic output placement"))?;
+                let toward = automatic_boundary_direction(candidate);
+                let lamp = plan_translation.apply(lamp);
+                let terminal = step(lamp, toward.opposite());
                 let blocks = vec![PlacedBlock {
                     at: lamp,
                     state: compile::lamp(),
@@ -529,7 +593,7 @@ fn place_boundaries(
                     lamp,
                     TargetGeometry {
                         terminal,
-                        allowed_entry: Facing::West,
+                        allowed_entry: toward.opposite(),
                         support: lamp,
                         requirement: TerminalRequirement::Exact(
                             crate::compile::routing::RouteTerminalKind::OutputTerminalRepeater,
@@ -575,129 +639,93 @@ fn place_boundaries(
     Ok(())
 }
 
-fn automatic_input_home(
-    candidate: &ExpandedPhysicalCandidate,
-    port: PortId,
-    port_index: usize,
-) -> Result<Anchor, SeedError> {
-    let rank = candidate
-        .instances
-        .instances
+fn automatic_boundary_direction(candidate: &ExpandedPhysicalCandidate) -> Facing {
+    let inputs = candidate
+        .pin_contracts
         .iter()
-        .map(|instance| {
-            (
-                instance.id,
-                usize::try_from(match instance.role {
-                    InstanceRole::Canonical => instance.logical_gate.0,
-                    InstanceRole::Duplicate { .. } => instance.id.0,
-                })
-                .unwrap_or(usize::MAX),
-            )
+        .filter_map(|(endpoint, pin)| {
+            matches!(endpoint, PhysicalEndpointId::PrimaryInput(_)).then_some(*pin)
         })
-        .collect::<BTreeMap<_, _>>();
-    let target_rank = candidate
-        .instances
-        .assignments
+        .collect::<Vec<_>>();
+    let outputs = candidate
+        .pin_contracts
         .iter()
-        .filter_map(|assignment| match (&assignment.driver, assignment.sink) {
-            (
-                PhysicalDriver::PrimaryInput(driver),
-                PhysicalSink::InstanceInput { instance, .. },
-            ) if *driver == port => rank.get(&instance).copied(),
-            _ => None,
+        .filter_map(|(endpoint, pin)| {
+            matches!(endpoint, PhysicalEndpointId::DeclaredOutput(_)).then_some(*pin)
         })
-        .min()
-        .unwrap_or(0);
-    let target_rank_i32 = i32::try_from(target_rank).map_err(|_| SeedError::IdentityOverflow)?;
-    let pin_extent = candidate
-        .pins
-        .iter()
-        .map(|(_, pin)| pin.at.x)
-        .max()
-        .unwrap_or(0)
-        .max(0);
-    Ok(Anchor {
-        x: pin_extent
-            .saturating_add(INSTANCE_BASE_X - INPUT_STANDOFF)
-            .saturating_add(target_rank_i32 * INSTANCE_X_PITCH),
-        y: instance_layer_y(candidate, target_rank, canonical_instance_count(candidate))?,
-        z: INSTANCE_BASE_Z
-            + target_rank_i32 * INSTANCE_Z_PITCH
-            + i32::try_from(port_index % 3).map_err(|_| SeedError::IdentityOverflow)? * 3,
-    })
+        .collect::<Vec<_>>();
+    if !inputs.is_empty() && !outputs.is_empty() {
+        let from = median_anchor(inputs.iter().map(|pin| pin.net_cell(PortRole::Input)));
+        let to = median_anchor(outputs.iter().map(|pin| pin.net_cell(PortRole::Output)));
+        dominant_horizontal_direction(from, to)
+    } else if !inputs.is_empty() {
+        majority_direction(inputs.iter().map(|pin| pin.toward))
+    } else if !outputs.is_empty() {
+        majority_direction(outputs.iter().map(|pin| pin.toward)).opposite()
+    } else {
+        Facing::East
+    }
 }
 
-fn automatic_output_home(
-    candidate: &ExpandedPhysicalCandidate,
-    port: PortId,
-    port_index: usize,
-) -> Result<Anchor, SeedError> {
-    let rank = candidate
-        .instances
-        .instances
-        .iter()
-        .map(|instance| {
+fn median_anchor(anchors: impl Iterator<Item = Anchor>) -> Anchor {
+    let anchors = anchors.collect::<Vec<_>>();
+    let mut xs = anchors.iter().map(|anchor| anchor.x).collect::<Vec<_>>();
+    let mut ys = anchors.iter().map(|anchor| anchor.y).collect::<Vec<_>>();
+    let mut zs = anchors.iter().map(|anchor| anchor.z).collect::<Vec<_>>();
+    xs.sort();
+    ys.sort();
+    zs.sort();
+    Anchor {
+        x: xs[xs.len() / 2],
+        y: ys[ys.len() / 2],
+        z: zs[zs.len() / 2],
+    }
+}
+
+fn majority_direction(directions: impl Iterator<Item = Facing>) -> Facing {
+    let order = [Facing::North, Facing::East, Facing::South, Facing::West];
+    let directions = directions.collect::<Vec<_>>();
+    order
+        .into_iter()
+        .max_by_key(|candidate| {
             (
-                instance.id,
-                usize::try_from(match instance.role {
-                    InstanceRole::Canonical => instance.logical_gate.0,
-                    InstanceRole::Duplicate { .. } => instance.id.0,
-                })
-                .unwrap_or(usize::MAX),
+                directions
+                    .iter()
+                    .filter(|direction| *direction == candidate)
+                    .count(),
+                std::cmp::Reverse(
+                    order
+                        .iter()
+                        .position(|direction| direction == candidate)
+                        .unwrap(),
+                ),
             )
         })
-        .collect::<BTreeMap<_, _>>();
-    let assignment = candidate
-        .instances
-        .assignments
-        .iter()
-        .find(|assignment| assignment.sink == PhysicalSink::DeclaredOutput(port))
-        .ok_or(SeedError::Incomplete("automatic output assignment"))?;
-    let driver_rank = match &assignment.driver {
-        PhysicalDriver::PrimaryInput(_) => 0,
-        PhysicalDriver::Instance(driver) => {
-            let owner = match driver {
-                crate::compile::fragment_synth::instance_graph::InstanceDriver::Primitive {
-                    logical_owner,
-                    ..
-                }
-                | crate::compile::fragment_synth::instance_graph::InstanceDriver::Junction {
-                    logical_owner,
-                    ..
-                } => *logical_owner,
-            };
-            rank.get(&owner).copied().unwrap_or(0)
+        .unwrap_or(Facing::East)
+}
+
+fn dominant_horizontal_direction(from: Anchor, to: Anchor) -> Facing {
+    let dx = i64::from(to.x) - i64::from(from.x);
+    let dz = i64::from(to.z) - i64::from(from.z);
+    if dz.abs() >= dx.abs() && dz != 0 {
+        if dz < 0 {
+            Facing::North
+        } else {
+            Facing::South
         }
-    };
-    let driver_rank = i32::try_from(driver_rank).map_err(|_| SeedError::IdentityOverflow)?;
-    let pin_extent = candidate
-        .pins
-        .iter()
-        .map(|(_, pin)| pin.at.x)
-        .max()
-        .unwrap_or(0)
-        .max(0);
-    Ok(Anchor {
-        x: pin_extent
-            .saturating_add(INSTANCE_BASE_X)
-            .saturating_add(driver_rank * INSTANCE_X_PITCH)
-            .saturating_add(OUTPUT_STANDOFF),
-        y: instance_layer_y(
-            candidate,
-            usize::try_from(driver_rank).map_err(|_| SeedError::IdentityOverflow)?,
-            canonical_instance_count(candidate),
-        )?,
-        z: INSTANCE_BASE_Z
-            + driver_rank * INSTANCE_Z_PITCH
-            + 8
-            + i32::try_from(port_index).map_err(|_| SeedError::IdentityOverflow)? * 4,
-    })
+    } else if dx < 0 {
+        Facing::West
+    } else {
+        Facing::East
+    }
 }
 
 fn place_instances(
     candidate: &mut ExpandedPhysicalCandidate,
     netlist: &Netlist,
     search_config: &SearchConfig,
+    plan: &SeedPlacementPlan,
+    plan_translation: PlanTranslation,
     placement_overrides: &BTreeMap<InstanceId, InstancePlacementOverride>,
     occupied: &mut BTreeSet<Anchor>,
     sources: &mut BTreeMap<PhysicalEndpointId, SourceGeometry>,
@@ -705,13 +733,6 @@ fn place_instances(
 ) -> Result<(), SeedError> {
     let order = topological_instance_order(&candidate.instances);
     let mut placement_search = PlacementSearch::new(search_config);
-    let pin_extent = candidate
-        .pins
-        .iter()
-        .map(|(_, pin)| pin.at.x)
-        .max()
-        .unwrap_or(0)
-        .max(0);
 
     for instance_id in order {
         let instance = candidate
@@ -721,36 +742,23 @@ fn place_instances(
             .find(|instance| instance.id == instance_id)
             .ok_or(SeedError::Incomplete("topological instance"))?
             .clone();
-        let ordinal =
-            i32::try_from(instance.logical_gate.0).map_err(|_| SeedError::IdentityOverflow)?;
-        let duplicate_lane = match instance.role {
-            InstanceRole::Canonical => 0,
-            InstanceRole::Duplicate { ordinal } => i32::from(ordinal),
-        };
-        let base = Anchor {
-            x: pin_extent
-                .saturating_add(INSTANCE_BASE_X)
-                .saturating_add(ordinal * INSTANCE_X_PITCH),
-            y: instance_layer_y(
-                candidate,
-                usize::try_from(ordinal).map_err(|_| SeedError::IdentityOverflow)?,
-                netlist.gates.len(),
-            )?
-            .saturating_add(duplicate_lane * INSTANCE_Y_PITCH),
-            z: INSTANCE_BASE_Z
-                + ordinal * INSTANCE_Z_PITCH
-                + duplicate_lane * (INSTANCE_Z_PITCH / 2),
-        };
+        let planned = plan
+            .instances
+            .get(&instance.id)
+            .copied()
+            .ok_or(SeedError::Incomplete("planned instance pose"))?;
         let placement_override = placement_overrides.get(&instance.id).copied();
-        let base = Anchor {
-            x: base
+        let base = plan_translation.apply(Anchor {
+            x: planned
+                .preferred_origin
                 .x
                 .saturating_add(placement_override.map_or(0, |choice| choice.dx)),
-            z: base
+            z: planned
+                .preferred_origin
                 .z
                 .saturating_add(placement_override.map_or(0, |choice| choice.dz)),
-            ..base
-        };
+            ..planned.preferred_origin
+        });
         let gate = &netlist.gates
             [usize::try_from(instance.logical_gate.0).map_err(|_| SeedError::IdentityOverflow)?];
 
@@ -758,7 +766,7 @@ fn place_instances(
             OutputSpec::Junction { contributors, .. } => {
                 let facing = placement_override
                     .map(|choice| choice.facing)
-                    .unwrap_or(CellFacing::NORTH);
+                    .unwrap_or(planned.facing);
                 place_junction_instance(
                     candidate,
                     &instance,
@@ -772,20 +780,18 @@ fn place_instances(
                 )?;
             }
             OutputSpec::Primitive(output) => {
-                let facing =
-                    placement_override
-                        .map(|choice| choice.facing)
-                        .unwrap_or(match instance.role {
-                            InstanceRole::Canonical => CellFacing::EAST,
-                            InstanceRole::Duplicate { .. } => CellFacing::NORTH,
-                        });
+                let facing = placement_override
+                    .map(|choice| choice.facing)
+                    .unwrap_or(planned.facing);
+                let positions = topology_primitive_positions(&instance);
                 for specification in &instance.expanded.topology.primitives {
-                    let node = i32::from(specification.id.node.0);
-                    let anchor = step_many(
-                        base,
-                        geometry::output_direction(facing),
-                        node.saturating_mul(PRIMITIVE_X_PITCH),
-                    );
+                    let local = positions[&specification.id];
+                    let (dx, dy, dz) = geometry::rotate((local.x, local.y, local.z), facing);
+                    let anchor = Anchor {
+                        x: base.x.saturating_add(dx),
+                        y: base.y.saturating_add(dy),
+                        z: base.z.saturating_add(dz),
+                    };
                     place_primitive_searched(
                         candidate,
                         specification.id,
@@ -823,51 +829,53 @@ fn place_instances(
     Ok(())
 }
 
-fn instance_layer_y(
-    candidate: &ExpandedPhysicalCandidate,
-    rank: usize,
-    count: usize,
-) -> Result<i32, SeedError> {
-    let pinned_output_y = candidate
-        .pin_contracts
-        .iter()
-        .filter_map(|(endpoint, pin)| {
-            matches!(endpoint, PhysicalEndpointId::DeclaredOutput(_)).then_some(pin.at.y)
-        })
-        .min();
-    let pinned_input_y = candidate
-        .pin_contracts
-        .iter()
-        .filter_map(|(endpoint, pin)| {
-            matches!(endpoint, PhysicalEndpointId::PrimaryInput(_)).then_some(pin.at.y)
-        })
-        .min();
-    let rank = i32::try_from(rank).map_err(|_| SeedError::IdentityOverflow)?;
-    Ok(match (pinned_input_y, pinned_output_y) {
-        (Some(input_y), Some(output_y)) => {
-            let denominator = i32::try_from(count.saturating_sub(1).max(1))
-                .map_err(|_| SeedError::IdentityOverflow)?;
-            input_y
-                .saturating_add(output_y.saturating_sub(input_y).saturating_mul(rank) / denominator)
+fn topology_primitive_positions(
+    instance: &crate::compile::fragment_synth::instance_graph::Instance,
+) -> BTreeMap<PrimitiveId, Position> {
+    let topology = &instance.expanded.topology;
+    let mut levels = BTreeMap::<PrimitiveId, i32>::new();
+    while levels.len() < topology.primitives.len() {
+        let before = levels.len();
+        for primitive in &topology.primitives {
+            if levels.contains_key(&primitive.id) {
+                continue;
+            }
+            let incoming = topology
+                .connections
+                .iter()
+                .filter(|edge| edge.target == ConnectionTarget::Primitive(primitive.id))
+                .filter_map(|edge| match edge.source {
+                    ConnectionSource::Primitive(source) => Some(source),
+                    ConnectionSource::ExternalInput { .. } => None,
+                })
+                .collect::<Vec<_>>();
+            if incoming.iter().all(|source| levels.contains_key(source)) {
+                levels.insert(
+                    primitive.id,
+                    incoming
+                        .iter()
+                        .map(|source| levels[source] + 1)
+                        .max()
+                        .unwrap_or(0),
+                );
+            }
         }
-        (_, Some(output_y)) => {
-            let reverse = i32::try_from(count.saturating_sub(1))
-                .map_err(|_| SeedError::IdentityOverflow)?
-                .saturating_sub(rank);
-            output_y.saturating_add(reverse * INSTANCE_Y_PITCH)
+        if levels.len() == before {
+            break;
         }
-        (Some(input_y), None) => input_y.saturating_add(rank * INSTANCE_Y_PITCH),
-        (None, None) => 4 + rank * INSTANCE_Y_PITCH,
-    })
-}
-
-fn canonical_instance_count(candidate: &ExpandedPhysicalCandidate) -> usize {
-    candidate
-        .instances
-        .instances
+    }
+    let mut per_level = BTreeMap::<i32, i32>::new();
+    topology
+        .primitives
         .iter()
-        .filter(|instance| instance.role == InstanceRole::Canonical)
-        .count()
+        .map(|primitive| {
+            let level = levels.get(&primitive.id).copied().unwrap_or(0);
+            let lane = per_level.entry(level).or_insert(0);
+            let position = Position::new(level * 4, 0, *lane * 4);
+            *lane += 1;
+            (primitive.id, position)
+        })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1757,7 +1765,12 @@ mod tests {
     use crate::compile::emission::{EmittedWorld, PhysicalCandidateView};
     use crate::compile::fragment_synth::certification::CompleteCandidateCertifier;
     use crate::compile::fragment_synth::legacy_adapter::{LegacyCandidateAdapter, LegacyOracle};
+    use crate::compile::fragment_synth::placement::{
+        PreferredInstancePose, SeedPlacementError, SeedPlacementPlan, SeedPlacementRequest,
+        SeedPlacer, TopologyAwareSeedPlacer,
+    };
     use crate::compile::fragment_synth::services::{DurableSeedEmitter, DurableSeedVerifier};
+    use crate::compile::metrics::canonical_fingerprint;
     use crate::compile::routing::{DurablePhysicalRouter, RealisedRouteTree};
     use crate::compile::Gate;
 
@@ -1857,6 +1870,87 @@ mod tests {
         }
     }
 
+    struct LiteralSeedPlacer {
+        calls: Cell<u32>,
+    }
+
+    impl SeedPlacer for LiteralSeedPlacer {
+        fn plan(
+            &self,
+            _request: SeedPlacementRequest<'_>,
+        ) -> Result<SeedPlacementPlan, SeedPlacementError> {
+            self.calls.set(self.calls.get() + 1);
+            Ok(SeedPlacementPlan {
+                instances: BTreeMap::from([(
+                    InstanceId(0),
+                    PreferredInstancePose {
+                        preferred_origin: Anchor { x: 91, y: 7, z: 83 },
+                        facing: CellFacing::NORTH,
+                    },
+                )]),
+                automatic_inputs: BTreeMap::from([(PortId(0), Anchor { x: 71, y: 7, z: 83 })]),
+                automatic_outputs: BTreeMap::from([(
+                    PortId(0),
+                    Anchor {
+                        x: 111,
+                        y: 7,
+                        z: 83,
+                    },
+                )]),
+                fingerprint: canonical_fingerprint(b"literal-seed-plan"),
+            })
+        }
+    }
+
+    #[test]
+    fn injected_seed_plan_controls_materialised_pose_and_automatic_boundaries_once() {
+        let netlist = not_netlist();
+        let library = Library::default_library();
+        let config = SearchConfig::checked_defaults();
+        let placer = LiteralSeedPlacer {
+            calls: Cell::new(0),
+        };
+
+        let certified = compile_sparse_seed_with_services(
+            SeedInput {
+                lowered: &netlist,
+                source_provenance: None,
+                pins: None,
+            },
+            SeedServices {
+                library: &library,
+                placer: &placer,
+                router: &DurablePhysicalRouter,
+                emitter: &DurableSeedEmitter,
+                verifier: &DurableSeedVerifier,
+                certifier: &CompleteCandidateCertifier,
+                search_config: &config,
+            },
+        )
+        .unwrap();
+
+        let candidate = certified.candidate();
+        assert_eq!(placer.calls.get(), 1);
+        let views = candidate.compatibility_views(&netlist).unwrap();
+        assert_eq!(
+            views.input_positions,
+            BTreeMap::from([("a".to_string(), (71, 7, 83))])
+        );
+        assert_eq!(
+            views.output_positions,
+            BTreeMap::from([("y".to_string(), (111, 7, 83))])
+        );
+        let primitive = PrimitiveId {
+            instance: InstanceId(0),
+            node: crate::compile::fragment_synth::identity::TopologyNodeId(0),
+        };
+        assert_eq!(candidate.placements[&primitive].facing, CellFacing::NORTH);
+        assert_eq!(
+            candidate.placements[&primitive].anchor,
+            Anchor { x: 91, y: 7, z: 83 }
+        );
+    }
+
     fn build(netlist: &Netlist) -> Result<CertifiedCandidate, SeedError> {
         build_with_pins(netlist, None)
     }
@@ -1875,6 +1969,7 @@ mod tests {
             },
             SeedServices {
                 library: &library,
+                placer: &TopologyAwareSeedPlacer,
                 router: &DurablePhysicalRouter,
                 emitter: &DurableSeedEmitter,
                 verifier: &DurableSeedVerifier,
@@ -1898,6 +1993,7 @@ mod tests {
             },
             SeedServices {
                 library: &library,
+                placer: &TopologyAwareSeedPlacer,
                 router: &DurablePhysicalRouter,
                 emitter: &DurableSeedEmitter,
                 verifier: &DurableSeedVerifier,
@@ -1959,6 +2055,7 @@ mod tests {
             },
             SeedServices {
                 library: &library,
+                placer: &TopologyAwareSeedPlacer,
                 router: &DurablePhysicalRouter,
                 emitter: &DurableSeedEmitter,
                 verifier: &DurableSeedVerifier,
@@ -2126,6 +2223,7 @@ mod tests {
             },
             SeedServices {
                 library: &library,
+                placer: &TopologyAwareSeedPlacer,
                 router: &router,
                 emitter: &emitter,
                 verifier: &verifier,
@@ -2306,6 +2404,7 @@ mod tests {
             },
             SeedServices {
                 library: &library,
+                placer: &TopologyAwareSeedPlacer,
                 router: &router,
                 emitter: &emitter,
                 verifier: &verifier,
@@ -2345,6 +2444,7 @@ mod tests {
             },
             SeedServices {
                 library: &library,
+                placer: &TopologyAwareSeedPlacer,
                 router: &router,
                 emitter: &emitter,
                 verifier: &verifier,
@@ -2375,6 +2475,7 @@ mod tests {
             },
             SeedServices {
                 library: &library,
+                placer: &TopologyAwareSeedPlacer,
                 router: &DurablePhysicalRouter,
                 emitter: &DurableSeedEmitter,
                 verifier: &DurableSeedVerifier,

@@ -6,6 +6,7 @@ use crate::compile::emission::{
     emit_candidate, EmissionError, EmittedWorld, PhysicalCandidateView,
 };
 use crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate;
+pub(crate) use crate::compile::fragment_synth::placement::TopologyAwareSeedPlacer;
 use crate::compile::verification::{verify_expanded_candidate, ExpandedPhysicalError};
 
 pub(crate) trait SeedEmitter {

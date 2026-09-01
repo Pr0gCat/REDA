@@ -11,9 +11,12 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use reda::circuits::and4::build_and4_netlist;
-use reda::compile::planner::{Anchor, PinRefusal, PortPlacements};
-use reda::compile::{compile_grown, CompileError};
-use reda::redstone::world::block::Facing;
+use reda::compile::fragment_synth::benchmark::legacy_benchmark_evaluator;
+use reda::compile::planner::{Anchor, PinRefusal, PortPlacements, PortRole};
+use reda::compile::{
+    compile_fragment_synth, compile_grown, CompileError, SynthesisBudget, SynthesisInput,
+};
+use reda::redstone::world::block::{BlockKind, Facing};
 
 /// One test's own scratch directory, created empty-or-reused. The binary is
 /// run *in* it because the `output/` tree it writes is relative to the
@@ -50,7 +53,10 @@ fn pins_file_defects_exit_by_name_before_any_compile() {
         "pins-missing-file",
         &["and4", "--grown", "--pins", "no-such-pins.json"],
     );
-    assert!(!output.status.success(), "a missing pins file must not compile anything");
+    assert!(
+        !output.status.success(),
+        "a missing pins file must not compile anything"
+    );
     let stderr = stderr_of(&output);
     assert!(
         stderr.contains("could not read the pins file") && stderr.contains("no-such-pins.json"),
@@ -60,11 +66,19 @@ fn pins_file_defects_exit_by_name_before_any_compile() {
     // A malformed pin is named through the CLI surface, port and defect both.
     let scratch = scratch_dir("pins-bad-facing");
     let bad_facing = scratch.join("bad-facing.pins.json");
-    std::fs::write(&bad_facing, r#"{"inputs": {"a": {"at": [1,1,1], "toward": "up"}}}"#)
-        .expect("the pins file is writable");
+    std::fs::write(
+        &bad_facing,
+        r#"{"inputs": {"a": {"at": [1,1,1], "toward": "up"}}}"#,
+    )
+    .expect("the pins file is writable");
     let (output, _) = run_in_scratch(
         "pins-bad-facing",
-        &["and4", "--grown", "--pins", bad_facing.to_str().expect("utf-8 path")],
+        &[
+            "and4",
+            "--grown",
+            "--pins",
+            bad_facing.to_str().expect("utf-8 path"),
+        ],
     );
     assert!(!output.status.success());
     let stderr = stderr_of(&output);
@@ -77,11 +91,19 @@ fn pins_file_defects_exit_by_name_before_any_compile() {
     // the labels that would have worked.
     let scratch = scratch_dir("pins-bad-label");
     let bad_label = scratch.join("bad-label.pins.json");
-    std::fs::write(&bad_label, r#"{"outputs": {"q": {"at": [5,1,2], "toward": "north"}}}"#)
-        .expect("the pins file is writable");
+    std::fs::write(
+        &bad_label,
+        r#"{"outputs": {"q": {"at": [5,1,2], "toward": "north"}}}"#,
+    )
+    .expect("the pins file is writable");
     let (output, _) = run_in_scratch(
         "pins-bad-label",
-        &["and4", "--grown", "--pins", bad_label.to_str().expect("utf-8 path")],
+        &[
+            "and4",
+            "--grown",
+            "--pins",
+            bad_label.to_str().expect("utf-8 path"),
+        ],
     );
     assert!(!output.status.success());
     let stderr = stderr_of(&output);
@@ -93,8 +115,11 @@ fn pins_file_defects_exit_by_name_before_any_compile() {
     // Pins compile through the generation front door only.
     let scratch = scratch_dir("pins-without-grown");
     let lawful = scratch.join("lawful.pins.json");
-    std::fs::write(&lawful, r#"{"inputs": {"a": {"at": [21,1,62], "toward": "north"}}}"#)
-        .expect("the pins file is writable");
+    std::fs::write(
+        &lawful,
+        r#"{"inputs": {"a": {"at": [21,1,62], "toward": "north"}}}"#,
+    )
+    .expect("the pins file is writable");
     let (output, _) = run_in_scratch(
         "pins-without-grown",
         &["and4", "--pins", lawful.to_str().expect("utf-8 path")],
@@ -119,14 +144,25 @@ fn pins_file_defects_exit_by_name_before_any_compile() {
 fn a_refusal_only_the_door_can_make_reaches_the_caller_by_name() {
     let scratch = scratch_dir("pins-off-the-board");
     let off_board = scratch.join("off-board.pins.json");
-    std::fs::write(&off_board, r#"{"inputs": {"a": {"at": [1,1,0], "toward": "north"}}}"#)
-        .expect("the pins file is writable");
+    std::fs::write(
+        &off_board,
+        r#"{"inputs": {"a": {"at": [1,1,0], "toward": "north"}}}"#,
+    )
+    .expect("the pins file is writable");
 
     let (output, _) = run_in_scratch(
         "pins-off-the-board",
-        &["and4", "--grown", "--pins", off_board.to_str().expect("utf-8 path")],
+        &[
+            "and4",
+            "--grown",
+            "--pins",
+            off_board.to_str().expect("utf-8 path"),
+        ],
     );
-    assert!(!output.status.success(), "an unbuildable pin must not ship a circuit");
+    assert!(
+        !output.status.success(),
+        "an unbuildable pin must not ship a circuit"
+    );
     let stderr = stderr_of(&output);
     assert!(
         stderr.contains("`a`") && stderr.contains("(1, 1, -1)"),
@@ -215,7 +251,12 @@ fn a_pinned_and4_round_trips_through_the_flags() {
 
     let (output, scratch) = run_in_scratch(
         "pins-round-trip",
-        &["and4", "--grown", "--pins", pins.to_str().expect("utf-8 path")],
+        &[
+            "and4",
+            "--grown",
+            "--pins",
+            pins.to_str().expect("utf-8 path"),
+        ],
     );
     assert!(
         output.status.success(),
@@ -249,7 +290,9 @@ fn a_pinned_and4_round_trips_through_the_flags() {
         .expect("the block dump is written");
     let cell = |x: i32, y: i32, z: i32| -> Option<String> {
         let prefix = format!("{x} {y} {z} ");
-        dump.lines().find(|line| line.starts_with(&prefix)).map(str::to_string)
+        dump.lines()
+            .find(|line| line.starts_with(&prefix))
+            .map(str::to_string)
     };
     assert_eq!(cell(21, 1, 62), None, "`a`'s pinned cell ships empty");
     assert_eq!(cell(53, 1, 10), None, "`y`'s pinned cell ships empty");
@@ -260,4 +303,210 @@ fn a_pinned_and4_round_trips_through_the_flags() {
             "the handover at ({x}, {y}, {z}) carries the signal north: {handover}"
         );
     }
+}
+
+#[test]
+fn topology_aware_seed_preserves_the_checked_seven_segment_pin_contract() {
+    let evaluator = legacy_benchmark_evaluator().unwrap();
+    let fixture = evaluator.fixture("pinned:verilog:seven_segment").unwrap();
+    let expected = [
+        (
+            Anchor { x: 76, y: 1, z: 24 },
+            Facing::North,
+            PortRole::Output,
+            Anchor { x: 76, y: 1, z: 25 },
+            Anchor { x: 76, y: 1, z: 26 },
+        ),
+        (
+            Anchor { x: 84, y: 1, z: 32 },
+            Facing::East,
+            PortRole::Output,
+            Anchor { x: 83, y: 1, z: 32 },
+            Anchor { x: 82, y: 1, z: 32 },
+        ),
+        (
+            Anchor { x: 84, y: 1, z: 48 },
+            Facing::East,
+            PortRole::Output,
+            Anchor { x: 83, y: 1, z: 48 },
+            Anchor { x: 82, y: 1, z: 48 },
+        ),
+        (
+            Anchor { x: 76, y: 1, z: 56 },
+            Facing::South,
+            PortRole::Output,
+            Anchor { x: 76, y: 1, z: 55 },
+            Anchor { x: 76, y: 1, z: 54 },
+        ),
+        (
+            Anchor { x: 68, y: 1, z: 48 },
+            Facing::West,
+            PortRole::Output,
+            Anchor { x: 69, y: 1, z: 48 },
+            Anchor { x: 70, y: 1, z: 48 },
+        ),
+        (
+            Anchor { x: 68, y: 1, z: 32 },
+            Facing::West,
+            PortRole::Output,
+            Anchor { x: 69, y: 1, z: 32 },
+            Anchor { x: 70, y: 1, z: 32 },
+        ),
+        (
+            Anchor { x: 76, y: 1, z: 40 },
+            Facing::West,
+            PortRole::Output,
+            Anchor { x: 77, y: 1, z: 40 },
+            Anchor { x: 78, y: 1, z: 40 },
+        ),
+        (
+            Anchor {
+                x: 76,
+                y: 1,
+                z: 120,
+            },
+            Facing::North,
+            PortRole::Input,
+            Anchor {
+                x: 76,
+                y: 1,
+                z: 119,
+            },
+            Anchor {
+                x: 76,
+                y: 1,
+                z: 118,
+            },
+        ),
+        (
+            Anchor {
+                x: 88,
+                y: 1,
+                z: 120,
+            },
+            Facing::North,
+            PortRole::Input,
+            Anchor {
+                x: 88,
+                y: 1,
+                z: 119,
+            },
+            Anchor {
+                x: 88,
+                y: 1,
+                z: 118,
+            },
+        ),
+        (
+            Anchor {
+                x: 100,
+                y: 1,
+                z: 120,
+            },
+            Facing::North,
+            PortRole::Input,
+            Anchor {
+                x: 100,
+                y: 1,
+                z: 119,
+            },
+            Anchor {
+                x: 100,
+                y: 1,
+                z: 118,
+            },
+        ),
+        (
+            Anchor {
+                x: 112,
+                y: 1,
+                z: 120,
+            },
+            Facing::North,
+            PortRole::Input,
+            Anchor {
+                x: 112,
+                y: 1,
+                z: 119,
+            },
+            Anchor {
+                x: 112,
+                y: 1,
+                z: 118,
+            },
+        ),
+    ];
+    let actual = fixture
+        .placements()
+        .iter()
+        .map(|(name, pin)| {
+            let role = if fixture.lowered_netlist().inputs.contains(name) {
+                PortRole::Input
+            } else {
+                PortRole::Output
+            };
+            (
+                pin.at,
+                pin.toward,
+                role,
+                pin.handover(role),
+                pin.net_cell(role),
+            )
+        })
+        .collect::<Vec<_>>();
+    for literal in expected {
+        assert!(
+            actual.contains(&literal),
+            "missing literal pin contract {literal:?}"
+        );
+    }
+    assert_eq!(actual.len(), expected.len());
+
+    let result = compile_fragment_synth(
+        SynthesisInput {
+            lowered: fixture.lowered_netlist(),
+            source_provenance: None,
+            pins: Some(fixture.placements()),
+        },
+        SynthesisBudget::Evaluations(0),
+    )
+    .unwrap();
+
+    for (at, toward, role, handover, net_cell) in expected {
+        assert_eq!(
+            result.compiled.world.get(at.x, at.y, at.z).kind,
+            BlockKind::Air
+        );
+        assert_ne!(
+            result
+                .compiled
+                .world
+                .get(handover.x, handover.y, handover.z)
+                .kind,
+            BlockKind::Air
+        );
+        assert_ne!(
+            result
+                .compiled
+                .world
+                .get(net_cell.x, net_cell.y, net_cell.z)
+                .kind,
+            BlockKind::Air
+        );
+        if role == PortRole::Input {
+            let handover_state = result
+                .compiled
+                .world
+                .get(handover.x, handover.y, handover.z);
+            assert_eq!(handover_state.kind, BlockKind::Repeater);
+            assert_eq!(handover_state.facing, Some(toward.opposite()));
+        }
+    }
+    assert!(result
+        .compiled
+        .observations
+        .primitive_outputs
+        .values()
+        .chain(result.compiled.observations.junction_outputs.values())
+        .all(|site| site.at.z < 120));
 }
