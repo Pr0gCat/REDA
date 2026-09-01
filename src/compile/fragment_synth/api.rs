@@ -82,36 +82,54 @@ fn compile_fragment_synth_with_config(
     budget: SynthesisBudget,
     search_config: &SearchConfig,
 ) -> Result<SynthesisResult, SynthesisError> {
-    compile_fragment_synth_with_config_and_placement_revision_override(
+    let library = Library::default_library();
+    let certification_config = CertificationConfig::from_search(search_config);
+    let case_fingerprint =
+        synthesis_case_fingerprint(&input, search_config, &certification_config, &library);
+    compile_fragment_synth_with_case_fingerprint(
         input,
         budget,
         search_config,
-        None,
+        &library,
+        case_fingerprint,
     )
 }
 
+#[cfg(test)]
 fn compile_fragment_synth_with_config_and_placement_revision_override(
     input: SynthesisInput<'_>,
     budget: SynthesisBudget,
     search_config: &SearchConfig,
-    placement_revision: Option<Fingerprint>,
+    placement_revision: Fingerprint,
 ) -> Result<SynthesisResult, SynthesisError> {
     let library = Library::default_library();
     let certification_config = CertificationConfig::from_search(search_config);
-    let case_fingerprint = match placement_revision {
-        Some(placement_revision) => synthesis_case_fingerprint_with_placement_revision(
-            &input,
-            search_config,
-            &certification_config,
-            &library,
-            placement_revision,
-        ),
-        None => synthesis_case_fingerprint(&input, search_config, &certification_config, &library),
-    };
+    let case_fingerprint = synthesis_case_fingerprint_with_placement_revision(
+        &input,
+        search_config,
+        &certification_config,
+        &library,
+        placement_revision,
+    );
+    compile_fragment_synth_with_case_fingerprint(
+        input,
+        budget,
+        search_config,
+        &library,
+        case_fingerprint,
+    )
+}
 
+fn compile_fragment_synth_with_case_fingerprint(
+    input: SynthesisInput<'_>,
+    budget: SynthesisBudget,
+    search_config: &SearchConfig,
+    library: &Library,
+    case_fingerprint: SynthesisCaseFingerprint,
+) -> Result<SynthesisResult, SynthesisError> {
     let seed_input = SeedInput::from(&input);
     let seed_services = SeedServices {
-        library: &library,
+        library,
         placer: &TopologyAwareSeedPlacer,
         router: &DurablePhysicalRouter,
         emitter: &DurableSeedEmitter,
@@ -446,14 +464,14 @@ mod tests {
             input,
             crate::compile::fragment_synth::search::SynthesisBudget::Evaluations(0),
             &config,
-            Some(old_revision),
+            old_revision,
         )
         .unwrap();
         let new = compile_fragment_synth_with_config_and_placement_revision_override(
             input,
             crate::compile::fragment_synth::search::SynthesisBudget::Evaluations(0),
             &config,
-            Some(new_revision),
+            new_revision,
         )
         .unwrap();
         assert_ne!(old.case_fingerprint, new.case_fingerprint);

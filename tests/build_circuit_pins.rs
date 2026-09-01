@@ -308,8 +308,8 @@ fn a_pinned_and4_round_trips_through_the_flags() {
 
 type CheckedPin = (PortPin, PortRole, Anchor, Anchor);
 
-fn checked_seven_segment_pin_contract(output_names: &[String]) -> BTreeMap<String, CheckedPin> {
-    assert_eq!(output_names.len(), 7, "the decoder exposes seven outputs");
+fn checked_seven_segment_pin_contract() -> BTreeMap<String, CheckedPin> {
+    let output_names = ["g18", "g21", "g25", "g17", "g27", "g28", "g30"];
     let outputs = [
         (
             Anchor { x: 76, y: 1, z: 24 },
@@ -431,7 +431,7 @@ fn checked_seven_segment_pin_contract(output_names: &[String]) -> BTreeMap<Strin
 
     output_names
         .iter()
-        .cloned()
+        .map(|name| (*name).to_string())
         .zip(outputs)
         .map(|(name, (at, toward, handover, net_cell))| {
             (
@@ -480,7 +480,7 @@ fn actual_pin_contract(
 fn checked_seven_segment_fixture_binds_every_signal_to_its_literal_pin() {
     let evaluator = legacy_benchmark_evaluator().unwrap();
     let fixture = evaluator.fixture("pinned:verilog:seven_segment").unwrap();
-    let expected = checked_seven_segment_pin_contract(&fixture.lowered_netlist().outputs);
+    let expected = checked_seven_segment_pin_contract();
     assert_eq!(actual_pin_contract(fixture), expected);
     for (name, (pin, _, _, _)) in expected {
         assert_eq!(
@@ -505,7 +505,7 @@ fn expected_handover_repeater(toward: Facing) -> BlockState {
 fn topology_aware_seed_preserves_the_checked_seven_segment_pin_contract() {
     let evaluator = legacy_benchmark_evaluator().unwrap();
     let fixture = evaluator.fixture("pinned:verilog:seven_segment").unwrap();
-    let expected = checked_seven_segment_pin_contract(&fixture.lowered_netlist().outputs);
+    let expected = checked_seven_segment_pin_contract();
     assert_eq!(actual_pin_contract(fixture), expected);
 
     let result = compile_fragment_synth(
