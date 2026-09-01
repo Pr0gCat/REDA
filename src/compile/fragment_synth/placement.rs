@@ -79,6 +79,7 @@ pub(crate) struct PlacementFrame {
 #[derive(Debug, Clone, Copy)]
 pub(crate) struct SeedPlacementRequest<'a> {
     pub graph: &'a InstanceGraph,
+    pub analysis: &'a SeedPlacementAnalysis,
     pub pins: &'a BTreeMap<PhysicalEndpointId, PortPin>,
 }
 
@@ -115,6 +116,57 @@ struct NetInterval {
     slack: u64,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct MacroBounds {
+    min_forward: i32,
+    max_forward: i32,
+    min_lateral: i32,
+    max_lateral: i32,
+}
+
+impl MacroBounds {
+    fn forward_span(self) -> i32 {
+        self.max_forward - self.min_forward + 1
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct HorizontalBounds {
+    min_x: i32,
+    max_x: i32,
+    min_z: i32,
+    max_z: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MacroEnvelope {
+    by_facing: [HorizontalBounds; 4],
+}
+
+impl MacroEnvelope {
+    fn oriented_bounds(self, facing: CellFacing, frame_forward: Facing) -> MacroBounds {
+        let bounds = self.by_facing[usize::from(facing.index())];
+        let frame_lateral = clockwise(frame_forward);
+        let mut forward = Vec::with_capacity(4);
+        let mut lateral = Vec::with_capacity(4);
+        for (x, z) in [
+            (bounds.min_x, bounds.min_z),
+            (bounds.min_x, bounds.max_z),
+            (bounds.max_x, bounds.min_z),
+            (bounds.max_x, bounds.max_z),
+        ] {
+            forward.push(project_horizontal(x, z, frame_forward));
+            lateral.push(project_horizontal(x, z, frame_lateral));
+        }
+        MacroBounds {
+            min_forward: *forward.iter().min().expect("four corners"),
+            max_forward: *forward.iter().max().expect("four corners"),
+            min_lateral: *lateral.iter().min().expect("four corners"),
+            max_lateral: *lateral.iter().max().expect("four corners"),
+        }
+    }
+}
+
 const ROUTING_CHANNEL: i32 = 6;
 const TRACK_PITCH: i32 = 6;
 
@@ -123,9 +175,9 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
         &self,
         request: SeedPlacementRequest<'_>,
     ) -> Result<SeedPlacementPlan, SeedPlacementError> {
-        let analysis = analyse_instance_dag(request.graph)?;
+        let analysis = request.analysis;
         let frame = derive_frame(request.pins);
-        let intervals = net_intervals(request.graph, &analysis);
+        let intervals = net_intervals(request.graph, analysis);
         let tracks = colour_intervals(&intervals);
         let track_laterals = track_laterals(request.graph, request.pins, frame, &tracks);
         let envelopes = request
@@ -135,27 +187,73 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
             .map(|instance| macro_envelope(instance).map(|size| (instance.id, size)))
             .collect::<Result<BTreeMap<_, _>, _>>()?;
 
-        let mut level_widths = BTreeMap::<u64, i32>::new();
+        let mut lanes = initial_lanes(request.graph, &track_laterals, analysis);
+        barycentric_sweep(analysis, &mut lanes, true);
+        barycentric_sweep(analysis, &mut lanes, false);
+
+        let mut facings = BTreeMap::new();
+        for instance in &request.graph.instances {
+            let lateral = lanes[&instance.id];
+            let max_span = [
+                CellFacing::NORTH,
+                CellFacing::EAST,
+                CellFacing::SOUTH,
+                CellFacing::WEST,
+            ]
+            .into_iter()
+            .map(|facing| {
+                envelopes[&instance.id]
+                    .oriented_bounds(facing, frame.forward)
+                    .forward_span()
+            })
+            .max()
+            .unwrap_or(1);
+            let origin = frame_to_world(frame, 0, lateral);
+            let source = frame_to_world(frame, -ROUTING_CHANNEL, lateral);
+            let target = frame_to_world(frame, max_span + ROUTING_CHANNEL, lateral);
+            facings.insert(
+                instance.id,
+                choose_instance_facing(instance, origin, source, target, frame.forward)?,
+            );
+        }
+
+        let bounds = request
+            .graph
+            .instances
+            .iter()
+            .map(|instance| {
+                (
+                    instance.id,
+                    envelopes[&instance.id].oriented_bounds(facings[&instance.id], frame.forward),
+                )
+            })
+            .collect::<BTreeMap<_, _>>();
+        let mut level_bounds = BTreeMap::<u64, MacroBounds>::new();
         for instance in &request.graph.instances {
             let level = analysis.nodes[&instance.id].forward_level;
-            level_widths
+            let instance_bounds = bounds[&instance.id];
+            level_bounds
                 .entry(level)
-                .and_modify(|width| *width = (*width).max(envelopes[&instance.id].0))
-                .or_insert(envelopes[&instance.id].0);
+                .and_modify(|level_bounds| {
+                    level_bounds.min_forward =
+                        level_bounds.min_forward.min(instance_bounds.min_forward);
+                    level_bounds.max_forward =
+                        level_bounds.max_forward.max(instance_bounds.max_forward);
+                })
+                .or_insert(instance_bounds);
         }
         let mut columns = BTreeMap::new();
         let mut cursor = 0i32;
-        for (&level, &width) in &level_widths {
-            columns.insert(level, cursor);
-            cursor = cursor
-                .checked_add(width)
+        for (&level, level_bounds) in &level_bounds {
+            let column = cursor
+                .checked_sub(level_bounds.min_forward)
+                .ok_or(SeedPlacementError::CoordinateOverflow)?;
+            columns.insert(level, column);
+            cursor = column
+                .checked_add(level_bounds.max_forward)
                 .and_then(|value| value.checked_add(ROUTING_CHANNEL))
                 .ok_or(SeedPlacementError::CoordinateOverflow)?;
         }
-
-        let mut lanes = initial_lanes(request.graph, &track_laterals, &analysis);
-        barycentric_sweep(&analysis, &mut lanes, true);
-        barycentric_sweep(&analysis, &mut lanes, false);
 
         let mut frame_origins = BTreeMap::<InstanceId, (i32, i32)>::new();
         for (&level, &column) in &columns {
@@ -166,18 +264,15 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
                 .filter(|id| analysis.nodes[id].forward_level == level)
                 .collect::<Vec<_>>();
             ids.sort_by_key(|id| (lanes[id], *id));
-            let mut lateral_end = i32::MIN / 4;
+            let entries = ids
+                .iter()
+                .copied()
+                .map(|id| (id, lanes[&id], bounds[&id]))
+                .collect::<Vec<_>>();
+            let legalized = legalize_laterals(&entries)?;
             for id in ids {
-                let depth = envelopes[&id].1;
-                let preferred = lanes[&id]
-                    .checked_mul(TRACK_PITCH)
-                    .ok_or(SeedPlacementError::CoordinateOverflow)?;
-                let lateral = preferred.max(lateral_end);
+                let lateral = legalized[&id];
                 frame_origins.insert(id, (column, lateral));
-                lateral_end = lateral
-                    .checked_add(depth)
-                    .and_then(|value| value.checked_add(ROUTING_CHANNEL))
-                    .ok_or(SeedPlacementError::CoordinateOverflow)?;
             }
         }
 
@@ -185,26 +280,17 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
         for instance in &request.graph.instances {
             let (forward, lateral) = frame_origins[&instance.id];
             let origin = frame_to_world(frame, forward, lateral);
-            let source = frame_to_world(frame, forward - ROUTING_CHANNEL, lateral);
-            let target = frame_to_world(
-                frame,
-                forward + envelopes[&instance.id].0 + ROUTING_CHANNEL,
-                lateral,
-            );
-            let facing = choose_instance_facing(instance, origin, source, target, frame.forward)?;
             instances.insert(
                 instance.id,
                 PreferredInstancePose {
                     preferred_origin: origin,
-                    facing,
+                    facing: facings[&instance.id],
                 },
             );
         }
 
-        let max_level = level_widths.keys().next_back().copied().unwrap_or(0);
         let input_forward = -ROUTING_CHANNEL;
-        let output_forward =
-            cursor.max(columns.get(&max_level).copied().unwrap_or(0) + ROUTING_CHANNEL);
+        let output_forward = cursor;
         let automatic_inputs = request
             .graph
             .primary_inputs
@@ -376,6 +462,42 @@ const fn horizontal_unit(direction: Facing) -> (i32, i32) {
         Facing::West => (-1, 0),
         Facing::Up | Facing::Down => unreachable!(),
     }
+}
+
+const fn project_horizontal(x: i32, z: i32, direction: Facing) -> i32 {
+    match direction {
+        Facing::North => -z,
+        Facing::South => z,
+        Facing::East => x,
+        Facing::West => -x,
+        Facing::Up | Facing::Down => unreachable!(),
+    }
+}
+
+fn legalize_laterals(
+    entries: &[(InstanceId, i32, MacroBounds)],
+) -> Result<BTreeMap<InstanceId, i32>, SeedPlacementError> {
+    let mut next_min_lateral: Option<i32> = None;
+    let mut origins = BTreeMap::new();
+    for &(instance, preferred, bounds) in entries {
+        let required_origin = next_min_lateral
+            .map(|minimum| {
+                minimum
+                    .checked_sub(bounds.min_lateral)
+                    .ok_or(SeedPlacementError::CoordinateOverflow)
+            })
+            .transpose()?
+            .unwrap_or(preferred);
+        let origin = preferred.max(required_origin);
+        origins.insert(instance, origin);
+        next_min_lateral = Some(
+            origin
+                .checked_add(bounds.max_lateral)
+                .and_then(|maximum| maximum.checked_add(ROUTING_CHANNEL))
+                .ok_or(SeedPlacementError::CoordinateOverflow)?,
+        );
+    }
+    Ok(origins)
 }
 
 fn net_intervals(graph: &InstanceGraph, analysis: &SeedPlacementAnalysis) -> Vec<NetInterval> {
@@ -625,20 +747,16 @@ fn primitive_positions(instance: &Instance) -> BTreeMap<PrimitiveId, Position> {
         .collect()
 }
 
-fn macro_envelope(instance: &Instance) -> Result<(i32, i32), SeedPlacementError> {
+fn macro_envelope(instance: &Instance) -> Result<MacroEnvelope, SeedPlacementError> {
     let positions = primitive_positions(instance);
-    let mut width = 1;
-    let mut depth = 1;
+    let mut by_facing = [HorizontalBounds::default(); 4];
     for facing in [
         CellFacing::NORTH,
         CellFacing::EAST,
         CellFacing::SOUTH,
         CellFacing::WEST,
     ] {
-        let mut min_x = 0;
-        let mut max_x = 0;
-        let mut min_z = 0;
-        let mut max_z = 0;
+        let mut bounds = None::<HorizontalBounds>;
         for primitive in &instance.expanded.topology.primitives {
             let variants = physical::variants(primitive.primitive);
             if variants.is_empty() {
@@ -655,16 +773,27 @@ fn macro_envelope(instance: &Instance) -> Result<(i32, i32), SeedPlacementError>
                 .map(|block| block.position)
                 .chain(variant.ports.iter().map(|port| port.position))
             {
-                min_x = min_x.min(base_x + point.x);
-                max_x = max_x.max(base_x + point.x);
-                min_z = min_z.min(base_z + point.z);
-                max_z = max_z.max(base_z + point.z);
+                let x = base_x + point.x;
+                let z = base_z + point.z;
+                bounds = Some(match bounds {
+                    Some(bounds) => HorizontalBounds {
+                        min_x: bounds.min_x.min(x),
+                        max_x: bounds.max_x.max(x),
+                        min_z: bounds.min_z.min(z),
+                        max_z: bounds.max_z.max(z),
+                    },
+                    None => HorizontalBounds {
+                        min_x: x,
+                        max_x: x,
+                        min_z: z,
+                        max_z: z,
+                    },
+                });
             }
         }
-        width = width.max(max_x - min_x + 1);
-        depth = depth.max(max_z - min_z + 1);
+        by_facing[usize::from(facing.index())] = bounds.unwrap_or_default();
     }
-    Ok((width, depth))
+    Ok(MacroEnvelope { by_facing })
 }
 
 fn choose_instance_facing(
@@ -762,26 +891,6 @@ fn forward_projection(anchor: Anchor, forward: Facing) -> i64 {
         Facing::West => -i64::from(anchor.x),
         Facing::Up | Facing::Down => 0,
     }
-}
-
-fn choose_physical_facing(
-    primitive: Primitive,
-    origin: Anchor,
-    source: Anchor,
-    target: Anchor,
-) -> CellFacing {
-    [
-        CellFacing::NORTH,
-        CellFacing::EAST,
-        CellFacing::SOUTH,
-        CellFacing::WEST,
-    ]
-    .into_iter()
-    .min_by_key(|facing| {
-        manhattan(source, input_terminal(primitive, *facing, origin))
-            + manhattan(output_terminal(primitive, *facing, origin), target)
-    })
-    .unwrap()
 }
 
 fn input_terminal(primitive: Primitive, facing: CellFacing, origin: Anchor) -> Anchor {
@@ -1187,7 +1296,7 @@ mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
     use crate::compile::fragment_synth::identity::{
-        GateIndex, InstanceId, PhysicalEndpointId, PortId,
+        GateIndex, ImplementationKey, InputMask, InstanceId, PhysicalEndpointId, PortId,
     };
     use crate::compile::fragment_synth::instance_graph::{
         DuplicateRequest, InstanceGraph, LogicalSignalId, PhysicalDriver, PhysicalSink,
@@ -1201,8 +1310,8 @@ mod tests {
     use crate::redstone::world::block::Facing;
 
     use super::{
-        analyse_instance_dag, choose_instance_facing, choose_physical_facing, colour_intervals,
-        derive_frame, hint_penalty, EdgeFacts, NetInterval, SeedPlacementError,
+        analyse_instance_dag, choose_instance_facing, colour_intervals, derive_frame, hint_penalty,
+        legalize_laterals, EdgeFacts, MacroBounds, NetInterval, SeedPlacementError,
         SeedPlacementRequest, SeedPlacer, TopologyAwareSeedPlacer,
     };
 
@@ -1532,44 +1641,106 @@ mod tests {
     }
 
     #[test]
-    fn torch_facing_uses_literal_input_and_output_world_ports() {
-        let origin = Anchor { x: 10, y: 4, z: 10 };
-        let facing = choose_physical_facing(
-            Primitive::Torch,
-            origin,
-            Anchor { x: 10, y: 4, z: 14 },
-            Anchor { x: 10, y: 4, z: 5 },
-        );
+    fn planner_torch_pose_uses_literal_actual_variant_ports() {
+        let graph = InstanceGraph::one_to_one(
+            &Netlist {
+                inputs: vec!["a".into()],
+                outputs: vec!["y".into()],
+                gates: vec![nor("y", &["a"])],
+            },
+            &Library::default_library(),
+        )
+        .unwrap();
+        let analysis = analyse_instance_dag(&graph).unwrap();
+        let pins = BTreeMap::new();
+        let plan = TopologyAwareSeedPlacer
+            .plan(SeedPlacementRequest {
+                graph: &graph,
+                analysis: &analysis,
+                pins: &pins,
+            })
+            .unwrap();
+        let pose = plan.instances[&InstanceId(0)];
+        let variant =
+            &crate::compile::physical::variants(Primitive::Torch)[usize::from(pose.facing.index())];
+        let input = variant.port(crate::compile::physical::PortKind::TorchInput);
+        let output = variant.port(crate::compile::physical::PortKind::TorchOutput);
 
-        assert_eq!(facing, CellFacing::NORTH);
+        assert_eq!(pose.facing, CellFacing::EAST);
+        assert_eq!(pose.preferred_origin, Anchor { x: 0, y: 1, z: 6 });
+        assert_eq!(input.position, Position::new(0, 0, 0));
+        assert_eq!(output.position, Position::new(1, 0, 0));
         assert_eq!(
-            super::input_terminal(Primitive::Torch, facing, origin),
-            Anchor { x: 10, y: 4, z: 11 }
+            input.position.offset(input.direction),
+            Position::new(-1, 0, 0)
         );
         assert_eq!(
-            super::output_terminal(Primitive::Torch, facing, origin),
-            Anchor { x: 10, y: 4, z: 8 }
+            output.position.offset(output.direction),
+            Position::new(2, 0, 0)
+        );
+        assert_eq!(
+            super::input_terminal(Primitive::Torch, pose.facing, pose.preferred_origin),
+            Anchor { x: -1, y: 1, z: 6 }
+        );
+        assert_eq!(
+            super::output_terminal(Primitive::Torch, pose.facing, pose.preferred_origin),
+            Anchor { x: 2, y: 1, z: 6 }
         );
     }
 
     #[test]
-    fn repeater_facing_uses_literal_rear_and_front_world_ports() {
-        let origin = Anchor { x: 10, y: 4, z: 10 };
-        let facing = choose_physical_facing(
-            Primitive::Repeater,
-            origin,
-            Anchor { x: 10, y: 4, z: 5 },
-            Anchor { x: 10, y: 4, z: 14 },
-        );
+    fn planner_repeater_pose_uses_literal_actual_rear_and_front_ports() {
+        let library = Library::default_library();
+        let graph = InstanceGraph::with_variants(
+            &Netlist {
+                inputs: vec!["a".into(), "b".into()],
+                outputs: vec!["y".into()],
+                gates: vec![Gate::merge("y", &["a", "b"])],
+            },
+            &library,
+            &BTreeMap::from([(
+                InstanceId(0),
+                ImplementationKey::Merge {
+                    isolation_mask: InputMask::new(0b01),
+                },
+            )]),
+            &[],
+        )
+        .unwrap();
+        let analysis = analyse_instance_dag(&graph).unwrap();
+        let pins = BTreeMap::new();
+        let plan = TopologyAwareSeedPlacer
+            .plan(SeedPlacementRequest {
+                graph: &graph,
+                analysis: &analysis,
+                pins: &pins,
+            })
+            .unwrap();
+        let pose = plan.instances[&InstanceId(0)];
+        let variant = &crate::compile::physical::variants(Primitive::Repeater)
+            [usize::from(pose.facing.index())];
+        let rear = variant.port(crate::compile::physical::PortKind::RepeaterRear);
+        let front = variant.port(crate::compile::physical::PortKind::RepeaterFront);
 
-        assert_eq!(facing, CellFacing::NORTH);
+        assert_eq!(pose.facing, CellFacing::WEST);
+        assert_eq!(pose.preferred_origin, Anchor { x: 0, y: 1, z: 6 });
+        assert_eq!(rear.position, Position::new(0, 0, 0));
+        assert_eq!(front.position, Position::new(0, 0, 0));
         assert_eq!(
-            super::input_terminal(Primitive::Repeater, facing, origin),
-            Anchor { x: 10, y: 4, z: 9 }
+            rear.position.offset(rear.direction),
+            Position::new(-1, 0, 0)
         );
         assert_eq!(
-            super::output_terminal(Primitive::Repeater, facing, origin),
-            Anchor { x: 10, y: 4, z: 11 }
+            front.position.offset(front.direction),
+            Position::new(1, 0, 0)
+        );
+        assert_eq!(
+            super::input_terminal(Primitive::Repeater, pose.facing, pose.preferred_origin),
+            Anchor { x: -1, y: 1, z: 6 }
+        );
+        assert_eq!(
+            super::output_terminal(Primitive::Repeater, pose.facing, pose.preferred_origin),
+            Anchor { x: 1, y: 1, z: 6 }
         );
     }
 
@@ -1625,10 +1796,12 @@ mod tests {
             gates: vec![nor("middle", &["a"]), nor("y", &["middle"])],
         };
         let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
+        let analysis = analyse_instance_dag(&graph).unwrap();
         let pins = BTreeMap::new();
         let placer = TopologyAwareSeedPlacer;
         let request = || SeedPlacementRequest {
             graph: &graph,
+            analysis: &analysis,
             pins: &pins,
         };
 
@@ -1641,5 +1814,142 @@ mod tests {
             first.instances[&InstanceId(1)].preferred_origin.x
                 > first.instances[&InstanceId(0)].preferred_origin.x
         );
+    }
+
+    #[test]
+    fn planner_consumes_the_injected_analysis_without_recomputing_the_dag() {
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["y".into()],
+            gates: vec![nor("middle", &["a"]), nor("y", &["middle"])],
+        };
+        let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
+        let mut injected = analyse_instance_dag(&graph).unwrap();
+        injected.order = vec![InstanceId(1), InstanceId(0)];
+        injected
+            .nodes
+            .get_mut(&InstanceId(0))
+            .unwrap()
+            .forward_level = 0;
+        injected
+            .nodes
+            .get_mut(&InstanceId(1))
+            .unwrap()
+            .forward_level = 0;
+        let pins = BTreeMap::new();
+
+        let plan = TopologyAwareSeedPlacer
+            .plan(SeedPlacementRequest {
+                graph: &graph,
+                analysis: &injected,
+                pins: &pins,
+            })
+            .unwrap();
+
+        assert_eq!(
+            plan.instances[&InstanceId(0)].preferred_origin.x,
+            plan.instances[&InstanceId(1)].preferred_origin.x
+        );
+    }
+
+    #[test]
+    fn oriented_negative_bounds_legalize_actual_different_facing_footprints() {
+        let library = Library::default_library();
+        let torch_graph = InstanceGraph::one_to_one(
+            &Netlist {
+                inputs: vec!["a".into()],
+                outputs: vec!["y".into()],
+                gates: vec![nor("y", &["a"])],
+            },
+            &library,
+        )
+        .unwrap();
+        let repeater_graph = InstanceGraph::with_variants(
+            &Netlist {
+                inputs: vec!["a".into(), "b".into(), "c".into()],
+                outputs: vec!["y".into()],
+                gates: vec![Gate::merge("y", &["a", "b", "c"])],
+            },
+            &library,
+            &BTreeMap::from([(
+                InstanceId(0),
+                ImplementationKey::Merge {
+                    isolation_mask: InputMask::new(0b111),
+                },
+            )]),
+            &[],
+        )
+        .unwrap();
+        let torch = super::macro_envelope(&torch_graph.instances[0]).unwrap();
+        let repeaters = super::macro_envelope(&repeater_graph.instances[0]).unwrap();
+        let torch_bounds = torch.oriented_bounds(CellFacing::NORTH, Facing::East);
+        let repeater_bounds = repeaters.oriented_bounds(CellFacing::SOUTH, Facing::East);
+
+        assert_eq!(
+            torch_bounds,
+            MacroBounds {
+                min_forward: 0,
+                max_forward: 0,
+                min_lateral: -1,
+                max_lateral: 0,
+            }
+        );
+        assert_eq!(
+            repeater_bounds,
+            MacroBounds {
+                min_forward: 0,
+                max_forward: 0,
+                min_lateral: -8,
+                max_lateral: 0,
+            }
+        );
+
+        let origins = legalize_laterals(&[
+            (InstanceId(0), 0, torch_bounds),
+            (InstanceId(1), 0, repeater_bounds),
+        ])
+        .unwrap();
+
+        assert_eq!(origins[&InstanceId(0)], 0);
+        assert_eq!(origins[&InstanceId(1)], 14);
+        let torch_cells = actual_block_footprint(
+            &torch_graph.instances[0],
+            CellFacing::NORTH,
+            origins[&InstanceId(0)],
+        );
+        let repeater_cells = actual_block_footprint(
+            &repeater_graph.instances[0],
+            CellFacing::SOUTH,
+            origins[&InstanceId(1)],
+        );
+        assert!(torch_cells.is_disjoint(&repeater_cells));
+    }
+
+    fn actual_block_footprint(
+        instance: &crate::compile::fragment_synth::instance_graph::Instance,
+        facing: CellFacing,
+        lateral_origin: i32,
+    ) -> BTreeSet<(i32, i32)> {
+        let positions = super::primitive_positions(instance);
+        instance
+            .expanded
+            .topology
+            .primitives
+            .iter()
+            .flat_map(|primitive| {
+                let local = positions[&primitive.id];
+                let (base_x, _, base_z) =
+                    crate::compile::geometry::rotate((local.x, local.y, local.z), facing);
+                crate::compile::physical::variants(primitive.primitive)[usize::from(facing.index())]
+                    .blocks
+                    .iter()
+                    .map(move |block| {
+                        (
+                            base_x + block.position.x,
+                            lateral_origin + base_z + block.position.z,
+                        )
+                    })
+            })
+            .collect()
     }
 }
