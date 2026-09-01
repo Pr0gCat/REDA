@@ -42,7 +42,8 @@ use crate::compile::planner::{PortPlacements, PortRole};
 use crate::compile::routing::{
     DelayedComponent, DelayedOwner, NonEmptyRouteSinks, PhysicalReservationKind,
     PhysicalReservationOwner, PhysicalReservations, PhysicalRouter, RouteEndpoint, RouteRequest,
-    RouteSink, RouterFailure, RouterRefusalCategory, TerminalContract, TerminalRequirement,
+    RouteSink, RouterFailure, RouterLimitKind, RouterRefusalCategory, TerminalContract,
+    TerminalRequirement,
 };
 use crate::compile::topology::{Library, Primitive};
 use crate::compile::verification::ExpandedPhysicalError;
@@ -130,6 +131,7 @@ pub(crate) struct SeedRoutingFailure {
     pub source: PhysicalEndpointId,
     pub sink: RoutedSinkId,
     pub category: RouterRefusalCategory,
+    pub limit_kind: Option<RouterLimitKind>,
     pub limit: Option<u64>,
     pub work_used: Option<u64>,
     pub plan_fingerprint: Fingerprint,
@@ -1341,11 +1343,19 @@ fn route_target_level(
         .unwrap_or(output_level)
 }
 
-fn instance_structural_slack(instance: InstanceId, analysis: &SeedPlacementAnalysis) -> u64 {
+fn input_boundary_slack(instance: InstanceId, analysis: &SeedPlacementAnalysis) -> u64 {
     analysis.nodes.get(&instance).map_or(0, |facts| {
         analysis
             .critical_delay_ticks
-            .saturating_sub(facts.head_ticks.saturating_add(facts.tail_ticks))
+            .saturating_sub(facts.tail_ticks)
+    })
+}
+
+fn output_boundary_slack(instance: InstanceId, analysis: &SeedPlacementAnalysis) -> u64 {
+    analysis.nodes.get(&instance).map_or(0, |facts| {
+        analysis
+            .critical_delay_ticks
+            .saturating_sub(facts.head_ticks)
     })
 }
 
@@ -1363,9 +1373,9 @@ fn route_target_slack(
             .iter()
             .find(|edge| edge.source == source && edge.sink == target)
             .map(|edge| edge.structural_slack_ticks)
-            .unwrap_or_else(|| instance_structural_slack(target, analysis)),
-        (None, Some(target)) => instance_structural_slack(target, analysis),
-        (Some(source), None) => instance_structural_slack(source, analysis),
+            .unwrap_or(0),
+        (None, Some(target)) => input_boundary_slack(target, analysis),
+        (Some(source), None) => output_boundary_slack(source, analysis),
         (None, None) => 0,
     }
 }
@@ -1670,11 +1680,14 @@ fn seed_routing_failure(
         .find(|candidate| candidate.id == sink)
         .map(|candidate| candidate.anchor)
         .unwrap_or(fallback.anchor);
-    let (limit, work_used) = match failure {
+    let (limit_kind, limit, work_used) = match failure {
         RouterFailure::RouterLimitExceeded {
-            limit, work_used, ..
-        } => (Some(*limit), Some(*work_used)),
-        _ => (None, None),
+            kind,
+            limit,
+            work_used,
+            ..
+        } => (Some(*kind), Some(*limit), Some(*work_used)),
+        _ => (None, None, None),
     };
     SeedRoutingFailure {
         scheduled_index,
@@ -1682,6 +1695,7 @@ fn seed_routing_failure(
         source,
         sink,
         category: failure.category(),
+        limit_kind,
         limit,
         work_used,
         plan_fingerprint: plan_fingerprint.clone(),
@@ -2088,6 +2102,58 @@ mod tests {
     }
 
     #[test]
+    fn boundary_route_slack_counts_instance_delay_once() {
+        let instance = InstanceId(0);
+        let analysis = SeedPlacementAnalysis {
+            order: vec![instance],
+            nodes: BTreeMap::from([(
+                instance,
+                crate::compile::fragment_synth::placement::NodeFacts {
+                    predecessors: Vec::new(),
+                    successors: Vec::new(),
+                    forward_level: 0,
+                    reverse_level: 0,
+                    head_ticks: 4,
+                    tail_ticks: 8,
+                },
+            )]),
+            edges: Vec::new(),
+            critical_delay_ticks: 10,
+        };
+        let geometry = TargetGeometry {
+            terminal: Anchor { x: 4, y: 1, z: 4 },
+            allowed_entry: Facing::West,
+            support: Anchor { x: 5, y: 1, z: 4 },
+            requirement: TerminalRequirement::DirectedDust,
+        };
+        let input_target = PendingTarget::Connection(
+            ConnectionId::External {
+                instance,
+                input_index: 0,
+            },
+            geometry,
+        );
+        let output_target = PendingTarget::DeclaredOutput(PortId(0), geometry);
+        let output_source = PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance,
+            node: crate::compile::fragment_synth::identity::TopologyNodeId(0),
+        });
+
+        assert_eq!(
+            route_target_slack(
+                PhysicalEndpointId::PrimaryInput(PortId(0)),
+                &input_target,
+                &analysis,
+            ),
+            2,
+        );
+        assert_eq!(
+            route_target_slack(output_source, &output_target, &analysis),
+            6,
+        );
+    }
+
+    #[test]
     fn router_limit_failure_keeps_exact_schedule_geometry_and_cap_work() {
         let route = RouteId(3);
         let source = PhysicalEndpointId::PrimaryInput(PortId(2));
@@ -2123,6 +2189,10 @@ mod tests {
         );
         assert_eq!(evidence.limit, Some(262_144));
         assert_eq!(evidence.work_used, Some(262_145));
+        assert_eq!(
+            evidence.limit_kind,
+            Some(crate::compile::routing::RouterLimitKind::QueueEntries)
+        );
         assert_eq!(evidence.plan_fingerprint, plan_fingerprint);
         assert_eq!(evidence.source_at, source_at);
         assert_eq!(evidence.sink_at, Anchor { x: 9, y: 2, z: 7 });
