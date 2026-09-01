@@ -85,6 +85,9 @@ pub(crate) fn analyse_instance_dag(
     let mut declared_output_drivers = BTreeSet::new();
 
     for assignment in &graph.assignments {
+        if let PhysicalSink::InstanceInput { instance, .. } = assignment.sink {
+            require_instance(&ids, instance)?;
+        }
         let PhysicalDriver::Instance(driver) = &assignment.driver else {
             continue;
         };
@@ -92,7 +95,6 @@ pub(crate) fn analyse_instance_dag(
         require_instance(&ids, source)?;
         match assignment.sink {
             PhysicalSink::InstanceInput { instance: sink, .. } => {
-                require_instance(&ids, sink)?;
                 if structural_edges.insert((source, sink)) {
                     predecessors
                         .get_mut(&sink)
@@ -341,7 +343,7 @@ mod tests {
 
     use crate::compile::fragment_synth::identity::{GateIndex, InstanceId, PortId};
     use crate::compile::fragment_synth::instance_graph::{
-        DuplicateRequest, InstanceGraph, LogicalSignalId, PhysicalSink,
+        DuplicateRequest, InstanceGraph, LogicalSignalId, PhysicalDriver, PhysicalSink,
     };
     use crate::compile::topology::{GateKind, Library};
     use crate::compile::{Gate, Netlist};
@@ -516,6 +518,32 @@ mod tests {
         assert_eq!(facts.nodes[&InstanceId(3)].forward_level, 0);
         assert_eq!(facts.nodes[&InstanceId(0)].reverse_level, 1);
         assert_eq!(facts.nodes[&InstanceId(3)].reverse_level, 1);
+    }
+
+    #[test]
+    fn malformed_primary_input_sink_names_unknown_instance_is_rejected() {
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["y".into()],
+            gates: vec![nor("y", &["a"])],
+        };
+        let mut graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
+        let primary_input_assignment = graph
+            .assignments
+            .iter_mut()
+            .find(|assignment| matches!(assignment.driver, PhysicalDriver::PrimaryInput(_)))
+            .unwrap();
+        primary_input_assignment.sink = PhysicalSink::InstanceInput {
+            instance: InstanceId(99),
+            input_index: 0,
+        };
+
+        assert_eq!(
+            analyse_instance_dag(&graph),
+            Err(SeedPlacementError::UnknownInstance {
+                instance: InstanceId(99),
+            })
+        );
     }
 
     #[test]
