@@ -33,6 +33,13 @@ report exactly:
 The replacement must change the source geometry of these failures. Increasing
 router caps is not a fix and must not be used to satisfy this spec.
 
+A route-request diagnostic adds one narrower shared pattern without claiming a
+single root cause: every failure occurs on a non-first fanout sink. The current
+tree order connects a near sink before a much farther sink. `full_adder` then
+fails while materialising the far branch; the other three requests exhaust the
+route-wide queue counter while searching later branches. This makes farthest
+critical sink first a measured hypothesis, not a general router rewrite.
+
 ## 2. Goals
 
 The first hard gate is correctness at optimisation budget zero:
@@ -204,9 +211,11 @@ Routes are ordered by:
 4. longer level span;
 5. typed source identity.
 
-Within a tree, sinks are ordered by criticality, then forward distance from the
-source, then the existing `PendingTarget` key. Route IDs are assigned only after
-this canonical order is complete.
+Within a tree, sinks are ordered by lower structural slack, then decreasing
+forward distance from the source, then the existing `PendingTarget` key. The
+first branch therefore establishes the longest critical trunk and nearer sinks
+can attach to it. Route IDs are assigned only after this canonical order is
+complete.
 
 All source and sink terminals are reserved before the first route. Routing still
 uses the existing `PhysicalRouter`, exact terminal contracts, repeater facing,
@@ -219,14 +228,15 @@ seed backtrack cap. Every attempt starts from a fresh candidate and unchanged
 router limits; partial physical state is never reused.
 
 A failed route produces a typed `SeedRoutingFailure` containing the scheduled
-route, source, failing sink, router category, work used, and placement-plan
-fingerprint. The next attempt adds exactly one monotonic repair constraint:
+route, source, failing sink, router category, optional cap limit/work used, and
+placement-plan fingerprint. The next attempt adds exactly one monotonic repair
+constraint:
 
-- a queue-cap failure gives the failed net an exclusive guarded track;
-- a physical tree invariant promotes the named sink earlier within that same
-  route tree and gives its source mouth an exclusive escape lane;
-- a local no-route failure separates the failed source and sink owners by one
-  additional lateral pitch.
+- the first failure of any fanout tree promotes the named sink to the first
+  branch and gives the source an exclusive guarded track;
+- if that canonical promotion already exists, the next failure separates the
+  failed source and sink owners by one additional lateral pitch;
+- a single-sink failure skips promotion and directly separates its owners.
 
 Repairs are keyed by typed identities and sorted canonically. Repeating an
 already-present repair is terminal `SeedExhausted`, not an infinite retry. The
