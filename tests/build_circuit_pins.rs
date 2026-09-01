@@ -7,16 +7,17 @@
 //! That is stated here, from outside the binary, against the same public entry
 //! an editor or an in-game mod would call.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use reda::circuits::and4::build_and4_netlist;
 use reda::compile::fragment_synth::benchmark::legacy_benchmark_evaluator;
-use reda::compile::planner::{Anchor, PinRefusal, PortPlacements, PortRole};
+use reda::compile::planner::{Anchor, PinRefusal, PortPin, PortPlacements, PortRole};
 use reda::compile::{
     compile_fragment_synth, compile_grown, CompileError, SynthesisBudget, SynthesisInput,
 };
-use reda::redstone::world::block::{BlockKind, Facing};
+use reda::redstone::world::block::{BlockKind, BlockState, Facing};
 
 /// One test's own scratch directory, created empty-or-reused. The binary is
 /// run *in* it because the `output/` tree it writes is relative to the
@@ -305,68 +306,62 @@ fn a_pinned_and4_round_trips_through_the_flags() {
     }
 }
 
-#[test]
-fn topology_aware_seed_preserves_the_checked_seven_segment_pin_contract() {
-    let evaluator = legacy_benchmark_evaluator().unwrap();
-    let fixture = evaluator.fixture("pinned:verilog:seven_segment").unwrap();
-    let expected = [
+type CheckedPin = (PortPin, PortRole, Anchor, Anchor);
+
+fn checked_seven_segment_pin_contract(output_names: &[String]) -> BTreeMap<String, CheckedPin> {
+    assert_eq!(output_names.len(), 7, "the decoder exposes seven outputs");
+    let outputs = [
         (
             Anchor { x: 76, y: 1, z: 24 },
             Facing::North,
-            PortRole::Output,
             Anchor { x: 76, y: 1, z: 25 },
             Anchor { x: 76, y: 1, z: 26 },
         ),
         (
             Anchor { x: 84, y: 1, z: 32 },
             Facing::East,
-            PortRole::Output,
             Anchor { x: 83, y: 1, z: 32 },
             Anchor { x: 82, y: 1, z: 32 },
         ),
         (
             Anchor { x: 84, y: 1, z: 48 },
             Facing::East,
-            PortRole::Output,
             Anchor { x: 83, y: 1, z: 48 },
             Anchor { x: 82, y: 1, z: 48 },
         ),
         (
             Anchor { x: 76, y: 1, z: 56 },
             Facing::South,
-            PortRole::Output,
             Anchor { x: 76, y: 1, z: 55 },
             Anchor { x: 76, y: 1, z: 54 },
         ),
         (
             Anchor { x: 68, y: 1, z: 48 },
             Facing::West,
-            PortRole::Output,
             Anchor { x: 69, y: 1, z: 48 },
             Anchor { x: 70, y: 1, z: 48 },
         ),
         (
             Anchor { x: 68, y: 1, z: 32 },
             Facing::West,
-            PortRole::Output,
             Anchor { x: 69, y: 1, z: 32 },
             Anchor { x: 70, y: 1, z: 32 },
         ),
         (
             Anchor { x: 76, y: 1, z: 40 },
             Facing::West,
-            PortRole::Output,
             Anchor { x: 77, y: 1, z: 40 },
             Anchor { x: 78, y: 1, z: 40 },
         ),
+    ];
+    let inputs = [
         (
+            "d3",
             Anchor {
                 x: 76,
                 y: 1,
                 z: 120,
             },
-            Facing::North,
-            PortRole::Input,
             Anchor {
                 x: 76,
                 y: 1,
@@ -379,13 +374,12 @@ fn topology_aware_seed_preserves_the_checked_seven_segment_pin_contract() {
             },
         ),
         (
+            "d2",
             Anchor {
                 x: 88,
                 y: 1,
                 z: 120,
             },
-            Facing::North,
-            PortRole::Input,
             Anchor {
                 x: 88,
                 y: 1,
@@ -398,13 +392,12 @@ fn topology_aware_seed_preserves_the_checked_seven_segment_pin_contract() {
             },
         ),
         (
+            "d1",
             Anchor {
                 x: 100,
                 y: 1,
                 z: 120,
             },
-            Facing::North,
-            PortRole::Input,
             Anchor {
                 x: 100,
                 y: 1,
@@ -417,13 +410,12 @@ fn topology_aware_seed_preserves_the_checked_seven_segment_pin_contract() {
             },
         ),
         (
+            "d0",
             Anchor {
                 x: 112,
                 y: 1,
                 z: 120,
             },
-            Facing::North,
-            PortRole::Input,
             Anchor {
                 x: 112,
                 y: 1,
@@ -436,7 +428,38 @@ fn topology_aware_seed_preserves_the_checked_seven_segment_pin_contract() {
             },
         ),
     ];
-    let actual = fixture
+
+    output_names
+        .iter()
+        .cloned()
+        .zip(outputs)
+        .map(|(name, (at, toward, handover, net_cell))| {
+            (
+                name,
+                (PortPin { at, toward }, PortRole::Output, handover, net_cell),
+            )
+        })
+        .chain(inputs.into_iter().map(|(name, at, handover, net_cell)| {
+            (
+                name.to_string(),
+                (
+                    PortPin {
+                        at,
+                        toward: Facing::North,
+                    },
+                    PortRole::Input,
+                    handover,
+                    net_cell,
+                ),
+            )
+        }))
+        .collect()
+}
+
+fn actual_pin_contract(
+    fixture: &reda::compile::fragment_synth::benchmark::BenchmarkFixture,
+) -> BTreeMap<String, CheckedPin> {
+    fixture
         .placements()
         .iter()
         .map(|(name, pin)| {
@@ -446,21 +469,44 @@ fn topology_aware_seed_preserves_the_checked_seven_segment_pin_contract() {
                 PortRole::Output
             };
             (
-                pin.at,
-                pin.toward,
-                role,
-                pin.handover(role),
-                pin.net_cell(role),
+                name.clone(),
+                (*pin, role, pin.handover(role), pin.net_cell(role)),
             )
         })
-        .collect::<Vec<_>>();
-    for literal in expected {
-        assert!(
-            actual.contains(&literal),
-            "missing literal pin contract {literal:?}"
+        .collect()
+}
+
+#[test]
+fn checked_seven_segment_fixture_binds_every_signal_to_its_literal_pin() {
+    let evaluator = legacy_benchmark_evaluator().unwrap();
+    let fixture = evaluator.fixture("pinned:verilog:seven_segment").unwrap();
+    let expected = checked_seven_segment_pin_contract(&fixture.lowered_netlist().outputs);
+    assert_eq!(actual_pin_contract(fixture), expected);
+    for (name, (pin, _, _, _)) in expected {
+        assert_eq!(
+            fixture.placements().get(&name),
+            Some(pin),
+            "{name} moved or changed outside-facing direction"
         );
     }
-    assert_eq!(actual.len(), expected.len());
+}
+
+fn expected_handover_repeater(toward: Facing) -> BlockState {
+    let mut state = BlockState::air();
+    state.kind = BlockKind::Repeater;
+    state.name = "minecraft:repeater".to_string();
+    state.facing = Some(toward.opposite());
+    state.delay = 1;
+    state.lit = true;
+    state
+}
+
+#[test]
+fn topology_aware_seed_preserves_the_checked_seven_segment_pin_contract() {
+    let evaluator = legacy_benchmark_evaluator().unwrap();
+    let fixture = evaluator.fixture("pinned:verilog:seven_segment").unwrap();
+    let expected = checked_seven_segment_pin_contract(&fixture.lowered_netlist().outputs);
+    assert_eq!(actual_pin_contract(fixture), expected);
 
     let result = compile_fragment_synth(
         SynthesisInput {
@@ -472,41 +518,43 @@ fn topology_aware_seed_preserves_the_checked_seven_segment_pin_contract() {
     )
     .unwrap();
 
-    for (at, toward, role, handover, net_cell) in expected {
+    for (name, (pin, _, handover, net_cell)) in &expected {
         assert_eq!(
-            result.compiled.world.get(at.x, at.y, at.z).kind,
-            BlockKind::Air
+            result.compiled.world.get(pin.at.x, pin.at.y, pin.at.z),
+            &BlockState::air(),
+            "{name}'s caller-owned pin cell must remain exactly air"
         );
-        assert_ne!(
+        assert_eq!(
             result
                 .compiled
                 .world
-                .get(handover.x, handover.y, handover.z)
-                .kind,
-            BlockKind::Air
+                .get(handover.x, handover.y, handover.z),
+            &expected_handover_repeater(pin.toward),
+            "{name}'s handover repeater changed state"
         );
-        assert_ne!(
-            result
-                .compiled
-                .world
-                .get(net_cell.x, net_cell.y, net_cell.z)
-                .kind,
-            BlockKind::Air
+        let net_state = result
+            .compiled
+            .world
+            .get(net_cell.x, net_cell.y, net_cell.z);
+        assert!(
+            matches!(
+                net_state.kind,
+                BlockKind::RedstoneWire | BlockKind::Repeater
+            ),
+            "{name}'s exact net cell {net_cell:?} must be a route conductor, got {net_state:?}"
         );
-        if role == PortRole::Input {
-            let handover_state = result
-                .compiled
-                .world
-                .get(handover.x, handover.y, handover.z);
-            assert_eq!(handover_state.kind, BlockKind::Repeater);
-            assert_eq!(handover_state.facing, Some(toward.opposite()));
+    }
+
+    let (size_x, size_y, size_z) = result.compiled.world.size();
+    for z in 120..size_z {
+        for y in 0..size_y {
+            for x in 0..size_x {
+                assert_eq!(
+                    result.compiled.world.get(x, y, z).kind,
+                    BlockKind::Air,
+                    "internal or boundary block escaped the inputs' inward half-space at ({x}, {y}, {z})"
+                );
+            }
         }
     }
-    assert!(result
-        .compiled
-        .observations
-        .primitive_outputs
-        .values()
-        .chain(result.compiled.observations.junction_outputs.values())
-        .all(|site| site.at.z < 120));
 }

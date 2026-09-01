@@ -82,10 +82,32 @@ fn compile_fragment_synth_with_config(
     budget: SynthesisBudget,
     search_config: &SearchConfig,
 ) -> Result<SynthesisResult, SynthesisError> {
+    compile_fragment_synth_with_config_and_placement_revision_override(
+        input,
+        budget,
+        search_config,
+        None,
+    )
+}
+
+fn compile_fragment_synth_with_config_and_placement_revision_override(
+    input: SynthesisInput<'_>,
+    budget: SynthesisBudget,
+    search_config: &SearchConfig,
+    placement_revision: Option<Fingerprint>,
+) -> Result<SynthesisResult, SynthesisError> {
     let library = Library::default_library();
     let certification_config = CertificationConfig::from_search(search_config);
-    let case_fingerprint =
-        synthesis_case_fingerprint(&input, search_config, &certification_config, &library);
+    let case_fingerprint = match placement_revision {
+        Some(placement_revision) => synthesis_case_fingerprint_with_placement_revision(
+            &input,
+            search_config,
+            &certification_config,
+            &library,
+            placement_revision,
+        ),
+        None => synthesis_case_fingerprint(&input, search_config, &certification_config, &library),
+    };
 
     let seed_input = SeedInput::from(&input);
     let seed_services = SeedServices {
@@ -262,8 +284,9 @@ fn pin_descriptor(name: &str, pin: PortPin) -> PinDescriptor<'_> {
 #[cfg(test)]
 mod tests {
     use super::{
-        compile_fragment_synth_with_config, synthesis_case_fingerprint,
-        synthesis_case_fingerprint_with_placement_revision, SynthesisInput,
+        compile_fragment_synth_with_config,
+        compile_fragment_synth_with_config_and_placement_revision_override,
+        synthesis_case_fingerprint, SynthesisInput,
     };
     use crate::circuits::and4::build_and4_netlist;
     use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
@@ -414,41 +437,26 @@ mod tests {
             source_provenance: None,
             pins: None,
         };
-        let library = Library::default_library();
         let config = SearchConfig::checked_defaults();
-        let certification = CertificationConfig::from_search(&config);
         let old_revision = crate::compile::metrics::canonical_fingerprint(b"seed-v1");
         let new_revision =
             crate::compile::metrics::canonical_fingerprint(b"topology-aware-seed-v2");
 
-        let old_case = synthesis_case_fingerprint_with_placement_revision(
-            &input,
-            &config,
-            &certification,
-            &library,
-            old_revision,
-        );
-        let new_case = synthesis_case_fingerprint_with_placement_revision(
-            &input,
-            &config,
-            &certification,
-            &library,
-            new_revision,
-        );
-        assert_ne!(old_case, new_case);
-
-        let first = compile_fragment_synth_with_config(
+        let old = compile_fragment_synth_with_config_and_placement_revision_override(
             input,
             crate::compile::fragment_synth::search::SynthesisBudget::Evaluations(0),
             &config,
+            Some(old_revision),
         )
         .unwrap();
-        let repeated = compile_fragment_synth_with_config(
+        let new = compile_fragment_synth_with_config_and_placement_revision_override(
             input,
             crate::compile::fragment_synth::search::SynthesisBudget::Evaluations(0),
             &config,
+            Some(new_revision),
         )
         .unwrap();
-        assert_eq!(first.candidate_fingerprint, repeated.candidate_fingerprint);
+        assert_ne!(old.case_fingerprint, new.case_fingerprint);
+        assert_eq!(old.candidate_fingerprint, new.candidate_fingerprint);
     }
 }
