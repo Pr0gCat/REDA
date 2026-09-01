@@ -238,6 +238,12 @@ constraint:
   failed source and sink owners by one additional lateral pitch;
 - a single-sink failure skips promotion and directly separates its owners.
 
+`CrossRouteConnectivity` is the one post-emission verification error that is
+also repairable: it already identifies the two typed routes that touched, so it
+adds an `ExclusiveGuardedTrack` for the later movable source. All other physical
+verification errors and every certification failure return directly; they are
+not converted into geometry guesses.
+
 Repairs are keyed by typed identities and sorted canonically. Repeating an
 already-present repair is terminal `SeedExhausted`, not an infinite retry. The
 error records attempts used and the final typed refusal. No repair changes a
