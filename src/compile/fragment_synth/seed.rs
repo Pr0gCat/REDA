@@ -3770,6 +3770,240 @@ mod tests {
         result.expect("a pinned output facing away from its channel must route and certify");
     }
 
+    /// Circuits beyond the six acceptance cases, built with the same
+    /// netlist builder the reference circuits use.  Release-only: the
+    /// seven-segment slices take a quarter of a minute each in release.
+    mod extra_circuits {
+        use crate::circuits::netlist_builder::NetlistBuilder;
+        use crate::compile::fragment_synth::api::{compile_fragment_synth, SynthesisInput};
+        use crate::compile::fragment_synth::search::SynthesisBudget;
+        use crate::compile::Netlist;
+
+        fn xor(b: &mut NetlistBuilder, x: &str, y: &str) -> String {
+            let nx = b.not(x);
+            let ny = b.not(y);
+            let left = b.and_reduce(vec![x.to_string(), ny]);
+            let right = b.and_reduce(vec![nx, y.to_string()]);
+            b.or_reduce(vec![left, right])
+        }
+
+        fn full_adder(b: &mut NetlistBuilder, x: &str, y: &str, cin: &str) -> (String, String) {
+            let ab = b.and_reduce(vec![x.to_string(), y.to_string()]);
+            let bc = b.and_reduce(vec![y.to_string(), cin.to_string()]);
+            let ac = b.and_reduce(vec![x.to_string(), cin.to_string()]);
+            let cout = b.or_reduce(vec![ab, bc, ac]);
+            let s1 = xor(b, x, y);
+            let sum = xor(b, &s1, cin);
+            (sum, cout)
+        }
+
+        fn ripple_adder(bits: usize) -> Netlist {
+            let mut b = NetlistBuilder::new();
+            let mut inputs = Vec::new();
+            for i in 0..bits {
+                inputs.push(format!("a{i}"));
+            }
+            for i in 0..bits {
+                inputs.push(format!("b{i}"));
+            }
+            inputs.push("cin".to_string());
+            let mut carry = "cin".to_string();
+            let mut outputs = Vec::new();
+            for i in 0..bits {
+                let (sum, cout) = full_adder(&mut b, &format!("a{i}"), &format!("b{i}"), &carry);
+                outputs.push(sum);
+                carry = cout;
+            }
+            outputs.push(carry);
+            Netlist {
+                inputs,
+                outputs,
+                gates: b.into_gates(),
+            }
+        }
+
+        fn decoder_2_to_4() -> Netlist {
+            let mut b = NetlistBuilder::new();
+            let n0 = b.not("s0");
+            let n1 = b.not("s1");
+            let outputs = vec![
+                b.and_reduce(vec![n1.clone(), n0.clone()]),
+                b.and_reduce(vec![n1, "s0".to_string()]),
+                b.and_reduce(vec!["s1".to_string(), n0]),
+                b.and_reduce(vec!["s1".to_string(), "s0".to_string()]),
+            ];
+            Netlist {
+                inputs: vec!["s1".into(), "s0".into()],
+                outputs,
+                gates: b.into_gates(),
+            }
+        }
+
+        fn mux_4_to_1() -> Netlist {
+            let mut b = NetlistBuilder::new();
+            let n0 = b.not("s0");
+            let n1 = b.not("s1");
+            let t0 = b.and_reduce(vec!["d0".to_string(), n1.clone(), n0.clone()]);
+            let t1 = b.and_reduce(vec!["d1".to_string(), n1, "s0".to_string()]);
+            let t2 = b.and_reduce(vec!["d2".to_string(), "s1".to_string(), n0]);
+            let t3 = b.and_reduce(vec!["d3".to_string(), "s1".to_string(), "s0".to_string()]);
+            let y = b.or_reduce(vec![t0, t1, t2, t3]);
+            Netlist {
+                inputs: vec![
+                    "d0".into(),
+                    "d1".into(),
+                    "d2".into(),
+                    "d3".into(),
+                    "s1".into(),
+                    "s0".into(),
+                ],
+                outputs: vec![y],
+                gates: b.into_gates(),
+            }
+        }
+
+        fn majority3() -> Netlist {
+            let mut b = NetlistBuilder::new();
+            let ab = b.and_reduce(vec!["a".into(), "b".into()]);
+            let bc = b.and_reduce(vec!["b".into(), "c".into()]);
+            let ac = b.and_reduce(vec!["a".into(), "c".into()]);
+            let y = b.or_reduce(vec![ab, bc, ac]);
+            Netlist {
+                inputs: vec!["a".into(), "b".into(), "c".into()],
+                outputs: vec![y],
+                gates: b.into_gates(),
+            }
+        }
+
+        fn parity4() -> Netlist {
+            let mut b = NetlistBuilder::new();
+            let p1 = xor(&mut b, "a", "b");
+            let p2 = xor(&mut b, &p1, "c");
+            let p3 = xor(&mut b, &p2, "d");
+            Netlist {
+                inputs: vec!["a".into(), "b".into(), "c".into(), "d".into()],
+                outputs: vec![p3],
+                gates: b.into_gates(),
+            }
+        }
+
+        fn equal4() -> Netlist {
+            let mut b = NetlistBuilder::new();
+            let mut same = Vec::new();
+            for i in 0..4 {
+                let x = xor(&mut b, &format!("a{i}"), &format!("b{i}"));
+                same.push(b.not(&x));
+            }
+            let y = b.and_reduce(same);
+            let mut inputs = Vec::new();
+            for i in 0..4 {
+                inputs.push(format!("a{i}"));
+            }
+            for i in 0..4 {
+                inputs.push(format!("b{i}"));
+            }
+            Netlist {
+                inputs,
+                outputs: vec![y],
+                gates: b.into_gates(),
+            }
+        }
+
+        fn wide_gate(kind: &str, width: usize) -> Netlist {
+            let mut b = NetlistBuilder::new();
+            let inputs = (0..width).map(|i| format!("i{i}")).collect::<Vec<_>>();
+            let y = if kind == "and" {
+                b.and_reduce(inputs.clone())
+            } else {
+                b.or_reduce(inputs.clone())
+            };
+            Netlist {
+                inputs,
+                outputs: vec![y],
+                gates: b.into_gates(),
+            }
+        }
+
+        fn half_adder_chain(bits: usize) -> Netlist {
+            // Incrementer: carry chain of half adders.
+            let mut b = NetlistBuilder::new();
+            let inputs = (0..bits).map(|i| format!("a{i}")).collect::<Vec<_>>();
+            let mut carry = "a0".to_string();
+            let mut outputs = vec![b.not("a0")];
+            for i in 1..bits {
+                let sum = xor(&mut b, &format!("a{i}"), &carry);
+                outputs.push(sum);
+                carry = b.and_reduce(vec![format!("a{i}"), carry]);
+            }
+            outputs.push(carry);
+            Netlist {
+                inputs,
+                outputs,
+                gates: b.into_gates(),
+            }
+        }
+
+        #[test]
+        #[ignore = "release-only: run with `cargo test --release --lib extra_circuits -- --ignored`"]
+        fn every_extra_circuit_certifies_with_the_topology_aware_seed() {
+            let mut cases: Vec<(String, Netlist)> = Vec::new();
+            for segment in 1..7 {
+                let (netlist, _) =
+                    crate::circuits::seven_segment::build_single_segment_netlist(segment);
+                cases.push((
+                    format!("segment_{}", (b'a' + segment as u8) as char),
+                    netlist,
+                ));
+            }
+            cases.push(("majority3".into(), majority3()));
+            cases.push(("parity4".into(), parity4()));
+            cases.push(("decoder_2_to_4".into(), decoder_2_to_4()));
+            cases.push(("mux_4_to_1".into(), mux_4_to_1()));
+            cases.push(("and8".into(), wide_gate("and", 8)));
+            cases.push(("or8".into(), wide_gate("or", 8)));
+            cases.push(("equal4".into(), equal4()));
+            cases.push(("incrementer4".into(), half_adder_chain(4)));
+            cases.push(("ripple_adder2".into(), ripple_adder(2)));
+            cases.push(("ripple_adder4".into(), ripple_adder(4)));
+            let selected = std::env::var("REDA_EXTRA_CIRCUITS").ok();
+            let mut failures = Vec::new();
+            for (name, netlist) in cases {
+                if let Some(selected) = &selected {
+                    if !selected.split(',').any(|s| s == name) {
+                        continue;
+                    }
+                }
+                let started = std::time::Instant::now();
+                let result = compile_fragment_synth(
+                    SynthesisInput {
+                        lowered: &netlist,
+                        source_provenance: None,
+                        pins: None,
+                    },
+                    SynthesisBudget::Evaluations(0),
+                );
+                match result {
+                    Ok(result) => eprintln!(
+                        "CIRCUIT {name}: OK gates={} ticks={} blocks={} in {:?}",
+                        netlist.gates.len(),
+                        result.metrics.quality.observed_settle,
+                        result.metrics.quality.non_air_blocks,
+                        started.elapsed()
+                    ),
+                    Err(error) => {
+                        eprintln!(
+                            "CIRCUIT {name}: ERR gates={} {error} in {:?}",
+                            netlist.gates.len(),
+                            started.elapsed()
+                        );
+                        failures.push(name);
+                    }
+                }
+            }
+            assert_eq!(failures, Vec::<String>::new());
+        }
+    }
+
     #[test]
     fn full_adder_routes_never_occupy_or_hug_a_later_access_corridor() {
         let (netlist, _) = crate::circuits::full_adder::build_full_adder_netlist();

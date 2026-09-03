@@ -287,6 +287,26 @@ impl PhysicalReservations {
         true
     }
 
+    /// Replace the exact state of one conductor this route already holds
+    /// (a trunk cell refreshed after a later branch departed from it).
+    pub(crate) fn restate_route_conductor(
+        &mut self,
+        at: Anchor,
+        route: RouteId,
+        state: BlockState,
+    ) -> bool {
+        match self.cells.get_mut(&at) {
+            Some(PhysicalReservation {
+                owner: PhysicalReservationOwner::Route(owner),
+                kind: kind @ PhysicalReservationKind::Conductor(_),
+            }) if *owner == route => {
+                *kind = PhysicalReservationKind::Conductor(state);
+                true
+            }
+            _ => false,
+        }
+    }
+
     pub fn reserve_conductor(&mut self, at: Anchor, owner: RouteId, state: BlockState) {
         self.reserve(
             at,
@@ -683,6 +703,9 @@ where
     let mut floor_states = BTreeMap::<Anchor, BlockState>::new();
     let mut floor_order = Vec::<Anchor>::new();
     let mut branches = Vec::with_capacity(request.sinks.as_slice().len());
+    // Trunk cells earlier branches departed from: a repeater there would cut
+    // that branch off, so a trunk refresh never lands on one.
+    let mut departures = BTreeSet::<Anchor>::new();
 
     for sink in request.sinks.as_slice() {
         let approach = step(sink.anchor, sink.allowed_entry);
@@ -730,12 +753,72 @@ where
             }
             previous_cell = *anchor;
         }
-        let laid = realise_branch_from_with_boundary_policy(
+        let mut laid = realise_branch_from_with_boundary_policy(
             previous_cell,
             carried,
             &path[shared..],
             strict_local,
         );
+        // A branch that leaves the trunk where the trunk's own repeater
+        // spacing left too little strength refreshes the trunk first: the
+        // nearest straight dust cell before its departure, that no branch
+        // departs from, becomes a repeater.  Every earlier branch only gets
+        // stronger; the search never sees a different trunk.
+        while !laid.carries && shared > 1 {
+            let candidate = (1..shared.saturating_sub(1)).rev().find(|&index| {
+                let (before, at, after) = (path[index - 1], path[index], path[index + 1]);
+                if departures.contains(&at)
+                    || cell_states
+                        .get(&at)
+                        .is_none_or(|state| state.kind != BlockKind::RedstoneWire)
+                {
+                    return false;
+                }
+                let Some(direction) = horizontal_direction(before, at) else {
+                    return false;
+                };
+                horizontal_direction(at, after) == Some(direction)
+                    && route_step_is_legal(before, at, after, &crate::compile::repeater(direction))
+            });
+            let Some(index) = candidate else {
+                break;
+            };
+            let direction = horizontal_direction(path[index - 1], path[index])
+                .expect("the candidate was checked to be a horizontal step");
+            let state = crate::compile::repeater(direction);
+            cell_states.insert(path[index], state.clone());
+            if reservations.restate_route_conductor(path[index], request.id, state.clone()) {
+                claim(
+                    path[index],
+                    PhysicalReservationOwner::Route(request.id),
+                    PhysicalReservationKind::Conductor(state),
+                );
+            }
+            carried = source_strength;
+            previous_cell = request.source.anchor;
+            trunk_repeaters = 0;
+            for anchor in &path[..shared] {
+                let state = cell_states
+                    .get(anchor)
+                    .expect("a shared prefix has an exact laid state");
+                if state.kind == BlockKind::Repeater {
+                    carried = MAX_SIGNAL_STRENGTH;
+                    trunk_repeaters += 1;
+                } else {
+                    carried = carried.saturating_sub(1);
+                }
+                previous_cell = *anchor;
+            }
+            laid = realise_branch_from_with_boundary_policy(
+                previous_cell,
+                carried,
+                &path[shared..],
+                strict_local,
+            );
+        }
+        if shared > 0 && shared < path.len() {
+            departures.insert(path[shared - 1]);
+        }
         if !laid.carries {
             return Err(RouterFailure::Refused {
                 route: request.id,
@@ -2350,6 +2433,82 @@ mod tests {
                 connection: connection(10, 0),
                 at: at(2, 1, 0),
             })
+        );
+    }
+
+    #[test]
+    fn a_branch_departing_from_a_weak_trunk_refreshes_the_trunk_first() {
+        // The ground under the trunk is taken from x = 3 on, so the first
+        // branch runs east on a lane at y = 3 and comes down for its terminal.
+        // The second branch can only leave the lane at x = 24, one cell
+        // before the trunk's own next repeater, step down and turn east at
+        // once: the stair and the bend take no repeater, so the departure
+        // needs more strength than the trunk's spacing leaves there.
+        let route = RouteId(11);
+        let source = endpoint(route);
+        let depart = 24;
+        let sinks = NonEmptyRouteSinks::new(vec![
+            sink(route, 0, at(42, 1, 0)),
+            sink(route, 1, at(depart + 2, 1, 8)),
+        ])
+        .unwrap();
+        // Everything inside the box is taken except the lane row, the one
+        // departure column, and the row the second sink sits on.
+        let allowed = |cell: Anchor| -> bool {
+            let lane_row = cell.z == 0
+                && (0..=44).contains(&cell.x)
+                && !(cell.y == 1 && (3..=38).contains(&cell.x));
+            let descent = cell.x == depart && (1..=2).contains(&cell.z);
+            let corridor = cell.x == depart + 1 && (2..=8).contains(&cell.z);
+            let sink_row = cell.z == 8 && (depart + 2..=depart + 3).contains(&cell.x);
+            lane_row || descent || corridor || sink_row
+        };
+        let mut reservations = PhysicalReservations::new();
+        for x in -3..=46 {
+            for z in -3..=12 {
+                for y in 1..=3 {
+                    let cell = at(x, y, z);
+                    if !allowed(cell) {
+                        reservations.reserve(
+                            cell,
+                            PhysicalReservationOwner::KeepOut(0),
+                            PhysicalReservationKind::KeepOut,
+                        );
+                    }
+                }
+            }
+        }
+
+        let tree = GuardedPhysicalRouter
+            .route(RouteRequest {
+                id: route,
+                source,
+                sinks: &sinks,
+                reservations: &reservations,
+                limits: RouterLimits {
+                    max_node_expansions: 50_000,
+                    max_queue_entries: 200_000,
+                },
+            })
+            .expect("the trunk is refreshed before the weak departure");
+
+        let departure = tree.branches[1]
+            .path
+            .iter()
+            .take_while(|cell| cell.z == 0)
+            .last()
+            .copied()
+            .expect("the second branch shares the trunk");
+        assert_eq!((departure.x, departure.z), (depart, 0));
+        let refreshed_before_departure = tree.cells.iter().any(|block| {
+            block.state.kind == BlockKind::Repeater
+                && block.at.z == 0
+                && block.at.x + 8 > depart
+                && block.at.x < depart
+        });
+        assert!(
+            refreshed_before_departure,
+            "a trunk repeater must sit within the last eight lane cells before the departure"
         );
     }
 
