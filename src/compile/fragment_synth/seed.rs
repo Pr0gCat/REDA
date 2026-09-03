@@ -4057,14 +4057,14 @@ mod tests {
             let s = ["s0".to_string(), "s1".to_string(), "s2".to_string()];
             let mut sel = Vec::new();
             for op in 0..8u8 {
-                let bit = |b: &mut NetlistBuilder, k: usize| -> String {
+                let bit = |k: usize| -> String {
                     if (op >> k) & 1 == 1 {
                         s[k].clone()
                     } else {
                         n[k].clone()
                     }
                 };
-                let bits = vec![bit(&mut b, 0), bit(&mut b, 1), bit(&mut b, 2)];
+                let bits = vec![bit(0), bit(1), bit(2)];
                 sel.push(b.and_reduce(bits));
             }
             // Subtraction shares the adder: the b operand is inverted and

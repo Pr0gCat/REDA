@@ -450,30 +450,6 @@ fn renumber<N: Ord + Copy>(pieces: &mut [Piece<N>]) {
     }
 }
 
-/// Gives every crossing net a free gap row of the column it crosses, nearest
-/// to its preferred lateral first, with at least one clear row between two
-/// crossings.  Demands are served in order of preferred row, then identity.
-pub(crate) fn allocate_crossing_rows<N: Ord + Copy + Debug>(
-    free_rows: &BTreeSet<i32>,
-    demands: &[(N, i32)],
-) -> Result<BTreeMap<N, i32>, ChannelPlanError<N>> {
-    let mut ordered = demands.to_vec();
-    ordered.sort_by_key(|(id, preferred)| (*preferred, *id));
-    let mut taken = BTreeSet::<i32>::new();
-    let mut rows = BTreeMap::new();
-    for (id, preferred) in ordered {
-        let candidate = free_rows
-            .iter()
-            .copied()
-            .filter(|row| taken.iter().all(|used| (used - row).abs() > 1))
-            .min_by_key(|row| ((row - preferred).abs(), *row))
-            .ok_or(ChannelPlanError::NoCrossingRow { net: id, preferred })?;
-        taken.insert(candidate);
-        rows.insert(id, candidate);
-    }
-    Ok(rows)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -697,21 +673,4 @@ mod tests {
         );
     }
 
-    #[test]
-    fn crossing_rows_prefer_the_nearest_free_row_and_keep_a_gap() {
-        let free = BTreeSet::from([10, 11, 12, 13, 30]);
-        let rows = allocate_crossing_rows(&free, &[(1u32, 11), (2, 12), (3, 12)]).unwrap();
-        assert_eq!(rows[&1], 11);
-        assert_eq!(rows[&2], 13);
-        assert_eq!(rows[&3], 30);
-        let free = BTreeSet::from([10, 11, 12, 13]);
-        let error = allocate_crossing_rows(&free, &[(1u32, 11), (2, 12), (3, 12)]).unwrap_err();
-        assert_eq!(
-            error,
-            ChannelPlanError::NoCrossingRow {
-                net: 3,
-                preferred: 12
-            }
-        );
-    }
 }
