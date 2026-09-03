@@ -8,6 +8,13 @@ pub(crate) struct TargetObligation<T> {
     pub promoted: bool,
     pub structural_slack_ticks: u64,
     pub forward_distance: u64,
+    /// Lateral distance between the sink's row and the source's row.  A sink
+    /// off the source row needs the channel lane; it goes first so the trunk
+    /// is on the lane before any same-row sink is served from it.
+    pub lateral_distance: u64,
+    /// Manhattan distance from the placed source anchor to the placed sink
+    /// terminal; among equal levels the farthest sink lays the trunk first.
+    pub physical_distance: u64,
     pub key: (u8, u32, u16),
 }
 
@@ -50,8 +57,13 @@ impl<T> RouteSchedule<T> {
                 targets.sort_by_key(|target| {
                     (
                         Reverse(target.promoted),
+                        // A sink off the source row establishes the channel
+                        // lane; every same-row sink is served from that lane
+                        // afterwards, whatever its slack.
+                        Reverse(target.lateral_distance > 0),
                         target.structural_slack_ticks,
                         Reverse(target.forward_distance),
+                        Reverse(target.physical_distance),
                         target.key,
                     )
                 });
@@ -102,6 +114,8 @@ mod tests {
             promoted: false,
             structural_slack_ticks: slack,
             forward_distance: distance,
+            lateral_distance: 0,
+            physical_distance: 0,
             key,
         }
     }

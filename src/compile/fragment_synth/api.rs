@@ -20,7 +20,7 @@ use crate::compile::planner::{PortPin, PortPlacements};
 use crate::compile::revisions::{
     cell_library_revision, expanded_physical_verifier_revision, simulator_revision,
 };
-use crate::compile::routing::DurablePhysicalRouter;
+use crate::compile::routing::GuardedPhysicalRouter;
 use crate::compile::topology::{GateKind, Library};
 use crate::compile::{CircuitObservations, CompiledCircuit, Netlist, PlannerKind};
 use crate::redstone::world::block::Facing;
@@ -131,7 +131,7 @@ fn compile_fragment_synth_with_case_fingerprint(
     let seed_services = SeedServices {
         library,
         placer: &TopologyAwareSeedPlacer,
-        router: &DurablePhysicalRouter,
+        router: &GuardedPhysicalRouter,
         emitter: &DurableSeedEmitter,
         verifier: &DurableSeedVerifier,
         certifier: &CompleteCandidateCertifier,

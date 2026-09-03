@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::compile::fragment_synth::channel_plan::{channel_width, lane_count};
 use crate::compile::fragment_synth::identity::{ConnectionId, InstanceId, PrimitiveId};
 use crate::compile::fragment_synth::identity::{PhysicalEndpointId, PortId};
 use crate::compile::fragment_synth::instance_graph::{
@@ -108,6 +109,13 @@ pub(crate) enum LayoutRepair {
         source_owner: LayoutOwner,
         sink_owner: LayoutOwner,
     },
+    /// The channel after `level` (the input channel for `min_level - 1`)
+    /// must offer at least `width` free forward cells: the channel routing
+    /// plan found more lanes than the placer's estimate allowed for.
+    WidenChannel {
+        level: i64,
+        width: i32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -122,6 +130,8 @@ pub(crate) struct SeedPlacementPlan {
     pub automatic_inputs: BTreeMap<PortId, Anchor>,
     pub automatic_outputs: BTreeMap<PortId, Anchor>,
     pub fingerprint: Fingerprint,
+    /// The frame every later stage (sockets, channel plan) measures in.
+    pub frame: PlacementFrame,
 }
 
 pub(crate) trait SeedPlacer {
@@ -206,16 +216,70 @@ impl MacroEnvelope {
     }
 }
 
-const ROUTING_CHANNEL: i32 = 6;
-const TRACK_PITCH: i32 = 6;
+/// Nominal channel depth used only to score instance facings before the
+/// real per-level channel widths are known.
+const ROUTING_CHANNEL: i32 = 13;
+/// Lateral margin added around every endpoint when estimating the trunk
+/// interval of a net: a torch's north or south socket line ends four cells
+/// from the support.
+const ENDPOINT_ROW_MARGIN: i32 = 4;
+/// Forward cells per channel taken by the source anchor and the sink
+/// terminal that sit just outside their macro envelopes.
+const ENDPOINT_CELLS_PER_CHANNEL: i32 = 2;
+/// Free cells between neighbouring macros in the same level.  Two torches
+/// stacked in one level may both use the sockets that face each other; each
+/// of those entries is three cells deep, and the two entry lines must not
+/// touch, so facing terminals need eight cells between them.
+const LATERAL_GAP: i32 = 10;
+/// Lateral pitch of net tracks; a multiple of the row grid so automatic
+/// boundaries land on grid rows.
+const TRACK_PITCH: i32 = 8;
+/// Every endpoint row (source anchor, torch socket approach, junction input)
+/// lies on this lateral grid relative to the frame origin.  Rows of
+/// different nets can then never be adjacent, and a dogleg always finds a
+/// free row between two grid rows.
+pub(crate) const ROW_GRID: i32 = 4;
+/// Lateral cells the channel routing plan may use beyond the outermost
+/// macro: the closed layers and their escape corridors.
+pub(crate) const CHANNEL_LATERAL_MARGIN: i32 = 32;
 
-impl SeedPlacer for TopologyAwareSeedPlacer {
-    fn plan(
+impl TopologyAwareSeedPlacer {
+    /// The plan with explicit minimum channel widths (keyed like
+    /// `derive_channel_widths`) layered over the estimated ones.
+    fn plan_with_widths(
         &self,
         request: SeedPlacementRequest<'_>,
+        minimum_widths: &BTreeMap<i64, i32>,
     ) -> Result<SeedPlacementPlan, SeedPlacementError> {
-        let analysis = request.analysis;
+        // The frame points from the inputs toward the outputs.  When both
+        // are pinned and the levels with their channels do not fit between
+        // the two pin lines, the frame is turned around: the levels are then
+        // placed behind the input line, and both pin lines face one
+        // turnaround channel in front of it.
         let frame = derive_frame(request.pins);
+        match self.plan_in_frame(request, minimum_widths, frame)? {
+            Some(plan) => Ok(plan),
+            None => {
+                let flipped = PlacementFrame {
+                    forward: frame.forward.opposite(),
+                    lateral: clockwise(frame.forward.opposite()),
+                    origin: frame.origin,
+                };
+                self.plan_in_frame(request, minimum_widths, flipped)?
+                    .ok_or(SeedPlacementError::CoordinateOverflow)
+            }
+        }
+    }
+
+    /// The plan in one frame, or `None` when pinned outputs lie inside the
+    /// forward span the levels need.
+    fn plan_in_frame(
+        &self,
+        request: SeedPlacementRequest<'_>,
+        minimum_widths: &BTreeMap<i64, i32>,
+        frame: PlacementFrame,
+    ) -> Result<Option<SeedPlacementPlan>, SeedPlacementError> {
+        let analysis = request.analysis;
         let intervals = net_intervals(request.graph, analysis);
         let tracks = colour_intervals(&intervals);
         let track_laterals = track_laterals(request.graph, request.pins, frame, &tracks);
@@ -229,6 +293,7 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
         let mut lanes = initial_lanes(request.graph, &track_laterals, analysis);
         barycentric_sweep(analysis, &mut lanes, true);
         barycentric_sweep(analysis, &mut lanes, false);
+        let channel = ROUTING_CHANNEL;
 
         let mut facings = BTreeMap::new();
         for instance in &request.graph.instances {
@@ -248,8 +313,8 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
             .max()
             .unwrap_or(1);
             let origin = frame_to_world(frame, 0, lateral);
-            let source = frame_to_world(frame, -ROUTING_CHANNEL, lateral);
-            let target = frame_to_world(frame, max_span + ROUTING_CHANNEL, lateral);
+            let source = frame_to_world(frame, -channel, lateral);
+            let target = frame_to_world(frame, max_span + channel, lateral);
             facings.insert(
                 instance.id,
                 choose_instance_facing(instance, origin, source, target, frame.forward)?,
@@ -281,21 +346,10 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
                 })
                 .or_insert(instance_bounds);
         }
-        let mut columns = BTreeMap::new();
-        let mut cursor = 0i32;
-        for (&level, level_bounds) in &level_bounds {
-            let column = cursor
-                .checked_sub(level_bounds.min_forward)
-                .ok_or(SeedPlacementError::CoordinateOverflow)?;
-            columns.insert(level, column);
-            cursor = column
-                .checked_add(level_bounds.max_forward)
-                .and_then(|value| value.checked_add(ROUTING_CHANNEL))
-                .ok_or(SeedPlacementError::CoordinateOverflow)?;
-        }
-
-        let mut frame_origins = BTreeMap::<InstanceId, (i32, i32)>::new();
-        for (&level, &column) in &columns {
+        // Lateral positions first: they do not depend on the column spacing,
+        // and the channel widths depend on them.
+        let mut laterals = BTreeMap::<InstanceId, i32>::new();
+        for &level in level_bounds.keys() {
             let mut ids = analysis
                 .order
                 .iter()
@@ -310,8 +364,126 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
                 .collect::<Vec<_>>();
             let legalized = legalize_laterals(&entries)?;
             for id in ids {
-                let lateral = legalized[&id];
-                frame_origins.insert(id, (column, lateral));
+                laterals.insert(id, legalized[&id]);
+            }
+        }
+        // Automatic ports share the shift: they sit on the free tracks the
+        // macros were placed around.
+        let automatic_input_lateral =
+            |port: PortId| -> i32 { track_laterals[&LogicalSignalId::PrimaryInput(port)] };
+        let automatic_output_lateral = |port: PortId| -> i32 {
+            request
+                .graph
+                .assignments
+                .iter()
+                .find(|assignment| assignment.sink == PhysicalSink::DeclaredOutput(port))
+                .and_then(|assignment| track_laterals.get(&assignment.signal).copied())
+                .unwrap_or(0)
+        };
+        let automatic_input_ports = request
+            .graph
+            .primary_inputs
+            .iter()
+            .copied()
+            .filter(|port| {
+                !request
+                    .pins
+                    .contains_key(&PhysicalEndpointId::PrimaryInput(*port))
+            })
+            .collect::<Vec<_>>();
+        let automatic_output_ports = request
+            .graph
+            .declared_outputs
+            .iter()
+            .copied()
+            .filter(|port| {
+                !request
+                    .pins
+                    .contains_key(&PhysicalEndpointId::DeclaredOutput(*port))
+            })
+            .collect::<Vec<_>>();
+        let lateral_shift = if request.pins.is_empty() {
+            0
+        } else {
+            let port_laterals = automatic_input_ports
+                .iter()
+                .map(|&port| automatic_input_lateral(port))
+                .chain(
+                    automatic_output_ports
+                        .iter()
+                        .map(|&port| automatic_output_lateral(port)),
+                )
+                .collect::<Vec<_>>();
+            confine_laterals_to_world(frame, &bounds, &port_laterals, &mut laterals)?
+        };
+
+        let mut channels =
+            derive_channel_widths(request, analysis, &level_bounds, &laterals, &track_laterals);
+        for (&level, &width) in minimum_widths {
+            channels
+                .entry(level)
+                .and_modify(|known| *known = (*known).max(width))
+                .or_insert(width);
+        }
+        let min_level = level_bounds.keys().next().copied().unwrap_or(0);
+        let input_channel = channels
+            .get(&(min_level as i64 - 1))
+            .copied()
+            .unwrap_or_else(|| channel_width(1));
+
+        // Pinned inputs sit at the frame origin, so the first level starts
+        // one input channel further forward; automatic inputs are placed one
+        // input channel behind the origin instead.
+        let pinned_inputs = request
+            .pins
+            .keys()
+            .any(|endpoint| matches!(endpoint, PhysicalEndpointId::PrimaryInput(_)));
+        // Pinned outputs ahead of the levels must leave room for every
+        // column and channel; otherwise the caller turns the frame around.
+        let mut cursor = if pinned_inputs {
+            input_channel + 1
+        } else {
+            0i32
+        };
+        if let Some((output_min, _)) = pinned_output_forward_extent(request, frame) {
+            if output_min > 0 {
+                let total = level_bounds
+                    .iter()
+                    .map(|(&level, bounds)| {
+                        bounds.forward_span()
+                            + channels
+                                .get(&(level as i64))
+                                .copied()
+                                .unwrap_or_else(|| channel_width(1))
+                    })
+                    .sum::<i32>();
+                if cursor + total > output_min {
+                    return Ok(None);
+                }
+            }
+        }
+        let mut columns = BTreeMap::new();
+        for (&level, level_bounds) in &level_bounds {
+            let column = cursor
+                .checked_sub(level_bounds.min_forward)
+                .ok_or(SeedPlacementError::CoordinateOverflow)?;
+            columns.insert(level, column);
+            let width = channels
+                .get(&(level as i64))
+                .copied()
+                .unwrap_or_else(|| channel_width(1));
+            cursor = column
+                .checked_add(level_bounds.max_forward)
+                .and_then(|value| value.checked_add(width))
+                .ok_or(SeedPlacementError::CoordinateOverflow)?;
+        }
+
+        let mut frame_origins = BTreeMap::<InstanceId, (i32, i32)>::new();
+        for (&level, &column) in &columns {
+            for (&id, &lateral) in &laterals {
+                if analysis.nodes[&id].forward_level == level {
+                    frame_origins.insert(id, (column, lateral));
+                }
             }
         }
 
@@ -328,57 +500,44 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
             );
         }
 
-        let input_forward = -ROUTING_CHANNEL;
+        let input_forward = -input_channel;
         let output_forward = cursor;
-        let automatic_inputs = request
-            .graph
-            .primary_inputs
+        let automatic_inputs = automatic_input_ports
             .iter()
-            .copied()
-            .filter(|port| {
-                !request
-                    .pins
-                    .contains_key(&PhysicalEndpointId::PrimaryInput(*port))
+            .map(|&port| {
+                let lateral = automatic_input_lateral(port)
+                    .checked_add(lateral_shift)
+                    .ok_or(SeedPlacementError::CoordinateOverflow)?;
+                Ok((port, frame_to_world(frame, input_forward, lateral)))
             })
-            .map(|port| {
-                let signal = LogicalSignalId::PrimaryInput(port);
-                (
-                    port,
-                    frame_to_world(frame, input_forward, track_laterals[&signal]),
-                )
-            })
-            .collect();
-        let automatic_outputs = request
-            .graph
-            .declared_outputs
+            .collect::<Result<BTreeMap<_, _>, SeedPlacementError>>()?;
+        let automatic_outputs = automatic_output_ports
             .iter()
-            .copied()
-            .filter(|port| {
-                !request
-                    .pins
-                    .contains_key(&PhysicalEndpointId::DeclaredOutput(*port))
+            .map(|&port| {
+                let lateral = automatic_output_lateral(port)
+                    .checked_add(lateral_shift)
+                    .ok_or(SeedPlacementError::CoordinateOverflow)?;
+                Ok((port, frame_to_world(frame, output_forward, lateral)))
             })
-            .map(|port| {
-                let signal = request
-                    .graph
-                    .assignments
-                    .iter()
-                    .find(|assignment| assignment.sink == PhysicalSink::DeclaredOutput(port))
-                    .map(|assignment| assignment.signal);
-                let lateral = signal
-                    .and_then(|signal| track_laterals.get(&signal).copied())
-                    .unwrap_or(0);
-                (port, frame_to_world(frame, output_forward, lateral))
-            })
-            .collect();
+            .collect::<Result<BTreeMap<_, _>, SeedPlacementError>>()?;
 
         let fingerprint = plan_fingerprint(&instances, &automatic_inputs, &automatic_outputs, &[]);
-        Ok(SeedPlacementPlan {
+        Ok(Some(SeedPlacementPlan {
             instances,
             automatic_inputs,
             automatic_outputs,
             fingerprint,
-        })
+            frame,
+        }))
+    }
+}
+
+impl SeedPlacer for TopologyAwareSeedPlacer {
+    fn plan(
+        &self,
+        request: SeedPlacementRequest<'_>,
+    ) -> Result<SeedPlacementPlan, SeedPlacementError> {
+        self.plan_with_widths(request, &BTreeMap::new())
     }
 
     fn plan_with_repairs(
@@ -386,12 +545,21 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
         request: SeedPlacementRequest<'_>,
         repairs: &[LayoutRepair],
     ) -> Result<SeedPlacementPlan, SeedPlacementError> {
-        let mut plan = self.plan(request)?;
+        let mut minimum_widths = BTreeMap::<i64, i32>::new();
+        for repair in repairs {
+            if let LayoutRepair::WidenChannel { level, width } = *repair {
+                minimum_widths
+                    .entry(level)
+                    .and_modify(|known| *known = (*known).max(width))
+                    .or_insert(width);
+            }
+        }
+        let mut plan = self.plan_with_widths(request, &minimum_widths)?;
         let repairs = repairs.iter().copied().collect::<BTreeSet<_>>();
         if repairs.is_empty() {
             return Ok(plan);
         }
-        let frame = derive_frame(request.pins);
+        let frame = plan.frame;
         for repair in &repairs {
             match *repair {
                 LayoutRepair::ExclusiveGuardedTrack { source } => {
@@ -422,6 +590,7 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
                         )?;
                     }
                 }
+                LayoutRepair::WidenChannel { .. } => {}
                 LayoutRepair::SeparateOwners {
                     source_owner,
                     sink_owner,
@@ -542,7 +711,122 @@ fn checked_step_many(
     })
 }
 
-fn derive_frame(pins: &BTreeMap<PhysicalEndpointId, PortPin>) -> PlacementFrame {
+/// Free forward cells after every level (keyed by that level; the input
+/// channel is keyed by `min_level - 1`).
+///
+/// A channel needs one lane per trunk that crosses it at the same lateral
+/// range, so the width comes from the left-edge lane count over the lateral
+/// intervals of the nets alive in that channel.  When both inputs and
+/// outputs are pinned the columns must still fit between the pin lines, so
+/// the widths are scaled down proportionally when their sum does not fit;
+/// the seed reports a typed refusal if a channel then cannot hold its lanes.
+fn derive_channel_widths(
+    request: SeedPlacementRequest<'_>,
+    analysis: &SeedPlacementAnalysis,
+    level_bounds: &BTreeMap<u64, MacroBounds>,
+    laterals: &BTreeMap<InstanceId, i32>,
+    track_laterals: &BTreeMap<LogicalSignalId, i32>,
+) -> BTreeMap<i64, i32> {
+    let intervals = net_intervals(request.graph, analysis);
+    let min_level = level_bounds.keys().next().copied().unwrap_or(0) as i64;
+    let max_level = level_bounds.keys().last().copied().unwrap_or(0) as i64;
+    let mut widths = BTreeMap::new();
+    for channel_level in (min_level - 1)..=max_level {
+        let mut crossing = Vec::new();
+        for interval in &intervals {
+            let start = interval.start as i64;
+            let end = interval.end as i64;
+            // A primary input lives in the input column, one before level 0;
+            // `net_intervals` reports its start as level 0.
+            let source_level = if request.graph.assignments.iter().any(|assignment| {
+                assignment.signal == interval.signal
+                    && matches!(assignment.driver, PhysicalDriver::PrimaryInput(_))
+            }) {
+                min_level - 1
+            } else {
+                start
+            };
+            if source_level > channel_level || end <= channel_level {
+                continue;
+            }
+            let mut lateral_extent: Option<(i32, i32)> = None;
+            let mut widen = |lateral: i32| {
+                lateral_extent = Some(match lateral_extent {
+                    None => (lateral - ENDPOINT_ROW_MARGIN, lateral + ENDPOINT_ROW_MARGIN),
+                    Some((min, max)) => (
+                        min.min(lateral - ENDPOINT_ROW_MARGIN),
+                        max.max(lateral + ENDPOINT_ROW_MARGIN),
+                    ),
+                });
+            };
+            for assignment in &request.graph.assignments {
+                if assignment.signal != interval.signal {
+                    continue;
+                }
+                match &assignment.driver {
+                    PhysicalDriver::PrimaryInput(_) => {
+                        if let Some(lateral) = track_laterals.get(&interval.signal) {
+                            widen(*lateral);
+                        }
+                    }
+                    PhysicalDriver::Instance(driver) => {
+                        if let Some(lateral) = laterals.get(&instance_driver_owner(driver)) {
+                            widen(*lateral);
+                        }
+                    }
+                }
+                match assignment.sink {
+                    PhysicalSink::InstanceInput { instance, .. } => {
+                        if let Some(lateral) = laterals.get(&instance) {
+                            widen(*lateral);
+                        }
+                    }
+                    PhysicalSink::DeclaredOutput(_) => {
+                        if let Some(lateral) = track_laterals.get(&interval.signal) {
+                            widen(*lateral);
+                        }
+                    }
+                }
+            }
+            if let Some(extent) = lateral_extent {
+                crossing.push(extent);
+            }
+        }
+        // The source anchor on one side and the sink terminal on the other
+        // each take one more cell than the macro envelope.
+        widths.insert(
+            channel_level,
+            channel_width(lane_count(&crossing)) + ENDPOINT_CELLS_PER_CHANNEL,
+        );
+    }
+
+    widths
+}
+
+/// Forward extent, relative to the frame origin, of the pinned output net
+/// cells: `None` without pinned outputs.
+fn pinned_output_forward_extent(
+    request: SeedPlacementRequest<'_>,
+    frame: PlacementFrame,
+) -> Option<(i32, i32)> {
+    let origin = project_horizontal(frame.origin.x, frame.origin.z, frame.forward);
+    request
+        .pins
+        .iter()
+        .filter(|(endpoint, _)| matches!(endpoint, PhysicalEndpointId::DeclaredOutput(_)))
+        .map(|(_, pin)| {
+            let cell = pin.net_cell(PortRole::Output);
+            project_horizontal(cell.x, cell.z, frame.forward) - origin
+        })
+        .fold(None, |extent, forward| {
+            Some(match extent {
+                None => (forward, forward),
+                Some((min, max)) => (min.min(forward), max.max(forward)),
+            })
+        })
+}
+
+pub(crate) fn derive_frame(pins: &BTreeMap<PhysicalEndpointId, PortPin>) -> PlacementFrame {
     let inputs = pins
         .iter()
         .filter_map(|(endpoint, pin)| {
@@ -653,7 +937,7 @@ fn frame_to_world(frame: PlacementFrame, forward: i32, lateral: i32) -> Anchor {
     }
 }
 
-const fn horizontal_unit(direction: Facing) -> (i32, i32) {
+pub(crate) const fn horizontal_unit(direction: Facing) -> (i32, i32) {
     match direction {
         Facing::North => (0, -1),
         Facing::South => (0, 1),
@@ -663,7 +947,7 @@ const fn horizontal_unit(direction: Facing) -> (i32, i32) {
     }
 }
 
-const fn project_horizontal(x: i32, z: i32, direction: Facing) -> i32 {
+pub(crate) const fn project_horizontal(x: i32, z: i32, direction: Facing) -> i32 {
     match direction {
         Facing::North => -z,
         Facing::South => z,
@@ -671,6 +955,67 @@ const fn project_horizontal(x: i32, z: i32, direction: Facing) -> i32 {
         Facing::West => -x,
         Facing::Up | Facing::Down => unreachable!(),
     }
+}
+
+/// Shifts every macro's lateral so the layout, with the channel layers the
+/// routing plan closes around it, stays inside the origin-based world along
+/// the frame's lateral axis.  Pinned ports fix the frame origin, so only the
+/// macros and the automatic ports (at `port_laterals`) can move; they all
+/// move together, by whole row-grid steps, and only when the world edge is
+/// on their side.  Returns the shift the caller applies to the ports.
+fn confine_laterals_to_world(
+    frame: PlacementFrame,
+    bounds: &BTreeMap<InstanceId, MacroBounds>,
+    port_laterals: &[i32],
+    laterals: &mut BTreeMap<InstanceId, i32>,
+) -> Result<i32, SeedPlacementError> {
+    let (lx, lz) = horizontal_unit(frame.lateral);
+    let (sign, origin) = if lx != 0 {
+        (lx, frame.origin.x)
+    } else {
+        (lz, frame.origin.z)
+    };
+    let extent_min = laterals
+        .iter()
+        .map(|(id, lateral)| lateral + bounds[id].min_lateral)
+        .chain(
+            port_laterals
+                .iter()
+                .map(|lateral| lateral - ENDPOINT_ROW_MARGIN),
+        )
+        .min();
+    let extent_max = laterals
+        .iter()
+        .map(|(id, lateral)| lateral + bounds[id].max_lateral)
+        .chain(
+            port_laterals
+                .iter()
+                .map(|lateral| lateral + ENDPOINT_ROW_MARGIN),
+        )
+        .max();
+    let (Some(extent_min), Some(extent_max)) = (extent_min, extent_max) else {
+        return Ok(0);
+    };
+    // World coordinate along the lateral axis: `origin + sign * lateral`.
+    let shortfall = if sign > 0 {
+        (CHANNEL_LATERAL_MARGIN - origin - extent_min).max(0)
+    } else {
+        (extent_max - (origin - CHANNEL_LATERAL_MARGIN)).max(0)
+    };
+    if shortfall == 0 {
+        return Ok(0);
+    }
+    let steps = (shortfall + ROW_GRID - 1) / ROW_GRID;
+    let shift = steps
+        .checked_mul(ROW_GRID)
+        .map(|shift| if sign > 0 { shift } else { -shift })
+        .ok_or(SeedPlacementError::CoordinateOverflow)?;
+    for lateral in laterals.values_mut() {
+        *lateral = lateral
+            .checked_add(shift)
+            .ok_or(SeedPlacementError::CoordinateOverflow)?;
+    }
+    Ok(shift)
 }
 
 fn legalize_laterals(
@@ -688,11 +1033,17 @@ fn legalize_laterals(
             .transpose()?
             .unwrap_or(preferred);
         let origin = preferred.max(required_origin);
+        // Snap up to the row grid: every macro's supports and anchors sit on
+        // multiples of the grid relative to its origin.
+        let origin = origin
+            .checked_add(ROW_GRID - 1)
+            .map(|value| value.div_euclid(ROW_GRID) * ROW_GRID)
+            .ok_or(SeedPlacementError::CoordinateOverflow)?;
         origins.insert(instance, origin);
         next_min_lateral = Some(
             origin
                 .checked_add(bounds.max_lateral)
-                .and_then(|maximum| maximum.checked_add(ROUTING_CHANNEL))
+                .and_then(|maximum| maximum.checked_add(LATERAL_GAP))
                 .ok_or(SeedPlacementError::CoordinateOverflow)?,
         );
     }
@@ -721,10 +1072,10 @@ fn net_intervals(graph: &InstanceGraph, analysis: &SeedPlacementAnalysis) -> Vec
         .map(|(signal, assignments)| {
             let start = assignments
                 .iter()
-                .filter_map(|assignment| match &assignment.driver {
-                    PhysicalDriver::PrimaryInput(_) => Some(0),
+                .map(|assignment| match &assignment.driver {
+                    PhysicalDriver::PrimaryInput(_) => 0,
                     PhysicalDriver::Instance(driver) => {
-                        Some(analysis.nodes[&instance_driver_owner(driver)].forward_level)
+                        analysis.nodes[&instance_driver_owner(driver)].forward_level
                     }
                 })
                 .min()
@@ -1011,6 +1362,11 @@ fn choose_instance_facing(
         .map(|primitive| (primitive.role, positions[&primitive.id]))
         .collect::<BTreeMap<_, _>>();
     let mut best = None;
+    // Only the facing whose output leaves forward is a candidate: every
+    // macro output feeds a later level, so it must exit toward the channel
+    // ahead; a sideways macro would also put its sockets and anchor off the
+    // row grid.  The scoring still runs so the pose derivation stays
+    // exercised.
     for (rank, facing) in [
         CellFacing::NORTH,
         CellFacing::EAST,
@@ -1019,6 +1375,7 @@ fn choose_instance_facing(
     ]
     .into_iter()
     .enumerate()
+    .filter(|(_, facing)| macro_output_direction(instance, *facing) == forward)
     {
         let mut score = hint_penalty(
             &roles,
@@ -1101,6 +1458,35 @@ fn input_terminal(primitive: Primitive, facing: CellFacing, origin: Anchor) -> A
         Primitive::Lever => PortKind::LeverOutput,
     };
     physical_terminal(primitive, facing, origin, kind)
+}
+
+/// The world direction a macro's output leaves in for this facing: the
+/// output port's direction for a primitive output, the cell facing itself for
+/// a junction.
+fn macro_output_direction(instance: &Instance, facing: CellFacing) -> Facing {
+    match &instance.expanded.topology.output {
+        OutputSpec::Primitive(id) => {
+            let primitive = instance
+                .expanded
+                .topology
+                .primitives
+                .iter()
+                .find(|spec| spec.id == *id)
+                .map(|spec| spec.primitive)
+                .unwrap_or(Primitive::Torch);
+            let kind = match primitive {
+                Primitive::Torch => PortKind::TorchOutput,
+                Primitive::Repeater => PortKind::RepeaterFront,
+                Primitive::Comparator => PortKind::ComparatorFront,
+                Primitive::Lever => PortKind::LeverOutput,
+                Primitive::Lamp => PortKind::LampInput,
+            };
+            physical::variants(primitive)[usize::from(facing.index())]
+                .port(kind)
+                .direction
+        }
+        OutputSpec::Junction { .. } => facing.direction(),
+    }
 }
 
 fn output_terminal(primitive: Primitive, facing: CellFacing, origin: Anchor) -> Anchor {
@@ -1503,6 +1889,59 @@ const fn primitive_delay_ticks(primitive: Primitive) -> u64 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pinned_layouts_shift_away_from_the_world_edge_in_grid_steps() {
+        use super::*;
+        // Lateral runs west from a pin at x = 21: the macros at laterals
+        // 0..=35 would land at negative x, so the whole free layout moves to
+        // higher laterals until the channel margin fits, by whole grid steps.
+        let frame = PlacementFrame {
+            forward: Facing::South,
+            lateral: Facing::West,
+            origin: Anchor { x: 21, y: 1, z: 62 },
+        };
+        let bounds = MacroBounds {
+            min_forward: 0,
+            max_forward: 3,
+            min_lateral: -1,
+            max_lateral: 3,
+        };
+        let ids = [InstanceId(0), InstanceId(1)];
+        let bounds = ids
+            .iter()
+            .map(|&id| (id, bounds))
+            .collect::<BTreeMap<_, _>>();
+        let mut laterals = BTreeMap::from([(ids[0], 0), (ids[1], 32)]);
+
+        let shift = confine_laterals_to_world(frame, &bounds, &[16], &mut laterals).unwrap();
+
+        // extent_max = 32 + 3 = 35 must come down to 21 - 32 = -11: a shortfall
+        // of 46 rounds up to twelve grid steps of four.
+        assert_eq!(shift, -48);
+        assert_eq!(laterals[&ids[0]], -48);
+        assert_eq!(laterals[&ids[1]], -16);
+
+        // Lateral running east from the same pin: extent_min = -1 lands at
+        // x = 20, eleven cells short of the margin, so the layout moves up by
+        // three grid steps; far from the edge nothing moves.
+        let frame = PlacementFrame {
+            lateral: Facing::East,
+            ..frame
+        };
+        let mut laterals = BTreeMap::from([(ids[0], 0), (ids[1], 32)]);
+        assert_eq!(
+            confine_laterals_to_world(frame, &bounds, &[16], &mut laterals).unwrap(),
+            12
+        );
+        assert_eq!(laterals[&ids[1]], 44);
+        let mut laterals = BTreeMap::from([(ids[0], 40), (ids[1], 72)]);
+        assert_eq!(
+            confine_laterals_to_world(frame, &bounds, &[56], &mut laterals).unwrap(),
+            0
+        );
+        assert_eq!(laterals[&ids[1]], 72);
+    }
+
     use std::collections::{BTreeMap, BTreeSet};
 
     use crate::compile::fragment_synth::identity::{
@@ -2049,7 +2488,7 @@ mod tests {
         let output = variant.port(crate::compile::physical::PortKind::TorchOutput);
 
         assert_eq!(pose.facing, CellFacing::EAST);
-        assert_eq!(pose.preferred_origin, Anchor { x: 0, y: 1, z: 6 });
+        assert_eq!(pose.preferred_origin, Anchor { x: 0, y: 1, z: 8 });
         assert_eq!(input.position, Position::new(0, 0, 0));
         assert_eq!(output.position, Position::new(1, 0, 0));
         assert_eq!(
@@ -2062,11 +2501,11 @@ mod tests {
         );
         assert_eq!(
             super::input_terminal(Primitive::Torch, pose.facing, pose.preferred_origin),
-            Anchor { x: -1, y: 1, z: 6 }
+            Anchor { x: -1, y: 1, z: 8 }
         );
         assert_eq!(
             super::output_terminal(Primitive::Torch, pose.facing, pose.preferred_origin),
-            Anchor { x: 2, y: 1, z: 6 }
+            Anchor { x: 2, y: 1, z: 8 }
         );
     }
 
@@ -2104,25 +2543,25 @@ mod tests {
         let rear = variant.port(crate::compile::physical::PortKind::RepeaterRear);
         let front = variant.port(crate::compile::physical::PortKind::RepeaterFront);
 
-        assert_eq!(pose.facing, CellFacing::WEST);
-        assert_eq!(pose.preferred_origin, Anchor { x: 0, y: 1, z: 6 });
+        // The merge's junction output leaves forward, so the macro takes the
+        // east cell facing.  The literal repeater ports of that variant are
+        // what the seed will orient its isolating repeaters against.
+        assert_eq!(pose.facing, CellFacing::EAST);
+        assert_eq!(pose.preferred_origin, Anchor { x: 0, y: 1, z: 8 });
         assert_eq!(rear.position, Position::new(0, 0, 0));
         assert_eq!(front.position, Position::new(0, 0, 0));
+        assert_eq!(rear.position.offset(rear.direction), Position::new(1, 0, 0));
         assert_eq!(
-            rear.position.offset(rear.direction),
+            front.position.offset(front.direction),
             Position::new(-1, 0, 0)
         );
         assert_eq!(
-            front.position.offset(front.direction),
-            Position::new(1, 0, 0)
-        );
-        assert_eq!(
             super::input_terminal(Primitive::Repeater, pose.facing, pose.preferred_origin),
-            Anchor { x: -1, y: 1, z: 6 }
+            Anchor { x: 1, y: 1, z: 8 }
         );
         assert_eq!(
             super::output_terminal(Primitive::Repeater, pose.facing, pose.preferred_origin),
-            Anchor { x: 1, y: 1, z: 6 }
+            Anchor { x: -1, y: 1, z: 8 }
         );
     }
 
@@ -2157,12 +2596,21 @@ mod tests {
             }],
         };
         let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
-        let without_hint = &graph.instances[0];
+        // Only facings along the frame's forward axis are candidates: the
+        // channel plan needs every socket row and anchor on the row grid.
+        // The pose still follows the actual port geometry: a source behind
+        // and a target ahead face the cell forward, the mirrored situation
+        // faces it backward.
+        let instance = &graph.instances[0];
         assert_eq!(
-            choose_instance_facing(without_hint, origin, source, target, Facing::East).unwrap(),
-            CellFacing::NORTH
+            choose_instance_facing(instance, origin, source, target, Facing::East).unwrap(),
+            CellFacing::EAST
         );
-        let mut with_hint = without_hint.clone();
+        assert_eq!(
+            choose_instance_facing(instance, origin, target, source, Facing::East).unwrap(),
+            CellFacing::EAST
+        );
+        let mut with_hint = instance.clone();
         with_hint.expanded.topology.embedding_hints = vec![hint];
         assert_eq!(
             choose_instance_facing(&with_hint, origin, source, target, Facing::East).unwrap(),
@@ -2293,7 +2741,9 @@ mod tests {
         .unwrap();
 
         assert_eq!(origins[&InstanceId(0)], 0);
-        assert_eq!(origins[&InstanceId(1)], 14);
+        // 8 cells of repeater footprint plus the ten-cell gap would put the
+        // origin at 18; the row grid snaps it up to 20.
+        assert_eq!(origins[&InstanceId(1)], 20);
         let torch_cells = actual_block_footprint(
             &torch_graph.instances[0],
             CellFacing::NORTH,

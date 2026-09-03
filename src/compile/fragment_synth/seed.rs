@@ -15,6 +15,9 @@ use crate::compile::fragment_synth::candidate::{
 use crate::compile::fragment_synth::certification::{
     CandidateCertificationError, CertifiedCandidate, ExpandedCandidateCertifier,
 };
+use crate::compile::fragment_synth::channel_layout::{
+    plan_channel_layout, ChannelLayout, ChannelLayoutError, NetGeometry,
+};
 use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
 use crate::compile::fragment_synth::identity::{
     ConnectionId, ImplementationKey, InstanceId, ObservationId, ObservationSite,
@@ -27,6 +30,7 @@ use crate::compile::fragment_synth::placement::{
     analyse_instance_dag, SeedPlacementAnalysis, SeedPlacementPlan, SeedPlacementRequest,
     SeedPlacer,
 };
+use crate::compile::fragment_synth::placement::{LayoutRepair, PlacementFrame};
 use crate::compile::fragment_synth::realise::{ExpandedAdapterError, ExpandedCandidateAdapter};
 use crate::compile::fragment_synth::route_schedule::{
     RouteObligation, RouteSchedule, TargetObligation,
@@ -96,6 +100,13 @@ pub(crate) enum SeedError {
     Candidate(#[from] CandidateError),
     #[error("invalid pinned IO: {0}")]
     InvalidPins(#[source] crate::compile::planner::PlannerError),
+    #[error("channel routing plan failed: {0}")]
+    ChannelLayout(#[from] ChannelLayoutError),
+    #[error("seed repair exhausted after {attempts_used} attempts: {refusal}")]
+    SeedExhausted {
+        attempts_used: u64,
+        refusal: Box<SeedError>,
+    },
     #[error("physical placement at {at:?} overlaps another seed component")]
     PlacementCollision { at: Anchor },
     #[error(
@@ -175,17 +186,17 @@ pub(crate) fn compile_sparse_seed_variant_with_services(
 }
 
 #[derive(Debug, Clone, Copy)]
-struct SourceGeometry {
-    route_anchor: Anchor,
-    allowed_exit: Facing,
+pub(crate) struct SourceGeometry {
+    pub(crate) route_anchor: Anchor,
+    pub(crate) allowed_exit: Facing,
 }
 
 #[derive(Debug, Clone, Copy)]
-struct TargetGeometry {
-    terminal: Anchor,
-    allowed_entry: Facing,
-    support: Anchor,
-    requirement: TerminalRequirement,
+pub(crate) struct TargetGeometry {
+    pub(crate) terminal: Anchor,
+    pub(crate) allowed_entry: Facing,
+    pub(crate) support: Anchor,
+    pub(crate) requirement: TerminalRequirement,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -257,7 +268,7 @@ impl PlacementSearch {
 }
 
 #[derive(Debug, Clone)]
-enum PendingTarget {
+pub(crate) enum PendingTarget {
     Connection(ConnectionId, TargetGeometry),
     DeclaredOutput(PortId, TargetGeometry),
 }
@@ -283,7 +294,7 @@ impl PendingTarget {
         }
     }
 
-    fn geometry(&self) -> TargetGeometry {
+    pub(crate) fn geometry(&self) -> TargetGeometry {
         match self {
             Self::Connection(_, geometry) | Self::DeclaredOutput(_, geometry) => *geometry,
         }
@@ -341,6 +352,71 @@ impl SparseSeedBuilder {
             }
         }
 
+        // Bounded fresh-candidate repair: every attempt rebuilds the
+        // candidate from scratch with the accumulated canonical repairs.  The
+        // only repair the channel plan asks for is a wider channel, and the
+        // requested width grows strictly, so the loop ends by the cap.
+        let cap = services.search_config.max_seed_backtracks;
+        let mut repairs = Vec::<LayoutRepair>::new();
+        let mut attempts = 0u64;
+        loop {
+            attempts += 1;
+            match Self::build_attempt(&input, &services, variant, instances.clone(), &repairs) {
+                Ok(certified) => return Ok(certified),
+                Err(SeedError::ChannelLayout(ChannelLayoutError::ChannelTooNarrow {
+                    level,
+                    needed,
+                    available,
+                    ..
+                })) => {
+                    // The placer's width for this channel and the free span the
+                    // plan measured differ by the endpoint cells beside the
+                    // macros; a repeated repair grows by the measured shortfall
+                    // so the loop is monotone.
+                    let previous = repairs.iter().find_map(|repair| match repair {
+                        LayoutRepair::WidenChannel {
+                            level: known,
+                            width,
+                        } if *known == level => Some(*width),
+                        _ => None,
+                    });
+                    let width = match previous {
+                        Some(previous) => previous + (needed - available).max(1),
+                        None => needed + CHANNEL_ENDPOINT_CELLS,
+                    };
+                    let already = previous.is_some_and(|previous| width <= previous);
+                    if already || attempts >= cap {
+                        return Err(SeedError::SeedExhausted {
+                            attempts_used: attempts,
+                            refusal: Box::new(SeedError::ChannelLayout(
+                                ChannelLayoutError::ChannelTooNarrow {
+                                    channel: 0,
+                                    level,
+                                    available: 0,
+                                    lanes: 0,
+                                    needed,
+                                },
+                            )),
+                        });
+                    }
+                    repairs.retain(|repair| {
+                        !matches!(repair, LayoutRepair::WidenChannel { level: known, .. } if *known == level)
+                    });
+                    repairs.push(LayoutRepair::WidenChannel { level, width });
+                    repairs.sort();
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
+
+    fn build_attempt(
+        input: &SeedInput<'_>,
+        services: &SeedServices<'_>,
+        variant: &SeedVariant,
+        instances: InstanceGraph,
+        repairs: &[LayoutRepair],
+    ) -> Result<CertifiedCandidate, SeedError> {
         let mut candidate =
             ExpandedPhysicalCandidate::empty(instances, input.pins.cloned().unwrap_or_default());
         candidate.bind_pin_contracts(input.lowered)?;
@@ -350,11 +426,14 @@ impl SparseSeedBuilder {
             .map_err(|_| SeedError::Incomplete("seed placement analysis"))?;
         let placement_plan = services
             .placer
-            .plan(SeedPlacementRequest {
-                graph: &candidate.instances,
-                analysis: &placement_analysis,
-                pins: &candidate.pin_contracts,
-            })
+            .plan_with_repairs(
+                SeedPlacementRequest {
+                    graph: &candidate.instances,
+                    analysis: &placement_analysis,
+                    pins: &candidate.pin_contracts,
+                },
+                repairs,
+            )
             .map_err(|_| SeedError::Incomplete("seed placement plan"))?;
         let plan_translation =
             PlanTranslation::for_unpinned(&placement_plan, !candidate.pin_contracts.is_empty());
@@ -383,6 +462,13 @@ impl SparseSeedBuilder {
             &mut targets,
         )?;
 
+        let sockets = assign_torch_sockets(
+            &candidate,
+            &placement_analysis,
+            placement_plan.frame,
+            &sources,
+        )?;
+        refresh_primitive_targets(&candidate, &sockets, &mut targets)?;
         let mut reservations = reservations_for_components(&candidate)?;
         reserve_route_endpoints(&mut reservations, &candidate, &sources, &targets);
         route_all(
@@ -390,9 +476,11 @@ impl SparseSeedBuilder {
             services.router,
             services.search_config,
             &placement_analysis,
+            placement_plan.frame,
             &placement_plan.fingerprint,
             &sources,
             &targets,
+            &sockets,
             &mut reservations,
         )?;
         candidate.validate_shape()?;
@@ -401,7 +489,9 @@ impl SparseSeedBuilder {
         let adapter = ExpandedCandidateAdapter::new(&candidate)?;
         let size = adapter.deterministic_world_size()?;
         let emitted = services.emitter.emit(&adapter, size)?;
-        services.verifier.verify(&candidate, &emitted)?;
+        if let Err(error) = services.verifier.verify(&candidate, &emitted) {
+            return Err(error.into());
+        }
 
         let certification = CertificationConfig::from_search(services.search_config);
         services
@@ -428,21 +518,23 @@ fn reserve_route_endpoints(
     }
     for (&sink, target) in targets {
         if reservations.get(&target.terminal).is_none() {
-            let endpoint = match sink {
-                PhysicalSink::InstanceInput {
-                    instance,
-                    input_index,
-                } => PhysicalEndpointId::Landing(ConnectionId::External {
-                    instance,
-                    input_index,
-                }),
-                PhysicalSink::DeclaredOutput(port) => PhysicalEndpointId::DeclaredOutput(port),
-            };
             reservations.reserve(
                 target.terminal,
-                PhysicalReservationOwner::Endpoint(endpoint),
+                PhysicalReservationOwner::Endpoint(sink_endpoint(sink)),
                 PhysicalReservationKind::KeepOut,
             );
+        }
+    }
+    // Nothing may stand directly above a terminal, its access cell, or a sink
+    // support: dust up there needs a floor exactly where the terminal goes,
+    // and a powered support would drive it straight back into the terminal's
+    // own input.
+    for (&endpoint, source) in sources {
+        for cell in [
+            source.route_anchor,
+            step(source.route_anchor, source.allowed_exit),
+        ] {
+            reserve_above(reservations, cell, endpoint);
         }
     }
     let endpoints = sources
@@ -492,6 +584,44 @@ fn reserve_route_endpoints(
                 );
             }
         }
+    }
+}
+
+/// Reservation owner tag for the closed channel layers.
+const CHANNEL_LAYER_OWNER: u32 = u32::MAX;
+/// Forward cells of a channel taken by the source anchor and the sink
+/// terminal beside their macros; the placer's width includes them, the
+/// channel plan's free span does not.
+const CHANNEL_ENDPOINT_CELLS: i32 = 2;
+
+fn sink_endpoint(sink: PhysicalSink) -> PhysicalEndpointId {
+    match sink {
+        PhysicalSink::InstanceInput {
+            instance,
+            input_index,
+        } => PhysicalEndpointId::Landing(ConnectionId::External {
+            instance,
+            input_index,
+        }),
+        PhysicalSink::DeclaredOutput(port) => PhysicalEndpointId::DeclaredOutput(port),
+    }
+}
+
+fn reserve_above(
+    reservations: &mut PhysicalReservations,
+    cell: Anchor,
+    endpoint: PhysicalEndpointId,
+) {
+    let above = Anchor {
+        y: cell.y + 1,
+        ..cell
+    };
+    if reservations.get(&above).is_none() {
+        reservations.reserve(
+            above,
+            PhysicalReservationOwner::Endpoint(endpoint),
+            PhysicalReservationKind::KeepOut,
+        );
     }
 }
 
@@ -1257,6 +1387,306 @@ fn assign_primitive_targets(
     Ok(())
 }
 
+/// The socket a connection lands in; declaration order is the fallback for
+/// every primitive that is not a torch.
+fn socket_ordinal(sockets: &BTreeMap<ConnectionId, usize>, connection: ConnectionId) -> usize {
+    sockets.get(&connection).copied().unwrap_or(0)
+}
+
+/// Assigns every torch input connection to one of the torch's three sockets
+/// so that the total distance from each driver's route anchor to the socket
+/// access cell is minimal.  Declaration order breaks ties, so the choice is a
+/// pure function of the placed geometry.
+fn assign_torch_sockets(
+    candidate: &ExpandedPhysicalCandidate,
+    analysis: &SeedPlacementAnalysis,
+    frame: PlacementFrame,
+    sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
+) -> Result<BTreeMap<ConnectionId, usize>, SeedError> {
+    use crate::compile::fragment_synth::placement::project_horizontal;
+    let lateral_of = |at: Anchor| project_horizontal(at.x, at.z, frame.lateral);
+    let along_forward =
+        |direction: Facing| direction == frame.forward || direction == frame.forward.opposite();
+    // Every source's entry row, keyed by the source endpoint: a sink row of
+    // another net that equals or touches one of them would put two ground
+    // lines side by side in the same channel.
+    let level_of = |endpoint: PhysicalEndpointId| -> i64 {
+        let instance = match endpoint {
+            PhysicalEndpointId::PrimitiveOutput(primitive) => primitive.instance,
+            PhysicalEndpointId::Junction(instance) => instance,
+            _ => return -1,
+        };
+        analysis
+            .nodes
+            .get(&instance)
+            .map_or(-1, |facts| facts.forward_level as i64)
+    };
+    let source_rows = sources
+        .iter()
+        .map(|(&endpoint, source)| {
+            let row_cell = if along_forward(source.allowed_exit) {
+                source.route_anchor
+            } else {
+                step_many(source.route_anchor, source.allowed_exit, 3)
+            };
+            (endpoint, (level_of(endpoint), lateral_of(row_cell)))
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut sockets = BTreeMap::new();
+    // Corridor cells already claimed by sockets chosen for earlier torches;
+    // a later torch pays for every cell of a candidate socket's entry that
+    // touches them, so facing sockets of stacked torches are avoided when
+    // the torch has a spare socket.
+    let mut claimed = BTreeSet::<Anchor>::new();
+    // Sink rows already claimed, with the sink's level and driver.
+    let mut claimed_rows = Vec::<(i64, i32, PhysicalEndpointId)>::new();
+    for instance in &candidate.instances.instances {
+        let sink_level = analysis
+            .nodes
+            .get(&instance.id)
+            .map_or(0, |facts| facts.forward_level as i64);
+        let mut by_primitive =
+            BTreeMap::<PrimitiveId, Vec<(ConnectionId, Anchor, PhysicalEndpointId)>>::new();
+        for connection in &instance.expanded.topology.connections {
+            let ConnectionTarget::Primitive(primitive) = connection.target else {
+                continue;
+            };
+            let is_torch = instance
+                .expanded
+                .topology
+                .primitives
+                .iter()
+                .any(|spec| spec.id == primitive && spec.primitive == Primitive::Torch);
+            if !is_torch {
+                continue;
+            }
+            let driver = match connection.source {
+                crate::compile::fragment_synth::topology::ConnectionSource::Primitive(id) => {
+                    PhysicalEndpointId::PrimitiveOutput(id)
+                }
+                crate::compile::fragment_synth::topology::ConnectionSource::ExternalInput {
+                    input_index,
+                } => candidate
+                    .instances
+                    .assignments
+                    .iter()
+                    .find(|assignment| {
+                        assignment.sink
+                            == PhysicalSink::InstanceInput {
+                                instance: instance.id,
+                                input_index,
+                            }
+                    })
+                    .and_then(|assignment| endpoint_for_driver(&assignment.driver))
+                    .ok_or(SeedError::Incomplete("torch socket driver"))?,
+            };
+            let anchor = sources
+                .get(&driver)
+                .ok_or(SeedError::Incomplete("torch socket driver geometry"))?
+                .route_anchor;
+            by_primitive
+                .entry(primitive)
+                .or_default()
+                .push((connection.id, anchor, driver));
+        }
+        for (primitive, inputs) in by_primitive {
+            let socket_count = geometry::input_directions(CellFacing::NORTH).len();
+            if inputs.len() > socket_count {
+                return Err(SeedError::Incomplete("torch socket arity"));
+            }
+            let placement = candidate
+                .placements
+                .get(&primitive)
+                .ok_or(SeedError::Incomplete("torch socket placement"))?;
+            let output = geometry::output_direction(placement.facing);
+            let access_cells = (0..socket_count)
+                .map(|ordinal| {
+                    let geometry = primitive_input_geometry(candidate, primitive, ordinal)?;
+                    // The socket behind the torch faces the previous level;
+                    // when distances tie it is the one a straight channel
+                    // entry can reach without turning across a neighbour.
+                    let behind = geometry.allowed_entry == output.opposite();
+                    let entry = socket_entry_cells(geometry.terminal, geometry.allowed_entry);
+                    let conflicts =
+                        entry.iter().filter(|cell| claimed.contains(cell)).count() as u64;
+                    let row_cell = if along_forward(geometry.allowed_entry) {
+                        geometry.terminal
+                    } else {
+                        step_many(geometry.terminal, geometry.allowed_entry, 3)
+                    };
+                    Ok(SocketOption {
+                        access: step(geometry.terminal, geometry.allowed_entry),
+                        behind,
+                        conflicts,
+                        entry,
+                        row: lateral_of(row_cell),
+                    })
+                })
+                .collect::<Result<Vec<_>, SeedError>>()?;
+            // Row conflicts depend on which driver lands in the socket: the
+            // driver's own row is the ideal straight line, every other row
+            // within one cell is a collision.
+            // Only the channel this sink faces matters: sources one level
+            // back and sinks of the same level share its rows.
+            let row_conflicts = inputs
+                .iter()
+                .map(|(_, _, driver)| {
+                    access_cells
+                        .iter()
+                        .map(|option| {
+                            let own_row = source_rows.get(driver).map(|(_, row)| *row);
+                            let against_sources = source_rows
+                                .iter()
+                                .filter(|(endpoint, (level, _))| {
+                                    *endpoint != driver && *level == sink_level - 1
+                                })
+                                .filter(|(_, (_, row))| (option.row - *row).abs() <= 1)
+                                .count();
+                            let against_own = usize::from(
+                                own_row.is_some_and(|row| (option.row - row).abs() == 1),
+                            );
+                            let against_sinks = claimed_rows
+                                .iter()
+                                .filter(|(level, row, _)| {
+                                    *level == sink_level && (option.row - *row).abs() <= 1
+                                })
+                                .count();
+                            (against_sources + against_own + against_sinks) as u64
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect::<Vec<_>>();
+            let mut best: Option<(u64, Vec<usize>)> = None;
+            let mut choice = vec![0usize; inputs.len()];
+            assign_sockets_recursive(
+                &inputs,
+                &access_cells,
+                &row_conflicts,
+                0,
+                &mut choice,
+                &mut best,
+            );
+            let (_, ordinals) = best.ok_or(SeedError::Incomplete("torch socket assignment"))?;
+            for ((connection, _, driver), ordinal) in inputs.iter().zip(ordinals) {
+                sockets.insert(*connection, ordinal);
+                claimed.extend(access_cells[ordinal].entry.iter().copied());
+                claimed_rows.push((sink_level, access_cells[ordinal].row, *driver));
+            }
+        }
+    }
+    Ok(sockets)
+}
+
+struct SocketOption {
+    access: Anchor,
+    behind: bool,
+    conflicts: u64,
+    entry: Vec<Anchor>,
+    row: i32,
+}
+
+/// One socket's straight entry: access cell, runway, and their sides.
+fn socket_entry_cells(terminal: Anchor, direction: Facing) -> Vec<Anchor> {
+    let access = step(terminal, direction);
+    let runway = step(access, direction);
+    let (left, right) = match direction {
+        Facing::North | Facing::South => (Facing::West, Facing::East),
+        Facing::East | Facing::West => (Facing::North, Facing::South),
+        Facing::Up | Facing::Down => return vec![access],
+    };
+    vec![
+        access,
+        runway,
+        step(access, left),
+        step(access, right),
+        step(runway, left),
+        step(runway, right),
+        step(runway, direction),
+    ]
+}
+
+/// Cost of one conflicting entry cell; it outweighs any distance the
+/// corpus can produce so a spare socket is always preferred to a collision.
+const SOCKET_CONFLICT_COST: u64 = 1 << 20;
+
+fn assign_sockets_recursive(
+    inputs: &[(ConnectionId, Anchor, PhysicalEndpointId)],
+    access_cells: &[SocketOption],
+    row_conflicts: &[Vec<u64>],
+    index: usize,
+    choice: &mut Vec<usize>,
+    best: &mut Option<(u64, Vec<usize>)>,
+) {
+    if index == inputs.len() {
+        let cost = inputs
+            .iter()
+            .zip(choice.iter())
+            .enumerate()
+            .map(|(input, ((_, anchor, _), &ordinal))| {
+                let option = &access_cells[ordinal];
+                manhattan(*anchor, option.access) * 2
+                    + u64::from(!option.behind)
+                    + (option.conflicts + row_conflicts[input][ordinal]) * SOCKET_CONFLICT_COST
+            })
+            .sum::<u64>();
+        let better = match best {
+            None => true,
+            Some((best_cost, best_choice)) => {
+                cost < *best_cost || (cost == *best_cost && *choice < *best_choice)
+            }
+        };
+        if better {
+            *best = Some((cost, choice.clone()));
+        }
+        return;
+    }
+    for ordinal in 0..access_cells.len() {
+        if choice[..index].contains(&ordinal) {
+            continue;
+        }
+        choice[index] = ordinal;
+        assign_sockets_recursive(inputs, access_cells, row_conflicts, index + 1, choice, best);
+    }
+}
+
+fn manhattan(from: Anchor, to: Anchor) -> u64 {
+    u64::from(from.x.abs_diff(to.x))
+        + u64::from(from.y.abs_diff(to.y))
+        + u64::from(from.z.abs_diff(to.z))
+}
+
+/// Re-derives the external primitive-input terminals from the chosen sockets
+/// so reservations and route obligations agree on every terminal cell.
+fn refresh_primitive_targets(
+    candidate: &ExpandedPhysicalCandidate,
+    sockets: &BTreeMap<ConnectionId, usize>,
+    targets: &mut BTreeMap<PhysicalSink, TargetGeometry>,
+) -> Result<(), SeedError> {
+    for instance in &candidate.instances.instances {
+        for connection in &instance.expanded.topology.connections {
+            let ConnectionTarget::Primitive(primitive) = connection.target else {
+                continue;
+            };
+            let ConnectionId::External { input_index, .. } = connection.id else {
+                continue;
+            };
+            let geometry = primitive_input_geometry(
+                candidate,
+                primitive,
+                socket_ordinal(sockets, connection.id),
+            )?;
+            targets.insert(
+                PhysicalSink::InstanceInput {
+                    instance: instance.id,
+                    input_index,
+                },
+                geometry,
+            );
+        }
+    }
+    Ok(())
+}
+
 fn primitive_input_geometry(
     candidate: &ExpandedPhysicalCandidate,
     primitive: PrimitiveId,
@@ -1385,9 +1815,11 @@ fn route_all(
     router: &dyn PhysicalRouter,
     config: &SearchConfig,
     analysis: &SeedPlacementAnalysis,
+    frame: PlacementFrame,
     plan_fingerprint: &Fingerprint,
     sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
     targets: &BTreeMap<PhysicalSink, TargetGeometry>,
+    sockets: &BTreeMap<ConnectionId, usize>,
     reservations: &mut PhysicalReservations,
 ) -> Result<(), SeedError> {
     let mut grouped = BTreeMap::<PhysicalEndpointId, Vec<PendingTarget>>::new();
@@ -1415,16 +1847,7 @@ fn route_all(
             };
             let geometry = match connection.target {
                 ConnectionTarget::Primitive(primitive) => {
-                    let ordinal = instance
-                        .expanded
-                        .topology
-                        .connections
-                        .iter()
-                        .filter(|candidate| {
-                            candidate.target == ConnectionTarget::Primitive(primitive)
-                        })
-                        .take_while(|candidate| candidate.id != connection.id)
-                        .count();
+                    let ordinal = socket_ordinal(sockets, connection.id);
                     primitive_input_geometry(candidate, primitive, ordinal)?
                 }
                 ConnectionTarget::Junction(_) => targets
@@ -1472,6 +1895,16 @@ fn route_all(
                 PhysicalReservationKind::KeepOut,
             );
         }
+        // Nothing may stand directly above a terminal, its access cell, or
+        // its support: dust up there needs a floor exactly where the terminal
+        // goes, and a powered support would drive it back into the input.
+        for cell in [
+            geometry.terminal,
+            step(geometry.terminal, geometry.allowed_entry),
+            geometry.support,
+        ] {
+            reserve_above(reservations, cell, endpoint);
+        }
     }
 
     let output_level = analysis
@@ -1481,6 +1914,9 @@ fn route_all(
         .max()
         .unwrap_or(0)
         .saturating_add(1);
+    let lateral_of = |at: Anchor| {
+        crate::compile::fragment_synth::placement::project_horizontal(at.x, at.z, frame.lateral)
+    };
     let obligations = grouped
         .into_iter()
         .map(|(source, pending)| {
@@ -1493,6 +1929,15 @@ fn route_all(
                         promoted: false,
                         structural_slack_ticks: route_target_slack(source, &target, analysis),
                         forward_distance: target_level.saturating_sub(source_level),
+                        lateral_distance: sources.get(&source).map_or(0, |geometry| {
+                            u64::from(
+                                lateral_of(geometry.route_anchor)
+                                    .abs_diff(lateral_of(target.geometry().terminal)),
+                            )
+                        }),
+                        physical_distance: sources.get(&source).map_or(0, |geometry| {
+                            manhattan(geometry.route_anchor, target.geometry().terminal)
+                        }),
                         key: target.key(),
                         target,
                     }
@@ -1531,6 +1976,73 @@ fn route_all(
                 .map(|geometry| geometry.terminal),
         )
         .collect::<BTreeSet<_>>();
+
+    // The channel routing plan: every net gets its own lane, climb, descent,
+    // and ground rows; everything else in the channels is closed.
+    let nets = schedule
+        .routes
+        .iter()
+        .map(|scheduled_route| {
+            let source_geometry = *sources
+                .get(&scheduled_route.source)
+                .ok_or(SeedError::Incomplete("route source geometry"))?;
+            let sinks = scheduled_route
+                .targets
+                .iter()
+                .map(|target| {
+                    let endpoint = match target {
+                        PendingTarget::Connection(connection, _) => {
+                            PhysicalEndpointId::Landing(*connection)
+                        }
+                        PendingTarget::DeclaredOutput(port, _) => {
+                            PhysicalEndpointId::DeclaredOutput(*port)
+                        }
+                    };
+                    (endpoint, target.geometry())
+                })
+                .collect();
+            Ok(NetGeometry {
+                source: scheduled_route.source,
+                source_geometry,
+                sinks,
+            })
+        })
+        .collect::<Result<Vec<_>, SeedError>>()?;
+    let layout = plan_channel_layout(
+        candidate,
+        analysis,
+        frame,
+        &nets,
+        router,
+        reservations,
+        config.router_limits,
+    )?;
+    // Box stub staircases belong to their routes before any route runs,
+    // ahead of the closed layers.
+    for (route_index, net) in nets.iter().enumerate() {
+        let Some(floors) = layout.floors.get(&net.source) else {
+            continue;
+        };
+        let route = RouteId(u32::try_from(route_index).map_err(|_| SeedError::IdentityOverflow)?);
+        for floor in floors {
+            if reservations.get(&floor.at).is_none() {
+                reservations.reserve(
+                    floor.at,
+                    PhysicalReservationOwner::RouteStair(route),
+                    PhysicalReservationKind::Floor(floor.state.clone()),
+                );
+            }
+        }
+    }
+    for &cell in &layout.closed {
+        if reservations.get(&cell).is_none() {
+            reservations.reserve(
+                cell,
+                PhysicalReservationOwner::KeepOut(CHANNEL_LAYER_OWNER),
+                PhysicalReservationKind::KeepOut,
+            );
+        }
+    }
 
     for (route_index, scheduled_route) in schedule.routes.into_iter().enumerate() {
         let source_id = scheduled_route.source;
@@ -1573,31 +2085,8 @@ fn route_all(
             .collect::<Result<Vec<_>, SeedError>>()?;
         let sinks = NonEmptyRouteSinks::new(sinks).map_err(|_| SeedError::EmptyRoute)?;
         let mut attempt_reservations = reservations.clone();
-        if matches!(source_id, PhysicalEndpointId::Junction(_))
-            && !attempt_reservations.promote_endpoint_conductor(
-                source.route_anchor,
-                source_id,
-                route,
-                compile::repeater(source.allowed_exit),
-            )
-        {
-            return Err(SeedError::Incomplete("junction source refresh reservation"));
-        }
-        if matches!(source_id, PhysicalEndpointId::Junction(_)) {
-            for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
-                if direction == source.allowed_exit || direction == source.allowed_exit.opposite() {
-                    continue;
-                }
-                let side = step(source.route_anchor, direction);
-                if attempt_reservations.get(&side).is_none() {
-                    attempt_reservations.reserve(
-                        side,
-                        PhysicalReservationOwner::KeepOut(route.0),
-                        PhysicalReservationKind::KeepOut,
-                    );
-                }
-            }
-        }
+        reserve_foreign_private_cells(&mut attempt_reservations, &layout, source_id, &protected);
+        reserve_source_refresh(&mut attempt_reservations, source_id, &source, route)?;
         let mut tree = match router.route(RouteRequest {
             id: route,
             source: RouteEndpoint {
@@ -1641,9 +2130,75 @@ fn route_all(
                 );
             }
         }
-        reserve_route(&mut attempt_reservations, &tree, &protected);
-        *reservations = attempt_reservations;
+        // Commit only what the route really laid: the attempt-local corridor
+        // keep-outs of later routes must not leak into the shared map.
+        reserve_source_refresh(reservations, source_id, &source, route)?;
+        reserve_route(reservations, &tree, &protected);
         candidate.routes.insert(route, tree);
+    }
+    Ok(())
+}
+
+/// Closes every other net's private plan cells for this attempt.  The
+/// owner's own cells stay free, and pre-reserved terminals are untouched.
+fn reserve_foreign_private_cells(
+    attempt: &mut PhysicalReservations,
+    layout: &ChannelLayout,
+    owner: PhysicalEndpointId,
+    protected: &BTreeSet<Anchor>,
+) {
+    let own = layout.private.get(&owner);
+    for (&net, cells) in &layout.private {
+        if net == owner {
+            continue;
+        }
+        for &cell in cells {
+            if protected.contains(&cell) || own.is_some_and(|own| own.contains(&cell)) {
+                continue;
+            }
+            if attempt.get(&cell).is_none() {
+                attempt.reserve(
+                    cell,
+                    PhysicalReservationOwner::Endpoint(net),
+                    PhysicalReservationKind::KeepOut,
+                );
+            }
+        }
+    }
+}
+
+/// A junction source is refreshed by a repeater at its route anchor, so the
+/// anchor is promoted to an exact route conductor and its two side cells are
+/// kept clear of foreign dust.
+fn reserve_source_refresh(
+    reservations: &mut PhysicalReservations,
+    source_id: PhysicalEndpointId,
+    source: &SourceGeometry,
+    route: RouteId,
+) -> Result<(), SeedError> {
+    if !matches!(source_id, PhysicalEndpointId::Junction(_)) {
+        return Ok(());
+    }
+    if !reservations.promote_endpoint_conductor(
+        source.route_anchor,
+        source_id,
+        route,
+        compile::repeater(source.allowed_exit),
+    ) {
+        return Err(SeedError::Incomplete("junction source refresh reservation"));
+    }
+    for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
+        if direction == source.allowed_exit || direction == source.allowed_exit.opposite() {
+            continue;
+        }
+        let side = step(source.route_anchor, direction);
+        if reservations.get(&side).is_none() {
+            reservations.reserve(
+                side,
+                PhysicalReservationOwner::KeepOut(route.0),
+                PhysicalReservationKind::KeepOut,
+            );
+        }
     }
     Ok(())
 }
@@ -1758,20 +2313,83 @@ fn reservations_for_components(
         );
         ordinal = ordinal.saturating_add(1);
     }
+    // A route cell directly above a component would need a floor exactly
+    // where the component stands, so the cell above every component block is
+    // closed as well.
+    let component_cells = candidate
+        .placements
+        .values()
+        .flat_map(|placement| &placement.blocks)
+        .chain(
+            candidate
+                .boundaries
+                .values()
+                .flat_map(|boundary| &boundary.blocks),
+        )
+        .chain(
+            candidate
+                .junctions
+                .values()
+                .flat_map(|junction| &junction.cells),
+        )
+        .map(|block| (block.at, block.state.kind))
+        .collect::<Vec<_>>();
+    for (at, _) in component_cells {
+        // Mandatory air rather than a keep-out: it also refuses a route floor
+        // there, so nothing can stand on top of a torch, lever, or support
+        // that the component may power.
+        let above = Anchor { y: at.y + 1, ..at };
+        if reservations.get(&above).is_none() {
+            reservations.reserve(
+                above,
+                PhysicalReservationOwner::KeepOut(ordinal),
+                PhysicalReservationKind::MandatoryAir,
+            );
+            ordinal = ordinal.saturating_add(1);
+        }
+    }
     Ok(reservations)
 }
 
-fn reserve_route(
+pub(crate) fn reserve_route(
     reservations: &mut PhysicalReservations,
     tree: &crate::compile::routing::RealisedRouteTree,
     protected: &BTreeSet<Anchor>,
 ) {
+    // Terminals and the source anchor were protected as endpoint keep-outs
+    // before routing; now that the route really occupies them they become
+    // exact conductors so later routes keep their halo distance from them.
+    let mut endpoint_at = BTreeMap::new();
+    for branch in &tree.branches {
+        endpoint_at.insert(branch.root, tree.source);
+        let endpoint = match branch.target {
+            crate::compile::routing::RouteTarget::Connection(connection) => {
+                PhysicalEndpointId::Landing(connection)
+            }
+            crate::compile::routing::RouteTarget::DeclaredOutput(port) => {
+                PhysicalEndpointId::DeclaredOutput(port)
+            }
+        };
+        endpoint_at.insert(branch.terminal.at, endpoint);
+    }
     for block in &tree.cells {
-        reservations.reserve(
-            block.at,
-            PhysicalReservationOwner::Route(tree.id),
-            PhysicalReservationKind::Conductor(block.state.clone()),
-        );
+        if reservations
+            .reserve(
+                block.at,
+                PhysicalReservationOwner::Route(tree.id),
+                PhysicalReservationKind::Conductor(block.state.clone()),
+            )
+            .is_none()
+        {
+            if let Some(&endpoint) = endpoint_at.get(&block.at) {
+                reservations.promote_endpoint_conductor(
+                    block.at,
+                    endpoint,
+                    tree.id,
+                    block.state.clone(),
+                );
+            }
+        }
     }
     for block in &tree.floors {
         reservations.reserve(
@@ -1931,7 +2549,7 @@ fn state_for_local(
     state
 }
 
-fn step(at: Anchor, direction: Facing) -> Anchor {
+pub(crate) fn step(at: Anchor, direction: Facing) -> Anchor {
     match direction {
         Facing::North => Anchor { z: at.z - 1, ..at },
         Facing::South => Anchor { z: at.z + 1, ..at },
@@ -1942,7 +2560,7 @@ fn step(at: Anchor, direction: Facing) -> Anchor {
     }
 }
 
-fn step_many(at: Anchor, direction: Facing, distance: i32) -> Anchor {
+pub(crate) fn step_many(at: Anchor, direction: Facing, distance: i32) -> Anchor {
     match direction {
         Facing::North => Anchor {
             z: at.z.saturating_sub(distance),
@@ -1986,7 +2604,7 @@ mod tests {
     };
     use crate::compile::fragment_synth::services::{DurableSeedEmitter, DurableSeedVerifier};
     use crate::compile::metrics::canonical_fingerprint;
-    use crate::compile::routing::{DurablePhysicalRouter, RealisedRouteTree};
+    use crate::compile::routing::{GuardedPhysicalRouter, RealisedRouteTree};
     use crate::compile::Gate;
 
     #[test]
@@ -2245,6 +2863,7 @@ mod tests {
         ) -> Result<SeedPlacementPlan, SeedPlacementError> {
             self.calls.set(self.calls.get() + 1);
             Ok(SeedPlacementPlan {
+                frame: crate::compile::fragment_synth::placement::derive_frame(_request.pins),
                 instances: BTreeMap::from([(
                     InstanceId(0),
                     PreferredInstancePose {
@@ -2284,7 +2903,7 @@ mod tests {
             SeedServices {
                 library: &library,
                 placer: &placer,
-                router: &DurablePhysicalRouter,
+                router: &GuardedPhysicalRouter,
                 emitter: &DurableSeedEmitter,
                 verifier: &DurableSeedVerifier,
                 certifier: &CompleteCandidateCertifier,
@@ -2334,7 +2953,7 @@ mod tests {
             SeedServices {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
-                router: &DurablePhysicalRouter,
+                router: &GuardedPhysicalRouter,
                 emitter: &DurableSeedEmitter,
                 verifier: &DurableSeedVerifier,
                 certifier: &CompleteCandidateCertifier,
@@ -2358,7 +2977,7 @@ mod tests {
             SeedServices {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
-                router: &DurablePhysicalRouter,
+                router: &GuardedPhysicalRouter,
                 emitter: &DurableSeedEmitter,
                 verifier: &DurableSeedVerifier,
                 certifier: &CompleteCandidateCertifier,
@@ -2420,7 +3039,7 @@ mod tests {
             SeedServices {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
-                router: &DurablePhysicalRouter,
+                router: &GuardedPhysicalRouter,
                 emitter: &DurableSeedEmitter,
                 verifier: &DurableSeedVerifier,
                 certifier: &CompleteCandidateCertifier,
@@ -2462,7 +3081,7 @@ mod tests {
     impl PhysicalRouter for CountingRouter {
         fn route(&self, request: RouteRequest<'_>) -> Result<RealisedRouteTree, RouterFailure> {
             self.calls.set(self.calls.get() + 1);
-            DurablePhysicalRouter.route(request)
+            GuardedPhysicalRouter.route(request)
         }
     }
 
@@ -2840,7 +3459,7 @@ mod tests {
             SeedServices {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
-                router: &DurablePhysicalRouter,
+                router: &GuardedPhysicalRouter,
                 emitter: &DurableSeedEmitter,
                 verifier: &DurableSeedVerifier,
                 certifier: &CompleteCandidateCertifier,
@@ -2894,7 +3513,7 @@ mod tests {
                     .collect(),
                 limits: request.limits,
             });
-            DurablePhysicalRouter.route(request)
+            GuardedPhysicalRouter.route(request)
         }
     }
 
@@ -3009,5 +3628,141 @@ mod tests {
                 );
             }
         }
+    }
+    /// Records every access-corridor violation the production seed hands to
+    /// the router: a source exit cell or sink approach cell that a foreign
+    /// route already occupies, or that a foreign conductor hugs.
+    #[derive(Default)]
+    struct CorridorCheckingRouter {
+        violations: RefCell<Vec<String>>,
+    }
+
+    impl CorridorCheckingRouter {
+        fn check_cell(&self, request: &RouteRequest<'_>, label: &str, cell: Anchor) {
+            let own_endpoints = std::iter::once(request.source.id)
+                .chain(request.sinks.as_slice().iter().map(|sink| sink.endpoint))
+                .collect::<BTreeSet<_>>();
+            if let Some(claim) = request.reservations.get(&cell) {
+                let own = match claim.owner {
+                    PhysicalReservationOwner::Endpoint(endpoint) => {
+                        own_endpoints.contains(&endpoint)
+                    }
+                    PhysicalReservationOwner::Route(route)
+                    | PhysicalReservationOwner::RouteStair(route) => route == request.id,
+                    PhysicalReservationOwner::Sink(sink) => sink.route == request.id,
+                    PhysicalReservationOwner::KeepOut(_) => false,
+                };
+                if !own {
+                    self.violations.borrow_mut().push(format!(
+                        "route {:?} {label} {cell:?} is reserved by {:?}",
+                        request.id, claim.owner
+                    ));
+                }
+            }
+            for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
+                let neighbour = step(cell, direction);
+                if let Some(claim) = request.reservations.get(&neighbour) {
+                    let foreign_conductor =
+                        matches!(claim.kind, PhysicalReservationKind::Conductor(_))
+                            && !matches!(
+                                claim.owner,
+                                PhysicalReservationOwner::Route(route) if route == request.id
+                            );
+                    if foreign_conductor {
+                        self.violations.borrow_mut().push(format!(
+                            "route {:?} {label} {cell:?} is hugged by {:?} at {neighbour:?}",
+                            request.id, claim.owner
+                        ));
+                    }
+                }
+            }
+        }
+    }
+
+    impl PhysicalRouter for CorridorCheckingRouter {
+        fn route(&self, request: RouteRequest<'_>) -> Result<RealisedRouteTree, RouterFailure> {
+            self.check_cell(
+                &request,
+                "source exit",
+                step(request.source.anchor, request.source.allowed_exit),
+            );
+            for sink in request.sinks.as_slice() {
+                self.check_cell(
+                    &request,
+                    "sink approach",
+                    step(sink.anchor, sink.allowed_entry),
+                );
+            }
+            GuardedPhysicalRouter.route(request)
+        }
+    }
+
+    fn build_checking_corridors(
+        netlist: &Netlist,
+        pins: Option<&PortPlacements>,
+    ) -> (Result<CertifiedCandidate, SeedError>, Vec<String>) {
+        let library = Library::default_library();
+        let config = SearchConfig::checked_defaults();
+        let router = CorridorCheckingRouter::default();
+        let result = compile_sparse_seed_with_services(
+            SeedInput {
+                lowered: netlist,
+                source_provenance: None,
+                pins,
+            },
+            SeedServices {
+                library: &library,
+                placer: &TopologyAwareSeedPlacer,
+                router: &router,
+                emitter: &DurableSeedEmitter,
+                verifier: &DurableSeedVerifier,
+                certifier: &CompleteCandidateCertifier,
+                search_config: &config,
+            },
+        );
+        let violations = router.violations.into_inner();
+        (result, violations)
+    }
+
+    #[test]
+    fn pinned_and4_routes_never_occupy_or_hug_a_later_access_corridor() {
+        let (netlist, _) = build_and4_netlist();
+        let output_name = netlist.outputs[0].clone();
+        let mut pins = PortPlacements::default();
+        pins.pin("a", Anchor { x: 21, y: 1, z: 62 }, Facing::North)
+            .pin(output_name, Anchor { x: 53, y: 1, z: 10 }, Facing::North);
+
+        let (result, violations) = build_checking_corridors(&netlist, Some(&pins));
+
+        assert_eq!(violations, Vec::<String>::new());
+        result.expect("pinned and4 must route and certify once corridors are protected");
+    }
+
+    #[test]
+    fn pinned_output_facing_away_from_its_channel_is_joined_by_a_router_stub() {
+        // The output lamp faces south, so its wire has to enter from the
+        // north, on the far side from the channel that serves it: the layout
+        // must plan a stub around the pin instead of a straight line into
+        // the lamp.
+        let (netlist, _) = build_and4_netlist();
+        let output_name = netlist.outputs[0].clone();
+        let mut pins = PortPlacements::default();
+        pins.pin("a", Anchor { x: 21, y: 1, z: 62 }, Facing::North)
+            .pin(output_name, Anchor { x: 53, y: 1, z: 10 }, Facing::South);
+
+        let (result, violations) = build_checking_corridors(&netlist, Some(&pins));
+
+        assert_eq!(violations, Vec::<String>::new());
+        result.expect("a pinned output facing away from its channel must route and certify");
+    }
+
+    #[test]
+    fn full_adder_routes_never_occupy_or_hug_a_later_access_corridor() {
+        let (netlist, _) = crate::circuits::full_adder::build_full_adder_netlist();
+
+        let (result, violations) = build_checking_corridors(&netlist, None);
+
+        assert_eq!(violations, Vec::<String>::new());
+        result.expect("full_adder must route and certify once corridors are protected");
     }
 }

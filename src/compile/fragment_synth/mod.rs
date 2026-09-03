@@ -1,5 +1,7 @@
 mod api;
 pub mod benchmark;
+pub(crate) mod channel_layout;
+pub(crate) mod channel_plan;
 pub mod candidate;
 pub mod certification;
 pub mod config;
