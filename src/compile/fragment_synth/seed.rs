@@ -30,7 +30,7 @@ use crate::compile::fragment_synth::placement::{
     analyse_instance_dag, SeedPlacementAnalysis, SeedPlacementPlan, SeedPlacementRequest,
     SeedPlacer,
 };
-use crate::compile::fragment_synth::placement::{LayoutRepair, PlacementFrame};
+use crate::compile::fragment_synth::placement::{LateralWindow, LayoutRepair, PlacementFrame};
 use crate::compile::fragment_synth::realise::{ExpandedAdapterError, ExpandedCandidateAdapter};
 use crate::compile::fragment_synth::route_schedule::{
     RouteObligation, RouteSchedule, TargetObligation,
@@ -359,6 +359,7 @@ impl SparseSeedBuilder {
         let cap = services.search_config.max_seed_backtracks;
         let mut repairs = Vec::<LayoutRepair>::new();
         let mut attempts = 0u64;
+        let mut widenings = 0u64;
         loop {
             attempts += 1;
             match Self::build_attempt(&input, &services, variant, instances.clone(), &repairs) {
@@ -385,7 +386,11 @@ impl SparseSeedBuilder {
                         None => needed + CHANNEL_ENDPOINT_CELLS,
                     };
                     let already = previous.is_some_and(|previous| width <= previous);
-                    if already || attempts >= cap {
+                    // A channel that keeps asking for more room after this
+                    // many widenings is not short of lanes; something else
+                    // is wrong with the layout.
+                    widenings += 1;
+                    if already || attempts >= cap || widenings > MAX_CHANNEL_WIDENINGS {
                         return Err(SeedError::SeedExhausted {
                             attempts_used: attempts,
                             refusal: Box::new(SeedError::ChannelLayout(
@@ -435,6 +440,8 @@ impl SparseSeedBuilder {
                 repairs,
             )
             .map_err(|_| SeedError::Incomplete("seed placement plan"))?;
+        // Every later stage measures levels in the plan's folded analysis.
+        let placement_analysis = placement_plan.analysis.clone();
         let plan_translation =
             PlanTranslation::for_unpinned(&placement_plan, !candidate.pin_contracts.is_empty());
 
@@ -477,6 +484,7 @@ impl SparseSeedBuilder {
             services.search_config,
             &placement_analysis,
             placement_plan.frame,
+            placement_plan.window,
             &placement_plan.fingerprint,
             &sources,
             &targets,
@@ -589,6 +597,8 @@ fn reserve_route_endpoints(
 
 /// Reservation owner tag for the closed channel layers.
 const CHANNEL_LAYER_OWNER: u32 = u32::MAX;
+/// Channel widenings the repair loop grants before it gives up.
+const MAX_CHANNEL_WIDENINGS: u64 = 16;
 /// Forward cells of a channel taken by the source anchor and the sink
 /// terminal beside their macros; the placer's width includes them, the
 /// channel plan's free span does not.
@@ -1816,6 +1826,7 @@ fn route_all(
     config: &SearchConfig,
     analysis: &SeedPlacementAnalysis,
     frame: PlacementFrame,
+    window: LateralWindow,
     plan_fingerprint: &Fingerprint,
     sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
     targets: &BTreeMap<PhysicalSink, TargetGeometry>,
@@ -2012,6 +2023,7 @@ fn route_all(
         candidate,
         analysis,
         frame,
+        window,
         &nets,
         router,
         reservations,
@@ -2864,6 +2876,8 @@ mod tests {
             self.calls.set(self.calls.get() + 1);
             Ok(SeedPlacementPlan {
                 frame: crate::compile::fragment_synth::placement::derive_frame(_request.pins),
+                analysis: _request.analysis.clone(),
+                window: LateralWindow::default(),
                 instances: BTreeMap::from([(
                     InstanceId(0),
                     PreferredInstancePose {

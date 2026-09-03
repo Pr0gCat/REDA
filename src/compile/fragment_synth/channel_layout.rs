@@ -19,8 +19,8 @@ use super::channel_plan::{
 use super::identity::PhysicalEndpointId;
 use super::identity::{RouteId, RoutedSinkId};
 use super::placement::{
-    horizontal_unit, project_horizontal, PlacementFrame, SeedPlacementAnalysis,
-    CHANNEL_LATERAL_MARGIN, ROW_GRID,
+    horizontal_unit, project_horizontal, LateralWindow, PlacementFrame, SeedPlacementAnalysis,
+    ROW_GRID,
 };
 use super::seed::{reserve_route, step, step_many, SourceGeometry, TargetGeometry};
 use crate::compile::geometry::Anchor;
@@ -97,8 +97,9 @@ pub(crate) struct ChannelLayout {
     pub floors: BTreeMap<PhysicalEndpointId, Vec<PlacedBlock>>,
 }
 
-/// How far beyond the placed macros the closed channel layers extend.
-const LATERAL_MARGIN: i32 = CHANNEL_LATERAL_MARGIN;
+/// How far beyond the placed macros the closed channel layers extend, inside
+/// the lateral window.
+const LATERAL_MARGIN: i32 = 32;
 /// Free forward cells of the turnaround channel beyond the last column.
 const TURNAROUND_CHANNEL: i32 = 40;
 /// Closed forward cells before the first and after the last column.
@@ -184,6 +185,7 @@ pub(crate) fn plan_channel_layout(
     candidate: &ExpandedPhysicalCandidate,
     analysis: &SeedPlacementAnalysis,
     placement_frame: PlacementFrame,
+    window: LateralWindow,
     nets: &[NetGeometry],
     router: &dyn PhysicalRouter,
     reservations: &PhysicalReservations,
@@ -249,7 +251,7 @@ pub(crate) fn plan_channel_layout(
             occupy(&mut by_level, level, block.at);
         }
     }
-    let endpoint_level = |endpoint: PhysicalEndpointId| -> Option<i64> {
+    let raw_level = |endpoint: PhysicalEndpointId| -> Option<i64> {
         match endpoint {
             PhysicalEndpointId::PrimaryInput(_) => Some(min_level - 1),
             PhysicalEndpointId::DeclaredOutput(_) => Some(max_level + 1),
@@ -265,11 +267,11 @@ pub(crate) fn plan_channel_layout(
     };
     // Endpoint cells belong to their columns as well.
     for net in nets {
-        if let Some(level) = endpoint_level(net.source) {
+        if let Some(level) = raw_level(net.source) {
             occupy(&mut by_level, level, net.source_geometry.route_anchor);
         }
         for (endpoint, geometry) in &net.sinks {
-            if let Some(level) = endpoint_level(*endpoint) {
+            if let Some(level) = raw_level(*endpoint) {
                 occupy(&mut by_level, level, geometry.terminal);
                 occupy(&mut by_level, level, geometry.support);
                 if !frame.along_forward(geometry.allowed_entry) {
@@ -284,6 +286,32 @@ pub(crate) fn plan_channel_layout(
             }
         }
     }
+    // Pinned inputs and pinned outputs whose forward extents overlap form
+    // one pin column: the levels march away from both, and the output nets
+    // come back to it through every column in between.
+    let mut output_level = max_level + 1;
+    if let (Some(inputs), Some(outputs)) = (
+        by_level.get(&(min_level - 1)).cloned(),
+        by_level.get(&(max_level + 1)).cloned(),
+    ) {
+        if inputs.min_forward <= outputs.max_forward && outputs.min_forward <= inputs.max_forward {
+            by_level.remove(&(max_level + 1));
+            let column = by_level
+                .get_mut(&(min_level - 1))
+                .expect("the input column was just read");
+            column.min_forward = column.min_forward.min(outputs.min_forward);
+            column.max_forward = column.max_forward.max(outputs.max_forward);
+            column.blocked_laterals.extend(outputs.blocked_laterals);
+            output_level = min_level - 1;
+        }
+    }
+    let endpoint_level = |endpoint: PhysicalEndpointId| -> Option<i64> {
+        if matches!(endpoint, PhysicalEndpointId::DeclaredOutput(_)) {
+            Some(output_level)
+        } else {
+            raw_level(endpoint)
+        }
+    };
     // Columns in forward order: a pinned output column may sit between the
     // inputs and the first level when the levels were placed beyond it.
     let mut ordered = by_level.into_iter().collect::<Vec<_>>();
@@ -310,6 +338,16 @@ pub(crate) fn plan_channel_layout(
     let Some((lateral_min, lateral_max)) = lateral_extent else {
         return Ok(ChannelLayout::default());
     };
+    // Everything the plan adds beside the macros stays inside the window.
+    // The placer measures laterals from the frame origin; this layout
+    // measures them from the world origin.
+    let origin_lateral = frame.lateral_of(placement_frame.origin);
+    let window = LateralWindow {
+        min: window.min.map(|min| min + origin_lateral),
+        max: window.max.map(|max| max + origin_lateral),
+    };
+    let (lateral_lo, lateral_hi) =
+        window.clamp(lateral_min - LATERAL_MARGIN, lateral_max + LATERAL_MARGIN);
     let channel_count = columns.len().saturating_sub(1);
     let channel_start = |channel: usize| columns[channel].max_forward + 1;
     let channel_end = |channel: usize| columns[channel + 1].min_forward - 1;
@@ -417,29 +455,42 @@ pub(crate) fn plan_channel_layout(
         );
     }
 
-    // ---- pinned output boxes -------------------------------------------
-    // A pinned output faces outward, so its wire enters from inside the box
-    // the pinned ports form, and that box is too tight for planar
-    // corridors.  Every pinned output is therefore joined to its column
-    // edge by the physical router itself, over the component reservations
-    // plus the stubs already routed: the router bridges earlier stubs where
-    // it must, and the stub's cells become the sink's private cells.
-    // Stubs are routed nearest the channel edge first, so no later stub can
-    // wall an earlier approach in; each takes the free edge lateral nearest
-    // its approach, which becomes its channel row.  The stub floors are
-    // reserved for the real route before any route runs, so a route laid
-    // under another's bridge or over it finds the same physics in either
-    // order.  A pinned output whose approach already lies in the channel
-    // keeps its straight line.
+    // ---- pinned port stubs ---------------------------------------------
+    // A pinned port faces outward, so its wire enters (or leaves) on the far
+    // side of the box the pinned ports form; that box is too tight for
+    // planar corridors, and pinned inputs beside each other along the
+    // forward axis would all claim the same row.  Every pinned output whose
+    // entry lies inside its column, and every pinned input whose exit does
+    // not run along the forward axis, is therefore joined to the column edge
+    // by the physical router itself, over the component reservations, the
+    // stubs already routed and a keep-out ring around every other pinned
+    // port's terminal, support and entry cells.  Stubs are routed nearest
+    // the channel edge first, so no later stub can wall an earlier port in;
+    // each takes the free edge lateral nearest its approach, which becomes
+    // its channel row.  The stub floors are reserved for the real route
+    // before any route runs, so a route laid under another's bridge or over
+    // it finds the same physics in either order.
     struct Stub {
         cells: BTreeSet<Anchor>,
         floors: Vec<PlacedBlock>,
     }
-    let grid_phase = lines
-        .values()
-        .next()
-        .map_or(0, |net| net.source.row.rem_euclid(2));
-    let mut stubs = BTreeMap::<(PhysicalEndpointId, usize), Stub>::new();
+    #[derive(Clone, Copy)]
+    struct StubPort {
+        net: PhysicalEndpointId,
+        /// `None` for the net's source, the sink index otherwise.
+        sink: Option<usize>,
+        endpoint: PhysicalEndpointId,
+        /// Where the stub starts and the direction it leaves in.
+        anchor: Anchor,
+        exit: Facing,
+        /// The block behind the anchor (lamp or handover repeater).
+        support: Anchor,
+        entry_depth: i32,
+    }
+    // Rows the plan chooses share the parity of the macro row grid, which
+    // the placer lays from the frame origin in steps of four.
+    let grid_phase = origin_lateral.rem_euclid(2);
+    let mut stubs = BTreeMap::<(PhysicalEndpointId, Option<usize>), Stub>::new();
     {
         let edge_of = |line: &Line| -> i32 {
             let column = &columns[line.column];
@@ -449,53 +500,84 @@ pub(crate) fn plan_channel_layout(
                 column.min_forward
             }
         };
-        let boxed = |id: PhysicalEndpointId,
-                     index: usize,
-                     endpoint: PhysicalEndpointId,
-                     geometry: &TargetGeometry|
-         -> bool {
-            if !matches!(endpoint, PhysicalEndpointId::DeclaredOutput(_))
-                || !candidate.pin_contracts.contains_key(&endpoint)
-            {
-                return false;
-            }
-            let line = &lines[&id].sinks[index];
-            let entry = frame.forward_of(step(geometry.terminal, geometry.allowed_entry));
-            if line.channel == line.column {
-                entry <= edge_of(line)
-            } else {
-                entry >= edge_of(line)
+        let line_of = |lines: &BTreeMap<PhysicalEndpointId, NetLines>, port: &StubPort| -> Line {
+            match port.sink {
+                Some(index) => lines[&port.net].sinks[index],
+                None => lines[&port.net].source,
             }
         };
+        let pinned = |endpoint: PhysicalEndpointId| candidate.pin_contracts.contains_key(&endpoint);
         let mut members = Vec::new();
         for net in nets {
+            let source = &net.source_geometry;
+            if matches!(net.source, PhysicalEndpointId::PrimaryInput(_))
+                && pinned(net.source)
+                && source.allowed_exit != frame.forward
+            {
+                members.push(StubPort {
+                    net: net.source,
+                    sink: None,
+                    endpoint: net.source,
+                    anchor: source.route_anchor,
+                    exit: source.allowed_exit,
+                    support: step(source.route_anchor, source.allowed_exit.opposite()),
+                    entry_depth: 3,
+                });
+            }
             for (index, (endpoint, geometry)) in net.sinks.iter().enumerate() {
-                if boxed(net.source, index, *endpoint, geometry) {
-                    members.push((net.source, index, *endpoint, geometry));
+                if !matches!(endpoint, PhysicalEndpointId::DeclaredOutput(_)) || !pinned(*endpoint)
+                {
+                    continue;
+                }
+                let line = lines[&net.source].sinks[index];
+                let entry = frame.forward_of(step(geometry.terminal, geometry.allowed_entry));
+                let inside = if line.channel == line.column {
+                    entry <= edge_of(&line)
+                } else {
+                    entry >= edge_of(&line)
+                };
+                if inside {
+                    members.push(StubPort {
+                        net: net.source,
+                        sink: Some(index),
+                        endpoint: *endpoint,
+                        anchor: geometry.terminal,
+                        exit: geometry.allowed_entry,
+                        support: geometry.support,
+                        entry_depth: entry_depth(geometry),
+                    });
                 }
             }
         }
-        members.sort_by_key(|&(id, index, _, geometry)| {
-            let line = &lines[&id].sinks[index];
-            let entry = frame.forward_of(step(geometry.terminal, geometry.allowed_entry));
-            ((entry - edge_of(line)).abs(), line.natural, id, index)
+        members.sort_by_key(|port| {
+            let line = line_of(&lines, port);
+            let entry = frame.forward_of(step(port.anchor, port.exit));
+            (
+                (entry - edge_of(&line)).abs(),
+                line.natural,
+                port.net,
+                port.sink,
+            )
         });
         let mut committed = Vec::<RealisedRouteTree>::new();
         let mut used_rows = BTreeMap::<usize, Vec<i32>>::new();
-        for (stub_index, &(id, index, endpoint, geometry)) in members.iter().enumerate() {
-            let line = lines[&id].sinks[index];
+        for (stub_index, port) in members.iter().enumerate() {
+            let line = line_of(&lines, port);
             let edge = edge_of(&line);
             let (entry_from, support_step) = if line.channel == line.column {
                 (frame.forward.opposite(), frame.forward)
             } else {
                 (frame.forward, frame.forward.opposite())
             };
-            let PhysicalEndpointId::DeclaredOutput(port) = endpoint else {
-                continue;
+            // The stub's end is only a label for the router; the real
+            // terminal is the port's own.
+            let label = match port.endpoint {
+                PhysicalEndpointId::DeclaredOutput(id) | PhysicalEndpointId::PrimaryInput(id) => id,
+                _ => continue,
             };
             let route = RouteId(u32::MAX - u32::try_from(stub_index).unwrap_or(0));
-            let own_entry = step(geometry.terminal, geometry.allowed_entry);
-            let mut candidates = ((lateral_min - LATERAL_MARGIN)..=(lateral_max + LATERAL_MARGIN))
+            let own_entry = step(port.anchor, port.exit);
+            let mut candidates = (lateral_lo..=lateral_hi)
                 .filter(|c| c.rem_euclid(2) == grid_phase)
                 .filter(|c| {
                     used_rows
@@ -513,21 +595,21 @@ pub(crate) fn plan_channel_layout(
                 for tree in &committed {
                     reserve_route(&mut scratch, tree, &BTreeSet::new());
                 }
-                // Nothing may run next to another pinned output's terminal
-                // or lamp, and every other output's entry cells stay free
-                // with the same clearance a laid wire would get.
-                for &(other_id, other_index, other_endpoint, other_geometry) in &members {
-                    let own = other_id == id && other_index == index;
+                // Nothing may run next to another pinned port's anchor or
+                // support, and every other port's entry cells stay free with
+                // the same clearance a laid wire would get.
+                for other in &members {
+                    let own = other.net == port.net && other.sink == port.sink;
                     let mut protect = |cell: Anchor, kind: PhysicalReservationKind| {
                         if scratch.get(&cell).is_none() {
                             scratch.reserve(
                                 cell,
-                                PhysicalReservationOwner::Endpoint(other_endpoint),
+                                PhysicalReservationOwner::Endpoint(other.endpoint),
                                 kind,
                             );
                         }
                     };
-                    for cell in [other_geometry.terminal, other_geometry.support] {
+                    for cell in [other.anchor, other.support] {
                         for direction in [Facing::North, Facing::East, Facing::South, Facing::West]
                         {
                             let neighbour = step(cell, direction);
@@ -538,13 +620,9 @@ pub(crate) fn plan_channel_layout(
                         }
                     }
                     if !own {
-                        for distance in 1..=entry_depth(other_geometry) {
+                        for distance in 1..=other.entry_depth {
                             protect(
-                                step_many(
-                                    other_geometry.terminal,
-                                    other_geometry.allowed_entry,
-                                    distance,
-                                ),
+                                step_many(other.anchor, other.exit, distance),
                                 PhysicalReservationKind::Conductor(crate::compile::dust()),
                             );
                         }
@@ -555,11 +633,11 @@ pub(crate) fn plan_channel_layout(
                 }
                 let sinks = vec![RouteSink {
                     id: RoutedSinkId { route, ordinal: 0 },
-                    endpoint,
+                    endpoint: port.endpoint,
                     anchor: end,
                     allowed_entry: entry_from,
                     terminal: TerminalContract::Sink {
-                        target: RouteTarget::DeclaredOutput(port),
+                        target: RouteTarget::DeclaredOutput(label),
                         support,
                         requirement: TerminalRequirement::Exact(RouteTerminalKind::BareMergeDust),
                     },
@@ -570,9 +648,9 @@ pub(crate) fn plan_channel_layout(
                 let request = RouteRequest {
                     id: route,
                     source: RouteEndpoint {
-                        id,
-                        anchor: geometry.terminal,
-                        allowed_exit: geometry.allowed_entry,
+                        id: port.net,
+                        anchor: port.anchor,
+                        allowed_exit: port.exit,
                         terminal: TerminalContract::Source {
                             signal_strength: MAX_SIGNAL_STRENGTH,
                         },
@@ -587,14 +665,16 @@ pub(crate) fn plan_channel_layout(
                 }
             }
             let Some((c, tree)) = found else {
-                return Err(ChannelLayoutError::BoxStub { endpoint });
+                return Err(ChannelLayoutError::BoxStub {
+                    endpoint: port.endpoint,
+                });
             };
             // The conductors and the clearance above them stay open for the
             // real route; the staircase floors are reserved for it instead,
             // so neither it nor any other route conducts through them.
             let mut cells = BTreeSet::new();
             for block in &tree.cells {
-                if block.at == geometry.terminal {
+                if block.at == port.anchor {
                     continue;
                 }
                 cells.insert(block.at);
@@ -606,11 +686,15 @@ pub(crate) fn plan_channel_layout(
             let floors = tree.floors.clone();
             used_rows.entry(line.column).or_default().push(c);
             committed.push(tree);
-            stubs.insert((id, index), Stub { cells, floors });
-            let net = lines.get_mut(&id).expect("net exists");
-            net.sinks[index].row = c;
-            net.sinks[index].natural = c;
-            net.sinks[index].depth = edge;
+            stubs.insert((port.net, port.sink), Stub { cells, floors });
+            let net = lines.get_mut(&port.net).expect("net exists");
+            let line = match port.sink {
+                Some(index) => &mut net.sinks[index],
+                None => &mut net.source,
+            };
+            line.row = c;
+            line.natural = c;
+            line.depth = edge;
         }
     }
 
@@ -695,7 +779,7 @@ pub(crate) fn plan_channel_layout(
         let mut per_column = BTreeMap::<usize, Vec<(PhysicalEndpointId, usize)>>::new();
         for (&id, net) in &lines {
             for (index, sink) in net.sinks.iter().enumerate() {
-                if stubs.contains_key(&(id, index)) {
+                if stubs.contains_key(&(id, Some(index))) {
                     continue;
                 }
                 per_column.entry(sink.column).or_default().push((id, index));
@@ -872,14 +956,11 @@ pub(crate) fn plan_channel_layout(
         if demands.is_empty() {
             continue;
         }
-        // Crossing rows lie on the same lateral grid as every endpoint row,
-        // so no crossing can ever sit next to another net's row.
-        let grid_phase = lines
-            .values()
-            .next()
-            .map_or(0, |net| net.source.row.rem_euclid(ROW_GRID));
-        let free = ((lateral_min - LATERAL_MARGIN)..=(lateral_max + LATERAL_MARGIN))
-            .filter(|lateral| lateral.rem_euclid(ROW_GRID) == grid_phase)
+        // Crossing rows share the parity of every endpoint row (the grid is
+        // four cells, so the rows between grid rows keep two cells from
+        // them), and no crossing may sit next to another net's row.
+        let free = (lateral_lo..=lateral_hi)
+            .filter(|lateral| lateral.rem_euclid(2) == grid_phase)
             .filter(|lateral| !geometry.blocked_laterals.contains(lateral))
             .collect::<BTreeSet<_>>();
         let rows = allocate_crossing_rows(&free, &demands)
@@ -893,6 +974,17 @@ pub(crate) fn plan_channel_layout(
     let mut layout = ChannelLayout::default();
     let mut private = |id: PhysicalEndpointId, cell: Anchor| {
         layout.private.entry(id).or_default().insert(cell);
+    };
+    // The cell under a lane cell at a climb or descent row is the riser of
+    // that staircase: it is reserved as the net's floor, never opened, so
+    // the router cannot conduct through it and strand the lane above.
+    let riser = |floors: &mut BTreeMap<PhysicalEndpointId, Vec<PlacedBlock>>,
+                 id: PhysicalEndpointId,
+                 at: Anchor| {
+        floors.entry(id).or_default().push(PlacedBlock {
+            at,
+            state: crate::compile::stone(),
+        });
     };
     for (channel, &level) in levels.iter().enumerate().take(channel_count) {
         let start = channel_start(channel);
@@ -954,11 +1046,8 @@ pub(crate) fn plan_channel_layout(
         // straddle its row, so it needs the same four-cell clearance from
         // every other row that endpoint rows have.  Straight lines' rows are
         // excluded as well.
-        let grid_phase = lines
-            .values()
-            .next()
-            .map_or(0, |net| net.source.row.rem_euclid(ROW_GRID));
-        let free_jog_rows = ((lateral_min - LATERAL_MARGIN)..=(lateral_max + LATERAL_MARGIN))
+        let grid_phase = origin_lateral.rem_euclid(ROW_GRID);
+        let free_jog_rows = (lateral_lo..=lateral_hi)
             .filter(|row| row.rem_euclid(ROW_GRID) == grid_phase)
             .filter(|row| straight_rows.iter().all(|used| (used - row).abs() > 1))
             .collect::<BTreeSet<_>>();
@@ -993,7 +1082,6 @@ pub(crate) fn plan_channel_layout(
                 frame.cell(lane - 1, row, ground),
                 frame.cell(lane - 2, row, ground + 1),
                 frame.cell(lane - 1, row, ground + 1),
-                frame.cell(lane, row, ground + 1),
                 frame.cell(lane - 1, row, ground + 2),
             ]
         };
@@ -1002,7 +1090,6 @@ pub(crate) fn plan_channel_layout(
                 frame.cell(lane + 1, row, ground),
                 frame.cell(lane + 2, row, ground + 1),
                 frame.cell(lane + 1, row, ground + 1),
-                frame.cell(lane, row, ground + 1),
                 frame.cell(lane + 1, row, ground + 2),
             ]
         };
@@ -1013,7 +1100,6 @@ pub(crate) fn plan_channel_layout(
                 frame.cell(lane + 1, row, ground + 2),
                 frame.cell(lane + 1, row, ground + 1),
                 frame.cell(lane + 2, row, ground + 1),
-                frame.cell(lane, row, ground + 1),
                 frame.cell(lane + 1, row, ground),
             ]
         };
@@ -1022,7 +1108,6 @@ pub(crate) fn plan_channel_layout(
                 frame.cell(lane - 1, row, ground + 2),
                 frame.cell(lane - 1, row, ground + 1),
                 frame.cell(lane - 2, row, ground + 1),
-                frame.cell(lane, row, ground + 1),
                 frame.cell(lane - 1, row, ground),
             ]
         };
@@ -1069,6 +1154,11 @@ pub(crate) fn plan_channel_layout(
                     for cell in climb_from_below(lane, departure) {
                         private(net.id, cell);
                     }
+                    riser(
+                        &mut layout.floors,
+                        net.id,
+                        frame.cell(lane, departure, ground + 1),
+                    );
                     private(net.id, frame.cell(lane - 2, departure, ground));
                 }
             }
@@ -1096,6 +1186,11 @@ pub(crate) fn plan_channel_layout(
                     for cell in descend_to_above(lane, departure) {
                         private(net.id, cell);
                     }
+                    riser(
+                        &mut layout.floors,
+                        net.id,
+                        frame.cell(lane, departure, ground + 1),
+                    );
                     private(net.id, frame.cell(lane + 2, departure, ground));
                 }
             }
@@ -1110,6 +1205,11 @@ pub(crate) fn plan_channel_layout(
                         for cell in descend_to_above(from, departure) {
                             private(net.id, cell);
                         }
+                        riser(
+                            &mut layout.floors,
+                            net.id,
+                            frame.cell(from, departure, ground + 1),
+                        );
                         private(net.id, frame.cell(from + 2, departure, ground));
                     }
                     for forward in (from + 2)..=(to - 2) {
@@ -1118,11 +1218,17 @@ pub(crate) fn plan_channel_layout(
                     for cell in climb_from_below(to, jog) {
                         private(net.id, cell);
                     }
+                    riser(&mut layout.floors, net.id, frame.cell(to, jog, ground + 1));
                 } else {
                     for departure in [jog - 1, jog, jog + 1] {
                         for cell in descend_to_below(from, departure) {
                             private(net.id, cell);
                         }
+                        riser(
+                            &mut layout.floors,
+                            net.id,
+                            frame.cell(from, departure, ground + 1),
+                        );
                         private(net.id, frame.cell(from - 2, departure, ground));
                     }
                     for forward in (to + 2)..=(from - 2) {
@@ -1131,6 +1237,7 @@ pub(crate) fn plan_channel_layout(
                     for cell in climb_from_above(to, jog) {
                         private(net.id, cell);
                     }
+                    riser(&mut layout.floors, net.id, frame.cell(to, jog, ground + 1));
                 }
             }
         }
@@ -1144,7 +1251,16 @@ pub(crate) fn plan_channel_layout(
         };
         let source = &net.source_geometry;
         let column = &columns[net_lines.source.column];
-        if frame.along_forward(source.allowed_exit) {
+        if let Some(stub) = stubs.get(&(net.source, None)) {
+            for &cell in &stub.cells {
+                private(net.source, cell);
+            }
+            layout
+                .floors
+                .entry(net.source)
+                .or_default()
+                .extend(stub.floors.iter().cloned());
+        } else if frame.along_forward(source.allowed_exit) {
             let anchor = frame.forward_of(source.route_anchor);
             let (from, to) = if source.allowed_exit == frame.forward {
                 (anchor + 1, column.max_forward)
@@ -1178,7 +1294,7 @@ pub(crate) fn plan_channel_layout(
             }
         }
         for (index, (_, geometry)) in net.sinks.iter().enumerate() {
-            if let Some(stub) = stubs.get(&(net.source, index)) {
+            if let Some(stub) = stubs.get(&(net.source, Some(index))) {
                 for &cell in &stub.cells {
                     private(net.source, cell);
                 }
@@ -1238,6 +1354,8 @@ pub(crate) fn plan_channel_layout(
         .collect::<BTreeSet<_>>();
     let forward_min = columns.first().map_or(0, |column| column.min_forward) - FORWARD_MARGIN;
     let forward_max = columns.last().map_or(0, |column| column.max_forward) + FORWARD_MARGIN;
+    // The closed layers cover the whole margin, window or not: outside the
+    // window is the callers' side, and the router must never see it open.
     for forward in forward_min..=forward_max {
         for lateral in (lateral_min - LATERAL_MARGIN)..=(lateral_max + LATERAL_MARGIN) {
             for y in ground..=(ground + 3) {

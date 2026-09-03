@@ -70,6 +70,12 @@ pub(crate) enum SeedPlacementError {
     MissingPhysicalVariant { primitive: Primitive },
     #[error("seed placer does not support layout repairs")]
     UnsupportedRepairs,
+    #[error(
+        "no placement frame keeps the levels inside the pins' inward half-spaces and the world"
+    )]
+    NoFrameFits,
+    #[error("macro {instance:?} is wider than the lateral window the pins leave")]
+    LateralWindowTooNarrow { instance: InstanceId },
     #[error("layout repair cannot move pinned or missing owner {owner:?}")]
     ImmovableRepairOwner { owner: LayoutOwner },
     #[error("layout repair cannot separate the same owner {owner:?}")]
@@ -132,7 +138,47 @@ pub(crate) struct SeedPlacementPlan {
     pub fingerprint: Fingerprint,
     /// The frame every later stage (sockets, channel plan) measures in.
     pub frame: PlacementFrame,
+    /// The analysis every later stage measures levels in: a level whose
+    /// macros do not fit the lateral window side by side is folded into
+    /// consecutive columns, and the levels after it move up.
+    pub analysis: SeedPlacementAnalysis,
+    /// Lateral bounds every block must respect.
+    pub window: LateralWindow,
 }
+
+/// Lateral bounds, in frame coordinates, that every block of the layout
+/// must respect: the origin-based world edge, and the inward half-space of
+/// every pinned input whose signal enters along the lateral axis.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+pub(crate) struct LateralWindow {
+    pub min: Option<i32>,
+    pub max: Option<i32>,
+}
+
+impl LateralWindow {
+    /// `lo..=hi` cut down to the window.
+    pub(crate) fn clamp(self, lo: i32, hi: i32) -> (i32, i32) {
+        (
+            self.min.map_or(lo, |min| lo.max(min)),
+            self.max.map_or(hi, |max| hi.min(max)),
+        )
+    }
+
+    fn width(self) -> Option<i32> {
+        match (self.min, self.max) {
+            (Some(min), Some(max)) => Some(max - min + 1),
+            _ => None,
+        }
+    }
+}
+
+/// Cells kept free inside the lateral window on each side, for the closed
+/// layers, escape corridors and stairs the channel plan puts beside the
+/// outermost macros.
+pub(crate) const WINDOW_MARGIN: i32 = 8;
+/// Forward cells the channel plan needs beyond the last column: the
+/// turnaround channel and the closed margin.
+const TURNAROUND_ALLOWANCE: i32 = 48;
 
 pub(crate) trait SeedPlacer {
     fn plan(
@@ -239,9 +285,6 @@ const TRACK_PITCH: i32 = 8;
 /// different nets can then never be adjacent, and a dogleg always finds a
 /// free row between two grid rows.
 pub(crate) const ROW_GRID: i32 = 4;
-/// Lateral cells the channel routing plan may use beyond the outermost
-/// macro: the closed layers and their escape corridors.
-pub(crate) const CHANNEL_LATERAL_MARGIN: i32 = 32;
 
 impl TopologyAwareSeedPlacer {
     /// The plan with explicit minimum channel widths (keyed like
@@ -251,33 +294,44 @@ impl TopologyAwareSeedPlacer {
         request: SeedPlacementRequest<'_>,
         minimum_widths: &BTreeMap<i64, i32>,
     ) -> Result<SeedPlacementPlan, SeedPlacementError> {
-        // The frame points from the inputs toward the outputs.  When both
-        // are pinned and the levels with their channels do not fit between
-        // the two pin lines, the frame is turned around: the levels are then
-        // placed behind the input line, and both pin lines face one
-        // turnaround channel in front of it.
-        let frame = derive_frame(request.pins);
-        match self.plan_in_frame(request, minimum_widths, frame)? {
-            Some(plan) => Ok(plan),
-            None => {
-                let flipped = PlacementFrame {
-                    forward: frame.forward.opposite(),
-                    lateral: clockwise(frame.forward.opposite()),
-                    origin: frame.origin,
-                };
-                self.plan_in_frame(request, minimum_widths, flipped)?
-                    .ok_or(SeedPlacementError::CoordinateOverflow)
+        // The frame points from the inputs toward the outputs.  When the
+        // levels with their channels do not fit ahead of the pins there (a
+        // pinned output line too close, or the world edge), the frame turns
+        // a quarter: the levels then march along the pin line, both pin
+        // groups form one pin column at the start, and every level is folded
+        // to the lateral room the pins' inward half-space leaves.  The
+        // levels are never placed behind a pinned input.
+        let direct = derive_frame(request.pins);
+        let turned = |forward: Facing| PlacementFrame {
+            forward,
+            lateral: clockwise(forward),
+            origin: direct.origin,
+        };
+        let candidates = [
+            direct,
+            turned(clockwise(direct.forward)),
+            turned(clockwise(clockwise(clockwise(direct.forward)))),
+        ];
+        for (index, frame) in candidates.into_iter().enumerate() {
+            let plan = self.plan_in_frame(request, minimum_widths, frame, index == 0)?;
+            if let Some(plan) = plan {
+                return Ok(plan);
             }
         }
+        Err(SeedPlacementError::NoFrameFits)
     }
 
-    /// The plan in one frame, or `None` when pinned outputs lie inside the
-    /// forward span the levels need.
+    /// The plan in one frame, or `None` when the levels do not fit ahead of
+    /// the pins.  In the direct frame pinned outputs ahead of the inputs form
+    /// their own column the levels must stop short of; in a turned frame
+    /// every pinned port lies beside the pin line and the levels start
+    /// beyond all of them.
     fn plan_in_frame(
         &self,
         request: SeedPlacementRequest<'_>,
         minimum_widths: &BTreeMap<i64, i32>,
         frame: PlacementFrame,
+        direct: bool,
     ) -> Result<Option<SeedPlacementPlan>, SeedPlacementError> {
         let analysis = request.analysis;
         let intervals = net_intervals(request.graph, analysis);
@@ -367,6 +421,84 @@ impl TopologyAwareSeedPlacer {
                 laterals.insert(id, legalized[&id]);
             }
         }
+
+        // ---- fold levels to the lateral window ----------------------------
+        // A level whose macros do not fit the window side by side is cut,
+        // in lateral order, into groups that do; each group becomes its own
+        // column and the levels after it move up.  Every group is moved to
+        // the window's first free lateral, on the row grid.
+        let window = lateral_window(frame, request.pins);
+        let budget = window
+            .width()
+            .map(|width| width - 2 * WINDOW_MARGIN - ROW_GRID);
+        let mut folded = analysis.clone();
+        if let Some(budget) = budget {
+            if budget < 1 {
+                return Ok(None);
+            }
+            let mut shift = 0u64;
+            let original_levels = level_bounds.keys().copied().collect::<Vec<_>>();
+            for level in original_levels {
+                let mut ids = laterals
+                    .keys()
+                    .copied()
+                    .filter(|id| analysis.nodes[id].forward_level == level)
+                    .collect::<Vec<_>>();
+                ids.sort_by_key(|id| (laterals[id], *id));
+                let mut groups: Vec<(i32, Vec<InstanceId>)> = Vec::new();
+                for id in ids {
+                    let lo = laterals[&id] + bounds[&id].min_lateral;
+                    let hi = laterals[&id] + bounds[&id].max_lateral;
+                    if hi - lo >= budget {
+                        return Err(SeedPlacementError::LateralWindowTooNarrow { instance: id });
+                    }
+                    match groups.last_mut() {
+                        Some((start, members)) if hi - *start < budget => members.push(id),
+                        _ => groups.push((lo, vec![id])),
+                    }
+                }
+                // Every group starts at the window's first free lateral, so
+                // the columns share one lateral extent that fits the window.
+                let base = window.min.map_or_else(
+                    || groups.first().map_or(0, |(start, _)| *start),
+                    |min| min + WINDOW_MARGIN,
+                );
+                for (sub, (start, members)) in groups.iter().enumerate() {
+                    let delta = -((start - base).div_euclid(ROW_GRID)) * ROW_GRID;
+                    for &id in members {
+                        folded
+                            .nodes
+                            .get_mut(&id)
+                            .expect("folded analysis covers every instance")
+                            .forward_level = level + shift + sub as u64;
+                        if delta != 0 {
+                            let lateral = laterals
+                                .get_mut(&id)
+                                .expect("legalized laterals cover every instance");
+                            *lateral = lateral
+                                .checked_add(delta)
+                                .ok_or(SeedPlacementError::CoordinateOverflow)?;
+                        }
+                    }
+                }
+                shift += groups.len() as u64 - 1;
+            }
+        }
+        let analysis = &folded;
+        let mut level_bounds = BTreeMap::<u64, MacroBounds>::new();
+        for instance in &request.graph.instances {
+            let level = analysis.nodes[&instance.id].forward_level;
+            let instance_bounds = bounds[&instance.id];
+            level_bounds
+                .entry(level)
+                .and_modify(|level_bounds| {
+                    level_bounds.min_forward =
+                        level_bounds.min_forward.min(instance_bounds.min_forward);
+                    level_bounds.max_forward =
+                        level_bounds.max_forward.max(instance_bounds.max_forward);
+                })
+                .or_insert(instance_bounds);
+        }
         // Automatic ports share the shift: they sit on the free tracks the
         // macros were placed around.
         let automatic_input_lateral =
@@ -405,7 +537,7 @@ impl TopologyAwareSeedPlacer {
         let lateral_shift = if request.pins.is_empty() {
             0
         } else {
-            let port_laterals = automatic_input_ports
+            let mut port_laterals = automatic_input_ports
                 .iter()
                 .map(|&port| automatic_input_lateral(port))
                 .chain(
@@ -414,7 +546,16 @@ impl TopologyAwareSeedPlacer {
                         .map(|&port| automatic_output_lateral(port)),
                 )
                 .collect::<Vec<_>>();
-            confine_laterals_to_world(frame, &bounds, &port_laterals, &mut laterals)?
+            // Folded levels start at the window's first free lateral, so the
+            // automatic ports' tracks start there as well.
+            let rebase = match (window.min, port_laterals.iter().min()) {
+                (Some(min), Some(&lowest)) if budget.is_some() => min + WINDOW_MARGIN - lowest,
+                _ => 0,
+            };
+            for lateral in &mut port_laterals {
+                *lateral += rebase;
+            }
+            rebase + confine_laterals(window, &bounds, &port_laterals, &mut laterals)?
         };
 
         let mut channels =
@@ -431,35 +572,45 @@ impl TopologyAwareSeedPlacer {
             .copied()
             .unwrap_or_else(|| channel_width(1));
 
-        // Pinned inputs sit at the frame origin, so the first level starts
-        // one input channel further forward; automatic inputs are placed one
-        // input channel behind the origin instead.
+        // The first level starts one input channel beyond the pin column:
+        // the pinned inputs' cells and every pinned output cell that does
+        // not lie ahead of them.  Automatic inputs are placed one input
+        // channel behind the origin instead.
         let pinned_inputs = request
             .pins
             .keys()
             .any(|endpoint| matches!(endpoint, PhysicalEndpointId::PrimaryInput(_)));
-        // Pinned outputs ahead of the levels must leave room for every
-        // column and channel; otherwise the caller turns the frame around.
         let mut cursor = if pinned_inputs {
-            input_channel + 1
+            pin_column_forward_max(request, frame, direct)
+                .checked_add(1)
+                .and_then(|value| value.checked_add(input_channel))
+                .ok_or(SeedPlacementError::CoordinateOverflow)?
         } else {
             0i32
         };
-        if let Some((output_min, _)) = pinned_output_forward_extent(request, frame) {
-            if output_min > 0 {
-                let total = level_bounds
-                    .iter()
-                    .map(|(&level, bounds)| {
-                        bounds.forward_span()
-                            + channels
-                                .get(&(level as i64))
-                                .copied()
-                                .unwrap_or_else(|| channel_width(1))
-                    })
-                    .sum::<i32>();
-                if cursor + total > output_min {
+        let total = level_bounds
+            .iter()
+            .map(|(&level, bounds)| {
+                bounds.forward_span()
+                    + channels
+                        .get(&(level as i64))
+                        .copied()
+                        .unwrap_or_else(|| channel_width(1))
+            })
+            .sum::<i32>();
+        // Pinned outputs ahead of the levels must leave room for every
+        // column and channel, and the levels must end inside the world and
+        // ahead of every pinned input; otherwise the caller turns the frame.
+        if direct {
+            if let Some((output_min, _)) = pinned_output_forward_extent(request, frame) {
+                if output_min > cursor && cursor + total > output_min {
                     return Ok(None);
                 }
+            }
+        }
+        if let Some(limit) = forward_limit(frame, request.pins) {
+            if cursor + total + TURNAROUND_ALLOWANCE > limit {
+                return Ok(None);
             }
         }
         let mut columns = BTreeMap::new();
@@ -500,7 +651,10 @@ impl TopologyAwareSeedPlacer {
             );
         }
 
-        let input_forward = -input_channel;
+        // Automatic inputs sit one input channel behind the origin in the
+        // direct frame; in a turned frame they join the pin line instead,
+        // since behind the origin is the world edge or the callers' side.
+        let input_forward = if direct { -input_channel } else { 0 };
         let output_forward = cursor;
         let automatic_inputs = automatic_input_ports
             .iter()
@@ -528,6 +682,8 @@ impl TopologyAwareSeedPlacer {
             automatic_outputs,
             fingerprint,
             frame,
+            analysis: folded,
+            window,
         }))
     }
 }
@@ -803,6 +959,103 @@ fn derive_channel_widths(
     widths
 }
 
+/// Lateral bounds from the world edge and from every pinned input whose
+/// signal enters along the lateral axis (the circuit lies on the side its
+/// signal heads to).
+fn lateral_window(
+    frame: PlacementFrame,
+    pins: &BTreeMap<PhysicalEndpointId, PortPin>,
+) -> LateralWindow {
+    let (lx, lz) = horizontal_unit(frame.lateral);
+    let (sign, origin) = if lx != 0 {
+        (lx, frame.origin.x)
+    } else {
+        (lz, frame.origin.z)
+    };
+    // World coordinate along the lateral axis: `origin + sign * lateral >= 0`.
+    let mut window = if sign > 0 {
+        LateralWindow {
+            min: Some(-origin),
+            max: None,
+        }
+    } else {
+        LateralWindow {
+            min: None,
+            max: Some(origin),
+        }
+    };
+    for (endpoint, pin) in pins {
+        if !matches!(endpoint, PhysicalEndpointId::PrimaryInput(_)) {
+            continue;
+        }
+        let lateral = lateral_projection(frame, pin.at);
+        if pin.toward == frame.lateral {
+            window.min = Some(window.min.map_or(lateral + 1, |min| min.max(lateral + 1)));
+        } else if pin.toward == frame.lateral.opposite() {
+            window.max = Some(window.max.map_or(lateral - 1, |max| max.min(lateral - 1)));
+        }
+    }
+    window
+}
+
+/// Largest forward coordinate the layout may reach: the world edge when the
+/// forward axis runs toward it, and one cell before any pinned input whose
+/// signal enters against the forward axis.
+fn forward_limit(
+    frame: PlacementFrame,
+    pins: &BTreeMap<PhysicalEndpointId, PortPin>,
+) -> Option<i32> {
+    let (fx, fz) = horizontal_unit(frame.forward);
+    let (sign, origin) = if fx != 0 {
+        (fx, frame.origin.x)
+    } else {
+        (fz, frame.origin.z)
+    };
+    let mut limit = (sign < 0).then_some(origin);
+    let origin_forward = project_horizontal(frame.origin.x, frame.origin.z, frame.forward);
+    for (endpoint, pin) in pins {
+        if !matches!(endpoint, PhysicalEndpointId::PrimaryInput(_))
+            || pin.toward != frame.forward.opposite()
+        {
+            continue;
+        }
+        let forward = project_horizontal(pin.at.x, pin.at.z, frame.forward) - origin_forward - 1;
+        limit = Some(limit.map_or(forward, |known| known.min(forward)));
+    }
+    limit
+}
+
+/// Forward coordinate, relative to the frame origin, of the last cell of the
+/// pin column: every pinned input cell, and every pinned output cell that
+/// does not lie ahead of the inputs (every pinned output in a turned frame).
+fn pin_column_forward_max(
+    request: SeedPlacementRequest<'_>,
+    frame: PlacementFrame,
+    direct: bool,
+) -> i32 {
+    let origin = project_horizontal(frame.origin.x, frame.origin.z, frame.forward);
+    let forward_of = |at: Anchor| project_horizontal(at.x, at.z, frame.forward) - origin;
+    let cells = |pin: &PortPin, role: PortRole| [pin.at, pin.handover(role), pin.net_cell(role)];
+    let inputs_max = request
+        .pins
+        .iter()
+        .filter(|(endpoint, _)| matches!(endpoint, PhysicalEndpointId::PrimaryInput(_)))
+        .flat_map(|(_, pin)| cells(pin, PortRole::Input))
+        .map(forward_of)
+        .max()
+        .unwrap_or(0);
+    request
+        .pins
+        .iter()
+        .filter(|(endpoint, _)| matches!(endpoint, PhysicalEndpointId::DeclaredOutput(_)))
+        .flat_map(|(_, pin)| cells(pin, PortRole::Output))
+        .map(forward_of)
+        .filter(|&forward| !direct || forward <= inputs_max)
+        .max()
+        .unwrap_or(inputs_max)
+        .max(inputs_max)
+}
+
 /// Forward extent, relative to the frame origin, of the pinned output net
 /// cells: `None` without pinned outputs.
 fn pinned_output_forward_extent(
@@ -957,24 +1210,18 @@ pub(crate) const fn project_horizontal(x: i32, z: i32, direction: Facing) -> i32
     }
 }
 
-/// Shifts every macro's lateral so the layout, with the channel layers the
-/// routing plan closes around it, stays inside the origin-based world along
-/// the frame's lateral axis.  Pinned ports fix the frame origin, so only the
-/// macros and the automatic ports (at `port_laterals`) can move; they all
-/// move together, by whole row-grid steps, and only when the world edge is
-/// on their side.  Returns the shift the caller applies to the ports.
-fn confine_laterals_to_world(
-    frame: PlacementFrame,
+/// Shifts every macro's lateral so the layout, with the margin the channel
+/// plan needs beside it, stays inside the lateral window.  Pinned ports fix
+/// the frame origin, so only the macros and the automatic ports (at
+/// `port_laterals`) can move; they all move together, by whole row-grid
+/// steps, and only when a window edge is on their side.  Returns the shift
+/// the caller applies to the ports.
+fn confine_laterals(
+    window: LateralWindow,
     bounds: &BTreeMap<InstanceId, MacroBounds>,
     port_laterals: &[i32],
     laterals: &mut BTreeMap<InstanceId, i32>,
 ) -> Result<i32, SeedPlacementError> {
-    let (lx, lz) = horizontal_unit(frame.lateral);
-    let (sign, origin) = if lx != 0 {
-        (lx, frame.origin.x)
-    } else {
-        (lz, frame.origin.z)
-    };
     let extent_min = laterals
         .iter()
         .map(|(id, lateral)| lateral + bounds[id].min_lateral)
@@ -996,19 +1243,23 @@ fn confine_laterals_to_world(
     let (Some(extent_min), Some(extent_max)) = (extent_min, extent_max) else {
         return Ok(0);
     };
-    // World coordinate along the lateral axis: `origin + sign * lateral`.
-    let shortfall = if sign > 0 {
-        (CHANNEL_LATERAL_MARGIN - origin - extent_min).max(0)
+    let below = window
+        .min
+        .map_or(0, |min| (min + WINDOW_MARGIN - extent_min).max(0));
+    let above = window
+        .max
+        .map_or(0, |max| (extent_max - (max - WINDOW_MARGIN)).max(0));
+    let (shortfall, sign) = if below > 0 {
+        (below, 1)
+    } else if above > 0 {
+        (above, -1)
     } else {
-        (extent_max - (origin - CHANNEL_LATERAL_MARGIN)).max(0)
-    };
-    if shortfall == 0 {
         return Ok(0);
-    }
+    };
     let steps = (shortfall + ROW_GRID - 1) / ROW_GRID;
     let shift = steps
         .checked_mul(ROW_GRID)
-        .map(|shift| if sign > 0 { shift } else { -shift })
+        .map(|shift| shift * sign)
         .ok_or(SeedPlacementError::CoordinateOverflow)?;
     for lateral in laterals.values_mut() {
         *lateral = lateral
@@ -1890,16 +2141,24 @@ const fn primitive_delay_ticks(primitive: Primitive) -> u64 {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn pinned_layouts_shift_away_from_the_world_edge_in_grid_steps() {
+    fn pinned_layouts_shift_inside_the_lateral_window_in_grid_steps() {
         use super::*;
-        // Lateral runs west from a pin at x = 21: the macros at laterals
-        // 0..=35 would land at negative x, so the whole free layout moves to
-        // higher laterals until the channel margin fits, by whole grid steps.
+        // Lateral runs west from a pin at x = 21, so the world edge caps the
+        // laterals at 21: the macros at laterals 0..=35 move down until the
+        // window margin fits, by whole grid steps.
         let frame = PlacementFrame {
             forward: Facing::South,
             lateral: Facing::West,
             origin: Anchor { x: 21, y: 1, z: 62 },
         };
+        let window = lateral_window(frame, &BTreeMap::new());
+        assert_eq!(
+            window,
+            LateralWindow {
+                min: None,
+                max: Some(21)
+            }
+        );
         let bounds = MacroBounds {
             min_forward: 0,
             max_forward: 3,
@@ -1913,33 +2172,82 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
         let mut laterals = BTreeMap::from([(ids[0], 0), (ids[1], 32)]);
 
-        let shift = confine_laterals_to_world(frame, &bounds, &[16], &mut laterals).unwrap();
+        let shift = confine_laterals(window, &bounds, &[16], &mut laterals).unwrap();
 
-        // extent_max = 32 + 3 = 35 must come down to 21 - 32 = -11: a shortfall
-        // of 46 rounds up to twelve grid steps of four.
-        assert_eq!(shift, -48);
-        assert_eq!(laterals[&ids[0]], -48);
-        assert_eq!(laterals[&ids[1]], -16);
+        // extent_max = 32 + 3 = 35 must come down to 21 - 8 = 13: a shortfall
+        // of 22 rounds up to six grid steps of four.
+        assert_eq!(shift, -24);
+        assert_eq!(laterals[&ids[0]], -24);
+        assert_eq!(laterals[&ids[1]], 8);
 
-        // Lateral running east from the same pin: extent_min = -1 lands at
-        // x = 20, eleven cells short of the margin, so the layout moves up by
-        // three grid steps; far from the edge nothing moves.
+        // Lateral running east from the same pin: the window starts at -21,
+        // extent_min = -1 already clears the margin, so nothing moves.
         let frame = PlacementFrame {
             lateral: Facing::East,
             ..frame
         };
+        let window = lateral_window(frame, &BTreeMap::new());
+        assert_eq!(
+            window,
+            LateralWindow {
+                min: Some(-21),
+                max: None
+            }
+        );
         let mut laterals = BTreeMap::from([(ids[0], 0), (ids[1], 32)]);
         assert_eq!(
-            confine_laterals_to_world(frame, &bounds, &[16], &mut laterals).unwrap(),
-            12
-        );
-        assert_eq!(laterals[&ids[1]], 44);
-        let mut laterals = BTreeMap::from([(ids[0], 40), (ids[1], 72)]);
-        assert_eq!(
-            confine_laterals_to_world(frame, &bounds, &[56], &mut laterals).unwrap(),
+            confine_laterals(window, &bounds, &[16], &mut laterals).unwrap(),
             0
         );
-        assert_eq!(laterals[&ids[1]], 72);
+        assert_eq!(laterals[&ids[1]], 32);
+    }
+
+    #[test]
+    fn a_pinned_input_facing_along_the_lateral_axis_caps_the_window() {
+        use super::*;
+        // Forward east, lateral south: an input at z = 120 whose signal
+        // enters northward keeps every block at z <= 119, i.e. lateral <= 1
+        // from the origin at z = 118; the world edge gives the other side.
+        let frame = PlacementFrame {
+            forward: Facing::East,
+            lateral: Facing::South,
+            origin: Anchor {
+                x: 94,
+                y: 1,
+                z: 118,
+            },
+        };
+        let pins = BTreeMap::from([(
+            PhysicalEndpointId::PrimaryInput(PortId(0)),
+            PortPin {
+                at: Anchor {
+                    x: 76,
+                    y: 1,
+                    z: 120,
+                },
+                toward: Facing::North,
+            },
+        )]);
+        assert_eq!(
+            lateral_window(frame, &pins),
+            LateralWindow {
+                min: Some(-118),
+                max: Some(1)
+            }
+        );
+        // The same pin against the forward axis bounds the forward extent.
+        let frame = PlacementFrame {
+            forward: Facing::South,
+            lateral: Facing::West,
+            ..frame
+        };
+        assert_eq!(forward_limit(frame, &pins), Some(1));
+        let frame = PlacementFrame {
+            forward: Facing::North,
+            lateral: Facing::East,
+            ..frame
+        };
+        assert_eq!(forward_limit(frame, &pins), Some(118));
     }
 
     use std::collections::{BTreeMap, BTreeSet};
@@ -2134,10 +2442,15 @@ mod tests {
             pins[&input],
             pin(Anchor { x: 20, y: 1, z: 40 }, Facing::North)
         );
-        assert_eq!(
-            repaired.instances[&InstanceId(0)].preferred_origin.x,
-            baseline.instances[&InstanceId(0)].preferred_origin.x + 2 * TRACK_PITCH
-        );
+        // The pin line at z = 40 leaves no forward room to the north, so the
+        // frame turns east; the repair moves the sink owner two tracks along
+        // whatever lateral axis the plan settled on.
+        assert_eq!(repaired.frame, baseline.frame);
+        let lateral = |plan: &super::SeedPlacementPlan| {
+            let origin = plan.instances[&InstanceId(0)].preferred_origin;
+            super::project_horizontal(origin.x, origin.z, plan.frame.lateral)
+        };
+        assert_eq!(lateral(&repaired), lateral(&baseline) + 2 * TRACK_PITCH);
     }
 
     #[test]
