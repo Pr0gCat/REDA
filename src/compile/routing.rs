@@ -482,6 +482,48 @@ impl RouterFailure {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DurablePhysicalRouter;
 
+/// The seed router: the same strict search and counters as
+/// [`DurablePhysicalRouter`], but a branch may touch its own route only along
+/// the trunk it departs from.  Dust that ran beside its own earlier cells
+/// would merge with them electrically and bypass any repeater in between.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct GuardedPhysicalRouter;
+
+impl PhysicalRouter for GuardedPhysicalRouter {
+    fn route(&self, request: RouteRequest<'_>) -> Result<RealisedRouteTree, RouterFailure> {
+        route_strict_with_physics(
+            request,
+            RoutingJoinPolicy::Wide,
+            RoutePhysics::GUARDED,
+            |_| 0,
+            |_, _, _| {},
+        )
+    }
+}
+
+/// Physical rules the guarded router applies on top of the legacy search.
+/// The legacy planner keeps the recorded behaviour of its circuits, so it
+/// runs with both rules off.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct RoutePhysics {
+    /// A path may not step into the floor cell of its own earlier dust.
+    pub own_floor_of_earlier: bool,
+    /// A later branch may climb its own earlier staircase: the clearance it
+    /// reserved above the lower step is its own mandatory air.
+    pub reuse_own_stair_clearance: bool,
+}
+
+impl RoutePhysics {
+    pub(crate) const LEGACY: Self = Self {
+        own_floor_of_earlier: false,
+        reuse_own_stair_clearance: false,
+    };
+    pub(crate) const GUARDED: Self = Self {
+        own_floor_of_earlier: true,
+        reuse_own_stair_clearance: true,
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 struct SearchState {
     estimate: u64,
@@ -560,7 +602,14 @@ where
     Price: FnMut(&Anchor) -> u64,
     Claim: FnMut(Anchor, PhysicalReservationOwner, PhysicalReservationKind),
 {
-    route_with_local_policy(request, join_policy, false, price, claim)
+    route_with_local_policy(
+        request,
+        join_policy,
+        RoutePhysics::LEGACY,
+        false,
+        price,
+        claim,
+    )
 }
 
 /// Strict local route certification for newly generated fragment candidates.
@@ -578,12 +627,35 @@ where
     Price: FnMut(&Anchor) -> u64,
     Claim: FnMut(Anchor, PhysicalReservationOwner, PhysicalReservationKind),
 {
-    route_with_local_policy(request, join_policy, true, price, claim)
+    route_with_local_policy(
+        request,
+        join_policy,
+        RoutePhysics::LEGACY,
+        true,
+        price,
+        claim,
+    )
+}
+
+/// Strict local routing with explicit physical rules.
+pub(crate) fn route_strict_with_physics<Price, Claim>(
+    request: RouteRequest<'_>,
+    join_policy: RoutingJoinPolicy,
+    physics: RoutePhysics,
+    price: Price,
+    claim: Claim,
+) -> Result<RealisedRouteTree, RouterFailure>
+where
+    Price: FnMut(&Anchor) -> u64,
+    Claim: FnMut(Anchor, PhysicalReservationOwner, PhysicalReservationKind),
+{
+    route_with_local_policy(request, join_policy, physics, true, price, claim)
 }
 
 fn route_with_local_policy<Price, Claim>(
     request: RouteRequest<'_>,
     join_policy: RoutingJoinPolicy,
+    physics: RoutePhysics,
     strict_local: bool,
     mut price: Price,
     mut claim: Claim,
@@ -624,6 +696,7 @@ where
             &cell_states,
             &reservations,
             &own_join,
+            physics,
             strict_local,
             &mut work,
             &mut price,
@@ -906,7 +979,12 @@ fn staircase_clearance_typed(from: Anchor, to: Anchor) -> Vec<Anchor> {
     }
 }
 
-fn self_obstructs_typed(previous: &BTreeMap<Anchor, Anchor>, at: Anchor, next: Anchor) -> bool {
+fn self_obstructs_typed(
+    previous: &BTreeMap<Anchor, Anchor>,
+    at: Anchor,
+    next: Anchor,
+    own_floor_of_earlier: bool,
+) -> bool {
     let drop_blocker = (next.y < at.y).then(|| Anchor {
         x: next.x,
         y: at.y + 1,
@@ -921,11 +999,18 @@ fn self_obstructs_typed(previous: &BTreeMap<Anchor, Anchor>, at: Anchor, next: A
         y: next.y - 1,
         ..next
     };
+    // Earlier dust directly above `next` needs a solid floor exactly at
+    // `next`, so `next` can never become a conductor of the same path.
+    let floor_of_earlier = own_floor_of_earlier.then_some(Anchor {
+        y: next.y + 1,
+        ..next
+    });
     let mut successor = None;
     let mut walk = Some(at);
     while let Some(cell) = walk {
         if Some(cell) == drop_blocker
             || cell == crushed_below
+            || Some(cell) == floor_of_earlier
             || (cell == smothered && successor.is_some_and(|after: Anchor| after.y > cell.y))
         {
             return true;
@@ -981,6 +1066,7 @@ fn staircase_cell_is_blocked(
     to: Anchor,
     cell: Anchor,
     reservations: &PhysicalReservations,
+    reuse_own_stair_clearance: bool,
 ) -> bool {
     let is_riser = to.y > from.y && cell.y == from.y;
     let Some(claim) = reservations.get(&cell) else {
@@ -990,6 +1076,14 @@ fn staircase_cell_is_blocked(
         return (!owned_by_route(claim.owner, route)
             && claim.owner != PhysicalReservationOwner::RouteStair(route))
             || reservation_is_conductor(claim);
+    }
+    // A later branch of the same route may climb its own earlier staircase:
+    // the clearance it reserved above the lower step is its own mandatory air.
+    if reuse_own_stair_clearance
+        && claim.owner == PhysicalReservationOwner::RouteStair(route)
+        && reservation_is_air(claim)
+    {
+        return false;
     }
     true
 }
@@ -1384,6 +1478,7 @@ fn search_path<Price>(
     laid: &BTreeMap<Anchor, BlockState>,
     reservations: &PhysicalReservations,
     own_join: &TypedOwnJoinCheck,
+    physics: RoutePhysics,
     strict_local: bool,
     work: &mut RouterWork,
     price: &mut Price,
@@ -1424,7 +1519,7 @@ where
             if strict_local && next == sink.anchor && next != goal {
                 continue;
             }
-            if self_obstructs_typed(&previous, state.at, next) {
+            if self_obstructs_typed(&previous, state.at, next, physics.own_floor_of_earlier) {
                 continue;
             }
             if strict_local {
@@ -1465,7 +1560,14 @@ where
             let stair_blocked = staircase_clearance_typed(state.at, next)
                 .into_iter()
                 .any(|cell| {
-                    staircase_cell_is_blocked(request.id, state.at, next, cell, reservations)
+                    staircase_cell_is_blocked(
+                        request.id,
+                        state.at,
+                        next,
+                        cell,
+                        reservations,
+                        physics.reuse_own_stair_clearance,
+                    )
                 });
             if !anchor_free || stair_blocked {
                 continue;
@@ -2249,6 +2351,75 @@ mod tests {
                 at: at(2, 1, 0),
             })
         );
+    }
+
+    #[test]
+    fn a_later_branch_can_reuse_its_own_stair_clearance() {
+        let route = RouteId(9);
+        let from = at(0, 1, 0);
+        let to = at(1, 2, 0);
+        let riser = at(1, 1, 0);
+        let clearance = at(0, 2, 0);
+        let mut reservations = PhysicalReservations::new();
+        reservations.reserve(
+            riser,
+            PhysicalReservationOwner::RouteStair(route),
+            PhysicalReservationKind::Floor(stone()),
+        );
+        reservations.reserve(
+            clearance,
+            PhysicalReservationOwner::RouteStair(route),
+            PhysicalReservationKind::MandatoryAir,
+        );
+
+        assert!(!staircase_cell_is_blocked(
+            route,
+            from,
+            to,
+            riser,
+            &reservations,
+            true
+        ));
+        assert!(!staircase_cell_is_blocked(
+            route,
+            from,
+            to,
+            clearance,
+            &reservations,
+            true
+        ));
+        assert!(staircase_cell_is_blocked(
+            RouteId(10),
+            from,
+            to,
+            clearance,
+            &reservations,
+            true
+        ));
+        // The legacy planner keeps refusing its own clearance.
+        assert!(staircase_cell_is_blocked(
+            route,
+            from,
+            to,
+            clearance,
+            &reservations,
+            false
+        ));
+    }
+
+    #[test]
+    fn a_path_cannot_step_into_the_floor_cell_of_its_own_earlier_dust() {
+        // ... (37,2,55) -> (36,1,55) -> (37,1,55): the last step lands directly
+        // under (37,2,55), whose dust needs a solid floor at exactly that cell.
+        let upper = at(37, 2, 55);
+        let side = at(36, 1, 55);
+        let under = at(37, 1, 55);
+        let previous = BTreeMap::from([(side, upper), (upper, at(37, 3, 56))]);
+
+        assert!(self_obstructs_typed(&previous, side, under, true));
+        assert!(!self_obstructs_typed(&previous, side, at(35, 1, 55), true));
+        // The legacy planner keeps its recorded behaviour.
+        assert!(!self_obstructs_typed(&previous, side, under, false));
     }
 
     #[test]
