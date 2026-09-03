@@ -13,8 +13,8 @@ use thiserror::Error;
 
 use super::candidate::ExpandedPhysicalCandidate;
 use super::channel_plan::{
-    allocate_crossing_rows, lane_forward, lane_forward_from_end, plan_channel, ChannelNet,
-    ChannelPlanError, LANE_MARGIN, LANE_PITCH,
+    lane_forward, lane_forward_from_end, plan_channel, ChannelNet, ChannelPlanError, LANE_MARGIN,
+    LANE_PITCH,
 };
 use super::identity::PhysicalEndpointId;
 use super::identity::{RouteId, RoutedSinkId};
@@ -95,6 +95,10 @@ pub(crate) struct ChannelLayout {
     /// Staircase floors a net's box stub needs, reserved for the net's route
     /// before any route runs so no route conducts through them.
     pub floors: BTreeMap<PhysicalEndpointId, Vec<PlacedBlock>>,
+    /// Lane cells a branch of the net is planned to depart from (the lane
+    /// cell at every descent and jog row and its two neighbours): the
+    /// router places no refresh repeater on them.
+    pub departures: BTreeMap<PhysicalEndpointId, BTreeSet<Anchor>>,
 }
 
 /// How far beyond the placed macros the closed channel layers extend, inside
@@ -658,6 +662,7 @@ pub(crate) fn plan_channel_layout(
                     sinks: &sinks,
                     reservations: &scratch,
                     limits,
+                    no_refresh: None,
                 };
                 if let Ok(tree) = router.route(request) {
                     found = Some((c, tree));
@@ -729,6 +734,36 @@ pub(crate) fn plan_channel_layout(
             frame.forward_of(net.source_geometry.route_anchor),
             frame.lateral_of(net.source_geometry.route_anchor),
         ));
+        // The source's own line from its anchor to the column edge is laid
+        // exactly like the private cells below; a corridor or run touching
+        // it would join the two nets.
+        if let Some(net_lines) = lines.get(&net.source) {
+            let source = &net.source_geometry;
+            let column = &columns[net_lines.source.column];
+            let row = net_lines.source.row;
+            let (from, to) = if frame.along_forward(source.allowed_exit) {
+                let anchor = frame.forward_of(source.route_anchor);
+                if source.allowed_exit == frame.forward {
+                    (anchor + 1, column.max_forward)
+                } else {
+                    (column.min_forward, anchor - 1)
+                }
+            } else {
+                for distance in 1..=3 {
+                    let cell = step_many(source.route_anchor, source.allowed_exit, distance);
+                    occupied_cells.insert((frame.forward_of(cell), frame.lateral_of(cell)));
+                }
+                let approach = step_many(source.route_anchor, source.allowed_exit, 3);
+                if net_lines.source.channel >= net_lines.source.column {
+                    (frame.forward_of(approach) + 1, column.max_forward)
+                } else {
+                    (column.min_forward, frame.forward_of(approach) - 1)
+                }
+            };
+            for forward in from..=to {
+                occupied_cells.insert((forward, row));
+            }
+        }
         for (_, geometry) in &net.sinks {
             occupied_cells.insert((
                 frame.forward_of(geometry.terminal),
@@ -773,6 +808,9 @@ pub(crate) fn plan_channel_layout(
         edge: i32,
     }
     let mut escapes = BTreeMap::<(PhysicalEndpointId, usize), Escape>::new();
+    // Laterals an escape's corridor and run occupy, per column: crossing
+    // rows through that column keep clear of them, as they do of macros.
+    let mut escape_laterals = Vec::<(usize, i32, i32)>::new();
     {
         // Sinks grouped by column, in the order (depth from the preferred
         // edge, natural lateral, net, index).
@@ -885,6 +923,7 @@ pub(crate) fn plan_channel_layout(
                     match chosen {
                         Some(c) => {
                             let extent = (c.min(line.natural), c.max(line.natural));
+                            escape_laterals.push((column_index, extent.0, extent.1));
                             side_placed.push((c, extent, depth));
                             for cell in corridor_cells(c).into_iter().chain(run_cells(c)) {
                                 occupied_cells.insert(cell);
@@ -939,6 +978,14 @@ pub(crate) fn plan_channel_layout(
         }
     }
 
+    let mut escape_blocked = BTreeMap::<usize, BTreeSet<i32>>::new();
+    for (column_index, low, high) in escape_laterals {
+        escape_blocked
+            .entry(column_index)
+            .or_default()
+            .extend((low - 1)..=(high + 1));
+    }
+
     // ---- crossings -----------------------------------------------------
     // A net alive in channels c..d crosses every column strictly between.
     let mut crossings = BTreeMap::<(PhysicalEndpointId, usize), i32>::new();
@@ -962,11 +1009,45 @@ pub(crate) fn plan_channel_layout(
         let free = (lateral_lo..=lateral_hi)
             .filter(|lateral| lateral.rem_euclid(2) == grid_phase)
             .filter(|lateral| !geometry.blocked_laterals.contains(lateral))
+            .filter(|lateral| {
+                !escape_blocked
+                    .get(&column)
+                    .is_some_and(|blocked| blocked.contains(lateral))
+            })
             .collect::<BTreeSet<_>>();
-        let rows = allocate_crossing_rows(&free, &demands)
-            .map_err(|error| ChannelLayoutError::Crossing { column, error })?;
-        for (id, row) in rows {
-            crossings.insert((id, column), row);
+        // A crossing row continues as a ground line into both channels
+        // beside the column, so it also keeps two cells from every other
+        // net's endpoint row there (side sockets sit one cell off the
+        // grid); a net's own rows are where it wants to be.
+        let neighbour_rows = lines
+            .iter()
+            .flat_map(|(&id, net)| {
+                std::iter::once(&net.source)
+                    .chain(net.sinks.iter())
+                    .filter(move |line| line.channel + 1 == column || line.channel == column)
+                    .map(move |line| (id, line.row))
+            })
+            .collect::<Vec<_>>();
+        let mut allocated = Vec::<(PhysicalEndpointId, i32)>::new();
+        let mut ordered = demands.clone();
+        ordered.sort_by_key(|(id, preferred)| (*preferred, *id));
+        for (id, preferred) in ordered {
+            let candidate = free
+                .iter()
+                .copied()
+                .filter(|row| allocated.iter().all(|(_, used)| (used - row).abs() > 1))
+                .filter(|row| {
+                    neighbour_rows
+                        .iter()
+                        .all(|(other, used)| *other == id || (used - row).abs() > 1)
+                })
+                .min_by_key(|row| ((row - preferred).abs(), *row))
+                .ok_or(ChannelLayoutError::Crossing {
+                    column,
+                    error: ChannelPlanError::NoCrossingRow { net: id, preferred },
+                })?;
+            allocated.push((id, candidate));
+            crossings.insert((id, column), candidate);
         }
     }
 
@@ -1047,9 +1128,18 @@ pub(crate) fn plan_channel_layout(
         // every other row that endpoint rows have.  Straight lines' rows are
         // excluded as well.
         let grid_phase = origin_lateral.rem_euclid(ROW_GRID);
+        // A jog's three departure cells straddle its row, so the row keeps
+        // three cells from every other row in the channel (endpoint rows,
+        // crossing rows and straight rows alike): the departure cells then
+        // never touch another net's ground line.
+        let every_row = channel_nets
+            .iter()
+            .flat_map(|net| net.source_rows.iter().chain(net.sink_rows.iter()).copied())
+            .chain(straight_rows.iter().copied())
+            .collect::<Vec<_>>();
         let free_jog_rows = (lateral_lo..=lateral_hi)
             .filter(|row| row.rem_euclid(ROW_GRID) == grid_phase)
-            .filter(|row| straight_rows.iter().all(|used| (used - row).abs() > 1))
+            .filter(|row| every_row.iter().all(|used| (used - row).abs() >= 3))
             .collect::<BTreeSet<_>>();
         let plan = plan_channel(&channel_nets, &free_jog_rows)
             .map_err(|error| ChannelLayoutError::Plan { channel, error })?;
@@ -1119,13 +1209,24 @@ pub(crate) fn plan_channel_layout(
         let mut lane_cells = BTreeMap::new();
         for net in &channel_nets {
             let segments = &plan.segments[&net.id];
-            let lane_at = |row: i32| -> i32 {
-                let segment = segments
-                    .iter()
-                    .find(|segment| segment.interval.0 <= row && row <= segment.interval.1)
-                    .unwrap_or(&segments[0]);
-                segment_forward(segment)
-            };
+            // A row climbs onto or leaves the lane of the segment that owns
+            // it; only a row no segment names (a straight row) falls back
+            // to the lane it lies in.
+            let lane_owning =
+                |row: i32, owned: fn(&super::channel_plan::Segment) -> &Vec<i32>| -> i32 {
+                    let segment = segments
+                        .iter()
+                        .find(|segment| owned(segment).contains(&row))
+                        .or_else(|| {
+                            segments.iter().find(|segment| {
+                                segment.interval.0 <= row && row <= segment.interval.1
+                            })
+                        })
+                        .unwrap_or(&segments[0]);
+                    segment_forward(segment)
+                };
+            let source_lane_at = |row: i32| lane_owning(row, |segment| &segment.source_rows);
+            let sink_lane_at = |row: i32| lane_owning(row, |segment| &segment.sink_rows);
             lane_cells.insert(net.id, segment_forward(&segments[0]));
             for segment in segments {
                 let lane = segment_forward(segment);
@@ -1134,7 +1235,7 @@ pub(crate) fn plan_channel_layout(
                 }
             }
             for &row in &net.source_rows {
-                let lane = lane_at(row);
+                let lane = source_lane_at(row);
                 for forward in start..=(lane - 2) {
                     private(net.id, frame.cell(forward, row, ground));
                 }
@@ -1167,7 +1268,14 @@ pub(crate) fn plan_channel_layout(
             // own repeaters (never on two neighbouring cells) can then block
             // at most one of the three departures.
             for &row in &net.sink_rows {
-                let lane = lane_at(row);
+                let lane = sink_lane_at(row);
+                for departure in [row - 1, row, row + 1] {
+                    layout
+                        .departures
+                        .entry(net.id)
+                        .or_default()
+                        .insert(frame.cell(lane, departure, ground + 2));
+                }
                 for forward in (lane + 2)..=end {
                     private(net.id, frame.cell(forward, row, ground));
                 }
@@ -1200,6 +1308,13 @@ pub(crate) fn plan_channel_layout(
                 };
                 let from = segment_forward(&pair[0]);
                 let to = segment_forward(&pair[1]);
+                for departure in [jog - 1, jog, jog + 1] {
+                    layout
+                        .departures
+                        .entry(net.id)
+                        .or_default()
+                        .insert(frame.cell(from, departure, ground + 2));
+                }
                 if from < to {
                     for departure in [jog - 1, jog, jog + 1] {
                         for cell in descend_to_above(from, departure) {

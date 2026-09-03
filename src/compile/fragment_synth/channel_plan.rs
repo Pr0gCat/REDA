@@ -45,7 +45,7 @@ pub(crate) enum ChannelPlanError<N: Debug> {
 }
 
 /// One straight run of a net's trunk on one lane.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Segment {
     /// Lane index within its pool: counted from the start edge for a net
     /// with a line on the start edge, from the end edge for a net whose lines
@@ -57,6 +57,11 @@ pub(crate) struct Segment {
     pub interval: (i32, i32),
     /// Row at which the trunk leaves this lane for the next segment's lane.
     pub jog: Option<i32>,
+    /// The rows this segment serves.  A dogleg's two segments overlap at
+    /// the jog row and the rows between, so a row must climb onto or leave
+    /// the lane of the segment that owns it, not the first lane it lies in.
+    pub source_rows: Vec<i32>,
+    pub sink_rows: Vec<i32>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -254,6 +259,8 @@ pub(crate) fn plan_channel<N: Ord + Copy + Debug>(
                         from_end,
                         interval: piece.interval,
                         jog: piece.jog_out,
+                        source_rows: piece.source_rows.clone(),
+                        sink_rows: piece.sink_rows.clone(),
                     });
                 }
                 return Ok(ChannelPlan {
@@ -596,6 +603,23 @@ mod tests {
         assert_eq!(first[1].jog, None);
         let second = plan.single_lane(2).unwrap();
         assert!(first[0].lane < second && second < first[1].lane, "{plan:?}");
+        // Both pieces span the jog row and the rows between, so each row
+        // must name the piece that owns it: the source row climbs onto the
+        // first lane, the sink row leaves the second.
+        assert_eq!(
+            (
+                first[0].source_rows.as_slice(),
+                first[0].sink_rows.as_slice()
+            ),
+            (&[30][..], &[][..])
+        );
+        assert_eq!(
+            (
+                first[1].source_rows.as_slice(),
+                first[1].sink_rows.as_slice()
+            ),
+            (&[][..], &[32][..])
+        );
     }
 
     #[test]

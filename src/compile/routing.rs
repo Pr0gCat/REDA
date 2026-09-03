@@ -358,6 +358,10 @@ pub struct RouteRequest<'a> {
     pub sinks: &'a NonEmptyRouteSinks,
     pub reservations: &'a PhysicalReservations,
     pub limits: RouterLimits,
+    /// Cells a later branch of this route is planned to depart the trunk
+    /// from: a repeater there could not feed the departing branch, so no
+    /// refresh is ever placed on one of them.
+    pub no_refresh: Option<&'a BTreeSet<Anchor>>,
 }
 
 pub trait PhysicalRouter {
@@ -531,16 +535,23 @@ pub(crate) struct RoutePhysics {
     /// A later branch may climb its own earlier staircase: the clearance it
     /// reserved above the lower step is its own mandatory air.
     pub reuse_own_stair_clearance: bool,
+    /// The strength a branch keeps in hand for cells no repeater can stand
+    /// on is the longest run of such cells, not the number of staircases on
+    /// the whole branch: dust decays one unit per cell on a stair as
+    /// anywhere else, and only a run of bends can push a refresh back.
+    pub reserve_for_bend_runs: bool,
 }
 
 impl RoutePhysics {
     pub(crate) const LEGACY: Self = Self {
         own_floor_of_earlier: false,
         reuse_own_stair_clearance: false,
+        reserve_for_bend_runs: false,
     };
     pub(crate) const GUARDED: Self = Self {
         own_floor_of_earlier: true,
         reuse_own_stair_clearance: true,
+        reserve_for_bend_runs: true,
     };
 }
 
@@ -758,6 +769,8 @@ where
             carried,
             &path[shared..],
             strict_local,
+            physics.reserve_for_bend_runs,
+            request.no_refresh,
         );
         // A branch that leaves the trunk where the trunk's own repeater
         // spacing left too little strength refreshes the trunk first: the
@@ -768,6 +781,9 @@ where
             let candidate = (1..shared.saturating_sub(1)).rev().find(|&index| {
                 let (before, at, after) = (path[index - 1], path[index], path[index + 1]);
                 if departures.contains(&at)
+                    || request
+                        .no_refresh
+                        .is_some_and(|planned| planned.contains(&at))
                     || cell_states
                         .get(&at)
                         .is_none_or(|state| state.kind != BlockKind::RedstoneWire)
@@ -814,6 +830,8 @@ where
                 carried,
                 &path[shared..],
                 strict_local,
+                physics.reserve_for_bend_runs,
+                request.no_refresh,
             );
         }
         if shared > 0 && shared < path.len() {
@@ -1871,7 +1889,7 @@ pub(crate) fn realise_branch_from(
     incoming: u8,
     cells: &[Anchor],
 ) -> LaidBranch {
-    realise_branch_from_with_boundary_policy(previous_cell, incoming, cells, false)
+    realise_branch_from_with_boundary_policy(previous_cell, incoming, cells, false, false, None)
 }
 
 fn realise_branch_from_with_boundary_policy(
@@ -1879,6 +1897,8 @@ fn realise_branch_from_with_boundary_policy(
     incoming: u8,
     cells: &[Anchor],
     include_boundary_bend: bool,
+    reserve_for_bend_runs: bool,
+    no_refresh: Option<&BTreeSet<Anchor>>,
 ) -> LaidBranch {
     let source = previous_cell;
     let mut bends: BTreeSet<usize> = cells
@@ -1902,6 +1922,15 @@ fn realise_branch_from_with_boundary_policy(
         }
         previous = *cell;
     }
+    // A planned departure cell takes no refresh either: the budget planner
+    // treats it like a bend and steps back to the cell before it.
+    if let Some(no_refresh) = no_refresh {
+        for (index, cell) in cells.iter().enumerate() {
+            if no_refresh.contains(cell) {
+                bends.insert(index);
+            }
+        }
+    }
     let stairs = bends
         .iter()
         .filter(|&&index| {
@@ -1909,7 +1938,24 @@ fn realise_branch_from_with_boundary_policy(
             cells[index].y != before.y
         })
         .count();
-    let reserve = (stairs as i32).min(crate::compile::MAX_DUST_RUN - 2);
+    let longest_bend_run = {
+        let mut longest = 0usize;
+        let mut run = 0usize;
+        for index in 0..cells.len() {
+            if bends.contains(&index) {
+                run += 1;
+                longest = longest.max(run);
+            } else {
+                run = 0;
+            }
+        }
+        longest
+    };
+    let reserve = if reserve_for_bend_runs {
+        (longest_bend_run as i32).min(crate::compile::MAX_DUST_RUN - 2)
+    } else {
+        (stairs as i32).min(crate::compile::MAX_DUST_RUN - 2)
+    };
     let (is_repeater, _) = crate::compile::plan_bent_path(cells.len(), &bends, incoming, reserve);
     let mut is_repeater = is_repeater;
     let mut previous = source;
@@ -2233,6 +2279,7 @@ mod tests {
                     max_node_expansions: 0,
                     max_queue_entries: 0,
                 },
+                no_refresh: None,
             })
             .unwrap_err();
 
@@ -2271,11 +2318,34 @@ mod tests {
     }
 
     #[test]
+    fn a_planned_departure_cell_never_receives_a_refresh() {
+        // Twenty straight cells with incoming strength 3 need a refresh
+        // within the first two; when the third cell is a planned departure
+        // the refresh steps back to the second.
+        let source = at(0, 1, 0);
+        let cells = (1..=20).map(|x| at(x, 1, 0)).collect::<Vec<_>>();
+        let free = realise_branch_from_with_boundary_policy(source, 3, &cells, false, true, None);
+        let planned = BTreeSet::from([at(3, 1, 0)]);
+        let guarded = realise_branch_from_with_boundary_policy(
+            source,
+            3,
+            &cells,
+            false,
+            true,
+            Some(&planned),
+        );
+        assert!(free.carries && guarded.carries);
+        assert_eq!(free.blocks[2].kind, BlockKind::Repeater);
+        assert_ne!(guarded.blocks[2].kind, BlockKind::Repeater);
+        assert_eq!(guarded.blocks[1].kind, BlockKind::Repeater);
+    }
+
+    #[test]
     fn branch_suffix_boundary_bend_never_receives_a_repeater() {
         let source = at(1, 1, 0);
         let cells = [at(2, 1, 0), at(2, 1, 1), at(2, 1, 2)];
 
-        let laid = realise_branch_from_with_boundary_policy(source, 2, &cells, true);
+        let laid = realise_branch_from_with_boundary_policy(source, 2, &cells, true, false, None);
 
         assert_ne!(
             laid.blocks[0].kind,
@@ -2302,6 +2372,7 @@ mod tests {
                     max_node_expansions: 10_000,
                     max_queue_entries: 50_000,
                 },
+                no_refresh: None,
             })
             .unwrap();
 
@@ -2364,6 +2435,7 @@ mod tests {
                     max_node_expansions: 10_000,
                     max_queue_entries: 50_000,
                 },
+                no_refresh: None,
             })
             .unwrap();
 
@@ -2397,6 +2469,7 @@ mod tests {
                 max_node_expansions: 10_000,
                 max_queue_entries: 50_000,
             },
+            no_refresh: None,
         };
         let tree = DurablePhysicalRouter.route(request).unwrap();
         assert_eq!(
@@ -2425,6 +2498,7 @@ mod tests {
                 max_node_expansions: 10_000,
                 max_queue_entries: 50_000,
             },
+            no_refresh: None,
         };
 
         assert_eq!(
@@ -2489,6 +2563,7 @@ mod tests {
                     max_node_expansions: 50_000,
                     max_queue_entries: 200_000,
                 },
+                no_refresh: None,
             })
             .expect("the trunk is refreshed before the weak departure");
 

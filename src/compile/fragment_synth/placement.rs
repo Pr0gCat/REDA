@@ -663,7 +663,11 @@ impl TopologyAwareSeedPlacer {
         // first, like every other pair of rows.
         let mut taken_rows = Vec::<i32>::new();
         let mut settle_row = |wanted: i32| -> i32 {
-            let free = |row: i32| taken_rows.iter().all(|taken| (taken - row).abs() >= ROW_GRID);
+            let free = |row: i32| {
+                taken_rows
+                    .iter()
+                    .all(|taken| (taken - row).abs() >= ROW_GRID)
+            };
             let row = (0..)
                 .flat_map(|step| [wanted + step, wanted - step])
                 .find(|&row| free(row))
@@ -702,7 +706,11 @@ impl TopologyAwareSeedPlacer {
             .collect::<Result<BTreeMap<_, _>, SeedPlacementError>>()?;
         let mut taken_rows = Vec::<i32>::new();
         let mut settle_row = |wanted: i32| -> i32 {
-            let free = |row: i32| taken_rows.iter().all(|taken| (taken - row).abs() >= ROW_GRID);
+            let free = |row: i32| {
+                taken_rows
+                    .iter()
+                    .all(|taken| (taken - row).abs() >= ROW_GRID)
+            };
             let row = (0..)
                 .flat_map(|step| [wanted + step, wanted - step])
                 .find(|&row| free(row))

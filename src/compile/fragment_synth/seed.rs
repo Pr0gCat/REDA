@@ -2112,6 +2112,7 @@ fn route_all(
             sinks: &sinks,
             reservations: &attempt_reservations,
             limits: config.router_limits,
+            no_refresh: layout.departures.get(&source_id),
         }) {
             Ok(tree) => tree,
             Err(failure) => {
@@ -2123,7 +2124,7 @@ fn route_all(
                     &sinks,
                     &failure,
                     plan_fingerprint,
-                )))
+                )));
             }
         };
         refresh_exact_route_delays(&mut tree);
@@ -3943,28 +3944,191 @@ mod tests {
             }
         }
 
-        #[test]
-        #[ignore = "release-only: run with `cargo test --release --lib extra_circuits -- --ignored`"]
-        fn every_extra_circuit_certifies_with_the_topology_aware_seed() {
-            let mut cases: Vec<(String, Netlist)> = Vec::new();
-            for segment in 1..7 {
-                let (netlist, _) =
-                    crate::circuits::seven_segment::build_single_segment_netlist(segment);
-                cases.push((
-                    format!("segment_{}", (b'a' + segment as u8) as char),
-                    netlist,
-                ));
+        /// A 4-bit ALU: opcode `s1 s0` selects AND, OR, XOR or ADD of `a`
+        /// and `b`; `cout` is the adder carry.
+        fn alu4() -> Netlist {
+            let mut b = NetlistBuilder::new();
+            let ns0 = b.not("s0");
+            let ns1 = b.not("s1");
+            let sel = [
+                b.and_reduce(vec![ns1.clone(), ns0.clone()]),
+                b.and_reduce(vec![ns1.clone(), "s0".to_string()]),
+                b.and_reduce(vec!["s1".to_string(), ns0.clone()]),
+                b.and_reduce(vec!["s1".to_string(), "s0".to_string()]),
+            ];
+            let mut carry = "cin".to_string();
+            let mut outputs = Vec::new();
+            for i in 0..4 {
+                let (x, y) = (format!("a{i}"), format!("b{i}"));
+                let and = b.and_reduce(vec![x.clone(), y.clone()]);
+                let or = b.or_reduce(vec![x.clone(), y.clone()]);
+                let xo = xor(&mut b, &x, &y);
+                let (sum, cout) = full_adder(&mut b, &x, &y, &carry);
+                carry = cout;
+                let picks = vec![
+                    b.and_reduce(vec![and, sel[0].clone()]),
+                    b.and_reduce(vec![or, sel[1].clone()]),
+                    b.and_reduce(vec![xo, sel[2].clone()]),
+                    b.and_reduce(vec![sum, sel[3].clone()]),
+                ];
+                outputs.push(b.or_reduce(picks));
             }
-            cases.push(("majority3".into(), majority3()));
-            cases.push(("parity4".into(), parity4()));
-            cases.push(("decoder_2_to_4".into(), decoder_2_to_4()));
-            cases.push(("mux_4_to_1".into(), mux_4_to_1()));
-            cases.push(("and8".into(), wide_gate("and", 8)));
-            cases.push(("or8".into(), wide_gate("or", 8)));
-            cases.push(("equal4".into(), equal4()));
-            cases.push(("incrementer4".into(), half_adder_chain(4)));
-            cases.push(("ripple_adder2".into(), ripple_adder(2)));
-            cases.push(("ripple_adder4".into(), ripple_adder(4)));
+            outputs.push(carry);
+            let mut inputs = Vec::new();
+            for i in 0..4 {
+                inputs.push(format!("a{i}"));
+            }
+            for i in 0..4 {
+                inputs.push(format!("b{i}"));
+            }
+            inputs.extend(["cin".to_string(), "s1".to_string(), "s0".to_string()]);
+            Netlist {
+                inputs,
+                outputs,
+                gates: b.into_gates(),
+            }
+        }
+
+        /// A 4x4 array multiplier: partial products summed with ripple adders.
+        fn multiplier4() -> Netlist {
+            let mut b = NetlistBuilder::new();
+            let pp = |b: &mut NetlistBuilder, i: usize, j: usize| {
+                b.and_reduce(vec![format!("a{i}"), format!("b{j}")])
+            };
+            let mut acc: Vec<String> = (0..4).map(|i| pp(&mut b, i, 0)).collect();
+            let mut outputs = vec![acc[0].clone()];
+            for j in 1..4 {
+                let row: Vec<String> = (0..4).map(|i| pp(&mut b, i, j)).collect();
+                let mut carry: Option<String> = None;
+                let mut next = Vec::new();
+                for i in 0..4 {
+                    let x = if i + 1 < acc.len() {
+                        Some(acc[i + 1].clone())
+                    } else {
+                        None
+                    };
+                    let y = row[i].clone();
+                    let (sum, cout) = match (x, carry.take()) {
+                        (Some(x), Some(c)) => full_adder(&mut b, &x, &y, &c),
+                        (Some(x), None) => {
+                            let sum = xor(&mut b, &x, &y);
+                            let cout = b.and_reduce(vec![x, y]);
+                            (sum, cout)
+                        }
+                        (None, Some(c)) => {
+                            let sum = xor(&mut b, &y, &c);
+                            let cout = b.and_reduce(vec![y, c]);
+                            (sum, cout)
+                        }
+                        (None, None) => (y, String::new()),
+                    };
+                    next.push(sum);
+                    if !cout.is_empty() {
+                        carry = Some(cout);
+                    }
+                }
+                if let Some(c) = carry {
+                    next.push(c);
+                }
+                outputs.push(next[0].clone());
+                acc = next;
+            }
+            outputs.extend(acc.into_iter().skip(1));
+            let mut inputs = Vec::new();
+            for i in 0..4 {
+                inputs.push(format!("a{i}"));
+            }
+            for i in 0..4 {
+                inputs.push(format!("b{i}"));
+            }
+            Netlist {
+                inputs,
+                outputs,
+                gates: b.into_gates(),
+            }
+        }
+
+        /// A fuller 4-bit ALU with a three-bit opcode: 000 AND, 001 OR,
+        /// 010 XOR, 011 NOT a, 100 ADD, 101 SUB (a + !b + 1), 110 SHL a,
+        /// 111 pass a.  Outputs r0..r3, the adder carry and a zero flag.
+        fn alu4_full() -> Netlist {
+            let mut b = NetlistBuilder::new();
+            let n = [b.not("s0"), b.not("s1"), b.not("s2")];
+            let s = ["s0".to_string(), "s1".to_string(), "s2".to_string()];
+            let mut sel = Vec::new();
+            for op in 0..8u8 {
+                let bit = |b: &mut NetlistBuilder, k: usize| -> String {
+                    if (op >> k) & 1 == 1 {
+                        s[k].clone()
+                    } else {
+                        n[k].clone()
+                    }
+                };
+                let bits = vec![bit(&mut b, 0), bit(&mut b, 1), bit(&mut b, 2)];
+                sel.push(b.and_reduce(bits));
+            }
+            // Subtraction shares the adder: the b operand is inverted and
+            // the carry-in forced high when s0 is set with s2.
+            let sub = b.and_reduce(vec!["s2".to_string(), n[1].clone(), "s0".to_string()]);
+            let nsub = b.not(&sub);
+            let mut carry = sub.clone();
+            let mut results = Vec::new();
+            let mut previous_a: Option<String> = None;
+            for i in 0..4 {
+                let (x, y) = (format!("a{i}"), format!("b{i}"));
+                let ny = b.not(&y);
+                let operand = {
+                    let keep = b.and_reduce(vec![y.clone(), nsub.clone()]);
+                    let flip = b.and_reduce(vec![ny.clone(), sub.clone()]);
+                    b.or_reduce(vec![keep, flip])
+                };
+                let (sum, cout) = full_adder(&mut b, &x, &operand, &carry);
+                carry = cout;
+                let and = b.and_reduce(vec![x.clone(), y.clone()]);
+                let or = b.or_reduce(vec![x.clone(), y.clone()]);
+                let xo = xor(&mut b, &x, &y);
+                let nx = b.not(&x);
+                let shifted = previous_a.clone().unwrap_or_else(|| {
+                    // Bit 0 of a left shift is zero: an AND of a signal with
+                    // its own inverse.
+                    let zero = b.and_reduce(vec![x.clone(), nx.clone()]);
+                    zero
+                });
+                let picks = vec![
+                    b.and_reduce(vec![and, sel[0].clone()]),
+                    b.and_reduce(vec![or, sel[1].clone()]),
+                    b.and_reduce(vec![xo, sel[2].clone()]),
+                    b.and_reduce(vec![nx, sel[3].clone()]),
+                    b.and_reduce(vec![sum.clone(), sel[4].clone()]),
+                    b.and_reduce(vec![sum, sel[5].clone()]),
+                    b.and_reduce(vec![shifted, sel[6].clone()]),
+                    b.and_reduce(vec![x.clone(), sel[7].clone()]),
+                ];
+                let r = b.or_reduce(picks);
+                results.push(r);
+                previous_a = Some(x);
+            }
+            let any = b.or_reduce(results.clone());
+            let zero = b.not(&any);
+            let mut outputs = results;
+            outputs.push(carry);
+            outputs.push(zero);
+            let mut inputs = Vec::new();
+            for i in 0..4 {
+                inputs.push(format!("a{i}"));
+            }
+            for i in 0..4 {
+                inputs.push(format!("b{i}"));
+            }
+            inputs.extend(["s2".to_string(), "s1".to_string(), "s0".to_string()]);
+            Netlist {
+                inputs,
+                outputs,
+                gates: b.into_gates(),
+            }
+        }
+
+        fn run_cases(cases: Vec<(String, Netlist)>) {
             let selected = std::env::var("REDA_EXTRA_CIRCUITS").ok();
             let mut failures = Vec::new();
             for (name, netlist) in cases {
@@ -4001,6 +4165,42 @@ mod tests {
                 }
             }
             assert_eq!(failures, Vec::<String>::new());
+        }
+
+        #[test]
+        #[ignore = "release-only: run with `cargo test --release --lib large_circuits -- --ignored`"]
+        fn every_large_circuit_certifies_with_the_topology_aware_seed() {
+            run_cases(vec![
+                ("ripple_adder8".into(), ripple_adder(8)),
+                ("alu4".into(), alu4()),
+                ("alu4_full".into(), alu4_full()),
+                ("multiplier4".into(), multiplier4()),
+            ]);
+        }
+
+        #[test]
+        #[ignore = "release-only: run with `cargo test --release --lib extra_circuits -- --ignored`"]
+        fn every_extra_circuit_certifies_with_the_topology_aware_seed() {
+            let mut cases: Vec<(String, Netlist)> = Vec::new();
+            for segment in 1..7 {
+                let (netlist, _) =
+                    crate::circuits::seven_segment::build_single_segment_netlist(segment);
+                cases.push((
+                    format!("segment_{}", (b'a' + segment as u8) as char),
+                    netlist,
+                ));
+            }
+            cases.push(("majority3".into(), majority3()));
+            cases.push(("parity4".into(), parity4()));
+            cases.push(("decoder_2_to_4".into(), decoder_2_to_4()));
+            cases.push(("mux_4_to_1".into(), mux_4_to_1()));
+            cases.push(("and8".into(), wide_gate("and", 8)));
+            cases.push(("or8".into(), wide_gate("or", 8)));
+            cases.push(("equal4".into(), equal4()));
+            cases.push(("incrementer4".into(), half_adder_chain(4)));
+            cases.push(("ripple_adder2".into(), ripple_adder(2)));
+            cases.push(("ripple_adder4".into(), ripple_adder(4)));
+            run_cases(cases);
         }
     }
 

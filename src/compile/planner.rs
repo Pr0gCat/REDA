@@ -1133,6 +1133,7 @@ pub fn try_move(
                         max_node_expansions: u64::MAX,
                         max_queue_entries: u64::MAX,
                     },
+                    no_refresh: None,
                 },
                 crate::compile::routing::RoutingJoinPolicy::Off,
                 |_| 0,
@@ -4826,6 +4827,7 @@ fn lay_net(
             max_node_expansions: u64::MAX,
             max_queue_entries: u64::MAX,
         },
+        no_refresh: None,
     }) {
         Ok(tree) => Ok(adapter.convert_to_legacy(tree)),
         Err(_) => Err(adapter
@@ -5252,6 +5254,7 @@ fn route_in_order(
                 max_node_expansions: u64::MAX,
                 max_queue_entries: u64::MAX,
             },
+            no_refresh: None,
         }) {
             Ok(tree) => routes.push(adapter.convert_to_legacy(tree)),
             Err(_) => {
@@ -7214,6 +7217,7 @@ mod tests {
                     max_node_expansions: u64::MAX,
                     max_queue_entries: 1,
                 },
+                no_refresh: None,
             })
             .expect_err("the second sink must spend the request's third expansion");
 
@@ -7280,6 +7284,7 @@ mod tests {
                     max_node_expansions: 10_000,
                     max_queue_entries: 50_000,
                 },
+                no_refresh: None,
             })
             .expect("the route detours around a gate-owned conductor");
 
