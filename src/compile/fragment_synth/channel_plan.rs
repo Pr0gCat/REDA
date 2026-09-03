@@ -18,7 +18,7 @@ use thiserror::Error;
 
 /// Forward cells between the column edge and the first lane: a three-cell
 /// entry line, the cell beyond it, and the climb cell.
-pub(crate) const LANE_MARGIN: i32 = 5;
+pub(crate) const LANE_MARGIN: i32 = 3;
 /// Forward cells between neighbouring lanes.
 pub(crate) const LANE_PITCH: i32 = 3;
 
@@ -486,14 +486,14 @@ mod tests {
     }
 
     #[test]
-    fn lanes_sit_five_cells_in_and_three_apart() {
-        assert_eq!(lane_forward(40, 0), 45);
-        assert_eq!(lane_forward(40, 1), 48);
-        assert_eq!(lane_forward(40, 3), 54);
-        assert_eq!(channel_width(1), 13);
-        assert_eq!(channel_width(4), 22);
-        // A channel of width 22 starting at 40 spans 40..=61: lane 3 at 54
-        // leaves 55..=61 for the climb cell, the sink line, and the edge.
+    fn lanes_sit_three_cells_in_and_three_apart() {
+        assert_eq!(lane_forward(40, 0), 43);
+        assert_eq!(lane_forward(40, 1), 46);
+        assert_eq!(lane_forward(40, 3), 52);
+        assert_eq!(channel_width(1), 9);
+        assert_eq!(channel_width(4), 18);
+        // A channel of width 18 starting at 40 spans 40..=57: lane 3 at 52
+        // leaves 53..=57 for the descent cells, the sink line, and the edge.
         assert!(lane_forward(40, 3) + LANE_MARGIN <= 40 + channel_width(4) - 1 + 1);
     }
 
@@ -617,8 +617,8 @@ mod tests {
             (plan.start_lanes, plan.end_lanes, plan.lane_count),
             (1, 1, 2)
         );
-        assert_eq!(lane_forward_from_end(100, 0), 95);
-        assert_eq!(lane_forward_from_end(100, 1), 92);
+        assert_eq!(lane_forward_from_end(100, 0), 97);
+        assert_eq!(lane_forward_from_end(100, 1), 94);
     }
 
     #[test]

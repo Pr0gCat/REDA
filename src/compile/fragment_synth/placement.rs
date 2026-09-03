@@ -656,21 +656,81 @@ impl TopologyAwareSeedPlacer {
         // since behind the origin is the world edge or the callers' side.
         let input_forward = if direct { -input_channel } else { 0 };
         let output_forward = cursor;
+        // An automatic port sits on the row of the macros it is wired to
+        // (the median of their origins), so a port feeding one macro gets a
+        // straight ground line with no lane and no extra repeater.  Ports
+        // wanting the same row are spread a row-grid step apart, nearest
+        // first, like every other pair of rows.
+        let mut taken_rows = Vec::<i32>::new();
+        let mut settle_row = |wanted: i32| -> i32 {
+            let free = |row: i32| taken_rows.iter().all(|taken| (taken - row).abs() >= ROW_GRID);
+            let row = (0..)
+                .flat_map(|step| [wanted + step, wanted - step])
+                .find(|&row| free(row))
+                .unwrap_or(wanted);
+            taken_rows.push(row);
+            row
+        };
+        let median = |mut rows: Vec<i32>| -> Option<i32> {
+            rows.sort_unstable();
+            rows.get(rows.len() / 2).copied()
+        };
         let automatic_inputs = automatic_input_ports
             .iter()
             .map(|&port| {
-                let lateral = automatic_input_lateral(port)
-                    .checked_add(lateral_shift)
-                    .ok_or(SeedPlacementError::CoordinateOverflow)?;
+                let wired = request
+                    .graph
+                    .assignments
+                    .iter()
+                    .filter(|assignment| {
+                        matches!(&assignment.driver, PhysicalDriver::PrimaryInput(driver) if *driver == port)
+                    })
+                    .filter_map(|assignment| match assignment.sink {
+                        PhysicalSink::InstanceInput { instance, .. } => laterals.get(&instance).copied(),
+                        PhysicalSink::DeclaredOutput(_) => None,
+                    })
+                    .collect::<Vec<_>>();
+                let wanted = match median(wired) {
+                    Some(row) => row,
+                    None => automatic_input_lateral(port)
+                        .checked_add(lateral_shift)
+                        .ok_or(SeedPlacementError::CoordinateOverflow)?,
+                };
+                let lateral = settle_row(wanted);
                 Ok((port, frame_to_world(frame, input_forward, lateral)))
             })
             .collect::<Result<BTreeMap<_, _>, SeedPlacementError>>()?;
+        let mut taken_rows = Vec::<i32>::new();
+        let mut settle_row = |wanted: i32| -> i32 {
+            let free = |row: i32| taken_rows.iter().all(|taken| (taken - row).abs() >= ROW_GRID);
+            let row = (0..)
+                .flat_map(|step| [wanted + step, wanted - step])
+                .find(|&row| free(row))
+                .unwrap_or(wanted);
+            taken_rows.push(row);
+            row
+        };
         let automatic_outputs = automatic_output_ports
             .iter()
             .map(|&port| {
-                let lateral = automatic_output_lateral(port)
-                    .checked_add(lateral_shift)
-                    .ok_or(SeedPlacementError::CoordinateOverflow)?;
+                let driver = request
+                    .graph
+                    .assignments
+                    .iter()
+                    .find(|assignment| assignment.sink == PhysicalSink::DeclaredOutput(port))
+                    .and_then(|assignment| match &assignment.driver {
+                        PhysicalDriver::Instance(driver) => {
+                            laterals.get(&instance_driver_owner(driver)).copied()
+                        }
+                        PhysicalDriver::PrimaryInput(_) => None,
+                    });
+                let wanted = match driver {
+                    Some(row) => row,
+                    None => automatic_output_lateral(port)
+                        .checked_add(lateral_shift)
+                        .ok_or(SeedPlacementError::CoordinateOverflow)?,
+                };
+                let lateral = settle_row(wanted);
                 Ok((port, frame_to_world(frame, output_forward, lateral)))
             })
             .collect::<Result<BTreeMap<_, _>, SeedPlacementError>>()?;
