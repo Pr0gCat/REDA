@@ -1,7 +1,8 @@
 # Module Floorplan: hierarchical placement over the topology-aware seed
 
 Status: approved in design review on 2026-09-04 (four sections, each
-confirmed by the user).
+confirmed by the user); revised the same day after a code-backed review
+(§13 lists what changed).
 
 This spec adds one level of structure above the topology-aware seed: a
 Verilog module becomes a block that is compiled once, certified once, and
@@ -28,22 +29,23 @@ solves, plus a handful of wires between them.
 The founding architecture document (`2026-08-05-redstone-eda-design.md`,
 §7.2 and §10.1) already asked for this: datapath slices laid out
 programmatically, module hierarchy reused for placement, and no black-box
-macro library. Nothing since has designed it. The front end flattens
-everything: `synth.py` reads only the top module and `netlist_from_json`
-rejects any cell that is not a simple gate.
+macro library. Nothing since has designed it. The front end loses the
+hierarchy on the Rust side: `synth.py` never flattens and Yosys keeps every
+module in its JSON, but `netlist_from_json` reads only the top module and
+reports a submodule instance cell as a missing `Y` connection
+(`yosys_json.rs:397`) before it ever checks the cell type.
 
 ## 2. Goals
 
-1. A design written as modules compiles as blocks: every distinct
-   (module, pin contract) pair is compiled and certified once; every
-   instance is a translated copy.
+1. A design written as modules compiles as blocks: every distinct module
+   is compiled and certified once; every instance is a translated copy.
 2. The parent places blocks and its own loose gates with the existing
    level/column placer and wires the gaps with the existing channel plan
    and guarded router. No new router.
 3. The certified artifact is flat. Hierarchy exists only during placement
    and routing. Structural verification, the symbolic equivalence proof,
    the exhaustive truth check and the manifest sweep run unchanged on the
-   union.
+   union, and the union contains no block-specific object.
 4. A single-module design compiles through the new path to the same
    candidate as today (same candidate fingerprint), so the six acceptance
    cases and the eleven pinned seven-segment IO are unaffected.
@@ -55,20 +57,22 @@ rejects any cell that is not a simple gate.
 
 - No automatic recovery of repeated subgraphs from a flat netlist. Reuse
   comes from module instances the user wrote.
-- No pins on a block's lateral sides. Blocks expose inputs on their west
-  edge and outputs on their east edge only (§6 explains why that is
-  enough).
+- No pinned ports on blocks. A block is compiled exactly as an unpinned
+  circuit is today; its ports are wherever the seed's automatic ports land
+  (§6 explains why that is enough and cheaper).
 - No compositional certification. Each block is certified when compiled,
   and the assembled design is certified again in full. No per-block timing
   certificate replaces whole-world simulation.
 - No integration of `macro_cells::CellLibrary`; no fixed geometry library.
 - No change to the A* router, `RouterLimits`, `SynthesisInput`,
-  `compile_fragment_synth`, the pinned-IO contract or the legacy front
-  doors.
+  `compile_fragment_synth`, `ExpandedPhysicalCandidate`,
+  `PhysicalEndpointId`, the pinned-IO contract or the legacy front doors.
 - No fragment optimisation inside a block from the parent: blocks compile
   at budget zero in this milestone (§9).
 - No stateful modules. A module containing a flip-flop is refused by the
   existing `UnsupportedStatefulTopology` path.
+- No block rotation. Every block keeps the seed's frame: inputs west,
+  outputs east, ground at y = 1.
 
 ## 4. Chosen architecture
 
@@ -76,19 +80,21 @@ rejects any cell that is not a simple gate.
 Verilog ── Yosys (no flatten) ── HierarchicalNetlist
                                         │
                      ┌──────────────────┴──────────────────┐
-                     │ per (module, pin contract), parallel │
-                     │   compile block = seed + certify     │
+                     │ per module, parallel:                │
+                     │   compile block = unpinned seed +    │
+                     │   certify                            │
                      └──────────────────┬──────────────────┘
-                                        │ CompiledBlock {candidate, bounds, pins}
-   parent: InstanceGraph with BlockMacro instances + loose gates
+                                        │ CompiledBlock {candidate, bounds, ports}
+   parent: planning graph with block macros + loose gates
          → placement (blocks are macros) → channel plan/layout → routes
-         → union candidate (blocks translated) → certify (unchanged)
+         → union candidate (blocks translated, routes spliced)
+         → certify (unchanged)
 ```
 
 Recursion is uniform: a module that instantiates other modules is itself
 compiled by the parent procedure, and the result is a `CompiledBlock` for
 its own parent. The top module is the root of the same procedure with the
-caller's pins.
+caller's pins, if any.
 
 ## 5. Front end
 
@@ -119,24 +125,38 @@ acyclic; a cycle is a front-end error naming the modules.
 
 ### 5.2 Yosys
 
-`synth.py` keeps `hierarchy -check -top` and never runs `flatten`.
-`opt`, `techmap`, `abc` and `opt_clean` are run per module (Yosys does
-this already when no `flatten` is present). `netlist_from_json` reads every
-module in the JSON. A cell whose type is another module in the file becomes
-a `ModuleInstance`; a cell of any other unknown type stays a hard error.
-Multi-bit ports are still split per bit with the existing `port[i]` names,
-in the instance port map as well.
+`synth.py` already runs `hierarchy -check -top`, `proc`, `opt`, `techmap`,
+`abc` and `opt_clean` with no selection and no `flatten`, so every pass
+runs per module and the JSON carries every module. Only the reader
+changes: `netlist_from_json` reads every module; a cell whose `type` is a
+key of `modules` becomes a `ModuleInstance`; the type check moves ahead of
+the `Y` lookup so any other unknown type is still reported as an unknown
+cell, not as a missing connection. Parameterised modules appear under
+Yosys's derived names (`$paramod\full_adder\WIDTH=4`) both as module keys
+and as instance types; the reader keeps those strings as the module key
+and the flattener sanitises them for signal prefixes. Multi-bit ports are
+still split per bit with the existing `port[i]` names, in the instance
+port map as well.
 
-### 5.3 Flattening
+### 5.3 Constant ports
+
+An instance port tied to a constant (`1'b0` on a slice's carry-in) is not
+a different pin contract; it is a different module. The front end
+specialises: it clones the module under a derived name
+(`full_adder@cin=0`), substitutes the constant into the clone's own gates
+(the existing NOR/OR constant folding in `netlist_from_json` applies) and
+rewrites the instance to the clone. Two instances with the same constants
+share the clone.
+
+### 5.4 Flattening
 
 `HierarchicalNetlist::flatten() -> (Netlist, Vec<GatePath>)` produces the
 flat netlist certification uses. Signal names inside an instance are
 prefixed with the instance path joined by `.` (`alu.slice2.g7`); port
 connections are resolved by aliasing the child port name to the parent
 signal, so no extra buffer gates appear. `GatePath` records, for every flat
-gate, the instance path it came from; the parent uses it to group gates
-into blocks (§7.1). Flattening is deterministic: modules in `BTreeMap`
-order, instances and gates in declaration order.
+gate, the instance path it came from. Flattening is deterministic: modules
+in `BTreeMap` order, instances and gates in declaration order.
 
 Lowering runs per module, on the module's own gates with its ports as
 boundaries, and the flattened netlist that certification uses is the
@@ -145,132 +165,173 @@ flattened gates. `lower_optimised` may otherwise optimise across a module
 boundary and make two instances of one module differ, which would break
 sharing and the one-to-one correspondence through `GatePath`.
 
-### 5.4 Test builder
+### 5.5 Test builder
 
 `HierarchicalNetlistBuilder` in `src/circuits/` wraps `NetlistBuilder` and
 adds `instance(name, module, ports)`. The hierarchical test circuits of
 §11 are built with it; one Verilog fixture (`tests/fixtures/ripple_adder8.v`
 with a `full_adder` module) exercises the Yosys path end to end.
 
-## 6. Pin contract
+## 6. Block compile and port table
 
-A block's ports are pinned by its parent before the block is compiled:
-
-```rust
-pub struct PinContract {
-    pub inputs: Vec<String>,   // west edge, north to south, row grid 4
-    pub outputs: Vec<String>,  // east edge, north to south, row grid 4
-}
-```
-
-The contract is relative: side and ordinal only. The parent orders a
-block's inputs and outputs by the lateral track order of the nets they
-connect to (`track_laterals`, which depends on net intervals and levels
-only, not on block sizes), so wires do not cross in the gap. Two
-instances of one module with the same ordering share one compile; a
-different ordering, or a port tied to a constant, is a different contract
-and a different compile.
-
-The block compile turns the contract into `PortPlacements` for the existing
-pinned-IO path: inputs at forward `0`, outputs at the block's east edge,
-rows at `ROW_GRID` pitch from the north. Because output positions depend
-on the block's width, which the compile determines, the seed is asked with
-inputs pinned and outputs automatic; the automatic outputs already land on
-the east edge at the sweep cursor in row order. The compile reports the
-resulting absolute pin anchors and the bounding box:
+A block is compiled by the existing unpinned seed, with no
+`PortPlacements`, at budget zero, and certified. Nothing about the seed
+changes for a block. The result is read back:
 
 ```rust
 pub struct CompiledBlock {
     pub module: String,
-    pub contract: PinContract,
-    pub candidate: ExpandedPhysicalCandidate, // block-local coordinates, origin 0
-    pub bounds: BlockBounds,                  // min/max x, y, z of every claim
-    pub inputs: BTreeMap<String, PortPin>,    // west edge
-    pub outputs: BTreeMap<String, PortPin>,   // east edge
+    pub candidate: ExpandedPhysicalCandidate, // as compiled, including the
+                                              // seed's own translation to x,z >= 16
+    pub bounds: BlockBounds,                  // min/max x, y, z over every claim
+    pub inputs: BTreeMap<String, BlockPort>,  // west edge
+    pub outputs: BTreeMap<String, BlockPort>, // east edge
     pub metrics: CandidateMetrics,
+}
+
+pub struct BlockPort {
+    pub cell: Anchor,     // input: the lever cell; output: the lamp cell
+    pub toward: Facing,   // always East in this milestone
 }
 ```
 
-Why west and east are enough: the parent places by topological level and
-every inter-block net leaves a lower level and enters a higher one, so it
-always exits an east edge and enters a west edge. Chained blocks (a ripple
-carry) occupy consecutive levels and the carry crosses one channel. Blocks
-at the same depth sit side by side in one level and never talk to each
-other directly.
+Why no pins. Pinning even only the inputs sends the seed down the pinned
+path (pin column, router stubs, level folding, frame turning). The
+acceptance data shows what that costs: the pinned seven segment has 56% of
+the gates of the unpinned one and 2.3 times the ticks and 1.5 times the
+blocks. The unpinned seed already puts every automatic input one input
+channel west of the first level (a stone under a lever, the route starting
+one cell east of the lever) and every automatic output one channel east of
+the last level (an output terminal repeater feeding a lamp). Those cells
+are a pin table by construction: an input port is the lever cell with
+`toward = East`, an output port is the lamp cell with `toward = East`. The
+parent reads them from `candidate.boundaries`.
+
+Port order along an edge is decided by the block's own placement (the row
+of the macro each port wires to) and is not controllable; the parent's
+channel plan takes the rows as they are, as it does for any macro's ports.
 
 ## 7. Parent placement and routing
 
-### 7.1 Block macros in the instance graph
+### 7.1 Planning graph
 
-`InstanceGraph` gains a second kind of instance:
+The parent plans over a graph of its own, not over an `InstanceGraph`
+with new variants. `PhysicalEndpointId` has eight exhaustive matches and
+some twenty partial ones across placement, layout, seed, timing and
+verification; adding block variants there would silently mis-handle
+blocks in every `_ =>` arm and would contradict §8. Instead:
 
 ```rust
-pub enum InstanceBody {
-    Gate(ExpandedInstance),          // today's one-gate instance
-    Block(BlockMacro),
+pub(crate) enum PlanNode {
+    Gate(InstanceId),        // a loose gate of this module, as today
+    Block(BlockInstance),
 }
 
-pub struct BlockMacro {
+pub(crate) struct BlockInstance {
     pub block: BlockId,              // index into the parent's compiled blocks
     pub path: Vec<String>,           // instance path
-    pub inputs: Vec<(PortId, PortIndex)>,   // parent signal -> block input
-    pub outputs: Vec<(PortId, PortIndex)>,  // block output -> parent signal
+    pub inputs: Vec<(PortId, String)>,   // parent signal -> block input name
+    pub outputs: Vec<(PortId, String)>,  // block output name -> parent signal
+}
+
+pub(crate) enum PlanEndpoint {
+    Flat(PhysicalEndpointId),
+    BlockInput { instance: PlanNodeId, port: String },
+    BlockOutput { instance: PlanNodeId, port: String },
 }
 ```
 
-A block has several outputs, so `PhysicalEndpointId` gains
-`BlockOutput(InstanceId, PortIndex)` and sinks gain `BlockInput(InstanceId,
-PortIndex)`. Everything that pattern-matches on endpoints (placement
-geometry, channel endpoints, route requests, timing arcs) handles the new
-arms; the ones that only need an anchor and an exit facing read them from
-the block's pin table.
+Placement, channel plan, channel layout and route requests are
+generalised over `PlanEndpoint` where they currently take
+`PhysicalEndpointId`; the concrete geometry they need (anchor, exit or
+entry facing, terminal contract) comes from a small trait both kinds
+implement. For a block: an output is a source with anchor at the lamp cell,
+`allowed_exit = East`, signal strength 15 (the block's output terminal
+repeater feeds it); an input is a sink with anchor at the lever cell,
+`allowed_entry = West`, `TerminalRequirement::Exact(Repeater facing East)`,
+support = the stone already under the lever.
 
-Gates that belong to a block instance are not in the parent graph as
-gates; they enter the union candidate at the end (§7.4).
+Gates that belong to a block are not in the parent graph; they enter the
+union candidate at the end (§7.4).
 
 ### 7.2 Placement
 
-`macro_envelope` for a block returns its bounding box in every facing (a
-block is never rotated in this milestone, so all four are the same box).
-Levels come from the DAG as today; a block's level is the maximum level of
-its input drivers plus one. `topology_delay_ticks` for a block is the
-block's certified `static_routed_delay`, so head/tail ticks and slack stay
-meaningful. Lateral tracks, barycentric sweeps, level folding, channel
-widths and the column sweep run unchanged. `LATERAL_GAP` applies between a
-block and its neighbours as between any macros.
+`macro_envelope` for a block returns its bounding box (all four facings
+identical; blocks are not rotated). Levels come from the DAG as today; a
+block's level is the maximum level of its input drivers plus one. The
+delay `analyse_instance_dag` uses for a block is the block's certified
+`static_routed_delay`, the worst input-to-output path, so head/tail ticks
+and slack are conservative for a block. Lateral tracks, barycentric
+sweeps, level folding, channel widths and the column sweep run unchanged;
+a block that does not fit the lateral window is `LateralWindowTooNarrow`
+naming the block, because a block cannot be folded. `LATERAL_GAP` applies
+between a block and its neighbours as between any macros.
 
 ### 7.3 Channel plan and layout
 
-A block's pins are channel endpoints exactly like a gate macro's ports:
-inputs on the channel's end edge, outputs on the next channel's start
-edge, each with its row. Crossing rows are chosen among rows free of every
-macro in the column, so a net that must pass a block runs outside the
-block's lateral extent. Column escapes, doglegs, jogs and departure
-planning apply unchanged.
+A block's ports are channel endpoints exactly like a gate macro's ports:
+inputs on a channel's end edge, outputs on the next channel's start edge,
+each with its row. Crossing rows are chosen among rows free of every macro
+in the column, so a net that must pass a block runs outside the block's
+lateral extent. Column escapes, doglegs, jogs and departure planning apply
+unchanged.
 
-The block's whole bounding box plus the air cell above every block is
-reserved as closed cells before any parent route runs, so no parent route
-enters a block.
+Before any parent route runs, every block's bounding box, extended one
+cell above the block's own maximum y, is reserved as closed cells; the
+block's lanes sit at ground + 2 and its closed layers reach ground + 3, so
+the air above the whole box is what keeps parent routes out.
 
-### 7.4 Union candidate
+### 7.4 Union candidate: translation and splicing
 
-After routing, the parent builds one flat `ExpandedPhysicalCandidate`:
+After routing, the parent builds one flat `ExpandedPhysicalCandidate`.
 
-- every compiled block's candidate is translated by the instance's placed
-  origin (`translate(candidate, dx, dy, dz)`, a new pure function over
-  every anchor-carrying field: placements, boundaries, connections, routes,
-  junctions, observations, pins);
-- the block's `InstanceId`s and `RouteId`s are renumbered into the parent's
-  space in instance-path order;
-- the block's pinned inputs and automatic outputs become ordinary
-  `Landing` sinks and `PrimitiveOutput` sources joined to the parent's
-  routes at the handover cells, exactly as a pinned circuit's IO join its
-  caller today;
-- the parent's own instances and routes are appended.
+**Translation.** `translate(candidate, dx, dy, dz)` moves every
+anchor-carrying field: `placements.{anchor, delayed.at, blocks[].at}`,
+`boundaries.{delayed.at, blocks[].at}`, `routes.{cells, floors,
+branches[].{root, path[], terminal.at}}`, `junctions.{at, cells}`,
+`observations[].site.at`, `pins[].at`, `pin_contracts[].at`. No existing
+walker covers all of these (`all_owned_blocks`, `physical_ledger`,
+`visit_blocks` and `deterministic_world_size` visit only the four block
+arrays), so `translate` is written as a field-by-field walk next to
+`fingerprint()`, which is the one function that already touches every
+field, and §11 tests it by serialising. `dx, dz` come from the instance's
+placed origin minus the block's own origin (the unpinned seed shifts its
+plan to x, z ≥ 16, and `bounds` is measured on the shifted claims); `dy` is
+the parent's ground y minus 1, which is zero unless the parent is a pinned
+top module.
+
+**Splicing.** A block boundary is an ordinary mid-route repeater in the
+union. The candidate model allows one route per connection and structural
+verification requires a route's source to be the driving endpoint, so the
+parent's route and the block's internal route are joined into one
+`RealisedRouteTree` rather than meeting at an endpoint:
+
+- *Block input.* The parent's route ends with an exact repeater at the
+  lever cell, facing east, on the stone the block placed there. The
+  block's internal route from that input (root one cell east of the lever)
+  is appended: the parent's branch path continues through the repeater
+  into the block route's cells; the block route's branches become branches
+  of the parent's tree; the lever, the block's `PrimaryInput` boundary,
+  its observation and its pin contract are dropped. The repeater restores
+  strength 15, which is what the block's route was compiled against.
+- *Block output.* The block's route from its driving gate ends in the
+  output terminal repeater facing the lamp. The lamp is removed; the
+  parent's route from that output, whose source is now the block's driving
+  gate, continues from the lamp cell. The block's `DeclaredOutput`
+  boundary and observation are dropped.
+- The block's `InstanceId`s, `RouteId`s and `RoutedSinkId`s are renumbered
+  into the parent's space in instance-path order; the parent's own
+  instances and routes are appended; `refresh_exact_route_delays` is rerun
+  on the union so route delays count the boundary repeaters.
+
+A block's input route may itself be a fanout tree, so a spliced tree can
+carry a tree; `RealisedRouteTree` allows that. Path continuity and the
+"root within one cell of the source" check hold across the splice because
+the repeater cell and the root cell are adjacent by construction.
 
 The union is indistinguishable from a flat compile of the flattened
-netlist: one gate per instance, absolute anchors, no block objects. That
-is why §8 needs no new code.
+netlist: one gate per instance, absolute anchors, ordinary routes with
+repeaters, no block objects.
 
 ## 8. Certification
 
@@ -278,28 +339,31 @@ is why §8 needs no new code.
 flattened lowered netlist. Structural verification re-instantiates every
 gate's topology and compares; the equivalence proof walks the flattened
 combinational order; the exhaustive truth check and the manifest sweep
-simulate the emitted world. None of these sees a block.
+simulate the emitted world. None of these sees a block, and none of them
+changes.
 
 Each block was certified when it was compiled, with its own manifest over
 its own inputs. A failure of the assembled design therefore points at the
-assembly (a parent route or a handover), which is reported with the
-instance path.
+assembly (a parent route or a splice), which is reported with the instance
+path.
 
 ## 9. Budgets, fingerprints and determinism
 
 - **Budget.** `compile_hierarchical(netlist, budget, pins)` compiles every
   block at `SynthesisBudget::Evaluations(0)` and spends `budget` on the
   parent's fragment search over its own loose gates and routes. Block
-  instances have no alternative implementations and are never proposed.
-  Optimising inside blocks is later work.
+  instances have no alternative implementations and are never proposed;
+  fragment selection skips `PlanNode::Block`. Optimising inside blocks is
+  later work.
 - **Case fingerprint.** The parent's `CaseDescriptor` hashes the
-  hierarchical netlist (modules, instances, port maps) and the pin
-  contracts, in addition to today's fields. A single-module design hashes
-  the same netlist as today and the empty instance list, and the design
-  degenerates to the flat path, so its candidate fingerprint is unchanged.
-- **Determinism.** Block compiles depend only on (module, contract). They
-  run on a thread pool sized by available parallelism and are collected
-  into a `BTreeMap<(module, contract), CompiledBlock>`; every later step
+  hierarchical netlist (modules, instances, port maps, constant
+  specialisations) in addition to today's fields. A single-module design
+  hashes the same netlist as today and an empty instance list, and the
+  design degenerates to the flat path, so its candidate fingerprint is
+  unchanged.
+- **Determinism.** Block compiles depend only on the module. They run on a
+  thread pool sized by available parallelism and are collected into a
+  `BTreeMap<String, CompiledBlock>` keyed by module; every later step
   iterates that map. No wall-clock budget, no randomness, no hash-map
   iteration order reaches the result. A test compiles the same design with
   one thread and with many and compares candidate fingerprints.
@@ -308,30 +372,38 @@ instance path.
 
 - `HierarchyError::Cycle { modules }`, `UnknownModule { instance, module }`,
   `PortMismatch { instance, port }` from the front end.
-- `BlockCompileError { path, module, source: SynthesisError }`: a block
-  that does not certify names its module and the first instance path that
-  needed that contract.
-- Parent placement and routing errors are today's `SeedError`s; the
-  bounded channel-widening repair loop applies to the parent as it does
-  to any seed.
-- A block wider than the parent's lateral window is
-  `LateralWindowTooNarrow` naming the block, not a silent fold (a block
-  cannot be folded).
+- `BlockCompileError { module, first_path, source: SynthesisError }`: a
+  block that does not certify names its module and the first instance path
+  that uses it.
+- Parent placement and routing errors are today's `SeedError`s, with the
+  instance path added where a block is involved; the bounded
+  channel-widening repair loop applies to the parent as it does to any
+  seed.
+- `LateralWindowTooNarrow { block }` when a block is wider than the
+  parent's window.
 
 ## 11. Tests and acceptance
 
 Unit tests (debug build):
 
-- front end: two-level and three-level JSON with instances parse; a cycle
-  and an unknown module are refused; flatten produces prefixed names and
-  a `GatePath` per gate; a module with `port[i]` bits maps per bit;
-- `translate` moves every anchor-carrying field of a candidate and nothing
-  else (round trip back to origin is identity);
-- `PinContract` to `PortPlacements`: rows on the grid, order preserved;
-  two instances with the same ordering share a compile, a different
-  ordering does not;
-- a block macro's envelope equals its bounds; its endpoints carry the pin
-  anchors and facings;
+- front end: two-level and three-level JSON with instances parse; a
+  `$paramod` instance resolves; a cycle and an unknown module are refused
+  as such (not as a missing `Y`); flatten produces prefixed names and a
+  `GatePath` per gate; a module with `port[i]` bits maps per bit; a
+  constant-tied port produces a specialised module shared by equal
+  instances;
+- `translate`: serialise the candidate before and after, every `Anchor`
+  moved by exactly the offset and nothing else changed; the translated
+  candidate passes `validate_shape`;
+- block port table: an unpinned compile of `full_adder` yields inputs at
+  lever cells on the west edge and outputs at lamp cells on the east edge,
+  in `bounds`;
+- splicing: a parent with one loose gate driving one block input, and one
+  block output driving one loose gate, produces a union whose routes pass
+  structural verification and whose route delays include the boundary
+  repeaters;
+- planning graph: a block macro's envelope equals its bounds; its
+  endpoints carry the port anchors and facings;
 - a single-module hierarchical netlist yields the same candidate
   fingerprint as `compile_fragment_synth` on the flat netlist, for `and4`,
   `full_adder` and the pinned seven segment (eleven IO byte-identical).
@@ -341,15 +413,18 @@ Release-only acceptance (ignored tests, same harness style as
 
 | circuit | structure | must |
 |---|---|---|
-| ripple_adder8 | 8 × full_adder module | certify; ticks ≤ flat 474 |
-| alu4_full | 4 × slice module (two contracts) + glue | certify; ticks ≤ flat 588 |
-| multiplier4 | 3 adder rows as modules, blocks side by side | certify; ticks ≤ flat 591 |
+| ripple_adder8 | 8 × full_adder module (slice 0 specialised on cin) | certify |
+| alu4_full | 4 × slice module + glue | certify |
+| multiplier4 | 3 adder rows as modules, blocks side by side | certify |
 | alu8 | 2 × alu4 module, each 4 × slice (three levels) | certify |
 | ripple_adder8 via Verilog fixture | Yosys path | certify, same fingerprint as the builder version |
 
-Also recorded, not gated: non-air blocks and wall time flat vs.
-hierarchical, and the share of wall time spent in the manifest sweep
-(measured before implementation starts, so the time claim is honest).
+Recorded and reported against the flat compile, not gated: settle ticks,
+non-air blocks, wall time, and the share of wall time spent in the
+manifest sweep (measured before implementation starts). Every block
+boundary adds a repeater tick, so a tick gate against the flat compile
+would invite exactly the pass-driven patching this project refuses; the
+gate is certification, and alu8 certifying is the milestone.
 
 The six existing acceptance cases are rerun through the harness and must be
 byte-identical in candidate fingerprint and metrics.
@@ -359,9 +434,16 @@ byte-identical in candidate fingerprint and metrics.
 - **Slice-aware placement only** (annotate gates with slice index and
   role, keep global routing). Least code, but the wiring problem that
   breaks stays global and generation time barely moves.
+- **Pin contracts on blocks** (parent chooses port sides and order, block
+  compiled pinned). The first draft of this spec. Dropped: the pinned path
+  costs 2.3 times the ticks, the parent cannot control automatic output
+  order anyway, and the channel plan already accepts ports on any row.
 - **Pins on all four sides with lateral stubs.** Needed only if chained
   blocks were stacked laterally. Level placement makes every inter-block
   net west-to-east, so the feature is unnecessary.
+- **Block endpoints as new `PhysicalEndpointId` variants.** The first
+  draft. Dropped for the blast radius (§7.1) and because the union must
+  stay flat.
 - **Compositional certification** (per-block timing certificate, boundary
   simulation only). Forbidden by the fragment-synthesis spec's "no weaker
   verifier" rule and an open research problem; the union candidate keeps
@@ -370,3 +452,21 @@ byte-identical in candidate fingerprint and metrics.
   hierarchy stops at the module, and the module is what the user writes.
 - **Integrating `macro_cells`.** It stores geometry without logic; the
   equivalence proof could not see through it.
+
+## 13. Revision after review (2026-09-04)
+
+- §1: the front end does not flatten; only the JSON reader drops the
+  hierarchy.
+- §6: pin contracts removed; blocks compile unpinned and the port table is
+  read from the seed's automatic ports.
+- §7.1: block endpoints live in a parent planning enum, not in
+  `PhysicalEndpointId`.
+- §7.4: boundaries are spliced into one route tree with a repeater at the
+  join, because the candidate model has one route per connection; the
+  block's signal-strength assumption is stated and met.
+- §7.3: keep-out extends one cell above the block's own top, not one cell
+  above ground.
+- §7.4 and §11: `translate` is a complete field walk tested by
+  serialisation, since no existing walker covers every anchor.
+- §5.2 and §5.3: `$paramod` names and constant-port specialisation.
+- §11: ticks recorded, not gated.
