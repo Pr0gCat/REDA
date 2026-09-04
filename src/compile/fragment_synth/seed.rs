@@ -2981,6 +2981,30 @@ pub(crate) mod tests {
         build(&lowered).expect("full adder seed certifies")
     }
 
+    /// The owning pair behind [`services`] -- split out because
+    /// `SeedServices` only borrows, so its `library`/`search_config` fields
+    /// need somewhere outside the call that builds them to live.
+    pub(crate) fn default_services_parts() -> (Library, SearchConfig) {
+        (Library::default_library(), SearchConfig::checked_defaults())
+    }
+
+    /// The same `SeedServices` wiring `api.rs`'s
+    /// `compile_fragment_synth_with_case_fingerprint` uses in production
+    /// (`api.rs:131-139`), for callers outside this module (e.g.
+    /// `blocks.rs`) that need a real seed run without duplicating that
+    /// wiring themselves.
+    pub(crate) fn services<'a>(library: &'a Library, config: &'a SearchConfig) -> SeedServices<'a> {
+        SeedServices {
+            library,
+            placer: &TopologyAwareSeedPlacer,
+            router: &GuardedPhysicalRouter,
+            emitter: &DurableSeedEmitter,
+            verifier: &DurableSeedVerifier,
+            certifier: &CompleteCandidateCertifier,
+            search_config: config,
+        }
+    }
+
     fn build_with_pins(
         netlist: &Netlist,
         pins: Option<&PortPlacements>,

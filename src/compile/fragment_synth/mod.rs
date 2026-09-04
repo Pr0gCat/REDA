@@ -1,5 +1,6 @@
 mod api;
 pub mod benchmark;
+pub(crate) mod blocks;
 pub(crate) mod channel_layout;
 pub(crate) mod channel_plan;
 pub mod candidate;
