@@ -6,7 +6,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::compile::fragment_synth::identity::{
-    GateIndex, ImplementationKey, InstanceId, PortId, PrimitiveId,
+    GateIndex, ImplementationKey, InstanceId, PortId, PrimitiveId, TopologyNodeId,
 };
 use crate::compile::fragment_synth::topology::{
     instantiate, merge_isolation_mask, ContributorSpec, ExpandedInstance, OutputSpec, TopologyError,
@@ -84,6 +84,44 @@ pub struct InstanceGraph {
     pub assignments: Vec<SinkAssignment>,
     pub primary_inputs: Vec<PortId>,
     pub declared_outputs: Vec<PortId>,
+    /// Block instances stamped into this module's graph (Task 8). Empty for
+    /// every flat design, and deliberately not serialised when empty so the
+    /// on-disk / fingerprinted shape of a flat `InstanceGraph` is unchanged.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocks: Vec<BlockInstance>,
+}
+
+/// A compiled block ([`crate::compile::fragment_synth::blocks::CompiledBlock`])
+/// stamped once into the parent's instance graph under its own [`InstanceId`].
+/// A block reuses existing physical identities rather than adding a new
+/// `PhysicalEndpointId` variant: block output `k` is
+/// `PhysicalEndpointId::PrimitiveOutput(PrimitiveId { instance: id, node: TopologyNodeId(k) })`,
+/// and block input `k` lands at
+/// `PhysicalSink::InstanceInput { instance: id, input_index: k }`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct BlockInstance {
+    pub id: InstanceId,
+    /// Index into the parent's compiled block list.
+    pub block: u32,
+    /// Instance path segment(s) inside this module (one name).
+    pub path: Vec<String>,
+    /// Block input `k` <- parent signal.
+    pub inputs: Vec<LogicalSignalId>,
+    /// Block output `k` = synthetic gate row in the planning netlist.
+    pub output_gates: Vec<GateIndex>,
+}
+
+/// Describes one block instantiation for [`InstanceGraph::with_blocks`]: a
+/// name, an index into the parent's compiled block list, and the parent
+/// signals wired to each input/output in the block's declared port order.
+#[derive(Debug, Clone, Copy)]
+pub struct BlockSpec<'a> {
+    pub name: &'a str,
+    pub block: u32,
+    /// Parent signals, in block input order.
+    pub inputs: &'a [String],
+    /// Parent signals, in block output order.
+    pub outputs: &'a [String],
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -195,44 +233,8 @@ impl InstanceGraph {
         implementations: &BTreeMap<InstanceId, ImplementationKey>,
         duplicates: &[DuplicateRequest],
     ) -> Result<Self, SynthesisError> {
-        let mut instances = Vec::with_capacity(netlist.gates.len());
-        for (index, gate) in netlist.gates.iter().enumerate() {
-            let gate_index = gate_index(index)?;
-            if gate.kind.is_sequential() {
-                return Err(SynthesisError::UnsupportedStatefulTopology { gate: gate_index });
-            }
-            let instance = InstanceId(gate_index.0);
-            let default_implementation = if matches!(gate.kind, GateKind::Or(_)) {
-                ImplementationKey::Merge {
-                    isolation_mask: merge_isolation_mask(netlist, gate_index)
-                        .map_err(|_| SynthesisError::NoLibraryEntry { gate: gate_index })?,
-                }
-            } else {
-                ImplementationKey::Library(
-                    library
-                        .entry_id_at(gate.kind, 0)
-                        .ok_or(SynthesisError::NoLibraryEntry { gate: gate_index })?,
-                )
-            };
-            let implementation = implementations
-                .get(&instance)
-                .copied()
-                .unwrap_or(default_implementation);
-            let expanded =
-                instantiate(library, gate, instance, &implementation).map_err(|source| {
-                    SynthesisError::Topology {
-                        gate: gate_index,
-                        source,
-                    }
-                })?;
-            instances.push(Instance {
-                id: instance,
-                logical_gate: gate_index,
-                role: InstanceRole::Canonical,
-                implementation,
-                expanded,
-            });
-        }
+        let mut instances =
+            instantiate_gates(netlist, library, implementations, netlist.gates.len())?;
         if let Some(&instance) = implementations
             .keys()
             .find(|instance| !instances.iter().any(|item| item.id == **instance))
@@ -372,9 +374,151 @@ impl InstanceGraph {
             assignments,
             primary_inputs,
             declared_outputs,
+            blocks: Vec::new(),
         };
         graph.validate(netlist)?;
         Ok(graph)
+    }
+
+    /// Builds an `InstanceGraph` for a module that stamps one or more
+    /// compiled blocks. `planning` is the parent's lowered own gates
+    /// followed by one synthetic `GateKind::Buf` gate per block output
+    /// (`"<inst>.<port>"`, driven by the block input signal(s), producing
+    /// the parent signal of that output) -- synthetic gates exist only so
+    /// `signal_table` assigns every block output a `LogicalSignalId::GateOutput`
+    /// and are never instantiated as real instances. `blocks` describes each
+    /// block instantiation in the same order its synthetic output gates
+    /// appear at the tail of `planning.gates`.
+    pub(crate) fn with_blocks(
+        planning: &Netlist,
+        library: &Library,
+        blocks: &[BlockSpec<'_>],
+    ) -> Result<Self, SynthesisError> {
+        let synthetic_outputs: usize = blocks.iter().map(|spec| spec.outputs.len()).sum();
+        let real_gates = planning
+            .gates
+            .len()
+            .checked_sub(synthetic_outputs)
+            .ok_or(SynthesisError::IdentityOverflow)?;
+        let instances = instantiate_gates(planning, library, &BTreeMap::new(), real_gates)?;
+
+        let (signals, primary_inputs) = signal_table(planning)?;
+
+        let base_id = u32::try_from(planning.gates.len()).map_err(|_| SynthesisError::IdentityOverflow)?;
+        let mut block_instances = Vec::with_capacity(blocks.len());
+        for (k, spec) in blocks.iter().enumerate() {
+            let offset = u32::try_from(k).map_err(|_| SynthesisError::IdentityOverflow)?;
+            let id = InstanceId(
+                base_id
+                    .checked_add(offset)
+                    .ok_or(SynthesisError::IdentityOverflow)?,
+            );
+            let inputs = spec
+                .inputs
+                .iter()
+                .map(|name| {
+                    signals
+                        .get(name.as_str())
+                        .copied()
+                        .ok_or_else(|| SynthesisError::UndrivenSignal {
+                            signal: name.clone(),
+                        })
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            let output_gates = spec
+                .outputs
+                .iter()
+                .map(|name| match signals.get(name.as_str()) {
+                    Some(LogicalSignalId::GateOutput(gate)) => Ok(*gate),
+                    _ => Err(SynthesisError::UndrivenSignal {
+                        signal: name.clone(),
+                    }),
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            block_instances.push(BlockInstance {
+                id,
+                block: spec.block,
+                path: vec![spec.name.to_string()],
+                inputs,
+                output_gates,
+            });
+        }
+        block_instances.sort_by_key(|block| block.id);
+
+        let mut assignments = Vec::new();
+        for instance in &instances {
+            let gate = &planning.gates[usize::try_from(instance.logical_gate.0).unwrap()];
+            for (input_index, name) in gate.inputs.iter().enumerate() {
+                let signal =
+                    *signals
+                        .get(name.as_str())
+                        .ok_or_else(|| SynthesisError::UndrivenSignal {
+                            signal: name.clone(),
+                        })?;
+                assignments.push(SinkAssignment {
+                    sink: PhysicalSink::InstanceInput {
+                        instance: instance.id,
+                        input_index: u16::try_from(input_index)
+                            .map_err(|_| SynthesisError::IdentityOverflow)?,
+                    },
+                    signal,
+                    driver: driver_for_signal_with_blocks(signal, &instances, &block_instances)?,
+                });
+            }
+        }
+
+        for block in &block_instances {
+            for (input_index, &signal) in block.inputs.iter().enumerate() {
+                assignments.push(SinkAssignment {
+                    sink: PhysicalSink::InstanceInput {
+                        instance: block.id,
+                        input_index: u16::try_from(input_index)
+                            .map_err(|_| SynthesisError::IdentityOverflow)?,
+                    },
+                    signal,
+                    driver: driver_for_signal_with_blocks(signal, &instances, &block_instances)?,
+                });
+            }
+        }
+
+        let mut declared_outputs = Vec::with_capacity(planning.outputs.len());
+        for (index, name) in planning.outputs.iter().enumerate() {
+            let port = PortId(u32::try_from(index).map_err(|_| SynthesisError::IdentityOverflow)?);
+            let signal =
+                *signals
+                    .get(name.as_str())
+                    .ok_or_else(|| SynthesisError::UndrivenSignal {
+                        signal: name.clone(),
+                    })?;
+            declared_outputs.push(port);
+            assignments.push(SinkAssignment {
+                sink: PhysicalSink::DeclaredOutput(port),
+                signal,
+                driver: driver_for_signal_with_blocks(signal, &instances, &block_instances)?,
+            });
+        }
+
+        assignments.sort_by_key(|assignment| assignment.sink);
+
+        let graph = InstanceGraph {
+            instances,
+            assignments,
+            primary_inputs,
+            declared_outputs,
+            blocks: block_instances,
+        };
+        graph.validate(planning)?;
+        Ok(graph)
+    }
+
+    /// Whether `id` names a block instance rather than a gate instance.
+    pub fn is_block(&self, id: InstanceId) -> bool {
+        self.blocks.iter().any(|block| block.id == id)
+    }
+
+    /// The block instance named `id`, if any.
+    pub fn block(&self, id: InstanceId) -> Option<&BlockInstance> {
+        self.blocks.iter().find(|block| block.id == id)
     }
 
     pub fn validate(&self, netlist: &Netlist) -> Result<(), SynthesisError> {
@@ -400,22 +544,40 @@ impl InstanceGraph {
             return Err(SynthesisError::IdentityOverflow);
         }
 
+        // Synthetic block-output gates (the tail of `netlist.gates` for a
+        // module compiled with `with_blocks`) have no canonical instance of
+        // their own -- they are represented by `self.blocks` instead.
+        let block_output_gates: BTreeSet<GateIndex> = self
+            .blocks
+            .iter()
+            .flat_map(|block| block.output_gates.iter().copied())
+            .collect();
+
         let mut instance_by_id = BTreeMap::new();
         let mut roles = BTreeSet::new();
-        let mut canonical_counts = vec![0usize; netlist.gates.len()];
+        let mut canonical_counts: BTreeMap<GateIndex, usize> = (0..netlist.gates.len())
+            .map(gate_index)
+            .collect::<Result<Vec<_>, _>>()?
+            .into_iter()
+            .filter(|gate| !block_output_gates.contains(gate))
+            .map(|gate| (gate, 0usize))
+            .collect();
         for instance in &self.instances {
             if instance_by_id.insert(instance.id, instance).is_some() {
                 return Err(SynthesisError::DuplicateInstanceId {
                     instance: instance.id,
                 });
             }
-            let logical = usize::try_from(instance.logical_gate.0)
+            if usize::try_from(instance.logical_gate.0)
                 .ok()
                 .filter(|&gate| gate < netlist.gates.len())
-                .ok_or(SynthesisError::UnknownLogicalGate {
+                .is_none()
+            {
+                return Err(SynthesisError::UnknownLogicalGate {
                     instance: instance.id,
                     gate: instance.logical_gate,
-                })?;
+                });
+            }
             if instance.expanded.instance != instance.id
                 || instance.expanded.implementation != instance.implementation
             {
@@ -430,15 +592,22 @@ impl InstanceGraph {
                 });
             }
             if instance.role == InstanceRole::Canonical {
-                canonical_counts[logical] += 1;
+                if let Some(count) = canonical_counts.get_mut(&instance.logical_gate) {
+                    *count += 1;
+                }
             }
         }
-        for (index, count) in canonical_counts.into_iter().enumerate() {
-            let gate = gate_index(index)?;
+        for (gate, count) in canonical_counts {
             match count {
                 0 => return Err(SynthesisError::MissingCanonicalInstance { gate }),
                 1 => {}
                 _ => return Err(SynthesisError::DuplicateCanonicalInstance { gate }),
+            }
+        }
+        let mut block_by_id = BTreeMap::new();
+        for block in &self.blocks {
+            if instance_by_id.contains_key(&block.id) || block_by_id.insert(block.id, block).is_some() {
+                return Err(SynthesisError::DuplicateInstanceId { instance: block.id });
             }
         }
         let mut assignment_by_sink = BTreeMap::new();
@@ -488,7 +657,29 @@ impl InstanceGraph {
                         })
                     };
                 }
-                validate_driver(assignment, &instance_by_id)?;
+                validate_driver(assignment, &instance_by_id, &block_by_id)?;
+            }
+        }
+        for block in &self.blocks {
+            for (input_index, &signal) in block.inputs.iter().enumerate() {
+                let input_index =
+                    u16::try_from(input_index).map_err(|_| SynthesisError::IdentityOverflow)?;
+                let sink = PhysicalSink::InstanceInput {
+                    instance: block.id,
+                    input_index,
+                };
+                expected_sinks.insert(sink);
+                let assignment = assignment_by_sink
+                    .get(&sink)
+                    .ok_or(SynthesisError::MissingAssignment { sink })?;
+                if assignment.signal != signal {
+                    return Err(SynthesisError::WrongLogicalSignal {
+                        sink,
+                        expected: signal,
+                        actual: assignment.signal,
+                    });
+                }
+                validate_driver(assignment, &instance_by_id, &block_by_id)?;
             }
         }
         for (index, name) in netlist.outputs.iter().enumerate() {
@@ -512,7 +703,7 @@ impl InstanceGraph {
                     actual: assignment.signal,
                 });
             }
-            validate_driver(assignment, &instance_by_id)?;
+            validate_driver(assignment, &instance_by_id, &block_by_id)?;
         }
         if let Some((&sink, _)) = assignment_by_sink
             .iter()
@@ -541,6 +732,60 @@ fn gate_index(index: usize) -> Result<GateIndex, SynthesisError> {
     u32::try_from(index)
         .map(GateIndex)
         .map_err(|_| SynthesisError::IdentityOverflow)
+}
+
+/// Instantiates `netlist.gates[..upto]` exactly as `with_variants` always
+/// has -- `netlist` itself is the full (untruncated) netlist so
+/// `merge_isolation_mask` still sees every gate; `upto` only bounds which
+/// gates get an `Instance`. `with_variants` calls this with
+/// `upto = netlist.gates.len()` (its previous, unchanged behaviour);
+/// `with_blocks` calls it with `upto` stopping before the synthetic
+/// block-output gates.
+fn instantiate_gates(
+    netlist: &Netlist,
+    library: &Library,
+    implementations: &BTreeMap<InstanceId, ImplementationKey>,
+    upto: usize,
+) -> Result<Vec<Instance>, SynthesisError> {
+    let mut instances = Vec::with_capacity(upto);
+    for (index, gate) in netlist.gates.iter().take(upto).enumerate() {
+        let gate_index = gate_index(index)?;
+        if gate.kind.is_sequential() {
+            return Err(SynthesisError::UnsupportedStatefulTopology { gate: gate_index });
+        }
+        let instance = InstanceId(gate_index.0);
+        let default_implementation = if matches!(gate.kind, GateKind::Or(_)) {
+            ImplementationKey::Merge {
+                isolation_mask: merge_isolation_mask(netlist, gate_index)
+                    .map_err(|_| SynthesisError::NoLibraryEntry { gate: gate_index })?,
+            }
+        } else {
+            ImplementationKey::Library(
+                library
+                    .entry_id_at(gate.kind, 0)
+                    .ok_or(SynthesisError::NoLibraryEntry { gate: gate_index })?,
+            )
+        };
+        let implementation = implementations
+            .get(&instance)
+            .copied()
+            .unwrap_or(default_implementation);
+        let expanded =
+            instantiate(library, gate, instance, &implementation).map_err(|source| {
+                SynthesisError::Topology {
+                    gate: gate_index,
+                    source,
+                }
+            })?;
+        instances.push(Instance {
+            id: instance,
+            logical_gate: gate_index,
+            role: InstanceRole::Canonical,
+            implementation,
+            expanded,
+        });
+    }
+    Ok(instances)
 }
 
 fn signal_table(
@@ -602,18 +847,82 @@ fn driver_for_signal(
     }
 }
 
+/// The driver for block output `k`: a single-terminal primitive driver
+/// naming the block's own instance and topology node `k`, so its endpoint
+/// resolves (via `endpoint_for_driver`) to
+/// `PhysicalEndpointId::PrimitiveOutput(PrimitiveId { instance: block.id, node: TopologyNodeId(k) })`.
+fn block_output_driver(block: &BlockInstance, node: u16) -> InstanceDriver {
+    InstanceDriver::Primitive {
+        logical_owner: block.id,
+        terminals: vec![PrimitiveId {
+            instance: block.id,
+            node: TopologyNodeId(node),
+        }],
+    }
+}
+
+/// Like [`driver_for_signal`], but a `GateOutput` naming one of `blocks`'
+/// synthetic output gates resolves to that block's own driver instead of
+/// requiring a canonical `Instance` (blocks have neither).
+fn driver_for_signal_with_blocks(
+    signal: LogicalSignalId,
+    instances: &[Instance],
+    blocks: &[BlockInstance],
+) -> Result<PhysicalDriver, SynthesisError> {
+    if let LogicalSignalId::GateOutput(gate) = signal {
+        if let Some((block, position)) = blocks.iter().find_map(|block| {
+            block
+                .output_gates
+                .iter()
+                .position(|&owned| owned == gate)
+                .map(|position| (block, position))
+        }) {
+            let node = u16::try_from(position).map_err(|_| SynthesisError::IdentityOverflow)?;
+            return Ok(PhysicalDriver::Instance(block_output_driver(block, node)));
+        }
+    }
+    driver_for_signal(signal, instances)
+}
+
+/// Reads the single terminal's node out of a driver that claims to be owned
+/// by `owner`, or `None` if it is not of the canonical single-terminal
+/// primitive shape a block output driver always has.
+fn block_driver_node(driver: &InstanceDriver, owner: InstanceId) -> Option<usize> {
+    match driver {
+        InstanceDriver::Primitive { terminals, .. } => match terminals.as_slice() {
+            [PrimitiveId { instance, node }] if *instance == owner => Some(node.0 as usize),
+            _ => None,
+        },
+        InstanceDriver::Junction { .. } => None,
+    }
+}
+
 fn validate_driver(
     assignment: &SinkAssignment,
     instance_by_id: &BTreeMap<InstanceId, &Instance>,
+    block_by_id: &BTreeMap<InstanceId, &BlockInstance>,
 ) -> Result<(), SynthesisError> {
     let actual = match &assignment.driver {
         PhysicalDriver::PrimaryInput(port) => LogicalSignalId::PrimaryInput(*port),
         PhysicalDriver::Instance(driver) => {
             let owner = driver.logical_owner();
-            let instance = instance_by_id
-                .get(&owner)
-                .ok_or(SynthesisError::UnknownDriverInstance { instance: owner })?;
-            LogicalSignalId::GateOutput(instance.logical_gate)
+            if let Some(instance) = instance_by_id.get(&owner) {
+                LogicalSignalId::GateOutput(instance.logical_gate)
+            } else if let Some(block) = block_by_id.get(&owner) {
+                let node = block_driver_node(driver, owner).ok_or(
+                    SynthesisError::WrongPhysicalDriver {
+                        sink: assignment.sink,
+                    },
+                )?;
+                let gate = block.output_gates.get(node).copied().ok_or(
+                    SynthesisError::WrongPhysicalDriver {
+                        sink: assignment.sink,
+                    },
+                )?;
+                LogicalSignalId::GateOutput(gate)
+            } else {
+                return Err(SynthesisError::UnknownDriverInstance { instance: owner });
+            }
         }
     };
     if actual != assignment.signal {
@@ -627,10 +936,32 @@ fn validate_driver(
         PhysicalDriver::PrimaryInput(port) => PhysicalDriver::PrimaryInput(*port),
         PhysicalDriver::Instance(driver) => {
             let owner = driver.logical_owner();
-            let instance = instance_by_id
-                .get(&owner)
-                .ok_or(SynthesisError::UnknownDriverInstance { instance: owner })?;
-            PhysicalDriver::Instance(instance_driver(instance))
+            if let Some(instance) = instance_by_id.get(&owner) {
+                PhysicalDriver::Instance(instance_driver(instance))
+            } else {
+                // `owner` was already resolved to a known block above, or
+                // this function would have returned `UnknownDriverInstance`.
+                let block = block_by_id
+                    .get(&owner)
+                    .expect("owner resolved against instance_by_id or block_by_id above");
+                let gate = match assignment.signal {
+                    LogicalSignalId::GateOutput(gate) => gate,
+                    LogicalSignalId::PrimaryInput(_) => {
+                        return Err(SynthesisError::WrongPhysicalDriver {
+                            sink: assignment.sink,
+                        })
+                    }
+                };
+                let node = block
+                    .output_gates
+                    .iter()
+                    .position(|&owned| owned == gate)
+                    .and_then(|position| u16::try_from(position).ok())
+                    .ok_or(SynthesisError::WrongPhysicalDriver {
+                        sink: assignment.sink,
+                    })?;
+                PhysicalDriver::Instance(block_output_driver(block, node))
+            }
         }
     };
     if assignment.driver != expected {
@@ -642,18 +973,20 @@ fn validate_driver(
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
+    use crate::compile::fragment_synth::candidate::endpoint_for_driver;
     use crate::compile::fragment_synth::identity::{
-        GateIndex, ImplementationKey, InputMask, InstanceId, PortId,
+        GateIndex, ImplementationKey, InputMask, InstanceId, PhysicalEndpointId, PortId,
+        PrimitiveId, TopologyNodeId,
     };
     use crate::compile::topology::{GateKind, Library};
     use crate::compile::{Gate, Netlist};
 
     use super::{
-        InstanceDriver, InstanceGraph, InstanceRole, LogicalSignalId, PhysicalDriver, PhysicalSink,
-        SynthesisError,
+        BlockSpec, InstanceDriver, InstanceGraph, InstanceRole, LogicalSignalId, PhysicalDriver,
+        PhysicalSink, SynthesisError,
     };
 
     fn nor(output: &str, inputs: &[&str]) -> Gate {
@@ -1015,5 +1348,233 @@ mod tests {
             graph.validate(&stateful),
             Err(SynthesisError::UnsupportedStatefulTopology { gate: GateIndex(0) })
         );
+    }
+
+    /// top: x -> [block u0: inputs a; outputs y, w] ; y -> nor g0 -> z ; w declared output.
+    /// Shared with the placement tests (Task 9).
+    pub(crate) fn planning_with_one_block() -> (Netlist, Vec<(String, u32, Vec<String>, Vec<String>)>)
+    {
+        let planning = Netlist {
+            inputs: vec!["x".into()],
+            outputs: vec!["z".into(), "w".into()],
+            gates: vec![
+                Gate {
+                    name: "g0".into(),
+                    inputs: vec!["y".into()],
+                    output: "z".into(),
+                    kind: GateKind::Nor(1),
+                },
+                Gate {
+                    name: "u0.y".into(),
+                    inputs: vec!["x".into()],
+                    output: "y".into(),
+                    kind: GateKind::Buf,
+                },
+                Gate {
+                    name: "u0.w".into(),
+                    inputs: vec!["x".into()],
+                    output: "w".into(),
+                    kind: GateKind::Buf,
+                },
+            ],
+        };
+        (
+            planning,
+            vec![(
+                "u0".into(),
+                0,
+                vec!["x".into()],
+                vec!["y".into(), "w".into()],
+            )],
+        )
+    }
+
+    pub(crate) fn specs_of(
+        owned: &[(String, u32, Vec<String>, Vec<String>)],
+    ) -> Vec<BlockSpec<'_>> {
+        owned
+            .iter()
+            .map(|(name, block, inputs, outputs)| BlockSpec {
+                name,
+                block: *block,
+                inputs,
+                outputs,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn a_block_joins_the_graph_with_one_driver_per_output_and_one_sink_per_input() {
+        let (planning, owned) = planning_with_one_block();
+        let library = Library::default_library();
+        let graph = InstanceGraph::with_blocks(&planning, &library, &specs_of(&owned)).expect("builds");
+        assert_eq!(graph.instances.len(), 1, "only the real gate is instantiated");
+        assert_eq!(graph.blocks.len(), 1);
+        let block = &graph.blocks[0];
+        assert_eq!(block.id, InstanceId(3));
+        assert_eq!(block.inputs, vec![LogicalSignalId::PrimaryInput(PortId(0))]);
+        assert_eq!(block.output_gates, vec![GateIndex(1), GateIndex(2)]);
+        let to_block = graph
+            .assignments
+            .iter()
+            .find(|a| {
+                a.sink
+                    == PhysicalSink::InstanceInput {
+                        instance: block.id,
+                        input_index: 0,
+                    }
+            })
+            .unwrap();
+        assert_eq!(to_block.driver, PhysicalDriver::PrimaryInput(PortId(0)));
+        let from_block = graph
+            .assignments
+            .iter()
+            .find(|a| {
+                a.sink
+                    == PhysicalSink::InstanceInput {
+                        instance: InstanceId(0),
+                        input_index: 0,
+                    }
+            })
+            .unwrap();
+        assert_eq!(
+            endpoint_for_driver(&from_block.driver),
+            Some(PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+                instance: block.id,
+                node: TopologyNodeId(0)
+            }))
+        );
+        let w = graph
+            .assignments
+            .iter()
+            .find(|a| a.sink == PhysicalSink::DeclaredOutput(PortId(1)))
+            .unwrap();
+        assert_eq!(
+            endpoint_for_driver(&w.driver),
+            Some(PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+                instance: block.id,
+                node: TopologyNodeId(1)
+            }))
+        );
+        assert!(graph.is_block(block.id));
+    }
+
+    #[test]
+    fn a_graph_without_blocks_serialises_exactly_as_before() {
+        let netlist = crate::circuits::and4::build_and4_netlist().0; // any existing fixture
+        let lowered = crate::compile::lowering::lower_optimised(&netlist).unwrap();
+        let graph = InstanceGraph::one_to_one(&lowered, &Library::default_library()).unwrap();
+        let json = serde_json::to_string(&graph).unwrap();
+        assert!(!json.contains("\"blocks\""));
+    }
+
+    /// top: x0, x1 -> [block u0: inputs a, b; outputs p, q, r] ; p, q, r all declared outputs.
+    /// Proves every input and every output of a multi-port block is wired, not just the first.
+    fn planning_with_wide_block() -> (Netlist, Vec<(String, u32, Vec<String>, Vec<String>)>) {
+        let planning = Netlist {
+            inputs: vec!["x0".into(), "x1".into()],
+            outputs: vec!["p".into(), "q".into(), "r".into()],
+            gates: vec![
+                Gate {
+                    name: "u0.p".into(),
+                    inputs: vec!["x0".into()],
+                    output: "p".into(),
+                    kind: GateKind::Buf,
+                },
+                Gate {
+                    name: "u0.q".into(),
+                    inputs: vec!["x1".into()],
+                    output: "q".into(),
+                    kind: GateKind::Buf,
+                },
+                Gate {
+                    name: "u0.r".into(),
+                    inputs: vec!["x0".into()],
+                    output: "r".into(),
+                    kind: GateKind::Buf,
+                },
+            ],
+        };
+        (
+            planning,
+            vec![(
+                "u0".into(),
+                0,
+                vec!["x0".into(), "x1".into()],
+                vec!["p".into(), "q".into(), "r".into()],
+            )],
+        )
+    }
+
+    #[test]
+    fn a_wide_block_wires_every_input_and_every_output() {
+        let (planning, owned) = planning_with_wide_block();
+        let library = Library::default_library();
+        let graph = InstanceGraph::with_blocks(&planning, &library, &specs_of(&owned)).expect("builds");
+        assert_eq!(graph.instances.len(), 0, "no real gates besides the block");
+        assert_eq!(graph.blocks.len(), 1);
+        let block = &graph.blocks[0];
+        assert_eq!(
+            block.inputs,
+            vec![
+                LogicalSignalId::PrimaryInput(PortId(0)),
+                LogicalSignalId::PrimaryInput(PortId(1)),
+            ]
+        );
+        assert_eq!(
+            block.output_gates,
+            vec![GateIndex(0), GateIndex(1), GateIndex(2)]
+        );
+        for input_index in 0..2u16 {
+            let sink = PhysicalSink::InstanceInput {
+                instance: block.id,
+                input_index,
+            };
+            let assignment = graph
+                .assignments
+                .iter()
+                .find(|a| a.sink == sink)
+                .unwrap_or_else(|| panic!("missing sink for block input {input_index}"));
+            assert_eq!(
+                assignment.driver,
+                PhysicalDriver::PrimaryInput(PortId(input_index as u32))
+            );
+        }
+        for (k, name) in ["p", "q", "r"].iter().enumerate() {
+            let index = planning.outputs.iter().position(|o| o == name).unwrap();
+            let sink = PhysicalSink::DeclaredOutput(PortId(index as u32));
+            let assignment = graph
+                .assignments
+                .iter()
+                .find(|a| a.sink == sink)
+                .unwrap_or_else(|| panic!("missing declared output {name}"));
+            assert_eq!(
+                endpoint_for_driver(&assignment.driver),
+                Some(PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+                    instance: block.id,
+                    node: TopologyNodeId(k as u16),
+                }))
+            );
+        }
+    }
+
+    #[test]
+    fn validate_accepts_a_graph_containing_blocks() {
+        let (planning, owned) = planning_with_one_block();
+        let library = Library::default_library();
+        let graph = InstanceGraph::with_blocks(&planning, &library, &specs_of(&owned)).expect("builds");
+        assert_eq!(graph.validate(&planning), Ok(()));
+    }
+
+    #[test]
+    fn a_graph_with_blocks_keeps_assignments_sorted_by_sink() {
+        let (planning, owned) = planning_with_wide_block();
+        let library = Library::default_library();
+        let graph = InstanceGraph::with_blocks(&planning, &library, &specs_of(&owned)).expect("builds");
+        assert!(!graph.blocks.is_empty());
+        assert!(graph
+            .assignments
+            .windows(2)
+            .all(|pair| pair[0].sink < pair[1].sink));
     }
 }

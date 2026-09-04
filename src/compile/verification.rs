@@ -1361,6 +1361,7 @@ mod tests {
                 assignments: Vec::new(),
                 primary_inputs: vec![PortId(0)],
                 declared_outputs: vec![PortId(0)],
+                blocks: Vec::new(),
             },
             placements: Default::default(),
             boundaries: Default::default(),

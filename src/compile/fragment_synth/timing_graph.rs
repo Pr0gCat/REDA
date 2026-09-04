@@ -844,6 +844,7 @@ mod tests {
             assignments: Vec::new(),
             primary_inputs: vec![PortId(0), PortId(1)],
             declared_outputs: vec![PortId(0)],
+            blocks: Vec::new(),
         };
         let mut candidate = ExpandedPhysicalCandidate::empty(graph, PortPlacements::default());
         let isolator = expanded.topology.primitives[0];
