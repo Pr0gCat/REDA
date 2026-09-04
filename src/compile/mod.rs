@@ -69,6 +69,7 @@ pub mod energising;
 pub mod equivalence;
 pub mod fragment_synth;
 pub mod geometry;
+pub mod hierarchy;
 pub mod lowering;
 pub mod metrics;
 pub mod physical;
@@ -100,6 +101,7 @@ pub use fragment_synth::{
     compile_fragment_synth, CapWorkCounters, ProposalTerminal, ProposalTrace, StopReason,
     SynthesisBudget, SynthesisCaseFingerprint, SynthesisError, SynthesisInput, SynthesisResult,
 };
+pub use hierarchy::{GatePath, HierarchicalNetlist, HierarchyError, Module, ModuleInstance};
 
 pub(crate) use verification::physical_verifier_revision_descriptor;
 #[cfg(test)]
