@@ -376,6 +376,21 @@ impl ExpandedPhysicalCandidate {
     }
 
     pub fn fingerprint(&self) -> Fingerprint {
+        let payload = self.fingerprint_payload();
+        let bytes =
+            serde_json::to_vec(&payload).expect("candidate fingerprint data must serialize");
+        canonical_fingerprint(&bytes)
+    }
+
+    /// Test-only escape hatch: `relocate.rs`'s `anchors_of` test needs to
+    /// serialise the exact payload `fingerprint()` hashes, to count how many
+    /// `Anchor`s it contains independently of the field-by-field walker.
+    #[cfg(test)]
+    pub(crate) fn fingerprint_payload_for_test(&self) -> impl Serialize + '_ {
+        self.fingerprint_payload()
+    }
+
+    fn fingerprint_payload(&self) -> CandidateFingerprintPayload<'_> {
         let placements = self
             .placements
             .iter()
@@ -398,7 +413,7 @@ impl ExpandedPhysicalCandidate {
                 toward: pin.toward,
             })
             .collect();
-        let payload = CandidateFingerprintPayload {
+        CandidateFingerprintPayload {
             instances: &self.instances,
             placements,
             boundaries: self
@@ -448,10 +463,7 @@ impl ExpandedPhysicalCandidate {
                 })
                 .collect(),
             pin_name_bindings: self.pin_name_bindings.iter().collect(),
-        };
-        let bytes =
-            serde_json::to_vec(&payload).expect("candidate fingerprint data must serialize");
-        canonical_fingerprint(&bytes)
+        }
     }
 
     pub fn validate_physical_ownership(&self) -> Result<(), CandidateError> {

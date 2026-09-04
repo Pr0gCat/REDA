@@ -2970,6 +2970,17 @@ pub(crate) mod tests {
         build_with_pins(netlist, None)
     }
 
+    /// A real certified candidate with more than one instance and a
+    /// non-trivial route tree, for `relocate.rs`'s translation and
+    /// renumbering tests -- `not_netlist()`'s one-gate candidate is too
+    /// small to catch a walker that misses a field.
+    pub(crate) fn certified_full_adder() -> CertifiedCandidate {
+        let (netlist, _) = crate::circuits::full_adder::build_full_adder_netlist();
+        let lowered = crate::compile::lowering::lower_optimised(&netlist)
+            .expect("full adder netlist lowers");
+        build(&lowered).expect("full adder seed certifies")
+    }
+
     fn build_with_pins(
         netlist: &Netlist,
         pins: Option<&PortPlacements>,
