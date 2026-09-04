@@ -215,44 +215,34 @@ channel plan takes the rows as they are, as it does for any macro's ports.
 
 ### 7.1 Planning graph
 
-The parent plans over a graph of its own, not over an `InstanceGraph`
-with new variants. `PhysicalEndpointId` has eight exhaustive matches and
-some twenty partial ones across placement, layout, seed, timing and
-verification; adding block variants there would silently mis-handle
-blocks in every `_ =>` arm and would contradict §8. Instead:
+The parent plans over the existing `InstanceGraph` with one addition: a
+`blocks` list (`BlockInstance { id, block, path, inputs, output_gates }`)
+that is skipped by serialisation when empty, so a flat design's fingerprint
+is unchanged. Blocks are **not** `Instance`s: every loop over
+`graph.instances` (primitive placement, socket assignment, fragment
+proposals) ignores them by construction, and the few places that must see
+them (DAG analysis, envelopes, block placement, block routes, channel
+occupancy) get explicit block loops.
 
-```rust
-pub(crate) enum PlanNode {
-    Gate(InstanceId),        // a loose gate of this module, as today
-    Block(BlockInstance),
-}
+Block endpoints reuse existing identity variants with the block's own
+`InstanceId`, so `PhysicalEndpointId` gains nothing: block output `k` is
+`PrimitiveOutput(PrimitiveId { instance: block, node: k })`, block input
+`k` is the sink `InstanceInput { instance: block, input_index: k }` whose
+landing is `Landing(ConnectionId::External { instance: block, input_index:
+k })`. The parent's planning netlist carries one synthetic `Buf` gate per
+block output so the signal table can name it; those gates are never
+instantiated.
 
-pub(crate) struct BlockInstance {
-    pub block: BlockId,              // index into the parent's compiled blocks
-    pub path: Vec<String>,           // instance path
-    pub inputs: Vec<(PortId, String)>,   // parent signal -> block input name
-    pub outputs: Vec<(PortId, String)>,  // block output name -> parent signal
-}
-
-pub(crate) enum PlanEndpoint {
-    Flat(PhysicalEndpointId),
-    BlockInput { instance: PlanNodeId, port: String },
-    BlockOutput { instance: PlanNodeId, port: String },
-}
-```
-
-Placement, channel plan, channel layout and route requests are
-generalised over `PlanEndpoint` where they currently take
-`PhysicalEndpointId`; the concrete geometry they need (anchor, exit or
-entry facing, terminal contract) comes from a small trait both kinds
-implement. For a block: an output is a source with anchor at the lamp cell,
+Geometry for a block: an output is a source with anchor at the lamp cell,
 `allowed_exit = East`, signal strength 15 (the block's output terminal
 repeater feeds it); an input is a sink with anchor at the lever cell,
-`allowed_entry = West`, `TerminalRequirement::Exact(Repeater facing East)`,
-support = the stone already under the lever.
+`allowed_entry = West`, requirement `Exact(OutputTerminalRepeater)` (a
+repeater laid on the lever cell facing the block's root dust), support =
+the root cell.
 
 Gates that belong to a block are not in the parent graph; they enter the
-union candidate at the end (§7.4).
+union candidate at the end (§7.4). The parent's planning candidate is never
+certified; only the union is.
 
 ### 7.2 Placement
 
@@ -351,10 +341,11 @@ path.
 
 - **Budget.** `compile_hierarchical(netlist, budget, pins)` compiles every
   block at `SynthesisBudget::Evaluations(0)` and spends `budget` on the
-  parent's fragment search over its own loose gates and routes. Block
-  instances have no alternative implementations and are never proposed;
-  fragment selection skips `PlanNode::Block`. Optimising inside blocks is
-  later work.
+  parent's fragment search over its own loose gates and routes: the
+  proposal stream keeps choosing fragments from the certified union, and
+  every proposal re-plans the parent around the same compiled blocks. A
+  proposal that names a block-internal gate is refused, not applied.
+  Optimising inside blocks is later work.
 - **Case fingerprint.** The parent's `CaseDescriptor` hashes the
   hierarchical netlist (modules, instances, port maps, constant
   specialisations) in addition to today's fields. A single-module design
@@ -441,9 +432,11 @@ byte-identical in candidate fingerprint and metrics.
 - **Pins on all four sides with lateral stubs.** Needed only if chained
   blocks were stacked laterally. Level placement makes every inter-block
   net west-to-east, so the feature is unnecessary.
-- **Block endpoints as new `PhysicalEndpointId` variants.** The first
-  draft. Dropped for the blast radius (§7.1) and because the union must
-  stay flat.
+- **Block endpoints as new `PhysicalEndpointId` variants**, or a separate
+  planning enum threaded through placement, layout and routing. Both
+  drafts. Dropped: the first for its blast radius, the second because every
+  planning function is keyed by `InstanceId` already and a block only
+  needs one.
 - **Compositional certification** (per-block timing certificate, boundary
   simulation only). Forbidden by the fragment-synthesis spec's "no weaker
   verifier" rule and an open research problem; the union candidate keeps
@@ -459,8 +452,9 @@ byte-identical in candidate fingerprint and metrics.
   hierarchy.
 - §6: pin contracts removed; blocks compile unpinned and the port table is
   read from the seed's automatic ports.
-- §7.1: block endpoints live in a parent planning enum, not in
-  `PhysicalEndpointId`.
+- §7.1: blocks are a separate list on the instance graph and their
+  endpoints reuse existing identity variants with the block's instance id;
+  `PhysicalEndpointId` is unchanged.
 - §7.4: boundaries are spliced into one route tree with a repeater at the
   join, because the candidate model has one route per connection; the
   block's signal-strength assumption is stated and met.
