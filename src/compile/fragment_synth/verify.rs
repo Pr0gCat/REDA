@@ -306,6 +306,9 @@ fn validate_instance_graph(
             | SynthesisError::UnsupportedDuplicateTopology { canonical } => {
                 StableStructuralId::Instance(canonical)
             }
+            SynthesisError::InvalidBlockOutputGate { block, .. } => {
+                StableStructuralId::Instance(block)
+            }
             SynthesisError::UnsupportedStatefulTopology { gate }
             | SynthesisError::NoLibraryEntry { gate }
             | SynthesisError::MissingCanonicalInstance { gate }

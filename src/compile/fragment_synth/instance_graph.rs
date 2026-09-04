@@ -212,6 +212,10 @@ pub enum SynthesisError {
     NonCanonicalInstanceOrder,
     #[error("sink assignments are not in canonical sink order")]
     NonCanonicalAssignmentOrder,
+    #[error(
+        "block {block:?} names gate {gate:?} as an output, but it is not a synthetic block-output gate"
+    )]
+    InvalidBlockOutputGate { block: InstanceId, gate: GateIndex },
 }
 
 impl InstanceGraph {
@@ -546,12 +550,46 @@ impl InstanceGraph {
 
         // Synthetic block-output gates (the tail of `netlist.gates` for a
         // module compiled with `with_blocks`) have no canonical instance of
-        // their own -- they are represented by `self.blocks` instead.
-        let block_output_gates: BTreeSet<GateIndex> = self
-            .blocks
-            .iter()
-            .flat_map(|block| block.output_gates.iter().copied())
-            .collect();
+        // their own -- they are represented by `self.blocks` instead, and
+        // `block.output_gates` is what tells the canonical-instance check
+        // below to exempt them. That makes `output_gates` untrusted input:
+        // `BlockInstance` and all its fields are public, so a hand-built or
+        // corrupted graph could point an entry at a *real* gate and silently
+        // switch off that gate's canonical-instance requirement. Every entry
+        // is therefore checked before it is trusted -- it must fall in the
+        // synthetic tail (recomputed the same way `with_blocks` computes it:
+        // `netlist.gates.len()` minus the total number of declared block
+        // outputs), it must name a `GateKind::Buf` gate, and no two blocks
+        // (or two output slots) may claim the same gate index. Because the
+        // tail has exactly as many slots as there are declared block
+        // outputs, checking range + distinctness for every entry also proves
+        // the whole set of claimed gates *is* the tail, not merely a subset
+        // of it.
+        let synthetic_outputs: usize =
+            self.blocks.iter().map(|block| block.output_gates.len()).sum();
+        let real_gates = netlist
+            .gates
+            .len()
+            .checked_sub(synthetic_outputs)
+            .ok_or(SynthesisError::IdentityOverflow)?;
+        let mut block_output_gates: BTreeSet<GateIndex> = BTreeSet::new();
+        for block in &self.blocks {
+            for &gate in &block.output_gates {
+                let index =
+                    usize::try_from(gate.0).map_err(|_| SynthesisError::IdentityOverflow)?;
+                let is_synthetic_buf = index >= real_gates
+                    && netlist
+                        .gates
+                        .get(index)
+                        .is_some_and(|g| matches!(g.kind, GateKind::Buf));
+                if !is_synthetic_buf || !block_output_gates.insert(gate) {
+                    return Err(SynthesisError::InvalidBlockOutputGate {
+                        block: block.id,
+                        gate,
+                    });
+                }
+            }
+        }
 
         let mut instance_by_id = BTreeMap::new();
         let mut roles = BTreeSet::new();
@@ -1576,5 +1614,88 @@ pub(crate) mod tests {
             .assignments
             .windows(2)
             .all(|pair| pair[0].sink < pair[1].sink));
+    }
+
+    /// A corrupted `BlockInstance.output_gates` entry naming a *real* gate
+    /// (rather than a synthetic `Buf` gate in the block-owned tail) must not
+    /// silently exempt that real gate from the canonical-instance
+    /// requirement -- `validate` must reject the graph and name the block.
+    #[test]
+    fn validate_rejects_a_block_output_gate_that_names_a_real_gate() {
+        let (planning, owned) = planning_with_one_block();
+        let library = Library::default_library();
+        let mut graph =
+            InstanceGraph::with_blocks(&planning, &library, &specs_of(&owned)).expect("builds");
+        let block_id = graph.blocks[0].id;
+        // GateIndex(0) is the real `g0` (a Nor gate) instantiated as
+        // InstanceId(0) -- not part of the block's synthetic tail
+        // (GateIndex(1), GateIndex(2)).
+        graph.blocks[0].output_gates[0] = GateIndex(0);
+
+        assert_eq!(
+            graph.validate(&planning),
+            Err(SynthesisError::InvalidBlockOutputGate {
+                block: block_id,
+                gate: GateIndex(0),
+            })
+        );
+    }
+
+    /// A block input driven directly by another block's output, with no
+    /// real gate in between. `driver_for_signal_with_blocks` resolves this
+    /// generically (it doesn't special-case "first block found"), but
+    /// nothing exercised the block-to-block path before this test.
+    #[test]
+    fn a_block_input_driven_directly_by_another_blocks_output_resolves_and_validates() {
+        let planning = Netlist {
+            inputs: vec!["x".into()],
+            outputs: vec!["z".into()],
+            gates: vec![
+                Gate {
+                    name: "u0.y".into(),
+                    inputs: vec!["x".into()],
+                    output: "y".into(),
+                    kind: GateKind::Buf,
+                },
+                Gate {
+                    name: "u1.z".into(),
+                    inputs: vec!["y".into()],
+                    output: "z".into(),
+                    kind: GateKind::Buf,
+                },
+            ],
+        };
+        let owned = vec![
+            ("u0".to_string(), 0u32, vec!["x".to_string()], vec!["y".to_string()]),
+            ("u1".to_string(), 1u32, vec!["y".to_string()], vec!["z".to_string()]),
+        ];
+        let library = Library::default_library();
+        let graph = InstanceGraph::with_blocks(&planning, &library, &specs_of(&owned))
+            .expect("builds");
+        assert_eq!(graph.instances.len(), 0, "both gates are synthetic block outputs");
+        assert_eq!(graph.blocks.len(), 2);
+        let producer = graph.blocks.iter().find(|b| b.block == 0).unwrap();
+        let consumer = graph.blocks.iter().find(|b| b.block == 1).unwrap();
+
+        let to_consumer = graph
+            .assignments
+            .iter()
+            .find(|a| {
+                a.sink
+                    == PhysicalSink::InstanceInput {
+                        instance: consumer.id,
+                        input_index: 0,
+                    }
+            })
+            .unwrap();
+        assert_eq!(
+            endpoint_for_driver(&to_consumer.driver),
+            Some(PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+                instance: producer.id,
+                node: TopologyNodeId(0),
+            }))
+        );
+
+        assert_eq!(graph.validate(&planning), Ok(()));
     }
 }
