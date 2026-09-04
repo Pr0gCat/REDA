@@ -22,13 +22,13 @@
 //! dropped: a dropped cell is a netlist that still compiles, to the wrong
 //! circuit.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use serde_json::{Map, Value};
 
 use crate::circuits::netlist_builder::NetlistBuilder;
 use crate::compile::topology::{self, GateKind};
-use crate::compile::Netlist;
+use crate::compile::{HierarchicalNetlist, Module, ModuleInstance, Netlist, PortBinding};
 
 use super::FrontendError;
 
@@ -80,6 +80,22 @@ fn output_pin_for(cell_type: &str) -> &'static str {
 
 fn unsupported(message: impl Into<String>) -> FrontendError {
     FrontendError::Unsupported(message.into())
+}
+
+/// A cell type neither this module's own instance table (a name from
+/// `modules.keys()`) nor `topology::gate_kind_for_yosys_cell` has ever heard
+/// of -- a hard, loud error naming both the cell and its type, shared by the
+/// gate-cell path (`Context::build_cell`) and the first cell pass in
+/// `module_from_json`, which must report this *before* it ever goes looking
+/// for a `Y`/`Q` connection that a genuinely unknown cell may not have.
+fn unknown_cell_error(cell_name: &str, cell_type: &str) -> FrontendError {
+    let known: Vec<&str> = topology::known_yosys_cell_types().map(|(name, _)| name).collect();
+    unsupported(format!(
+        "cell `{cell_name}` has type `{cell_type}`, which this project's topology library has no \
+         realization for. Supported: {known:?}. (A `$__ZERO`/`$__ONE` drives a hard-wired \
+         constant and a `$_DFF_*_` holds state -- neither has any realization in real redstone. A \
+         word-level type such as `$and` means `techmap` did not run.)"
+    ))
 }
 
 /// One bit of a Yosys "bits" array: either a real net id, or a literal
@@ -254,14 +270,7 @@ impl<'a> Context<'a> {
     /// compiles, to the wrong circuit.
     fn build_cell(&mut self, cell: &CellInfo<'a>) -> Result<String, FrontendError> {
         let Some(kind) = topology::gate_kind_for_yosys_cell(cell.cell_type) else {
-            let known: Vec<&str> = topology::known_yosys_cell_types().map(|(name, _)| name).collect();
-            return Err(unsupported(format!(
-                "cell `{}` has type `{}`, which this project's topology library has no realization \
-                 for. Supported: {known:?}. (A `$__ZERO`/`$__ONE` drives a hard-wired constant and \
-                 a `$_DFF_*_` holds state -- neither has any realization in real redstone. A \
-                 word-level type such as `$and` means `techmap` did not run.)",
-                cell.name, cell.cell_type
-            )));
+            return Err(unknown_cell_error(&cell.name, cell.cell_type));
         };
         let pins = pins_for(cell.cell_type)
             .unwrap_or_else(|| panic!("`{}` has a GateKind but no pin names -- CELL_PINS is out of step", cell.cell_type));
@@ -331,69 +340,140 @@ impl<'a> Context<'a> {
     }
 }
 
-/// Convert Yosys's JSON (as produced by `write_json` after `abc`, see
-/// `synth.py`) into a gate-level [`Netlist`] for `top_module`.
-///
-/// Returns the netlist together with a lookup from each declared output
-/// port's name (bit-indexed as `"name[i]"` for a multi-bit port) to that
-/// output's actual signal name in `netlist.outputs`.
-pub(super) fn netlist_from_json(json: &Value, top_module: &str) -> Result<(Netlist, HashMap<String, String>), FrontendError> {
-    let modules = as_object(json.get("modules").ok_or_else(|| unsupported("yosys JSON has no `modules` key"))?, "`modules`")?;
+/// One bit-name per bit of a port: bare `name` for a 1-bit port (every port
+/// in this project's own reference circuits), `name[i]` for a wider one
+/// (LSB-first, matching Yosys's own "bits" convention) so this frontend is
+/// not silently wrong the first time someone hands it a multi-bit port.
+/// Shared by every port declaration this reader looks at -- a module's own
+/// `ports`, and (via `module_from_json`'s instance-cell handling) a child
+/// module's `ports` as seen from an instantiating cell's `connections`.
+fn bit_names(port_name: &str, bits: &[Value]) -> Vec<String> {
+    if bits.len() == 1 {
+        vec![port_name.to_string()]
+    } else {
+        (0..bits.len()).map(|i| format!("{port_name}[{i}]")).collect()
+    }
+}
 
-    let module = modules.get(top_module).ok_or_else(|| {
-        let available: Vec<&str> = modules.keys().map(String::as_str).collect();
-        unsupported(format!("yosys JSON has no module named `{top_module}`; found: {available:?}"))
-    })?;
-
-    let ports = as_object(module.get("ports").ok_or_else(|| unsupported("module has no `ports` key"))?, "`ports`")?;
-    let cells = as_object(module.get("cells").ok_or_else(|| unsupported("module has no `cells` key"))?, "`cells`")?;
-
-    // One bit-name per bit of a port: bare `name` for a 1-bit port (every
-    // port in this project's own reference circuits), `name[i]` for a wider
-    // one (LSB-first, matching Yosys's own "bits" convention) so this
-    // frontend is not silently wrong the first time someone hands it a
-    // multi-bit port.
-    fn bit_names(port_name: &str, bits: &[Value]) -> Vec<String> {
-        if bits.len() == 1 {
-            vec![port_name.to_string()]
-        } else {
-            (0..bits.len()).map(|i| format!("{port_name}[{i}]")).collect()
+/// Every port of `module_json` (one of `modules`'s own values) as
+/// `(bit_name, net_id, is_output)`, LSB-first per port -- the shape both the
+/// port-declaration loop and the instance-cell loops need, so this is the
+/// one place that reads a `"ports"` object.
+fn module_port_bits(module_json: &Map<String, Value>, module_name: &str) -> Result<Vec<(String, i64, bool)>, FrontendError> {
+    let ports = as_object(
+        module_json.get("ports").ok_or_else(|| unsupported(format!("module `{module_name}` has no `ports` key")))?,
+        "`ports`",
+    )?;
+    let mut out = Vec::new();
+    for (port_name, port) in ports {
+        let direction = as_str(
+            port.get("direction").ok_or_else(|| unsupported(format!("port `{port_name}` has no `direction`")))?,
+            "port direction",
+        )?;
+        let is_output = match direction {
+            "output" => true,
+            "input" => false,
+            other => return Err(unsupported(format!("port `{port_name}` has unsupported direction `{other}`"))),
+        };
+        let bits = as_array(port.get("bits").ok_or_else(|| unsupported(format!("port `{port_name}` has no `bits`")))?, "port bits")?;
+        for (name, bit) in bit_names(port_name, bits).into_iter().zip(bits.iter()) {
+            let id = match parse_bit(bit)? {
+                Bit::Net(id) => id,
+                Bit::Zero | Bit::One => {
+                    return Err(unsupported(format!(
+                        "port `{port_name}` of module `{module_name}` has a constant bit, which yosys should never emit for a port declaration"
+                    )));
+                }
+            };
+            out.push((name, id, is_output));
         }
     }
+    Ok(out)
+}
+
+/// One instance cell as split out of `cells` during the first pass:
+/// `cell_name`, the child module's own name (a key of `module_names`), and
+/// its `connections` object, keyed by the *child's* port names (unlike
+/// `CellInfo`, whose `connections` are keyed by a simple cell's fixed pin
+/// names such as `A`/`Y`).
+struct InstanceInfo<'a> {
+    cell_name: String,
+    child_module: &'a str,
+    connections: &'a Map<String, Value>,
+}
+
+/// Read one module's JSON body into a [`Module`]: its own gates (exactly the
+/// existing single-module reading logic) plus one [`ModuleInstance`] per
+/// cell whose type names another module in `module_names`.
+///
+/// `is_top` gates a boundary-naming step that only nested modules need: a
+/// nested module's own declared output net, when driven by a locally-built
+/// gate, is renamed to the *port's* bit name (instead of keeping the
+/// gate-builder's generated name) so `HierarchicalNetlist::flatten`'s alias
+/// substitution -- keyed by the child's own port names -- can find it. The
+/// top module is exempt from that rename: nothing ever instantiates it, so
+/// its own boundary names are never looked up by an alias, and renaming them
+/// would change `netlist_from_json`'s gate names for a single-module design,
+/// which have to stay byte-identical.
+///
+/// Returns the module together with a lookup from each of its own declared
+/// output port's bit names to that output's actual signal name -- the same
+/// shape `netlist_from_json` has always returned, now computed once per
+/// module instead of only for the top one.
+fn module_from_json(
+    modules: &Map<String, Value>,
+    module_names: &BTreeSet<String>,
+    module_name: &str,
+    is_top: bool,
+) -> Result<(Module, HashMap<String, String>), FrontendError> {
+    let module_value = modules.get(module_name).unwrap_or_else(|| panic!("module `{module_name}` must be present -- caller iterates modules.keys()"));
+    let module_json = as_object(module_value, &format!("module `{module_name}`"))?;
+    let cells = as_object(module_json.get("cells").ok_or_else(|| unsupported(format!("module `{module_name}` has no `cells` key")))?, "`cells`")?;
+
+    let port_bits = module_port_bits(module_json, module_name)?;
 
     let mut inputs: Vec<String> = Vec::new();
     let mut signal_of: HashMap<i64, String> = HashMap::new();
     let mut input_names: HashSet<String> = HashSet::new();
+    // This module's own output ports, reserved against their net ids ahead
+    // of building anything: consulted below when an instance's output net
+    // turns out to be one of them (so the instance is bound straight to the
+    // port's name rather than a synthesized one) and after resolving a
+    // locally-built gate (for the boundary rename `is_top` gates, above).
+    let mut reserved_output_names: HashMap<i64, String> = HashMap::new();
+    let mut output_bits: Vec<(String, i64)> = Vec::new();
 
-    for (port_name, port) in ports {
-        let direction = as_str(port.get("direction").ok_or_else(|| unsupported(format!("port `{port_name}` has no `direction`")))?, "port direction")?;
-        if direction != "input" {
-            continue;
-        }
-        let bits = as_array(port.get("bits").ok_or_else(|| unsupported(format!("port `{port_name}` has no `bits`")))?, "port bits")?;
-        for (name, bit) in bit_names(port_name, bits).into_iter().zip(bits.iter()) {
-            match parse_bit(bit)? {
-                Bit::Net(id) => {
-                    signal_of.insert(id, name.clone());
-                    input_names.insert(name.clone());
-                    inputs.push(name);
-                }
-                Bit::Zero | Bit::One => {
-                    return Err(unsupported(format!("input port `{port_name}` has a constant bit, which yosys should never emit for a real input")));
-                }
-            }
+    for (name, id, is_output) in &port_bits {
+        if *is_output {
+            reserved_output_names.entry(*id).or_insert_with(|| name.clone());
+            output_bits.push((name.clone(), *id));
+        } else {
+            signal_of.insert(*id, name.clone());
+            input_names.insert(name.clone());
+            inputs.push(name.clone());
         }
     }
 
-    // Build the net-id -> driving-cell reverse index up front. Cells in
-    // Yosys's JSON are a JSON object -- serde_json orders that
-    // alphabetically by key, not topologically -- so this index (not
-    // iteration order) is what lets `Context::resolve` find a cell's driver
-    // regardless of how Yosys happened to name it.
+    // First cell pass: split instance cells from gate cells. An instance
+    // cell's type is checked against `module_names` *before* anything about
+    // simple-cell pins is assumed of it (a `Y`/`Q` connection, in
+    // particular) -- and a cell that is neither a known instance nor a
+    // known gate kind is reported by name and type right here, rather than
+    // falling through to a `single_bit` lookup that would misreport it as a
+    // missing connection.
     let mut driver_of: HashMap<i64, CellInfo> = HashMap::new();
+    let mut instance_cells: Vec<InstanceInfo> = Vec::new();
     for (cell_name, cell) in cells {
         let cell_type = as_str(cell.get("type").ok_or_else(|| unsupported(format!("cell `{cell_name}` has no `type`")))?, "cell type")?;
         let connections = as_object(cell.get("connections").ok_or_else(|| unsupported(format!("cell `{cell_name}` has no `connections`")))?, "cell connections")?;
+
+        if module_names.contains(cell_type) {
+            instance_cells.push(InstanceInfo { cell_name: cell_name.clone(), child_module: cell_type, connections });
+            continue;
+        }
+        if topology::gate_kind_for_yosys_cell(cell_type).is_none() {
+            return Err(unknown_cell_error(cell_name, cell_type));
+        }
         let out_bit = single_bit(connections, output_pin_for(cell_type), cell_name)?;
         match parse_bit(out_bit)? {
             Bit::Net(id) => {
@@ -401,6 +481,52 @@ pub(super) fn netlist_from_json(json: &Value, top_module: &str) -> Result<(Netli
             }
             Bit::Zero | Bit::One => {
                 return Err(unsupported(format!("cell `{cell_name}` ({cell_type}) has a constant output, which is never something ABC needs written to a real net")));
+            }
+        }
+    }
+
+    // Register every instance's output nets as if they were primary inputs,
+    // so `Context::resolve` can use them without ever seeing the instance
+    // itself -- an instance is never in `driver_of`, and a child's output is
+    // otherwise unresolvable by the parent's own gates.
+    let mut instance_outputs: Vec<(String, String, String)> = Vec::new(); // (cell_name, child_port_bit, signal)
+    for instance in &instance_cells {
+        let child_value = modules.get(instance.child_module).ok_or_else(|| unsupported(format!("instance `{}` names unknown module `{}`", instance.cell_name, instance.child_module)))?;
+        let child_json = as_object(child_value, &format!("module `{}`", instance.child_module))?;
+        let child_ports = as_object(
+            child_json.get("ports").ok_or_else(|| unsupported(format!("module `{}` has no `ports` key", instance.child_module)))?,
+            "`ports`",
+        )?;
+        for (port_name, port) in child_ports {
+            let direction = as_str(
+                port.get("direction").ok_or_else(|| unsupported(format!("port `{port_name}` has no `direction`")))?,
+                "port direction",
+            )?;
+            if direction != "output" {
+                continue;
+            }
+            // Yosys omits a `connections` entry entirely for a port left
+            // unconnected in the source; leave it unbound rather than
+            // guessing a value for it, so `HierarchicalNetlist::validate`'s
+            // `UnconnectedPort` catches it downstream instead of this
+            // reader silently tying it to anything.
+            let Some(conn) = instance.connections.get(port_name.as_str()) else { continue };
+            let conn_bits = as_array(conn, &format!("instance `{}` pin `{port_name}`", instance.cell_name))?;
+            for (bit_name, bit) in bit_names(port_name, conn_bits).into_iter().zip(conn_bits.iter()) {
+                let signal = match parse_bit(bit)? {
+                    Bit::Net(id) => {
+                        let signal = reserved_output_names.get(&id).cloned().unwrap_or_else(|| format!("{}__{bit_name}", instance.cell_name));
+                        signal_of.insert(id, signal.clone());
+                        signal
+                    }
+                    Bit::Zero | Bit::One => {
+                        return Err(unsupported(format!(
+                            "instance `{}` output pin `{port_name}` is tied to a constant, which yosys should never emit for a cell output",
+                            instance.cell_name
+                        )));
+                    }
+                };
+                instance_outputs.push((instance.cell_name.clone(), bit_name, signal));
             }
         }
     }
@@ -417,24 +543,61 @@ pub(super) fn netlist_from_json(json: &Value, top_module: &str) -> Result<(Netli
     let mut outputs: Vec<String> = Vec::new();
     let mut seen_outputs: HashSet<String> = HashSet::new();
     let mut port_map: HashMap<String, String> = HashMap::new();
+    // Old generated name -> this module's own port bit name, applied to
+    // `ctx.builder`'s gates at the very end. Only ever populated when
+    // `!is_top` (see this function's doc comment).
+    let mut renames: HashMap<String, String> = HashMap::new();
 
-    for (port_name, port) in ports {
-        let direction = as_str(port.get("direction").ok_or_else(|| unsupported(format!("port `{port_name}` has no `direction`")))?, "port direction")?;
-        if direction != "output" {
-            continue;
+    for (bit_name, net_id) in &output_bits {
+        let signal = resolve_output_net(&mut ctx, *net_id)?;
+        let final_name = if is_top || &signal == bit_name || renames.values().any(|already| already == &signal) {
+            signal.clone()
+        } else {
+            renames.insert(signal.clone(), bit_name.clone());
+            bit_name.clone()
+        };
+        // Keep `signal_of` authoritative for the final name from here on,
+        // so an instance's input pin resolved below (or a later output port
+        // that shares this net) sees the renamed value directly instead of
+        // the generated one.
+        ctx.signal_of.insert(*net_id, final_name.clone());
+        if seen_outputs.insert(final_name.clone()) {
+            outputs.push(final_name.clone());
         }
-        let bits = as_array(port.get("bits").ok_or_else(|| unsupported(format!("port `{port_name}` has no `bits`")))?, "port bits")?;
-        for (name, bit) in bit_names(port_name, bits).into_iter().zip(bits.iter()) {
-            let signal = match parse_bit(bit)? {
-                Bit::Net(id) => resolve_output_net(&mut ctx, id)?,
-                Bit::Zero | Bit::One => {
-                    return Err(unsupported(format!("output port `{port_name}` is tied to a constant -- there is no hard-wired driver in real redstone")));
-                }
-            };
-            if seen_outputs.insert(signal.clone()) {
-                outputs.push(signal.clone());
+        port_map.insert(bit_name.clone(), final_name);
+    }
+
+    // Resolve every instance's input pins now that every gate (and every
+    // instance output net) that could drive one has a name -- Yosys's cell
+    // ordering is not topological, so an instance's input may be fed by a
+    // gate this module had not yet built when the instance cells were
+    // first split out above.
+    let mut instance_inputs: Vec<(String, String, PortBinding)> = Vec::new();
+    for instance in &instance_cells {
+        let child_value = modules.get(instance.child_module).expect("instance module presence already checked above");
+        let child_json = as_object(child_value, &format!("module `{}`", instance.child_module))?;
+        let child_ports = as_object(
+            child_json.get("ports").ok_or_else(|| unsupported(format!("module `{}` has no `ports` key", instance.child_module)))?,
+            "`ports`",
+        )?;
+        for (port_name, port) in child_ports {
+            let direction = as_str(
+                port.get("direction").ok_or_else(|| unsupported(format!("port `{port_name}` has no `direction`")))?,
+                "port direction",
+            )?;
+            if direction != "input" {
+                continue;
             }
-            port_map.insert(name, signal);
+            let Some(conn) = instance.connections.get(port_name.as_str()) else { continue };
+            let conn_bits = as_array(conn, &format!("instance `{}` pin `{port_name}`", instance.cell_name))?;
+            for (bit_name, bit) in bit_names(port_name, conn_bits).into_iter().zip(conn_bits.iter()) {
+                let binding = match parse_bit(bit)? {
+                    Bit::Net(id) => PortBinding::Signal(ctx.resolve(id)?),
+                    Bit::Zero => PortBinding::Zero,
+                    Bit::One => PortBinding::One,
+                };
+                instance_inputs.push((instance.cell_name.clone(), bit_name, binding));
+            }
         }
     }
 
@@ -448,8 +611,87 @@ pub(super) fn netlist_from_json(json: &Value, top_module: &str) -> Result<(Netli
         return Err(unsupported(format!("{} cell(s) are never used to drive any output: {leftover:?}", leftover.len())));
     }
 
-    let netlist = Netlist { inputs, outputs, gates: ctx.builder.into_gates() };
-    Ok((netlist, port_map))
+    let mut gates = ctx.builder.into_gates();
+    if !renames.is_empty() {
+        for gate in &mut gates {
+            if let Some(new) = renames.get(&gate.name) {
+                gate.name = new.clone();
+            }
+            if let Some(new) = renames.get(&gate.output) {
+                gate.output = new.clone();
+            }
+            for input in &mut gate.inputs {
+                if let Some(new) = renames.get(input) {
+                    *input = new.clone();
+                }
+            }
+        }
+    }
+
+    let mut instances = Vec::with_capacity(instance_cells.len());
+    for instance in &instance_cells {
+        let mut ports: BTreeMap<String, PortBinding> = BTreeMap::new();
+        for (cell_name, port_bit, signal) in &instance_outputs {
+            if cell_name == &instance.cell_name {
+                ports.insert(port_bit.clone(), PortBinding::Signal(signal.clone()));
+            }
+        }
+        for (cell_name, port_bit, binding) in &instance_inputs {
+            if cell_name == &instance.cell_name {
+                ports.insert(port_bit.clone(), binding.clone());
+            }
+        }
+        instances.push(ModuleInstance { name: instance.cell_name.clone(), module: instance.child_module.to_string(), ports });
+    }
+
+    Ok((Module { inputs, outputs, gates, instances }, port_map))
+}
+
+/// Read every module out of Yosys's JSON (as produced by `write_json` after
+/// `abc`, see `synth.py`) into a [`HierarchicalNetlist`] rooted at
+/// `top_module`, keeping every submodule instance as a
+/// [`crate::compile::ModuleInstance`] rather than flattening it away.
+///
+/// Returns the design together with a lookup from each of `top_module`'s own
+/// declared output port names to that output's actual signal name -- the
+/// same shape [`netlist_from_json`] has always returned.
+pub(super) fn hierarchical_netlist_from_json(json: &Value, top_module: &str) -> Result<(HierarchicalNetlist, HashMap<String, String>), FrontendError> {
+    let modules_json = as_object(json.get("modules").ok_or_else(|| unsupported("yosys JSON has no `modules` key"))?, "`modules`")?;
+    if !modules_json.contains_key(top_module) {
+        let available: Vec<&str> = modules_json.keys().map(String::as_str).collect();
+        return Err(unsupported(format!("yosys JSON has no module named `{top_module}`; found: {available:?}")));
+    }
+
+    let module_names: BTreeSet<String> = modules_json.keys().cloned().collect();
+
+    let mut modules: BTreeMap<String, Module> = BTreeMap::new();
+    let mut top_port_map: HashMap<String, String> = HashMap::new();
+    for name in &module_names {
+        let (module, port_map) = module_from_json(modules_json, &module_names, name, name == top_module)?;
+        if name == top_module {
+            top_port_map = port_map;
+        }
+        modules.insert(name.clone(), module);
+    }
+
+    let design = HierarchicalNetlist { top: top_module.to_string(), modules };
+    design.validate().map_err(|error| unsupported(error.to_string()))?;
+    Ok((design, top_port_map))
+}
+
+/// Convert Yosys's JSON into a flat, gate-level [`Netlist`] for
+/// `top_module`, folding away module structure entirely.
+///
+/// Unchanged in behaviour for a single-module JSON payload (no submodule
+/// instances): the same [`Netlist`], the same gate names, the same port
+/// map as before this reader learned to keep hierarchy at all -- see
+/// [`hierarchical_netlist_from_json`]'s and [`module_from_json`]'s own doc
+/// comments for why nothing about that path changed.
+pub(super) fn netlist_from_json(json: &Value, top_module: &str) -> Result<(Netlist, HashMap<String, String>), FrontendError> {
+    let (design, port_map) = hierarchical_netlist_from_json(json, top_module)?;
+    let design = design.specialise_constants().map_err(|error| unsupported(error.to_string()))?;
+    let (flat, _) = design.flatten().map_err(|error| unsupported(error.to_string()))?;
+    Ok((flat, port_map))
 }
 
 /// Resolve an output port's net to a signal name that is guaranteed to be
@@ -701,5 +943,140 @@ mod tests {
         };
         assert!(message.contains("tbuf0"), "error must name the cell: {message}");
         assert!(message.contains("$_TBUF_"), "error must name the cell's type: {message}");
+    }
+
+    fn inv_module(input_bit: u64, output_bit: u64) -> serde_json::Value {
+        json!({
+            "ports": {
+                "a": { "direction": "input", "bits": [input_bit] },
+                "y": { "direction": "output", "bits": [output_bit] }
+            },
+            "cells": {
+                "n0": { "type": "$_NOT_", "connections": { "A": [input_bit], "Y": [output_bit] } }
+            }
+        })
+    }
+
+    #[test]
+    fn a_submodule_instance_becomes_a_module_instance_with_a_port_map() {
+        let json = json!({
+            "modules": {
+                "inv": inv_module(2, 3),
+                "top": {
+                    "ports": {
+                        "x": { "direction": "input", "bits": [2] },
+                        "z": { "direction": "output", "bits": [4] }
+                    },
+                    "cells": {
+                        "u0": { "type": "inv", "connections": { "a": [2], "y": [3] } },
+                        "u1": { "type": "inv", "connections": { "a": [3], "y": [4] } }
+                    }
+                }
+            }
+        });
+        let (design, port_map) = hierarchical_netlist_from_json(&json, "top").expect("reads");
+        assert_eq!(design.top, "top");
+        assert_eq!(design.modules.len(), 2);
+        let top = &design.modules["top"];
+        assert_eq!(top.instances.len(), 2);
+        assert_eq!(top.instances[0].name, "u0");
+        assert_eq!(top.instances[0].module, "inv");
+        assert_eq!(top.instances[0].ports["a"], PortBinding::Signal("x".into()));
+        let mid = match &top.instances[0].ports["y"] { PortBinding::Signal(s) => s.clone(), other => panic!("{other:?}") };
+        assert_eq!(top.instances[1].ports["a"], PortBinding::Signal(mid));
+        assert_eq!(top.instances[1].ports["y"], PortBinding::Signal("z".into()));
+        assert_eq!(port_map["z"], "z");
+        let (flat, _) = design.flatten().expect("flattens");
+        assert_eq!(flat.gates.len(), 2);
+    }
+
+    #[test]
+    fn a_paramod_instance_resolves_to_its_derived_module() {
+        let json = json!({
+            "modules": {
+                "$paramod\\inv\\W=1": inv_module(2, 3),
+                "top": {
+                    "ports": {
+                        "x": { "direction": "input", "bits": [2] },
+                        "z": { "direction": "output", "bits": [3] }
+                    },
+                    "cells": {
+                        "u0": { "type": "$paramod\\inv\\W=1", "connections": { "a": [2], "y": [3] } }
+                    }
+                }
+            }
+        });
+        let (design, _) = hierarchical_netlist_from_json(&json, "top").expect("reads");
+        assert!(design.modules.contains_key("$paramod\\inv\\W=1"));
+        assert_eq!(design.modules["top"].instances[0].module, "$paramod\\inv\\W=1");
+    }
+
+    #[test]
+    fn a_constant_instance_port_is_a_constant_binding() {
+        let json = json!({
+            "modules": {
+                "inv": inv_module(2, 3),
+                "top": {
+                    "ports": { "z": { "direction": "output", "bits": [3] } },
+                    "cells": {
+                        "u0": { "type": "inv", "connections": { "a": ["0"], "y": [3] } }
+                    }
+                }
+            }
+        });
+        let (design, _) = hierarchical_netlist_from_json(&json, "top").expect("reads");
+        assert_eq!(design.modules["top"].instances[0].ports["a"], PortBinding::Zero);
+    }
+
+    #[test]
+    fn an_unknown_cell_type_is_reported_as_unknown_not_as_a_missing_y() {
+        let json = json!({
+            "modules": {
+                "top": {
+                    "ports": {
+                        "x": { "direction": "input", "bits": [2] },
+                        "z": { "direction": "output", "bits": [3] }
+                    },
+                    "cells": {
+                        "w0": { "type": "$weird", "connections": { "A": [2], "Q": [3] } }
+                    }
+                }
+            }
+        });
+        let error = hierarchical_netlist_from_json(&json, "top").unwrap_err().to_string();
+        assert!(error.contains("$weird"), "{error}");
+        assert!(!error.contains("no `Y` connection"), "{error}");
+    }
+
+    #[test]
+    fn a_multi_bit_instance_port_maps_per_bit() {
+        let json = json!({
+            "modules": {
+                "buf2": {
+                    "ports": {
+                        "a": { "direction": "input", "bits": [2, 3] },
+                        "y": { "direction": "output", "bits": [4, 5] }
+                    },
+                    "cells": {
+                        "n0": { "type": "$_NOT_", "connections": { "A": [2], "Y": [4] } },
+                        "n1": { "type": "$_NOT_", "connections": { "A": [3], "Y": [5] } }
+                    }
+                },
+                "top": {
+                    "ports": {
+                        "p": { "direction": "input", "bits": [2, 3] },
+                        "q": { "direction": "output", "bits": [4, 5] }
+                    },
+                    "cells": {
+                        "u0": { "type": "buf2", "connections": { "a": [2, 3], "y": [4, 5] } }
+                    }
+                }
+            }
+        });
+        let (design, _) = hierarchical_netlist_from_json(&json, "top").expect("reads");
+        let ports = &design.modules["top"].instances[0].ports;
+        assert_eq!(ports["a[0]"], PortBinding::Signal("p[0]".into()));
+        assert_eq!(ports["a[1]"], PortBinding::Signal("p[1]".into()));
+        assert_eq!(ports["y[1]"], PortBinding::Signal("q[1]".into()));
     }
 }

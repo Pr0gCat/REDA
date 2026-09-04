@@ -50,7 +50,7 @@ use std::fmt;
 use std::path::Path;
 use std::process::Command;
 
-use crate::compile::Netlist;
+use crate::compile::{HierarchicalNetlist, HierarchyError, Netlist};
 
 mod yosys_json;
 
@@ -120,6 +120,12 @@ impl From<serde_json::Error> for FrontendError {
     }
 }
 
+impl From<HierarchyError> for FrontendError {
+    fn from(err: HierarchyError) -> Self {
+        FrontendError::Unsupported(err.to_string())
+    }
+}
+
 /// Synthesize `verilog_source`'s `top_module` into a **gate-level**
 /// [`Netlist`] -- one gate per Yosys cell, in Yosys's own vocabulary. Run it
 /// through `compile::lowering::lower` (as `compile::compile` does) to get
@@ -141,6 +147,31 @@ pub fn synthesize_verilog(
     verilog_source: &str,
     top_module: &str,
 ) -> Result<(Netlist, HashMap<String, String>), FrontendError> {
+    let (design, port_map) = synthesize_verilog_hierarchical(verilog_source, top_module)?;
+    let design = design.specialise_constants()?;
+    let (flat, _) = design.flatten()?;
+    Ok((flat, port_map))
+}
+
+/// Synthesize `verilog_source`'s `top_module` into a [`HierarchicalNetlist`]
+/// -- every module Yosys kept, with each submodule instantiation still a
+/// [`crate::compile::ModuleInstance`] rather than folded away. [`synthesize_verilog`]
+/// is this function plus [`HierarchicalNetlist::flatten`]; use this one
+/// directly for anything that wants to see (or place) module structure
+/// itself -- hierarchical placement, in particular.
+///
+/// Returns the design together with a lookup from each of `top_module`'s own
+/// declared output port names to that output's actual signal name, exactly
+/// as [`synthesize_verilog`] does.
+///
+/// # Errors
+///
+/// See [`FrontendError`]. Same preconditions as [`synthesize_verilog`]:
+/// `python` on `PATH` with `yowasp-yosys` installed.
+pub fn synthesize_verilog_hierarchical(
+    verilog_source: &str,
+    top_module: &str,
+) -> Result<(HierarchicalNetlist, HashMap<String, String>), FrontendError> {
     let work_dir = make_work_dir()?;
 
     let verilog_path = work_dir.join("top.v");
@@ -152,11 +183,11 @@ pub fn synthesize_verilog(
 
     let result = run_synth(&synth_py_path, &verilog_path, top_module, &output_json_path);
 
-    let netlist_result = match result {
+    let design = match result {
         Ok(()) => {
             let json_text = std::fs::read_to_string(&output_json_path)?;
             let json: serde_json::Value = serde_json::from_str(&json_text)?;
-            yosys_json::netlist_from_json(&json, top_module)
+            yosys_json::hierarchical_netlist_from_json(&json, top_module)
         }
         Err(err) => Err(err),
     };
@@ -165,11 +196,11 @@ pub fn synthesize_verilog(
     // what was actually fed to Yosys, and someone debugging a synthesis
     // failure needs it. Clean up on success so temp directories do not pile
     // up across repeated runs.
-    if netlist_result.is_ok() {
+    if design.is_ok() {
         let _ = std::fs::remove_dir_all(&work_dir);
     }
 
-    netlist_result
+    design
 }
 
 /// A fresh, empty scratch directory under the OS temp directory. Not using
