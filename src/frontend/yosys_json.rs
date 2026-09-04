@@ -547,23 +547,52 @@ fn module_from_json(
     // `ctx.builder`'s gates at the very end. Only ever populated when
     // `!is_top` (see this function's doc comment).
     let mut renames: HashMap<String, String> = HashMap::new();
+    // Non-top only: every driver name already claimed as *some* output
+    // port's own identity. Two declared output ports tied to the same net
+    // (`assign y1 = n; assign y2 = n;`) is legal Verilog, and `Module.outputs`
+    // has to declare both (`HierarchicalNetlist::validate` matches a parent
+    // instance's port keys against it) -- but they cannot both alias onto
+    // the same driver name, or the second port has no gate of its own for
+    // `flatten`'s name-keyed alias substitution to find. Once a name is
+    // claimed here, any later port that resolves to it gets a fresh
+    // `synthesize_buffer` fork instead, giving it its own gate-driven
+    // identity.
+    let mut claimed_by_port: HashSet<String> = HashSet::new();
 
     for (bit_name, net_id) in &output_bits {
         let signal = resolve_output_net(&mut ctx, *net_id)?;
-        let final_name = if is_top || &signal == bit_name || renames.values().any(|already| already == &signal) {
-            signal.clone()
+        if is_top {
+            // Byte-identical to before: dedup by signal, no renaming, no
+            // buffering. Nothing ever instantiates the top module, so its
+            // own boundary names are never looked up by an alias.
+            ctx.signal_of.insert(*net_id, signal.clone());
+            if seen_outputs.insert(signal.clone()) {
+                outputs.push(signal.clone());
+            }
+            port_map.insert(bit_name.clone(), signal);
+            continue;
+        }
+        let final_name = if claimed_by_port.contains(&signal) {
+            // This net's driver name is already some other declared port's
+            // identity -- fork a distinct signal for this port rather than
+            // reusing it (which would silently drop this port from
+            // `outputs` again, just under a different guard).
+            let buffered = ctx.synthesize_buffer(&signal);
+            renames.insert(buffered, bit_name.clone());
+            bit_name.clone()
+        } else if &signal == bit_name {
+            signal
         } else {
             renames.insert(signal.clone(), bit_name.clone());
+            // Keep `signal_of` authoritative for the final name from here
+            // on, so an instance's input pin resolved below (or a later
+            // output port that shares this net) sees the renamed value
+            // directly instead of the generated one.
+            ctx.signal_of.insert(*net_id, bit_name.clone());
             bit_name.clone()
         };
-        // Keep `signal_of` authoritative for the final name from here on,
-        // so an instance's input pin resolved below (or a later output port
-        // that shares this net) sees the renamed value directly instead of
-        // the generated one.
-        ctx.signal_of.insert(*net_id, final_name.clone());
-        if seen_outputs.insert(final_name.clone()) {
-            outputs.push(final_name.clone());
-        }
+        claimed_by_port.insert(final_name.clone());
+        outputs.push(final_name.clone());
         port_map.insert(bit_name.clone(), final_name);
     }
 
@@ -1078,5 +1107,150 @@ mod tests {
         assert_eq!(ports["a[0]"], PortBinding::Signal("p[0]".into()));
         assert_eq!(ports["a[1]"], PortBinding::Signal("p[1]".into()));
         assert_eq!(ports["y[1]"], PortBinding::Signal("q[1]".into()));
+    }
+
+    /// Two declared output ports of a non-top module tied to the same net
+    /// (`assign y1 = n; assign y2 = n;`, legal Verilog) must both survive as
+    /// declared ports -- `HierarchicalNetlist::validate` matches an
+    /// instantiating parent's port keys against `Module.outputs`, and a
+    /// module that only declares one of the two refuses any instance that
+    /// binds the other with `PortMismatch`. This is the reviewer's exact
+    /// repro (module `dual`, ports `y1`/`y2` both on net 3, instantiated
+    /// from `top` with `y1 -> p`, `y2 -> q`).
+    fn dual_output_json() -> serde_json::Value {
+        json!({
+            "modules": {
+                "dual": {
+                    "ports": {
+                        "a": { "direction": "input", "bits": [2] },
+                        "y1": { "direction": "output", "bits": [3] },
+                        "y2": { "direction": "output", "bits": [3] }
+                    },
+                    "cells": {
+                        "n0": { "type": "$_NOT_", "connections": { "A": [2], "Y": [3] } }
+                    }
+                },
+                "top": {
+                    "ports": {
+                        "x": { "direction": "input", "bits": [2] },
+                        "p": { "direction": "output", "bits": [4] },
+                        "q": { "direction": "output", "bits": [5] }
+                    },
+                    "cells": {
+                        "u0": { "type": "dual", "connections": { "a": [2], "y1": [4], "y2": [5] } }
+                    }
+                }
+            }
+        })
+    }
+
+    #[test]
+    fn a_non_top_module_declares_both_output_ports_that_share_one_net() {
+        let json = dual_output_json();
+        let (design, _) = hierarchical_netlist_from_json(&json, "top").expect("reads");
+        let dual = &design.modules["dual"];
+        assert!(dual.outputs.contains(&"y1".to_string()), "outputs = {:?}", dual.outputs);
+        assert!(dual.outputs.contains(&"y2".to_string()), "outputs = {:?}", dual.outputs);
+        assert_eq!(dual.outputs.len(), 2, "outputs = {:?}", dual.outputs);
+        let top = &design.modules["top"];
+        assert_eq!(top.instances[0].ports["y1"], PortBinding::Signal("p".into()));
+        assert_eq!(top.instances[0].ports["y2"], PortBinding::Signal("q".into()));
+    }
+
+    /// End to end through `netlist_from_json` (`specialise_constants` then
+    /// `flatten`): both parent signals actually end up driven by their own
+    /// gate, not aliased onto each other -- the fix has to give the second
+    /// output port a real, distinct identity, not just a declaration.
+    #[test]
+    fn netlist_from_json_drives_both_parent_signals_for_two_output_ports_on_one_net() {
+        let json = dual_output_json();
+        let (flat, port_map) = netlist_from_json(&json, "top").expect("flattens");
+        assert_eq!(port_map["p"], "p");
+        assert_eq!(port_map["q"], "q");
+        let p_gate = flat.gates.iter().find(|g| g.output == "p").expect("a gate drives p");
+        let q_gate = flat.gates.iter().find(|g| g.output == "q").expect("a gate drives q");
+        assert_eq!(p_gate.inputs, vec!["x".to_string()]);
+        // q's gate is a fork of p's own signal (a buffer synthesized for
+        // the second port), not a second, disconnected driver of `n`.
+        assert_eq!(q_gate.inputs, vec!["p".to_string()]);
+    }
+
+    /// End to end through `netlist_from_json` on a genuinely two-level
+    /// design: the flattened gate names carry their instance prefix, the
+    /// chained signal between the two instances is the same string on both
+    /// sides of the join (not two different names for the same wire), and
+    /// the port map still names the right signal for the top module's own
+    /// output port.
+    #[test]
+    fn netlist_from_json_flattens_a_two_level_hierarchy_with_prefixed_gate_names() {
+        let json = json!({
+            "modules": {
+                "inv": inv_module(2, 3),
+                "top": {
+                    "ports": {
+                        "x": { "direction": "input", "bits": [2] },
+                        "z": { "direction": "output", "bits": [4] }
+                    },
+                    "cells": {
+                        "u0": { "type": "inv", "connections": { "a": [2], "y": [3] } },
+                        "u1": { "type": "inv", "connections": { "a": [3], "y": [4] } }
+                    }
+                }
+            }
+        });
+        let (flat, port_map) = netlist_from_json(&json, "top").expect("flattens");
+        assert_eq!(port_map["z"], "z");
+        assert_eq!(flat.inputs, vec!["x".to_string()]);
+        assert_eq!(flat.outputs, vec!["z".to_string()]);
+        assert_eq!(flat.gates.len(), 2);
+        assert!(flat.gates.iter().all(|g| g.name.starts_with("u0.") || g.name.starts_with("u1.")), "gates = {:?}", flat.gates);
+        let u0_gate = flat.gates.iter().find(|g| g.name.starts_with("u0.")).expect("u0's gate is present");
+        let u1_gate = flat.gates.iter().find(|g| g.name.starts_with("u1.")).expect("u1's gate is present");
+        assert_eq!(u0_gate.inputs, vec!["x".to_string()]);
+        // The signal chaining the two instances together is literally the
+        // same string on both ends -- not `u0`'s generated name on one side
+        // and something else on the other.
+        assert_eq!(u1_gate.inputs, vec![u0_gate.output.clone()]);
+        assert_eq!(u1_gate.output, "z");
+    }
+
+    /// End to end through `netlist_from_json` with a constant tied to an
+    /// instance port: `specialise_constants` has to fold the constant into a
+    /// cloned module (dropping it from a `$_NOR_` cell's arity) before
+    /// `flatten` can produce a netlist at all, since `flatten` itself
+    /// refuses any surviving `PortBinding::Zero`/`One`. Proves the two
+    /// passes actually compose through the reader, not just in isolation.
+    #[test]
+    fn netlist_from_json_specialises_a_constant_tied_instance_port_before_flattening() {
+        let json = json!({
+            "modules": {
+                "nor2": {
+                    "ports": {
+                        "a": { "direction": "input", "bits": [10] },
+                        "b": { "direction": "input", "bits": [11] },
+                        "y": { "direction": "output", "bits": [12] }
+                    },
+                    "cells": {
+                        "g0": { "type": "$_NOR_", "connections": { "A": [10], "B": [11], "Y": [12] } }
+                    }
+                },
+                "top": {
+                    "ports": {
+                        "x": { "direction": "input", "bits": [2] },
+                        "z": { "direction": "output", "bits": [3] }
+                    },
+                    "cells": {
+                        "u0": { "type": "nor2", "connections": { "a": [2], "b": ["0"], "y": [3] } }
+                    }
+                }
+            }
+        });
+        let (flat, port_map) = netlist_from_json(&json, "top").expect("specialises and flattens");
+        assert_eq!(port_map["z"], "z");
+        assert_eq!(flat.gates.len(), 1);
+        let gate = &flat.gates[0];
+        assert_eq!(gate.inputs, vec!["x".to_string()]);
+        assert_eq!(gate.output, "z");
+        assert_eq!(gate.kind, GateKind::Nor(1));
     }
 }
