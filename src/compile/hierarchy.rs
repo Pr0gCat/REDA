@@ -61,6 +61,11 @@ pub enum HierarchyError {
     UnknownTop(String),
     #[error("constant on `{instance}.{port}` cannot be folded into a {kind:?} gate")]
     UnfoldableConstant { instance: String, port: String, kind: GateKind },
+    #[error(
+        "instance `{instance}` still binds `{port}` to a constant; call specialise_constants \
+         before flatten"
+    )]
+    UnspecialisedConstant { instance: String, port: String },
 }
 
 /// `a.b.c` with Yosys's derived names made identifier-safe. `$` (Yosys's
@@ -244,12 +249,18 @@ impl HierarchicalNetlist {
     }
 
     /// The flat netlist certification uses, plus the origin of every gate.
+    ///
+    /// Precondition: `specialise_constants` must already have been run on
+    /// this design. A `PortBinding::Zero`/`One` reaching this point means
+    /// some instance's constant tie was never folded into a specialised
+    /// module, which would otherwise silently rename the port into a signal
+    /// nothing drives; `flatten` refuses that instead of guessing.
     pub fn flatten(&self) -> Result<(Netlist, Vec<GatePath>), HierarchyError> {
         self.validate()?;
         let top = &self.modules[&self.top];
         let mut gates = Vec::new();
         let mut paths = Vec::new();
-        self.flatten_into(&self.top, &[], &BTreeMap::new(), &mut gates, &mut paths);
+        self.flatten_into(&self.top, &[], &BTreeMap::new(), &mut gates, &mut paths)?;
         Ok((
             Netlist { inputs: top.inputs.clone(), outputs: top.outputs.clone(), gates },
             paths,
@@ -263,7 +274,7 @@ impl HierarchicalNetlist {
         aliases: &BTreeMap<String, String>,
         gates: &mut Vec<Gate>,
         paths: &mut Vec<GatePath>,
-    ) {
+    ) -> Result<(), HierarchyError> {
         let module = &self.modules[module_name];
         let prefix = instance_prefix(path);
         let rename = |signal: &str| -> String {
@@ -272,9 +283,15 @@ impl HierarchicalNetlist {
             }
             if prefix.is_empty() { signal.to_string() } else { format!("{prefix}.{signal}") }
         };
+        // A gate's own name is always path-prefixed, never alias-rewritten:
+        // `aliases` is keyed by this module's *port* names, and a gate that
+        // happens to be named after one of them is not that port.
+        let path_prefixed = |signal: &str| -> String {
+            if prefix.is_empty() { signal.to_string() } else { format!("{prefix}.{signal}") }
+        };
         for (index, gate) in module.gates.iter().enumerate() {
             gates.push(Gate {
-                name: rename(&gate.name),
+                name: path_prefixed(&gate.name),
                 inputs: gate.inputs.iter().map(|s| rename(s)).collect(),
                 output: rename(&gate.output),
                 kind: gate.kind,
@@ -284,14 +301,23 @@ impl HierarchicalNetlist {
         for instance in &module.instances {
             let mut child_aliases = BTreeMap::new();
             for (port, binding) in &instance.ports {
-                if let PortBinding::Signal(signal) = binding {
-                    child_aliases.insert(port.clone(), rename(signal));
+                match binding {
+                    PortBinding::Signal(signal) => {
+                        child_aliases.insert(port.clone(), rename(signal));
+                    }
+                    PortBinding::Zero | PortBinding::One => {
+                        return Err(HierarchyError::UnspecialisedConstant {
+                            instance: instance.name.clone(),
+                            port: port.clone(),
+                        });
+                    }
                 }
             }
             let mut child_path = path.to_vec();
             child_path.push(instance.name.clone());
-            self.flatten_into(&instance.module, &child_path, &child_aliases, gates, paths);
+            self.flatten_into(&instance.module, &child_path, &child_aliases, gates, paths)?;
         }
+        Ok(())
     }
 }
 
@@ -323,12 +349,41 @@ fn specialise_module(
                 }
             }
         }
+        if inputs.is_empty() && matches!(gate.kind, GateKind::Nor(_) | GateKind::Or(_)) {
+            // Every input folded away: the gate would become a hard-wired
+            // constant output, which nothing in redstone can realise (see
+            // `Context::build_cell` in `yosys_json.rs`, which refuses both
+            // "hard-wired-1" and "hard-wired-0" for the same reason).
+            let culprits: Vec<&str> = gate.inputs.iter().map(String::as_str).collect();
+            return Err(HierarchyError::UnfoldableConstant {
+                instance: instance.to_string(),
+                port: culprits.join(","),
+                kind: gate.kind,
+            });
+        }
         gate.kind = match gate.kind {
             GateKind::Nor(_) => GateKind::Nor(inputs.len()),
             GateKind::Or(_) => GateKind::Or(inputs.len()),
             other => other,
         };
         gate.inputs = inputs;
+    }
+    // The clone's own child instances may bind one of the ports that was
+    // just tied off (e.g. this module passes its input straight through to
+    // a grandchild's port). That binding must follow the same constant,
+    // otherwise it survives as a `Signal` reference to a port the clone no
+    // longer declares -- a wire nothing drives that neither `validate` nor
+    // `flatten` would catch. The outer `specialise_constants` loop re-queues
+    // this clone (`pending.push`), so if this rewrite turns any of its own
+    // instances into a constant binding, that gets folded in turn.
+    for instance in &mut clone.instances {
+        for binding in instance.ports.values_mut() {
+            if let PortBinding::Signal(signal) = binding {
+                if let Some(&bit) = constants.get(signal.as_str()) {
+                    *binding = if bit { PortBinding::One } else { PortBinding::Zero };
+                }
+            }
+        }
     }
     alias_single_input_ors(&mut clone);
     Ok(clone)
@@ -579,5 +634,189 @@ mod tests {
     #[test]
     fn instance_prefixes_sanitise_paramod_names() {
         assert_eq!(instance_prefix(&["a".into(), "$paramod\\fa\\W=4".into()]), "a.__paramod_fa_W_4");
+    }
+
+    /// Regression for review finding "Critical 1": specialising a module
+    /// must rewrite bindings inside its OWN child instances too, not just
+    /// its own gates. `top` ties `mid`'s port `b` to zero; `mid` passes that
+    /// same signal straight into its own child instance `uleaf`'s port `a`.
+    /// The clone `mid@b=0` must carry `a: Zero` on `uleaf`, which the outer
+    /// `specialise_constants` loop then folds again into `leaf@a=0`.
+    #[test]
+    fn specialising_rewrites_the_clones_own_child_instance_bindings() {
+        let mut modules = BTreeMap::new();
+        modules.insert(
+            "leaf".to_string(),
+            Module {
+                inputs: vec!["a".into(), "c".into()],
+                outputs: vec!["y".into()],
+                gates: vec![gate("g0", &["a", "c"], "y", GateKind::Nor(2))],
+                instances: vec![],
+            },
+        );
+        modules.insert(
+            "mid".to_string(),
+            Module {
+                inputs: vec!["b".into(), "c".into()],
+                outputs: vec!["y".into()],
+                gates: vec![],
+                instances: vec![ModuleInstance {
+                    name: "uleaf".into(),
+                    module: "leaf".into(),
+                    ports: BTreeMap::from([
+                        ("a".to_string(), PortBinding::Signal("b".into())),
+                        ("c".to_string(), PortBinding::Signal("c".into())),
+                        ("y".to_string(), PortBinding::Signal("y".into())),
+                    ]),
+                }],
+            },
+        );
+        modules.insert(
+            "top".to_string(),
+            Module {
+                inputs: vec!["w".into()],
+                outputs: vec!["z".into()],
+                gates: vec![],
+                instances: vec![ModuleInstance {
+                    name: "umid".into(),
+                    module: "mid".into(),
+                    ports: BTreeMap::from([
+                        ("b".to_string(), PortBinding::Zero),
+                        ("c".to_string(), PortBinding::Signal("w".into())),
+                        ("y".to_string(), PortBinding::Signal("z".into())),
+                    ]),
+                }],
+            },
+        );
+        let design = HierarchicalNetlist { top: "top".into(), modules };
+        let specialised = design.specialise_constants().expect("specialises");
+
+        // The clone chain: mid@b=0 exists, and its own uleaf binding, having
+        // inherited a=0 from the tied-off `b`, was itself specialised into
+        // leaf@a=0. Without the fix, `uleaf` in `mid@b=0` keeps a stale
+        // `Signal("b")` binding and this second-level clone never appears.
+        let mid_clone = specialised.modules.get("mid@b=0").expect("mid@b=0 clone exists");
+        assert_eq!(mid_clone.instances.len(), 1);
+        assert_eq!(mid_clone.instances[0].module, "leaf@a=0");
+        assert!(specialised.modules.contains_key("leaf@a=0"), "the re-queued clone was specialised in turn");
+
+        // No module anywhere in the result still carries a constant
+        // binding: every tie was folded into a specialised module.
+        for module in specialised.modules.values() {
+            for instance in &module.instances {
+                for binding in instance.ports.values() {
+                    assert!(
+                        matches!(binding, PortBinding::Signal(_)),
+                        "instance `{}` still carries a constant binding after specialisation",
+                        instance.name
+                    );
+                }
+            }
+        }
+
+        specialised.flatten().expect("the fully specialised design flattens");
+    }
+
+    /// Regression for review finding "Critical 2": folding away every input
+    /// of a gate would leave a `Nor(0)`/`Or(0)`, which is a hard-wired
+    /// constant output. Nothing in this project can realise that (see
+    /// `Context::build_cell` in `yosys_json.rs`), so it must be refused by
+    /// name instead of silently produced.
+    #[test]
+    fn folding_all_inputs_of_a_gate_is_refused_by_name() {
+        let mut modules = BTreeMap::new();
+        modules.insert(
+            "nor2".to_string(),
+            Module {
+                inputs: vec!["a".into(), "b".into()],
+                outputs: vec!["y".into()],
+                gates: vec![gate("g0", &["a", "b"], "y", GateKind::Nor(2))],
+                instances: vec![],
+            },
+        );
+        modules.insert(
+            "top".to_string(),
+            Module {
+                inputs: vec![],
+                outputs: vec!["z".into()],
+                gates: vec![],
+                instances: vec![ModuleInstance {
+                    name: "u0".into(),
+                    module: "nor2".into(),
+                    ports: BTreeMap::from([
+                        ("a".to_string(), PortBinding::Zero),
+                        ("b".to_string(), PortBinding::Zero),
+                        ("y".to_string(), PortBinding::Signal("z".into())),
+                    ]),
+                }],
+            },
+        );
+        let design = HierarchicalNetlist { top: "top".into(), modules };
+        match design.specialise_constants() {
+            Err(HierarchyError::UnfoldableConstant { instance, .. }) => {
+                assert_eq!(instance, "u0");
+            }
+            other => panic!("expected an unfoldable constant, got {other:?}"),
+        }
+    }
+
+    /// Regression for review finding "Important 3": `rename` inside
+    /// `flatten_into` is keyed by *port* names, so a gate whose `name`
+    /// happens to equal one of its module's port names must not be
+    /// alias-rewritten -- only path-prefixed, like every other gate name.
+    #[test]
+    fn a_gate_named_after_a_port_is_not_aliased() {
+        let mut modules = BTreeMap::new();
+        modules.insert(
+            "inv2".to_string(),
+            Module {
+                inputs: vec!["a".into()],
+                outputs: vec!["y".into()],
+                // The gate's own name collides with its module's input port name.
+                gates: vec![gate("a", &["a"], "y", GateKind::Nor(1))],
+                instances: vec![],
+            },
+        );
+        modules.insert(
+            "top".to_string(),
+            Module {
+                inputs: vec!["x".into()],
+                outputs: vec!["z".into()],
+                gates: vec![],
+                instances: vec![ModuleInstance {
+                    name: "u0".into(),
+                    module: "inv2".into(),
+                    ports: BTreeMap::from([
+                        ("a".to_string(), PortBinding::Signal("x".into())),
+                        ("y".to_string(), PortBinding::Signal("z".into())),
+                    ]),
+                }],
+            },
+        );
+        let design = HierarchicalNetlist { top: "top".into(), modules };
+        let (flat, _) = design.flatten().expect("flattens");
+        assert_eq!(
+            flat.gates[0].name, "u0.a",
+            "the gate's own name must be path-prefixed, not aliased to the port binding"
+        );
+        assert_eq!(flat.gates[0].inputs, vec!["x".to_string()], "the gate's inputs still alias through the port binding");
+    }
+
+    /// Regression for review finding "Important 4": `flatten` must enforce
+    /// its `specialise_constants`-first precondition rather than silently
+    /// renaming a constant-tied port into a signal nothing drives.
+    #[test]
+    fn flatten_refuses_an_unspecialised_constant_binding() {
+        let mut design = two_level();
+        design.modules.get_mut("top").unwrap().instances[0]
+            .ports
+            .insert("a".to_string(), PortBinding::Zero);
+        match design.flatten() {
+            Err(HierarchyError::UnspecialisedConstant { instance, port }) => {
+                assert_eq!(instance, "u0");
+                assert_eq!(port, "a");
+            }
+            other => panic!("expected an unspecialised constant, got {other:?}"),
+        }
     }
 }
