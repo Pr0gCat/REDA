@@ -69,8 +69,11 @@ impl IdMap {
             .ok_or(RelocateError::UnmappedInstance(id))
     }
 
-    fn route(&self, id: RouteId) -> RouteId {
-        RouteId(id.0 + self.route_offset)
+    fn route(&self, id: RouteId) -> Result<RouteId, RelocateError> {
+        id.0
+            .checked_add(self.route_offset)
+            .map(RouteId)
+            .ok_or(RelocateError::RouteIdOverflow(id))
     }
 
     fn primitive(&self, id: PrimitiveId) -> Result<PrimitiveId, RelocateError> {
@@ -131,11 +134,11 @@ impl IdMap {
         })
     }
 
-    fn routed_sink(&self, sink: RoutedSinkId) -> RoutedSinkId {
-        RoutedSinkId {
-            route: self.route(sink.route),
+    fn routed_sink(&self, sink: RoutedSinkId) -> Result<RoutedSinkId, RelocateError> {
+        Ok(RoutedSinkId {
+            route: self.route(sink.route)?,
             ordinal: sink.ordinal,
-        }
+        })
     }
 
     fn delayed_owner(&self, owner: DelayedOwner) -> Result<DelayedOwner, RelocateError> {
@@ -143,7 +146,7 @@ impl IdMap {
             DelayedOwner::Primitive(primitive) => {
                 DelayedOwner::Primitive(self.primitive(primitive)?)
             }
-            DelayedOwner::Route(route) => DelayedOwner::Route(self.route(route)),
+            DelayedOwner::Route(route) => DelayedOwner::Route(self.route(route)?),
             DelayedOwner::InputBinding(port) => DelayedOwner::InputBinding(port),
         })
     }
@@ -173,6 +176,8 @@ impl IdMap {
 pub(crate) enum RelocateError {
     #[error("instance {0:?} is not present in the renumbering map")]
     UnmappedInstance(InstanceId),
+    #[error("route {0:?} overflows u32 after adding the route offset")]
+    RouteIdOverflow(RouteId),
 }
 
 /// Visits every `Anchor` an [`ExpandedPhysicalCandidate`] owns, in a fixed
@@ -282,12 +287,26 @@ pub(crate) fn anchors_of(candidate: &ExpandedPhysicalCandidate) -> Vec<Anchor> {
 /// to `map`, rebuilding every map keyed by one of them so keys and values
 /// never disagree. `PortId`s are untouched. Fails on the first instance
 /// `map` does not cover.
+///
+/// Precondition the caller must know about: the renumbered candidate's
+/// `instances` field (an [`InstanceGraph`](crate::compile::fragment_synth::instance_graph::InstanceGraph))
+/// carries a STALE `ValidatedTopology.fingerprint` on every
+/// `expanded.topology`. That fingerprint is a cached hash over a payload
+/// containing `PrimitiveId`/`ConnectionId` values
+/// (`crate::compile::fragment_synth::topology`'s `finish_topology` and its
+/// private `FingerprintPayload`), and `renumber` has no way to recompute it
+/// from outside that module -- it can only rewrite the ids the hash was
+/// already taken over. `verify.rs:274` compares this field structurally. A
+/// caller that needs a verifiable graph after renumbering must rebuild it
+/// with `InstanceGraph::one_to_one_with_implementations` rather than reusing
+/// the one `renumber` produced.
 pub(crate) fn renumber(
     candidate: &mut ExpandedPhysicalCandidate,
     map: &IdMap,
 ) -> Result<(), RelocateError> {
     renumber_instance_graph(candidate, map)?;
     renumber_placements(candidate, map)?;
+    renumber_boundaries(candidate, map)?;
     renumber_connections(candidate, map)?;
     renumber_routes(candidate, map)?;
     renumber_junctions(candidate, map)?;
@@ -373,6 +392,23 @@ fn renumber_instance_graph(
             }),
         };
     }
+    // `InstanceGraph::assignments` must stay sorted by `PhysicalSink`
+    // (`InstanceGraph::validate`'s canonical-order check) and the sort key
+    // for an `InstanceInput` sink embeds the instance id we just rewrote
+    // above. `map` is not required to be monotonic, so re-sort rather than
+    // assume the existing order still holds -- mirroring the
+    // `assignments.sort_by_key(...)` at the end of `InstanceGraph::with_variants`.
+    candidate
+        .instances
+        .assignments
+        .sort_by_key(|assignment| assignment.sink);
+    // `instances` does NOT need the same treatment. Its sort key is
+    // `(logical_gate, role, id)`, but `validate` also requires every
+    // `(logical_gate, role)` pair to be unique (`DuplicateInstanceRole`), and
+    // neither `logical_gate` nor `role` is touched by renumbering -- only
+    // `id`. So any two instances already differ in one of the first two
+    // components, the comparison never reaches `id`, and the vector's order
+    // is unaffected by however `map` permutes ids.
     Ok(())
 }
 
@@ -392,6 +428,24 @@ fn renumber_placements(
     Ok(())
 }
 
+/// Remaps `boundary.delayed.owner` the same way [`renumber_placements`]
+/// remaps a placement's -- `DelayedOwner::Primitive`/`DelayedOwner::Route`
+/// both carry an identity `renumber` rewrites. `boundaries`' key
+/// (`PhysicalEndpointId`, always `PrimaryInput`/`DeclaredOutput` here) is a
+/// `PortId` and is never renumbered, so the map itself is never rebuilt --
+/// only mutated in place.
+fn renumber_boundaries(
+    candidate: &mut ExpandedPhysicalCandidate,
+    map: &IdMap,
+) -> Result<(), RelocateError> {
+    for boundary in candidate.boundaries.values_mut() {
+        if let Some(delayed) = &mut boundary.delayed {
+            delayed.owner = map.delayed_owner(delayed.owner)?;
+        }
+    }
+    Ok(())
+}
+
 fn renumber_connections(
     candidate: &mut ExpandedPhysicalCandidate,
     map: &IdMap,
@@ -401,8 +455,8 @@ fn renumber_connections(
         binding.id = map.connection(binding.id)?;
         binding.source = map.endpoint(binding.source)?;
         binding.landing = map.endpoint(binding.landing)?;
-        binding.route = map.route(binding.route);
-        binding.sink = map.routed_sink(binding.sink);
+        binding.route = map.route(binding.route)?;
+        binding.sink = map.routed_sink(binding.sink)?;
         rebuilt.insert(binding.id, binding);
     }
     candidate.connections = rebuilt;
@@ -415,12 +469,12 @@ fn renumber_routes(
 ) -> Result<(), RelocateError> {
     let mut rebuilt = BTreeMap::new();
     for (_, mut tree) in std::mem::take(&mut candidate.routes) {
-        tree.id = map.route(tree.id);
+        tree.id = map.route(tree.id)?;
         tree.source = map.endpoint(tree.source)?;
         for branch in &mut tree.branches {
-            branch.sink = map.routed_sink(branch.sink);
+            branch.sink = map.routed_sink(branch.sink)?;
             branch.target = map.route_target(branch.target)?;
-            branch.terminal.sink = map.routed_sink(branch.terminal.sink);
+            branch.terminal.sink = map.routed_sink(branch.terminal.sink)?;
             branch.terminal.delayed_owner = branch
                 .terminal
                 .delayed_owner
@@ -535,5 +589,111 @@ mod tests {
             .all(|c| c.sink.route == c.route && c.route.0 >= 50));
         assert_eq!(after.instances.instances.len(), before.instances.instances.len());
         after.validate_shape().expect("renumbered candidate keeps its shape");
+    }
+
+    #[test]
+    fn renumber_remaps_boundary_delayed_owner() {
+        use crate::compile::routing::DelayedComponent;
+
+        let before = full_adder_candidate();
+        let map = IdMap {
+            instances: before
+                .instances
+                .instances
+                .iter()
+                .map(|i| (i.id, InstanceId(i.id.0 + 100)))
+                .collect(),
+            route_offset: 50,
+        };
+        let boundary_key = *before
+            .boundaries
+            .keys()
+            .next()
+            .expect("full adder candidate has at least one boundary");
+        let primitive_id = *before
+            .placements
+            .keys()
+            .next()
+            .expect("full adder candidate has at least one placement");
+        let route_id = *before
+            .routes
+            .keys()
+            .next()
+            .expect("full adder candidate has at least one route");
+
+        // A boundary delayed on a primitive: `.owner` must follow the same
+        // instance remapping `renumber_placements` already applies to a
+        // placement's own `delayed.owner`.
+        let mut primitive_owned = before.clone();
+        primitive_owned
+            .boundaries
+            .get_mut(&boundary_key)
+            .unwrap()
+            .delayed = Some(DelayedComponent {
+            at: Anchor { x: 0, y: 0, z: 0 },
+            owner: DelayedOwner::Primitive(primitive_id),
+        });
+        renumber(&mut primitive_owned, &map).expect("renumbers");
+        let expected_primitive = PrimitiveId {
+            instance: InstanceId(primitive_id.instance.0 + 100),
+            node: primitive_id.node,
+        };
+        assert_eq!(
+            primitive_owned.boundaries[&boundary_key]
+                .delayed
+                .as_ref()
+                .unwrap()
+                .owner,
+            DelayedOwner::Primitive(expected_primitive),
+        );
+
+        // A boundary delayed on a route: `.owner` must follow the same
+        // route_offset every other `RouteId` in the candidate gets.
+        let mut route_owned = before.clone();
+        route_owned
+            .boundaries
+            .get_mut(&boundary_key)
+            .unwrap()
+            .delayed = Some(DelayedComponent {
+            at: Anchor { x: 0, y: 0, z: 0 },
+            owner: DelayedOwner::Route(route_id),
+        });
+        renumber(&mut route_owned, &map).expect("renumbers");
+        assert_eq!(
+            route_owned.boundaries[&boundary_key]
+                .delayed
+                .as_ref()
+                .unwrap()
+                .owner,
+            DelayedOwner::Route(RouteId(route_id.0 + 50)),
+        );
+    }
+
+    #[test]
+    fn renumbering_resorts_assignments_after_a_non_monotonic_remap() {
+        let before = full_adder_candidate();
+        let mut after = before.clone();
+        // Deliberately non-monotonic: reverses the ids. `IdMap`'s contract
+        // never requires monotonicity, but the diff's own test above only
+        // ever used `id.0 + 100`, which happens to be monotonic and so can
+        // never exercise this.
+        let ids: Vec<InstanceId> = before.instances.instances.iter().map(|i| i.id).collect();
+        let map = IdMap {
+            instances: ids
+                .iter()
+                .copied()
+                .zip(ids.iter().copied().rev())
+                .collect(),
+            route_offset: 50,
+        };
+        renumber(&mut after, &map).expect("renumbers");
+
+        let (netlist, _) = crate::circuits::full_adder::build_full_adder_netlist();
+        let lowered = crate::compile::lowering::lower_optimised(&netlist)
+            .expect("full adder netlist lowers");
+        after
+            .instances
+            .validate(&lowered)
+            .expect("renumbered instance graph keeps canonical sink order");
     }
 }

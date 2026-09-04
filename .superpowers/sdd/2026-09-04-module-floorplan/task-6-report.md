@@ -171,3 +171,143 @@ Already covered by the brief's own first test body, which I implemented verbatim
 2. One field renumbered beyond the brief's literal list (`ObservationSite.logical_owner`)
    — documented above with the reasoning; flagging in case the brief's omission was
    deliberate for a reason I'm not seeing rather than an oversight.
+
+## Fix round 1
+
+Two review findings on the original diff, both latent (only triggerable by callers not yet
+written) and both fixed here, each with a RED-then-GREEN test. Two small cleanups done
+alongside per the review's instruction.
+
+### Finding 1: `renumber` never rewrote `BoundaryPlacement.delayed.owner`
+
+`for_each_anchor`'s boundary loop shifts `.delayed.at` (a coordinate, translate's job) but
+nothing in `renumber` ever touched `.delayed.owner` (an identity, `DelayedOwner::Primitive`
+or `DelayedOwner::Route`, either of which embeds an id `renumber` rewrites everywhere else).
+`renumber_placements` already does exactly this for a *placement's* `delayed.owner`
+(`delayed.owner = map.delayed_owner(delayed.owner)?;`) — the boundary case was a plain
+asymmetry, not a deliberate omission.
+
+**Fix:** added `renumber_boundaries` (`relocate.rs`, next to `renumber_placements`), called
+from `renumber` right after `renumber_placements`. It walks `candidate.boundaries.values_mut()`
+and remaps `delayed.owner` through the same `map.delayed_owner(...)` placements already use.
+`boundaries`' key (`PhysicalEndpointId`, always `PrimaryInput`/`DeclaredOutput` here) is a
+`PortId` and is never renumbered, so — unlike every other `renumber_*` helper — this one
+never rebuilds the map, only mutates values in place.
+
+**Test:** `renumber_remaps_boundary_delayed_owner` (`relocate.rs::tests`). Takes a real
+`full_adder_candidate()`, picks one existing boundary, and directly sets its `.delayed` to
+`DelayedComponent { owner: DelayedOwner::Primitive(primitive_id), .. }` (a real primitive id
+from the candidate's own placements) in one clone, and to
+`DelayedComponent { owner: DelayedOwner::Route(route_id), .. }` (a real route id from the
+candidate's own routes) in a second clone. Renumbers both with the same `IdMap` the existing
+`renumbering_shifts_instances_and_routes_consistently` test uses (`id.0 + 100` instances,
+`route_offset: 50`), then asserts the boundary's `delayed.owner` moved to the expected
+remapped id in each case. Constructed the boundary state directly rather than trying to
+compile a candidate that naturally produces a primitive/route-owned boundary, per the task's
+own suggestion — this is a unit test of `renumber`, not of the seed.
+
+### Finding 2: `renumber_instance_graph` never re-sorted `assignments`
+
+`InstanceGraph::assignments` must stay sorted by `PhysicalSink`
+(`InstanceGraph::validate`'s `NonCanonicalAssignmentOrder` check), and for two
+`InstanceInput` sinks that order is decided by the instance id embedded in the sink —
+exactly the field `renumber_instance_graph` rewrites in place without ever re-sorting
+afterward. `IdMap`'s contract never requires the mapping to be monotonic (nothing checks or
+documents that), so a non-monotonic map silently leaves `assignments` in the *old* order,
+which no longer matches the *new* ids' order. The original diff's own test used `id.0 + 100`
+for every instance, which is monotonic and therefore never exercises this.
+
+**Fix:** added `candidate.instances.assignments.sort_by_key(|assignment| assignment.sink);`
+at the end of `renumber_instance_graph`, right after the assignment-rewriting loop —
+mirroring the `assignments.sort_by_key(|assignment| assignment.sink)` at the end of
+`InstanceGraph::with_variants` (`instance_graph.rs`).
+
+**Did `instances` need the same treatment? Conclusion: no**, and I verified this myself
+rather than taking the review's framing on faith. `instances`' sort key is
+`(logical_gate, role, id)`, checked by `validate`'s `NonCanonicalInstanceOrder` guard
+(`instances.windows(2).any(|pair| (g0,r0,id0) >= (g1,r1,id1))`). `validate` separately
+requires every `(logical_gate, role)` pair to be unique across `instances`
+(`roles.insert((instance.logical_gate, instance.role))`, erroring
+`DuplicateInstanceRole` on a repeat) — so for any two distinct instances in a valid graph,
+`logical_gate` or `role` already differs. `renumber` never touches either field, only `id`.
+That means the 3-tuple comparison between any two entries always resolves on its first or
+second component and never falls through to comparing `id` — so however non-monotonically
+`map` permutes ids, the relative order of the `(logical_gate, role, id)` tuples, and
+therefore the vector's sortedness, is unaffected. Left `instances` unsorted and added a
+comment in `renumber_instance_graph` recording this reasoning in place, so a future reader
+doesn't have to re-derive it.
+
+**Test:** `renumbering_resorts_assignments_after_a_non_monotonic_remap` (`relocate.rs::tests`).
+Builds an `IdMap` that reverses the full adder candidate's instance ids
+(`ids.iter().zip(ids.iter().rev())`) — deliberately non-monotonic, unlike every existing
+test's `id.0 + 100` map — renumbers with it, then calls
+`after.instances.validate(&lowered)` where `lowered` is the same lowered full-adder netlist
+`seed::tests::certified_full_adder()` compiles the candidate from
+(`crate::circuits::full_adder::build_full_adder_netlist()` through `lower_optimised`), per
+the review's instruction that `validate` must be given the netlist the graph was built from.
+Asserts `validate` succeeds.
+
+### Small fix: `IdMap::route` now checked
+
+`RouteId(id.0 + self.route_offset)` was unchecked `u32` addition; every comparable
+identity-arithmetic site in the codebase (e.g. the duplicate-id derivation in
+`InstanceGraph::with_variants`, `instance_graph.rs:270-277`) uses `checked_add(...).ok_or(...)`.
+Changed `IdMap::route` to
+`id.0.checked_add(self.route_offset).map(RouteId).ok_or(RelocateError::RouteIdOverflow(id))`,
+added the new `RelocateError::RouteIdOverflow(RouteId)` variant, and threaded the now-fallible
+`route`/`routed_sink` through every call site (`delayed_owner`, `renumber_connections`,
+`renumber_routes`) with `?`. No behavioural change for any id that doesn't actually overflow
+`u32`, which is every case any existing or new test exercises.
+
+### Small fix: doc comment on `renumber` recording the fingerprint-staleness precondition
+
+Added a doc comment on `renumber` stating plainly: the renumbered candidate's `instances`
+field carries a STALE `ValidatedTopology.fingerprint`, because that fingerprint is a cached
+hash over a payload containing `PrimitiveId`/`ConnectionId` values
+(`topology.rs`'s `finish_topology`/`FingerprintPayload`, both private to that module) and
+`renumber` has no way to recompute it from outside `topology.rs` — it can only rewrite the
+ids the hash was already taken over. Named `verify.rs:274` as the structural comparison that
+reads this field, and stated that a caller needing a verifiable graph after renumbering must
+rebuild it with `InstanceGraph::one_to_one_with_implementations` rather than reuse the one
+`renumber` produced. This documents the finding the original report already raised in prose;
+per this round's brief, the report's own (separately-corrected) claim about what the
+fingerprint round-trip test would or wouldn't catch was left untouched.
+
+### Deferred by ruling
+
+The report's claim that the fingerprint round-trip test in
+`translate_moves_every_anchor_by_the_offset_and_nothing_else` would catch a field `translate`
+skips is inaccurate (a field neither `translate` nor `anchors_of` visits returns to its
+original value trivially under a round-trip, so a skipped field would not be caught by that
+test). Left the report's prose as-is per this round's explicit instruction not to touch it;
+the correction is recorded elsewhere.
+
+### Commands run
+
+- `cargo build --lib` — clean after the checked-`route` change, confirming the `?`
+  threading compiles.
+- `cargo test --lib compile::fragment_synth::relocate` — RED check: with
+  `renumber_boundaries` uncalled and the `assignments.sort_by_key` removed, 3 passed, 2
+  failed (`renumber_remaps_boundary_delayed_owner`: wrong `Primitive` id in the boundary's
+  `delayed.owner`; `renumbering_resorts_assignments_after_a_non_monotonic_remap`:
+  `NonCanonicalAssignmentOrder` from `InstanceGraph::validate`). Restored the fix from a
+  backup copy of the file and confirmed it was byte-identical to what's committed.
+- `cargo test --lib compile::fragment_synth::relocate` — GREEN: 5 passed, 0 failed (the
+  original 3 plus the 2 new ones).
+- `cargo test --lib compile::fragment_synth::instance_graph` — 10 passed, 0 failed, all
+  pre-existing, unaffected by the `assignments` re-sort (their own maps stay monotonic by
+  construction).
+- `cargo check --lib --tests` — compiles clean, 24 warnings (was 23 with the original
+  diff's own baseline check; +1 for the new `renumber_boundaries` function, currently only
+  reachable from `#[cfg(test)]`, same as every other `renumber_*` helper).
+
+### Global constraints check (this round)
+
+- `SynthesisInput`, `compile_fragment_synth`, `ExpandedPhysicalCandidate`'s existing fields,
+  `PhysicalEndpointId`, legacy front doors: untouched.
+- `fingerprint()`'s output: unaffected — `renumber` and `renumber_boundaries` don't touch
+  anchors, and no fingerprint test was modified.
+- Determinism: `BTreeMap` only; no `HashMap`/`HashSet` introduced. `renumber_boundaries`
+  mutates the existing `BTreeMap`'s values in place rather than rebuilding it, since its key
+  never changes.
+- Rust 2021, no new dependencies.
