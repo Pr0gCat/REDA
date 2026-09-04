@@ -1029,4 +1029,163 @@ mod tests {
             }
         }
     }
+
+    // ---------------------------------------------------------------------
+    // Review finding on Task 5: `inv`/`full_adder`/`ripple_adder` are built
+    // only from `GateKind::Nor`/`Or`, which `polarity::assign_polarities`
+    // leaves entirely on the positive rail (its `eligible` list only ever
+    // contains non-realisable gates) -- so every test above takes
+    // `lower_with_assignment_and_provenance`'s trivial all-positive
+    // "compatibility" branch. The mixed-polarity branch, and the
+    // positive-rail correction inside it that is the *only* thing keeping a
+    // per-module-lowered child's declared output from handing its parent an
+    // inverted signal (`lowering.rs`, the `nor_named` re-materialisation
+    // guarded by `polarity == Negative && netlist.outputs.contains(...)`),
+    // was never exercised. This fixture forces it.
+    // ---------------------------------------------------------------------
+
+    use crate::compile::polarity::assign_polarities;
+    use crate::compile::topology::SignalPolarity;
+
+    /// Like `eval::evaluate` above, but understands every `GateKind` via
+    /// `GateKind::evaluate` instead of only `Nor`/`Or`. `eval::evaluate` is
+    /// deliberately restricted to what `NetlistBuilder`'s reduction helpers
+    /// produce, so it cannot score this test's *unlowered* flattening, which
+    /// still carries the original `And`/`Nand` gates the fixture below
+    /// declares directly (not through `NetlistBuilder`, which has no helper
+    /// that emits a non-realisable kind other than the low-level, crate-only
+    /// `cell`). Kept local: nothing else in this file needs a general-kind
+    /// oracle.
+    fn evaluate_any_kind(netlist: &Netlist, assignment: &BTreeMap<String, bool>) -> BTreeMap<String, bool> {
+        let mut values: BTreeMap<String, bool> = BTreeMap::new();
+        for name in &netlist.inputs {
+            values.insert(name.clone(), assignment[name]);
+        }
+        let order = netlist.combinational_order().expect("evaluate_any_kind: netlist must be acyclic");
+        for index in order {
+            let gate = &netlist.gates[index];
+            let inputs: Vec<bool> = gate.inputs.iter().map(|input| values[input]).collect();
+            values.insert(gate.output.clone(), gate.kind.evaluate(&inputs));
+        }
+        values
+    }
+
+    /// `leaf`: `m = a AND b` (a declared output), `y = m NAND c` (a declared
+    /// output). `Nand`'s positive expansion wants `!m`
+    /// (`positive_expansion_for(GateKind::Nand)` in `topology.rs`): if `m`
+    /// stays on its positive rail, realising `!m` for `y` costs a fresh
+    /// inverter; if `m` is lowered onto its *negative* rail instead, `y`
+    /// consumes that rail directly for free, and `m`'s own positive rail
+    /// (still required -- `m` is a declared output) is recovered by the
+    /// correction instead. That trade swaps one `Nor(2)` (realising `m`
+    /// positive) for one `Merge(2)` (realising `m` negative) at equal gate
+    /// count -- a strict *area* win, since `merge_footprint_area(2) == 6 <
+    /// nor_footprint_area(2) == 9` -- so `assign_polarities`'s local search
+    /// always takes it. Verified directly below (`assign_polarities` is
+    /// called on the leaf's own boundary netlist and its result checked),
+    /// not inferred from gate counts after the fact.
+    #[test]
+    fn a_declared_output_lowered_onto_its_negative_rail_still_reaches_the_parent_positive() {
+        let leaf = Module {
+            inputs: vec!["a".into(), "b".into(), "c".into()],
+            outputs: vec!["m".into(), "y".into()],
+            gates: vec![
+                gate("g0", &["a", "b"], "m", GateKind::And),
+                gate("g1", &["m", "c"], "y", GateKind::Nand),
+            ],
+            instances: vec![],
+        };
+
+        // Confirm by construction, before asserting anything else, that
+        // this fixture actually takes the branch the test targets: the
+        // gate producing the declared output `m` is really assigned the
+        // negative rail, and `y` has no reason to flip.
+        let boundary = Netlist { inputs: leaf.inputs.clone(), outputs: leaf.outputs.clone(), gates: leaf.gates.clone() };
+        let assignment = assign_polarities(&boundary).expect("assigns");
+        assert_eq!(
+            assignment,
+            vec![SignalPolarity::Negative, SignalPolarity::Positive],
+            "this fixture must force `m` (a declared output) onto the negative rail for the test below \
+             to actually exercise the positive-rail correction; if this fails, the cost trade the doc \
+             comment describes no longer holds and the fixture needs redesigning, not weakening"
+        );
+
+        let mut modules = BTreeMap::new();
+        modules.insert("leaf".to_string(), leaf.clone());
+        let instance = |name: &str, suffix: &str| ModuleInstance {
+            name: name.into(),
+            module: "leaf".into(),
+            ports: BTreeMap::from([
+                ("a".to_string(), PortBinding::Signal(format!("a{suffix}"))),
+                ("b".to_string(), PortBinding::Signal(format!("b{suffix}"))),
+                ("c".to_string(), PortBinding::Signal(format!("c{suffix}"))),
+                ("m".to_string(), PortBinding::Signal(format!("m{suffix}"))),
+                ("y".to_string(), PortBinding::Signal(format!("y{suffix}"))),
+            ]),
+        };
+        modules.insert(
+            "top".to_string(),
+            Module {
+                inputs: vec!["a0".into(), "b0".into(), "c0".into(), "a1".into(), "b1".into(), "c1".into()],
+                outputs: vec!["m0".into(), "y0".into(), "m1".into(), "y1".into()],
+                gates: vec![],
+                instances: vec![instance("u0", "0"), instance("u1", "1")],
+            },
+        );
+        let design = HierarchicalNetlist { top: "top".into(), modules };
+
+        let lowered = lower_hierarchy(&design).expect("lowers");
+
+        // A non-realisable gate always expands into strictly more physical
+        // gates, so the leaf's lowered form growing confirms it was really
+        // expanded, not passed through unchanged.
+        assert!(
+            lowered.modules["leaf"].gates.len() > leaf.gates.len(),
+            "expanding And/Nand must add gates: {} -> {}",
+            leaf.gates.len(),
+            lowered.modules["leaf"].gates.len()
+        );
+        assert!(lowered.modules["leaf"].gates.iter().all(|g| matches!(g.kind, GateKind::Nor(_) | GateKind::Or(_))));
+
+        // Two instances of one module -- now lowered under a real polarity
+        // decision instead of the trivial all-positive compatibility path --
+        // still lower to the identical gate-kind sequence, matched through
+        // `GatePath`. Same property as `two_instances_of_one_module_lower_identically`.
+        let leaf_lowered_kinds: Vec<GateKind> = lowered.modules["leaf"].gates.iter().map(|g| g.kind).collect();
+        for path in [["u0"], ["u1"]] {
+            let kinds: Vec<GateKind> = lowered
+                .paths
+                .iter()
+                .enumerate()
+                .filter(|(_, p)| p.path == path)
+                .map(|(i, _)| lowered.flat.gates[i].kind)
+                .collect();
+            assert_eq!(kinds, leaf_lowered_kinds, "instance {path:?} must reproduce the leaf's own lowered gates exactly");
+        }
+
+        // The child's declared output really is on the positive rail --
+        // proved by evaluating, not by reading gate kinds. If the
+        // positive-rail correction were missing, `m0`/`m1` would come out
+        // inverted here and this would disagree with the unlowered ground
+        // truth on every mask where `a & b` is true.
+        let (unlowered_flat, _) = design.flatten().expect("the unlowered design flattens");
+        let top_inputs = &unlowered_flat.inputs;
+        assert!(top_inputs.len() <= 8, "exhaustive enumeration below assumes a small input count");
+        for mask in 0u32..(1 << top_inputs.len()) {
+            let assignment: BTreeMap<String, bool> = top_inputs
+                .iter()
+                .enumerate()
+                .map(|(i, name)| (name.clone(), mask & (1 << i) != 0))
+                .collect();
+            let before = evaluate_any_kind(&unlowered_flat, &assignment);
+            let after = eval::evaluate(&lowered.flat, &assignment);
+            for output in &unlowered_flat.outputs {
+                assert_eq!(
+                    before[output], after[output],
+                    "output `{output}` disagrees for input {assignment:?} -- a missing positive-rail \
+                     correction would surface here as an inverted `m0`/`m1`"
+                );
+            }
+        }
+    }
 }
