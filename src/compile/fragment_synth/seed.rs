@@ -435,7 +435,7 @@ impl SparseSeedBuilder {
         candidate.bind_pin_contracts(input.lowered)?;
         crate::compile::planner::validate_port_placements(input.lowered, &candidate.pins)
             .map_err(SeedError::InvalidPins)?;
-        let placement_analysis = analyse_instance_dag(&candidate.instances)
+        let placement_analysis = analyse_instance_dag(&candidate.instances, &BTreeMap::new())
             .map_err(|_| SeedError::Incomplete("seed placement analysis"))?;
         let placement_plan = services
             .placer
@@ -444,6 +444,7 @@ impl SparseSeedBuilder {
                     graph: &candidate.instances,
                     analysis: &placement_analysis,
                     pins: &candidate.pin_contracts,
+                    block_facts: &BTreeMap::new(),
                 },
                 repairs,
             )

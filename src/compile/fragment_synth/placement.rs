@@ -94,6 +94,22 @@ pub(crate) struct SeedPlacementRequest<'a> {
     pub graph: &'a InstanceGraph,
     pub analysis: &'a SeedPlacementAnalysis,
     pub pins: &'a BTreeMap<PhysicalEndpointId, PortPin>,
+    pub block_facts: &'a BTreeMap<InstanceId, BlockFacts>,
+}
+
+/// Per-block facts the placer needs, supplied by the seed: the block's
+/// fixed east-facing footprint and its certified delay.  A block is an
+/// opaque box -- it has no topology for the placer to measure, so these
+/// facts (and `block_delays` passed to [`analyse_instance_dag`]) replace
+/// what `macro_envelope`/`topology_delay_ticks` derive for an ordinary
+/// instance.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BlockFacts {
+    /// `max.x - min.x + 1` of the block's certified layout.
+    pub width: i32,
+    /// `max.z - min.z + 1` of the block's certified layout.
+    pub depth: i32,
+    pub delay_ticks: u64,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -337,12 +353,19 @@ impl TopologyAwareSeedPlacer {
         let intervals = net_intervals(request.graph, analysis);
         let tracks = colour_intervals(&intervals);
         let track_laterals = track_laterals(request.graph, request.pins, frame, &tracks);
-        let envelopes = request
+        let mut envelopes = request
             .graph
             .instances
             .iter()
             .map(|instance| macro_envelope(instance).map(|size| (instance.id, size)))
             .collect::<Result<BTreeMap<_, _>, _>>()?;
+        for block in &request.graph.blocks {
+            let facts = *request
+                .block_facts
+                .get(&block.id)
+                .expect("block facts supplied for every block in the graph");
+            envelopes.insert(block.id, block_envelope(facts));
+        }
 
         let mut lanes = initial_lanes(request.graph, &track_laterals, analysis);
         barycentric_sweep(analysis, &mut lanes, true);
@@ -374,22 +397,30 @@ impl TopologyAwareSeedPlacer {
                 choose_instance_facing(instance, origin, source, target, frame.forward)?,
             );
         }
+        // A block is an opaque, already-certified layout: it keeps its
+        // fixed east-facing orientation, and neither `choose_instance_facing`
+        // nor `macro_output_direction` apply -- both read `expanded.topology`,
+        // which a block does not have.
+        for block in &request.graph.blocks {
+            facings.insert(block.id, CellFacing::EAST);
+        }
 
         let bounds = request
             .graph
             .instances
             .iter()
-            .map(|instance| {
+            .map(|instance| instance.id)
+            .chain(request.graph.blocks.iter().map(|block| block.id))
+            .map(|id| {
                 (
-                    instance.id,
-                    envelopes[&instance.id].oriented_bounds(facings[&instance.id], frame.forward),
+                    id,
+                    envelopes[&id].oriented_bounds(facings[&id], frame.forward),
                 )
             })
             .collect::<BTreeMap<_, _>>();
         let mut level_bounds = BTreeMap::<u64, MacroBounds>::new();
-        for instance in &request.graph.instances {
-            let level = analysis.nodes[&instance.id].forward_level;
-            let instance_bounds = bounds[&instance.id];
+        for (&id, &instance_bounds) in &bounds {
+            let level = analysis.nodes[&id].forward_level;
             level_bounds
                 .entry(level)
                 .and_modify(|level_bounds| {
@@ -486,9 +517,8 @@ impl TopologyAwareSeedPlacer {
         }
         let analysis = &folded;
         let mut level_bounds = BTreeMap::<u64, MacroBounds>::new();
-        for instance in &request.graph.instances {
-            let level = analysis.nodes[&instance.id].forward_level;
-            let instance_bounds = bounds[&instance.id];
+        for (&id, &instance_bounds) in &bounds {
+            let level = analysis.nodes[&id].forward_level;
             level_bounds
                 .entry(level)
                 .and_modify(|level_bounds| {
@@ -639,14 +669,13 @@ impl TopologyAwareSeedPlacer {
         }
 
         let mut instances = BTreeMap::new();
-        for instance in &request.graph.instances {
-            let (forward, lateral) = frame_origins[&instance.id];
+        for (&id, &(forward, lateral)) in &frame_origins {
             let origin = frame_to_world(frame, forward, lateral);
             instances.insert(
-                instance.id,
+                id,
                 PreferredInstancePose {
                     preferred_origin: origin,
-                    facing: facings[&instance.id],
+                    facing: facings[&id],
                 },
             );
         }
@@ -1525,11 +1554,16 @@ fn initial_lanes(
             counts
         },
     );
-    graph.instances.iter().map(|instance| {
+    graph
+        .instances
+        .iter()
+        .map(|instance| instance.id)
+        .chain(graph.blocks.iter().map(|block| block.id))
+        .map(|id| {
         let mut values = Vec::new();
         for assignment in graph.assignments.iter().filter(|assignment| {
-            matches!(assignment.sink, PhysicalSink::InstanceInput { instance: sink, .. } if sink == instance.id)
-                || matches!(&assignment.driver, PhysicalDriver::Instance(driver) if instance_driver_owner(driver) == instance.id)
+            matches!(assignment.sink, PhysicalSink::InstanceInput { instance: sink, .. } if sink == id)
+                || matches!(&assignment.driver, PhysicalDriver::Instance(driver) if instance_driver_owner(driver) == id)
         }) {
             let critical = match (&assignment.driver, assignment.sink) {
                 (PhysicalDriver::Instance(driver), PhysicalSink::InstanceInput { instance: sink, .. }) => analysis.edges.iter().any(|edge| edge.source == instance_driver_owner(driver) && edge.sink == sink && edge.structural_slack_ticks == 0),
@@ -1539,7 +1573,7 @@ fn initial_lanes(
             values.extend(std::iter::repeat_n(track_laterals[&assignment.signal], weight));
         }
         values.sort();
-        (instance.id, values.get(values.len() / 2).copied().unwrap_or(0))
+        (id, values.get(values.len() / 2).copied().unwrap_or(0))
     }).collect()
 }
 
@@ -1663,6 +1697,20 @@ fn macro_envelope(instance: &Instance) -> Result<MacroEnvelope, SeedPlacementErr
         by_facing[usize::from(facing.index())] = bounds.unwrap_or_default();
     }
     Ok(MacroEnvelope { by_facing })
+}
+
+/// A block's envelope: a plain `width`x`depth` box, identical for all four
+/// facings since a block always keeps its certified, east-facing layout.
+fn block_envelope(facts: BlockFacts) -> MacroEnvelope {
+    let bounds = HorizontalBounds {
+        min_x: 0,
+        max_x: facts.width - 1,
+        min_z: 0,
+        max_z: facts.depth - 1,
+    };
+    MacroEnvelope {
+        by_facing: [bounds; 4],
+    }
 }
 
 fn choose_instance_facing(
@@ -1927,18 +1975,20 @@ fn plan_fingerprint(
 
 pub(crate) fn analyse_instance_dag(
     graph: &InstanceGraph,
+    block_delays: &BTreeMap<InstanceId, u64>,
 ) -> Result<SeedPlacementAnalysis, SeedPlacementError> {
-    let ids = graph
+    let all_ids = graph
         .instances
         .iter()
         .map(|instance| instance.id)
-        .collect::<BTreeSet<_>>();
-    if ids.len() != graph.instances.len() {
+        .chain(graph.blocks.iter().map(|block| block.id))
+        .collect::<Vec<_>>();
+    let ids = all_ids.iter().copied().collect::<BTreeSet<_>>();
+    if ids.len() != all_ids.len() {
         let mut seen = BTreeSet::new();
-        let instance = graph
-            .instances
+        let instance = all_ids
             .iter()
-            .map(|instance| instance.id)
+            .copied()
             .find(|instance| !seen.insert(*instance))
             .expect("different instance and identity counts imply a duplicate");
         return Err(SeedPlacementError::DuplicateInstance { instance });
@@ -2018,6 +2068,13 @@ pub(crate) fn analyse_instance_dag(
             topology_delay_ticks(instance.id, &instance.expanded.topology)
                 .map(|delay| (instance.id, delay))
         })
+        .chain(graph.blocks.iter().map(|block| {
+            block_delays
+                .get(&block.id)
+                .copied()
+                .map(|delay| (block.id, delay))
+                .ok_or(SeedPlacementError::UnresolvedTopology { instance: block.id })
+        }))
         .collect::<Result<BTreeMap<_, _>, _>>()?;
 
     let mut forward_levels = BTreeMap::<InstanceId, u64>::new();
@@ -2337,8 +2394,9 @@ mod tests {
 
     use super::{
         analyse_instance_dag, choose_instance_facing, colour_intervals, derive_frame, hint_penalty,
-        legalize_laterals, EdgeFacts, LayoutOwner, LayoutRepair, MacroBounds, NetInterval,
-        SeedPlacementError, SeedPlacementRequest, SeedPlacer, TopologyAwareSeedPlacer, TRACK_PITCH,
+        legalize_laterals, BlockFacts, EdgeFacts, LayoutOwner, LayoutRepair, MacroBounds,
+        NetInterval, SeedPlacementError, SeedPlacementRequest, SeedPlacer, TopologyAwareSeedPlacer,
+        TRACK_PITCH,
     };
 
     fn nor(output: &str, inputs: &[&str]) -> Gate {
@@ -2355,6 +2413,47 @@ mod tests {
             &Library::default_library(),
         )
         .unwrap()
+    }
+
+    #[test]
+    fn a_block_is_a_level_node_with_its_certified_delay_and_a_box_envelope() {
+        use crate::compile::fragment_synth::instance_graph::tests::{
+            planning_with_one_block, specs_of,
+        };
+        let (planning, owned) = planning_with_one_block();
+        let graph =
+            InstanceGraph::with_blocks(&planning, &Library::default_library(), &specs_of(&owned))
+                .unwrap();
+        let block = graph.blocks[0].id;
+        let delays = BTreeMap::from([(block, 37u64)]);
+        let analysis = analyse_instance_dag(&graph, &delays).expect("analyses");
+        assert_eq!(analysis.nodes[&block].forward_level, 0);
+        assert_eq!(analysis.nodes[&InstanceId(0)].forward_level, 1);
+        assert_eq!(analysis.nodes[&block].head_ticks, 37);
+        assert!(analysis.nodes[&InstanceId(0)].head_ticks > 37);
+        let facts = BTreeMap::from([(
+            block,
+            BlockFacts {
+                width: 30,
+                depth: 20,
+                delay_ticks: 37,
+            },
+        )]);
+        let plan = TopologyAwareSeedPlacer
+            .plan(SeedPlacementRequest {
+                graph: &graph,
+                analysis: &analysis,
+                pins: &BTreeMap::new(),
+                block_facts: &facts,
+            })
+            .expect("plans");
+        let pose = plan.instances[&block];
+        assert_eq!(pose.facing, CellFacing::EAST);
+        let gate = plan.instances[&InstanceId(0)];
+        assert!(
+            gate.preferred_origin.x >= pose.preferred_origin.x + 30,
+            "the gate's column starts after the block's width plus a channel"
+        );
     }
 
     fn primitive_source(instance: u32) -> PhysicalEndpointId {
@@ -2376,12 +2475,14 @@ mod tests {
     #[test]
     fn canonical_layout_repairs_move_exact_owners_and_bind_the_fingerprint() {
         let graph = two_stage_graph();
-        let analysis = analyse_instance_dag(&graph).unwrap();
+        let analysis = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
         let pins = BTreeMap::new();
+        let facts = BTreeMap::new();
         let request = SeedPlacementRequest {
             graph: &graph,
             analysis: &analysis,
             pins: &pins,
+            block_facts: &facts,
         };
         let baseline = TopologyAwareSeedPlacer.plan(request).unwrap();
         assert_eq!(
@@ -2446,12 +2547,14 @@ mod tests {
     #[test]
     fn repair_order_is_canonical_and_same_owner_separation_is_named() {
         let graph = two_stage_graph();
-        let analysis = analyse_instance_dag(&graph).unwrap();
+        let analysis = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
         let pins = BTreeMap::new();
+        let facts = BTreeMap::new();
         let request = SeedPlacementRequest {
             graph: &graph,
             analysis: &analysis,
             pins: &pins,
+            block_facts: &facts,
         };
         let first = LayoutRepair::ExclusiveGuardedTrack {
             source: primitive_source(0),
@@ -2485,13 +2588,15 @@ mod tests {
     #[test]
     fn pinned_boundary_repair_keeps_the_pin_and_moves_the_sink_owner() {
         let graph = two_stage_graph();
-        let analysis = analyse_instance_dag(&graph).unwrap();
+        let analysis = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
         let input = PhysicalEndpointId::PrimaryInput(PortId(0));
         let pins = BTreeMap::from([(input, pin(Anchor { x: 20, y: 1, z: 40 }, Facing::North))]);
+        let facts = BTreeMap::new();
         let request = SeedPlacementRequest {
             graph: &graph,
             analysis: &analysis,
             pins: &pins,
+            block_facts: &facts,
         };
         let baseline = TopologyAwareSeedPlacer.plan(request).unwrap();
         let repaired = TopologyAwareSeedPlacer
@@ -2530,7 +2635,7 @@ mod tests {
         };
         let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
 
-        let facts = analyse_instance_dag(&graph).unwrap();
+        let facts = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
 
         assert_eq!(facts.nodes[&InstanceId(1)].forward_level, 0);
         assert_eq!(facts.nodes[&InstanceId(0)].forward_level, 1);
@@ -2550,7 +2655,7 @@ mod tests {
         };
         let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
 
-        let facts = analyse_instance_dag(&graph).unwrap();
+        let facts = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
 
         assert_eq!(
             facts.nodes[&InstanceId(0)].successors,
@@ -2574,7 +2679,7 @@ mod tests {
         };
         let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
 
-        let facts = analyse_instance_dag(&graph).unwrap();
+        let facts = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
 
         assert_eq!(
             facts.order,
@@ -2640,7 +2745,7 @@ mod tests {
         };
         let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
 
-        let facts = analyse_instance_dag(&graph).unwrap();
+        let facts = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
 
         assert_eq!(facts.nodes[&InstanceId(0)].head_ticks, 4);
         assert_eq!(facts.nodes[&InstanceId(0)].tail_ticks, 4);
@@ -2673,7 +2778,7 @@ mod tests {
         )
         .unwrap();
 
-        let facts = analyse_instance_dag(&graph).unwrap();
+        let facts = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
 
         assert_eq!(
             facts.order,
@@ -2706,7 +2811,7 @@ mod tests {
         };
 
         assert_eq!(
-            analyse_instance_dag(&graph),
+            analyse_instance_dag(&graph, &BTreeMap::new()),
             Err(SeedPlacementError::UnknownInstance {
                 instance: InstanceId(99),
             })
@@ -2743,7 +2848,7 @@ mod tests {
         first_input.driver = back_edge_driver;
 
         assert!(matches!(
-            analyse_instance_dag(&cycle),
+            analyse_instance_dag(&cycle, &BTreeMap::new()),
             Err(SeedPlacementError::DependencyCycle { .. })
         ));
     }
@@ -2853,13 +2958,15 @@ mod tests {
             &Library::default_library(),
         )
         .unwrap();
-        let analysis = analyse_instance_dag(&graph).unwrap();
+        let analysis = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
         let pins = BTreeMap::new();
+        let facts = BTreeMap::new();
         let plan = TopologyAwareSeedPlacer
             .plan(SeedPlacementRequest {
                 graph: &graph,
                 analysis: &analysis,
                 pins: &pins,
+                block_facts: &facts,
             })
             .unwrap();
         let pose = plan.instances[&InstanceId(0)];
@@ -2909,13 +3016,15 @@ mod tests {
             &[],
         )
         .unwrap();
-        let analysis = analyse_instance_dag(&graph).unwrap();
+        let analysis = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
         let pins = BTreeMap::new();
+        let facts = BTreeMap::new();
         let plan = TopologyAwareSeedPlacer
             .plan(SeedPlacementRequest {
                 graph: &graph,
                 analysis: &analysis,
                 pins: &pins,
+                block_facts: &facts,
             })
             .unwrap();
         let pose = plan.instances[&InstanceId(0)];
@@ -3007,13 +3116,15 @@ mod tests {
             gates: vec![nor("middle", &["a"]), nor("y", &["middle"])],
         };
         let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
-        let analysis = analyse_instance_dag(&graph).unwrap();
+        let analysis = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
         let pins = BTreeMap::new();
+        let facts = BTreeMap::new();
         let placer = TopologyAwareSeedPlacer;
         let request = || SeedPlacementRequest {
             graph: &graph,
             analysis: &analysis,
             pins: &pins,
+            block_facts: &facts,
         };
 
         let first = placer.plan(request()).unwrap();
@@ -3035,7 +3146,7 @@ mod tests {
             gates: vec![nor("middle", &["a"]), nor("y", &["middle"])],
         };
         let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
-        let mut injected = analyse_instance_dag(&graph).unwrap();
+        let mut injected = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
         injected.order = vec![InstanceId(1), InstanceId(0)];
         injected
             .nodes
@@ -3048,12 +3159,14 @@ mod tests {
             .unwrap()
             .forward_level = 0;
         let pins = BTreeMap::new();
+        let facts = BTreeMap::new();
 
         let plan = TopologyAwareSeedPlacer
             .plan(SeedPlacementRequest {
                 graph: &graph,
                 analysis: &injected,
                 pins: &pins,
+                block_facts: &facts,
             })
             .unwrap();
 
@@ -3164,5 +3277,29 @@ mod tests {
                     })
             })
             .collect()
+    }
+
+    /// Direct proof of the no-blocks invariant: the fingerprint for an
+    /// existing multi-gate netlist, captured from the placer before Task 9's
+    /// edits landed, must still match bit-for-bit now that `analyse_instance_dag`
+    /// and `plan_in_frame` both read `graph.blocks` (empty here) alongside
+    /// `graph.instances`.
+    #[test]
+    fn no_blocks_fingerprint_matches_the_pre_task_9_placer_exactly() {
+        let graph = two_stage_graph();
+        let analysis = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
+        let pins = BTreeMap::new();
+        let facts = BTreeMap::new();
+        let request = SeedPlacementRequest {
+            graph: &graph,
+            analysis: &analysis,
+            pins: &pins,
+            block_facts: &facts,
+        };
+        let plan = TopologyAwareSeedPlacer.plan(request).unwrap();
+        assert_eq!(
+            plan.fingerprint.as_str(),
+            "24ef3d8e581982f52eeb7a40a6763ae2e8ad2493553aa4851fe309e55000bc93"
+        );
     }
 }
