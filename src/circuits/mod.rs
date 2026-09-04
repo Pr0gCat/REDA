@@ -15,6 +15,7 @@
 
 pub mod and4;
 pub mod full_adder;
+pub(crate) mod hierarchical_builder;
 pub(crate) mod netlist_builder;
 pub mod seven_segment;
 pub mod verilog;
