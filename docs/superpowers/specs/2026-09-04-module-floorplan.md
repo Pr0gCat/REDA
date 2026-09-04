@@ -116,7 +116,13 @@ pub struct Module {
 pub struct ModuleInstance {
     pub name: String,        // instance name inside the parent
     pub module: String,      // key into `modules`
-    pub ports: BTreeMap<String, String>, // child port -> parent signal
+    pub ports: BTreeMap<String, PortBinding>, // child port -> what drives it
+}
+
+pub enum PortBinding {
+    Signal(String),
+    Zero,
+    One,
 }
 ```
 
