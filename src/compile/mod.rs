@@ -101,7 +101,10 @@ pub use fragment_synth::{
     compile_fragment_synth, CapWorkCounters, ProposalTerminal, ProposalTrace, StopReason,
     SynthesisBudget, SynthesisCaseFingerprint, SynthesisError, SynthesisInput, SynthesisResult,
 };
-pub use hierarchy::{GatePath, HierarchicalNetlist, HierarchyError, Module, ModuleInstance, PortBinding};
+pub use hierarchy::{
+    lower_hierarchy, GatePath, HierarchicalNetlist, HierarchyError, LowerHierarchyError,
+    LoweredHierarchy, Module, ModuleInstance, PortBinding,
+};
 
 pub(crate) use verification::physical_verifier_revision_descriptor;
 #[cfg(test)]

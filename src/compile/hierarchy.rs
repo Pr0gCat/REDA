@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use thiserror::Error;
 
+use crate::compile::lowering::{lower_optimised, LowerError};
 use crate::compile::topology::GateKind;
 use crate::compile::{Gate, Netlist};
 
@@ -318,6 +319,87 @@ impl HierarchicalNetlist {
             self.flatten_into(&instance.module, &child_path, &child_aliases, gates, paths)?;
         }
         Ok(())
+    }
+}
+
+/// Every module lowered once, on its own boundary -- never on the flattened
+/// design -- plus the flattening of those already-lowered modules, which is
+/// what certification consumes.
+///
+/// Lowering a module on its own boundary (rather than lowering the flat
+/// netlist as a whole) is the property that lets two instances of one module
+/// share a single compile: both instances flatten from the *same* lowered
+/// `Module`, so their gates are byte-identical, in the same order, by
+/// construction -- see `two_instances_of_one_module_lower_identically`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LoweredHierarchy {
+    /// Each module lowered on its own boundary netlist (`boundary_netlist`).
+    /// Port names (`inputs`/`outputs`) and `instances` are the originals,
+    /// unchanged; only `gates` came out of `lower_optimised`.
+    pub modules: BTreeMap<String, Module>,
+    pub top: String,
+    /// Flattening of the lowered modules: what certification sees.
+    pub flat: Netlist,
+    pub paths: Vec<GatePath>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum LowerHierarchyError {
+    #[error(transparent)]
+    Hierarchy(#[from] HierarchyError),
+    #[error("module `{module}` failed to lower: {source}")]
+    Lowering { module: String, source: LowerError },
+}
+
+/// Lower every module of `design` on its own boundary netlist, then flatten
+/// the already-lowered modules.
+///
+/// This is deliberately *not* "flatten, then lower": lowering the flat
+/// netlist would let the optimiser choose polarities and share inverters
+/// across a module boundary, so two instances of the same module could come
+/// out lowered differently depending on what surrounds each one. Lowering
+/// per module first, on `boundary_netlist` (which keeps every child
+/// instance's ports as boundary signals so lowering cannot optimise them
+/// away), guarantees that identical instances flatten to identical gates.
+///
+/// Precondition: `specialise_constants` must already have been run on
+/// `design` if it ties any instance port to a constant -- same precondition
+/// `flatten` documents, since flattening the lowered modules is exactly what
+/// this does last.
+pub fn lower_hierarchy(design: &HierarchicalNetlist) -> Result<LoweredHierarchy, LowerHierarchyError> {
+    let order = design.module_order()?;
+    let mut modules: BTreeMap<String, Module> = BTreeMap::new();
+    for name in &order {
+        let original = &design.modules[name];
+        let boundary = design.boundary_netlist(name);
+        let lowered = lower_optimised(&boundary)
+            .map_err(|source| LowerHierarchyError::Lowering { module: name.clone(), source })?;
+        modules.insert(
+            name.clone(),
+            Module {
+                inputs: original.inputs.clone(),
+                outputs: original.outputs.clone(),
+                gates: lowered.gates,
+                instances: original.instances.clone(),
+            },
+        );
+    }
+    let lowered_design = HierarchicalNetlist { top: design.top.clone(), modules };
+    let (flat, paths) = lowered_design.flatten()?;
+    Ok(LoweredHierarchy { modules: lowered_design.modules, top: lowered_design.top, flat, paths })
+}
+
+impl LoweredHierarchy {
+    /// The lowered module as the netlist a block compile takes: its real
+    /// ports only, not the pseudo-ports `boundary_netlist` adds for its
+    /// child instances.
+    pub fn block_netlist(&self, module: &str) -> Netlist {
+        let module = &self.modules[module];
+        Netlist { inputs: module.inputs.clone(), outputs: module.outputs.clone(), gates: module.gates.clone() }
+    }
+
+    pub fn as_hierarchical(&self) -> HierarchicalNetlist {
+        HierarchicalNetlist { top: self.top.clone(), modules: self.modules.clone() }
     }
 }
 
@@ -817,6 +899,134 @@ mod tests {
                 assert_eq!(port, "a");
             }
             other => panic!("expected an unspecialised constant, got {other:?}"),
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // Task 5: lower each module on its own boundary, then flatten the
+    // lowered modules.
+    // ---------------------------------------------------------------------
+
+    use crate::circuits::hierarchical_builder::{circuits, eval};
+
+    #[test]
+    fn lowering_per_module_then_flattening_equals_flattening_the_lowered_single_module() {
+        // A single-module design lowers exactly as lower_optimised on its netlist.
+        let mut design = two_level();
+        let inv = design.modules.remove("inv").unwrap();
+        design.modules.clear();
+        design.modules.insert("inv".into(), inv.clone());
+        design.top = "inv".into();
+        let lowered = lower_hierarchy(&design).expect("lowers");
+        let expected = crate::compile::lowering::lower_optimised(
+            &Netlist { inputs: inv.inputs, outputs: inv.outputs, gates: inv.gates },
+        )
+        .expect("lowers");
+        assert_eq!(lowered.flat, expected);
+    }
+
+    #[test]
+    fn two_instances_of_one_module_lower_identically() {
+        let lowered = lower_hierarchy(&two_level()).expect("lowers");
+        let inv = &lowered.modules["inv"];
+        let first: Vec<_> = lowered.paths.iter().enumerate().filter(|(_, p)| p.path == ["u0"]).map(|(i, _)| &lowered.flat.gates[i]).collect();
+        let second: Vec<_> = lowered.paths.iter().enumerate().filter(|(_, p)| p.path == ["u1"]).map(|(i, _)| &lowered.flat.gates[i]).collect();
+        assert_eq!(first.len(), inv.gates.len());
+        assert_eq!(first.len(), second.len());
+        for (a, b) in first.iter().zip(&second) {
+            assert_eq!(a.kind, b.kind);
+        }
+        assert!(lowered.flat.gates.iter().all(|g| matches!(g.kind, GateKind::Nor(_) | GateKind::Or(_))));
+    }
+
+    /// A module that just passes one of its own inputs straight to a
+    /// declared output, with no gate in between (`Module { inputs: ["a"],
+    /// outputs: ["a"], gates: [] }`), used as the design's own top so there
+    /// is no parent instance whose single `ports` entry would have to stand
+    /// for both directions at once. `lower_optimised` must not choke on a
+    /// declared output that is also a declared input -- and the lowered
+    /// result must still actually compute the identity, not merely fail to
+    /// error.
+    #[test]
+    fn a_pass_through_module_gets_a_buffer() {
+        let mut modules = BTreeMap::new();
+        modules.insert(
+            "pass".to_string(),
+            Module { inputs: vec!["a".into()], outputs: vec!["a".into()], gates: vec![], instances: vec![] },
+        );
+        let design = HierarchicalNetlist { top: "pass".into(), modules };
+        let lowered = lower_hierarchy(&design).expect("a pass-through module lowers");
+        assert!(lowered.flat.gates.iter().all(|g| matches!(g.kind, GateKind::Nor(_) | GateKind::Or(_))));
+
+        let mut for_true = BTreeMap::new();
+        for_true.insert("a".to_string(), true);
+        let mut for_false = BTreeMap::new();
+        for_false.insert("a".to_string(), false);
+        assert_eq!(eval::evaluate(&lowered.flat, &for_true)["a"], true);
+        assert_eq!(eval::evaluate(&lowered.flat, &for_false)["a"], false);
+    }
+
+    /// The composition property the whole design rests on: for a
+    /// hierarchical design, `lower_hierarchy(...).flat` must contain
+    /// *exactly* the union of every instance's lowered module gates -- no
+    /// gate that lowering could only have produced by optimising across a
+    /// module boundary, and nothing missing. Also checks the lowered design
+    /// still computes the same function as the unlowered one.
+    #[test]
+    fn lowering_a_hierarchical_design_is_exactly_the_union_of_lowered_instance_gates_and_preserves_the_function() {
+        let design = circuits::ripple_adder(2);
+        let (unlowered_flat, _) = design.flatten().expect("the unlowered design flattens");
+        let lowered = lower_hierarchy(&design).expect("lowers");
+
+        assert!(
+            lowered.flat.gates.iter().all(|g| matches!(g.kind, GateKind::Nor(_) | GateKind::Or(_))),
+            "lowering must leave only the two realisable kinds"
+        );
+
+        // Group the flattened gates by the exact instance path that produced
+        // them. Each group's gate-kind sequence must match its own module's
+        // lowered gates exactly, in order -- if certification ever saw a
+        // gate a cross-module optimisation could only have produced, some
+        // group here would disagree with its module's own kind sequence.
+        let mut by_path: BTreeMap<Vec<String>, (String, Vec<GateKind>)> = BTreeMap::new();
+        for (gate, path) in lowered.flat.gates.iter().zip(&lowered.paths) {
+            let entry =
+                by_path.entry(path.path.clone()).or_insert_with(|| (path.module.clone(), Vec::new()));
+            entry.1.push(gate.kind);
+        }
+        assert!(!by_path.is_empty());
+        let mut total = 0usize;
+        for (path, (module_name, kinds)) in &by_path {
+            let module = &lowered.modules[module_name];
+            let expected: Vec<GateKind> = module.gates.iter().map(|g| g.kind).collect();
+            assert_eq!(
+                kinds, &expected,
+                "instance path {path:?} (module `{module_name}`) must reproduce its module's own lowered gates exactly"
+            );
+            total += kinds.len();
+        }
+        assert_eq!(total, lowered.flat.gates.len(), "every flattened gate must belong to exactly one instance");
+
+        // The lowering must still compute the same function: enumerate every
+        // input assignment and check the lowered netlist agrees with the
+        // original, unlowered flattening (both are already Nor/Or-only, so
+        // `eval::evaluate` can score them both).
+        let top_inputs = design.modules[&design.top].inputs.clone();
+        assert!(top_inputs.len() <= 8, "exhaustive enumeration below assumes a small input count");
+        for mask in 0u32..(1 << top_inputs.len()) {
+            let assignment: BTreeMap<String, bool> = top_inputs
+                .iter()
+                .enumerate()
+                .map(|(i, name)| (name.clone(), mask & (1 << i) != 0))
+                .collect();
+            let before = eval::evaluate(&unlowered_flat, &assignment);
+            let after = eval::evaluate(&lowered.flat, &assignment);
+            for output in &unlowered_flat.outputs {
+                assert_eq!(
+                    before[output], after[output],
+                    "output `{output}` disagrees for input {assignment:?}"
+                );
+            }
         }
     }
 }
