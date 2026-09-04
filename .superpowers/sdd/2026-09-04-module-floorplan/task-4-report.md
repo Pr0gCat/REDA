@@ -195,3 +195,138 @@ flattens to a netlist with a valid `combinational_order()`.
   brief's design notes (`slice`/`adder_row`/`alu4` names, `shift_in`/`cin` on
   `alu4_full`'s `slice`, `alu4` = 4 slices + glue for `alu8`, top = 2×`alu4` with carry
   chained).
+
+## Fix round 1
+
+Review finding: every test added for the four hierarchical circuits (`ripple_adder`,
+`alu4_full`, `multiplier4`, `alu8`) only checked *structure* -- `validate()`,
+`module_order()`, `flatten()` succeeding, port/instance counts, `combinational_order()`
+existing. None of that proves a circuit computes what its name claims; a truth table
+was hand-derived once by a reviewer, but a later edit (swapped opcode index, row 2
+reusing row 1's zero-tie) would pass every existing test silently. This round adds a
+Boolean evaluator for a flat `Netlist` and uses it to prove equivalence against an
+independent reference for all four circuits.
+
+### Where the evaluator lives, and why
+
+`eval::evaluate` (new, `src/circuits/hierarchical_builder.rs`, right before `mod tests`)
+is `#[cfg(test)] pub(crate) mod eval` inside the same file. It was kept local rather
+than promoted to a shared location (e.g. `circuits::netlist_builder` or a new
+`compile::eval`) because nothing outside this file's own tests needs to evaluate a
+netlist yet -- a tiny, single-purpose evaluator is easier to audit sitting next to its
+only callers than as a new module with one user. It is marked `pub(crate)` (not
+private) specifically so a later task that also wants to evaluate a `Netlist` can reach
+it (`crate::circuits::hierarchical_builder::eval::evaluate`) without duplicating it
+first; if that happens, lifting it out to a shared spot at that point is the right
+move, noted in its doc comment.
+
+`evaluate(netlist, assignment)` walks `netlist.combinational_order()` (already a valid
+topological order), maintaining a `BTreeMap<String, bool>` seeded with the given input
+assignment. For each gate in order: `GateKind::Nor(_)` -> true iff no input is true;
+`GateKind::Or(_)` -> true iff any input is true. Any other `GateKind` triggers a
+`panic!` naming the offending gate and its kind -- per the task's explicit
+instruction, so this evaluator can never silently return a wrong answer for a netlist
+shape it doesn't understand. (In practice only `Nor`/`Or` ever appear: every hand-built
+circuit here is constructed exclusively through `NetlistBuilder`'s
+`and_reduce`/`or_reduce`/`not`/`nor` helpers, which only ever emit those two kinds.)
+
+### Reaching `seed.rs`'s private flat helpers
+
+`extra_circuits::{ripple_adder, alu4_full, multiplier4}` live inside
+`fragment_synth::seed`'s `#[cfg(test)] mod tests { mod extra_circuits { ... } }`, both
+private. Per the task's instruction not to move or modify their logic, the smallest
+change that makes them reachable was widening three existing visibility annotations in
+`src/compile/fragment_synth/seed.rs` (no other line in any of these three functions
+touched):
+
+- `mod tests {` -> `pub(crate) mod tests {`
+- `mod extra_circuits {` -> `pub(crate) mod extra_circuits {`
+- `fn ripple_adder(bits: usize) -> Netlist {` -> `pub(crate) fn ripple_adder(...)`
+- `fn alu4_full() -> Netlist {` -> `pub(crate) fn alu4_full() -> Netlist {`
+- `fn multiplier4() -> Netlist {` -> `pub(crate) fn multiplier4() -> Netlist {`
+
+`extra_circuits::alu4` (used to build `alu8`'s per-nibble ALU, but not itself the flat
+counterpart being compared against -- `alu8` has no flat counterpart) was left private;
+only the three functions actually consumed by the new equivalence tests were widened.
+Both `mod tests` and `mod extra_circuits` stay `#[cfg(test)]`-gated as before, so this
+changes nothing about non-test builds. The new tests import them as
+`crate::compile::fragment_synth::seed::tests::extra_circuits as flat`.
+
+### How ports were matched between the hierarchical and flat netlists
+
+**Inputs** are matched *by name*, not position: every input name is the literal same
+string on both sides (`a0..`, `b0..`, `cin`, `s0`/`s1`/`s2`). The one wrinkle is
+`alu4_full`: the flat helper declares its opcode inputs as `s2, s1, s0` (that literal
+order) while the hierarchical `top` declares `s0, s1, s2`. Since `evaluate` takes a
+name-keyed `BTreeMap<String, bool>` assignment rather than a positional vector, this
+reordering is irrelevant -- one assignment map, built from either side's own input
+list, drives both netlists identically.
+
+**Outputs** are never literally equal by name and so are matched *by position*: the
+hierarchical side exposes its declared port names (`s0`, `cout`, `r0`, `zero`, ...)
+while the flat side's outputs are whatever generated gate name (`g12`, ...) each
+`NetlistBuilder` reduction happened to produce. Both sides were confirmed (by reading
+the construction code in `hierarchical_builder.rs` and `seed.rs` side by side) to build
+their `outputs` vector in the same semantic order for all three exhaustively-compared
+circuits -- e.g. `ripple_adder`: sum bit 0, sum bit 1, ..., final carry, on both sides;
+`alu4_full`: `r0, r1, r2, r3, cout, zero` on both sides; `multiplier4`: `o0..o7` in the
+same partial-product-row order on both sides. `assert_same_outputs` zips
+`hier.outputs`/`flat.outputs` positionally and evaluates each pair.
+
+### Tests added and case counts
+
+All in `src/circuits/hierarchical_builder.rs`, new `#[cfg(test)] mod equivalence`:
+
+- `ripple_adder4_matches_the_flat_builder_exhaustively` -- 9 inputs, all 512 cases,
+  against `flat::ripple_adder(4)`.
+- `alu4_full_matches_the_flat_builder_exhaustively` -- `specialise_constants()` then
+  `flatten()`, 11 inputs, all 2048 cases, against `flat::alu4_full()`.
+- `multiplier4_matches_the_flat_builder_exhaustively` -- 8 inputs, all 256 cases,
+  against `flat::multiplier4()`.
+- `alu8_add_opcode_matches_8_bit_arithmetic_over_a_deterministic_sample` -- `alu8()` has
+  no flat counterpart, so opcode is fixed to ADD (`s1=1, s0=1`, the same encoding
+  `extra_circuits::alu4`'s `sel[3]` and `hierarchical_builder`'s `alu4_module` both
+  use) and 256 deterministic samples are drawn over the 17 remaining inputs
+  (`a0..a7, b0..b7, cin`, a 2^17 space), each checked against `(a + b + cin) & 0xFF`
+  for `r0..r7` and `(a + b + cin) >> 8` for `cout`.
+- `ripple_adder8_matches_8_bit_arithmetic_over_a_deterministic_sample` -- same
+  arithmetic-direct approach (not the flat comparison, and not exhaustive: 2^17 cases
+  is too slow for a debug build), 256 deterministic samples over `a0..a7, b0..b7, cin`,
+  checked against `(a + b + cin) & 0xFF` / carry.
+
+The sample is generated by `deterministic_sample`: `mask = (index * 0x9E3779B1) &
+(space - 1)`. Since `0x9E3779B1` is odd and `space` is a power of two, multiplying by
+it is a bijection mod `space` (the standard Fibonacci-hashing trick), so this scatters
+the first 256 indices across the whole input space as a fixed, reproducible sequence --
+never a seeded or random number generator, satisfying the project's determinism rule.
+
+No discrepancy was found: all four circuits agree with their reference on every case
+run.
+
+### Commands run
+
+```
+cargo test --lib circuits
+```
+19 passed, 0 failed, 7 ignored (release-only/measurement harnesses, pre-existing and
+unaffected), ~29s -- includes all five new `equivalence` tests plus the four existing
+`circuits::hierarchical_builder` structural tests.
+
+```
+cargo test --lib compile::fragment_synth::seed
+```
+20 passed, 0 failed, 2 ignored (release-only, pre-existing), ~58s -- confirms the
+`pub(crate)` visibility widening in `seed.rs` did not disturb any of its own tests.
+
+Also ran `cargo build --lib` and `cargo test --lib --no-run` to check for new warnings:
+the test build compiles clean; the plain (non-test) library build shows pre-existing
+dead-code warnings for `xor`/`full_adder_gates`/`full_adder_module` in
+`hierarchical_builder.rs` (they're only reachable from `#[cfg(test)]` code, unchanged by
+this round) and unrelated warnings elsewhere in the crate -- nothing introduced by this
+fix.
+
+### Deferred by ruling
+
+Per the task instructions, the locally-computed always-zero signals (`AND(x, NOT(x))`
+inside `slice`/`adder_row`/`multiplier4`'s `top`) were left as-is: two real NOR gates
+each, not optimised away.

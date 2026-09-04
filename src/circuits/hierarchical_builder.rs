@@ -571,6 +571,90 @@ pub(crate) mod circuits {
     }
 }
 
+/// A tiny Boolean evaluator for a flat, combinational [`crate::compile::Netlist`].
+///
+/// Every existing test in this file (and in `compile::hierarchy`) only checks
+/// *structure*: instance counts, `validate()`/`module_order()`/`flatten()`
+/// succeeding, port counts, `combinational_order()` existing. None of that
+/// proves a circuit computes what its name claims -- a swapped opcode index,
+/// or row 2 reusing row 1's zero-tie, would pass every structural test here
+/// silently. This evaluator exists so the `equivalence` tests below can
+/// actually run the netlist and compare it, bit for bit, against an
+/// independent reference.
+///
+/// Kept test-only and local to this file rather than promoted somewhere more
+/// shareable: nothing outside this file's own tests needs to evaluate a
+/// netlist yet, and putting a tiny, single-purpose evaluator next to its only
+/// callers is easier to audit than a new shared module with one user. If a
+/// later task wants netlist evaluation for its own tests, this is the
+/// natural thing to lift into a shared `#[cfg(test)]` location (e.g.
+/// `circuits::netlist_builder` or a new `compile::eval`) rather than
+/// duplicating it.
+#[cfg(test)]
+pub(crate) mod eval {
+    use std::collections::BTreeMap;
+
+    use crate::compile::topology::GateKind;
+    use crate::compile::Netlist;
+
+    /// Evaluate `netlist` on a full assignment of its declared inputs
+    /// (`assignment` must have an entry for every name in `netlist.inputs`),
+    /// returning every input's and every gate's boolean value keyed by
+    /// signal name.
+    ///
+    /// Walks gates in `netlist.combinational_order()` (a valid topological
+    /// order, so every gate's inputs are already in `values` by the time it
+    /// is evaluated). `NetlistBuilder`'s reduction helpers
+    /// (`and_reduce`/`or_reduce`/`not`/`nor`) only ever produce two gate
+    /// kinds (see `Gate::kind`'s doc comment): `GateKind::Nor` (true iff
+    /// *no* input is true) and `GateKind::Or` (true iff *any* input is
+    /// true). Any other kind means this evaluator does not know how to
+    /// interpret the netlist, so it asserts rather than risking a silently
+    /// wrong answer -- the entire point of this evaluator is to be a
+    /// trustworthy oracle.
+    pub(crate) fn evaluate(netlist: &Netlist, assignment: &BTreeMap<String, bool>) -> BTreeMap<String, bool> {
+        let mut values: BTreeMap<String, bool> = BTreeMap::new();
+        for name in &netlist.inputs {
+            let value = *assignment
+                .get(name)
+                .unwrap_or_else(|| panic!("evaluate: no assignment given for input {name:?}"));
+            values.insert(name.clone(), value);
+        }
+
+        let order = netlist
+            .combinational_order()
+            .expect("evaluate: netlist must be an acyclic combinational circuit");
+        for index in order {
+            let gate = &netlist.gates[index];
+            let true_inputs = gate
+                .inputs
+                .iter()
+                .filter(|input| {
+                    *values.get(input.as_str()).unwrap_or_else(|| {
+                        panic!(
+                            "evaluate: signal {input:?} feeding gate {:?} was not yet defined \
+                             -- combinational_order() should make this unreachable",
+                            gate.name
+                        )
+                    })
+                })
+                .count();
+            let value = match gate.kind {
+                GateKind::Nor(_) => true_inputs == 0,
+                GateKind::Or(_) => true_inputs > 0,
+                other => panic!(
+                    "evaluate: gate {:?} has kind {other:?} -- this evaluator only understands \
+                     Nor/Or, the only two kinds NetlistBuilder's reduction helpers ever produce; \
+                     extend it deliberately rather than guessing at a new kind's semantics",
+                    gate.name
+                ),
+            };
+            values.insert(gate.output.clone(), value);
+        }
+        values
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -639,5 +723,225 @@ mod tests {
         assert_eq!(flat.outputs.len(), 8);
         assert!(paths.iter().any(|p| p.module == "adder_row"));
         assert!(flat.combinational_order().is_some());
+    }
+}
+
+/// Boolean-equivalence tests: proves each hierarchical circuit above
+/// actually computes what its name claims, by evaluating it (via [`eval`])
+/// against an independent reference and comparing every declared output --
+/// not just checking that it validates, orders, and flattens (every existing
+/// test above only checks that).
+///
+/// - `ripple_adder(4)`, `alu4_full()`, `multiplier4()` are compared
+///   exhaustively against `fragment_synth::seed`'s own flat reference
+///   circuits (widened to `pub(crate)` there for this -- see the
+///   `pub(crate) mod tests` / `pub(crate) mod extra_circuits` comments in
+///   `seed.rs`; their logic is untouched).
+/// - `alu8()` has no flat counterpart in `seed.rs`, so it is checked against
+///   8-bit arithmetic directly: fix the opcode to ADD and confirm
+///   `r0..r7`/`cout` equal `(a + b + cin)`'s low 8 bits and its carry out,
+///   over a deterministic sample.
+/// - `ripple_adder(8)` is checked the same arithmetic way rather than
+///   against its flat counterpart -- 17 inputs (2^17 cases) is too slow to
+///   enumerate exhaustively in a debug build.
+///
+/// **Name matching.** Every *input* name here is literally the same string
+/// on both the hierarchical and the flat side (`a0..`, `b0..`, `cin`,
+/// `s0`/`s1`/`s2`). `alu4_full`'s flat inputs list the opcode as
+/// `s2, s1, s0` while the hierarchical `top` lists `s0, s1, s2` -- but
+/// since [`eval::evaluate`] takes a name-keyed assignment rather than a
+/// positional one, that reordering does not matter: one assignment map,
+/// built from either side's input names, drives both netlists identically.
+/// *Output* names are never literally equal: the hierarchical side exposes
+/// its declared port names (`s0`, `cout`, `r0`, ...) while the flat side's
+/// outputs are `NetlistBuilder`-generated gate names (`g12`, ...). Both
+/// sides build their `outputs` vector in the same semantic order (bit 0's
+/// result, bit 1's, ..., the final carry -- confirmed by reading each
+/// circuit's construction in `hierarchical_builder.rs` and `seed.rs`), so
+/// outputs are matched **by position**.
+#[cfg(test)]
+mod equivalence {
+    use std::collections::BTreeMap;
+
+    use super::circuits;
+    use super::eval::evaluate;
+    use crate::compile::fragment_synth::seed::tests::extra_circuits as flat;
+    use crate::compile::Netlist;
+
+    /// Every assignment of `names` to booleans -- `names[bit]` is bit `bit`
+    /// of a `0..2^names.len()` counter. A complete, deterministic
+    /// enumeration (no randomness).
+    fn exhaustive(names: &[String]) -> Vec<BTreeMap<String, bool>> {
+        let total = 1usize << names.len();
+        (0..total)
+            .map(|mask| {
+                names
+                    .iter()
+                    .enumerate()
+                    .map(|(bit, name)| (name.clone(), (mask >> bit) & 1 == 1))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// `count` assignments of `names`, drawn from the full `2^names.len()`
+    /// space by a fixed odd-multiplier stride (`index * ODD_STEP mod
+    /// space`) instead of exhaustively or randomly: an odd multiplier times
+    /// a power-of-two modulus is a bijection over that range, so this is a
+    /// deterministic, reproducible scatter across the whole input space --
+    /// the same sequence every run, never a seeded/random number generator.
+    fn deterministic_sample(names: &[String], count: usize) -> Vec<BTreeMap<String, bool>> {
+        const ODD_STEP: usize = 0x9E37_79B1;
+        let space = 1usize << names.len();
+        let count = count.min(space);
+        (0..count)
+            .map(|i| {
+                let mask = i.wrapping_mul(ODD_STEP) & (space - 1);
+                names
+                    .iter()
+                    .enumerate()
+                    .map(|(bit, name)| (name.clone(), (mask >> bit) & 1 == 1))
+                    .collect()
+            })
+            .collect()
+    }
+
+    /// Evaluate both netlists on `assignment` and assert every declared
+    /// output agrees, matched by position (see the module doc comment).
+    fn assert_same_outputs(case: usize, assignment: &BTreeMap<String, bool>, hier: &Netlist, flat: &Netlist) {
+        assert_eq!(hier.outputs.len(), flat.outputs.len(), "case {case}: output counts differ");
+        let hier_values = evaluate(hier, assignment);
+        let flat_values = evaluate(flat, assignment);
+        for (position, (hier_name, flat_name)) in hier.outputs.iter().zip(flat.outputs.iter()).enumerate() {
+            let hier_bit = hier_values[hier_name];
+            let flat_bit = flat_values[flat_name];
+            assert_eq!(
+                hier_bit, flat_bit,
+                "case {case} ({assignment:?}): output #{position} disagrees -- hierarchical \
+                 {hier_name:?}={hier_bit}, flat {flat_name:?}={flat_bit}"
+            );
+        }
+    }
+
+    #[test]
+    fn ripple_adder4_matches_the_flat_builder_exhaustively() {
+        let design = circuits::ripple_adder(4);
+        let (hier, _) = design.flatten().expect("flattens");
+        let flat_netlist = flat::ripple_adder(4);
+        assert_eq!(hier.inputs.len(), 9, "ripple_adder(4) should have 9 inputs");
+
+        for (case, assignment) in exhaustive(&hier.inputs).into_iter().enumerate() {
+            assert_same_outputs(case, &assignment, &hier, &flat_netlist);
+        }
+    }
+
+    #[test]
+    fn alu4_full_matches_the_flat_builder_exhaustively() {
+        let design = circuits::alu4_full().specialise_constants().expect("specialises");
+        let (hier, _) = design.flatten().expect("flattens after specialising");
+        let flat_netlist = flat::alu4_full();
+        assert_eq!(hier.inputs.len(), 11, "alu4_full() should have 11 inputs");
+
+        // Input names are the same *set* on both sides (see the module doc
+        // comment) even though the two lists order `s0`/`s1`/`s2`
+        // differently -- `hier.inputs` alone is enough to build every
+        // assignment, since `evaluate` looks values up by name.
+        for (case, assignment) in exhaustive(&hier.inputs).into_iter().enumerate() {
+            assert_same_outputs(case, &assignment, &hier, &flat_netlist);
+        }
+    }
+
+    #[test]
+    fn multiplier4_matches_the_flat_builder_exhaustively() {
+        let design = circuits::multiplier4();
+        let (hier, _) = design.flatten().expect("flattens");
+        let flat_netlist = flat::multiplier4();
+        assert_eq!(hier.inputs.len(), 8, "multiplier4() should have 8 inputs");
+
+        for (case, assignment) in exhaustive(&hier.inputs).into_iter().enumerate() {
+            assert_same_outputs(case, &assignment, &hier, &flat_netlist);
+        }
+    }
+
+    /// Reads an 8-bit little-endian value (`{prefix}0` is bit 0) out of an
+    /// `evaluate()` result.
+    fn read_u8(values: &BTreeMap<String, bool>, prefix: &str) -> u32 {
+        (0..8).fold(0u32, |acc, bit| acc | ((values[&format!("{prefix}{bit}")] as u32) << bit))
+    }
+
+    /// The 17 non-opcode inputs `alu8`/`ripple_adder(8)` share: two 8-bit
+    /// operands plus a carry-in.
+    fn operand_and_carry_names() -> Vec<String> {
+        (0..8)
+            .map(|i| format!("a{i}"))
+            .chain((0..8).map(|i| format!("b{i}")))
+            .chain(std::iter::once("cin".to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn alu8_add_opcode_matches_8_bit_arithmetic_over_a_deterministic_sample() {
+        let design = circuits::alu8();
+        let (hier, _) = design.flatten().expect("flattens (alu8 has no constants to specialise)");
+
+        let names = operand_and_carry_names();
+        assert_eq!(names.len(), 17);
+
+        for (case, mut assignment) in deterministic_sample(&names, 256).into_iter().enumerate() {
+            // ADD is opcode s1=1, s0=1 -- see `extra_circuits::alu4`'s
+            // `sel[3]` and `hierarchical_builder`'s `alu4_module`, which
+            // decode the same way.
+            assignment.insert("s1".to_string(), true);
+            assignment.insert("s0".to_string(), true);
+
+            let values = evaluate(&hier, &assignment);
+            let a = read_u8(&values, "a");
+            let b = read_u8(&values, "b");
+            let cin = values["cin"] as u32;
+            let sum = a + b + cin;
+            let expected_r = sum & 0xFF;
+            let expected_cout = (sum >> 8) & 1 == 1;
+
+            let actual_r = read_u8(&values, "r");
+            let actual_cout = values["cout"];
+            assert_eq!(
+                actual_r, expected_r,
+                "case {case}: a={a} b={b} cin={cin} -> r={actual_r:#04x}, expected {expected_r:#04x}"
+            );
+            assert_eq!(
+                actual_cout, expected_cout,
+                "case {case}: a={a} b={b} cin={cin} -> cout={actual_cout}, expected {expected_cout}"
+            );
+        }
+    }
+
+    #[test]
+    fn ripple_adder8_matches_8_bit_arithmetic_over_a_deterministic_sample() {
+        let design = circuits::ripple_adder(8);
+        let (hier, _) = design.flatten().expect("flattens");
+
+        let names = operand_and_carry_names();
+        assert_eq!(names.len(), 17);
+
+        for (case, assignment) in deterministic_sample(&names, 256).into_iter().enumerate() {
+            let values = evaluate(&hier, &assignment);
+            let a = read_u8(&values, "a");
+            let b = read_u8(&values, "b");
+            let cin = values["cin"] as u32;
+            let sum = a + b + cin;
+            let expected_s = sum & 0xFF;
+            let expected_cout = (sum >> 8) & 1 == 1;
+
+            let actual_s = read_u8(&values, "s");
+            let actual_cout = values["cout"];
+            assert_eq!(
+                actual_s, expected_s,
+                "case {case}: a={a} b={b} cin={cin} -> s={actual_s:#04x}, expected {expected_s:#04x}"
+            );
+            assert_eq!(
+                actual_cout, expected_cout,
+                "case {case}: a={a} b={b} cin={cin} -> cout={actual_cout}, expected {expected_cout}"
+            );
+        }
     }
 }

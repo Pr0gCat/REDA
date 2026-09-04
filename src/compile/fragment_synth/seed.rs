@@ -2616,7 +2616,11 @@ pub(crate) fn step_many(at: Anchor, direction: Facing, distance: i32) -> Anchor 
 }
 
 #[cfg(test)]
-mod tests {
+// `pub(crate)` only so `circuits::hierarchical_builder`'s equivalence tests
+// can reach `extra_circuits`'s flat reference circuits below (see that
+// module's own comment) -- nothing in here is otherwise touched or
+// re-exported outside `#[cfg(test)]` builds.
+pub(crate) mod tests {
     use std::cell::{Cell, RefCell};
 
     use super::*;
@@ -3787,7 +3791,11 @@ mod tests {
     /// Circuits beyond the six acceptance cases, built with the same
     /// netlist builder the reference circuits use.  Release-only: the
     /// seven-segment slices take a quarter of a minute each in release.
-    mod extra_circuits {
+    // `pub(crate)`: see the `pub(crate) mod tests` comment above -- widened
+    // only so `ripple_adder`/`alu4_full`/`multiplier4` below are reachable
+    // as the flat comparison netlists for the hierarchical equivalence
+    // tests. Logic is untouched.
+    pub(crate) mod extra_circuits {
         use crate::circuits::netlist_builder::NetlistBuilder;
         use crate::compile::fragment_synth::api::{compile_fragment_synth, SynthesisInput};
         use crate::compile::fragment_synth::search::SynthesisBudget;
@@ -3811,7 +3819,7 @@ mod tests {
             (sum, cout)
         }
 
-        fn ripple_adder(bits: usize) -> Netlist {
+        pub(crate) fn ripple_adder(bits: usize) -> Netlist {
             let mut b = NetlistBuilder::new();
             let mut inputs = Vec::new();
             for i in 0..bits {
@@ -4003,7 +4011,7 @@ mod tests {
         }
 
         /// A 4x4 array multiplier: partial products summed with ripple adders.
-        fn multiplier4() -> Netlist {
+        pub(crate) fn multiplier4() -> Netlist {
             let mut b = NetlistBuilder::new();
             let pp = |b: &mut NetlistBuilder, i: usize, j: usize| {
                 b.and_reduce(vec![format!("a{i}"), format!("b{j}")])
@@ -4064,7 +4072,7 @@ mod tests {
         /// A fuller 4-bit ALU with a three-bit opcode: 000 AND, 001 OR,
         /// 010 XOR, 011 NOT a, 100 ADD, 101 SUB (a + !b + 1), 110 SHL a,
         /// 111 pass a.  Outputs r0..r3, the adder carry and a zero flag.
-        fn alu4_full() -> Netlist {
+        pub(crate) fn alu4_full() -> Netlist {
             let mut b = NetlistBuilder::new();
             let n = [b.not("s0"), b.not("s1"), b.not("s2")];
             let s = ["s0".to_string(), "s1".to_string(), "s2".to_string()];
