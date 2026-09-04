@@ -422,6 +422,14 @@ impl SparseSeedBuilder {
         instances: InstanceGraph,
         repairs: &[LayoutRepair],
     ) -> Result<CertifiedCandidate, SeedError> {
+        let timing = std::env::var_os("REDA_PHASE_TIMING").is_some();
+        let mut phase_started = std::time::Instant::now();
+        let phase = |name: &str, started: &mut std::time::Instant| {
+            if timing {
+                eprintln!("PHASE {name} {}", started.elapsed().as_millis());
+            }
+            *started = std::time::Instant::now();
+        };
         let mut candidate =
             ExpandedPhysicalCandidate::empty(instances, input.pins.cloned().unwrap_or_default());
         candidate.bind_pin_contracts(input.lowered)?;
@@ -440,6 +448,7 @@ impl SparseSeedBuilder {
                 repairs,
             )
             .map_err(|_| SeedError::Incomplete("seed placement plan"))?;
+        phase("placement", &mut phase_started);
         // Every later stage measures levels in the plan's folded analysis.
         let placement_analysis = placement_plan.analysis.clone();
         let plan_translation =
@@ -493,6 +502,7 @@ impl SparseSeedBuilder {
         )?;
         candidate.validate_shape()?;
         candidate.validate_physical_ownership()?;
+        phase("layout+routing", &mut phase_started);
 
         let adapter = ExpandedCandidateAdapter::new(&candidate)?;
         let size = adapter.deterministic_world_size()?;
@@ -500,12 +510,15 @@ impl SparseSeedBuilder {
         if let Err(error) = services.verifier.verify(&candidate, &emitted) {
             return Err(error.into());
         }
+        phase("emit+verify", &mut phase_started);
 
         let certification = CertificationConfig::from_search(services.search_config);
-        services
+        let certified = services
             .certifier
             .certify(candidate, input.lowered, services.library, &certification)
-            .map_err(SeedError::from)
+            .map_err(SeedError::from);
+        phase("certify", &mut phase_started);
+        certified
     }
 }
 
