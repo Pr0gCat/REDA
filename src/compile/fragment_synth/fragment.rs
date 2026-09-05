@@ -213,7 +213,10 @@ impl ProposalStream<CertifiedCandidate> for FragmentProposalStream<'_> {
     }
 }
 
-fn terminal_for_seed_error(error: &SeedError, work: &mut CapWorkCounters) -> ProposalTerminal {
+pub(crate) fn terminal_for_seed_error(
+    error: &SeedError,
+    work: &mut CapWorkCounters,
+) -> ProposalTerminal {
     match error {
         SeedError::Routing(SeedRoutingFailure {
             work_used: Some(work_used),

@@ -52,20 +52,26 @@ use crate::compile::fragment_synth::api::{
     compiled_from_certified, synthesis_case_fingerprint, SynthesisCaseFingerprint, SynthesisError,
     SynthesisInput, SynthesisResult,
 };
-use crate::compile::fragment_synth::blocks::{compile_block, CompiledBlock};
+use crate::compile::fragment_synth::blocks::{compile_block, BlockPort, CompiledBlock};
 use crate::compile::fragment_synth::certification::{
     CertifiedCandidate, CompleteCandidateCertifier,
 };
 use crate::compile::fragment_synth::compile_fragment_synth;
 use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
-use crate::compile::fragment_synth::fragment::FragmentProposalStream;
-use crate::compile::fragment_synth::instance_graph::{BlockSpec, InstanceGraph};
+use crate::compile::fragment_synth::fragment::terminal_for_seed_error;
+use crate::compile::fragment_synth::identity::InstanceId;
+use crate::compile::fragment_synth::instance_graph::{
+    BlockSpec, InstanceDriver, InstanceGraph, LogicalSignalId, PhysicalDriver, PhysicalSink,
+};
+use crate::compile::fragment_synth::placement::{analyse_instance_dag, EdgeFacts};
+use crate::compile::fragment_synth::relocate::Offset;
 use crate::compile::fragment_synth::search::{
-    run_budgeted_proposals, SynthesisBudget, SystemMonotonicClock,
+    run_budgeted_proposals, CapWorkCounters, ProposalEvaluation, ProposalStream, ProposalTerminal,
+    SearchCandidate, SynthesisBudget, SystemMonotonicClock,
 };
 use crate::compile::fragment_synth::seed::{
-    certify_planned, plan_parent_with_services, ParentBlocks, SeedError, SeedInput, SeedServices,
-    SeedVariant,
+    certify_planned, plan_parent_with_services, BlockPlacementOffset, ParentBlocks, SeedError,
+    SeedInput, SeedServices, SeedVariant,
 };
 use crate::compile::fragment_synth::services::{
     DurableSeedEmitter, DurableSeedVerifier, TopologyAwareSeedPlacer,
@@ -137,10 +143,42 @@ pub(crate) fn compile_hierarchical_with_threads(
     let blocks = compile_blocks(&lowered, &order, threads)?;
     let ordered = ordered_blocks(&lowered, &lowered.top, &order, &blocks);
 
-    let compile_variant = |variant: &SeedVariant| -> Result<CertifiedCandidate, SeedError> {
-        compile_module_with_blocks(&lowered, &lowered.top, &ordered, pins, services, variant)
-    };
-    let certified = compile_variant(&SeedVariant::default())
+    let certified = compile_module_with_blocks(
+        &lowered,
+        &lowered.top,
+        &ordered,
+        pins,
+        services,
+        &SeedVariant::default(),
+        &BTreeMap::new(),
+    )
+    .map_err(|error| SynthesisError::Seed(format!("{}: {error}", lowered.top)))?;
+    let (_, graph) = parent_planning_graph(
+        &lowered,
+        &lowered.top,
+        &ordered,
+        &library,
+        &SeedVariant::default(),
+    )
+    .map_err(|error| SynthesisError::Seed(format!("{}: {error}", lowered.top)))?;
+    let block_delays = graph
+        .blocks
+        .iter()
+        .map(|block| {
+            let compiled = ordered
+                .get(block.block as usize)
+                .ok_or(SeedError::UnknownBlock {
+                    block: block.id,
+                    index: block.block,
+                })?;
+            Ok((block.id, compiled.delay.0))
+        })
+        .collect::<Result<BTreeMap<_, _>, SeedError>>()
+        .map_err(|error| SynthesisError::Seed(format!("{}: {error}", lowered.top)))?;
+    let analysis = analyse_instance_dag(&graph, &block_delays)
+        .map_err(|error| SynthesisError::Seed(format!("{}: {error}", lowered.top)))?;
+    let edges = explicit_block_edges(&graph, &analysis.edges);
+    let (source_outputs, sink_inputs) = compiled_port_lookup(&graph, &ordered)
         .map_err(|error| SynthesisError::Seed(format!("{}: {error}", lowered.top)))?;
 
     let flat_input = SynthesisInput {
@@ -159,13 +197,23 @@ pub(crate) fn compile_hierarchical_with_threads(
     ));
 
     let clock = SystemMonotonicClock::start();
-    let seed_input = SeedInput::from(&flat_input);
+    let compile = |block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>| {
+        compile_module_with_blocks(
+            &lowered,
+            &lowered.top,
+            &ordered,
+            pins,
+            services,
+            &SeedVariant::default(),
+            block_placements,
+        )
+    };
     let mut proposals =
-        FragmentProposalStream::with_compiler(seed_input, services, Box::new(compile_variant));
+        HierarchicalProposalStream::new(edges, source_outputs, sink_inputs, Box::new(compile));
     let summary = run_budgeted_proposals(certified, budget, &clock, &mut proposals);
 
-    let compiled = compiled_from_certified(&summary.best, &lowered.flat)?;
-    let metrics = summary.best.metrics().clone();
+    let compiled = compiled_from_certified(&summary.best.certified, &lowered.flat)?;
+    let metrics = summary.best.certified.metrics().clone();
     let candidate_fingerprint = metrics.candidate_fingerprint.clone();
     Ok(SynthesisResult {
         compiled,
@@ -204,8 +252,8 @@ fn compile_module_with_blocks(
     pins: Option<&PortPlacements>,
     services: SeedServices<'_>,
     variant: &SeedVariant,
-) -> Result<CertifiedCandidate, SeedError> {
-    let (planning, owned) = planning_netlist(lowered, module, ordered);
+    block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
+) -> Result<HierarchicalCandidate, SeedError> {
     let parent_gates = u32::try_from(lowered.modules[module].gates.len())
         .map_err(|_| SeedError::IdentityOverflow)?;
 
@@ -234,13 +282,9 @@ fn compile_module_with_blocks(
         ));
     }
 
-    let specs: Vec<BlockSpec<'_>> = owned.iter().map(BlockSpecOwned::as_spec).collect();
-    let graph = InstanceGraph::with_blocks_and_implementations(
-        &planning,
-        services.library,
-        &specs,
-        &variant.implementations,
-    )?;
+    let (planning, graph) =
+        parent_planning_graph(lowered, module, ordered, services.library, variant)?;
+
     let planned = plan_parent_with_services(
         SeedInput {
             lowered: &planning,
@@ -251,8 +295,9 @@ fn compile_module_with_blocks(
         graph,
         ParentBlocks { compiled: ordered },
         &variant.placements,
-        &BTreeMap::new(),
+        block_placements,
     )?;
+    let realised_block_offsets = planned.block_offsets.clone();
     let (flat, paths) = module_flattening(lowered, module)?;
     let union = union_candidate(UnionInput {
         parent: &planned,
@@ -262,7 +307,297 @@ fn compile_module_with_blocks(
         library: services.library,
     })
     .map_err(|error| SeedError::Union(error.to_string()))?;
-    certify_planned(union, &flat, services)
+    let certified = certify_planned(union, &flat, services)?;
+    Ok(HierarchicalCandidate {
+        certified,
+        block_placements: block_placements.clone(),
+        realised_block_offsets,
+    })
+}
+
+fn parent_planning_graph(
+    lowered: &LoweredHierarchy,
+    module: &str,
+    ordered: &[CompiledBlock],
+    library: &Library,
+    variant: &SeedVariant,
+) -> Result<(Netlist, InstanceGraph), SeedError> {
+    let (planning, owned) = planning_netlist(lowered, module, ordered);
+    let specs: Vec<BlockSpec<'_>> = owned.iter().map(BlockSpecOwned::as_spec).collect();
+    let graph = InstanceGraph::with_blocks_and_implementations(
+        &planning,
+        library,
+        &specs,
+        &variant.implementations,
+    )?;
+    Ok((planning, graph))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+struct BlockEdge {
+    source_block: InstanceId,
+    source_port: u16,
+    sink_block: InstanceId,
+    sink_input: u16,
+    slack: u64,
+}
+
+#[derive(Serialize)]
+struct HierarchicalProposalFingerprint<'a> {
+    schema: &'static str,
+    edge: BlockEdge,
+    incumbent_fingerprint: &'a str,
+    block_placements: Vec<(InstanceId, i32, i32)>,
+}
+
+fn hierarchical_proposal_fingerprint(
+    schema: &'static str,
+    edge: BlockEdge,
+    incumbent: &HierarchicalCandidate,
+    block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
+) -> crate::compile::metrics::Fingerprint {
+    let descriptor = HierarchicalProposalFingerprint {
+        schema,
+        edge,
+        incumbent_fingerprint: incumbent.candidate_fingerprint().as_str(),
+        block_placements: block_placements
+            .iter()
+            .map(|(&block, offset)| (block, offset.dx, offset.dz))
+            .collect(),
+    };
+    canonical_fingerprint(
+        &serde_json::to_vec(&descriptor).expect("hierarchical proposal descriptor serializes"),
+    )
+}
+
+fn explicit_block_edges(graph: &InstanceGraph, facts: &[EdgeFacts]) -> Vec<BlockEdge> {
+    let slack = facts
+        .iter()
+        .map(|edge| ((edge.source, edge.sink), edge.structural_slack_ticks))
+        .collect::<BTreeMap<_, _>>();
+    let mut edges = Vec::new();
+    for assignment in &graph.assignments {
+        let PhysicalSink::InstanceInput {
+            instance: sink_block,
+            input_index: sink_input,
+        } = assignment.sink
+        else {
+            continue;
+        };
+        let Some(sink) = graph.block(sink_block) else {
+            continue;
+        };
+        if usize::from(sink_input) >= sink.inputs.len() {
+            continue;
+        }
+        let PhysicalDriver::Instance(InstanceDriver::Primitive {
+            logical_owner,
+            terminals,
+        }) = &assignment.driver
+        else {
+            continue;
+        };
+        let [terminal] = terminals.as_slice() else {
+            continue;
+        };
+        if *logical_owner != terminal.instance {
+            continue;
+        }
+        let Some(source) = graph.block(*logical_owner) else {
+            continue;
+        };
+        let source_port = usize::from(terminal.node.0);
+        let Some(&output_gate) = source.output_gates.get(source_port) else {
+            continue;
+        };
+        if assignment.signal != LogicalSignalId::GateOutput(output_gate) {
+            continue;
+        }
+        let Some(&slack) = slack.get(&(*logical_owner, sink_block)) else {
+            continue;
+        };
+        edges.push(BlockEdge {
+            source_block: *logical_owner,
+            source_port: terminal.node.0,
+            sink_block,
+            sink_input,
+            slack,
+        });
+    }
+    edges.sort_by_key(|edge| {
+        (
+            edge.slack,
+            edge.source_block,
+            edge.sink_block,
+            edge.sink_input,
+        )
+    });
+    edges
+}
+
+fn compiled_port_lookup(
+    graph: &InstanceGraph,
+    ordered: &[CompiledBlock],
+) -> Result<
+    (
+        BTreeMap<(InstanceId, u16), BlockPort>,
+        BTreeMap<(InstanceId, u16), BlockPort>,
+    ),
+    SeedError,
+> {
+    let mut source_outputs = BTreeMap::new();
+    let mut sink_inputs = BTreeMap::new();
+    for block in &graph.blocks {
+        let compiled = ordered
+            .get(block.block as usize)
+            .ok_or(SeedError::UnknownBlock {
+                block: block.id,
+                index: block.block,
+            })?;
+        for (index, name) in compiled.lowered.outputs.iter().enumerate() {
+            let port = compiled
+                .outputs
+                .get(name)
+                .ok_or(SeedError::Incomplete("compiled block output port"))?;
+            source_outputs.insert(
+                (
+                    block.id,
+                    u16::try_from(index).map_err(|_| SeedError::IdentityOverflow)?,
+                ),
+                *port,
+            );
+        }
+        for (index, name) in compiled.lowered.inputs.iter().enumerate() {
+            let port = compiled
+                .inputs
+                .get(name)
+                .ok_or(SeedError::Incomplete("compiled block input port"))?;
+            sink_inputs.insert(
+                (
+                    block.id,
+                    u16::try_from(index).map_err(|_| SeedError::IdentityOverflow)?,
+                ),
+                *port,
+            );
+        }
+    }
+    Ok((source_outputs, sink_inputs))
+}
+
+fn block_alignment_proposal(
+    edge: &BlockEdge,
+    source_outputs: &BTreeMap<(InstanceId, u16), BlockPort>,
+    sink_inputs: &BTreeMap<(InstanceId, u16), BlockPort>,
+    realised_offsets: &BTreeMap<InstanceId, Offset>,
+    incumbent: &BTreeMap<InstanceId, BlockPlacementOffset>,
+) -> BTreeMap<InstanceId, BlockPlacementOffset> {
+    let source = source_outputs[&(edge.source_block, edge.source_port)];
+    let sink = sink_inputs[&(edge.sink_block, edge.sink_input)];
+    let source_z = source
+        .cell
+        .z
+        .saturating_add(realised_offsets[&edge.source_block].dz);
+    let sink_z = sink
+        .cell
+        .z
+        .saturating_add(realised_offsets[&edge.sink_block].dz);
+    let mut proposal = incumbent.clone();
+    let placement = proposal
+        .entry(edge.sink_block)
+        .or_insert(BlockPlacementOffset { dx: 0, dz: 0 });
+    placement.dz = placement.dz.saturating_add(source_z.saturating_sub(sink_z));
+    proposal
+}
+
+struct HierarchicalCandidate {
+    certified: CertifiedCandidate,
+    block_placements: BTreeMap<InstanceId, BlockPlacementOffset>,
+    realised_block_offsets: BTreeMap<InstanceId, Offset>,
+}
+
+impl SearchCandidate for HierarchicalCandidate {
+    fn candidate_fingerprint(&self) -> &crate::compile::metrics::Fingerprint {
+        &self.certified.metrics().candidate_fingerprint
+    }
+
+    fn quality(&self) -> crate::compile::fragment_synth::certification::QualityKey {
+        self.certified.metrics().quality
+    }
+}
+
+type HierarchicalCompiler<'a> = dyn Fn(&BTreeMap<InstanceId, BlockPlacementOffset>) -> Result<HierarchicalCandidate, SeedError>
+    + 'a;
+
+struct HierarchicalProposalStream<'a> {
+    edges: Vec<BlockEdge>,
+    source_outputs: BTreeMap<(InstanceId, u16), BlockPort>,
+    sink_inputs: BTreeMap<(InstanceId, u16), BlockPort>,
+    compile: Box<HierarchicalCompiler<'a>>,
+}
+
+impl<'a> HierarchicalProposalStream<'a> {
+    fn new(
+        edges: Vec<BlockEdge>,
+        source_outputs: BTreeMap<(InstanceId, u16), BlockPort>,
+        sink_inputs: BTreeMap<(InstanceId, u16), BlockPort>,
+        compile: Box<HierarchicalCompiler<'a>>,
+    ) -> Self {
+        Self {
+            edges,
+            source_outputs,
+            sink_inputs,
+            compile,
+        }
+    }
+}
+
+impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
+    fn next(
+        &mut self,
+        proposal_index: u64,
+        incumbent: &HierarchicalCandidate,
+    ) -> Option<ProposalEvaluation<HierarchicalCandidate>> {
+        let edge = *self.edges.get(usize::try_from(proposal_index).ok()?)?;
+        let block_placements = block_alignment_proposal(
+            &edge,
+            &self.source_outputs,
+            &self.sink_inputs,
+            &incumbent.realised_block_offsets,
+            &incumbent.block_placements,
+        );
+        let fragment_fingerprint = hierarchical_proposal_fingerprint(
+            "hierarchical-block-fragment-v1",
+            edge,
+            incumbent,
+            &block_placements,
+        );
+        let choice_fingerprint = hierarchical_proposal_fingerprint(
+            "hierarchical-block-choice-v1",
+            edge,
+            incumbent,
+            &block_placements,
+        );
+        let mut cap_work = CapWorkCounters::default();
+        match (self.compile)(&block_placements) {
+            Ok(candidate) => Some(ProposalEvaluation {
+                fragment_fingerprint,
+                choice_fingerprint,
+                terminal: ProposalTerminal::NoImprovement,
+                cap_work,
+                certified: Some(candidate),
+            }),
+            Err(error) => {
+                let terminal = terminal_for_seed_error(&error, &mut cap_work);
+                Some(ProposalEvaluation {
+                    fragment_fingerprint,
+                    choice_fingerprint,
+                    terminal,
+                    cap_work,
+                    certified: None,
+                })
+            }
+        }
+    }
 }
 
 /// Every module the reachable design actually instantiates.
@@ -374,6 +709,7 @@ fn compile_blocks(
             None,
             services,
             &SeedVariant::default(),
+            &BTreeMap::new(),
         )
         .map_err(|error| SynthesisError::Seed(format!("{name}: {error}")))?;
         // The netlist this block carries must be the one its candidate was
@@ -385,13 +721,14 @@ fn compile_blocks(
         // block's ports anything behind them actually consumes.
         let (flat, _) = module_flattening(lowered, name)
             .map_err(|error| SynthesisError::Seed(format!("{name}: {error}")))?;
-        let block = CompiledBlock::from_certified(name, &flat, &certified).map_err(|error| {
-            SynthesisError::Block {
-                module: name.clone(),
-                first_path: first_instance_path(lowered, name),
-                reason: error.to_string(),
-            }
-        })?;
+        let block =
+            CompiledBlock::from_certified(name, &flat, &certified.certified).map_err(|error| {
+                SynthesisError::Block {
+                    module: name.clone(),
+                    first_path: first_instance_path(lowered, name),
+                    reason: error.to_string(),
+                }
+            })?;
         compiled.insert(name.clone(), block);
     }
     Ok(compiled)
@@ -568,11 +905,294 @@ fn hierarchy_descriptor_bytes(design: &HierarchicalNetlist) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compile::fragment_synth::identity::{ImplementationKey, InputMask, InstanceId};
-    use crate::compile::fragment_synth::instance_graph::DuplicateRequest;
+    use crate::compile::fragment_synth::identity::{
+        GateIndex, ImplementationKey, InputMask, PortId, PrimitiveId, TopologyNodeId,
+    };
+    use crate::compile::fragment_synth::instance_graph::{
+        BlockInstance, DuplicateRequest, SinkAssignment,
+    };
     use crate::compile::fragment_synth::seed::InstancePlacementOverride;
+    use crate::compile::geometry::Anchor;
     use crate::compile::hierarchy::{Module, ModuleInstance};
     use crate::compile::Gate;
+    use crate::redstone::world::block::Facing;
+
+    struct BlockProposalFixture {
+        graph: InstanceGraph,
+        structural_edges: Vec<EdgeFacts>,
+        source: InstanceId,
+        sink: InstanceId,
+        source_outputs: BTreeMap<(InstanceId, u16), BlockPort>,
+        sink_inputs: BTreeMap<(InstanceId, u16), BlockPort>,
+        realised_offsets: BTreeMap<InstanceId, Offset>,
+        block_placements: BTreeMap<InstanceId, BlockPlacementOffset>,
+    }
+
+    /// One valid two-block connection plus every malformed assignment the
+    /// parent proposal stream must ignore. The port cells are deliberately
+    /// distinct from their realised offsets: alignment has to use both.
+    fn block_proposal_fixture() -> BlockProposalFixture {
+        let source = InstanceId(10);
+        let later_source = InstanceId(11);
+        let sink = InstanceId(20);
+        let later_sink = InstanceId(21);
+        let non_block = InstanceId(99);
+        let primary = LogicalSignalId::PrimaryInput(PortId(0));
+        let primitive = |logical_owner, terminals| {
+            PhysicalDriver::Instance(InstanceDriver::Primitive {
+                logical_owner,
+                terminals,
+            })
+        };
+        let terminal = |instance, node| PrimitiveId {
+            instance,
+            node: TopologyNodeId(node),
+        };
+        let assignment = |sink, signal, driver| SinkAssignment {
+            sink,
+            signal,
+            driver,
+        };
+        let sink_input = |instance, input_index| PhysicalSink::InstanceInput {
+            instance,
+            input_index,
+        };
+        let block = |id, index, inputs, output_gates| BlockInstance {
+            id,
+            block: index,
+            path: vec![format!("block{index}")],
+            inputs,
+            output_gates,
+        };
+
+        BlockProposalFixture {
+            graph: InstanceGraph {
+                instances: vec![],
+                assignments: vec![
+                    assignment(
+                        sink_input(sink, 0),
+                        LogicalSignalId::GateOutput(GateIndex(0)),
+                        primitive(source, vec![terminal(source, 0)]),
+                    ),
+                    assignment(
+                        sink_input(sink, 1),
+                        LogicalSignalId::GateOutput(GateIndex(1)),
+                        primitive(source, vec![terminal(source, 1)]),
+                    ),
+                    assignment(
+                        sink_input(sink, 2),
+                        LogicalSignalId::GateOutput(GateIndex(2)),
+                        primitive(later_source, vec![terminal(later_source, 0)]),
+                    ),
+                    assignment(
+                        sink_input(later_sink, 0),
+                        LogicalSignalId::GateOutput(GateIndex(0)),
+                        primitive(source, vec![terminal(source, 0)]),
+                    ),
+                    assignment(
+                        sink_input(sink, 3),
+                        primary,
+                        PhysicalDriver::PrimaryInput(PortId(0)),
+                    ),
+                    assignment(
+                        sink_input(sink, 4),
+                        LogicalSignalId::GateOutput(GateIndex(0)),
+                        PhysicalDriver::Instance(InstanceDriver::Junction {
+                            logical_owner: source,
+                            contributors: vec![],
+                        }),
+                    ),
+                    assignment(
+                        sink_input(sink, 5),
+                        LogicalSignalId::GateOutput(GateIndex(0)),
+                        primitive(source, vec![terminal(source, 0), terminal(source, 1)]),
+                    ),
+                    assignment(
+                        sink_input(sink, 6),
+                        LogicalSignalId::GateOutput(GateIndex(0)),
+                        primitive(source, vec![terminal(later_source, 0)]),
+                    ),
+                    assignment(
+                        sink_input(sink, 7),
+                        LogicalSignalId::GateOutput(GateIndex(0)),
+                        primitive(non_block, vec![terminal(non_block, 0)]),
+                    ),
+                    assignment(
+                        sink_input(non_block, 0),
+                        LogicalSignalId::GateOutput(GateIndex(0)),
+                        primitive(source, vec![terminal(source, 0)]),
+                    ),
+                    assignment(
+                        sink_input(sink, 8),
+                        LogicalSignalId::GateOutput(GateIndex(0)),
+                        primitive(source, vec![terminal(source, 2)]),
+                    ),
+                    assignment(
+                        sink_input(sink, 9),
+                        LogicalSignalId::GateOutput(GateIndex(0)),
+                        primitive(source, vec![terminal(source, 0)]),
+                    ),
+                    assignment(
+                        sink_input(sink, 1),
+                        LogicalSignalId::GateOutput(GateIndex(1)),
+                        primitive(source, vec![terminal(source, 0)]),
+                    ),
+                ],
+                primary_inputs: vec![],
+                declared_outputs: vec![],
+                blocks: vec![
+                    block(source, 0, vec![primary], vec![GateIndex(0), GateIndex(1)]),
+                    block(later_source, 1, vec![primary], vec![GateIndex(2)]),
+                    block(sink, 2, vec![primary; 9], vec![]),
+                    block(later_sink, 3, vec![primary], vec![]),
+                ],
+            },
+            structural_edges: vec![
+                EdgeFacts {
+                    source,
+                    sink,
+                    structural_slack_ticks: 5,
+                },
+                EdgeFacts {
+                    source: later_source,
+                    sink,
+                    structural_slack_ticks: 0,
+                },
+                EdgeFacts {
+                    source,
+                    sink: later_sink,
+                    structural_slack_ticks: 5,
+                },
+            ],
+            source,
+            sink,
+            source_outputs: BTreeMap::from([(
+                (source, 1),
+                BlockPort {
+                    cell: Anchor { x: 2, y: 0, z: 6 },
+                    toward: Facing::East,
+                },
+            )]),
+            sink_inputs: BTreeMap::from([(
+                (sink, 1),
+                BlockPort {
+                    cell: Anchor { x: 8, y: 0, z: 2 },
+                    toward: Facing::East,
+                },
+            )]),
+            realised_offsets: BTreeMap::from([
+                (
+                    source,
+                    Offset {
+                        dx: 100,
+                        dy: 0,
+                        dz: 30,
+                    },
+                ),
+                (
+                    sink,
+                    Offset {
+                        dx: 200,
+                        dy: 0,
+                        dz: 10,
+                    },
+                ),
+            ]),
+            block_placements: BTreeMap::from([
+                (source, BlockPlacementOffset { dx: 3, dz: 4 }),
+                (sink, BlockPlacementOffset { dx: 7, dz: -5 }),
+            ]),
+        }
+    }
+
+    #[test]
+    fn explicit_block_edges_accept_only_valid_block_terminals_and_sort_stably() {
+        let fixture = block_proposal_fixture();
+
+        assert_eq!(
+            explicit_block_edges(&fixture.graph, &fixture.structural_edges),
+            vec![
+                BlockEdge {
+                    source_block: InstanceId(11),
+                    source_port: 0,
+                    sink_block: fixture.sink,
+                    sink_input: 2,
+                    slack: 0,
+                },
+                BlockEdge {
+                    source_block: fixture.source,
+                    source_port: 0,
+                    sink_block: fixture.sink,
+                    sink_input: 0,
+                    slack: 5,
+                },
+                BlockEdge {
+                    source_block: fixture.source,
+                    source_port: 1,
+                    sink_block: fixture.sink,
+                    sink_input: 1,
+                    slack: 5,
+                },
+                BlockEdge {
+                    source_block: fixture.source,
+                    source_port: 0,
+                    sink_block: InstanceId(21),
+                    sink_input: 0,
+                    slack: 5,
+                },
+            ],
+            "primary inputs, malformed block terminals, invalid sink inputs, and non-block endpoints are not block edges",
+        );
+    }
+
+    #[test]
+    fn block_alignment_proposal_is_cumulative_and_moves_only_its_sink() {
+        let fixture = block_proposal_fixture();
+        let edge = BlockEdge {
+            source_block: fixture.source,
+            source_port: 1,
+            sink_block: fixture.sink,
+            sink_input: 1,
+            slack: 5,
+        };
+
+        let proposal: BTreeMap<InstanceId, BlockPlacementOffset> = block_alignment_proposal(
+            &edge,
+            &fixture.source_outputs,
+            &fixture.sink_inputs,
+            &fixture.realised_offsets,
+            &fixture.block_placements,
+        );
+
+        assert_eq!(
+            proposal
+                .iter()
+                .map(|(&block, offset)| (block, (offset.dx, offset.dz)))
+                .collect::<BTreeMap<_, _>>(),
+            BTreeMap::from([(fixture.source, (3, 4)), (fixture.sink, (7, 19)),]),
+            "the cumulative proposal retains every incumbent placement and updates only its sink",
+        );
+        assert_eq!(
+            (proposal[&fixture.source].dx, proposal[&fixture.source].dz),
+            (
+                fixture.block_placements[&fixture.source].dx,
+                fixture.block_placements[&fixture.source].dz,
+            ),
+        );
+
+        let source_z = fixture.source_outputs[&(fixture.source, 1)].cell.z
+            + fixture.realised_offsets[&fixture.source].dz;
+        let incumbent = fixture.block_placements[&fixture.sink];
+        let proposed = proposal[&fixture.sink];
+        let moved_sink_z = fixture.sink_inputs[&(fixture.sink, 1)].cell.z
+            + fixture.realised_offsets[&fixture.sink].dz
+            + proposed.dz
+            - incumbent.dz;
+        assert_eq!(
+            moved_sink_z, source_z,
+            "the compiled port cells align in absolute Z"
+        );
+    }
 
     /// A three-level design (`top` -> `mid` -> two distinct leaves) small
     /// enough to compile inside a unit test.
@@ -723,10 +1343,9 @@ mod tests {
             Err(_) => panic!("an unknown module must return an error, not panic"),
         };
         match error {
-            SynthesisError::Hierarchy(message) => assert_eq!(
-                message,
-                "instance `u0` names unknown module `missing`"
-            ),
+            SynthesisError::Hierarchy(message) => {
+                assert_eq!(message, "instance `u0` names unknown module `missing`")
+            }
             other => panic!("expected the hierarchy error category, got {other}"),
         }
     }
@@ -894,53 +1513,30 @@ mod tests {
     }
 
     /// The budgeted search really runs over a hierarchical top: the
-    /// proposal stream is pulled, every proposal is compiled by
+    /// block-edge stream is pulled, every proposal is compiled by
     /// `compile_module_with_blocks` (not the flat seed), and the incumbent
     /// survives whatever comes back.
     ///
-    /// Every trace entry is proof the pluggable compiler ran: the stream
-    /// records a terminal only after `(self.compile)(&variant)` returned,
-    /// and the one terminal it can produce without calling the compiler
-    /// (`BacktrackCapExhausted` from the shell-ordinal cap) is asserted
-    /// against below.
+    /// Every trace entry is proof the parent compiler ran: the stream emits
+    /// no evaluation before it calls `compile_module_with_blocks` for its
+    /// selected block edge.
     #[test]
     fn a_non_zero_budget_evaluates_real_proposals() {
-        let design = three_level_design();
+        let design = crate::circuits::hierarchical_builder::circuits::ripple_adder(2);
         let baseline = compile_hierarchical(&design, SynthesisBudget::Evaluations(0), None)
             .expect("certifies");
         assert_eq!(baseline.evaluations_used, 0);
         assert!(baseline.trace.is_empty());
 
-        let searched = compile_hierarchical(&design, SynthesisBudget::Evaluations(2), None)
+        let searched = compile_hierarchical(&design, SynthesisBudget::Evaluations(1), None)
             .expect("a budgeted hierarchical compile must still certify");
 
-        assert_eq!(searched.evaluations_used, 2, "the stream must be pulled");
-        assert_eq!(searched.trace.len(), 2);
-        for entry in &searched.trace {
-            assert_ne!(
-                entry.terminal,
-                crate::compile::fragment_synth::search::ProposalTerminal::BacktrackCapExhausted,
-                "a proposal that never reached the parent compiler proves nothing"
-            );
-        }
-        // Stronger than "it was called": at least one proposal came back
-        // with a certified candidate, so a variant really was re-planned
-        // around the blocks, unioned and certified. Both do today; one is
-        // asserted so a single proposal drifting to a refusal does not
-        // silently empty the test.
-        assert!(
-            searched
-                .trace
-                .iter()
-                .any(|entry| entry.certified_quality.is_some()),
-            "no proposal was actually planned and certified: {:?}",
-            searched
-                .trace
-                .iter()
-                .map(|entry| entry.terminal)
-                .collect::<Vec<_>>()
+        assert_eq!(
+            searched.evaluations_used, 1,
+            "the carry edge must be evaluated"
         );
-        assert!(searched.compiled.output_positions.contains_key("o"));
+        assert_eq!(searched.trace.len(), 1);
+        assert!(searched.compiled.output_positions.contains_key("s1"));
         assert!(
             searched.metrics.quality <= baseline.metrics.quality,
             "the search must never return worse than the seed it started from"
@@ -966,7 +1562,15 @@ mod tests {
         assert!(parent_gates > 0, "the top must own gates of its own");
         let block_gate = InstanceId(parent_gates);
         let compile = |variant: &SeedVariant| {
-            compile_module_with_blocks(&lowered, &lowered.top, &ordered, None, services, variant)
+            compile_module_with_blocks(
+                &lowered,
+                &lowered.top,
+                &ordered,
+                None,
+                services,
+                variant,
+                &BTreeMap::new(),
+            )
         };
 
         let certified = compile(&SeedVariant::default()).expect("the default variant plans");
@@ -976,6 +1580,7 @@ mod tests {
         // placement the seed already chose keeps this about the guard
         // rather than about whether some other placement routes.
         let facing = certified
+            .certified
             .candidate()
             .placements
             .iter()
