@@ -4907,6 +4907,93 @@ pub(crate) mod tests {
                 ("alu8".into(), h::alu8()),
             ]);
         }
+
+        /// Task 4's target oracle: does `ripple_adder8`'s hierarchical
+        /// block-edge proposal stream ever reach BOTH quality gates --
+        /// `observed_settle <= 474` and `non_air_blocks <= 100_615` -- on the
+        /// SAME certified result, at any evaluation budget up to full stream
+        /// exhaustion? See
+        /// `.superpowers/sdd/2026-09-05-timing-aware-module-floorplan/task-4-report.md`
+        /// for how this measurement is used.
+        ///
+        /// Budgets 0/1/2/4 are the same deterministic staircase
+        /// `hierarchy_api::tests::evaluation_budgets_0_1_2_4_are_deterministic_quality_staircases`
+        /// already proves for a small fixture; the fifth point uses
+        /// `SynthesisBudget::Evaluations(u64::MAX)` -- no arbitrary cap, so
+        /// the run can only end by the finite block-edge proposal stream
+        /// itself running out (`HierarchicalProposalStream::next` emits
+        /// exactly one proposal per edge, in `explicit_block_edges`' order).
+        /// This last point must ALWAYS report `StopReason::ProposalStreamExhausted`
+        /// with `evaluations_used < u64::MAX`, regardless of whether an
+        /// earlier, smaller budget already met both quality gates --
+        /// otherwise a smaller budget "passing" would mask the true
+        /// exhaustion point silently hitting an evaluation cap instead.
+        #[test]
+        #[ignore = "release-only: run with `cargo test --release --lib ripple_adder8_hierarchical_budget_target_oracle -- --ignored --nocapture`"]
+        fn ripple_adder8_hierarchical_budget_target_oracle() {
+            use crate::circuits::hierarchical_builder::circuits as h;
+            use crate::compile::compile_hierarchical;
+            use crate::compile::fragment_synth::search::StopReason;
+
+            const MAX_OBSERVED_SETTLE: u64 = 474;
+            const MAX_NON_AIR_BLOCKS: u64 = 100_615;
+
+            let design = h::ripple_adder(8);
+            let points: [(&str, SynthesisBudget); 5] = [
+                ("budget=0", SynthesisBudget::Evaluations(0)),
+                ("budget=1", SynthesisBudget::Evaluations(1)),
+                ("budget=2", SynthesisBudget::Evaluations(2)),
+                ("budget=4", SynthesisBudget::Evaluations(4)),
+                ("budget=exhaustion", SynthesisBudget::Evaluations(u64::MAX)),
+            ];
+
+            let mut target_met = false;
+            let mut last = None;
+            for (label, budget) in points {
+                let started = std::time::Instant::now();
+                let result = compile_hierarchical(&design, budget, None)
+                    .unwrap_or_else(|error| panic!("{label}: ripple_adder8 must certify: {error}"));
+                let quality = result.metrics.quality;
+                eprintln!(
+                    "TARGET {label}: ticks={} blocks={} static_delay={:?} \
+                     evaluations_used={} stop_reason={:?} case_fingerprint={} \
+                     candidate_fingerprint={} trace={:?} in {:?}",
+                    quality.observed_settle,
+                    quality.non_air_blocks,
+                    quality.static_routed_delay,
+                    result.evaluations_used,
+                    result.stop_reason,
+                    result.case_fingerprint.as_str(),
+                    result.candidate_fingerprint.as_str(),
+                    result.trace,
+                    started.elapsed(),
+                );
+                if quality.observed_settle <= MAX_OBSERVED_SETTLE
+                    && quality.non_air_blocks <= MAX_NON_AIR_BLOCKS
+                {
+                    target_met = true;
+                }
+                last = Some((label, result.stop_reason, result.evaluations_used));
+            }
+
+            let (label, stop_reason, evaluations_used) =
+                last.expect("five budget points always run");
+            assert_eq!(
+                stop_reason,
+                StopReason::ProposalStreamExhausted,
+                "{label}: the last (largest) budget point uses \
+                 SynthesisBudget::Evaluations(u64::MAX), an uncapped run, so it must \
+                 always end by exhausting the finite block-edge proposal stream -- \
+                 regardless of whether an earlier point already met both quality \
+                 gates (target_met={target_met}) -- an EvaluationBudget stop here \
+                 would mean the run was silently capped instead of truly exhausted"
+            );
+            assert!(
+                evaluations_used < u64::MAX,
+                "{label}: stream exhaustion must use fewer than u64::MAX evaluations, \
+                 got {evaluations_used}"
+            );
+        }
     }
 
     #[test]
