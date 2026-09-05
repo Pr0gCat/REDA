@@ -343,31 +343,46 @@ struct BlockEdge {
 }
 
 #[derive(Serialize)]
-struct HierarchicalProposalFingerprint<'a> {
+struct BlockEdgeFingerprint {
+    schema: &'static str,
+    edge: BlockEdge,
+}
+
+#[derive(Serialize)]
+struct HierarchicalChoiceFingerprint<'a> {
     schema: &'static str,
     edge: BlockEdge,
     incumbent_fingerprint: &'a str,
     block_placements: Vec<(InstanceId, i32, i32)>,
 }
 
-fn hierarchical_proposal_fingerprint(
-    schema: &'static str,
+fn serialized_fingerprint(descriptor: &impl Serialize) -> crate::compile::metrics::Fingerprint {
+    canonical_fingerprint(
+        &serde_json::to_vec(descriptor).expect("hierarchical proposal descriptor serializes"),
+    )
+}
+
+fn block_edge_fingerprint(edge: BlockEdge) -> crate::compile::metrics::Fingerprint {
+    serialized_fingerprint(&BlockEdgeFingerprint {
+        schema: "hierarchical-block-fragment-v1",
+        edge,
+    })
+}
+
+fn hierarchical_choice_fingerprint(
     edge: BlockEdge,
     incumbent: &HierarchicalCandidate,
     block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
 ) -> crate::compile::metrics::Fingerprint {
-    let descriptor = HierarchicalProposalFingerprint {
-        schema,
+    serialized_fingerprint(&HierarchicalChoiceFingerprint {
+        schema: "hierarchical-block-choice-v1",
         edge,
         incumbent_fingerprint: incumbent.candidate_fingerprint().as_str(),
         block_placements: block_placements
             .iter()
             .map(|(&block, offset)| (block, offset.dx, offset.dz))
             .collect(),
-    };
-    canonical_fingerprint(
-        &serde_json::to_vec(&descriptor).expect("hierarchical proposal descriptor serializes"),
-    )
+    })
 }
 
 fn explicit_block_edges(graph: &InstanceGraph, facts: &[EdgeFacts]) -> Vec<BlockEdge> {
@@ -491,6 +506,7 @@ fn block_alignment_proposal(
     realised_offsets: &BTreeMap<InstanceId, Offset>,
     incumbent: &BTreeMap<InstanceId, BlockPlacementOffset>,
 ) -> BTreeMap<InstanceId, BlockPlacementOffset> {
+    // Edge and ports share a validated graph; offsets come from its planned candidate.
     let source = source_outputs[&(edge.source_block, edge.source_port)];
     let sink = sink_inputs[&(edge.sink_block, edge.sink_input)];
     let source_z = source
@@ -565,18 +581,9 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
             &incumbent.realised_block_offsets,
             &incumbent.block_placements,
         );
-        let fragment_fingerprint = hierarchical_proposal_fingerprint(
-            "hierarchical-block-fragment-v1",
-            edge,
-            incumbent,
-            &block_placements,
-        );
-        let choice_fingerprint = hierarchical_proposal_fingerprint(
-            "hierarchical-block-choice-v1",
-            edge,
-            incumbent,
-            &block_placements,
-        );
+        let fragment_fingerprint = block_edge_fingerprint(edge);
+        let choice_fingerprint =
+            hierarchical_choice_fingerprint(edge, incumbent, &block_placements);
         let mut cap_work = CapWorkCounters::default();
         match (self.compile)(&block_placements) {
             Ok(candidate) => Some(ProposalEvaluation {
@@ -1536,6 +1543,14 @@ mod tests {
             "the carry edge must be evaluated"
         );
         assert_eq!(searched.trace.len(), 1);
+        let trace = &searched.trace;
+        let proposal = trace.first().expect("one trace entry asserted above");
+        assert!(
+            proposal.certified_quality.is_some(),
+            "the carry alignment proposal must plan, union, and certify; terminal={:?}, trace={:?}",
+            proposal.terminal,
+            trace,
+        );
         assert!(searched.compiled.output_positions.contains_key("s1"));
         assert!(
             searched.metrics.quality <= baseline.metrics.quality,

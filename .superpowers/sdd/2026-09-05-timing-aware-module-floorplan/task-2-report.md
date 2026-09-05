@@ -54,11 +54,29 @@ The controller then verified the final production code:
 The correction uses `ripple_adder(2)`, which has a real block-to-block carry
 edge, compares budget one against its budget-zero baseline, and asserts one
 trace entry and one evaluation.  It retains output and non-worsening-quality
-checks, but no longer requires a certified proposal: a classified compile
-refusal is valid evidence that the finite stream called the parent compiler.
-Together with the final focused pass, every nonignored `hierarchy_api` test is
-covered at final production code.  The only warning in these runs was the
-pre-existing `BlockFacts.delay_ticks` dead-code warning.
+checks.  The only warning in these runs was the pre-existing
+`BlockFacts.delay_ticks` dead-code warning.
+
+## Fix Round 1: Claude review follow-up
+
+The original one-evaluation assertion did not prove that the selected carry
+proposal completed planning, union and certification: a stream that refused
+every proposal could satisfy it.  The test now requires its sole trace entry
+to have `certified_quality.is_some()` and prints that entry's exact terminal
+and the complete trace on failure.  The controller reran
+`cargo test --lib a_non_zero_budget_evaluates_real_proposals -- --nocapture`:
+pass; 1 passed, 957 filtered, 205.27 s.  This proves the first `ripple_adder(2)`
+carry-alignment proposal planned, unioned and certified with
+`certified_quality.is_some()`.  The only warning was the pre-existing
+`BlockFacts.delay_ticks` dead-code warning.  The earlier focused run took
+212.02 s, so roughly 3.5 minutes remains the known cost of this integration
+contract.
+
+Fragment and choice fingerprints are now distinct by construction.  The
+fragment fingerprint serializes only a versioned `BlockEdge` descriptor;
+choice adds the incumbent fingerprint and ordered block placements.  Direct
+port/offset map indexing is documented as an invariant of the same validated
+graph and planned candidate, without adding an error abstraction.
 
 ## Review against the brief and minimality
 
@@ -97,6 +115,7 @@ pre-existing `BlockFacts.delay_ticks` dead-code warning.
 
 ## Local final checks
 
-This finalization ran `rustfmt --edition 2021` on both Rust files and
-`git diff --check` successfully.  Cargo was not run during finalization by
-request; the test results above are controller-provided verification evidence.
+This finalization and the Claude-review follow-up each ran `rustfmt --edition
+2021` on both Rust files and `git diff --check` successfully.  Cargo was not
+run during finalization by request; the test results above are
+controller-provided verification evidence.
