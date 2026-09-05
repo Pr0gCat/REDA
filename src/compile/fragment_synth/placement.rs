@@ -536,8 +536,19 @@ impl TopologyAwareSeedPlacer {
         }
         // Automatic ports share the shift: they sit on the free tracks the
         // macros were placed around.
-        let automatic_input_lateral =
-            |port: PortId| -> i32 { track_laterals[&LogicalSignalId::PrimaryInput(port)] };
+        // A declared input no gate reads has no net, so no track: it still
+        // gets a lever (`automatic_input_ports` below is every primary
+        // input, unfiltered by consumers), and it stands on lateral 0 like
+        // any other trackless signal -- the same fallback `track_lateral`
+        // and `automatic_output_lateral` already use. Indexing here instead
+        // panicked on an unused port, which is ordinary hardware
+        // description.
+        let automatic_input_lateral = |port: PortId| -> i32 {
+            track_laterals
+                .get(&LogicalSignalId::PrimaryInput(port))
+                .copied()
+                .unwrap_or(0)
+        };
         let automatic_output_lateral = |port: PortId| -> i32 {
             request
                 .graph

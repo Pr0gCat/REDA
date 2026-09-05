@@ -57,7 +57,7 @@ use thiserror::Error;
 
 use crate::compile::fragment_synth::blocks::CompiledBlock;
 use crate::compile::fragment_synth::candidate::{
-    CandidateError, ConnectionBinding, ExpandedPhysicalCandidate, PlacedBlock,
+    endpoint_for_driver, CandidateError, ConnectionBinding, ExpandedPhysicalCandidate, PlacedBlock,
     RealisedRouteBranch, RealisedRouteTree, RouteTarget,
 };
 use crate::compile::fragment_synth::identity::{
@@ -139,10 +139,15 @@ pub(crate) enum UnionError {
     #[error("block {block:?} port `{port}` has no route to splice")]
     MissingRoute { block: InstanceId, port: String },
     #[error(
-        "block {block:?} routes nothing out of input `{port}`: the parent's wire into that lever \
-         would be left delivering to nothing, and no later check would notice"
+        "block {block:?} has a gate reading input `{port}` but no route out of that lever: the \
+         signal the parent delivers would never reach the gate that wants it"
     )]
     UnroutedBlockInput { block: InstanceId, port: String },
+    #[error(
+        "the parent reads block {block:?} output `{port}` but laid no route away from its lamp: \
+         the consumer would be left with nothing driving it"
+    )]
+    UnroutedBlockOutput { block: InstanceId, port: String },
     #[error("the union is not a well-formed flat candidate: {0}")]
     Shape(#[from] CandidateError),
     #[error("the union is internally incomplete: {0}")]
@@ -251,8 +256,18 @@ struct Piece {
     /// Input port names in declared order, with their lever cell in parent
     /// coordinates.
     inputs: Vec<(String, Anchor)>,
+    /// Whether anything INSIDE the block actually consumes input `k` --
+    /// read off the block's own lowered netlist, which is the only thing
+    /// that can tell "no gate wanted this lever" from "the splice lost the
+    /// route". A module may declare a port nothing reads, and the block
+    /// compile places its lever anyway, so this is a legal, ordinary shape
+    /// rather than a defect.
+    input_is_read: Vec<bool>,
     /// Output port names in declared order.
     outputs: Vec<String>,
+    /// Whether anything in the PARENT consumes output `q` -- read off the
+    /// parent's own planning assignments, the mirror of `input_is_read`.
+    output_is_read: Vec<bool>,
 }
 
 pub(crate) fn union_candidate(
@@ -401,6 +416,24 @@ pub(crate) fn union_candidate(
                 Ok((port.clone(), shift(cell, offset)))
             })
             .collect::<Result<Vec<_>, UnionError>>()?;
+        let input_is_read = compiled
+            .lowered
+            .inputs
+            .iter()
+            .map(|port| block_reads_input(&compiled.lowered, port))
+            .collect();
+        let output_is_read = (0..compiled.lowered.outputs.len())
+            .map(|index| {
+                let node = TopologyNodeId(
+                    u16::try_from(index).map_err(|_| UnionError::Incomplete("block port width"))?,
+                );
+                Ok(parent_reads_block_output(
+                    &parent_candidate.instances,
+                    block.id,
+                    node,
+                ))
+            })
+            .collect::<Result<Vec<_>, UnionError>>()?;
         pieces.push((
             Piece {
                 planning: block.id,
@@ -411,7 +444,9 @@ pub(crate) fn union_candidate(
                 },
                 routes,
                 inputs,
+                input_is_read,
                 outputs: compiled.lowered.outputs.clone(),
+                output_is_read,
             },
             candidate,
         ));
@@ -490,6 +525,80 @@ fn absorb_cells(into: &mut RealisedRouteTree, source: &RealisedRouteTree) {
             into.floors.push(floor.clone());
         }
     }
+}
+
+/// Does anything inside the block consume its own input port `port`?
+///
+/// This is the one question that separates a benign unread port from a lost
+/// route, and the block's own lowered netlist is the only place that
+/// answers it: a gate naming the port as an input reads it, and so does a
+/// declared output carrying the port's name (`assign y = a`, whose route out
+/// of the lever is the one the output splice consumes). A port no gate names
+/// is ordinary hardware description -- an unused pin on an instantiated
+/// module -- and the block compile still places its lever, because
+/// `automatic_input_ports` is every declared input, unfiltered by consumers.
+fn block_reads_input(lowered: &Netlist, port: &str) -> bool {
+    lowered
+        .gates
+        .iter()
+        .any(|gate| gate.inputs.iter().any(|input| input == port))
+        || lowered.outputs.iter().any(|output| output == port)
+}
+
+/// Does anything in the parent consume block output `node`?
+///
+/// The mirror of [`block_reads_input`], asked of the parent's planning
+/// instance graph: every sink the parent has -- a gate input or a declared
+/// output -- carries the driver it is fed from, and a block output's driver
+/// resolves to `PrimitiveOutput(PrimitiveId { block, node })`. If no sink
+/// names it, nothing reads the lamp and the parent lays no route away from
+/// it; if some sink does, a missing route is a defect.
+fn parent_reads_block_output(
+    graph: &InstanceGraph,
+    block: InstanceId,
+    node: TopologyNodeId,
+) -> bool {
+    let endpoint = PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+        instance: block,
+        node,
+    });
+    graph
+        .assignments
+        .iter()
+        .any(|assignment| endpoint_for_driver(&assignment.driver) == Some(endpoint))
+}
+
+/// Retires a delivery branch nothing needs any more, together with the cells
+/// and floors that only that branch put on the ground.
+///
+/// `dropped` must already be out of `tree.branches`. Every anchor still
+/// walked by a surviving branch stays; the rest of the dropped branch's path
+/// leaves, and a floor whose cell has just left goes with it. Keeping them
+/// would be *legal* -- neither `validate_shape` nor
+/// `validate_physical_ownership` requires a route cell to lie on any branch,
+/// and `RealisedRouteTree::validate` only forbids two cells on one anchor --
+/// but it would emit a live spur of dust ending in a repeater that drives
+/// nothing, which is exactly the dead end this fix exists to avoid.
+fn retire_branch(tree: &mut RealisedRouteTree, dropped: &RealisedRouteBranch) {
+    let kept = tree
+        .branches
+        .iter()
+        .flat_map(|branch| branch.path.iter().copied())
+        .collect::<BTreeSet<_>>();
+    let dead = dropped
+        .path
+        .iter()
+        .copied()
+        .filter(|at| !kept.contains(at))
+        .collect::<BTreeSet<_>>();
+    tree.cells.retain(|cell| !dead.contains(&cell.at));
+    tree.floors.retain(|floor| {
+        let supported = Anchor {
+            y: floor.at.y + 1,
+            ..floor.at
+        };
+        !dead.contains(&supported)
+    });
 }
 
 /// Ensures `tree` owns a floor at `at`, unless something in `tree` already
@@ -580,6 +689,15 @@ fn take_block_route_from(
 /// output `q`) into a tree inside that very span. Without the fallback the
 /// unreachable case would report [`UnionError::MissingRoute`], which is the
 /// right answer for something that cannot happen.
+///
+/// An output the parent never reads is a deliberate case, not a fall-through.
+/// A module may declare an output whose instantiation leaves it unconnected,
+/// and the parent then lays no route away from that lamp -- so the block's
+/// own delivery branch has nowhere to go and is retired, along with the dust
+/// and terminal repeater that only it walked. What tells that apart from a
+/// route the splice lost is `Piece::output_is_read`, read off the parent's
+/// own assignments before any renumbering; if the parent DOES read the lamp
+/// and there is still no route, that is [`UnionError::UnroutedBlockOutput`].
 fn splice_outputs(
     union_routes: &mut BTreeMap<RouteId, RealisedRouteTree>,
     piece: &mut Piece,
@@ -611,25 +729,43 @@ fn splice_outputs(
             .iter()
             .find(|(_, tree)| tree.source == ghost_output)
             .map(|(id, _)| *id);
-        if let Some(parent_id) = parent_id {
-            let parent = union_routes
-                .remove(&parent_id)
-                .ok_or(UnionError::Incomplete("parent route out of a block"))?;
-            absorb_cells(&mut holder, &parent);
-            for branch in parent.branches {
-                let mut path = ob.path.clone();
-                path.extend(branch.path.iter().copied());
-                holder.branches.push(RealisedRouteBranch {
-                    sink: branch.sink,
-                    target: branch.target,
-                    root: ob.root,
-                    path,
-                    terminal: branch.terminal,
+        let Some(parent_id) = parent_id else {
+            // Nothing in the parent reads this lamp. Whether that is benign
+            // or a lost route is not visible here, so ask the parent's own
+            // assignments -- the mirror of the question the input splice
+            // asks the block's netlist.
+            if piece.output_is_read[index] {
+                return Err(UnionError::UnroutedBlockOutput {
+                    block: piece.planning,
+                    port: port.clone(),
                 });
             }
+            // A declared output of an instantiated module that the parent
+            // leaves unconnected is ordinary hardware description. The lamp
+            // was a block boundary and is dropped with the rest of them, and
+            // the dust and terminal repeater that fed it go too: keeping
+            // them would leave a powered spur driving nothing.
+            retire_branch(&mut holder, &ob);
+            if !holder.branches.is_empty() {
+                union_routes.insert(holder.id, holder);
+            }
+            continue;
+        };
+        let parent = union_routes
+            .remove(&parent_id)
+            .ok_or(UnionError::Incomplete("parent route out of a block"))?;
+        absorb_cells(&mut holder, &parent);
+        for branch in parent.branches {
+            let mut path = ob.path.clone();
+            path.extend(branch.path.iter().copied());
+            holder.branches.push(RealisedRouteBranch {
+                sink: branch.sink,
+                target: branch.target,
+                root: ob.root,
+                path,
+                terminal: branch.terminal,
+            });
         }
-        // No parent route at all means nothing in the parent reads this
-        // block output; dropping `ob` alone already retires its lamp.
         union_routes.insert(holder.id, holder);
     }
     Ok(())
@@ -639,11 +775,26 @@ fn splice_outputs(
 /// the lever: the exact terminal repeater standing on the lever stops being
 /// a delivery terminal and becomes an ordinary counted mid-route refresh.
 ///
-/// A block that has no route out of input `k` at all is refused here, not
-/// skipped. Skipping was worse than it looks: the parent's delivery branch
-/// has already been taken out of its tree (its target names the block's
-/// ghost id, so it cannot stay), which would leave the parent's wire running
-/// into a dead end that nothing downstream is in a position to notice.
+/// A block with no route out of input `k` has two quite different causes,
+/// and they look identical at this call site, so the decision is made from
+/// the block's own netlist (`Piece::input_is_read`) instead:
+///
+/// * **Nothing inside the block reads that lever.** An unused pin on an
+///   instantiated module is ordinary hardware description, and it compiles
+///   as a block today -- `automatic_input_ports` places a lever for every
+///   declared input whether or not a gate wants it, while the block's
+///   routing is grouped from actual consumers only, so there is no route to
+///   find. The parent still delivers to that lever, because `route_all`
+///   walks `0..block.inputs.len()` unconditionally. The delivery branch is
+///   retired here, together with the cells and floors that only it walked;
+///   what remains is the same shape a flat compile produces for a primary
+///   input no gate reads.
+/// * **A gate does read it and the route is missing anyway.** That is a real
+///   defect, and it is refused with [`UnionError::UnroutedBlockInput`].
+///   Skipping it would be worse than it looks: the parent's delivery branch
+///   has already been taken out of its tree (its target names the block's
+///   ghost id, so it cannot stay), leaving the parent's wire running into a
+///   dead end that nothing downstream is in a position to notice.
 fn splice_inputs(
     union_routes: &mut BTreeMap<RouteId, RealisedRouteTree>,
     piece: &mut Piece,
@@ -670,6 +821,20 @@ fn splice_inputs(
             return Err(UnionError::Incomplete(
                 "parent route into a block misses its lever",
             ));
+        }
+
+        if !piece.input_is_read[index] {
+            // An unused pin on an instantiated module. The block compile
+            // placed the lever anyway and the parent routes to every
+            // declared input, so the delivery exists with nothing on the
+            // far side of it. Retire the branch and the dust that only it
+            // walked; what is left is the same shape a flat compile
+            // produces for an input no gate reads.
+            retire_branch(&mut parent, &pb);
+            if !parent.branches.is_empty() {
+                union_routes.insert(parent.id, parent);
+            }
+            continue;
         }
 
         let source = PhysicalEndpointId::PrimaryInput(PortId(
@@ -834,13 +999,17 @@ mod tests {
 
     const GHOST: InstanceId = InstanceId(99);
 
+    /// Every port read by the side that faces it, which is the case where a
+    /// missing route is a defect rather than a benign unused pin.
     fn a_piece(inputs: Vec<(String, Anchor)>, outputs: Vec<String>) -> Piece {
         Piece {
             planning: InstanceId(7),
             ghost: GHOST,
             span: RouteSpan { from: 10, to: 20 },
             routes: BTreeMap::new(),
+            input_is_read: vec![true; inputs.len()],
             inputs,
+            output_is_read: vec![true; outputs.len()],
             outputs,
         }
     }
@@ -991,6 +1160,304 @@ mod tests {
             joined.branches[0].path,
             vec![lever, anchor(7)],
             "the joined path is the parent's up to the lever, then the block's"
+        );
+    }
+
+    /// One block instance, all the way through: lower the design, compile
+    /// the block, plan the parent around it, and union the two.
+    fn union_one_block<'a>(
+        design: &crate::compile::HierarchicalNetlist,
+        block_module: &str,
+        library: &'a Library,
+        services: crate::compile::fragment_synth::seed::SeedServices<'a>,
+    ) -> (
+        crate::compile::hierarchy::LoweredHierarchy,
+        CompiledBlock,
+        PlannedParent,
+        Result<ExpandedPhysicalCandidate, UnionError>,
+    ) {
+        let lowered = crate::compile::hierarchy::lower_hierarchy(design).expect("lowers");
+        let netlist = lowered.block_netlist(block_module);
+        let block = crate::compile::fragment_synth::blocks::compile_block(
+            block_module,
+            &netlist,
+            services,
+        )
+        .expect("the block compiles");
+        let ordered = vec![block.clone()];
+        let top = lowered.top.clone();
+        let (planning, owned) = planning_netlist(&lowered, &top, &ordered);
+        let graph = InstanceGraph::with_blocks(
+            &planning,
+            library,
+            &owned.iter().map(BlockSpecOwned::as_spec).collect::<Vec<_>>(),
+        )
+        .expect("the parent graph builds");
+        let planned = crate::compile::fragment_synth::seed::plan_parent_with_services(
+            SeedInput {
+                lowered: &planning,
+                source_provenance: None,
+                pins: None,
+            },
+            services,
+            graph,
+            ParentBlocks {
+                compiled: std::slice::from_ref(&block),
+            },
+            &BTreeMap::new(),
+        )
+        .expect("the parent plans");
+        let union = union_candidate(UnionInput {
+            parent: &planned,
+            blocks: std::slice::from_ref(&block),
+            flat: &lowered.flat,
+            paths: &lowered.paths,
+            library,
+        });
+        (lowered, block, planned, union)
+    }
+
+    /// Every anchor the union owns, whoever owns it.
+    fn occupied(union: &ExpandedPhysicalCandidate) -> BTreeSet<Anchor> {
+        union
+            .placements
+            .values()
+            .flat_map(|placement| placement.blocks.iter())
+            .chain(
+                union
+                    .boundaries
+                    .values()
+                    .flat_map(|boundary| boundary.blocks.iter()),
+            )
+            .chain(
+                union
+                    .routes
+                    .values()
+                    .flat_map(|route| route.cells.iter().chain(route.floors.iter())),
+            )
+            .chain(
+                union
+                    .junctions
+                    .values()
+                    .flat_map(|junction| junction.cells.iter()),
+            )
+            .map(|block| block.at)
+            .collect()
+    }
+
+    /// An input port no gate inside the module reads is ordinary hardware
+    /// description, and it compiles as a block today: the block's own
+    /// placement puts a lever there anyway, while its routing is grouped
+    /// from actual consumers and so lays no route out of it. The parent
+    /// nonetheless delivers to every declared input. The union must retire
+    /// that delivery -- branch, dust and terminal repeater together -- and
+    /// still certify, rather than refuse the whole design.
+    #[test]
+    fn a_block_input_no_gate_reads_unions_and_certifies_with_no_dead_dust() {
+        let (library, config) =
+            crate::compile::fragment_synth::seed::tests::default_services_parts();
+        let services = crate::compile::fragment_synth::seed::tests::services(&library, &config);
+        let mut hb = crate::circuits::hierarchical_builder::HierarchicalNetlistBuilder::new();
+        // `ignores_a` declares `a` and never reads it.
+        hb.module("ignores_a", &["a", "b"], &["y"], |m| {
+            m.gates.nor_named("y", "y", &["b".to_string()]);
+        });
+        // `n` feeds the unread port AND a parent gate, so the parent's tree
+        // out of it survives the retirement with one branch left: the dead
+        // cells have to be picked out of a tree that stays.
+        hb.module("top", &["x", "p"], &["z", "t"], |m| {
+            let n = m.gates.not("x");
+            m.instance("u0", "ignores_a", &[("a", &n), ("b", "p"), ("y", "w")]);
+            m.gates.nor_named("z", "z", &["w".to_string()]);
+            m.gates.nor_named("t", "t", &[n]);
+        });
+        let design = hb.finish("top");
+        let (lowered, block, planned, union) =
+            union_one_block(&design, "ignores_a", &library, services);
+        let union = union.expect("an unread block input is not a reason to refuse the design");
+
+        // The case really is the one under test: the block routes nothing
+        // out of `a`, and the parent delivers to its lever regardless.
+        let block_id = planned.candidate.instances.blocks[0].id;
+        let offset = planned.block_offsets[&block_id];
+        assert!(
+            !block.candidate.routes.values().any(|tree| tree.source
+                == PhysicalEndpointId::PrimaryInput(PortId(0))),
+            "the block must have no route out of the input nothing reads"
+        );
+        let delivery = planned
+            .candidate
+            .routes
+            .values()
+            .flat_map(|route| &route.branches)
+            .find(|branch| {
+                branch.target
+                    == RouteTarget::Connection(ConnectionId::External {
+                        instance: block_id,
+                        input_index: 0,
+                    })
+            })
+            .expect("the parent routes to every declared block input")
+            .clone();
+        assert_eq!(delivery.terminal.at, shift(block.inputs["a"].cell, offset));
+
+        // Nothing survives on the retired path: no branch walks it, and no
+        // owner is left standing on the cells that only it used.
+        let live = union
+            .routes
+            .values()
+            .flat_map(|route| &route.branches)
+            .flat_map(|branch| branch.path.iter().copied())
+            .collect::<BTreeSet<_>>();
+        let standing = occupied(&union);
+        for at in &delivery.path {
+            if live.contains(at) {
+                continue;
+            }
+            assert!(
+                !standing.contains(at),
+                "the retired delivery left a block at {at:?} that no branch walks"
+            );
+        }
+        assert!(
+            !live.contains(&delivery.terminal.at),
+            "the lever's boundary repeater must not survive as a live route cell"
+        );
+
+        assert!(union.instances.blocks.is_empty());
+        assert_eq!(union.instances.instances.len(), lowered.flat.gates.len());
+        assert_eq!(
+            union.boundaries.len(),
+            lowered.flat.inputs.len() + lowered.flat.outputs.len()
+        );
+        let certified = crate::compile::fragment_synth::seed::certify_planned(
+            union,
+            &lowered.flat,
+            services,
+        )
+        .expect("certifies");
+        assert!(certified.metrics().quality.observed_settle > 0);
+    }
+
+    /// The mirror: a declared block output the parent leaves unconnected.
+    /// The block always routes to its own lamp, so the delivery exists with
+    /// nothing on the far side; the union retires it, drops the lamp with
+    /// the rest of the block's boundaries, and certifies.
+    #[test]
+    fn a_block_output_the_parent_never_reads_unions_and_certifies() {
+        let (library, config) =
+            crate::compile::fragment_synth::seed::tests::default_services_parts();
+        let services = crate::compile::fragment_synth::seed::tests::services(&library, &config);
+        let mut hb = crate::circuits::hierarchical_builder::HierarchicalNetlistBuilder::new();
+        crate::circuits::hierarchical_builder::full_adder_module(&mut hb);
+        // top(x, b, c) : n = NOT x ; u0 = full_adder(n, b, c) ; z = NOR(sum).
+        // `cout` is bound and then never read by anything in `top`.
+        hb.module("top", &["x", "b", "c"], &["z"], |m| {
+            let n = m.gates.not("x");
+            m.instance(
+                "u0",
+                "full_adder",
+                &[
+                    ("a", &n),
+                    ("b", "b"),
+                    ("cin", "c"),
+                    ("sum", "sum"),
+                    ("cout", "cout"),
+                ],
+            );
+            m.gates.nor_named("z", "z", &["sum".to_string()]);
+        });
+        let design = hb.finish("top");
+        let (lowered, block, planned, union) =
+            union_one_block(&design, "full_adder", &library, services);
+        let union = union.expect("an unread block output is not a reason to refuse the design");
+
+        // The case really is the one under test: `cout` is block output 1,
+        // the block delivers to its lamp, and the parent lays no route away
+        // from it.
+        assert_eq!(block.lowered.outputs[1], "cout");
+        let block_id = planned.candidate.instances.blocks[0].id;
+        let offset = planned.block_offsets[&block_id];
+        assert!(
+            !planned.candidate.routes.values().any(|tree| tree.source
+                == PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+                    instance: block_id,
+                    node: TopologyNodeId(1),
+                })),
+            "nothing in the parent reads `cout`, so the parent lays no route from its lamp"
+        );
+        let delivery = block
+            .candidate
+            .routes
+            .values()
+            .flat_map(|route| &route.branches)
+            .find(|branch| branch.target == RouteTarget::DeclaredOutput(PortId(1)))
+            .expect("the block routes every declared output of its own")
+            .clone();
+
+        let live = union
+            .routes
+            .values()
+            .flat_map(|route| &route.branches)
+            .flat_map(|branch| branch.path.iter().copied())
+            .collect::<BTreeSet<_>>();
+        let standing = occupied(&union);
+        for at in delivery.path.iter().map(|at| shift(*at, offset)) {
+            if live.contains(&at) {
+                continue;
+            }
+            assert!(
+                !standing.contains(&at),
+                "the retired output delivery left a block at {at:?} that no branch walks"
+            );
+        }
+        assert!(
+            !standing.contains(&shift(block.outputs["cout"].cell, offset)),
+            "the lamp of an output nothing reads must not survive"
+        );
+
+        assert!(union.instances.blocks.is_empty());
+        assert_eq!(union.instances.instances.len(), lowered.flat.gates.len());
+        assert_eq!(
+            union.boundaries.len(),
+            lowered.flat.inputs.len() + lowered.flat.outputs.len()
+        );
+        let certified = crate::compile::fragment_synth::seed::certify_planned(
+            union,
+            &lowered.flat,
+            services,
+        )
+        .expect("certifies");
+        assert!(certified.metrics().quality.observed_settle > 0);
+    }
+
+    /// The other half of the pair: a block output the parent DOES read, with
+    /// no route away from its lamp, is a lost route and is refused.
+    #[test]
+    fn a_block_output_the_parent_reads_with_no_route_is_refused() {
+        let mut union_routes = BTreeMap::new();
+        let mut piece = a_piece(Vec::new(), vec!["y".to_string()]);
+        piece.routes.insert(
+            RouteId(10),
+            a_tree(
+                10,
+                PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+                    instance: InstanceId(3),
+                    node: TopologyNodeId(0),
+                }),
+                vec![a_branch(
+                    RouteTarget::DeclaredOutput(PortId(0)),
+                    anchor(0),
+                    &[anchor(1)],
+                )],
+            ),
+        );
+
+        let error = splice_outputs(&mut union_routes, &mut piece)
+            .expect_err("the parent reads `y` but has no route from its lamp");
+        assert!(
+            matches!(&error, UnionError::UnroutedBlockOutput { port, .. } if port == "y"),
+            "expected an unrouted-output refusal, got {error}"
         );
     }
 
