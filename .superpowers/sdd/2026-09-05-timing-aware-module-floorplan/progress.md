@@ -69,3 +69,14 @@ Spec review: APPROVED after closing typed `BlockEdge`, whole-incumbent wrapper a
 - Ceiling: seven ripple carry edges can remove at most 14 ticks, so even the ideal result is 562, still 88 above the target.  This design is a bounded contract experiment, not a claim that it reaches 474.
 
 Ruling: specify single-consumer repeater sharing as the next bounded experiment but do not implement it inside this target-closing goal — its certified structural ceiling is 14 ticks against a 102-tick gap, while the next smallest target-relevant direction is general double-NOR output-alias elimination in hierarchy flattening — cost if wrong: physical interactions could make sharing save more than the structural bound predicts, delaying a useful optimization until its own experiment.
+
+## Task 5 complete — regression and review
+
+- Report: `.superpowers/sdd/2026-09-05-timing-aware-module-floorplan/task-5-report.md`.
+- Release lib: 892 passed, 0 failed, 68 ignored.  All integration binaries passed except one pre-existing stale baseline verifier fingerprint (`1af206...` fixture versus `049a81...` current); its relevant blobs are unchanged from `addfe03`, and the same binary's other two tests pass on a clean tree.
+- Long harnesses: all 4 hierarchical, all 16 flat-extra and all 4 flat-large circuits certified.  The flat large harness reproduced `ripple_adder8` at 474 ticks / 100,615 blocks; three-level hierarchical `alu8` certified at 972 / 213,833.
+- Six-case acceptance: about 51m22s; all 30 runs compiled and certified, all 30 misses were legacy replacement quality gates, no correctness error, no shipping file generated.
+- Clippy: completed without error; warnings recorded rather than widened into cleanup.
+- Review: two Claude Code reviews completed; boundary/union APPROVED with one cache-efficiency Minor, and the evidence reviewer found only the now-closed missing Task 5 report.  CodeRabbit CLI was unavailable; a non-responsive Opus review was stopped.
+
+Ruling: retain the current flat topology-aware path despite failing the older legacy replacement quality gate — all cases certify, this goal changes only hierarchical module-floorplan search, and restoring legacy flat quality is a separate algorithm decision — cost if wrong: users selecting the topology-aware flat path keep higher latency on the five legacy baseline circuits until that separate quality goal is solved.
