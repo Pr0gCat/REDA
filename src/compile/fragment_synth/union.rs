@@ -78,6 +78,48 @@ use crate::compile::{Gate, Netlist};
 /// Everything the union needs: the planned parent, the compiled blocks it
 /// stamps, and the flattened netlist (plus one [`GatePath`] per flat gate)
 /// that the result must look like it was compiled from.
+///
+/// # Preconditions
+///
+/// These three are the union's own, and no check downstream re-derives them.
+/// The first is a genuine residual risk; the other two are structural, and
+/// only one of them is reported as an error rather than mis-mapped.
+///
+/// * **A merge gate a block exports keeps the block's `isolation_mask`,
+///   which the parent's fanout can invalidate.** The union carries every
+///   instance's `ImplementationKey` over from the candidate that actually
+///   placed it, because that key is what the cells on the ground realise.
+///   For an `Or`/merge gate the default key is `Merge { isolation_mask }`,
+///   and that mask is computed from the *enclosing* netlist's fanout -- so a
+///   block signal that is bare inside the block can gain a consumer once the
+///   block is flattened into the parent, and the mask the block chose is
+///   then a bit short. Nothing here proves the mask right. The equivalence
+///   proof does not: `reinstantiate_authority`
+///   ([`crate::compile::fragment_synth::verify`]) re-instantiates from that
+///   same stale key, so proof and candidate are self-consistent *with* a
+///   wrong mask. Only the simulator can catch it, and exhaustively only when
+///   the design has at most `exhaustive_input_threshold` inputs
+///   ([`crate::compile::fragment_synth::config`], default 8) -- and wide
+///   designs are exactly what blocks exist for. What actually holds this up
+///   is geometry, not a check: every block port already carries a repeater,
+///   and a repeater is a diode, which supplies the isolation a mask bit
+///   would have asked for. A block that exports a merge input is the case
+///   to re-derive the key for rather than carry it over.
+///
+/// * **The parent's instance graph must be one-to-one.** Step 1 below pairs
+///   the k-th empty-path flat gate with planning instance k. An
+///   `InstanceRole::Duplicate` instance breaks that count, and the union
+///   then fails with [`UnionError::Incomplete`] rather than mapping a gate
+///   onto the wrong instance.
+///
+/// * **A block must not itself contain blocks.** `block_locals` counts every
+///   flat gate whose path *starts* with a block instance's name, so a nested
+///   block's grandchildren land in that count, while the compiled block's
+///   own graph (built from `LoweredHierarchy::block_netlist`, which is the
+///   module's own gates only) does not have them. A nested block is
+///   therefore mis-mapped, not rejected. A hierarchy deeper than one level
+///   has to be unioned bottom-up, each level's union becoming the next
+///   level's [`CompiledBlock`].
 pub(crate) struct UnionInput<'a> {
     pub parent: &'a PlannedParent,
     pub blocks: &'a [CompiledBlock],
@@ -96,6 +138,11 @@ pub(crate) enum UnionError {
     InstanceGraph(#[from] SynthesisError),
     #[error("block {block:?} port `{port}` has no route to splice")]
     MissingRoute { block: InstanceId, port: String },
+    #[error(
+        "block {block:?} routes nothing out of input `{port}`: the parent's wire into that lever \
+         would be left delivering to nothing, and no later check would notice"
+    )]
+    UnroutedBlockInput { block: InstanceId, port: String },
     #[error("the union is not a well-formed flat candidate: {0}")]
     Shape(#[from] CandidateError),
     #[error("the union is internally incomplete: {0}")]
@@ -172,6 +219,24 @@ pub(crate) fn planning_netlist(
     )
 }
 
+/// The half-open span of [`RouteId`]s one block's relocated routes occupy.
+///
+/// Block route ids and the parent's live in one id space, and the parent's
+/// come first, so any scan of the union's routes that means "a tree that
+/// came from THIS block" has to be fenced by this span -- an unfenced
+/// ascending scan finds the parent's own route first and takes that instead.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct RouteSpan {
+    from: u32,
+    to: u32,
+}
+
+impl RouteSpan {
+    fn holds(&self, id: RouteId) -> bool {
+        (self.from..self.to).contains(&id.0)
+    }
+}
+
 /// One block, translated and renumbered into the parent's space, with its
 /// routes lifted out so the splice can consume them one at a time.
 struct Piece {
@@ -180,7 +245,8 @@ struct Piece {
     /// Where that id was parked while renumbering the parent, so it can
     /// never collide with a real flat instance.
     ghost: InstanceId,
-    candidate: ExpandedPhysicalCandidate,
+    /// Which [`RouteId`]s this block's relocated routes were given.
+    span: RouteSpan,
     routes: BTreeMap<RouteId, RealisedRouteTree>,
     /// Input port names in declared order, with their lever cell in parent
     /// coordinates.
@@ -335,29 +401,35 @@ pub(crate) fn union_candidate(
                 Ok((port.clone(), shift(cell, offset)))
             })
             .collect::<Result<Vec<_>, UnionError>>()?;
-        pieces.push(Piece {
-            planning: block.id,
-            ghost: ghost_of[&block.id],
+        pieces.push((
+            Piece {
+                planning: block.id,
+                ghost: ghost_of[&block.id],
+                span: RouteSpan {
+                    from: route_offset,
+                    to: next_route,
+                },
+                routes,
+                inputs,
+                outputs: compiled.lowered.outputs.clone(),
+            },
             candidate,
-            routes,
-            inputs,
-            outputs: compiled.lowered.outputs.clone(),
-        });
+        ));
     }
 
     // ---- 5. Every output splice, then every input splice. ----
-    for piece in &mut pieces {
-        splice_outputs(&mut union, piece)?;
+    for (piece, _) in &mut pieces {
+        splice_outputs(&mut union.routes, piece)?;
     }
-    for piece in &mut pieces {
-        splice_inputs(&mut union, piece)?;
+    for (piece, _) in &mut pieces {
+        splice_inputs(&mut union.routes, piece)?;
     }
 
     // ---- 6. Everything else the blocks own moves in as it stands. ----
-    for piece in pieces {
-        union.placements.extend(piece.candidate.placements);
-        union.junctions.extend(piece.candidate.junctions);
-        for (id, observation) in piece.candidate.observations {
+    for (piece, body) in pieces {
+        union.placements.extend(body.placements);
+        union.junctions.extend(body.junctions);
+        for (id, observation) in body.observations {
             // A block's own port observations name `PortId`s in the parent's
             // port space; they would silently overwrite the parent's.
             if matches!(
@@ -452,27 +524,64 @@ where
     Some((routes.remove(&id)?, index))
 }
 
-/// The same, over a block's not-yet-merged routes first and the union's
-/// routes second. A block whose two declared outputs are driven by one gate
-/// shares a single route tree, so the second output splice finds that tree
-/// already merged into the union.
-fn take_block_or_union_tree<F>(
-    union: &mut ExpandedPhysicalCandidate,
+/// Takes this block's own route out of `source`, whether it is still pending
+/// or has already been merged into the union by an earlier output splice.
+///
+/// The second case is what a pass-through -- a block input wired straight to
+/// a block output, with no gate between -- looks like by the time the input
+/// splice runs: the output splice consumed that very tree, so it is no
+/// longer pending, and it sits in the union under the block's own route id
+/// still carrying the *block's* `PrimaryInput(PortId(k))` as its source.
+/// Finding it there and merging it is what keeps that block-specific source
+/// from surviving into the finished candidate.
+///
+/// The union scan is fenced to the block's own id span. Without the fence it
+/// would just as happily match the parent's own route out of the parent's
+/// primary input `k`, which is a different signal wearing the same
+/// `PhysicalEndpointId`.
+fn take_block_route_from(
+    union_routes: &mut BTreeMap<RouteId, RealisedRouteTree>,
     pending: &mut BTreeMap<RouteId, RealisedRouteTree>,
-    wanted: F,
-) -> Option<(RealisedRouteTree, usize)>
-where
-    F: Fn(&RealisedRouteBranch) -> bool,
-{
-    take_tree_with(pending, &wanted).or_else(|| take_tree_with(&mut union.routes, &wanted))
+    span: RouteSpan,
+    source: PhysicalEndpointId,
+) -> Option<RealisedRouteTree> {
+    if let Some(id) = pending
+        .iter()
+        .find(|(_, tree)| tree.source == source)
+        .map(|(id, _)| *id)
+    {
+        return pending.remove(&id);
+    }
+    let merged = union_routes
+        .iter()
+        .find(|(id, tree)| span.holds(**id) && tree.source == source)
+        .map(|(id, _)| *id)?;
+    union_routes.remove(&merged)
 }
 
 /// The block's route out of output `q` swallows the parent's route away from
 /// the lamp: the lamp stops being a boundary lamp and becomes the parent
 /// trunk's first dust cell, and every parent branch is re-rooted onto the
 /// block's own output branch.
+///
+/// The block's tree is looked up in the block's own not-yet-merged routes
+/// and nowhere else. An earlier draft fell back to scanning the union's
+/// routes for a branch targeting `DeclaredOutput(PortId(q))`, on the theory
+/// that a block whose two declared outputs share one driver would share one
+/// tree and so find it already merged. That case cannot arise: a route tree
+/// is grouped by its source endpoint, and two distinct declared outputs of
+/// one block are produced by two distinct gates (or two distinct primary
+/// inputs), hence by two distinct endpoints. What the fallback could do was
+/// hijack: `DeclaredOutput(PortId(q))` reads identically in the block's port
+/// space and the parent's, so the scan could take the *parent's* route to
+/// ITS output `q` -- and fencing the scan to the block's id span would not
+/// even close that, since an earlier output splice pushes the parent's
+/// downstream branches (one of which may deliver to the parent's declared
+/// output `q`) into a tree inside that very span. Without the fallback the
+/// unreachable case would report [`UnionError::MissingRoute`], which is the
+/// right answer for something that cannot happen.
 fn splice_outputs(
-    union: &mut ExpandedPhysicalCandidate,
+    union_routes: &mut BTreeMap<RouteId, RealisedRouteTree>,
     piece: &mut Piece,
 ) -> Result<(), UnionError> {
     for (index, port) in piece.outputs.clone().iter().enumerate() {
@@ -483,7 +592,9 @@ fn splice_outputs(
             u32::try_from(index).map_err(|_| UnionError::Incomplete("block port width"))?,
         ));
         let Some((mut holder, ob_index)) =
-            take_block_or_union_tree(union, &mut piece.routes, |branch| branch.target == target)
+            take_tree_with(&mut piece.routes, &|branch: &RealisedRouteBranch| {
+                branch.target == target
+            })
         else {
             return Err(UnionError::MissingRoute {
                 block: piece.planning,
@@ -496,14 +607,12 @@ fn splice_outputs(
             instance: piece.ghost,
             node,
         });
-        let parent_id = union
-            .routes
+        let parent_id = union_routes
             .iter()
             .find(|(_, tree)| tree.source == ghost_output)
             .map(|(id, _)| *id);
         if let Some(parent_id) = parent_id {
-            let parent = union
-                .routes
+            let parent = union_routes
                 .remove(&parent_id)
                 .ok_or(UnionError::Incomplete("parent route out of a block"))?;
             absorb_cells(&mut holder, &parent);
@@ -521,7 +630,7 @@ fn splice_outputs(
         }
         // No parent route at all means nothing in the parent reads this
         // block output; dropping `ob` alone already retires its lamp.
-        union.routes.insert(holder.id, holder);
+        union_routes.insert(holder.id, holder);
     }
     Ok(())
 }
@@ -529,8 +638,14 @@ fn splice_outputs(
 /// The parent's route into input `k` swallows the block's route away from
 /// the lever: the exact terminal repeater standing on the lever stops being
 /// a delivery terminal and becomes an ordinary counted mid-route refresh.
+///
+/// A block that has no route out of input `k` at all is refused here, not
+/// skipped. Skipping was worse than it looks: the parent's delivery branch
+/// has already been taken out of its tree (its target names the block's
+/// ghost id, so it cannot stay), which would leave the parent's wire running
+/// into a dead end that nothing downstream is in a position to notice.
 fn splice_inputs(
-    union: &mut ExpandedPhysicalCandidate,
+    union_routes: &mut BTreeMap<RouteId, RealisedRouteTree>,
     piece: &mut Piece,
 ) -> Result<(), UnionError> {
     for (index, (port, lever)) in piece.inputs.clone().iter().enumerate() {
@@ -541,7 +656,7 @@ fn splice_inputs(
             input_index,
         });
         let Some((mut parent, pb_index)) =
-            take_tree_with(&mut union.routes, &|branch: &RealisedRouteBranch| {
+            take_tree_with(union_routes, &|branch: &RealisedRouteBranch| {
                 branch.target == target
             })
         else {
@@ -560,28 +675,25 @@ fn splice_inputs(
         let source = PhysicalEndpointId::PrimaryInput(PortId(
             u32::try_from(index).map_err(|_| UnionError::Incomplete("block port width"))?,
         ));
-        let inner = piece
-            .routes
-            .iter()
-            .find(|(_, tree)| tree.source == source)
-            .map(|(id, _)| *id);
-        if let Some(inner) = inner {
-            let inner = piece
-                .routes
-                .remove(&inner)
-                .ok_or(UnionError::Incomplete("block route from an input"))?;
-            absorb_cells(&mut parent, &inner);
-            for branch in inner.branches {
-                let mut path = pb.path.clone();
-                path.extend(branch.path.iter().copied());
-                parent.branches.push(RealisedRouteBranch {
-                    sink: branch.sink,
-                    target: branch.target,
-                    root: pb.root,
-                    path,
-                    terminal: branch.terminal,
-                });
-            }
+        let Some(inner) =
+            take_block_route_from(union_routes, &mut piece.routes, piece.span, source)
+        else {
+            return Err(UnionError::UnroutedBlockInput {
+                block: piece.planning,
+                port: port.clone(),
+            });
+        };
+        absorb_cells(&mut parent, &inner);
+        for branch in inner.branches {
+            let mut path = pb.path.clone();
+            path.extend(branch.path.iter().copied());
+            parent.branches.push(RealisedRouteBranch {
+                sink: branch.sink,
+                target: branch.target,
+                root: pb.root,
+                path,
+                terminal: branch.terminal,
+            });
         }
         // The lever's own stone was the block's input boundary floor, and the
         // boundary is gone; the parent's route almost always floored the same
@@ -596,7 +708,7 @@ fn splice_inputs(
                 state: crate::compile::stone(),
             },
         );
-        union.routes.insert(parent.id, parent);
+        union_routes.insert(parent.id, parent);
     }
     Ok(())
 }
@@ -676,6 +788,211 @@ fn refresh_declared_output_owners(union: &mut ExpandedPhysicalCandidate) {
 mod tests {
     use super::*;
     use crate::compile::fragment_synth::seed::{ParentBlocks, SeedInput};
+    use crate::compile::routing::{RouteTerminalKind, TerminalRecord};
+    use crate::redstone::world::block::BlockKind;
+
+    fn anchor(x: i32) -> Anchor {
+        Anchor { x, y: 0, z: 0 }
+    }
+
+    /// A branch whose terminal stands on the last cell of `path`. Only the
+    /// fields the splice reads are meaningful.
+    fn a_branch(target: RouteTarget, root: Anchor, path: &[Anchor]) -> RealisedRouteBranch {
+        let sink = RoutedSinkId {
+            route: RouteId(0),
+            ordinal: 0,
+        };
+        RealisedRouteBranch {
+            sink,
+            target,
+            root,
+            path: path.to_vec(),
+            terminal: TerminalRecord {
+                sink,
+                at: *path.last().unwrap_or(&root),
+                state: crate::compile::stone(),
+                kind: RouteTerminalKind::OutputTerminalRepeater,
+                repeaters: 0,
+                delayed_owner: None,
+            },
+        }
+    }
+
+    fn a_tree(
+        id: u32,
+        source: PhysicalEndpointId,
+        branches: Vec<RealisedRouteBranch>,
+    ) -> RealisedRouteTree {
+        RealisedRouteTree {
+            id: RouteId(id),
+            source,
+            cells: Vec::new(),
+            floors: Vec::new(),
+            branches,
+        }
+    }
+
+    const GHOST: InstanceId = InstanceId(99);
+
+    fn a_piece(inputs: Vec<(String, Anchor)>, outputs: Vec<String>) -> Piece {
+        Piece {
+            planning: InstanceId(7),
+            ghost: GHOST,
+            span: RouteSpan { from: 10, to: 20 },
+            routes: BTreeMap::new(),
+            inputs,
+            outputs,
+        }
+    }
+
+    fn routes_of(trees: Vec<RealisedRouteTree>) -> BTreeMap<RouteId, RealisedRouteTree> {
+        trees.into_iter().map(|tree| (tree.id, tree)).collect()
+    }
+
+    /// Finding 3: `DeclaredOutput(PortId(q))` reads identically in a block's
+    /// port space and in the parent's, and the parent's routes come first in
+    /// id order. The output splice must therefore look for the block's own
+    /// output route in the block's own routes and NOWHERE else -- the
+    /// earlier fallback scan of the union's routes would take the parent's
+    /// route to the parent's output `q` and splice the block onto it.
+    #[test]
+    fn a_block_output_never_takes_the_parents_own_route_to_the_same_port_number() {
+        let parent = a_tree(
+            0,
+            PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+                instance: InstanceId(0),
+                node: TopologyNodeId(0),
+            }),
+            vec![a_branch(
+                RouteTarget::DeclaredOutput(PortId(0)),
+                anchor(0),
+                &[anchor(1)],
+            )],
+        );
+        let mut union_routes = routes_of(vec![parent.clone()]);
+        let mut piece = a_piece(Vec::new(), vec!["y".to_string()]);
+
+        let error = splice_outputs(&mut union_routes, &mut piece)
+            .expect_err("the block has no route out of `y` of its own");
+        assert!(
+            matches!(&error, UnionError::MissingRoute { port, .. } if port == "y"),
+            "expected a missing-route refusal, got {error}"
+        );
+        assert_eq!(
+            union_routes.get(&RouteId(0)),
+            Some(&parent),
+            "the parent's own route to its declared output 0 must be untouched"
+        );
+    }
+
+    /// Finding 2, the case that is refused: a block that routes nothing out
+    /// of one of its levers. The parent's delivery branch has already been
+    /// lifted out of its tree by then (its target names the block's ghost
+    /// id, so it cannot stay), so skipping would leave the parent's wire
+    /// running into a dead end that no later check looks at.
+    #[test]
+    fn a_block_input_with_no_route_out_of_its_lever_is_refused_not_skipped() {
+        let lever = anchor(5);
+        let mut union_routes = routes_of(vec![a_tree(
+            0,
+            PhysicalEndpointId::PrimaryInput(PortId(0)),
+            vec![a_branch(
+                RouteTarget::Connection(ConnectionId::External {
+                    instance: GHOST,
+                    input_index: 0,
+                }),
+                anchor(0),
+                &[lever],
+            )],
+        )]);
+        let mut piece = a_piece(vec![("a".to_string(), lever)], Vec::new());
+
+        let error = splice_inputs(&mut union_routes, &mut piece)
+            .expect_err("nothing inside the block reads input `a`");
+        assert!(
+            matches!(&error, UnionError::UnroutedBlockInput { port, .. } if port == "a"),
+            "expected an unrouted-input refusal, got {error}"
+        );
+    }
+
+    /// Finding 2, the case that now works: `assign out = in`. By the time
+    /// the input splice runs, the output splice has already consumed the
+    /// block's tree out of `PrimaryInput(PortId(k))` -- it was the tree
+    /// carrying the `DeclaredOutput` branch -- and left it in the union
+    /// under the block's own route id, still wearing the BLOCK's source. The
+    /// input splice has to find it there and merge it, or that block-space
+    /// source survives into the finished candidate aliased onto the parent's
+    /// port numbering.
+    ///
+    /// The parent's own route out of ITS primary input 0 wears the identical
+    /// [`PhysicalEndpointId`] and comes first in id order, so the search has
+    /// to be fenced to the block's route span.
+    #[test]
+    fn a_pass_through_block_route_is_found_after_the_output_splice_consumed_it() {
+        let lever = anchor(5);
+        let delivery = a_tree(
+            0,
+            PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+                instance: InstanceId(0),
+                node: TopologyNodeId(0),
+            }),
+            vec![a_branch(
+                RouteTarget::Connection(ConnectionId::External {
+                    instance: GHOST,
+                    input_index: 0,
+                }),
+                anchor(0),
+                &[lever],
+            )],
+        );
+        // The PARENT's own primary input 0: same endpoint identity, different
+        // signal, lower route id.
+        let decoy = a_tree(
+            1,
+            PhysicalEndpointId::PrimaryInput(PortId(0)),
+            vec![a_branch(
+                RouteTarget::DeclaredOutput(PortId(9)),
+                anchor(20),
+                &[anchor(21)],
+            )],
+        );
+        // What the output splice left behind for the pass-through.
+        let merged = a_tree(
+            11,
+            PhysicalEndpointId::PrimaryInput(PortId(0)),
+            vec![a_branch(
+                RouteTarget::DeclaredOutput(PortId(3)),
+                anchor(6),
+                &[anchor(7)],
+            )],
+        );
+        let mut union_routes = routes_of(vec![delivery, decoy.clone(), merged]);
+        let mut piece = a_piece(vec![("a".to_string(), lever)], Vec::new());
+
+        splice_inputs(&mut union_routes, &mut piece).expect("the pass-through tree is spliced");
+
+        assert!(
+            !union_routes.contains_key(&RouteId(11)),
+            "the block's own tree must have been consumed by the join"
+        );
+        assert_eq!(
+            union_routes.get(&RouteId(1)),
+            Some(&decoy),
+            "the parent's own route out of its primary input 0 must be untouched"
+        );
+        let joined = &union_routes[&RouteId(0)];
+        assert_eq!(joined.branches.len(), 1);
+        assert_eq!(
+            joined.branches[0].target,
+            RouteTarget::DeclaredOutput(PortId(3))
+        );
+        assert_eq!(joined.branches[0].root, anchor(0));
+        assert_eq!(
+            joined.branches[0].path,
+            vec![lever, anchor(7)],
+            "the joined path is the parent's up to the lever, then the block's"
+        );
+    }
 
     /// gate -> block -> gate, certified as one flat circuit.
     #[test]
@@ -745,17 +1062,115 @@ mod tests {
             union.boundaries.len(),
             lowered.flat.inputs.len() + lowered.flat.outputs.len()
         );
-        // Boundary repeaters are counted in route delays.
-        let repeaters: u64 = union
-            .routes
-            .values()
-            .flat_map(|route| &route.branches)
-            .map(|branch| branch.terminal.repeaters)
-            .sum();
-        assert!(
-            repeaters >= 3 + 2,
-            "three input joins and two output joins add repeaters"
-        );
+        // Every boundary join has to show up in the route delays. A floor on
+        // the grand total says nothing here -- a compiled full adder's own
+        // internal routes clear five repeaters on their own, whether or not
+        // a single boundary was counted -- so measure each of the five joins
+        // against the two halves it was made from. A joined branch's count
+        // must be the parent half, plus the block half, plus exactly one for
+        // the boundary repeater itself, which stopped being an excluded
+        // delivery terminal and became an ordinary counted mid-route refresh.
+        let block_id = planned.candidate.instances.blocks[0].id;
+        let offset = planned.block_offsets[&block_id];
+        let crossing = |at: Anchor| {
+            let mut counts = union
+                .routes
+                .values()
+                .flat_map(|route| &route.branches)
+                .filter(|branch| branch.path.contains(&at))
+                .map(|branch| branch.terminal.repeaters)
+                .collect::<Vec<_>>();
+            counts.sort_unstable();
+            counts
+        };
+        for (index, port) in block.lowered.inputs.iter().enumerate() {
+            let lever = shift(block.inputs[port].cell, offset);
+            let pb = planned
+                .candidate
+                .routes
+                .values()
+                .flat_map(|route| &route.branches)
+                .find(|branch| {
+                    branch.target
+                        == RouteTarget::Connection(ConnectionId::External {
+                            instance: block_id,
+                            input_index: u16::try_from(index).unwrap(),
+                        })
+                })
+                .expect("the parent routes every block input");
+            assert_eq!(pb.terminal.at, lever, "input `{port}` terminal");
+            assert_eq!(
+                pb.terminal.state.kind,
+                BlockKind::Repeater,
+                "input `{port}` boundary is a repeater"
+            );
+            assert_eq!(
+                pb.terminal.kind,
+                RouteTerminalKind::OutputTerminalRepeater,
+                "input `{port}` boundary was an excluded delivery terminal"
+            );
+            let inner = block
+                .candidate
+                .routes
+                .values()
+                .find(|tree| {
+                    tree.source
+                        == PhysicalEndpointId::PrimaryInput(PortId(u32::try_from(index).unwrap()))
+                })
+                .expect("the block routes every input it reads");
+            let mut expected = inner
+                .branches
+                .iter()
+                .map(|branch| branch.terminal.repeaters + pb.terminal.repeaters + 1)
+                .collect::<Vec<_>>();
+            expected.sort_unstable();
+            assert_eq!(crossing(lever), expected, "input `{port}` join");
+        }
+        for (index, port) in block.lowered.outputs.iter().enumerate() {
+            let ob = block
+                .candidate
+                .routes
+                .values()
+                .flat_map(|route| &route.branches)
+                .find(|branch| {
+                    branch.target
+                        == RouteTarget::DeclaredOutput(PortId(u32::try_from(index).unwrap()))
+                })
+                .expect("the block routes every declared output");
+            assert_eq!(
+                ob.terminal.state.kind,
+                BlockKind::Repeater,
+                "output `{port}` boundary is a repeater"
+            );
+            assert_eq!(
+                ob.terminal.kind,
+                RouteTerminalKind::OutputTerminalRepeater,
+                "output `{port}` boundary was an excluded delivery terminal"
+            );
+            let downstream = planned
+                .candidate
+                .routes
+                .values()
+                .find(|tree| {
+                    tree.source
+                        == PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+                            instance: block_id,
+                            node: TopologyNodeId(u16::try_from(index).unwrap()),
+                        })
+                })
+                .expect("the parent reads every block output");
+            let mut expected = downstream
+                .branches
+                .iter()
+                .map(|branch| branch.terminal.repeaters + ob.terminal.repeaters + 1)
+                .collect::<Vec<_>>();
+            expected.sort_unstable();
+            assert_eq!(
+                crossing(shift(ob.terminal.at, offset)),
+                expected,
+                "output `{port}` join"
+            );
+        }
         let certified = crate::compile::fragment_synth::seed::certify_planned(
             union,
             &lowered.flat,
