@@ -37,7 +37,24 @@ pub(crate) struct BlockPort {
 #[derive(Debug, Clone)]
 pub(crate) struct CompiledBlock {
     pub module: String,
-    /// The block netlist it was compiled from.
+    /// The netlist `candidate` was certified against, and the block's
+    /// declared interface: `lowered.inputs`/`lowered.outputs` are the
+    /// module's own ports, in declared order, and `lowered.gates` is
+    /// everything the candidate realises.
+    ///
+    /// For a leaf that is the module's own gates. For a module that itself
+    /// instantiates something it is that module's whole FLATTENING --
+    /// grandchildren included -- because that is what its candidate holds.
+    /// The two must not diverge: the union one level up reads these gates
+    /// (`union::block_reads_input`) to tell "this port feeds nothing" from
+    /// "the splice lost a route", and a netlist narrower than the candidate
+    /// makes every port consumed only by a grandchild look unused, which
+    /// retires the parent's delivery to a route that is really there.
+    /// `HierarchicalNetlist::flatten` copies the top module's `inputs` and
+    /// `outputs` verbatim, so a flattening carries exactly the same port
+    /// name list, in the same order, as `LoweredHierarchy::block_netlist`
+    /// would -- which is what keeps `union::planning_netlist`'s port
+    /// bindings and `from_certified`'s `PortId` indexing lined up.
     pub lowered: Netlist,
     /// Block-local coordinates, exactly as compiled.
     pub candidate: ExpandedPhysicalCandidate,
@@ -91,6 +108,10 @@ impl CompiledBlock {
     /// then becomes a [`CompiledBlock`] for its own parent. Both routes
     /// must read the port table by exactly the same rule, so there is only
     /// one place that reads it.
+    ///
+    /// `lowered` must be the netlist `certified` was certified against --
+    /// for that second route, the module's flattening, NOT its own gates.
+    /// See [`CompiledBlock::lowered`].
     pub(crate) fn from_certified(
         module: &str,
         lowered: &Netlist,

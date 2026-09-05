@@ -23,6 +23,20 @@
 //! to `union_candidate` as a block it has already been flattened into a
 //! block of its own, so it contains no blocks.
 //!
+//! The other half of that discipline is what such a block carries as its
+//! [`CompiledBlock::lowered`]: the module's whole FLATTENING, which is what
+//! its candidate was certified against, and never
+//! `LoweredHierarchy::block_netlist` (the module's own gates only). The two
+//! differ exactly when the module instantiates something, and the
+//! difference is not cosmetic. A parent module typically passes most of its
+//! own inputs straight down to its children -- `alu4`'s `a0..a3`, `b0..b3`
+//! and `cin` are consumed only by its four `slice` instances -- so with the
+//! narrower netlist the union one level up asks `block_reads_input` about
+//! gates that are not in it, concludes nine of eleven ports feed nothing,
+//! and retires the grandparent's delivery to routes that are really there.
+//! Certification then refuses the result. Keeping `lowered` in step with
+//! the candidate is what makes three levels compile.
+//!
 //! A single-module design does not go through any of this. It returns
 //! straight down [`compile_fragment_synth`] on the flattened lowered
 //! netlist, which for a module with no instances is exactly
@@ -361,11 +375,21 @@ fn compile_blocks(
             &SeedVariant::default(),
         )
         .map_err(|error| SynthesisError::Seed(format!("{name}: {error}")))?;
-        let block = CompiledBlock::from_certified(name, &lowered.block_netlist(name), &certified)
-            .map_err(|error| SynthesisError::Block {
-            module: name.clone(),
-            first_path: first_instance_path(lowered, name),
-            reason: error.to_string(),
+        // The netlist this block carries must be the one its candidate was
+        // certified against -- this module's whole FLATTENING, grandchildren
+        // included -- not `block_netlist`, which is the module's own gates
+        // only. See `CompiledBlock::lowered`: a block whose netlist is
+        // narrower than its candidate is internally inconsistent, and the
+        // union one level up reads that netlist to decide which of the
+        // block's ports anything behind them actually consumes.
+        let (flat, _) = module_flattening(lowered, name)
+            .map_err(|error| SynthesisError::Seed(format!("{name}: {error}")))?;
+        let block = CompiledBlock::from_certified(name, &flat, &certified).map_err(|error| {
+            SynthesisError::Block {
+                module: name.clone(),
+                first_path: first_instance_path(lowered, name),
+                reason: error.to_string(),
+            }
         })?;
         compiled.insert(name.clone(), block);
     }
@@ -543,7 +567,106 @@ fn hierarchy_descriptor_bytes(design: &HierarchicalNetlist) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compile::hierarchy::Module;
+    use crate::compile::fragment_synth::identity::{ImplementationKey, InputMask, InstanceId};
+    use crate::compile::fragment_synth::instance_graph::DuplicateRequest;
+    use crate::compile::fragment_synth::seed::InstancePlacementOverride;
+    use crate::compile::hierarchy::{Module, ModuleInstance};
+    use crate::compile::Gate;
+
+    /// A three-level design (`top` -> `mid` -> two distinct leaves) small
+    /// enough to compile inside a unit test.
+    ///
+    /// The shape is `alu4`'s, deliberately: **`mid` passes every one of its
+    /// own inputs straight down to its children**, so not one of `mid`'s own
+    /// gates names `x`, `y` or `z`, and `mid` declares no output carrying
+    /// those names either. That is the only property that makes this
+    /// fixture a test of anything -- a block whose `lowered` is its own
+    /// gates instead of its flattening reads all three ports as consumed by
+    /// nothing, and the union one level up retires the grandparent's
+    /// delivery to routes that are really there.
+    ///
+    /// Two DISTINCT leaf modules, so the leaf worker pool has more than one
+    /// name to hand out, and a middle module, so the sequential
+    /// parent-compile loop runs too.
+    fn three_level_design() -> HierarchicalNetlist {
+        fn instance(name: &str, module: &str, ports: &[(&str, &str)]) -> ModuleInstance {
+            ModuleInstance {
+                name: name.to_string(),
+                module: module.to_string(),
+                ports: ports
+                    .iter()
+                    .map(|(port, signal)| {
+                        (
+                            (*port).to_string(),
+                            PortBinding::Signal((*signal).to_string()),
+                        )
+                    })
+                    .collect(),
+            }
+        }
+        let mut modules = BTreeMap::new();
+        // Leaf one: `w = u OR v`, as NOT(NOR(u, v)).
+        modules.insert(
+            "any_of".to_string(),
+            Module {
+                inputs: vec!["u".into(), "v".into()],
+                outputs: vec!["w".into()],
+                gates: vec![Gate::nor("t", &["u", "v"]), Gate::nor("w", &["t"])],
+                instances: vec![],
+            },
+        );
+        // Leaf two, a different module: `w = NOR(u, v)`.
+        modules.insert(
+            "neither".to_string(),
+            Module {
+                inputs: vec!["u".into(), "v".into()],
+                outputs: vec!["w".into()],
+                gates: vec![Gate::nor("w", &["u", "v"])],
+                instances: vec![],
+            },
+        );
+        modules.insert(
+            "mid".to_string(),
+            Module {
+                inputs: vec!["x".into(), "y".into(), "z".into()],
+                outputs: vec!["m".into()],
+                // Reads only its children's outputs -- never x, y or z.
+                gates: vec![Gate::nor("m", &["p", "q"])],
+                instances: vec![
+                    instance("lo", "any_of", &[("u", "x"), ("v", "y"), ("w", "p")]),
+                    instance("hi", "neither", &[("u", "y"), ("v", "z"), ("w", "q")]),
+                ],
+            },
+        );
+        modules.insert(
+            "top".to_string(),
+            Module {
+                inputs: vec!["a".into(), "b".into(), "c".into()],
+                outputs: vec!["o".into()],
+                gates: vec![Gate::nor("g", &["a", "b"]), Gate::nor("o", &["n", "g"])],
+                instances: vec![instance(
+                    "m0",
+                    "mid",
+                    &[("x", "a"), ("y", "b"), ("z", "c"), ("m", "n")],
+                )],
+            },
+        );
+        HierarchicalNetlist {
+            top: "top".to_string(),
+            modules,
+        }
+    }
+
+    /// [`three_level_design`] specialised and lowered, with its module
+    /// order -- the state `compile_hierarchical_with_threads` works from.
+    fn lowered_three_level() -> (LoweredHierarchy, Vec<String>) {
+        let design = three_level_design()
+            .specialise_constants()
+            .expect("no constants to specialise");
+        let lowered = lower_hierarchy(&design).expect("lowers");
+        let order = lowered.as_hierarchical().module_order().expect("acyclic");
+        (lowered, order)
+    }
 
     fn single_module(netlist: &Netlist, name: &str) -> HierarchicalNetlist {
         let mut modules = BTreeMap::new();
@@ -630,9 +753,90 @@ mod tests {
         assert!(result.compiled.output_positions.contains_key("s1"));
     }
 
+    /// Three levels, end to end. `mid` is compiled as a parent, becomes a
+    /// block, and is then stamped by `top` -- the recursion the whole
+    /// module exists for, and the case that is broken by construction if a
+    /// parent-turned-block carries its own gates instead of its flattening
+    /// as its `lowered` netlist.
+    #[test]
+    fn a_three_level_design_certifies_end_to_end() {
+        let design = three_level_design();
+
+        // The fixture is only a test of anything while this holds.
+        let mid = &design.modules["mid"];
+        for port in &mid.inputs {
+            assert!(
+                !mid.gates
+                    .iter()
+                    .any(|gate| gate.inputs.contains(port) || &gate.output == port)
+                    && !mid.outputs.contains(port),
+                "`mid` must pass `{port}` straight to a child, as `alu4` does"
+            );
+        }
+        assert_eq!(design.modules["top"].instances.len(), 1);
+        assert_eq!(mid.instances.len(), 2);
+
+        let result = compile_hierarchical(&design, SynthesisBudget::Evaluations(0), None)
+            .expect("a three-level design must certify");
+        assert!(result.metrics.quality.observed_settle > 0);
+        assert!(result.compiled.output_positions.contains_key("o"));
+    }
+
+    /// The three-level acceptance circuit itself: `top` -> two `alu4` ->
+    /// four `slice` each. Same shape as
+    /// [`a_three_level_design_certifies_end_to_end`], two orders of
+    /// magnitude bigger -- 19 primary inputs and several hundred flat
+    /// gates, which is minutes of routing and certification, not seconds.
+    ///
+    /// Ignored so the fast suite stays fast; run it with
+    /// `cargo test --lib compile::fragment_synth::hierarchy_api -- --ignored`.
+    #[test]
+    #[ignore = "minutes, not seconds: 2 x alu4 x 4 slices is the full acceptance circuit"]
+    fn alu8_the_three_level_acceptance_circuit_certifies() {
+        let design = crate::circuits::hierarchical_builder::circuits::alu8();
+        let result = compile_hierarchical(&design, SynthesisBudget::Evaluations(0), None)
+            .expect("alu8 must certify");
+        assert!(result.metrics.quality.observed_settle > 0);
+        for bit in 0..8 {
+            assert!(result
+                .compiled
+                .output_positions
+                .contains_key(&format!("r{bit}")));
+        }
+        assert!(result.compiled.output_positions.contains_key("cout"));
+    }
+
+    /// Both halves of `compile_blocks` have to run for this to mean
+    /// anything: the leaf worker pool needs more than one name to hand out,
+    /// and the sequential parent loop needs a module that instantiates
+    /// something. [`three_level_design`] has two distinct leaves and one
+    /// middle module, and the assertions below state that rather than
+    /// trusting it -- a fixture that quietly loses its second leaf would
+    /// make this test vacuous again.
     #[test]
     fn parallel_and_sequential_block_compiles_agree() {
-        let design = crate::circuits::hierarchical_builder::circuits::ripple_adder(2);
+        let design = three_level_design();
+        let (lowered, order) = lowered_three_level();
+        let instantiated = instantiated_modules(&lowered);
+        let leaves: Vec<&String> = order
+            .iter()
+            .filter(|name| {
+                instantiated.contains(*name) && lowered.modules[*name].instances.is_empty()
+            })
+            .collect();
+        let parents: Vec<&String> = order
+            .iter()
+            .filter(|name| {
+                instantiated.contains(*name) && !lowered.modules[*name].instances.is_empty()
+            })
+            .collect();
+        assert_eq!(
+            leaves.len(),
+            2,
+            "the worker pool must have real work: {leaves:?}"
+        );
+        assert_eq!(parents.len(), 1, "the parent loop must run: {parents:?}");
+
         let many =
             compile_hierarchical_with_threads(&design, SynthesisBudget::Evaluations(0), None, 4)
                 .unwrap();
@@ -641,6 +845,147 @@ mod tests {
                 .unwrap();
         assert_eq!(many.candidate_fingerprint, one.candidate_fingerprint);
         assert_eq!(many.case_fingerprint, one.case_fingerprint);
+    }
+
+    /// The budgeted search really runs over a hierarchical top: the
+    /// proposal stream is pulled, every proposal is compiled by
+    /// `compile_module_with_blocks` (not the flat seed), and the incumbent
+    /// survives whatever comes back.
+    ///
+    /// Every trace entry is proof the pluggable compiler ran: the stream
+    /// records a terminal only after `(self.compile)(&variant)` returned,
+    /// and the one terminal it can produce without calling the compiler
+    /// (`BacktrackCapExhausted` from the shell-ordinal cap) is asserted
+    /// against below.
+    #[test]
+    fn a_non_zero_budget_evaluates_real_proposals() {
+        let design = three_level_design();
+        let baseline = compile_hierarchical(&design, SynthesisBudget::Evaluations(0), None)
+            .expect("certifies");
+        assert_eq!(baseline.evaluations_used, 0);
+        assert!(baseline.trace.is_empty());
+
+        let searched = compile_hierarchical(&design, SynthesisBudget::Evaluations(2), None)
+            .expect("a budgeted hierarchical compile must still certify");
+
+        assert_eq!(searched.evaluations_used, 2, "the stream must be pulled");
+        assert_eq!(searched.trace.len(), 2);
+        for entry in &searched.trace {
+            assert_ne!(
+                entry.terminal,
+                crate::compile::fragment_synth::search::ProposalTerminal::BacktrackCapExhausted,
+                "a proposal that never reached the parent compiler proves nothing"
+            );
+        }
+        // Stronger than "it was called": at least one proposal came back
+        // with a certified candidate, so a variant really was re-planned
+        // around the blocks, unioned and certified. Both do today; one is
+        // asserted so a single proposal drifting to a refusal does not
+        // silently empty the test.
+        assert!(
+            searched
+                .trace
+                .iter()
+                .any(|entry| entry.certified_quality.is_some()),
+            "no proposal was actually planned and certified: {:?}",
+            searched
+                .trace
+                .iter()
+                .map(|entry| entry.terminal)
+                .collect::<Vec<_>>()
+        );
+        assert!(searched.compiled.output_positions.contains_key("o"));
+        assert!(
+            searched.metrics.quality <= baseline.metrics.quality,
+            "the search must never return worse than the seed it started from"
+        );
+    }
+
+    /// The two proposals a block-stamping parent cannot represent, and the
+    /// one it can.
+    ///
+    /// `compile_module_with_blocks` is the whole point of the pluggable
+    /// compiler seam, so its guards are stated directly rather than left to
+    /// whichever variant the stream happens to choose.
+    #[test]
+    fn a_parent_refuses_only_the_proposals_it_cannot_represent() {
+        let (lowered, order) = lowered_three_level();
+        let library = Library::default_library();
+        let search_config = SearchConfig::checked_defaults();
+        let services = seed_services(&library, &search_config);
+        let blocks = compile_blocks(&lowered, &order, 1).expect("blocks compile");
+        let ordered = ordered_blocks(&lowered, &lowered.top, &order, &blocks);
+        let parent_gates =
+            u32::try_from(lowered.modules[&lowered.top].gates.len()).expect("narrow");
+        assert!(parent_gates > 0, "the top must own gates of its own");
+        let block_gate = InstanceId(parent_gates);
+        let compile = |variant: &SeedVariant| {
+            compile_module_with_blocks(&lowered, &lowered.top, &ordered, None, services, variant)
+        };
+
+        let certified = compile(&SeedVariant::default()).expect("the default variant plans");
+
+        // A proposal naming one of the parent's OWN gates is a proposal the
+        // parent can act on, and must not be refused. Re-stating the
+        // placement the seed already chose keeps this about the guard
+        // rather than about whether some other placement routes.
+        let facing = certified
+            .candidate()
+            .placements
+            .iter()
+            .find(|(id, _)| id.instance == InstanceId(0))
+            .map(|(_, placement)| placement.facing)
+            .expect("the parent's first gate is placed");
+        let mut representable = SeedVariant::default();
+        representable.placements.insert(
+            InstanceId(0),
+            InstancePlacementOverride {
+                facing,
+                dx: 0,
+                dz: 0,
+            },
+        );
+        compile(&representable).expect("a variant over the parent's own gates is representable");
+
+        let mut implements_a_block_gate = SeedVariant::default();
+        implements_a_block_gate.implementations.insert(
+            block_gate,
+            ImplementationKey::Merge {
+                isolation_mask: InputMask::new(0),
+            },
+        );
+        let mut places_a_block_gate = SeedVariant::default();
+        places_a_block_gate.placements.insert(
+            block_gate,
+            InstancePlacementOverride {
+                facing,
+                dx: 0,
+                dz: 0,
+            },
+        );
+        // Rendered rather than matched: a `CertifiedCandidate`'s own `Debug`
+        // is the entire compiled world, which is not what anyone wants out
+        // of a failing assertion.
+        let refusal = |variant: &SeedVariant| match compile(variant) {
+            Err(SeedError::Incomplete(reason)) => reason.to_string(),
+            Err(other) => format!("some other error: {other}"),
+            Ok(_) => "certified".to_string(),
+        };
+
+        for variant in [implements_a_block_gate, places_a_block_gate] {
+            assert_eq!(refusal(&variant), "proposal targets a block gate");
+        }
+
+        let mut duplicates = SeedVariant::default();
+        duplicates.duplicates.push(DuplicateRequest {
+            canonical: InstanceId(0),
+            ordinal: 1,
+            sinks: BTreeSet::new(),
+        });
+        assert_eq!(
+            refusal(&duplicates),
+            "a duplicate proposal cannot be represented in a parent that stamps blocks"
+        );
     }
 
     /// The hierarchy is part of the case, not just its flattening. Two

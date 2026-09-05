@@ -112,14 +112,20 @@ use crate::compile::{Gate, Netlist};
 ///   then fails with [`UnionError::Incomplete`] rather than mapping a gate
 ///   onto the wrong instance.
 ///
-/// * **A block must not itself contain blocks.** `block_locals` counts every
-///   flat gate whose path *starts* with a block instance's name, so a nested
-///   block's grandchildren land in that count, while the compiled block's
-///   own graph (built from `LoweredHierarchy::block_netlist`, which is the
-///   module's own gates only) does not have them. A nested block is
-///   therefore mis-mapped, not rejected. A hierarchy deeper than one level
-///   has to be unioned bottom-up, each level's union becoming the next
-///   level's [`CompiledBlock`].
+/// * **A block must not itself contain blocks, and its
+///   [`CompiledBlock::lowered`] must be the netlist its candidate was
+///   certified against.** Both halves are one requirement: `block_locals`
+///   counts every flat gate whose path *starts* with a block instance's
+///   name, and `input_is_read` asks that same netlist which of the block's
+///   ports anything behind them consumes. A block still holding an
+///   unresolved child would be mis-mapped rather than rejected; a block
+///   carrying only its own gates while its candidate holds its whole
+///   flattening reads as "no gate wants this lever" for every port only a
+///   grandchild consumes, and the parent's delivery to a live route is
+///   retired. A hierarchy deeper than one level is therefore unioned
+///   bottom-up, each level's union becoming the next level's
+///   [`CompiledBlock`] *with that level's flattening as its `lowered`* --
+///   which is what `hierarchy_api::compile_blocks` does.
 pub(crate) struct UnionInput<'a> {
     pub parent: &'a PlannedParent,
     pub blocks: &'a [CompiledBlock],
