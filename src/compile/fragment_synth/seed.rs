@@ -329,6 +329,27 @@ pub(crate) fn plan_parent_with_services(
     })
 }
 
+/// The finishing half on its own: shape and ownership validation, emission,
+/// verification and certification, over a candidate somebody else built.
+///
+/// [`plan_parent_with_services`] deliberately stops before this, because a
+/// parent's candidate is not a finished design until its blocks have been
+/// dissolved into it (`union::union_candidate`). Once they have, the result
+/// is an ordinary flat candidate and goes through exactly the same finish
+/// as a flat compile -- no branch here knows a block ever existed.
+pub(crate) fn certify_planned(
+    candidate: ExpandedPhysicalCandidate,
+    lowered: &Netlist,
+    services: SeedServices<'_>,
+) -> Result<CertifiedCandidate, SeedError> {
+    let input = SeedInput {
+        lowered,
+        source_provenance: None,
+        pins: None,
+    };
+    SparseSeedBuilder::finish_attempt(candidate, &input, &services)
+}
+
 /// Bounded fresh-candidate repair: every attempt rebuilds the candidate
 /// from scratch with the accumulated canonical repairs.  The only repair
 /// the channel plan asks for is a wider channel, and the requested width
@@ -2706,7 +2727,7 @@ fn seed_routing_failure(
     }
 }
 
-fn refresh_exact_route_delays(tree: &mut crate::compile::routing::RealisedRouteTree) {
+pub(crate) fn refresh_exact_route_delays(tree: &mut crate::compile::routing::RealisedRouteTree) {
     let repeaters = tree
         .cells
         .iter()

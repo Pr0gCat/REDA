@@ -20,6 +20,7 @@ pub(crate) mod seed;
 pub(crate) mod services;
 pub mod timing_graph;
 pub mod topology;
+pub(crate) mod union;
 pub mod verify;
 
 pub use api::{
