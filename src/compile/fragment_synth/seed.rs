@@ -4702,6 +4702,118 @@ pub(crate) mod tests {
             cases.push(("ripple_adder4".into(), ripple_adder(4)));
             run_cases(cases);
         }
+
+        /// Every distinct module reachable from `design.top` (`top` itself
+        /// included), walking `ModuleInstance::module` transitively. This is
+        /// exactly the set `compile_hierarchical` compiles once each --
+        /// leaves through the worker pool, parents (`top` included) through
+        /// the sequential loop -- so it is what "how many distinct modules
+        /// were compiled" means for the printed report below.
+        fn distinct_modules(design: &crate::compile::HierarchicalNetlist) -> usize {
+            use std::collections::BTreeSet;
+            let mut seen = BTreeSet::new();
+            let mut pending = vec![design.top.clone()];
+            while let Some(name) = pending.pop() {
+                if !seen.insert(name.clone()) {
+                    continue;
+                }
+                if let Some(module) = design.modules.get(&name) {
+                    for instance in &module.instances {
+                        pending.push(instance.module.clone());
+                    }
+                }
+            }
+            seen.len()
+        }
+
+        /// [`run_cases`]'s hierarchical counterpart: same `REDA_EXTRA_CIRCUITS`
+        /// filter and the same "assert no failures" shape, but driving
+        /// `compile_hierarchical` on a [`crate::compile::HierarchicalNetlist`]
+        /// instead of `compile_fragment_synth` on an already-flat [`Netlist`].
+        /// Prints enough for a release run's log to be self-explaining on its
+        /// own: the flat gate count (computed by specialising and flattening
+        /// the design, the same two steps `compile_hierarchical` itself takes
+        /// before lowering), how many distinct modules the design compiles,
+        /// the settle ticks and non-air block count off the certified
+        /// candidate's own metrics, and wall time -- and, on failure, the
+        /// error `compile_hierarchical` returned, so a refusal names itself
+        /// instead of only tripping the final assertion.
+        fn run_hierarchical_cases(cases: Vec<(String, crate::compile::HierarchicalNetlist)>) {
+            use crate::compile::compile_hierarchical;
+
+            let selected = std::env::var("REDA_EXTRA_CIRCUITS").ok();
+            let mut failures = Vec::new();
+            for (name, design) in cases {
+                if let Some(selected) = &selected {
+                    if !selected.split(',').any(|s| s == name) {
+                        continue;
+                    }
+                }
+                let gate_count = design
+                    .specialise_constants()
+                    .ok()
+                    .and_then(|specialised| specialised.flatten().ok())
+                    .map(|(flat, _)| flat.gates.len());
+                let blocks_compiled = distinct_modules(&design);
+                let started = std::time::Instant::now();
+                match compile_hierarchical(&design, SynthesisBudget::Evaluations(0), None) {
+                    Ok(result) => eprintln!(
+                        "CIRCUIT {name} (hierarchical): OK gates={} blocks_compiled={blocks_compiled} \
+                         ticks={} blocks={} in {:?}",
+                        gate_count
+                            .map(|count| count.to_string())
+                            .unwrap_or_else(|| "?".to_string()),
+                        result.metrics.quality.observed_settle,
+                        result.metrics.quality.non_air_blocks,
+                        started.elapsed()
+                    ),
+                    Err(error) => {
+                        eprintln!(
+                            "CIRCUIT {name} (hierarchical): ERR blocks_compiled={blocks_compiled} \
+                             {error} in {:?}",
+                            started.elapsed()
+                        );
+                        failures.push(name);
+                    }
+                }
+            }
+            assert_eq!(failures, Vec::<String>::new());
+        }
+
+        /// The plan's hierarchical acceptance corpus: the same four shapes
+        /// [`every_large_circuit_certifies_with_the_topology_aware_seed`]
+        /// certifies flat, this time built as a real module hierarchy
+        /// (`crate::circuits::hierarchical_builder::circuits`) and compiled
+        /// through [`compile_hierarchical`] end to end -- leaf blocks
+        /// compiled once and stamped at every instance, then spliced into
+        /// one flat candidate and certified exactly as the flat front door
+        /// certifies its own candidate.
+        ///
+        /// `alu8` is also covered, alone, by
+        /// `compile::fragment_synth::hierarchy_api::tests::alu8_the_three_level_acceptance_circuit_certifies`
+        /// (with its own per-bit `output_positions` assertions, which this
+        /// uniform harness does not make). That test is deliberately left in
+        /// place rather than deleted: it is the one place `alu8`'s output
+        /// wiring is checked bit by bit. Including `alu8` here too is not
+        /// pointless duplication of *coverage* -- it is what makes this
+        /// harness actually the acceptance corpus (four circuits, one
+        /// uniform report line each) rather than three plus a footnote. The
+        /// cost is a second ~371s compile of `alu8` when this whole test
+        /// runs unfiltered; a run that only wants the fast three can set
+        /// `REDA_EXTRA_CIRCUITS=ripple_adder8,alu4_full,multiplier4` to skip
+        /// it, since `hierarchy_api`'s own test already certifies `alu8` on
+        /// its own.
+        #[test]
+        #[ignore = "release-only: run with `cargo test --release --lib every_hierarchical_circuit -- --ignored --nocapture`"]
+        fn every_hierarchical_circuit_certifies_through_module_floorplan() {
+            use crate::circuits::hierarchical_builder::circuits as h;
+            run_hierarchical_cases(vec![
+                ("ripple_adder8".into(), h::ripple_adder(8)),
+                ("alu4_full".into(), h::alu4_full()),
+                ("multiplier4".into(), h::multiplier4()),
+                ("alu8".into(), h::alu8()),
+            ]);
+        }
     }
 
     #[test]
