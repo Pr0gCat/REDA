@@ -7,6 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 use crate::compile::emission::EmissionError;
+use crate::compile::fragment_synth::blocks::CompiledBlock;
 use crate::compile::fragment_synth::candidate::{
     endpoint_for_driver, BoundaryPlacement, CandidateError, ConnectionBinding,
     ExpandedPhysicalCandidate, PlacedBlock, PrimitivePlacement, RealisedJunction,
@@ -21,17 +22,18 @@ use crate::compile::fragment_synth::channel_layout::{
 use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
 use crate::compile::fragment_synth::identity::{
     ConnectionId, ImplementationKey, InstanceId, ObservationId, ObservationSite,
-    PhysicalEndpointId, PortId, PrimitiveId, RouteId, RoutedSinkId,
+    PhysicalEndpointId, PortId, PrimitiveId, RouteId, RoutedSinkId, TopologyNodeId,
 };
 use crate::compile::fragment_synth::instance_graph::{
     DuplicateRequest, InstanceGraph, PhysicalDriver, PhysicalSink, SynthesisError,
 };
 use crate::compile::fragment_synth::placement::{
-    analyse_instance_dag, SeedPlacementAnalysis, SeedPlacementPlan, SeedPlacementRequest,
-    SeedPlacer,
+    analyse_instance_dag, BlockFacts, SeedPlacementAnalysis, SeedPlacementPlan,
+    SeedPlacementRequest, SeedPlacer,
 };
 use crate::compile::fragment_synth::placement::{LateralWindow, LayoutRepair, PlacementFrame};
 use crate::compile::fragment_synth::realise::{ExpandedAdapterError, ExpandedCandidateAdapter};
+use crate::compile::fragment_synth::relocate::Offset;
 use crate::compile::fragment_synth::route_schedule::{
     RouteObligation, RouteSchedule, TargetObligation,
 };
@@ -133,6 +135,14 @@ pub(crate) enum SeedError {
     IdentityOverflow,
     #[error("seed topology is internally incomplete: {0}")]
     Incomplete(&'static str),
+    #[error(
+        "block instance {block:?} names compiled block {index}, which the parent did not supply"
+    )]
+    UnknownBlock { block: InstanceId, index: u32 },
+    #[error("the parent placing block {block:?} did not settle on the direct east frame")]
+    BlockFrameTurned { block: InstanceId },
+    #[error("block {block:?} has a footprint too large to measure in placement coordinates")]
+    BlockTooWide { block: InstanceId },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -183,6 +193,207 @@ pub(crate) fn compile_sparse_seed_variant_with_services(
     variant: &SeedVariant,
 ) -> Result<CertifiedCandidate, SeedError> {
     SparseSeedBuilder::build_variant(input, services, variant)
+}
+
+/// The compiled blocks a parent may stamp, indexed exactly the way
+/// [`BlockInstance::block`](crate::compile::fragment_synth::instance_graph::BlockInstance)
+/// indexes them.
+#[derive(Clone, Copy)]
+pub(crate) struct ParentBlocks<'a> {
+    pub compiled: &'a [CompiledBlock],
+}
+
+impl ParentBlocks<'static> {
+    /// A parent that stamps nothing -- what every flat design passes.
+    pub(crate) const fn none() -> Self {
+        Self { compiled: &[] }
+    }
+}
+
+/// A parent design planned as far as its routes, with the block bodies in
+/// place as opaque reservations. Emission, verification and certification
+/// have deliberately not run: stamping each block's real contents into the
+/// candidate is a later step, and until it has, the candidate's block
+/// bodies are placeholder placements rather than owned topology.
+pub(crate) struct PlannedParent {
+    /// The parent's own gates, boundaries and routes, plus one placeholder
+    /// placement per block holding that block's translated body.
+    pub candidate: ExpandedPhysicalCandidate,
+    /// Block instance -> the translation from block-local to parent
+    /// coordinates that [`relocate::translate`](crate::compile::fragment_synth::relocate::translate)
+    /// must apply to stamp it.
+    pub block_offsets: BTreeMap<InstanceId, Offset>,
+    /// The planning netlist the parent was planned from.
+    pub lowered: Netlist,
+}
+
+/// Everything the parent's planning stages need to know about the blocks in
+/// its graph, derived in ONE walk over `graph.blocks`.
+///
+/// The placer's footprint facts, the level analysis's delays and the
+/// geometry `place_blocks` stamps all come out of this single resolution,
+/// so no two of them can disagree about which compiled block a
+/// `BlockInstance` names, or about how wide it is.
+struct ResolvedBlocks<'a> {
+    compiled: BTreeMap<InstanceId, &'a CompiledBlock>,
+    facts: BTreeMap<InstanceId, BlockFacts>,
+    delays: BTreeMap<InstanceId, u64>,
+}
+
+impl<'a> ResolvedBlocks<'a> {
+    fn resolve(graph: &InstanceGraph, blocks: ParentBlocks<'a>) -> Result<Self, SeedError> {
+        let mut resolved = Self {
+            compiled: BTreeMap::new(),
+            facts: BTreeMap::new(),
+            delays: BTreeMap::new(),
+        };
+        for instance in &graph.blocks {
+            let index = usize::try_from(instance.block).map_err(|_| SeedError::IdentityOverflow)?;
+            let compiled = blocks
+                .compiled
+                .get(index)
+                .ok_or_else(|| SeedError::UnknownBlock {
+                    block: instance.id,
+                    index: instance.block,
+                })?;
+            let span = |low: i32, high: i32| {
+                high.checked_sub(low)
+                    .and_then(|span| span.checked_add(1))
+                    .filter(|span| *span > 0)
+            };
+            let (Some(width), Some(depth)) = (
+                span(compiled.bounds.min.x, compiled.bounds.max.x),
+                span(compiled.bounds.min.z, compiled.bounds.max.z),
+            ) else {
+                return Err(SeedError::BlockTooWide { block: instance.id });
+            };
+            resolved.facts.insert(
+                instance.id,
+                BlockFacts {
+                    width,
+                    depth,
+                    delay_ticks: compiled.delay.0,
+                },
+            );
+            resolved.delays.insert(instance.id, compiled.delay.0);
+            resolved.compiled.insert(instance.id, compiled);
+        }
+        Ok(resolved)
+    }
+
+    fn compiled(&self, block: InstanceId) -> Result<&'a CompiledBlock, SeedError> {
+        self.compiled
+            .get(&block)
+            .copied()
+            .ok_or(SeedError::Incomplete("resolved compiled block"))
+    }
+}
+
+/// Plans a parent design that stamps compiled blocks: places the parent's
+/// own gates and boundaries, reserves each block's body where the placer
+/// put it, and routes the parent's wires to the blocks' port cells.
+///
+/// This is [`SparseSeedBuilder::build_variant`] stopped after routing --
+/// the same channel-widening repair loop, the same planning half -- because
+/// a parent's candidate is not finished until its blocks' real contents
+/// have been stamped into it.
+pub(crate) fn plan_parent_with_services(
+    input: SeedInput<'_>,
+    services: SeedServices<'_>,
+    graph: InstanceGraph,
+    blocks: ParentBlocks<'_>,
+    placements: &BTreeMap<InstanceId, InstancePlacementOverride>,
+) -> Result<PlannedParent, SeedError> {
+    if let Some(provenance) = input.source_provenance {
+        if provenance.len() != input.lowered.gates.len() {
+            return Err(SeedError::ProvenanceWidth {
+                expected: input.lowered.gates.len(),
+                actual: provenance.len(),
+            });
+        }
+    }
+    let (candidate, block_offsets) = with_channel_widening(services.search_config, |repairs| {
+        SparseSeedBuilder::plan_attempt(
+            &input,
+            &services,
+            placements,
+            graph.clone(),
+            blocks,
+            repairs,
+        )
+    })?;
+    Ok(PlannedParent {
+        candidate,
+        block_offsets,
+        lowered: input.lowered.clone(),
+    })
+}
+
+/// Bounded fresh-candidate repair: every attempt rebuilds the candidate
+/// from scratch with the accumulated canonical repairs.  The only repair
+/// the channel plan asks for is a wider channel, and the requested width
+/// grows strictly, so the loop ends by the cap.
+fn with_channel_widening<T>(
+    config: &SearchConfig,
+    mut attempt: impl FnMut(&[LayoutRepair]) -> Result<T, SeedError>,
+) -> Result<T, SeedError> {
+    let cap = config.max_seed_backtracks;
+    let mut repairs = Vec::<LayoutRepair>::new();
+    let mut attempts = 0u64;
+    let mut widenings = 0u64;
+    loop {
+        attempts += 1;
+        match attempt(&repairs) {
+            Ok(built) => return Ok(built),
+            Err(SeedError::ChannelLayout(ChannelLayoutError::ChannelTooNarrow {
+                level,
+                needed,
+                available,
+                ..
+            })) => {
+                // The placer's width for this channel and the free span the
+                // plan measured differ by the endpoint cells beside the
+                // macros; a repeated repair grows by the measured shortfall
+                // so the loop is monotone.
+                let previous = repairs.iter().find_map(|repair| match repair {
+                    LayoutRepair::WidenChannel {
+                        level: known,
+                        width,
+                    } if *known == level => Some(*width),
+                    _ => None,
+                });
+                let width = match previous {
+                    Some(previous) => previous + (needed - available).max(1),
+                    None => needed + CHANNEL_ENDPOINT_CELLS,
+                };
+                let already = previous.is_some_and(|previous| width <= previous);
+                // A channel that keeps asking for more room after this
+                // many widenings is not short of lanes; something else
+                // is wrong with the layout.
+                widenings += 1;
+                if already || attempts >= cap || widenings > MAX_CHANNEL_WIDENINGS {
+                    return Err(SeedError::SeedExhausted {
+                        attempts_used: attempts,
+                        refusal: Box::new(SeedError::ChannelLayout(
+                            ChannelLayoutError::ChannelTooNarrow {
+                                channel: 0,
+                                level,
+                                available: 0,
+                                lanes: 0,
+                                needed,
+                            },
+                        )),
+                    });
+                }
+                repairs.retain(|repair| {
+                    !matches!(repair, LayoutRepair::WidenChannel { level: known, .. } if *known == level)
+                });
+                repairs.push(LayoutRepair::WidenChannel { level, width });
+                repairs.sort();
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -352,69 +563,13 @@ impl SparseSeedBuilder {
             }
         }
 
-        // Bounded fresh-candidate repair: every attempt rebuilds the
-        // candidate from scratch with the accumulated canonical repairs.  The
-        // only repair the channel plan asks for is a wider channel, and the
-        // requested width grows strictly, so the loop ends by the cap.
-        let cap = services.search_config.max_seed_backtracks;
-        let mut repairs = Vec::<LayoutRepair>::new();
-        let mut attempts = 0u64;
-        let mut widenings = 0u64;
-        loop {
-            attempts += 1;
-            match Self::build_attempt(&input, &services, variant, instances.clone(), &repairs) {
-                Ok(certified) => return Ok(certified),
-                Err(SeedError::ChannelLayout(ChannelLayoutError::ChannelTooNarrow {
-                    level,
-                    needed,
-                    available,
-                    ..
-                })) => {
-                    // The placer's width for this channel and the free span the
-                    // plan measured differ by the endpoint cells beside the
-                    // macros; a repeated repair grows by the measured shortfall
-                    // so the loop is monotone.
-                    let previous = repairs.iter().find_map(|repair| match repair {
-                        LayoutRepair::WidenChannel {
-                            level: known,
-                            width,
-                        } if *known == level => Some(*width),
-                        _ => None,
-                    });
-                    let width = match previous {
-                        Some(previous) => previous + (needed - available).max(1),
-                        None => needed + CHANNEL_ENDPOINT_CELLS,
-                    };
-                    let already = previous.is_some_and(|previous| width <= previous);
-                    // A channel that keeps asking for more room after this
-                    // many widenings is not short of lanes; something else
-                    // is wrong with the layout.
-                    widenings += 1;
-                    if already || attempts >= cap || widenings > MAX_CHANNEL_WIDENINGS {
-                        return Err(SeedError::SeedExhausted {
-                            attempts_used: attempts,
-                            refusal: Box::new(SeedError::ChannelLayout(
-                                ChannelLayoutError::ChannelTooNarrow {
-                                    channel: 0,
-                                    level,
-                                    available: 0,
-                                    lanes: 0,
-                                    needed,
-                                },
-                            )),
-                        });
-                    }
-                    repairs.retain(|repair| {
-                        !matches!(repair, LayoutRepair::WidenChannel { level: known, .. } if *known == level)
-                    });
-                    repairs.push(LayoutRepair::WidenChannel { level, width });
-                    repairs.sort();
-                }
-                Err(error) => return Err(error),
-            }
-        }
+        with_channel_widening(services.search_config, |repairs| {
+            Self::build_attempt(&input, &services, variant, instances.clone(), repairs)
+        })
     }
 
+    /// The whole pipeline: plan the layout and routes, then finish the
+    /// candidate off.  Exactly the two halves composed, and nothing else.
     fn build_attempt(
         input: &SeedInput<'_>,
         services: &SeedServices<'_>,
@@ -422,6 +577,27 @@ impl SparseSeedBuilder {
         instances: InstanceGraph,
         repairs: &[LayoutRepair],
     ) -> Result<CertifiedCandidate, SeedError> {
+        let (candidate, _) = Self::plan_attempt(
+            input,
+            services,
+            &variant.placements,
+            instances,
+            ParentBlocks::none(),
+            repairs,
+        )?;
+        Self::finish_attempt(candidate, input, services)
+    }
+
+    /// The planning half: everything through `route_all`.  Returns the
+    /// routed candidate and where each block landed.
+    fn plan_attempt(
+        input: &SeedInput<'_>,
+        services: &SeedServices<'_>,
+        placements: &BTreeMap<InstanceId, InstancePlacementOverride>,
+        instances: InstanceGraph,
+        blocks: ParentBlocks<'_>,
+        repairs: &[LayoutRepair],
+    ) -> Result<(ExpandedPhysicalCandidate, BTreeMap<InstanceId, Offset>), SeedError> {
         let timing = std::env::var_os("REDA_PHASE_TIMING").is_some();
         let mut phase_started = std::time::Instant::now();
         let phase = |name: &str, started: &mut std::time::Instant| {
@@ -435,7 +611,11 @@ impl SparseSeedBuilder {
         candidate.bind_pin_contracts(input.lowered)?;
         crate::compile::planner::validate_port_placements(input.lowered, &candidate.pins)
             .map_err(SeedError::InvalidPins)?;
-        let placement_analysis = analyse_instance_dag(&candidate.instances, &BTreeMap::new())
+        // One resolution of the parent's blocks feeds both the level
+        // analysis (delays) and the placer (footprints), so the two views
+        // of a block can never drift apart.
+        let resolved = ResolvedBlocks::resolve(&candidate.instances, blocks)?;
+        let placement_analysis = analyse_instance_dag(&candidate.instances, &resolved.delays)
             .map_err(|_| SeedError::Incomplete("seed placement analysis"))?;
         let placement_plan = services
             .placer
@@ -444,12 +624,21 @@ impl SparseSeedBuilder {
                     graph: &candidate.instances,
                     analysis: &placement_analysis,
                     pins: &candidate.pin_contracts,
-                    block_facts: &BTreeMap::new(),
+                    block_facts: &resolved.facts,
                 },
                 repairs,
             )
             .map_err(|_| SeedError::Incomplete("seed placement plan"))?;
         phase("placement", &mut phase_started);
+        // A block is a fixed east-facing layout: its inputs sit on its west
+        // face and its outputs on its east one.  A parent that settled on a
+        // turned frame would have to route backwards into every block, so
+        // refuse rather than plan something unroutable.
+        if let Some(block) = candidate.instances.blocks.first() {
+            if placement_plan.frame.forward != Facing::East {
+                return Err(SeedError::BlockFrameTurned { block: block.id });
+            }
+        }
         // Every later stage measures levels in the plan's folded analysis.
         let placement_analysis = placement_plan.analysis.clone();
         let plan_translation =
@@ -467,13 +656,22 @@ impl SparseSeedBuilder {
             &mut sources,
             &mut targets,
         )?;
+        let block_offsets = place_blocks(
+            &mut candidate,
+            &resolved,
+            &placement_plan,
+            plan_translation,
+            &mut occupied,
+            &mut sources,
+            &mut targets,
+        )?;
         place_instances(
             &mut candidate,
             input.lowered,
             services.search_config,
             &placement_plan,
             plan_translation,
-            &variant.placements,
+            placements,
             &mut occupied,
             &mut sources,
             &mut targets,
@@ -501,9 +699,27 @@ impl SparseSeedBuilder {
             &sockets,
             &mut reservations,
         )?;
+        phase("layout+routing", &mut phase_started);
+        Ok((candidate, block_offsets))
+    }
+
+    /// The finishing half: shape and ownership validation, emission,
+    /// verification and certification.
+    fn finish_attempt(
+        candidate: ExpandedPhysicalCandidate,
+        input: &SeedInput<'_>,
+        services: &SeedServices<'_>,
+    ) -> Result<CertifiedCandidate, SeedError> {
+        let timing = std::env::var_os("REDA_PHASE_TIMING").is_some();
+        let mut phase_started = std::time::Instant::now();
+        let phase = |name: &str, started: &mut std::time::Instant| {
+            if timing {
+                eprintln!("PHASE {name} {}", started.elapsed().as_millis());
+            }
+            *started = std::time::Instant::now();
+        };
         candidate.validate_shape()?;
         candidate.validate_physical_ownership()?;
-        phase("layout+routing", &mut phase_started);
 
         let adapter = ExpandedCandidateAdapter::new(&candidate)?;
         let size = adapter.deterministic_world_size()?;
@@ -832,6 +1048,174 @@ fn place_boundaries(
         targets.insert(PhysicalSink::DeclaredOutput(port), geometry);
     }
     Ok(())
+}
+
+/// Reserves each stamped block's body where the placer put it, and
+/// registers its ports as parent route endpoints.
+///
+/// A block is opaque to the parent: nothing in the parent's own pipeline
+/// understands its topology, and the parent must simply not route through
+/// it.  The body therefore enters the candidate as ONE placeholder
+/// `PrimitivePlacement` per block, holding every cell the compiled block
+/// owns, translated.  That is the shape both `channel_layout`'s occupancy
+/// and `reservations_for_components` already read, so the block's footprint
+/// closes the channel columns it stands in and closes the cell above every
+/// one of its own blocks, with no change to either.
+///
+/// Two cells per port are deliberately NOT in the placeholder:
+///   * an input's lever cell, which the parent's route terminal claims for
+///     the repeater that drives the block's own root dust one cell east of
+///     it (the stone under the lever stays: it is the repeater's floor);
+///   * an output's lamp cell, which the parent's route root claims, driven
+///     from the west by the block's own output repeater.
+fn place_blocks(
+    candidate: &mut ExpandedPhysicalCandidate,
+    resolved: &ResolvedBlocks<'_>,
+    plan: &SeedPlacementPlan,
+    plan_translation: PlanTranslation,
+    occupied: &mut BTreeSet<Anchor>,
+    sources: &mut BTreeMap<PhysicalEndpointId, SourceGeometry>,
+    targets: &mut BTreeMap<PhysicalSink, TargetGeometry>,
+) -> Result<BTreeMap<InstanceId, Offset>, SeedError> {
+    let mut offsets = BTreeMap::new();
+    let block_ids = candidate
+        .instances
+        .blocks
+        .iter()
+        .map(|block| block.id)
+        .collect::<Vec<_>>();
+    for block in block_ids {
+        let compiled = resolved.compiled(block)?;
+        let pose = plan
+            .instances
+            .get(&block)
+            .copied()
+            .ok_or(SeedError::Incomplete("planned block pose"))?;
+        let origin = plan_translation.apply(pose.preferred_origin);
+        // The placer's origin is the block's own minimum corner, and the
+        // parent's ground row sits one above the floor row every unpinned
+        // layout (a block's included) puts its supports on.
+        let offset = Offset {
+            dx: origin.x - compiled.bounds.min.x,
+            dy: (plan.frame.origin.y - 1) - compiled.bounds.min.y,
+            dz: origin.z - compiled.bounds.min.z,
+        };
+        offsets.insert(block, offset);
+
+        let mut ports = BTreeSet::new();
+        for (index, name) in compiled.lowered.outputs.iter().enumerate() {
+            let port = compiled
+                .outputs
+                .get(name)
+                .ok_or(SeedError::Incomplete("compiled block output port"))?;
+            let lamp = shift(port.cell, offset);
+            ports.insert(lamp);
+            sources.insert(
+                PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+                    instance: block,
+                    node: TopologyNodeId(
+                        u16::try_from(index).map_err(|_| SeedError::IdentityOverflow)?,
+                    ),
+                }),
+                SourceGeometry {
+                    route_anchor: lamp,
+                    allowed_exit: Facing::East,
+                },
+            );
+        }
+        for (index, name) in compiled.lowered.inputs.iter().enumerate() {
+            let port = compiled
+                .inputs
+                .get(name)
+                .ok_or(SeedError::Incomplete("compiled block input port"))?;
+            let lever = shift(port.cell, offset);
+            ports.insert(lever);
+            targets.insert(
+                PhysicalSink::InstanceInput {
+                    instance: block,
+                    input_index: u16::try_from(index).map_err(|_| SeedError::IdentityOverflow)?,
+                },
+                TargetGeometry {
+                    terminal: lever,
+                    allowed_entry: Facing::West,
+                    support: step(lever, Facing::East),
+                    requirement: TerminalRequirement::Exact(
+                        crate::compile::routing::RouteTerminalKind::OutputTerminalRepeater,
+                    ),
+                },
+            );
+        }
+
+        // The body, deduplicated by cell: a block's own route floors may
+        // restate a cell another of its routes already floors, and the
+        // parent only needs each cell claimed once.  First writer wins, in
+        // the fixed order below, so the placeholder is deterministic.
+        let mut body = BTreeMap::<Anchor, BlockState>::new();
+        for cell in compiled_block_cells(&compiled.candidate) {
+            let at = shift(cell.at, offset);
+            if ports.contains(&at) {
+                continue;
+            }
+            body.entry(at).or_insert_with(|| cell.state.clone());
+        }
+        let blocks = body
+            .into_iter()
+            .map(|(at, state)| PlacedBlock { at, state })
+            .collect::<Vec<_>>();
+        claim_blocks(occupied, &blocks)?;
+        let id = PrimitiveId {
+            instance: block,
+            node: TopologyNodeId(0),
+        };
+        candidate.placements.insert(
+            id,
+            PrimitivePlacement {
+                id,
+                variant: 0,
+                facing: CellFacing::EAST,
+                anchor: origin,
+                delayed: None,
+                blocks,
+            },
+        );
+    }
+    Ok(offsets)
+}
+
+/// Every physical cell a compiled block owns, in a fixed order.
+fn compiled_block_cells(
+    candidate: &ExpandedPhysicalCandidate,
+) -> impl Iterator<Item = &PlacedBlock> {
+    candidate
+        .placements
+        .values()
+        .flat_map(|placement| &placement.blocks)
+        .chain(
+            candidate
+                .boundaries
+                .values()
+                .flat_map(|boundary| &boundary.blocks),
+        )
+        .chain(
+            candidate
+                .junctions
+                .values()
+                .flat_map(|junction| &junction.cells),
+        )
+        .chain(
+            candidate
+                .routes
+                .values()
+                .flat_map(|route| route.cells.iter().chain(route.floors.iter())),
+        )
+}
+
+fn shift(at: Anchor, offset: Offset) -> Anchor {
+    Anchor {
+        x: at.x + offset.dx,
+        y: at.y + offset.dy,
+        z: at.z + offset.dz,
+    }
 }
 
 fn automatic_boundary_direction(candidate: &ExpandedPhysicalCandidate) -> Facing {
@@ -1889,6 +2273,41 @@ fn route_all(
                 .push(PendingTarget::Connection(connection.id, geometry));
         }
     }
+    // A block has no topology to walk, so its inputs are grouped straight
+    // off the graph's assignments.  Its OUTPUTS need nothing here: they are
+    // already registered in `sources`, and every consumer of one reaches it
+    // through `endpoint_for_driver` like any other instance output.
+    for block in &candidate.instances.blocks {
+        for input_index in 0..block.inputs.len() {
+            let input_index =
+                u16::try_from(input_index).map_err(|_| SeedError::IdentityOverflow)?;
+            let sink = PhysicalSink::InstanceInput {
+                instance: block.id,
+                input_index,
+            };
+            let source = candidate
+                .instances
+                .assignments
+                .iter()
+                .find(|assignment| assignment.sink == sink)
+                .and_then(|assignment| endpoint_for_driver(&assignment.driver))
+                .ok_or(SeedError::Incomplete("block input source"))?;
+            let geometry = targets
+                .get(&sink)
+                .copied()
+                .ok_or(SeedError::Incomplete("block input target"))?;
+            grouped
+                .entry(source)
+                .or_default()
+                .push(PendingTarget::Connection(
+                    ConnectionId::External {
+                        instance: block.id,
+                        input_index,
+                    },
+                    geometry,
+                ));
+        }
+    }
     for assignment in &candidate.instances.assignments {
         let PhysicalSink::DeclaredOutput(port) = assignment.sink else {
             continue;
@@ -2636,6 +3055,7 @@ pub(crate) mod tests {
     use crate::compile::fragment_synth::services::{DurableSeedEmitter, DurableSeedVerifier};
     use crate::compile::metrics::canonical_fingerprint;
     use crate::compile::routing::{GuardedPhysicalRouter, RealisedRouteTree};
+    use crate::compile::topology::GateKind;
     use crate::compile::Gate;
 
     #[test]
@@ -2977,8 +3397,8 @@ pub(crate) mod tests {
     /// small to catch a walker that misses a field.
     pub(crate) fn certified_full_adder() -> CertifiedCandidate {
         let (netlist, _) = crate::circuits::full_adder::build_full_adder_netlist();
-        let lowered = crate::compile::lowering::lower_optimised(&netlist)
-            .expect("full adder netlist lowers");
+        let lowered =
+            crate::compile::lowering::lower_optimised(&netlist).expect("full adder netlist lowers");
         build(&lowered).expect("full adder seed certifies")
     }
 
@@ -4269,5 +4689,167 @@ pub(crate) mod tests {
 
         assert_eq!(violations, Vec::<String>::new());
         result.expect("full_adder must route and certify once corridors are protected");
+    }
+    /// The parent's own planning netlist for one stamped full adder:
+    /// three primary inputs feed the block, the block's first output feeds
+    /// one real NOR gate whose output is exported, and the block's second
+    /// output is exported directly.
+    fn parent_planning_over_one_full_adder(
+        block: &CompiledBlock,
+    ) -> (Netlist, Vec<String>, Vec<String>) {
+        let inputs = block.lowered.inputs.clone();
+        // Parent signals carrying the block's outputs, in declared order.
+        let carried = vec!["s0".to_string(), "s1".to_string()];
+        let mut gates = vec![Gate {
+            name: "g0".into(),
+            inputs: vec![carried[0].clone()],
+            output: "z".into(),
+            kind: GateKind::Nor(1),
+        }];
+        // The synthetic `Buf` tail `with_blocks` expects: one row per block
+        // output, in declared order, after every real gate.
+        for (index, signal) in carried.iter().enumerate() {
+            gates.push(Gate {
+                name: format!("u0.{index}"),
+                inputs: inputs.clone(),
+                output: signal.clone(),
+                kind: GateKind::Buf,
+            });
+        }
+        let planning = Netlist {
+            inputs: inputs.clone(),
+            outputs: vec!["z".to_string(), carried[1].clone()],
+            gates,
+        };
+        (planning, inputs, carried)
+    }
+
+    fn shift(at: Anchor, offset: Offset) -> Anchor {
+        Anchor {
+            x: at.x + offset.dx,
+            y: at.y + offset.dy,
+            z: at.z + offset.dz,
+        }
+    }
+
+    #[test]
+    fn a_parent_routes_into_and_out_of_a_block_with_repeaters_at_the_boundary() {
+        let (library, config) = default_services_parts();
+        let services = services(&library, &config);
+        let fa = crate::compile::lowering::lower_optimised(
+            &crate::circuits::full_adder::build_full_adder_netlist().0,
+        )
+        .unwrap();
+        let block =
+            crate::compile::fragment_synth::blocks::compile_block("full_adder", &fa, services)
+                .expect("the full adder compiles as a block");
+        let (planning, block_inputs, block_outputs) = parent_planning_over_one_full_adder(&block);
+        let specs = [crate::compile::fragment_synth::instance_graph::BlockSpec {
+            name: "u0",
+            block: 0,
+            inputs: &block_inputs,
+            outputs: &block_outputs,
+        }];
+        let graph = InstanceGraph::with_blocks(&planning, &library, &specs).expect("parent graph");
+        let planned = plan_parent_with_services(
+            SeedInput {
+                lowered: &planning,
+                source_provenance: None,
+                pins: None,
+            },
+            services,
+            graph,
+            ParentBlocks {
+                compiled: std::slice::from_ref(&block),
+            },
+            &BTreeMap::new(),
+        )
+        .expect("plans");
+
+        let block_id = planned.candidate.instances.blocks[0].id;
+        let offset = planned.block_offsets[&block_id];
+
+        // Every parent route into the block ends in a repeater on the
+        // block's lever cell.  A repeater's `facing` names the side its
+        // input arrives on, so the repeater that drives the block's own
+        // root dust (one cell east of the lever) faces West.
+        for (name, port) in &block.inputs {
+            let lever = shift(port.cell, offset);
+            let branch = planned
+                .candidate
+                .routes
+                .values()
+                .flat_map(|route| &route.branches)
+                .find(|branch| branch.terminal.at == lever)
+                .unwrap_or_else(|| panic!("no parent route reaches block input {name}"));
+            assert_eq!(branch.terminal.state.kind, BlockKind::Repeater);
+            assert_eq!(branch.terminal.state.facing, Some(Facing::West));
+        }
+        // Every parent route out of the block starts on the block's lamp cell.
+        for (name, port) in &block.outputs {
+            let lamp = shift(port.cell, offset);
+            assert!(
+                planned
+                    .candidate
+                    .routes
+                    .values()
+                    .any(|route| route.branches.iter().any(|branch| branch.root == lamp)),
+                "no parent route leaves block output {name}"
+            );
+        }
+        // The block body is reserved: no parent route cell lies inside the
+        // block's box except on one of its own port cells.
+        let inside = |at: Anchor| {
+            at.x >= block.bounds.min.x + offset.dx
+                && at.x <= block.bounds.max.x + offset.dx
+                && at.z >= block.bounds.min.z + offset.dz
+                && at.z <= block.bounds.max.z + offset.dz
+        };
+        for route in planned.candidate.routes.values() {
+            for cell in &route.cells {
+                let on_port = block
+                    .inputs
+                    .values()
+                    .chain(block.outputs.values())
+                    .any(|port| shift(port.cell, offset) == cell.at);
+                assert!(
+                    !inside(cell.at) || on_port,
+                    "route cell {:?} inside the block",
+                    cell.at
+                );
+            }
+        }
+    }
+
+    /// The no-blocks invariant.  Both literals were read off the seed as it
+    /// stood immediately before Task 10 touched it (a throwaway test that
+    /// panicked with the certified metrics of these two circuits), so this
+    /// asserts the block-aware pipeline leaves a flat design bit-for-bit
+    /// where it was, not merely self-consistent.
+    #[test]
+    fn a_flat_design_certifies_to_the_pre_block_fingerprints() {
+        let (and4, _) = build_and4_netlist();
+        let and4 = build(&and4).unwrap();
+        assert_eq!(
+            and4.metrics().candidate_fingerprint.as_str(),
+            "318f8c04304e88773f0cf809e498305828afd308fe4b3b003fd3a25fe519284c"
+        );
+        assert_eq!(
+            and4.metrics().emitted_world_fingerprint.as_str(),
+            "97fcaad9a1b4f456718a4073ec22e0f67aae322de0e4d07e62255d65e963d30d"
+        );
+        let full_adder = crate::compile::lowering::lower_optimised(
+            &crate::circuits::full_adder::build_full_adder_netlist().0,
+        )
+        .unwrap();
+        let full_adder = build(&full_adder).unwrap();
+        assert_eq!(
+            full_adder.metrics().candidate_fingerprint.as_str(),
+            "02c3401071d4f93964147d52561fc7e1b38f1be65765232d8f280df71a5912c5"
+        );
+        assert_eq!(
+            full_adder.metrics().emitted_world_fingerprint.as_str(),
+            "5c5ffd5e96504dd559d499cb96c4eda692c59bf9f724136d5bdd6fe8a6df9173"
+        );
     }
 }

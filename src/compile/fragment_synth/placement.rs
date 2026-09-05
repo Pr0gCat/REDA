@@ -360,10 +360,15 @@ impl TopologyAwareSeedPlacer {
             .map(|instance| macro_envelope(instance).map(|size| (instance.id, size)))
             .collect::<Result<BTreeMap<_, _>, _>>()?;
         for block in &request.graph.blocks {
+            // The caller derives `block_facts` and the analysis's block
+            // delays from the same walk, so a block present here without
+            // facts is the same internal inconsistency
+            // `analyse_instance_dag` already names this way -- a refusal,
+            // not a panic.
             let facts = *request
                 .block_facts
                 .get(&block.id)
-                .expect("block facts supplied for every block in the graph");
+                .ok_or(SeedPlacementError::UnresolvedTopology { instance: block.id })?;
             envelopes.insert(block.id, block_envelope(facts));
         }
 

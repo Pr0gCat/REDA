@@ -231,7 +231,10 @@ fn terminal_for_seed_error(error: &SeedError, work: &mut CapWorkCounters) -> Pro
         | SeedError::Adapter(_)
         | SeedError::Emission(_)
         | SeedError::IdentityOverflow
-        | SeedError::Incomplete(_) => ProposalTerminal::Refused,
+        | SeedError::Incomplete(_)
+        | SeedError::UnknownBlock { .. }
+        | SeedError::BlockFrameTurned { .. }
+        | SeedError::BlockTooWide { .. } => ProposalTerminal::Refused,
     }
 }
 
