@@ -918,6 +918,7 @@ mod tests {
     use crate::compile::fragment_synth::instance_graph::{
         BlockInstance, DuplicateRequest, SinkAssignment,
     };
+    use crate::compile::fragment_synth::search::StopReason;
     use crate::compile::fragment_synth::seed::InstancePlacementOverride;
     use crate::compile::geometry::Anchor;
     use crate::compile::hierarchy::{Module, ModuleInstance};
@@ -1556,6 +1557,133 @@ mod tests {
             searched.metrics.quality <= baseline.metrics.quality,
             "the search must never return worse than the seed it started from"
         );
+    }
+
+    /// A top with no gates of its own chaining five one-gate NOT blocks,
+    /// alternating between two distinct leaf modules (`not_a`, `not_b`):
+    /// `a -> g0 -> g1 -> g2 -> g3 -> g4 -> z`. Every block has exactly one
+    /// input and one output, so the four `g(i) -> g(i+1)` connections are
+    /// exactly the design's four block-to-block edges -- `a -> g0` and
+    /// `g4 -> z` are primary-input/output bindings, not block edges.
+    fn chain_of_five_not_blocks() -> HierarchicalNetlist {
+        fn instance(name: &str, module: &str, ports: &[(&str, &str)]) -> ModuleInstance {
+            ModuleInstance {
+                name: name.to_string(),
+                module: module.to_string(),
+                ports: ports
+                    .iter()
+                    .map(|(port, signal)| {
+                        (
+                            (*port).to_string(),
+                            PortBinding::Signal((*signal).to_string()),
+                        )
+                    })
+                    .collect(),
+            }
+        }
+        fn not_module() -> Module {
+            Module {
+                inputs: vec!["u".into()],
+                outputs: vec!["w".into()],
+                gates: vec![Gate::nor("w", &["u"])],
+                instances: vec![],
+            }
+        }
+        let mut modules = BTreeMap::new();
+        modules.insert("not_a".to_string(), not_module());
+        modules.insert("not_b".to_string(), not_module());
+        modules.insert(
+            "top".to_string(),
+            Module {
+                inputs: vec!["a".into()],
+                outputs: vec!["z".into()],
+                gates: vec![],
+                instances: vec![
+                    instance("g0", "not_a", &[("u", "a"), ("w", "n1")]),
+                    instance("g1", "not_b", &[("u", "n1"), ("w", "n2")]),
+                    instance("g2", "not_a", &[("u", "n2"), ("w", "n3")]),
+                    instance("g3", "not_b", &[("u", "n3"), ("w", "n4")]),
+                    instance("g4", "not_a", &[("u", "n4"), ("w", "z")]),
+                ],
+            },
+        );
+        HierarchicalNetlist {
+            top: "top".to_string(),
+            modules,
+        }
+    }
+
+    /// Evaluation budgets 0/1/2/4 against the four-edge chain fixture: each
+    /// smaller trace is an exact prefix of the larger one, quality never
+    /// worsens as the budget grows, every budget stops for the same reason,
+    /// and worker count cannot change the result. `Time(d)` shares the same
+    /// ordered stream and is already covered by
+    /// `a_time_budget_stops_only_after_the_crossing_proposal_finishes` in
+    /// `search.rs`, so it is not re-tested here.
+    #[test]
+    fn evaluation_budgets_0_1_2_4_are_deterministic_quality_staircases() {
+        let design = chain_of_five_not_blocks();
+        let budgets = [0u64, 1, 2, 4];
+
+        let results: Vec<_> = budgets
+            .iter()
+            .map(|&budget| {
+                compile_hierarchical_with_threads(
+                    &design,
+                    SynthesisBudget::Evaluations(budget),
+                    None,
+                    1,
+                )
+                .unwrap_or_else(|error| panic!("budget {budget} must certify: {error}"))
+            })
+            .collect();
+
+        for (result, &budget) in results.iter().zip(&budgets) {
+            assert_eq!(result.evaluations_used, budget, "budget {budget}");
+            assert_eq!(result.trace.len(), budget as usize, "budget {budget}");
+            assert_eq!(
+                result.stop_reason,
+                StopReason::EvaluationBudget,
+                "budget {budget} stops exactly at its limit, since the fixture offers four proposals"
+            );
+        }
+
+        let budget_4_trace = &results[3].trace;
+        assert_eq!(
+            budget_4_trace.len(),
+            4,
+            "budget 4 evaluates exactly four proposals before EvaluationBudget stops it; \
+             the fixture's four block-to-block edges are asserted separately, above, via the \
+             comment on chain_of_five_not_blocks"
+        );
+        for result in &results[..3] {
+            assert_eq!(
+                result.trace,
+                budget_4_trace[..result.trace.len()],
+                "a smaller budget's trace must be an exact prefix of the larger one"
+            );
+        }
+
+        for pair in results.windows(2) {
+            assert!(
+                pair[1].metrics.quality <= pair[0].metrics.quality,
+                "quality must be a non-increasing staircase as the budget grows"
+            );
+        }
+        let budget_zero_quality = results[0].metrics.quality;
+        for result in &results[1..] {
+            assert!(
+                result.metrics.quality <= budget_zero_quality,
+                "no larger budget may select worse than budget 0"
+            );
+        }
+
+        let many =
+            compile_hierarchical_with_threads(&design, SynthesisBudget::Evaluations(4), None, 4)
+                .expect("budget 4 must certify with four workers");
+        assert_eq!(many.candidate_fingerprint, results[3].candidate_fingerprint);
+        assert_eq!(many.metrics.quality, results[3].metrics.quality);
+        assert_eq!(many.trace, results[3].trace);
     }
 
     /// The two proposals a block-stamping parent cannot represent, and the
