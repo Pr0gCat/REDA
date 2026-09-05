@@ -23,6 +23,16 @@ use reda::frontend::synthesize_verilog_hierarchical;
 /// distinct modules were compiled" count `seed.rs`'s hierarchical harness
 /// prints, duplicated here in miniature because this integration test
 /// cannot reach that harness's test-only helper across the crate boundary.
+///
+/// Caller's responsibility: `design` must already be the output of
+/// `HierarchicalNetlist::specialise_constants`, not the design as
+/// originally synthesized. `compile_hierarchical` calls
+/// `specialise_constants` *before* deriving the module set it compiles: an
+/// instance whose port is tied to a constant compiles a structurally
+/// different clone (`"<module>@<port>=<bit>"`, with fewer inputs than the
+/// original), and that clone -- not the original module -- is what actually
+/// gets compiled. Walking the raw design would undercount by exactly the
+/// number of such clones.
 fn distinct_modules(design: &HierarchicalNetlist) -> usize {
     use std::collections::BTreeSet;
     let mut seen = BTreeSet::new();
@@ -66,20 +76,21 @@ fn the_verilog_ripple_adder8_keeps_eight_full_adder_instances_and_certifies() {
         design.modules.keys().collect::<Vec<_>>()
     );
 
-    let gate_count = design
-        .specialise_constants()
-        .ok()
+    let specialised = design.specialise_constants().ok();
+    let gate_count = specialised
+        .as_ref()
         .and_then(|specialised| specialised.flatten().ok())
         .map(|(flat, _)| flat.gates.len());
-    let blocks_compiled = distinct_modules(&design);
+    let blocks_compiled = specialised.as_ref().map(distinct_modules);
 
     let started = std::time::Instant::now();
     let result = compile_hierarchical(&design, SynthesisBudget::Evaluations(0), None)
         .unwrap_or_else(|error| panic!("the synthesized ripple_adder8 must certify: {error}"));
     eprintln!(
-        "CIRCUIT verilog_ripple_adder8 (hierarchical): OK gates={} blocks_compiled={blocks_compiled} \
+        "CIRCUIT verilog_ripple_adder8 (hierarchical): OK gates={} blocks_compiled={} \
          ticks={} blocks={} in {:?}",
         gate_count.map(|count| count.to_string()).unwrap_or_else(|| "?".to_string()),
+        blocks_compiled.map(|count| count.to_string()).unwrap_or_else(|| "?".to_string()),
         result.metrics.quality.observed_settle,
         result.metrics.quality.non_air_blocks,
         started.elapsed()

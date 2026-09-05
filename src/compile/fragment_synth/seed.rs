@@ -4704,11 +4704,29 @@ pub(crate) mod tests {
         }
 
         /// Every distinct module reachable from `design.top` (`top` itself
-        /// included), walking `ModuleInstance::module` transitively. This is
-        /// exactly the set `compile_hierarchical` compiles once each --
-        /// leaves through the worker pool, parents (`top` included) through
-        /// the sequential loop -- so it is what "how many distinct modules
-        /// were compiled" means for the printed report below.
+        /// included), walking `ModuleInstance::module` transitively.
+        ///
+        /// Caller's responsibility: `design` must already be the output of
+        /// `HierarchicalNetlist::specialise_constants`, not the design as
+        /// originally built. `compile_hierarchical` itself calls
+        /// `specialise_constants` *before* deriving the module set it
+        /// compiles (`instantiated_modules` in `hierarchy_api.rs`, private
+        /// to that module and therefore not reusable here): an instance
+        /// whose port is tied to a constant compiles a structurally
+        /// different clone (`"<module>@<port>=<bit>"`, with fewer inputs
+        /// than the original -- see `specialise_constants`'s doc comment),
+        /// and that clone, not the original module, is what actually gets
+        /// compiled. Walking the raw design undercounts by exactly the
+        /// number of such clones (`alu4_full`'s bit-0 `shift_in` tie is one
+        /// example: the raw walk sees `top`+`slice` == 2, but three modules
+        /// are actually compiled -- `top`, `slice`, `slice@shift_in=0`).
+        ///
+        /// This walks the *public* `specialise_constants()` output rather
+        /// than reaching into `hierarchy_api`'s private `instantiated_modules`
+        /// so that a future change to what gets specialised cannot leave
+        /// this count silently stale: both this walk and
+        /// `compile_hierarchical` start from the same public transform, so
+        /// whatever it produces is what both agree on.
         fn distinct_modules(design: &crate::compile::HierarchicalNetlist) -> usize {
             use std::collections::BTreeSet;
             let mut seen = BTreeSet::new();
@@ -4726,18 +4744,43 @@ pub(crate) mod tests {
             seen.len()
         }
 
+        /// Pins [`distinct_modules`] against a constant-tied circuit and a
+        /// constant-free one, on the design each is actually compiled from
+        /// (post-`specialise_constants`) -- not against a released binary,
+        /// so this never touches `compile_hierarchical` and runs in
+        /// milliseconds: `alu4_full` ties bit 0's `shift_in` to
+        /// `PortBinding::Zero`, which must specialise `slice` into a
+        /// separate `slice@shift_in=0` clone (`top`, `slice`,
+        /// `slice@shift_in=0` == 3, not the 2 a walk of the raw design would
+        /// see); `ripple_adder8` ties no port to a constant anywhere, so its
+        /// count is unaffected by specialisation (`top`, `full_adder` == 2).
+        #[test]
+        fn distinct_modules_counts_constant_specialised_clones_separately() {
+            use crate::circuits::hierarchical_builder::circuits as h;
+
+            let alu4_full = h::alu4_full()
+                .specialise_constants()
+                .expect("alu4_full's constant tie folds");
+            assert_eq!(distinct_modules(&alu4_full), 3);
+
+            let ripple_adder8 = h::ripple_adder(8)
+                .specialise_constants()
+                .expect("ripple_adder8 has no constant ties to fold");
+            assert_eq!(distinct_modules(&ripple_adder8), 2);
+        }
+
         /// [`run_cases`]'s hierarchical counterpart: same `REDA_EXTRA_CIRCUITS`
         /// filter and the same "assert no failures" shape, but driving
         /// `compile_hierarchical` on a [`crate::compile::HierarchicalNetlist`]
         /// instead of `compile_fragment_synth` on an already-flat [`Netlist`].
         /// Prints enough for a release run's log to be self-explaining on its
-        /// own: the flat gate count (computed by specialising and flattening
-        /// the design, the same two steps `compile_hierarchical` itself takes
-        /// before lowering), how many distinct modules the design compiles,
-        /// the settle ticks and non-air block count off the certified
-        /// candidate's own metrics, and wall time -- and, on failure, the
-        /// error `compile_hierarchical` returned, so a refusal names itself
-        /// instead of only tripping the final assertion.
+        /// own: the flat gate count and the distinct-module count (both off
+        /// the *specialised* design -- see [`distinct_modules`] -- the same
+        /// design `compile_hierarchical` itself derives before lowering), the
+        /// settle ticks and non-air block count off the certified candidate's
+        /// own metrics, and wall time -- and, on failure, the error
+        /// `compile_hierarchical` returned, so a refusal names itself instead
+        /// of only tripping the final assertion.
         fn run_hierarchical_cases(cases: Vec<(String, crate::compile::HierarchicalNetlist)>) {
             use crate::compile::compile_hierarchical;
 
@@ -4749,28 +4792,32 @@ pub(crate) mod tests {
                         continue;
                     }
                 }
-                let gate_count = design
-                    .specialise_constants()
-                    .ok()
+                let specialised = design.specialise_constants().ok();
+                let gate_count = specialised
+                    .as_ref()
                     .and_then(|specialised| specialised.flatten().ok())
                     .map(|(flat, _)| flat.gates.len());
-                let blocks_compiled = distinct_modules(&design);
+                let blocks_compiled = specialised.as_ref().map(distinct_modules);
+                let gates_str = gate_count
+                    .map(|count| count.to_string())
+                    .unwrap_or_else(|| "?".to_string());
+                let blocks_compiled_str = blocks_compiled
+                    .map(|count| count.to_string())
+                    .unwrap_or_else(|| "?".to_string());
                 let started = std::time::Instant::now();
                 match compile_hierarchical(&design, SynthesisBudget::Evaluations(0), None) {
                     Ok(result) => eprintln!(
-                        "CIRCUIT {name} (hierarchical): OK gates={} blocks_compiled={blocks_compiled} \
+                        "CIRCUIT {name} (hierarchical): OK gates={gates_str} \
+                         blocks_compiled={blocks_compiled_str} \
                          ticks={} blocks={} in {:?}",
-                        gate_count
-                            .map(|count| count.to_string())
-                            .unwrap_or_else(|| "?".to_string()),
                         result.metrics.quality.observed_settle,
                         result.metrics.quality.non_air_blocks,
                         started.elapsed()
                     ),
                     Err(error) => {
                         eprintln!(
-                            "CIRCUIT {name} (hierarchical): ERR blocks_compiled={blocks_compiled} \
-                             {error} in {:?}",
+                            "CIRCUIT {name} (hierarchical): ERR gates={gates_str} \
+                             blocks_compiled={blocks_compiled_str} {error} in {:?}",
                             started.elapsed()
                         );
                         failures.push(name);
