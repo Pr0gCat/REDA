@@ -85,6 +85,12 @@ pub(crate) struct InstancePlacementOverride {
     pub dz: i32,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct BlockPlacementOffset {
+    pub(crate) dx: i32,
+    pub(crate) dz: i32,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct SeedVariant {
     pub implementations: BTreeMap<InstanceId, ImplementationKey>,
@@ -305,7 +311,7 @@ pub(crate) fn plan_parent_with_services(
     graph: InstanceGraph,
     blocks: ParentBlocks<'_>,
     placements: &BTreeMap<InstanceId, InstancePlacementOverride>,
-    block_placements: &BTreeMap<InstanceId, Offset>,
+    block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
 ) -> Result<PlannedParent, SeedError> {
     if let Some(provenance) = input.source_provenance {
         if provenance.len() != input.lowered.gates.len() {
@@ -620,7 +626,7 @@ impl SparseSeedBuilder {
         input: &SeedInput<'_>,
         services: &SeedServices<'_>,
         placements: &BTreeMap<InstanceId, InstancePlacementOverride>,
-        block_placements: &BTreeMap<InstanceId, Offset>,
+        block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
         instances: InstanceGraph,
         blocks: ParentBlocks<'_>,
         repairs: &[LayoutRepair],
@@ -1101,7 +1107,7 @@ fn place_blocks(
     resolved: &ResolvedBlocks<'_>,
     plan: &SeedPlacementPlan,
     plan_translation: PlanTranslation,
-    block_placements: &BTreeMap<InstanceId, Offset>,
+    block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
     occupied: &mut BTreeSet<Anchor>,
     sources: &mut BTreeMap<PhysicalEndpointId, SourceGeometry>,
     targets: &mut BTreeMap<PhysicalSink, TargetGeometry>,
@@ -5122,7 +5128,7 @@ pub(crate) mod tests {
             InstanceGraph::with_blocks(&planning, &library, &specs).expect("parent graph"),
             ParentBlocks { compiled: &blocks },
             &BTreeMap::new(),
-            &BTreeMap::from([(block_ids[0], Offset { dx, dy: 0, dz })]),
+            &BTreeMap::from([(block_ids[0], BlockPlacementOffset { dx, dz })]),
         )
         .expect("overridden parent plans");
 
