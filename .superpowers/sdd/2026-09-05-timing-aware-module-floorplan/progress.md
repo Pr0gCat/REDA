@@ -48,3 +48,14 @@ Spec review: APPROVED after closing typed `BlockEdge`, whole-incumbent wrapper a
 - GREEN: the hierarchy staircase test passed in 9.54s; the existing time-boundary test passed in 0.00s.
 - Review: Claude Code Sonnet approved both spec compliance and task quality with no Critical, Important, or Minor findings.
 - Result: Task 3 added only a focused fixture and runnable contract test; production behavior was already correct and remained unchanged.
+
+## Task 4 complete — target measurement and bounded result
+
+- Commit: `24b0ef4`.
+- Release oracle: `cargo test --release --lib ripple_adder8_hierarchical_budget_target_oracle -- --ignored --nocapture` passed in 2010.81s.
+- Staircase: budget 0 = 608/70,603; budget 1 = 590/70,659; budget 2 = 590/70,659; budget 4 = 580/70,827; exhausted = 576/71,147 (`ticks/blocks`).
+- Exhaustion: 7 evaluations, `StopReason::ProposalStreamExhausted`, case fingerprint `b9ab139aa9726703df3cd0b9f7ed30d50c6a8e0c8b1e2bb4156024a179844573`, final candidate fingerprint `44f7e78033a4e2a22fea5d1d489f0f4bf0d4be2f446d2ee8e1020a42804065c9`.
+- Bounded result: the full alignment stream stays 29,468 blocks below the cap but misses the latency target by 102 ticks; the next allowed design is the specified single-consumer boundary-repeater sharing experiment.
+- Review: Claude Code Sonnet approved spec compliance and task quality with no Critical or Important findings.
+- Task 4 minor (deferred): report tables render `ExactDelay(678)` as the numeric `678`; harmless presentation simplification, final review should decide whether to normalize the label.
+- Task 4 minor (deferred): budget 0/1/2/4 evaluation counts and stop reasons were observed and Task 3 covers the contract, but the target harness itself only asserts final exhaustion, not every intermediate stop reason.
