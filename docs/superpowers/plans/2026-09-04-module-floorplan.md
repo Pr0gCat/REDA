@@ -1,5 +1,11 @@
 # Module Floorplan Implementation Plan
 
+> **Status: implementation and verification complete (2026-09-05).** Tasks
+> 1-13 landed through `14470a1`; Task 14's fresh flat, hierarchical, Verilog,
+> pinned-IO and release integration runs are recorded in the acceptance report
+> and SDD ledger. Final review found no structural floorplan defect and its four
+> reachable frontend findings were fixed with regression tests.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Compile a Verilog module once as an unpinned, certified block, stamp it at every instance, place blocks as opaque macros in the parent, wire the gaps with the existing channel plan, and certify the flat union exactly as today.

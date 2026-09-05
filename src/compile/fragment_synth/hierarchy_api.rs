@@ -686,6 +686,51 @@ mod tests {
     }
 
     #[test]
+    fn an_unknown_module_is_returned_as_a_hierarchy_error_instead_of_panicking() {
+        let design = HierarchicalNetlist {
+            top: "top".to_string(),
+            modules: BTreeMap::from([(
+                "top".to_string(),
+                Module {
+                    inputs: vec![],
+                    outputs: vec![],
+                    gates: vec![],
+                    instances: vec![ModuleInstance {
+                        name: "u0".to_string(),
+                        module: "missing".to_string(),
+                        ports: BTreeMap::from([("a".to_string(), PortBinding::Zero)]),
+                    }],
+                },
+            )]),
+        };
+
+        match design.specialise_constants() {
+            Err(crate::compile::HierarchyError::UnknownModule { instance, module }) => {
+                assert_eq!(instance, "u0");
+                assert_eq!(module, "missing");
+            }
+            Err(other) => panic!("expected typed UnknownModule, got {other}"),
+            Ok(_) => panic!("an unknown module must be rejected during specialisation"),
+        }
+
+        let outcome = std::panic::catch_unwind(|| {
+            compile_hierarchical(&design, SynthesisBudget::Evaluations(0), None)
+        });
+        let error = match outcome {
+            Ok(Err(error)) => error,
+            Ok(Ok(_)) => panic!("an unknown module must be rejected"),
+            Err(_) => panic!("an unknown module must return an error, not panic"),
+        };
+        match error {
+            SynthesisError::Hierarchy(message) => assert_eq!(
+                message,
+                "instance `u0` names unknown module `missing`"
+            ),
+            other => panic!("expected the hierarchy error category, got {other}"),
+        }
+    }
+
+    #[test]
     fn a_single_module_design_is_the_flat_compile_byte_for_byte() {
         for (name, netlist) in [
             ("and4", crate::circuits::and4::build_and4_netlist().0),

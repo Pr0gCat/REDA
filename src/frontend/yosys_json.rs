@@ -402,6 +402,19 @@ struct InstanceInfo<'a> {
     connections: &'a Map<String, Value>,
 }
 
+/// Pick a deterministic builder prefix that cannot produce a name already
+/// claimed at this module boundary. The ordinary `g` prefix remains the
+/// common case; underscores are appended only while some claimed name starts
+/// with it, which guarantees that `<prefix><decimal>` is fresh as well.
+fn fresh_module_gate_prefix<'a>(claimed: impl Iterator<Item = &'a str>) -> String {
+    let claimed: Vec<&str> = claimed.collect();
+    let mut prefix = String::from("g");
+    while claimed.iter().any(|name| name.starts_with(&prefix)) {
+        prefix.push('_');
+    }
+    prefix
+}
+
 /// Read one module's JSON body into a [`Module`]: its own gates (exactly the
 /// existing single-module reading logic) plus one [`ModuleInstance`] per
 /// cell whose type names another module in `module_names`.
@@ -531,13 +544,24 @@ fn module_from_json(
         }
     }
 
+    let builder = if is_top {
+        // Preserve the legacy flat reader's generated names byte for byte.
+        NetlistBuilder::new()
+    } else {
+        NetlistBuilder::with_prefix(fresh_module_gate_prefix(
+            signal_of
+                .values()
+                .map(String::as_str)
+                .chain(output_bits.iter().map(|(name, _)| name.as_str())),
+        ))
+    };
     let mut ctx = Context {
         driver_of,
         signal_of,
         in_progress: HashSet::new(),
         input_names,
         buffer_of_input: HashMap::new(),
-        builder: NetlistBuilder::new(),
+        builder,
     };
 
     let mut outputs: Vec<String> = Vec::new();
@@ -562,10 +586,12 @@ fn module_from_json(
     for (bit_name, net_id) in &output_bits {
         let signal = resolve_output_net(&mut ctx, *net_id)?;
         if is_top {
-            // Byte-identical to before: dedup by signal, no renaming, no
-            // buffering. Nothing ever instantiates the top module, so its
-            // own boundary names are never looked up by an alias.
-            ctx.signal_of.insert(*net_id, signal.clone());
+            // Byte-identical to before: dedup by signal, with no boundary
+            // rename or extra buffer. Nothing ever instantiates the top
+            // module, so its own boundary names are never looked up by an
+            // alias. In particular, do not replace `signal_of[net_id]` with
+            // a pass-through output's synthesized buffer: other cones on
+            // that net must keep reading the primary input directly.
             if seen_outputs.insert(signal.clone()) {
                 outputs.push(signal.clone());
             }
@@ -1252,5 +1278,176 @@ mod tests {
         assert_eq!(gate.inputs, vec!["x".to_string()]);
         assert_eq!(gate.output, "z");
         assert_eq!(gate.kind, GateKind::Nor(1));
+    }
+
+    /// A child module is free to name an output port exactly like a
+    /// generated gate name (`g0`). The boundary rename that gives the port
+    /// its gate-driven identity must not rename a second gate onto a name a
+    /// standing gate already carries -- that is two drivers of one signal,
+    /// a netlist that still flattens, to the wrong circuit. Two chained
+    /// inverters make the collision real: the builder names them `g0` and
+    /// `g1`, and the declared output `g0` is driven by `g1`.
+    #[test]
+    fn a_child_output_port_named_like_a_generated_gate_does_not_collide() {
+        let json = json!({
+            "modules": {
+                "sub": {
+                    "ports": {
+                        "a": { "direction": "input", "bits": [2] },
+                        "g0": { "direction": "output", "bits": [4] }
+                    },
+                    "cells": {
+                        "n0": { "type": "$_NOT_", "connections": { "A": [2], "Y": [3] } },
+                        "n1": { "type": "$_NOT_", "connections": { "A": [3], "Y": [4] } }
+                    }
+                },
+                "top": {
+                    "ports": {
+                        "x": { "direction": "input", "bits": [2] },
+                        "z": { "direction": "output", "bits": [3] }
+                    },
+                    "cells": {
+                        "u0": { "type": "sub", "connections": { "a": [2], "g0": [3] } }
+                    }
+                }
+            }
+        });
+        let (design, _) = hierarchical_netlist_from_json(&json, "top").expect("reads");
+        let sub = &design.modules["sub"];
+        assert_eq!(
+            sub.gates,
+            vec![
+                crate::compile::Gate {
+                    name: "g_0".to_string(),
+                    inputs: vec!["a".to_string()],
+                    output: "g_0".to_string(),
+                    kind: GateKind::Nor(1),
+                },
+                crate::compile::Gate {
+                    name: "g0".to_string(),
+                    inputs: vec!["g_0".to_string()],
+                    output: "g0".to_string(),
+                    kind: GateKind::Nor(1),
+                },
+            ],
+            "the internal gate gets the deterministic fresh prefix and the port keeps its declared name"
+        );
+        let top = &design.modules["top"];
+        assert_eq!(top.instances.len(), 1);
+        assert_eq!(top.instances[0].module, "sub");
+        assert_eq!(
+            top.instances[0].ports["g0"],
+            PortBinding::Signal("z".to_string()),
+            "the colliding port must be on the real path from the reachable child to top.z"
+        );
+        let (flat, _) = design.flatten().expect("the reachable child flattens");
+        assert_eq!(flat.outputs, vec!["z".to_string()]);
+        assert_eq!(flat.gates[0].output, "u0.g_0");
+        assert_eq!(flat.gates[1].inputs, vec!["u0.g_0".to_string()]);
+        assert_eq!(flat.gates[1].output, "z");
+    }
+
+    #[test]
+    fn every_shared_output_port_name_is_reserved_from_generated_gates() {
+        let json = json!({
+            "modules": {
+                "dual": {
+                    "ports": {
+                        "a": { "direction": "input", "bits": [2] },
+                        "a0": { "direction": "output", "bits": [4] },
+                        "g0": { "direction": "output", "bits": [4] }
+                    },
+                    "cells": {
+                        "n0": { "type": "$_NOT_", "connections": { "A": [2], "Y": [3] } },
+                        "n1": { "type": "$_NOT_", "connections": { "A": [3], "Y": [4] } }
+                    }
+                },
+                "top": {
+                    "ports": {
+                        "x": { "direction": "input", "bits": [2] },
+                        "p": { "direction": "output", "bits": [3] },
+                        "q": { "direction": "output", "bits": [4] }
+                    },
+                    "cells": {
+                        "u0": { "type": "dual", "connections": { "a": [2], "a0": [3], "g0": [4] } }
+                    }
+                }
+            }
+        });
+
+        let (design, _) = hierarchical_netlist_from_json(&json, "top").expect("reads");
+        let dual = &design.modules["dual"];
+        assert_eq!(dual.gates.len(), 3, "two inverters plus one output fork");
+        assert_eq!(
+            dual.gates.iter().map(|gate| gate.name.as_str()).collect::<HashSet<_>>().len(),
+            dual.gates.len(),
+            "every gate name must be unique: {:?}",
+            dual.gates
+        );
+        assert_eq!(
+            dual.gates.iter().map(|gate| gate.output.as_str()).collect::<HashSet<_>>().len(),
+            dual.gates.len(),
+            "every gate output must be unique: {:?}",
+            dual.gates
+        );
+        assert_eq!(dual.gates[0].output, "g_0");
+
+        let (flat, _) = design.flatten().expect("flattens");
+        assert!(flat.gates.iter().any(|gate| gate.output == "p"));
+        assert!(flat.gates.iter().any(|gate| gate.output == "q"));
+    }
+
+    /// A top-level `assign p = x;` synthesizes a buffer for `p` -- and
+    /// nothing else. The old flat reader never wrote that buffer's name back
+    /// over the input's net, so every other reader of net `x` (here, `q`'s
+    /// inverter) kept reading the primary input directly. Byte identity with
+    /// that reader means: two gates, and the inverter's input is `x`, not
+    /// the buffer's output.
+    #[test]
+    fn a_top_passthrough_output_does_not_reroute_other_readers_of_its_net() {
+        let json = json!({
+            "modules": {
+                "top": {
+                    "ports": {
+                        "p": { "direction": "output", "bits": [2] },
+                        "q": { "direction": "output", "bits": [4] },
+                        "x": { "direction": "input", "bits": [2] }
+                    },
+                    "cells": {
+                        "n0": { "type": "$_NOT_", "connections": { "A": [2], "Y": [4] } }
+                    }
+                }
+            }
+        });
+        let (netlist, port_map) = netlist_from_json(&json, "top").expect("reads");
+        assert_eq!(
+            netlist,
+            Netlist {
+                inputs: vec!["x".to_string()],
+                outputs: vec!["g0".to_string(), "g1".to_string()],
+                gates: vec![
+                    crate::compile::Gate {
+                        name: "g0".to_string(),
+                        inputs: vec!["x".to_string()],
+                        output: "g0".to_string(),
+                        kind: GateKind::Buf,
+                    },
+                    crate::compile::Gate {
+                        name: "g1".to_string(),
+                        inputs: vec!["x".to_string()],
+                        output: "g1".to_string(),
+                        kind: GateKind::Nor(1),
+                    },
+                ],
+            },
+            "the complete legacy flat netlist must stay byte-for-byte stable"
+        );
+        assert_eq!(
+            port_map,
+            HashMap::from([
+                ("p".to_string(), "g0".to_string()),
+                ("q".to_string(), "g1".to_string()),
+            ])
+        );
     }
 }

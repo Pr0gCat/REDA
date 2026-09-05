@@ -2,7 +2,7 @@
 
 Status: approved in design review on 2026-09-04 (four sections, each
 confirmed by the user); revised the same day after a code-backed review
-(§13 lists what changed).
+(§13 lists what changed); implemented and verified on 2026-09-05 (§14).
 
 This spec adds one level of structure above the topology-aware seed: a
 Verilog module becomes a block that is compiled once, certified once, and
@@ -414,7 +414,7 @@ Release-only acceptance (ignored tests, same harness style as
 | alu4_full | 4 × slice module + glue | certify |
 | multiplier4 | 3 adder rows as modules, blocks side by side | certify |
 | alu8 | 2 × alu4 module, each 4 × slice (three levels) | certify |
-| ripple_adder8 via Verilog fixture | Yosys path | certify, same fingerprint as the builder version |
+| ripple_adder8 via Verilog fixture | Yosys path | keep all 8 full_adder instances and certify |
 
 Recorded and reported against the flat compile, not gated: settle ticks,
 non-air blocks, wall time, and the share of wall time spent in the
@@ -470,3 +470,60 @@ byte-identical in candidate fingerprint and metrics.
   serialisation, since no existing walker covers every anchor.
 - §5.2 and §5.3: `$paramod` names and constant-port specialisation.
 - §11: ticks recorded, not gated.
+- §11: the Verilog fixture is required to preserve the module instances and
+  certify, but not to match the hand-built fixture's candidate fingerprint.
+  Yosys/ABC is free to choose a different gate decomposition from the test
+  builder; equality at the flattened logic and certified-world boundaries is
+  the meaningful contract.
+
+## 14. Implemented outcome and known limitations (2026-09-05)
+
+Implemented on branch `claude/topology-aware-seed-v2-6f8f7e`. The core
+architecture is the approved design: compile each specialised module once,
+stamp the certified block at each instance, route the parent around opaque
+block envelopes, splice every boundary through a repeater, and certify one
+flat union with the unchanged verifier, equivalence proof and simulator.
+
+Fresh acceptance results:
+
+- all four hierarchical circuits certify: ripple_adder8 608 ticks / 70603
+  blocks, alu4_full 925 / 191062, multiplier4 1039 / 124948 and alu8
+  972 / 213833;
+- alu8 is the required three-level case and has no completed flat baseline;
+- the Verilog ripple_adder8 keeps eight `full_adder` instances through Yosys
+  and certifies at 366 / 48467;
+- all 16 extra and all four large flat circuits still certify; the four large
+  figures exactly match their 2026-09-04 baselines;
+- the six-case harness reproduced every budget-zero metric and all 30
+  case/budget combinations certified. Its legacy replacement-quality gate
+  remains false because this seed does not beat the old compiler on every
+  tick/block comparison; that gate is not the module-floorplan acceptance
+  criterion;
+- the release integration chain passes with 888 library tests, 7 pinned-IO,
+  5 channel-safety, 4 fragment-acceptance, 1 architecture, 10 reference and
+  27 terminal-handover tests. `cargo clippy --lib` exits successfully with
+  the branch's existing warnings.
+
+The final review found no structural correctness defect in the floorplan or
+flat-union model. Four reachable frontend defects found during that review
+were fixed with RED/GREEN regression tests: generated Yosys names cannot
+collide with a child output such as `g0`; a top pass-through output no longer
+rewrites later consumers of its input net; constant specialisation preserves
+declared output names; and an unknown child module returns a typed hierarchy
+error instead of panicking.
+
+Known limits remain explicit:
+
+- every boundary repeater adds one tick. Hierarchy reduces work when module
+  reuse dominates, but is not a universal tick or block win;
+- blocks compile at budget zero and the parent refuses proposals that name a
+  block-internal gate, so some non-zero budget is wasted on thin hierarchical
+  parents;
+- blocks keep a fixed east-facing frame and are never rotated; an incompatible
+  pinned frame or a block wider than the lateral window is a typed refusal;
+- the pinned single-module contract is covered end to end, but a pinned
+  multi-module parent does not yet have a dedicated release acceptance case;
+- sanitised sibling instance names are deterministic, but validation does not
+  yet reject every pathological pair that sanitises to the same prefix;
+- hierarchy is flattened before certification. There is no compositional or
+  per-module substitute for whole-world verification.

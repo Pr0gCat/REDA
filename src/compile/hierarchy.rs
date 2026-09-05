@@ -183,6 +183,10 @@ impl HierarchicalNetlist {
     /// Only NOR/OR inputs tied to zero fold (the neutral element); anything
     /// else is refused, matching the Yosys reader's rule.
     pub fn specialise_constants(&self) -> Result<HierarchicalNetlist, HierarchyError> {
+        // Specialisation indexes child modules while cloning them. Validate
+        // first so a missing child is returned as the existing typed
+        // `UnknownModule` error instead of reaching that index and panicking.
+        self.validate()?;
         let mut out = self.clone();
         let mut pending: Vec<String> = out.modules.keys().cloned().collect();
         while let Some(parent_name) = pending.pop() {
@@ -474,15 +478,20 @@ fn specialise_module(
 /// `GateKind::Or(1)` is a bare wire in this project, not a gate (see
 /// `Context::build_cell` in `yosys_json.rs`, which returns the single input
 /// directly rather than building a gate). Folding a constant can leave an
-/// `Or` at arity 1, so remove that gate and rename every reference to its
-/// output -- other gates' inputs, the module's own outputs, and any
-/// instance port bound to it -- to its one remaining input instead.
+/// `Or` at arity 1, so remove an internal one and rename every reference to
+/// its output. A declared output is different: its name is part of the
+/// module boundary and must survive specialisation, so retain that boundary
+/// as a `Buf` for lowering instead of aliasing the port away.
 fn alias_single_input_ors(module: &mut Module) {
     loop {
         let Some(index) = module.gates.iter().position(|gate| matches!(gate.kind, GateKind::Or(1)))
         else {
             break;
         };
+        if module.outputs.contains(&module.gates[index].output) {
+            module.gates[index].kind = GateKind::Buf;
+            continue;
+        }
         let alias = module.gates.remove(index);
         let source = alias.inputs[0].clone();
         let target = alias.output;
@@ -491,11 +500,6 @@ fn alias_single_input_ors(module: &mut Module) {
                 if *input == target {
                     *input = source.clone();
                 }
-            }
-        }
-        for output in &mut module.outputs {
-            if *output == target {
-                *output = source.clone();
             }
         }
         for instance in &mut module.instances {
@@ -693,6 +697,52 @@ mod tests {
         assert_eq!(module.gates.len(), 1, "the Or(1) alias gate is removed entirely");
         assert_eq!(module.gates[0].inputs, vec!["a".to_string()], "downstream gate now reads the alias's source");
         assert_eq!(module.gates[0].output, "y".to_string());
+    }
+
+    /// Constant folding can leave an `Or(1)` whose output IS one of the
+    /// module's declared output ports. Aliasing that gate away would rename
+    /// the declared port itself, so the instantiating parent's binding of
+    /// the original port name becomes a `PortMismatch`. The port must
+    /// survive, driven by a real (Buf or equivalent) gate.
+    #[test]
+    fn a_constant_fold_that_leaves_an_or1_on_a_declared_output_keeps_the_port() {
+        let mut modules = BTreeMap::new();
+        modules.insert(
+            "wire_or".to_string(),
+            Module {
+                inputs: vec!["a".into(), "b".into()],
+                outputs: vec!["y".into()],
+                gates: vec![gate("g0", &["a", "b"], "y", GateKind::Or(2))],
+                instances: vec![],
+            },
+        );
+        modules.insert(
+            "top".to_string(),
+            Module {
+                inputs: vec!["x".into()],
+                outputs: vec!["z".into()],
+                gates: vec![],
+                instances: vec![ModuleInstance {
+                    name: "u0".into(),
+                    module: "wire_or".into(),
+                    ports: BTreeMap::from([
+                        ("a".to_string(), PortBinding::Signal("x".into())),
+                        ("b".to_string(), PortBinding::Zero),
+                        ("y".to_string(), PortBinding::Signal("z".into())),
+                    ]),
+                }],
+            },
+        );
+        let design = HierarchicalNetlist { top: "top".into(), modules };
+        let specialised = design.specialise_constants().expect("specialises");
+        let clone = &specialised.modules["wire_or@b=0"];
+        assert_eq!(clone.outputs, vec!["y".to_string()], "the declared output port must survive specialisation");
+        assert_eq!(clone.gates, vec![gate("g0", &["a"], "y", GateKind::Buf)]);
+        specialised.validate().expect("the parent's `y` binding must still match a declared port");
+        let (flat, _) = specialised.flatten().expect("flattens");
+        let z_gate = flat.gates.iter().find(|g| g.output == "z").expect("a gate drives z");
+        assert_eq!(z_gate.inputs, vec!["x".to_string()]);
+        lower_hierarchy(&specialised).expect("the kept gate must be lowerable");
     }
 
     #[test]
