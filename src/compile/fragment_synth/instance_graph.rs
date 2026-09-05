@@ -398,13 +398,40 @@ impl InstanceGraph {
         library: &Library,
         blocks: &[BlockSpec<'_>],
     ) -> Result<Self, SynthesisError> {
+        Self::with_blocks_and_implementations(planning, library, blocks, &BTreeMap::new())
+    }
+
+    /// [`Self::with_blocks`] with the per-instance implementation choices a
+    /// fragment proposal made, exactly as
+    /// [`Self::one_to_one_with_implementations`] carries them for a flat
+    /// design.
+    ///
+    /// There is deliberately no duplicate-request counterpart. A duplicate
+    /// instance is numbered past the parent's own gates, which is where the
+    /// block instances already live, and -- more decisively -- the flat
+    /// union documents that the parent's graph must be one-to-one
+    /// (`union::UnionInput`), so a duplicated parent instance could not be
+    /// mapped onto a flat gate afterwards even if it were numbered. The
+    /// hierarchical front door refuses such a proposal before it gets here.
+    pub(crate) fn with_blocks_and_implementations(
+        planning: &Netlist,
+        library: &Library,
+        blocks: &[BlockSpec<'_>],
+        implementations: &BTreeMap<InstanceId, ImplementationKey>,
+    ) -> Result<Self, SynthesisError> {
         let synthetic_outputs: usize = blocks.iter().map(|spec| spec.outputs.len()).sum();
         let real_gates = planning
             .gates
             .len()
             .checked_sub(synthetic_outputs)
             .ok_or(SynthesisError::IdentityOverflow)?;
-        let instances = instantiate_gates(planning, library, &BTreeMap::new(), real_gates)?;
+        let instances = instantiate_gates(planning, library, implementations, real_gates)?;
+        if let Some(&instance) = implementations
+            .keys()
+            .find(|instance| !instances.iter().any(|item| item.id == **instance))
+        {
+            return Err(SynthesisError::UnknownImplementationOverride { instance });
+        }
 
         let (signals, primary_inputs) = signal_table(planning)?;
 

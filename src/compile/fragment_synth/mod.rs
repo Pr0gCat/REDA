@@ -7,6 +7,7 @@ pub mod candidate;
 pub mod certification;
 pub mod config;
 mod fragment;
+mod hierarchy_api;
 pub mod identity;
 pub mod instance_graph;
 pub mod legacy_adapter;
@@ -27,4 +28,5 @@ pub use api::{
     compile_fragment_synth, SynthesisCaseFingerprint, SynthesisError, SynthesisInput,
     SynthesisResult,
 };
+pub use hierarchy_api::compile_hierarchical;
 pub use search::{CapWorkCounters, ProposalTerminal, ProposalTrace, StopReason, SynthesisBudget};

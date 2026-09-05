@@ -15,7 +15,8 @@ use reda::circuits::and4::build_and4_netlist;
 use reda::compile::fragment_synth::benchmark::legacy_benchmark_evaluator;
 use reda::compile::planner::{Anchor, PinRefusal, PortPin, PortPlacements, PortRole};
 use reda::compile::{
-    compile_fragment_synth, compile_grown, CompileError, SynthesisBudget, SynthesisInput,
+    compile_fragment_synth, compile_grown, compile_hierarchical, CompileError, HierarchicalNetlist,
+    Module, SynthesisBudget, SynthesisInput,
 };
 use reda::redstone::world::block::{BlockKind, BlockState, Facing};
 
@@ -487,6 +488,100 @@ fn checked_seven_segment_fixture_binds_every_signal_to_its_literal_pin() {
             fixture.placements().get(&name),
             Some(pin),
             "{name} moved or changed outside-facing direction"
+        );
+    }
+}
+
+/// The hierarchical front door, on a design of exactly one module, must be
+/// the flat front door -- including under pins.
+///
+/// The seven-segment fixture is the strongest available statement of that:
+/// eleven caller-owned `(Anchor, toward)` pins, each with a handover
+/// repeater the caller reads and a net cell the route has to reach. If
+/// `compile_hierarchical`'s single-module path diverged anywhere -- a
+/// different lowering, a different case fingerprint, pins not forwarded --
+/// the candidate would move and these cells would stop agreeing.
+///
+/// The fixture only exposes an already-lowered netlist, so wrapping it as a
+/// module means `lower_hierarchy` lowers it a second time. That second pass
+/// being the identity is asserted directly, and cheaply, by
+/// `compile::fragment_synth::hierarchy_api::tests::lowering_an_already_lowered_netlist_is_the_identity`.
+#[test]
+fn compile_hierarchical_preserves_the_checked_seven_segment_pin_contract() {
+    let evaluator = legacy_benchmark_evaluator().unwrap();
+    let fixture = evaluator.fixture("pinned:verilog:seven_segment").unwrap();
+    let expected = checked_seven_segment_pin_contract();
+    assert_eq!(expected.len(), 11, "the checked contract pins eleven ports");
+    assert_eq!(actual_pin_contract(fixture), expected);
+
+    let netlist = fixture.lowered_netlist();
+    let mut modules = BTreeMap::new();
+    modules.insert(
+        "seven_segment".to_string(),
+        Module {
+            inputs: netlist.inputs.clone(),
+            outputs: netlist.outputs.clone(),
+            gates: netlist.gates.clone(),
+            instances: vec![],
+        },
+    );
+    let design = HierarchicalNetlist {
+        top: "seven_segment".to_string(),
+        modules,
+    };
+
+    let flat = compile_fragment_synth(
+        SynthesisInput {
+            lowered: netlist,
+            source_provenance: None,
+            pins: Some(fixture.placements()),
+        },
+        SynthesisBudget::Evaluations(0),
+    )
+    .unwrap();
+    let hierarchical = compile_hierarchical(
+        &design,
+        SynthesisBudget::Evaluations(0),
+        Some(fixture.placements()),
+    )
+    .unwrap();
+
+    assert_eq!(
+        hierarchical.candidate_fingerprint, flat.candidate_fingerprint,
+        "a one-module hierarchy must compile to the very same candidate"
+    );
+    assert_eq!(
+        hierarchical.case_fingerprint, flat.case_fingerprint,
+        "a one-module hierarchy must be the very same synthesis case"
+    );
+
+    for (name, (pin, _, handover, net_cell)) in &expected {
+        assert_eq!(
+            hierarchical
+                .compiled
+                .world
+                .get(pin.at.x, pin.at.y, pin.at.z),
+            &BlockState::air(),
+            "{name}'s caller-owned pin cell must remain exactly air"
+        );
+        assert_eq!(
+            hierarchical
+                .compiled
+                .world
+                .get(handover.x, handover.y, handover.z),
+            &expected_handover_repeater(pin.toward),
+            "{name}'s handover repeater changed state"
+        );
+        let net_state = hierarchical
+            .compiled
+            .world
+            .get(net_cell.x, net_cell.y, net_cell.z);
+        assert!(
+            matches!(
+                net_state.kind,
+                BlockKind::RedstoneWire | BlockKind::Repeater
+            ),
+            "{name}'s exact net cell {net_cell:?} must be a route conductor, got {net_state:?}"
         );
     }
 }

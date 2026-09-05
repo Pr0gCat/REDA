@@ -143,6 +143,8 @@ pub(crate) enum SeedError {
     BlockFrameTurned { block: InstanceId },
     #[error("block {block:?} has a footprint too large to measure in placement coordinates")]
     BlockTooWide { block: InstanceId },
+    #[error("flat union failed: {0}")]
+    Union(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

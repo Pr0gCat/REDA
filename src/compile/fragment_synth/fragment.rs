@@ -59,9 +59,20 @@ pub(crate) struct DuplicateChoice {
     pub request: DuplicateRequest,
 }
 
+/// How a proposal's variant is turned into a certified candidate.
+///
+/// A flat design compiles a variant with the sparse seed builder. A
+/// hierarchical parent cannot: its variant has to be re-planned around the
+/// blocks it stamps and re-unioned into a flat candidate, which is a
+/// different procedure over the same `SeedVariant`. The stream itself only
+/// ever *chooses* variants, so the choice of compiler is the caller's.
+pub(crate) type VariantCompiler<'a> =
+    dyn Fn(&SeedVariant) -> Result<CertifiedCandidate, SeedError> + 'a;
+
 pub(crate) struct FragmentProposalStream<'a> {
     input: SeedInput<'a>,
     services: SeedServices<'a>,
+    compile: Box<VariantCompiler<'a>>,
     variants: BTreeMap<Fingerprint, SeedVariant>,
     next_single_index: u64,
     next_duplicate_index: u64,
@@ -69,9 +80,24 @@ pub(crate) struct FragmentProposalStream<'a> {
 
 impl<'a> FragmentProposalStream<'a> {
     pub(crate) fn new(input: SeedInput<'a>, services: SeedServices<'a>) -> Self {
+        Self::with_compiler(
+            input,
+            services,
+            Box::new(move |variant| {
+                compile_sparse_seed_variant_with_services(input, services, variant)
+            }),
+        )
+    }
+
+    pub(crate) fn with_compiler(
+        input: SeedInput<'a>,
+        services: SeedServices<'a>,
+        compile: Box<VariantCompiler<'a>>,
+    ) -> Self {
         Self {
             input,
             services,
+            compile,
             variants: BTreeMap::new(),
             next_single_index: 0,
             next_duplicate_index: 0,
@@ -161,7 +187,7 @@ impl ProposalStream<CertifiedCandidate> for FragmentProposalStream<'_> {
                 );
                 (fragment_fingerprint, choice_fingerprint, cap_work)
             };
-        match compile_sparse_seed_variant_with_services(self.input, self.services, &variant) {
+        match (self.compile)(&variant) {
             Ok(certified) => {
                 self.variants
                     .insert(certified.metrics().candidate_fingerprint.clone(), variant);
@@ -234,7 +260,8 @@ fn terminal_for_seed_error(error: &SeedError, work: &mut CapWorkCounters) -> Pro
         | SeedError::Incomplete(_)
         | SeedError::UnknownBlock { .. }
         | SeedError::BlockFrameTurned { .. }
-        | SeedError::BlockTooWide { .. } => ProposalTerminal::Refused,
+        | SeedError::BlockTooWide { .. }
+        | SeedError::Union(_) => ProposalTerminal::Refused,
     }
 }
 

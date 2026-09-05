@@ -49,6 +49,13 @@ impl SynthesisCaseFingerprint {
     pub fn as_str(&self) -> &str {
         self.0.as_str()
     }
+
+    /// A case fingerprint derived somewhere else -- the hierarchical front
+    /// door mixes this crate's flat case fingerprint with a descriptor of
+    /// the module hierarchy, which only it knows how to write.
+    pub(crate) fn from_fingerprint(fingerprint: Fingerprint) -> Self {
+        Self(fingerprint)
+    }
 }
 
 #[derive(Debug, Error)]
@@ -57,6 +64,19 @@ pub enum SynthesisError {
     Seed(String),
     #[error("certified candidate cannot expose compatibility metadata: {0}")]
     Compatibility(String),
+    #[error("the module hierarchy is not compilable: {0}")]
+    Hierarchy(String),
+    // `reason` rather than `source`: `thiserror` treats a field literally
+    // named `source` as the error's `std::error::Error::source()`, which a
+    // `String` cannot be. The rendered text is carried, not the error, so
+    // that a block failure can cross the worker-thread boundary as plain
+    // data.
+    #[error("compiling block `{module}` (first instantiated at `{first_path}`) failed: {reason}")]
+    Block {
+        module: String,
+        first_path: String,
+        reason: String,
+    },
 }
 
 pub struct SynthesisResult {
@@ -158,7 +178,7 @@ fn compile_fragment_synth_with_case_fingerprint(
     })
 }
 
-fn compiled_from_certified(
+pub(crate) fn compiled_from_certified(
     certified: &crate::compile::fragment_synth::certification::CertifiedCandidate,
     lowered: &Netlist,
 ) -> Result<CompiledCircuit, SynthesisError> {

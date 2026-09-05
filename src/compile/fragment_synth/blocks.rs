@@ -13,7 +13,7 @@ use std::collections::BTreeMap;
 use thiserror::Error;
 
 use crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate;
-use crate::compile::fragment_synth::certification::CandidateMetrics;
+use crate::compile::fragment_synth::certification::{CandidateMetrics, CertifiedCandidate};
 use crate::compile::fragment_synth::identity::{PhysicalEndpointId, PortId};
 use crate::compile::fragment_synth::relocate;
 use crate::compile::fragment_synth::seed::{compile_sparse_seed_with_services, SeedError, SeedInput, SeedServices};
@@ -77,90 +77,111 @@ pub(crate) fn compile_block(
             module: module.to_string(),
             source,
         })?;
-    let candidate = certified.candidate().clone();
-    // `pins: None` above means `bind_pin_contracts` (seed.rs) never resolves
-    // a pin, so `automatic_boundary_direction` (seed.rs) always takes its
-    // `pin_contracts.is_empty()` branch and returns `Facing::East` for every
-    // boundary it places. Check that invariant explicitly here rather than
-    // just hardcoding `Facing::East` on the `BlockPort`s below on faith -- a
-    // block that somehow compiled with a pinned frame would place its
-    // boundaries by a different rule, and every later task that stamps this
-    // block by its `toward` would silently be wrong.
-    if !candidate.pin_contracts.is_empty() {
-        return Err(BlockError::PinnedFrame {
-            module: module.to_string(),
-        });
-    }
-    let metrics = certified.metrics().clone();
+    CompiledBlock::from_certified(module, lowered, &certified)
+}
 
-    let mut inputs = BTreeMap::new();
-    for (index, name) in lowered.inputs.iter().enumerate() {
-        let port = PortId(u32::try_from(index).map_err(|_| BlockError::IdentityOverflow {
-            module: module.to_string(),
-        })?);
-        let endpoint = PhysicalEndpointId::PrimaryInput(port);
-        let lever = candidate
-            .boundaries
-            .get(&endpoint)
-            .and_then(|boundary| {
-                boundary
-                    .blocks
-                    .iter()
-                    .find(|block| block.state.kind == BlockKind::Lever)
-            })
-            .ok_or_else(|| BlockError::MissingBoundary {
+impl CompiledBlock {
+    /// Read a block's port table off a candidate that has already been
+    /// certified for `lowered`.
+    ///
+    /// Split out of [`compile_block`] because a module that itself contains
+    /// module instances is not compiled by the flat seed at all: it is
+    /// planned around its own blocks and unioned into a flat candidate
+    /// (`hierarchy_api::compile_module_with_blocks`), and that candidate
+    /// then becomes a [`CompiledBlock`] for its own parent. Both routes
+    /// must read the port table by exactly the same rule, so there is only
+    /// one place that reads it.
+    pub(crate) fn from_certified(
+        module: &str,
+        lowered: &Netlist,
+        certified: &CertifiedCandidate,
+    ) -> Result<CompiledBlock, BlockError> {
+        let candidate = certified.candidate().clone();
+        // `pins: None` on every route into here means `bind_pin_contracts`
+        // (seed.rs) never resolves a pin, so `automatic_boundary_direction`
+        // (seed.rs) always takes its `pin_contracts.is_empty()` branch and
+        // returns `Facing::East` for every boundary it places. Check that
+        // invariant explicitly here rather than just hardcoding
+        // `Facing::East` on the `BlockPort`s below on faith -- a block that
+        // somehow compiled with a pinned frame would place its boundaries
+        // by a different rule, and every later task that stamps this block
+        // by its `toward` would silently be wrong.
+        if !candidate.pin_contracts.is_empty() {
+            return Err(BlockError::PinnedFrame {
                 module: module.to_string(),
-                port: name.clone(),
-            })?;
-        inputs.insert(
-            name.clone(),
-            BlockPort {
-                cell: lever.at,
-                toward: Facing::East,
-            },
-        );
-    }
+            });
+        }
+        let metrics = certified.metrics().clone();
 
-    let mut outputs = BTreeMap::new();
-    for (index, name) in lowered.outputs.iter().enumerate() {
-        let port = PortId(u32::try_from(index).map_err(|_| BlockError::IdentityOverflow {
-            module: module.to_string(),
-        })?);
-        let endpoint = PhysicalEndpointId::DeclaredOutput(port);
-        let lamp = candidate
-            .boundaries
-            .get(&endpoint)
-            .and_then(|boundary| {
-                boundary
-                    .blocks
-                    .iter()
-                    .find(|block| block.state.kind == BlockKind::Lamp)
-            })
-            .ok_or_else(|| BlockError::MissingBoundary {
+        let mut inputs = BTreeMap::new();
+        for (index, name) in lowered.inputs.iter().enumerate() {
+            let port = PortId(u32::try_from(index).map_err(|_| BlockError::IdentityOverflow {
                 module: module.to_string(),
-                port: name.clone(),
-            })?;
-        outputs.insert(
-            name.clone(),
-            BlockPort {
-                cell: lamp.at,
-                toward: Facing::East,
-            },
-        );
-    }
+            })?);
+            let endpoint = PhysicalEndpointId::PrimaryInput(port);
+            let lever = candidate
+                .boundaries
+                .get(&endpoint)
+                .and_then(|boundary| {
+                    boundary
+                        .blocks
+                        .iter()
+                        .find(|block| block.state.kind == BlockKind::Lever)
+                })
+                .ok_or_else(|| BlockError::MissingBoundary {
+                    module: module.to_string(),
+                    port: name.clone(),
+                })?;
+            inputs.insert(
+                name.clone(),
+                BlockPort {
+                    cell: lever.at,
+                    toward: Facing::East,
+                },
+            );
+        }
 
-    let bounds = bounds_of(&candidate);
-    let delay = metrics.quality.static_routed_delay;
-    Ok(CompiledBlock {
-        module: module.to_string(),
-        lowered: lowered.clone(),
-        candidate,
-        bounds,
-        inputs,
-        outputs,
-        delay,
-        metrics,
-    })
+        let mut outputs = BTreeMap::new();
+        for (index, name) in lowered.outputs.iter().enumerate() {
+            let port = PortId(u32::try_from(index).map_err(|_| BlockError::IdentityOverflow {
+                module: module.to_string(),
+            })?);
+            let endpoint = PhysicalEndpointId::DeclaredOutput(port);
+            let lamp = candidate
+                .boundaries
+                .get(&endpoint)
+                .and_then(|boundary| {
+                    boundary
+                        .blocks
+                        .iter()
+                        .find(|block| block.state.kind == BlockKind::Lamp)
+                })
+                .ok_or_else(|| BlockError::MissingBoundary {
+                    module: module.to_string(),
+                    port: name.clone(),
+                })?;
+            outputs.insert(
+                name.clone(),
+                BlockPort {
+                    cell: lamp.at,
+                    toward: Facing::East,
+                },
+            );
+        }
+
+        let bounds = bounds_of(&candidate);
+        let delay = metrics.quality.static_routed_delay;
+        Ok(CompiledBlock {
+            module: module.to_string(),
+            lowered: lowered.clone(),
+            candidate,
+            bounds,
+            inputs,
+            outputs,
+            delay,
+            metrics,
+        })
+    }
 }
 
 /// The axis-aligned box containing every anchor `candidate` owns, per

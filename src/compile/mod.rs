@@ -98,8 +98,9 @@ pub mod verification;
 pub mod world_partition;
 
 pub use fragment_synth::{
-    compile_fragment_synth, CapWorkCounters, ProposalTerminal, ProposalTrace, StopReason,
-    SynthesisBudget, SynthesisCaseFingerprint, SynthesisError, SynthesisInput, SynthesisResult,
+    compile_fragment_synth, compile_hierarchical, CapWorkCounters, ProposalTerminal, ProposalTrace,
+    StopReason, SynthesisBudget, SynthesisCaseFingerprint, SynthesisError, SynthesisInput,
+    SynthesisResult,
 };
 pub use hierarchy::{
     lower_hierarchy, GatePath, HierarchicalNetlist, HierarchyError, LowerHierarchyError,
