@@ -4706,27 +4706,10 @@ pub(crate) mod tests {
         /// Every distinct module reachable from `design.top` (`top` itself
         /// included), walking `ModuleInstance::module` transitively.
         ///
-        /// Caller's responsibility: `design` must already be the output of
-        /// `HierarchicalNetlist::specialise_constants`, not the design as
-        /// originally built. `compile_hierarchical` itself calls
-        /// `specialise_constants` *before* deriving the module set it
-        /// compiles (`instantiated_modules` in `hierarchy_api.rs`, private
-        /// to that module and therefore not reusable here): an instance
-        /// whose port is tied to a constant compiles a structurally
-        /// different clone (`"<module>@<port>=<bit>"`, with fewer inputs
-        /// than the original -- see `specialise_constants`'s doc comment),
-        /// and that clone, not the original module, is what actually gets
-        /// compiled. Walking the raw design undercounts by exactly the
-        /// number of such clones (`alu4_full`'s bit-0 `shift_in` tie is one
-        /// example: the raw walk sees `top`+`slice` == 2, but three modules
-        /// are actually compiled -- `top`, `slice`, `slice@shift_in=0`).
-        ///
-        /// This walks the *public* `specialise_constants()` output rather
-        /// than reaching into `hierarchy_api`'s private `instantiated_modules`
-        /// so that a future change to what gets specialised cannot leave
-        /// this count silently stale: both this walk and
-        /// `compile_hierarchical` start from the same public transform, so
-        /// whatever it produces is what both agree on.
+        /// Private, and only ever called on an already-specialised design --
+        /// see [`compiled_module_count`], the sole caller, for why the design
+        /// must be `HierarchicalNetlist::specialise_constants`'s output
+        /// rather than the design as originally built.
         fn distinct_modules(design: &crate::compile::HierarchicalNetlist) -> usize {
             use std::collections::BTreeSet;
             let mut seen = BTreeSet::new();
@@ -4744,29 +4727,69 @@ pub(crate) mod tests {
             seen.len()
         }
 
-        /// Pins [`distinct_modules`] against a constant-tied circuit and a
-        /// constant-free one, on the design each is actually compiled from
-        /// (post-`specialise_constants`) -- not against a released binary,
-        /// so this never touches `compile_hierarchical` and runs in
-        /// milliseconds: `alu4_full` ties bit 0's `shift_in` to
-        /// `PortBinding::Zero`, which must specialise `slice` into a
-        /// separate `slice@shift_in=0` clone (`top`, `slice`,
-        /// `slice@shift_in=0` == 3, not the 2 a walk of the raw design would
-        /// see); `ripple_adder8` ties no port to a constant anywhere, so its
-        /// count is unaffected by specialisation (`top`, `full_adder` == 2).
+        /// "How many distinct modules does `compile_hierarchical` compile
+        /// once each for `design`" -- the count the hierarchical harness
+        /// reports as `blocks_compiled=`.
+        ///
+        /// Specialises `design`'s constant-tied ports first, then walks the
+        /// result with [`distinct_modules`], because `compile_hierarchical`
+        /// itself calls `HierarchicalNetlist::specialise_constants` *before*
+        /// deriving the module set it compiles (`instantiated_modules` in
+        /// `hierarchy_api.rs`, private to that module and therefore not
+        /// reusable here): an instance whose port is tied to a constant
+        /// compiles a structurally different clone
+        /// (`"<module>@<port>=<bit>"`, with fewer inputs than the original --
+        /// see `specialise_constants`'s doc comment), and that clone, not the
+        /// original module, is what actually gets compiled. Walking the raw
+        /// design undercounts by exactly the number of such clones
+        /// (`alu4_full`'s bit-0 `shift_in` tie is one example: the raw walk
+        /// sees `top`+`slice` == 2, but three modules are actually compiled --
+        /// `top`, `slice`, `slice@shift_in=0`).
+        ///
+        /// Folding the specialise-then-count sequence into one function
+        /// removes the precondition entirely rather than merely documenting
+        /// it: every caller -- the harness and the unit test below -- passes
+        /// the design as originally built and gets the post-specialisation
+        /// count back, so there is no raw-design call site left that could
+        /// silently skip the step. This also walks the *public*
+        /// `specialise_constants()` output rather than reaching into
+        /// `hierarchy_api`'s private `instantiated_modules`, so that a future
+        /// change to what gets specialised cannot leave this count silently
+        /// stale: both this walk and `compile_hierarchical` start from the
+        /// same public transform, so whatever it produces is what both agree
+        /// on.
+        fn compiled_module_count(
+            design: &crate::compile::HierarchicalNetlist,
+        ) -> Result<usize, crate::compile::HierarchyError> {
+            design
+                .specialise_constants()
+                .map(|specialised| distinct_modules(&specialised))
+        }
+
+        /// Pins [`compiled_module_count`] against a constant-tied circuit and
+        /// a constant-free one, passing each the design as originally built
+        /// (not pre-specialised) -- not against a released binary, so this
+        /// never touches `compile_hierarchical` and runs in milliseconds:
+        /// `alu4_full` ties bit 0's `shift_in` to `PortBinding::Zero`, which
+        /// must specialise `slice` into a separate `slice@shift_in=0` clone
+        /// (`top`, `slice`, `slice@shift_in=0` == 3 -- this would read 2 if
+        /// `compiled_module_count` ever stopped specialising before
+        /// counting); `ripple_adder8` ties no port to a constant anywhere, so
+        /// its count is unaffected by specialisation (`top`, `full_adder` ==
+        /// 2).
         #[test]
-        fn distinct_modules_counts_constant_specialised_clones_separately() {
+        fn compiled_module_count_counts_constant_specialised_clones_separately() {
             use crate::circuits::hierarchical_builder::circuits as h;
 
-            let alu4_full = h::alu4_full()
-                .specialise_constants()
-                .expect("alu4_full's constant tie folds");
-            assert_eq!(distinct_modules(&alu4_full), 3);
-
-            let ripple_adder8 = h::ripple_adder(8)
-                .specialise_constants()
-                .expect("ripple_adder8 has no constant ties to fold");
-            assert_eq!(distinct_modules(&ripple_adder8), 2);
+            assert_eq!(
+                compiled_module_count(&h::alu4_full()).expect("alu4_full's constant tie folds"),
+                3
+            );
+            assert_eq!(
+                compiled_module_count(&h::ripple_adder(8))
+                    .expect("ripple_adder8 has no constant ties to fold"),
+                2
+            );
         }
 
         /// [`run_cases`]'s hierarchical counterpart: same `REDA_EXTRA_CIRCUITS`
@@ -4774,11 +4797,11 @@ pub(crate) mod tests {
         /// `compile_hierarchical` on a [`crate::compile::HierarchicalNetlist`]
         /// instead of `compile_fragment_synth` on an already-flat [`Netlist`].
         /// Prints enough for a release run's log to be self-explaining on its
-        /// own: the flat gate count and the distinct-module count (both off
-        /// the *specialised* design -- see [`distinct_modules`] -- the same
-        /// design `compile_hierarchical` itself derives before lowering), the
-        /// settle ticks and non-air block count off the certified candidate's
-        /// own metrics, and wall time -- and, on failure, the error
+        /// own: the flat gate count (off the *specialised* design, the same
+        /// one `compile_hierarchical` itself derives before lowering) and the
+        /// distinct-module count via [`compiled_module_count`], the settle
+        /// ticks and non-air block count off the certified candidate's own
+        /// metrics, and wall time -- and, on failure, the error
         /// `compile_hierarchical` returned, so a refusal names itself instead
         /// of only tripping the final assertion.
         fn run_hierarchical_cases(cases: Vec<(String, crate::compile::HierarchicalNetlist)>) {
@@ -4792,12 +4815,12 @@ pub(crate) mod tests {
                         continue;
                     }
                 }
-                let specialised = design.specialise_constants().ok();
-                let gate_count = specialised
-                    .as_ref()
+                let gate_count = design
+                    .specialise_constants()
+                    .ok()
                     .and_then(|specialised| specialised.flatten().ok())
                     .map(|(flat, _)| flat.gates.len());
-                let blocks_compiled = specialised.as_ref().map(distinct_modules);
+                let blocks_compiled = compiled_module_count(&design).ok();
                 let gates_str = gate_count
                     .map(|count| count.to_string())
                     .unwrap_or_else(|| "?".to_string());

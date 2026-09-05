@@ -15,24 +15,14 @@
 //! release-only number of seconds, not something the fast default suite
 //! should pay for on every run.
 
-use reda::compile::{compile_hierarchical, HierarchicalNetlist, SynthesisBudget};
+use reda::compile::{compile_hierarchical, HierarchicalNetlist, HierarchyError, SynthesisBudget};
 use reda::frontend::synthesize_verilog_hierarchical;
 
 /// Every distinct module reachable from `design.top` (`top` included),
-/// walking `ModuleInstance::module` transitively -- the same "how many
-/// distinct modules were compiled" count `seed.rs`'s hierarchical harness
-/// prints, duplicated here in miniature because this integration test
-/// cannot reach that harness's test-only helper across the crate boundary.
+/// walking `ModuleInstance::module` transitively.
 ///
-/// Caller's responsibility: `design` must already be the output of
-/// `HierarchicalNetlist::specialise_constants`, not the design as
-/// originally synthesized. `compile_hierarchical` calls
-/// `specialise_constants` *before* deriving the module set it compiles: an
-/// instance whose port is tied to a constant compiles a structurally
-/// different clone (`"<module>@<port>=<bit>"`, with fewer inputs than the
-/// original), and that clone -- not the original module -- is what actually
-/// gets compiled. Walking the raw design would undercount by exactly the
-/// number of such clones.
+/// Private, and only ever called on an already-specialised design -- see
+/// [`compiled_module_count`], the sole caller.
 fn distinct_modules(design: &HierarchicalNetlist) -> usize {
     use std::collections::BTreeSet;
     let mut seen = BTreeSet::new();
@@ -48,6 +38,21 @@ fn distinct_modules(design: &HierarchicalNetlist) -> usize {
         }
     }
     seen.len()
+}
+
+/// "How many distinct modules does `compile_hierarchical` compile once each
+/// for `design`" -- the same count `seed.rs`'s hierarchical harness reports
+/// as `blocks_compiled=`, duplicated here (specialise, then walk) because
+/// this integration test cannot reach that harness's `#[cfg(test)]`-only
+/// helper across the crate boundary -- see
+/// `src/compile/fragment_synth/seed.rs`'s `compiled_module_count` for the
+/// full rationale (`compile_hierarchical` specialises constant-tied ports
+/// before deriving the module set it compiles, so walking the raw design
+/// undercounts whenever a port is tied to a constant).
+fn compiled_module_count(design: &HierarchicalNetlist) -> Result<usize, HierarchyError> {
+    design
+        .specialise_constants()
+        .map(|specialised| distinct_modules(&specialised))
 }
 
 #[test]
@@ -76,12 +81,12 @@ fn the_verilog_ripple_adder8_keeps_eight_full_adder_instances_and_certifies() {
         design.modules.keys().collect::<Vec<_>>()
     );
 
-    let specialised = design.specialise_constants().ok();
-    let gate_count = specialised
-        .as_ref()
+    let gate_count = design
+        .specialise_constants()
+        .ok()
         .and_then(|specialised| specialised.flatten().ok())
         .map(|(flat, _)| flat.gates.len());
-    let blocks_compiled = specialised.as_ref().map(distinct_modules);
+    let blocks_compiled = compiled_module_count(&design).ok();
 
     let started = std::time::Instant::now();
     let result = compile_hierarchical(&design, SynthesisBudget::Evaluations(0), None)
