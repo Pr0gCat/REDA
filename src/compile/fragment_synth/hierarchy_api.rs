@@ -251,6 +251,7 @@ fn compile_module_with_blocks(
         graph,
         ParentBlocks { compiled: ordered },
         &variant.placements,
+        &BTreeMap::new(),
     )?;
     let (flat, paths) = module_flattening(lowered, module)?;
     let union = union_candidate(UnionInput {

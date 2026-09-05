@@ -1211,6 +1211,7 @@ mod tests {
                 compiled: std::slice::from_ref(&block),
             },
             &BTreeMap::new(),
+            &BTreeMap::new(),
         )
         .expect("the parent plans");
         let union = union_candidate(UnionInput {
@@ -1516,6 +1517,7 @@ mod tests {
             ParentBlocks {
                 compiled: std::slice::from_ref(&block),
             },
+            &BTreeMap::new(),
             &BTreeMap::new(),
         )
         .unwrap();

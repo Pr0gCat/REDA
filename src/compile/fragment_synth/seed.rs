@@ -305,6 +305,7 @@ pub(crate) fn plan_parent_with_services(
     graph: InstanceGraph,
     blocks: ParentBlocks<'_>,
     placements: &BTreeMap<InstanceId, InstancePlacementOverride>,
+    block_placements: &BTreeMap<InstanceId, Offset>,
 ) -> Result<PlannedParent, SeedError> {
     if let Some(provenance) = input.source_provenance {
         if provenance.len() != input.lowered.gates.len() {
@@ -319,6 +320,7 @@ pub(crate) fn plan_parent_with_services(
             &input,
             &services,
             placements,
+            block_placements,
             graph.clone(),
             blocks,
             repairs,
@@ -604,6 +606,7 @@ impl SparseSeedBuilder {
             input,
             services,
             &variant.placements,
+            &BTreeMap::new(),
             instances,
             ParentBlocks::none(),
             repairs,
@@ -617,6 +620,7 @@ impl SparseSeedBuilder {
         input: &SeedInput<'_>,
         services: &SeedServices<'_>,
         placements: &BTreeMap<InstanceId, InstancePlacementOverride>,
+        block_placements: &BTreeMap<InstanceId, Offset>,
         instances: InstanceGraph,
         blocks: ParentBlocks<'_>,
         repairs: &[LayoutRepair],
@@ -684,6 +688,7 @@ impl SparseSeedBuilder {
             &resolved,
             &placement_plan,
             plan_translation,
+            block_placements,
             &mut occupied,
             &mut sources,
             &mut targets,
@@ -1096,6 +1101,7 @@ fn place_blocks(
     resolved: &ResolvedBlocks<'_>,
     plan: &SeedPlacementPlan,
     plan_translation: PlanTranslation,
+    block_placements: &BTreeMap<InstanceId, Offset>,
     occupied: &mut BTreeSet<Anchor>,
     sources: &mut BTreeMap<PhysicalEndpointId, SourceGeometry>,
     targets: &mut BTreeMap<PhysicalSink, TargetGeometry>,
@@ -1114,7 +1120,18 @@ fn place_blocks(
             .get(&block)
             .copied()
             .ok_or(SeedError::Incomplete("planned block pose"))?;
-        let origin = plan_translation.apply(pose.preferred_origin);
+        let block_offset = block_placements.get(&block).copied();
+        let origin = plan_translation.apply(Anchor {
+            x: pose
+                .preferred_origin
+                .x
+                .saturating_add(block_offset.map_or(0, |offset| offset.dx)),
+            z: pose
+                .preferred_origin
+                .z
+                .saturating_add(block_offset.map_or(0, |offset| offset.dz)),
+            ..pose.preferred_origin
+        });
         // The placer's origin is the block's own minimum corner, and the
         // parent's ground row sits one above the floor row every unpinned
         // layout (a block's included) puts its supports on.
@@ -4968,6 +4985,7 @@ pub(crate) mod tests {
                 compiled: std::slice::from_ref(&block),
             },
             &BTreeMap::new(),
+            &BTreeMap::new(),
         )
         .expect("plans");
 
@@ -5021,6 +5039,160 @@ pub(crate) mod tests {
                     !inside(cell.at) || on_port,
                     "route cell {:?} inside the block",
                     cell.at
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn block_placement_override_moves_only_the_selected_block_body_and_ports() {
+        let (library, config) = default_services_parts();
+        let lowered = crate::compile::lowering::lower_optimised(&not_netlist()).unwrap();
+        let compiled = crate::compile::fragment_synth::blocks::compile_block(
+            "not",
+            &lowered,
+            services(&library, &config),
+        )
+        .expect("the not gate compiles as a block");
+        let blocks = [compiled.clone(), compiled.clone()];
+        let left_inputs = vec!["a0".to_string()];
+        let right_inputs = vec!["a1".to_string()];
+        let left_outputs = vec!["y0".to_string()];
+        let right_outputs = vec!["y1".to_string()];
+        let planning = Netlist {
+            inputs: vec![left_inputs[0].clone(), right_inputs[0].clone()],
+            outputs: vec![left_outputs[0].clone(), right_outputs[0].clone()],
+            gates: vec![
+                Gate {
+                    name: "left.0".into(),
+                    inputs: left_inputs.clone(),
+                    output: left_outputs[0].clone(),
+                    kind: GateKind::Buf,
+                },
+                Gate {
+                    name: "right.0".into(),
+                    inputs: right_inputs.clone(),
+                    output: right_outputs[0].clone(),
+                    kind: GateKind::Buf,
+                },
+            ],
+        };
+        let specs = [
+            crate::compile::fragment_synth::instance_graph::BlockSpec {
+                name: "left",
+                block: 0,
+                inputs: &left_inputs,
+                outputs: &left_outputs,
+            },
+            crate::compile::fragment_synth::instance_graph::BlockSpec {
+                name: "right",
+                block: 1,
+                inputs: &right_inputs,
+                outputs: &right_outputs,
+            },
+        ];
+        let baseline_graph =
+            InstanceGraph::with_blocks(&planning, &library, &specs).expect("parent graph");
+        let block_ids = baseline_graph
+            .blocks
+            .iter()
+            .map(|block| block.id)
+            .collect::<Vec<_>>();
+        let baseline = plan_parent_with_services(
+            SeedInput {
+                lowered: &planning,
+                source_provenance: None,
+                pins: None,
+            },
+            services(&library, &config),
+            baseline_graph,
+            ParentBlocks { compiled: &blocks },
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .expect("baseline parent plans");
+        let (dx, dz) = (4, -3);
+        let overridden = plan_parent_with_services(
+            SeedInput {
+                lowered: &planning,
+                source_provenance: None,
+                pins: None,
+            },
+            services(&library, &config),
+            InstanceGraph::with_blocks(&planning, &library, &specs).expect("parent graph"),
+            ParentBlocks { compiled: &blocks },
+            &BTreeMap::new(),
+            &BTreeMap::from([(block_ids[0], Offset { dx, dy: 0, dz })]),
+        )
+        .expect("overridden parent plans");
+
+        let body = |planned: &PlannedParent, block| {
+            planned.candidate.placements[&PrimitiveId {
+                instance: block,
+                node: TopologyNodeId(0),
+            }]
+                .blocks
+                .iter()
+                .map(|cell| cell.at)
+                .collect::<BTreeSet<_>>()
+        };
+        let shifted = |at: Anchor| Anchor {
+            x: at.x + dx,
+            z: at.z + dz,
+            ..at
+        };
+        assert_eq!(
+            body(&overridden, block_ids[0]),
+            body(&baseline, block_ids[0])
+                .into_iter()
+                .map(shifted)
+                .collect(),
+        );
+        assert_eq!(
+            body(&overridden, block_ids[1]),
+            body(&baseline, block_ids[1]),
+        );
+
+        for (block, offset) in [
+            (block_ids[0], Offset { dx, dy: 0, dz }),
+            (
+                block_ids[1],
+                Offset {
+                    dx: 0,
+                    dy: 0,
+                    dz: 0,
+                },
+            ),
+        ] {
+            let baseline_offset = baseline.block_offsets[&block];
+            let expected_offset = Offset {
+                dx: baseline_offset.dx + offset.dx,
+                dy: baseline_offset.dy,
+                dz: baseline_offset.dz + offset.dz,
+            };
+            assert_eq!(overridden.block_offsets[&block], expected_offset);
+            for port in compiled.inputs.values() {
+                let terminal = shift(port.cell, expected_offset);
+                assert!(
+                    overridden
+                        .candidate
+                        .routes
+                        .values()
+                        .flat_map(|route| &route.branches)
+                        .any(|branch| branch.terminal.at == terminal),
+                    "no parent route reaches input port at {terminal:?}",
+                );
+            }
+            for port in compiled.outputs.values() {
+                let root = shift(port.cell, expected_offset);
+                assert!(
+                    overridden
+                        .candidate
+                        .routes
+                        .values()
+                        .flat_map(|route| &route.branches)
+                        .any(|branch| branch.root == root),
+                    "no parent route leaves output port at {root:?}",
                 );
             }
         }
