@@ -59,3 +59,13 @@ Spec review: APPROVED after closing typed `BlockEdge`, whole-incumbent wrapper a
 - Review: Claude Code Sonnet approved spec compliance and task quality with no Critical or Important findings.
 - Task 4 minor (deferred): report tables render `ExactDelay(678)` as the numeric `678`; harmless presentation simplification, final review should decide whether to normalize the label.
 - Task 4 minor (deferred): budget 0/1/2/4 evaluation counts and stop reasons were observed and Task 3 covers the contract, but the target harness itself only asserts final exhaustion, not every intermediate stop reason.
+
+## Next bounded design — single-consumer repeater sharing
+
+- Design: `docs/superpowers/specs/2026-09-05-single-consumer-repeater-sharing.md`.
+- Scope: keep the source block output repeater; allow the parent terminal at a provably single-consumer child input to become directed dust when typed-route strength, collinearity, isolation, and refresh checks all pass.
+- Strength rule: read actual `RealisedRouteTree.cells`; for each branch, root carried strength is the first repeater's zero-based path index (at least 1), or the full path length when no repeater exists; take the fanout maximum.  The parent predecessor loses two strength across its terminal dust and the child root dust.
+- Stability: shareability is computed once because it depends only on immutable assignments and compiled child routes; proposal-specific geometry remains a router decision with repeater fallback.
+- Ceiling: seven ripple carry edges can remove at most 14 ticks, so even the ideal result is 562, still 88 above the target.  This design is a bounded contract experiment, not a claim that it reaches 474.
+
+Ruling: specify single-consumer repeater sharing as the next bounded experiment but do not implement it inside this target-closing goal — its certified structural ceiling is 14 ticks against a 102-tick gap, while the next smallest target-relevant direction is general double-NOR output-alias elimination in hierarchy flattening — cost if wrong: physical interactions could make sharing save more than the structural bound predicts, delaying a useful optimization until its own experiment.
