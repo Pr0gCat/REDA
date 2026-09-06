@@ -362,20 +362,21 @@ fn serialized_fingerprint(descriptor: &impl Serialize) -> crate::compile::metric
     )
 }
 
-fn block_edge_fingerprint(edge: BlockEdge) -> crate::compile::metrics::Fingerprint {
-    serialized_fingerprint(&BlockEdgeFingerprint {
-        schema: "hierarchical-block-fragment-v1",
-        edge,
-    })
+fn block_edge_fingerprint(
+    schema: &'static str,
+    edge: BlockEdge,
+) -> crate::compile::metrics::Fingerprint {
+    serialized_fingerprint(&BlockEdgeFingerprint { schema, edge })
 }
 
 fn hierarchical_choice_fingerprint(
+    schema: &'static str,
     edge: BlockEdge,
     incumbent: &HierarchicalCandidate,
     block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
 ) -> crate::compile::metrics::Fingerprint {
     serialized_fingerprint(&HierarchicalChoiceFingerprint {
-        schema: "hierarchical-block-choice-v1",
+        schema,
         edge,
         incumbent_fingerprint: incumbent.candidate_fingerprint().as_str(),
         block_placements: block_placements
@@ -525,6 +526,38 @@ fn block_alignment_proposal(
     proposal
 }
 
+/// Move the edge's sink block one X cell toward the realised source port,
+/// preserving every other accepted offset. `None` when the ports already
+/// share an X coordinate.
+fn block_pull_x_proposal(
+    edge: &BlockEdge,
+    source_outputs: &BTreeMap<(InstanceId, u16), BlockPort>,
+    sink_inputs: &BTreeMap<(InstanceId, u16), BlockPort>,
+    realised_offsets: &BTreeMap<InstanceId, Offset>,
+    incumbent: &BTreeMap<InstanceId, BlockPlacementOffset>,
+) -> Option<BTreeMap<InstanceId, BlockPlacementOffset>> {
+    let source = source_outputs[&(edge.source_block, edge.source_port)];
+    let sink = sink_inputs[&(edge.sink_block, edge.sink_input)];
+    let source_x = source
+        .cell
+        .x
+        .saturating_add(realised_offsets[&edge.source_block].dx);
+    let sink_x = sink
+        .cell
+        .x
+        .saturating_add(realised_offsets[&edge.sink_block].dx);
+    let step = source_x.saturating_sub(sink_x).signum();
+    if step == 0 {
+        return None;
+    }
+    let mut proposal = incumbent.clone();
+    let placement = proposal
+        .entry(edge.sink_block)
+        .or_insert(BlockPlacementOffset { dx: 0, dz: 0 });
+    placement.dx = placement.dx.saturating_add(step);
+    Some(proposal)
+}
+
 struct HierarchicalCandidate {
     certified: CertifiedCandidate,
     block_placements: BTreeMap<InstanceId, BlockPlacementOffset>,
@@ -546,6 +579,9 @@ type HierarchicalCompiler<'a> = dyn Fn(&BTreeMap<InstanceId, BlockPlacementOffse
 
 struct HierarchicalProposalStream<'a> {
     edges: Vec<BlockEdge>,
+    /// Pull-X descriptors, frozen from the incumbent when the alignment
+    /// stage is exhausted. Edges whose ports already share an X are omitted.
+    pull_x_edges: Option<Vec<BlockEdge>>,
     source_outputs: BTreeMap<(InstanceId, u16), BlockPort>,
     sink_inputs: BTreeMap<(InstanceId, u16), BlockPort>,
     compile: Box<HierarchicalCompiler<'a>>,
@@ -560,10 +596,35 @@ impl<'a> HierarchicalProposalStream<'a> {
     ) -> Self {
         Self {
             edges,
+            pull_x_edges: None,
             source_outputs,
             sink_inputs,
             compile,
         }
+    }
+
+    fn pull_x_edge(
+        &mut self,
+        index: usize,
+        incumbent: &HierarchicalCandidate,
+    ) -> Option<BlockEdge> {
+        let frozen = self.pull_x_edges.get_or_insert_with(|| {
+            self.edges
+                .iter()
+                .filter(|edge| {
+                    block_pull_x_proposal(
+                        edge,
+                        &self.source_outputs,
+                        &self.sink_inputs,
+                        &incumbent.realised_block_offsets,
+                        &incumbent.block_placements,
+                    )
+                    .is_some()
+                })
+                .copied()
+                .collect()
+        });
+        frozen.get(index).copied()
     }
 }
 
@@ -573,18 +634,58 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
         proposal_index: u64,
         incumbent: &HierarchicalCandidate,
     ) -> Option<ProposalEvaluation<HierarchicalCandidate>> {
-        let edge = *self.edges.get(usize::try_from(proposal_index).ok()?)?;
-        let block_placements = block_alignment_proposal(
-            &edge,
-            &self.source_outputs,
-            &self.sink_inputs,
-            &incumbent.realised_block_offsets,
-            &incumbent.block_placements,
-        );
-        let fragment_fingerprint = block_edge_fingerprint(edge);
-        let choice_fingerprint =
-            hierarchical_choice_fingerprint(edge, incumbent, &block_placements);
+        let index = usize::try_from(proposal_index).ok()?;
+        let (edge, block_placements, fragment_schema, choice_schema) =
+            if let Some(&edge) = self.edges.get(index) {
+                let placements = block_alignment_proposal(
+                    &edge,
+                    &self.source_outputs,
+                    &self.sink_inputs,
+                    &incumbent.realised_block_offsets,
+                    &incumbent.block_placements,
+                );
+                (
+                    edge,
+                    Some(placements),
+                    "hierarchical-block-fragment-v1",
+                    "hierarchical-block-choice-v1",
+                )
+            } else {
+                let edge = self.pull_x_edge(index - self.edges.len(), incumbent)?;
+                // A descriptor whose ports now share an X is stale: refuse it
+                // rather than retarget.
+                let placements = block_pull_x_proposal(
+                    &edge,
+                    &self.source_outputs,
+                    &self.sink_inputs,
+                    &incumbent.realised_block_offsets,
+                    &incumbent.block_placements,
+                );
+                (
+                    edge,
+                    placements,
+                    "hierarchical-block-pull-x-fragment-v1",
+                    "hierarchical-block-pull-x-choice-v1",
+                )
+            };
+        let fragment_fingerprint = block_edge_fingerprint(fragment_schema, edge);
         let mut cap_work = CapWorkCounters::default();
+        let Some(block_placements) = block_placements else {
+            return Some(ProposalEvaluation {
+                fragment_fingerprint,
+                choice_fingerprint: hierarchical_choice_fingerprint(
+                    choice_schema,
+                    edge,
+                    incumbent,
+                    &incumbent.block_placements,
+                ),
+                terminal: ProposalTerminal::Refused,
+                cap_work,
+                certified: None,
+            });
+        };
+        let choice_fingerprint =
+            hierarchical_choice_fingerprint(choice_schema, edge, incumbent, &block_placements);
         match (self.compile)(&block_placements) {
             Ok(candidate) => Some(ProposalEvaluation {
                 fragment_fingerprint,
@@ -1202,6 +1303,49 @@ mod tests {
         );
     }
 
+    #[test]
+    fn block_pull_x_moves_only_the_sink_one_cell_toward_the_source() {
+        let mut fixture = block_proposal_fixture();
+        let edge = BlockEdge {
+            source_block: fixture.source,
+            source_port: 1,
+            sink_block: fixture.sink,
+            sink_input: 1,
+            slack: 5,
+        };
+
+        let proposal = block_pull_x_proposal(
+            &edge,
+            &fixture.source_outputs,
+            &fixture.sink_inputs,
+            &fixture.realised_offsets,
+            &fixture.block_placements,
+        )
+        .expect("the sink is east of the source");
+
+        assert_eq!(
+            proposal
+                .iter()
+                .map(|(&block, offset)| (block, (offset.dx, offset.dz)))
+                .collect::<BTreeMap<_, _>>(),
+            BTreeMap::from([(fixture.source, (3, 4)), (fixture.sink, (6, -5))]),
+            "only the sink moves one X cell and every accepted offset is preserved",
+        );
+
+        fixture.realised_offsets.get_mut(&fixture.sink).unwrap().dx = 94;
+        assert!(
+            block_pull_x_proposal(
+                &edge,
+                &fixture.source_outputs,
+                &fixture.sink_inputs,
+                &fixture.realised_offsets,
+                &fixture.block_placements,
+            )
+            .is_none(),
+            "equal realised port X produces no proposal",
+        );
+    }
+
     /// A three-level design (`top` -> `mid` -> two distinct leaves) small
     /// enough to compile inside a unit test.
     ///
@@ -1684,6 +1828,36 @@ mod tests {
         assert_eq!(many.candidate_fingerprint, results[3].candidate_fingerprint);
         assert_eq!(many.metrics.quality, results[3].metrics.quality);
         assert_eq!(many.trace, results[3].trace);
+    }
+
+    /// Exhausting the stream runs past the four alignment edges into the
+    /// Pull-X stage, deterministically, with fragment fingerprints that never
+    /// collide with the alignment ones (same edges, distinct schema).
+    #[test]
+    fn block_pull_x_stage_follows_alignment_deterministically() {
+        let design = chain_of_five_not_blocks();
+        let run = || {
+            compile_hierarchical_with_threads(&design, SynthesisBudget::Evaluations(64), None, 1)
+                .expect("exhausting the stream must certify")
+        };
+        let first = run();
+        assert_eq!(first.stop_reason, StopReason::ProposalStreamExhausted);
+        assert!(
+            first.trace.len() > 4,
+            "the stream must continue into Pull-X after the four alignment edges; trace={:?}",
+            first.trace
+        );
+        let alignment: BTreeSet<_> = first.trace[..4]
+            .iter()
+            .map(|entry| entry.fragment_fingerprint.clone())
+            .collect();
+        for entry in &first.trace[4..] {
+            assert!(
+                !alignment.contains(&entry.fragment_fingerprint),
+                "Pull-X fragment fingerprints use a distinct schema: {entry:?}"
+            );
+        }
+        assert_eq!(run().trace, first.trace, "the full trace is deterministic");
     }
 
     /// The two proposals a block-stamping parent cannot represent, and the
