@@ -60,12 +60,15 @@ use crate::compile::fragment_synth::certification::{
 use crate::compile::fragment_synth::compile_fragment_synth;
 use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
 use crate::compile::fragment_synth::fragment::terminal_for_seed_error;
-use crate::compile::fragment_synth::identity::InstanceId;
+use crate::compile::fragment_synth::identity::{InstanceId, RouteId};
 use crate::compile::fragment_synth::instance_graph::{
     BlockSpec, InstanceDriver, InstanceGraph, LogicalSignalId, PhysicalDriver, PhysicalSink,
 };
 use crate::compile::fragment_synth::placement::{analyse_instance_dag, EdgeFacts};
 use crate::compile::fragment_synth::relocate::Offset;
+use crate::compile::fragment_synth::route_opt::{
+    prune_descriptors, prune_route, ParentRouteChoice,
+};
 use crate::compile::fragment_synth::search::{
     run_budgeted_proposals, CapWorkCounters, ProposalEvaluation, ProposalStream, ProposalTerminal,
     SearchCandidate, SynthesisBudget, SystemMonotonicClock,
@@ -154,6 +157,7 @@ pub(crate) fn compile_hierarchical_with_threads(
         &SeedVariant::default(),
         &BTreeMap::new(),
         &[],
+        &[],
     )
     .map_err(|error| SynthesisError::Seed(format!("{}: {error}", lowered.top)))?;
     let (_, graph) = parent_planning_graph(
@@ -206,7 +210,8 @@ pub(crate) fn compile_hierarchical_with_threads(
 
     let clock = SystemMonotonicClock::start();
     let compile = |block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
-                   seams: &[InputSeamChoice]| {
+                   seams: &[InputSeamChoice],
+                   prunes: &[ParentRouteChoice]| {
         compile_module_with_blocks(
             &lowered,
             &lowered.top,
@@ -216,6 +221,7 @@ pub(crate) fn compile_hierarchical_with_threads(
             &SeedVariant::default(),
             block_placements,
             seams,
+            prunes,
         )
     };
     let mut proposals = HierarchicalProposalStream::new(
@@ -269,6 +275,7 @@ fn compile_module_with_blocks(
     variant: &SeedVariant,
     block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
     seams: &[InputSeamChoice],
+    prunes: &[ParentRouteChoice],
 ) -> Result<HierarchicalCandidate, SeedError> {
     let parent_gates = u32::try_from(lowered.modules[module].gates.len())
         .map_err(|_| SeedError::IdentityOverflow)?;
@@ -315,22 +322,40 @@ fn compile_module_with_blocks(
     )?;
     let realised_block_offsets = planned.block_offsets.clone();
     let (flat, paths) = module_flattening(lowered, module)?;
-    let union = union_candidate(UnionInput {
+    // Decided on the pre-union trees, which are the ones the union prunes.
+    let prunable = prunable_parent_routes(&planned.candidate.routes);
+    // Certification keeps the union's route ids, so `parent_routes` names
+    // the trees in the certified candidate's timing graph.
+    let (union, mut parent_routes) = union_candidate(UnionInput {
         parent: &planned,
         blocks: ordered,
         flat: &flat,
         paths: &paths,
         library: services.library,
         seams,
+        prunes,
     })
     .map_err(|error| SeedError::Union(error.to_string()))?;
+    parent_routes.retain(|route, _| prunable.contains(route));
     let certified = certify_planned(union, &flat, services)?;
     Ok(HierarchicalCandidate {
         certified,
         block_placements: block_placements.clone(),
         realised_block_offsets,
         seams: seams.to_vec(),
+        parent_routes,
+        prunes: prunes.to_vec(),
     })
+}
+
+/// The parent routes `prune_route` would actually change, proven on a
+/// throwaway clone of each tree. Offering any other route costs a full
+/// proposal compile that the union then refuses.
+fn prunable_parent_routes(routes: &BTreeMap<RouteId, RealisedRouteTree>) -> BTreeSet<RouteId> {
+    routes
+        .iter()
+        .filter_map(|(&route, tree)| prune_route(&mut tree.clone()).then_some(route))
+        .collect()
 }
 
 fn parent_planning_graph(
@@ -428,6 +453,20 @@ fn seam_choice_fingerprint(
         seam,
         incumbent_fingerprint: incumbent.candidate_fingerprint().as_str(),
     })
+}
+
+/// The prune stage's descriptor is one parent route.
+#[derive(Serialize)]
+struct PruneFingerprint {
+    schema: &'static str,
+    prune: ParentRouteChoice,
+}
+
+#[derive(Serialize)]
+struct PruneChoiceFingerprint<'a> {
+    schema: &'static str,
+    prune: ParentRouteChoice,
+    incumbent_fingerprint: &'a str,
 }
 
 /// Every Input Seam Absorption descriptor the stream will offer, in stream
@@ -638,6 +677,13 @@ struct HierarchicalCandidate {
     realised_block_offsets: BTreeMap<InstanceId, Offset>,
     /// Accepted seam choices, cumulative like `block_placements`.
     seams: Vec<InputSeamChoice>,
+    /// Each prunable pre-union parent route id to the id of the certified
+    /// tree that carries it (a route out of a block lamp is absorbed by the
+    /// block's output tree), for the prune stage's slack lookup. Routes
+    /// `prune_route` cannot change are left out so they are never offered.
+    parent_routes: BTreeMap<RouteId, RouteId>,
+    /// Accepted prune choices, cumulative like `seams`.
+    prunes: Vec<ParentRouteChoice>,
 }
 
 impl SearchCandidate for HierarchicalCandidate {
@@ -653,6 +699,7 @@ impl SearchCandidate for HierarchicalCandidate {
 type HierarchicalCompiler<'a> = dyn Fn(
         &BTreeMap<InstanceId, BlockPlacementOffset>,
         &[InputSeamChoice],
+        &[ParentRouteChoice],
     ) -> Result<HierarchicalCandidate, SeedError>
     + 'a;
 
@@ -665,6 +712,9 @@ struct HierarchicalProposalStream<'a> {
     /// read only the compiled blocks, which never change, so they are fixed
     /// at construction rather than frozen from an incumbent.
     seams: Vec<InputSeamChoice>,
+    /// Prune descriptors, frozen from the incumbent's timing graph when the
+    /// seam stage is exhausted: parent routes by minimum slack then id.
+    prunes: Option<Vec<ParentRouteChoice>>,
     source_outputs: BTreeMap<(InstanceId, u16), BlockPort>,
     sink_inputs: BTreeMap<(InstanceId, u16), BlockPort>,
     compile: Box<HierarchicalCompiler<'a>>,
@@ -682,6 +732,7 @@ impl<'a> HierarchicalProposalStream<'a> {
             edges,
             pull_x_edges: None,
             seams,
+            prunes: None,
             source_outputs,
             sink_inputs,
             compile,
@@ -721,6 +772,19 @@ impl<'a> HierarchicalProposalStream<'a> {
         });
         frozen.get(index).copied()
     }
+
+    /// The prune descriptor at stream position `index`, past every
+    /// alignment, Pull-X and seam descriptor. `freeze` reads the incumbent's
+    /// timing graph, so it runs once, the first time the stage is reached.
+    fn prune(
+        &mut self,
+        index: usize,
+        freeze: impl FnOnce() -> Vec<ParentRouteChoice>,
+    ) -> Option<ParentRouteChoice> {
+        let pull_x = self.pull_x_edges.as_ref().map_or(0, Vec::len);
+        let index = index.checked_sub(self.edges.len() + pull_x + self.seams.len())?;
+        self.prunes.get_or_insert_with(freeze).get(index).copied()
+    }
 }
 
 impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
@@ -731,7 +795,8 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
     ) -> Option<ProposalEvaluation<HierarchicalCandidate>> {
         let index = usize::try_from(proposal_index).ok()?;
         // Each stage yields its two fingerprints and, unless the descriptor
-        // is stale, the block placements and cumulative seams to compile.
+        // is stale, the block placements and cumulative seams and prunes to
+        // compile.
         let (fragment_fingerprint, choice_fingerprint, proposal) =
             if let Some(&edge) = self.edges.get(index) {
                 let placements = block_alignment_proposal(
@@ -749,7 +814,7 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                         incumbent,
                         &placements,
                     ),
-                    Some((placements, incumbent.seams.clone())),
+                    Some((placements, incumbent.seams.clone(), incumbent.prunes.clone())),
                 )
             } else if let Some(edge) = self.pull_x_edge(index - self.edges.len(), incumbent) {
                 // A descriptor whose ports now share an X is stale: refuse it
@@ -769,12 +834,13 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                         incumbent,
                         placements.as_ref().unwrap_or(&incumbent.block_placements),
                     ),
-                    placements.map(|placements| (placements, incumbent.seams.clone())),
+                    placements.map(|placements| {
+                        (placements, incumbent.seams.clone(), incumbent.prunes.clone())
+                    }),
                 )
-            } else {
+            } else if let Some(seam) = self.seam(index) {
                 // Block placements never change here; the union refuses a
                 // seam whose anchor is no longer a route-owned repeater.
-                let seam = self.seam(index)?;
                 let mut seams = incumbent.seams.clone();
                 seams.push(seam);
                 (
@@ -783,11 +849,31 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                         seam,
                     }),
                     seam_choice_fingerprint("hierarchical-input-seam-choice-v1", seam, incumbent),
-                    Some((incumbent.block_placements.clone(), seams)),
+                    Some((incumbent.block_placements.clone(), seams, incumbent.prunes.clone())),
+                )
+            } else {
+                // The union refuses a prune whose route is gone or already
+                // has nothing redundant left.
+                let prune = self.prune(index, || {
+                    prune_descriptors(incumbent.certified.timing_graph(), &incumbent.parent_routes)
+                })?;
+                let mut prunes = incumbent.prunes.clone();
+                prunes.push(prune);
+                (
+                    serialized_fingerprint(&PruneFingerprint {
+                        schema: "hierarchical-parent-prune-fragment-v1",
+                        prune,
+                    }),
+                    serialized_fingerprint(&PruneChoiceFingerprint {
+                        schema: "hierarchical-parent-prune-choice-v1",
+                        prune,
+                        incumbent_fingerprint: incumbent.candidate_fingerprint().as_str(),
+                    }),
+                    Some((incumbent.block_placements.clone(), incumbent.seams.clone(), prunes)),
                 )
             };
         let mut cap_work = CapWorkCounters::default();
-        let Some((block_placements, seams)) = proposal else {
+        let Some((block_placements, seams, prunes)) = proposal else {
             return Some(ProposalEvaluation {
                 fragment_fingerprint,
                 choice_fingerprint,
@@ -796,7 +882,7 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                 certified: None,
             });
         };
-        match (self.compile)(&block_placements, &seams) {
+        match (self.compile)(&block_placements, &seams, &prunes) {
             Ok(candidate) => Some(ProposalEvaluation {
                 fragment_fingerprint,
                 choice_fingerprint,
@@ -928,6 +1014,7 @@ fn compile_blocks(
             services,
             &SeedVariant::default(),
             &BTreeMap::new(),
+            &[],
             &[],
         )
         .map_err(|error| SynthesisError::Seed(format!("{name}: {error}")))?;
@@ -2002,7 +2089,9 @@ mod tests {
             fixture.sink_inputs.clone(),
             seams,
             Box::new(
-                |_: &BTreeMap<InstanceId, BlockPlacementOffset>, _: &[InputSeamChoice]| {
+                |_: &BTreeMap<InstanceId, BlockPlacementOffset>,
+                 _: &[InputSeamChoice],
+                 _: &[ParentRouteChoice]| {
                     unreachable!("the descriptor lookup never compiles")
                 },
             ),
@@ -2010,6 +2099,210 @@ mod tests {
         assert_eq!(stream.seam(edges.len() - 1), None, "alignment owns that index");
         assert_eq!(stream.seam(edges.len()), Some(lever_fed));
         assert_eq!(stream.seam(edges.len() + 1), None, "each descriptor is offered once");
+    }
+
+    /// The prune stage starts one past the last seam, counting the frozen
+    /// Pull-X descriptors in between; it is frozen once, from whatever the
+    /// incumbent's timing graph yields, and offers each descriptor exactly
+    /// once. Its fingerprints follow the seam stage's shape: the fragment
+    /// names only the route, the choice binds the incumbent as well.
+    #[test]
+    fn prune_stage_follows_seams_and_freezes_once() {
+        let fixture = block_proposal_fixture();
+        let edges = explicit_block_edges(&fixture.graph, &fixture.structural_edges);
+        let seam = InputSeamChoice {
+            sink_block: fixture.sink,
+            input: 3,
+            at: Anchor { x: 3, y: 0, z: 0 },
+        };
+        let mut stream = HierarchicalProposalStream::new(
+            edges.clone(),
+            fixture.source_outputs.clone(),
+            fixture.sink_inputs.clone(),
+            vec![seam],
+            Box::new(
+                |_: &BTreeMap<InstanceId, BlockPlacementOffset>,
+                 _: &[InputSeamChoice],
+                 _: &[ParentRouteChoice]| {
+                    unreachable!("the descriptor lookup never compiles")
+                },
+            ),
+        );
+        // Pull-X frozen to one edge, as the alignment stage leaves it.
+        stream.pull_x_edges = Some(vec![edges[0]]);
+        let first = ParentRouteChoice { route: RouteId(7) };
+        let second = ParentRouteChoice { route: RouteId(5) };
+        let start = edges.len() + 1 + 1;
+        assert_eq!(stream.seam(start - 1), Some(seam), "the seam stage owns the index before");
+        assert_eq!(
+            stream.prune(start - 1, || unreachable!("no freeze before the stage is reached")),
+            None
+        );
+        assert_eq!(stream.prune(start, || vec![first, second]), Some(first));
+        assert_eq!(stream.prune(start + 1, || unreachable!("frozen once")), Some(second));
+        assert_eq!(
+            stream.prune(start + 2, || unreachable!("frozen once")),
+            None,
+            "each descriptor is offered once"
+        );
+
+        let fragment = |prune: ParentRouteChoice| {
+            serialized_fingerprint(&PruneFingerprint {
+                schema: "hierarchical-parent-prune-fragment-v1",
+                prune,
+            })
+        };
+        let choice = |prune: ParentRouteChoice, incumbent_fingerprint: &str| {
+            serialized_fingerprint(&PruneChoiceFingerprint {
+                schema: "hierarchical-parent-prune-choice-v1",
+                prune,
+                incumbent_fingerprint,
+            })
+        };
+        assert_eq!(fragment(first), fragment(first), "the fragment names only the route");
+        assert_ne!(fragment(first), fragment(second));
+        assert_ne!(choice(first, "a"), choice(first, "b"), "the choice binds the incumbent");
+        assert_ne!(choice(first, "a"), fragment(first), "the two schemas never collide");
+
+        // Only routes `prune_route` can change reach the sidecar: route 5
+        // carries a redundant x5 refresh behind its x3 trunk repeater,
+        // route 7 has nothing behind x3 to remove.
+        let seam_tree = crate::compile::fragment_synth::union::tests::seam_tree;
+        let mut redundant = seam_tree(3, 4);
+        let x5 = Anchor { x: 5, y: 0, z: 0 };
+        redundant.cells.iter_mut().find(|cell| cell.at == x5).unwrap().state =
+            crate::compile::repeater(Facing::East);
+        let routes = BTreeMap::from([(RouteId(5), redundant), (RouteId(7), seam_tree(3, 4))]);
+        assert_eq!(
+            prunable_parent_routes(&routes),
+            BTreeSet::from([RouteId(5)]),
+            "the unprunable route is dropped, the prunable one is kept"
+        );
+    }
+
+    /// Parent Route Repack chooses the lowest-slack prunable parent route in
+    /// `multiplier4`, changes no child block, survives the unchanged full
+    /// certifier, and strictly improves quality.
+    #[test]
+    #[ignore = "minutes: compiles multiplier4's blocks and certifies the top twice"]
+    fn parent_route_pruning_improves_multiplier4() {
+        let design = crate::circuits::hierarchical_builder::circuits::multiplier4()
+            .specialise_constants()
+            .unwrap();
+        let lowered = lower_hierarchy(&design).unwrap();
+        let order = lowered.as_hierarchical().module_order().unwrap();
+        let library = Library::default_library();
+        let search_config = SearchConfig::checked_defaults();
+        let services = seed_services(&library, &search_config);
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let blocks = compile_blocks(&lowered, &order, threads).expect("blocks compile");
+        let ordered = ordered_blocks(&lowered, &lowered.top, &order, &blocks);
+        let variant = SeedVariant::default();
+        let (planning, graph) = parent_planning_graph(
+            &lowered,
+            &lowered.top,
+            &ordered,
+            &library,
+            &variant,
+        )
+        .unwrap();
+        let planned = plan_parent_with_services(
+            SeedInput {
+                lowered: &planning,
+                source_provenance: None,
+                pins: None,
+            },
+            services,
+            graph,
+            ParentBlocks { compiled: &ordered },
+            &variant.placements,
+            &BTreeMap::new(),
+        )
+        .expect("parent plans");
+        let route_repeaters = |tree: &RealisedRouteTree| {
+            tree.cells
+                .iter()
+                .filter(|cell| {
+                    cell.state.kind == crate::redstone::world::block::BlockKind::Repeater
+                })
+                .count()
+        };
+        let prunable = planned
+            .candidate
+            .routes
+            .iter()
+            .filter_map(|(&route, tree)| {
+                let mut clone = tree.clone();
+                crate::compile::fragment_synth::route_opt::prune_route(&mut clone)
+                    .then_some(route)
+            })
+            .collect::<BTreeSet<_>>();
+        assert!(!prunable.is_empty(), "multiplier4 has prunable parent routes");
+
+        let compile = |prunes: &[ParentRouteChoice]| {
+            let started = std::time::Instant::now();
+            let result = compile_module_with_blocks(
+                &lowered,
+                &lowered.top,
+                &ordered,
+                None,
+                services,
+                &variant,
+                &BTreeMap::new(),
+                &[],
+                prunes,
+            );
+            println!(
+                "parent prune test: {} route(s) compiled in {:?}: {:?}",
+                prunes.len(),
+                started.elapsed(),
+                result.as_ref().map(|candidate| candidate.certified.metrics().quality)
+            );
+            result
+        };
+        let baseline = compile(&[]).expect("baseline certifies");
+        let choice = prune_descriptors(
+            baseline.certified.timing_graph(),
+            &baseline.parent_routes,
+        )
+        .into_iter()
+        .next()
+        .expect("a timed parent route is prunable");
+        assert!(
+            baseline.parent_routes.keys().all(|route| prunable.contains(route)),
+            "the sidecar offers only prunable parent routes"
+        );
+        let mut expected = planned.candidate.routes[&choice.route].clone();
+        let before = route_repeaters(&expected);
+        assert!(crate::compile::fragment_synth::route_opt::prune_route(
+            &mut expected
+        ));
+        let removed = before - route_repeaters(&expected);
+        let pruned = compile(&[choice]).expect("the prune proposal certifies");
+        assert!(
+            pruned.certified.metrics().quality < baseline.certified.metrics().quality,
+            "parent pruning must strictly improve quality: pruned={:?} baseline={:?}",
+            pruned.certified.metrics().quality,
+            baseline.certified.metrics().quality
+        );
+        let all_repeaters = |candidate: &HierarchicalCandidate| {
+            candidate
+                .certified
+                .candidate()
+                .routes
+                .values()
+                .flat_map(|route| &route.cells)
+                .filter(|cell| {
+                    cell.state.kind == crate::redstone::world::block::BlockKind::Repeater
+                })
+                .count()
+        };
+        assert_eq!(
+            all_repeaters(&pruned) + removed,
+            all_repeaters(&baseline),
+            "only the proven parent-route refreshes disappear"
+        );
+        assert_eq!(pruned.prunes, vec![choice]);
     }
 
     /// Input Seam Absorption applied to ONE stamped `adder_row` of
@@ -2083,6 +2376,7 @@ mod tests {
                 &SeedVariant::default(),
                 &BTreeMap::new(),
                 seams,
+                &[],
             );
             println!(
                 "seam test: {} seam(s) compiled in {:?}: {:?}",
@@ -2182,6 +2476,7 @@ mod tests {
                 services,
                 variant,
                 &BTreeMap::new(),
+                &[],
                 &[],
             )
         };

@@ -15,6 +15,7 @@ pub mod manifest;
 pub(crate) mod placement;
 pub mod realise;
 pub(crate) mod relocate;
+pub(crate) mod route_opt;
 pub(crate) mod route_schedule;
 mod search;
 pub(crate) mod seed;

@@ -68,6 +68,7 @@ use crate::compile::fragment_synth::instance_graph::{
     BlockSpec, InstanceDriver, InstanceGraph, PhysicalDriver, PhysicalSink, SynthesisError,
 };
 use crate::compile::fragment_synth::relocate::{self, IdMap, Offset, RelocateError};
+use crate::compile::fragment_synth::route_opt::{prune_route, ParentRouteChoice};
 use crate::compile::fragment_synth::seed::{refresh_exact_route_delays, PlannedParent};
 use crate::compile::geometry::Anchor;
 use crate::compile::hierarchy::{GatePath, LoweredHierarchy, PortBinding};
@@ -139,6 +140,9 @@ pub(crate) struct UnionInput<'a> {
     /// Accepted Input Seam Absorption choices, applied to the named
     /// instance's clone only, before translation.
     pub seams: &'a [InputSeamChoice],
+    /// Accepted Parent Route Repack choices, applied to the parent's own
+    /// routes after renumbering and before any block is stamped.
+    pub prunes: &'a [ParentRouteChoice],
 }
 
 /// One Input Seam Absorption choice in the sink block's own coordinates:
@@ -401,9 +405,14 @@ struct Piece {
     output_is_read: Vec<bool>,
 }
 
+/// The flat candidate, plus where each of the parent's own routes ended up:
+/// pre-union parent [`RouteId`] to the id of the final tree that carries its
+/// branches. Most map to themselves; a route out of a block lamp is absorbed
+/// by the block's output tree (and a pass-through may hand it on again), so
+/// its timing arcs are filed under that final id.
 pub(crate) fn union_candidate(
     input: UnionInput<'_>,
-) -> Result<ExpandedPhysicalCandidate, UnionError> {
+) -> Result<(ExpandedPhysicalCandidate, BTreeMap<RouteId, RouteId>), UnionError> {
     let parent_candidate = &input.parent.candidate;
     let block_instances = parent_candidate.instances.blocks.clone();
 
@@ -500,6 +509,18 @@ pub(crate) fn union_candidate(
     // `delayed: None` placement holding repeaters, and the real per-primitive
     // placements arriving below are what owns those cells from here on.
     union.placements.retain(|id, _| !ghosts.contains(&id.instance));
+    // Parent routes keep their ids (`route_offset: 0`) and no child cell
+    // exists yet, so a prune here can only ever touch parent-owned cells. A
+    // route that is gone or has nothing left to prune is a stale descriptor.
+    for prune in input.prunes {
+        let tree = union
+            .routes
+            .get_mut(&prune.route)
+            .ok_or(UnionError::Incomplete("prune names no parent route"))?;
+        if !prune_route(tree) {
+            return Err(UnionError::Incomplete("prune leaves the parent route unchanged"));
+        }
+    }
 
     // ---- 4. Each block, translated and renumbered into flat ids. ----
     let mut next_route = union.routes.keys().map(|id| id.0 + 1).max().unwrap_or(0);
@@ -596,12 +617,14 @@ pub(crate) fn union_candidate(
     }
 
     // ---- 5. Every output splice, then every input splice. ----
+    let mut absorbed = BTreeMap::<RouteId, RouteId>::new();
     for (piece, _) in &mut pieces {
-        splice_outputs(&mut union.routes, piece)?;
+        splice_outputs(&mut union.routes, piece, &mut absorbed)?;
     }
     for (piece, _) in &mut pieces {
-        splice_inputs(&mut union.routes, piece)?;
+        splice_inputs(&mut union.routes, piece, &mut absorbed)?;
     }
+    let parent_routes = realised_parent_routes(parent_candidate.routes.keys(), &absorbed);
 
     // ---- 6. Everything else the blocks own moves in as it stands. ----
     for (piece, body) in pieces {
@@ -630,7 +653,27 @@ pub(crate) fn union_candidate(
     refresh_declared_output_owners(&mut union);
 
     union.validate_shape()?;
-    Ok(union)
+    Ok((union, parent_routes))
+}
+
+/// Follows each pre-union parent route through `absorbed` (absorbed tree id
+/// to the id of the tree that took its branches) to the tree it finally
+/// lives in. An absorbed tree leaves the union the moment it is recorded,
+/// so every chain ends.
+fn realised_parent_routes<'a>(
+    parents: impl IntoIterator<Item = &'a RouteId>,
+    absorbed: &BTreeMap<RouteId, RouteId>,
+) -> BTreeMap<RouteId, RouteId> {
+    parents
+        .into_iter()
+        .map(|&parent| {
+            let mut id = parent;
+            while let Some(&into) = absorbed.get(&id) {
+                id = into;
+            }
+            (parent, id)
+        })
+        .collect()
 }
 
 fn compiled_of<'a>(input: &UnionInput<'a>, index: u32) -> Result<&'a CompiledBlock, UnionError> {
@@ -844,6 +887,7 @@ fn take_block_route_from(
 fn splice_outputs(
     union_routes: &mut BTreeMap<RouteId, RealisedRouteTree>,
     piece: &mut Piece,
+    absorbed: &mut BTreeMap<RouteId, RouteId>,
 ) -> Result<(), UnionError> {
     for (index, port) in piece.outputs.clone().iter().enumerate() {
         let node = TopologyNodeId(
@@ -897,6 +941,7 @@ fn splice_outputs(
         let parent = union_routes
             .remove(&parent_id)
             .ok_or(UnionError::Incomplete("parent route out of a block"))?;
+        absorbed.insert(parent_id, holder.id);
         absorb_cells(&mut holder, &parent);
         for branch in parent.branches {
             let mut path = ob.path.clone();
@@ -941,6 +986,7 @@ fn splice_outputs(
 fn splice_inputs(
     union_routes: &mut BTreeMap<RouteId, RealisedRouteTree>,
     piece: &mut Piece,
+    absorbed: &mut BTreeMap<RouteId, RouteId>,
 ) -> Result<(), UnionError> {
     for (index, (port, lever)) in piece.inputs.clone().iter().enumerate() {
         let input_index =
@@ -991,6 +1037,9 @@ fn splice_inputs(
                 port: port.clone(),
             });
         };
+        // A pass-through's tree may already carry a parent route absorbed by
+        // the output splice; recording this hop keeps that chain resolvable.
+        absorbed.insert(inner.id, parent.id);
         absorb_cells(&mut parent, &inner);
         for branch in inner.branches {
             let mut path = pb.path.clone();
@@ -1059,7 +1108,7 @@ fn normalise_routes_and_connections(
             }
         }
         // Parent boundary repeaters became ordinary mid-route refreshes, and
-        // `absorb_input_seam` turned selected child refreshes into dust, so
+        // `absorb_input_seam` / `prune_route` turned selected refreshes into dust, so
         // every joined path needs a fresh tick count. This is the union's only
         // refresh; the mutations above rely on it.
         refresh_exact_route_delays(route);
@@ -1185,7 +1234,7 @@ pub(crate) mod tests {
         let mut union_routes = routes_of(vec![parent.clone()]);
         let mut piece = a_piece(Vec::new(), vec!["y".to_string()]);
 
-        let error = splice_outputs(&mut union_routes, &mut piece)
+        let error = splice_outputs(&mut union_routes, &mut piece, &mut BTreeMap::new())
             .expect_err("the block has no route out of `y` of its own");
         assert!(
             matches!(&error, UnionError::MissingRoute { port, .. } if port == "y"),
@@ -1220,7 +1269,7 @@ pub(crate) mod tests {
         )]);
         let mut piece = a_piece(vec![("a".to_string(), lever)], Vec::new());
 
-        let error = splice_inputs(&mut union_routes, &mut piece)
+        let error = splice_inputs(&mut union_routes, &mut piece, &mut BTreeMap::new())
             .expect_err("nothing inside the block reads input `a`");
         assert!(
             matches!(&error, UnionError::UnroutedBlockInput { port, .. } if port == "a"),
@@ -1282,7 +1331,8 @@ pub(crate) mod tests {
         let mut union_routes = routes_of(vec![delivery, decoy.clone(), merged]);
         let mut piece = a_piece(vec![("a".to_string(), lever)], Vec::new());
 
-        splice_inputs(&mut union_routes, &mut piece).expect("the pass-through tree is spliced");
+        splice_inputs(&mut union_routes, &mut piece, &mut BTreeMap::new())
+            .expect("the pass-through tree is spliced");
 
         assert!(
             !union_routes.contains_key(&RouteId(11)),
@@ -1304,6 +1354,98 @@ pub(crate) mod tests {
             joined.branches[0].path,
             vec![lever, anchor(7)],
             "the joined path is the parent's up to the lever, then the block's"
+        );
+    }
+
+    /// The prune stage reads slack off the certified timing graph, whose arcs
+    /// name FINAL route ids. The parent's route away from a block lamp is
+    /// absorbed by the block's output tree, and a pass-through block then
+    /// hands that tree on to the parent's delivery tree, so the parent-route
+    /// mapping has to follow the whole chain rather than one hop.
+    #[test]
+    fn parent_routes_are_mapped_through_output_and_pass_through_splices() {
+        let lever = anchor(5);
+        let lamp = anchor(8);
+        // Parent route 0 leaves the block's lamp (ghost output 0).
+        let downstream = a_tree(
+            0,
+            PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+                instance: GHOST,
+                node: TopologyNodeId(0),
+            }),
+            vec![a_branch(
+                RouteTarget::DeclaredOutput(PortId(4)),
+                lamp,
+                &[lamp, anchor(9)],
+            )],
+        );
+        // Parent route 1 delivers primary input 0 to the block's lever.
+        let delivery = a_tree(
+            1,
+            PhysicalEndpointId::PrimaryInput(PortId(0)),
+            vec![a_branch(
+                RouteTarget::Connection(ConnectionId::External {
+                    instance: GHOST,
+                    input_index: 0,
+                }),
+                anchor(0),
+                &[lever],
+            )],
+        );
+        // Parent route 2 touches no block and keeps its id.
+        let aside = a_tree(
+            2,
+            PhysicalEndpointId::PrimaryInput(PortId(1)),
+            vec![a_branch(
+                RouteTarget::DeclaredOutput(PortId(3)),
+                anchor(20),
+                &[anchor(21)],
+            )],
+        );
+        let mut union_routes = routes_of(vec![downstream, delivery, aside]);
+        // The block is a pass-through: its own route 10 runs from the cell
+        // east of its lever to its lamp.
+        let mut piece = a_piece(vec![("a".to_string(), lever)], vec!["y".to_string()]);
+        piece.routes.insert(
+            RouteId(10),
+            a_tree(
+                10,
+                PhysicalEndpointId::PrimaryInput(PortId(0)),
+                vec![a_branch(
+                    RouteTarget::DeclaredOutput(PortId(0)),
+                    anchor(6),
+                    &[anchor(6), anchor(7)],
+                )],
+            ),
+        );
+
+        let mut absorbed = BTreeMap::new();
+        splice_outputs(&mut union_routes, &mut piece, &mut absorbed).expect("output splice");
+        assert_eq!(
+            absorbed,
+            BTreeMap::from([(RouteId(0), RouteId(10))]),
+            "the block's output tree absorbed the parent's route away from the lamp"
+        );
+        splice_inputs(&mut union_routes, &mut piece, &mut absorbed).expect("input splice");
+        assert_eq!(
+            absorbed,
+            BTreeMap::from([(RouteId(0), RouteId(10)), (RouteId(10), RouteId(1))]),
+            "the delivery tree then absorbed the pass-through tree"
+        );
+        assert_eq!(
+            union_routes.keys().copied().collect::<Vec<_>>(),
+            vec![RouteId(1), RouteId(2)]
+        );
+
+        let parents = [RouteId(0), RouteId(1), RouteId(2)];
+        assert_eq!(
+            realised_parent_routes(&parents, &absorbed),
+            BTreeMap::from([
+                (RouteId(0), RouteId(1)),
+                (RouteId(1), RouteId(1)),
+                (RouteId(2), RouteId(2)),
+            ]),
+            "route 0 resolves through 10 to the surviving tree 1; the rest map to themselves"
         );
     }
 
@@ -1359,7 +1501,9 @@ pub(crate) mod tests {
             paths: &lowered.paths,
             library,
             seams: &[],
-        });
+            prunes: &[],
+        })
+        .map(|(union, _)| union);
         (lowered, block, planned, union)
     }
 
@@ -1599,7 +1743,7 @@ pub(crate) mod tests {
             ),
         );
 
-        let error = splice_outputs(&mut union_routes, &mut piece)
+        let error = splice_outputs(&mut union_routes, &mut piece, &mut BTreeMap::new())
             .expect_err("the parent reads `y` but has no route from its lamp");
         assert!(
             matches!(&error, UnionError::UnroutedBlockOutput { port, .. } if port == "y"),
@@ -1660,16 +1804,28 @@ pub(crate) mod tests {
             &BTreeMap::new(),
         )
         .unwrap();
-        let union = union_candidate(UnionInput {
+        let (union, parent_routes) = union_candidate(UnionInput {
             parent: &planned,
             blocks: std::slice::from_ref(&block),
             flat: &lowered.flat,
             paths: &lowered.paths,
             library: &library,
             seams: &[],
+            prunes: &[],
         })
         .expect("unions");
         union.validate_shape().expect("flat shape");
+        assert_eq!(
+            parent_routes.keys().copied().collect::<Vec<_>>(),
+            planned.candidate.routes.keys().copied().collect::<Vec<_>>(),
+            "every parent route is mapped"
+        );
+        for (parent, realised) in &parent_routes {
+            assert!(
+                union.routes.contains_key(realised),
+                "parent route {parent:?} maps to a tree {realised:?} the union no longer has"
+            );
+        }
         assert!(union.instances.blocks.is_empty());
         assert_eq!(union.instances.instances.len(), lowered.flat.gates.len());
         // No block boundary objects survive.
