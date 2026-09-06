@@ -364,8 +364,50 @@ pub struct RouteRequest<'a> {
     pub no_refresh: Option<&'a BTreeSet<Anchor>>,
 }
 
+pub struct OwnedRouteRequest<'a> {
+    pub id: RouteId,
+    pub source: RouteEndpoint,
+    pub sinks: &'a NonEmptyRouteSinks,
+    pub reservations: PhysicalReservations,
+    pub limits: RouterLimits,
+    pub no_refresh: Option<&'a BTreeSet<Anchor>>,
+}
+
+impl OwnedRouteRequest<'_> {
+    fn borrowed(&self) -> RouteRequest<'_> {
+        RouteRequest {
+            id: self.id,
+            source: self.source.clone(),
+            sinks: self.sinks,
+            reservations: &self.reservations,
+            limits: self.limits,
+            no_refresh: self.no_refresh,
+        }
+    }
+}
+
+impl<'a> From<RouteRequest<'a>> for OwnedRouteRequest<'a> {
+    fn from(request: RouteRequest<'a>) -> Self {
+        Self {
+            id: request.id,
+            source: request.source,
+            sinks: request.sinks,
+            reservations: request.reservations.clone(),
+            limits: request.limits,
+            no_refresh: request.no_refresh,
+        }
+    }
+}
+
 pub trait PhysicalRouter {
     fn route(&self, request: RouteRequest<'_>) -> Result<RealisedRouteTree, RouterFailure>;
+
+    fn route_owned(
+        &self,
+        request: OwnedRouteRequest<'_>,
+    ) -> Result<RealisedRouteTree, RouterFailure> {
+        self.route(request.borrowed())
+    }
 }
 
 /// Name-free fragment-side adapter.  It deliberately performs no coordinate
@@ -385,6 +427,13 @@ impl<R> FragmentRouterAdapter<R> {
 impl<R: PhysicalRouter> PhysicalRouter for FragmentRouterAdapter<R> {
     fn route(&self, request: RouteRequest<'_>) -> Result<RealisedRouteTree, RouterFailure> {
         self.router.route(request)
+    }
+
+    fn route_owned(
+        &self,
+        request: OwnedRouteRequest<'_>,
+    ) -> Result<RealisedRouteTree, RouterFailure> {
+        self.router.route_owned(request)
     }
 }
 
@@ -523,6 +572,20 @@ impl PhysicalRouter for GuardedPhysicalRouter {
             |_, _, _| {},
         )
     }
+
+    fn route_owned(
+        &self,
+        request: OwnedRouteRequest<'_>,
+    ) -> Result<RealisedRouteTree, RouterFailure> {
+        route_with_local_policy(
+            request,
+            RoutingJoinPolicy::Wide,
+            RoutePhysics::GUARDED,
+            true,
+            |_| 0,
+            |_, _, _| {},
+        )
+    }
 }
 
 /// Physical rules the guarded router applies on top of the legacy search.
@@ -634,7 +697,7 @@ where
     Claim: FnMut(Anchor, PhysicalReservationOwner, PhysicalReservationKind),
 {
     route_with_local_policy(
-        request,
+        request.into(),
         join_policy,
         RoutePhysics::LEGACY,
         false,
@@ -659,7 +722,7 @@ where
     Claim: FnMut(Anchor, PhysicalReservationOwner, PhysicalReservationKind),
 {
     route_with_local_policy(
-        request,
+        request.into(),
         join_policy,
         RoutePhysics::LEGACY,
         true,
@@ -680,11 +743,11 @@ where
     Price: FnMut(&Anchor) -> u64,
     Claim: FnMut(Anchor, PhysicalReservationOwner, PhysicalReservationKind),
 {
-    route_with_local_policy(request, join_policy, physics, true, price, claim)
+    route_with_local_policy(request.into(), join_policy, physics, true, price, claim)
 }
 
 fn route_with_local_policy<Price, Claim>(
-    request: RouteRequest<'_>,
+    request: OwnedRouteRequest<'_>,
     join_policy: RoutingJoinPolicy,
     physics: RoutePhysics,
     strict_local: bool,
@@ -695,20 +758,43 @@ where
     Price: FnMut(&Anchor) -> u64,
     Claim: FnMut(Anchor, PhysicalReservationOwner, PhysicalReservationKind),
 {
-    validate_request(&request)?;
+    validate_request(&request.borrowed())?;
+    let OwnedRouteRequest {
+        id,
+        source,
+        sinks,
+        reservations: requested,
+        limits,
+        no_refresh,
+    } = request;
+    let requested_route_conductors = PhysicalReservations {
+        cells: requested
+            .cells
+            .iter()
+            .filter(|(_, claim)| owned_by_route(claim.owner, id) && reservation_is_conductor(claim))
+            .map(|(&at, claim)| (at, claim.clone()))
+            .collect(),
+    };
     let source_strength =
-        request
-            .source
+        source
             .terminal
             .source_strength()
             .ok_or(RouterFailure::InvalidRequest {
-                route: request.id,
-                source: request.source.id,
+                route: id,
+                source: source.id,
                 sink: None,
             })?;
+    let mut reservations = requested;
+    let request = RouteRequest {
+        id,
+        source,
+        sinks,
+        reservations: &requested_route_conductors,
+        limits,
+        no_refresh,
+    };
     let start = request.source.anchor;
     let mut work = RouterWork::default();
-    let mut reservations = request.reservations.clone();
     let mut cell_states = BTreeMap::<Anchor, BlockState>::new();
     let mut cell_order = Vec::<Anchor>::new();
     let mut floor_states = BTreeMap::<Anchor, BlockState>::new();
@@ -2267,9 +2353,7 @@ mod tests {
         let source = endpoint(route);
         let sinks = NonEmptyRouteSinks::new(vec![sink(route, 0, at(4, 1, 0))]).unwrap();
         let reservations = PhysicalReservations::new();
-        let router = DurablePhysicalRouter;
-
-        let error = router
+        let borrowed_error = GuardedPhysicalRouter
             .route(RouteRequest {
                 id: route,
                 source: source.clone(),
@@ -2282,9 +2366,23 @@ mod tests {
                 no_refresh: None,
             })
             .unwrap_err();
+        let owned_error = GuardedPhysicalRouter
+            .route_owned(OwnedRouteRequest {
+                id: route,
+                source: source.clone(),
+                sinks: &sinks,
+                reservations,
+                limits: RouterLimits {
+                    max_node_expansions: 0,
+                    max_queue_entries: 0,
+                },
+                no_refresh: None,
+            })
+            .unwrap_err();
 
+        assert_eq!(owned_error, borrowed_error);
         assert_eq!(
-            error,
+            owned_error,
             RouterFailure::RouterLimitExceeded {
                 route,
                 source: source.id,
@@ -2417,6 +2515,101 @@ mod tests {
     }
 
     #[test]
+    fn owned_and_borrowed_requests_route_identically() {
+        let route = RouteId(19);
+        let sinks = NonEmptyRouteSinks::new(vec![
+            sink(route, 0, at(5, 1, 0)),
+            sink(route, 1, at(5, 1, 2)),
+        ])
+        .unwrap();
+        let reservations = PhysicalReservations::new();
+        let borrowed = GuardedPhysicalRouter
+            .route(RouteRequest {
+                id: route,
+                source: endpoint(route),
+                sinks: &sinks,
+                reservations: &reservations,
+                limits: RouterLimits {
+                    max_node_expansions: 10_000,
+                    max_queue_entries: 50_000,
+                },
+                no_refresh: None,
+            })
+            .unwrap();
+        let owned = GuardedPhysicalRouter
+            .route_owned(OwnedRouteRequest {
+                id: route,
+                source: endpoint(route),
+                sinks: &sinks,
+                reservations: reservations.clone(),
+                limits: RouterLimits {
+                    max_node_expansions: 10_000,
+                    max_queue_entries: 50_000,
+                },
+                no_refresh: None,
+            })
+            .unwrap();
+
+        assert_eq!(owned, borrowed);
+    }
+
+    #[test]
+    fn owned_request_preserves_no_refresh() {
+        let route = RouteId(20);
+        let sinks = NonEmptyRouteSinks::new(vec![sink(route, 0, at(36, 1, 0))]).unwrap();
+        let reservations = PhysicalReservations::new();
+        let limits = RouterLimits {
+            max_node_expansions: 100_000,
+            max_queue_entries: 500_000,
+        };
+        let without_guard = GuardedPhysicalRouter
+            .route(RouteRequest {
+                id: route,
+                source: endpoint(route),
+                sinks: &sinks,
+                reservations: &reservations,
+                limits,
+                no_refresh: None,
+            })
+            .unwrap();
+        let planned = without_guard
+            .cells
+            .iter()
+            .find(|cell| {
+                cell.at != sinks.as_slice()[0].anchor && cell.state.kind == BlockKind::Repeater
+            })
+            .map(|cell| cell.at)
+            .expect("the long route needs an internal refresh");
+        let no_refresh = BTreeSet::from([planned]);
+        let borrowed = GuardedPhysicalRouter
+            .route(RouteRequest {
+                id: route,
+                source: endpoint(route),
+                sinks: &sinks,
+                reservations: &reservations,
+                limits,
+                no_refresh: Some(&no_refresh),
+            })
+            .unwrap();
+        let owned = GuardedPhysicalRouter
+            .route_owned(OwnedRouteRequest {
+                id: route,
+                source: endpoint(route),
+                sinks: &sinks,
+                reservations,
+                limits,
+                no_refresh: Some(&no_refresh),
+            })
+            .unwrap();
+
+        assert_eq!(owned, borrowed);
+        assert!(!owned
+            .cells
+            .iter()
+            .any(|cell| cell.at == planned && cell.state.kind == BlockKind::Repeater));
+    }
+
+    #[test]
     fn fragment_adapter_preserves_distinct_typed_sink_identities() {
         let route = RouteId(10);
         let source = endpoint(route);
@@ -2472,6 +2665,26 @@ mod tests {
             no_refresh: None,
         };
         let tree = DurablePhysicalRouter.route(request).unwrap();
+        let owned = route_with_local_policy(
+            OwnedRouteRequest {
+                id: route,
+                source: source.clone(),
+                sinks: &sinks,
+                reservations: reservations.clone(),
+                limits: RouterLimits {
+                    max_node_expansions: 10_000,
+                    max_queue_entries: 50_000,
+                },
+                no_refresh: None,
+            },
+            RoutingJoinPolicy::Off,
+            RoutePhysics::LEGACY,
+            true,
+            |_| 0,
+            |_, _, _| {},
+        )
+        .unwrap();
+        assert_eq!(owned, tree);
         assert_eq!(
             tree.cells
                 .iter()

@@ -46,10 +46,9 @@ use crate::compile::metrics::Fingerprint;
 use crate::compile::physical::{self, PortKind};
 use crate::compile::planner::{PortPlacements, PortRole};
 use crate::compile::routing::{
-    DelayedComponent, DelayedOwner, NonEmptyRouteSinks, PhysicalReservationKind,
-    PhysicalReservationOwner, PhysicalReservations, PhysicalRouter, RouteEndpoint, RouteRequest,
-    RouteSink, RouterFailure, RouterLimitKind, RouterRefusalCategory, TerminalContract,
-    TerminalRequirement,
+    DelayedComponent, DelayedOwner, NonEmptyRouteSinks, OwnedRouteRequest, PhysicalReservationKind,
+    PhysicalReservationOwner, PhysicalReservations, PhysicalRouter, RouteEndpoint, RouteSink,
+    RouterFailure, RouterLimitKind, RouterRefusalCategory, TerminalContract, TerminalRequirement,
 };
 use crate::compile::topology::{Library, Primitive};
 use crate::compile::verification::ExpandedPhysicalError;
@@ -2578,7 +2577,7 @@ fn route_all(
         let mut attempt_reservations = reservations.clone();
         reserve_foreign_private_cells(&mut attempt_reservations, &layout, source_id, &protected);
         reserve_source_refresh(&mut attempt_reservations, source_id, &source, route)?;
-        let mut tree = match router.route(RouteRequest {
+        let routed = router.route_owned(OwnedRouteRequest {
             id: route,
             source: RouteEndpoint {
                 id: source_id,
@@ -2589,10 +2588,11 @@ fn route_all(
                 },
             },
             sinks: &sinks,
-            reservations: &attempt_reservations,
+            reservations: attempt_reservations,
             limits: config.router_limits,
             no_refresh: layout.departures.get(&source_id),
-        }) {
+        });
+        let mut tree = match routed {
             Ok(tree) => tree,
             Err(failure) => {
                 return Err(SeedError::Routing(seed_routing_failure(
@@ -3100,7 +3100,7 @@ pub(crate) mod tests {
     };
     use crate::compile::fragment_synth::services::{DurableSeedEmitter, DurableSeedVerifier};
     use crate::compile::metrics::canonical_fingerprint;
-    use crate::compile::routing::{GuardedPhysicalRouter, RealisedRouteTree};
+    use crate::compile::routing::{GuardedPhysicalRouter, RealisedRouteTree, RouteRequest};
     use crate::compile::topology::GateKind;
     use crate::compile::Gate;
 

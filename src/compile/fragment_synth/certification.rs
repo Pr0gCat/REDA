@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
+use std::sync::Mutex;
 
 use serde::Serialize;
 use thiserror::Error;
@@ -27,6 +28,12 @@ use crate::redstone::simulator::propagate::block_signal_at;
 use crate::redstone::simulator::{BoundedSimulationError, SimulationError, Simulator};
 use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::storage::World;
+
+const MAX_MANIFEST_SWEEP_THREADS: usize = 12;
+static MANIFEST_SWEEP_LOCK: Mutex<()> = Mutex::new(());
+
+type ManifestChunkOutcome =
+    std::thread::Result<Result<Vec<TransitionMeasurement>, CandidateCertificationError>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct QualityKey {
@@ -300,22 +307,113 @@ fn sweep_manifest(
     manifest: &TransitionManifest,
     config: &CertificationConfig,
 ) -> Result<Vec<TransitionMeasurement>, CandidateCertificationError> {
-    manifest
-        .transitions()
-        .iter()
-        .enumerate()
-        .map(|(manifest_index, transition)| {
-            measure_transition(
-                world,
-                candidate,
-                lowered,
-                compatibility,
-                transition,
-                manifest_index,
-                config,
-            )
-        })
-        .collect()
+    let available = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1);
+    let requested = std::env::var("REDA_CERT_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok());
+    let threads = manifest_sweep_threads(available, requested);
+    sweep_manifest_with_threads(
+        world,
+        candidate,
+        lowered,
+        compatibility,
+        manifest,
+        config,
+        threads,
+    )
+}
+
+fn manifest_sweep_threads(available: usize, requested: Option<usize>) -> usize {
+    requested
+        .unwrap_or(available)
+        .clamp(1, available.clamp(1, MAX_MANIFEST_SWEEP_THREADS))
+}
+
+fn manifest_sweep_guard() -> std::sync::MutexGuard<'static, ()> {
+    MANIFEST_SWEEP_LOCK
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+}
+
+fn sweep_manifest_with_threads(
+    world: &World,
+    candidate: &ExpandedPhysicalCandidate,
+    lowered: &Netlist,
+    compatibility: &CompatibilityViews,
+    manifest: &TransitionManifest,
+    config: &CertificationConfig,
+    threads: usize,
+) -> Result<Vec<TransitionMeasurement>, CandidateCertificationError> {
+    let transitions = manifest.transitions();
+    let worker_count = threads.max(1).min(transitions.len().max(1));
+    if worker_count == 1 {
+        return transitions
+            .iter()
+            .enumerate()
+            .map(|(manifest_index, transition)| {
+                measure_transition(
+                    world,
+                    candidate,
+                    lowered,
+                    compatibility,
+                    transition,
+                    manifest_index,
+                    config,
+                )
+            })
+            .collect();
+    }
+
+    // ponytail: one sweep owns the worker budget; use a shared pool only if
+    // concurrent compile throughput becomes more important than one compile's latency.
+    let _sweep = manifest_sweep_guard();
+    let chunk_len = transitions.len().div_ceil(worker_count);
+    std::thread::scope(|scope| {
+        let handles = transitions
+            .chunks(chunk_len)
+            .enumerate()
+            .map(|(chunk_index, chunk)| {
+                scope.spawn(move || {
+                    chunk
+                        .iter()
+                        .enumerate()
+                        .map(|(index, transition)| {
+                            measure_transition(
+                                world,
+                                candidate,
+                                lowered,
+                                compatibility,
+                                transition,
+                                chunk_index * chunk_len + index,
+                                config,
+                            )
+                        })
+                        .collect::<Result<Vec<_>, _>>()
+                })
+            })
+            .collect::<Vec<_>>();
+        let outcomes = handles
+            .into_iter()
+            .map(|handle| handle.join())
+            .collect::<Vec<_>>();
+        collect_manifest_chunks(outcomes, transitions.len())
+    })
+}
+
+fn collect_manifest_chunks(
+    outcomes: impl IntoIterator<Item = ManifestChunkOutcome>,
+    capacity: usize,
+) -> Result<Vec<TransitionMeasurement>, CandidateCertificationError> {
+    let mut measurements = Vec::with_capacity(capacity);
+    for outcome in outcomes {
+        match outcome {
+            Ok(chunk) => measurements.extend(chunk?),
+            Err(payload) => std::panic::resume_unwind(payload),
+        }
+    }
+    Ok(measurements)
 }
 
 fn measure_transition(
@@ -593,8 +691,10 @@ fn bits_of(mask: usize, width: usize) -> Vec<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        external_signal_is_high, settle, CandidateCertificationError, CompleteCandidateCertifier,
-        ExpandedCandidateCertifier, TransitionPhase,
+        collect_manifest_chunks, external_signal_is_high, manifest_sweep_guard,
+        manifest_sweep_threads, realise_and_verify_expanded, settle, sweep_manifest_with_threads,
+        CandidateCertificationError, CompleteCandidateCertifier, ExpandedCandidateCertifier,
+        TransitionManifest, TransitionPhase, MANIFEST_SWEEP_LOCK,
     };
     use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
     use crate::compile::fragment_synth::legacy_adapter::LegacyCandidateAdapter;
@@ -613,9 +713,84 @@ mod tests {
         assert!(external_signal_is_high(15));
     }
 
+    #[test]
+    fn manifest_worker_count_is_bounded_and_tunable() {
+        assert_eq!(manifest_sweep_threads(8, None), 8);
+        assert_eq!(manifest_sweep_threads(8, Some(4)), 4);
+        assert_eq!(manifest_sweep_threads(8, Some(0)), 1);
+        assert_eq!(manifest_sweep_threads(32, Some(32)), 12);
+    }
+
+    #[test]
+    fn earlier_manifest_error_wins_over_a_later_worker_panic() {
+        let outcomes = vec![
+            Ok(Err(CandidateCertificationError::CounterOverflow)),
+            Err(Box::new("later panic") as Box<dyn std::any::Any + Send>),
+        ];
+
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            collect_manifest_chunks(outcomes, 0)
+        }));
+
+        assert!(matches!(
+            result,
+            Ok(Err(CandidateCertificationError::CounterOverflow))
+        ));
+
+        let outcomes = vec![
+            Err(Box::new("first panic") as Box<dyn std::any::Any + Send>),
+            Ok(Err(CandidateCertificationError::CounterOverflow)),
+            Err(Box::new("later panic") as Box<dyn std::any::Any + Send>),
+        ];
+        let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            collect_manifest_chunks(outcomes, 0)
+        }))
+        .expect_err("the earliest panic must be resumed");
+        assert_eq!(panic.downcast_ref::<&str>(), Some(&"first panic"));
+    }
+
+    #[test]
+    fn manifest_sweeps_serialize_and_recover_after_poison() {
+        let held = manifest_sweep_guard();
+        std::thread::scope(|scope| {
+            let (started_tx, started_rx) = std::sync::mpsc::channel();
+            let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
+            scope.spawn(move || {
+                started_tx.send(()).unwrap();
+                let _guard = manifest_sweep_guard();
+                acquired_tx.send(()).unwrap();
+            });
+            started_rx.recv().unwrap();
+            assert!(acquired_rx
+                .recv_timeout(std::time::Duration::from_millis(20))
+                .is_err());
+            drop(held);
+            acquired_rx
+                .recv_timeout(std::time::Duration::from_secs(1))
+                .unwrap();
+        });
+
+        let panic = std::panic::catch_unwind(|| {
+            let _guard = manifest_sweep_guard();
+            panic!("poison the sweep lock");
+        });
+        assert!(panic.is_err());
+        assert!(MANIFEST_SWEEP_LOCK.is_poisoned());
+        drop(manifest_sweep_guard());
+        MANIFEST_SWEEP_LOCK.clear_poison();
+    }
+
     fn not_netlist() -> Netlist {
         Netlist {
             inputs: vec!["a".into()],
+            outputs: vec!["y".into()],
+            gates: vec![Gate::nor("y", &["a"])],
+        }
+    }
+
+    fn two_input_not_netlist() -> Netlist {
+        Netlist {
+            inputs: vec!["a".into(), "b".into()],
             outputs: vec!["y".into()],
             gates: vec![Gate::nor("y", &["a"])],
         }
@@ -657,6 +832,77 @@ mod tests {
             certified.timing_graph().fingerprint(),
             certified.metrics().realised_timing_graph_fingerprint
         );
+    }
+
+    #[test]
+    fn parallel_manifest_sweep_matches_serial_results() {
+        let netlist = two_input_not_netlist();
+        let compiled = compile_legacy(&netlist).expect("legacy migration fixture");
+        let candidate = LegacyCandidateAdapter::adapt(&netlist, &compiled)
+            .expect("typed migration fixture")
+            .candidate;
+        let library = Library::default_library();
+        let world = realise_and_verify_expanded(&candidate, &netlist, &library)
+            .expect("fixture must realise");
+        let compatibility = candidate
+            .compatibility_views(&netlist)
+            .expect("fixture compatibility views");
+        let mut config = CertificationConfig::from_search(&SearchConfig::checked_defaults());
+        let manifest =
+            TransitionManifest::for_kind(netlist.inputs.clone(), config.transition_manifest_kind);
+        let sweep = |config: &CertificationConfig, threads| {
+            sweep_manifest_with_threads(
+                world.world(),
+                &candidate,
+                &netlist,
+                &compatibility,
+                &manifest,
+                config,
+                threads,
+            )
+        };
+
+        let serial = sweep(&config, 1).expect("serial sweep");
+        let parallel = sweep(&config, 4).expect("parallel sweep");
+
+        assert_eq!(parallel, serial);
+        assert_eq!(
+            parallel
+                .iter()
+                .map(|measurement| measurement.manifest_index)
+                .collect::<Vec<_>>(),
+            (0..manifest.transitions().len()).collect::<Vec<_>>()
+        );
+
+        config.max_simulator_events_per_transition = 0;
+        let serial = sweep(&config, 1).expect_err("serial sweep must hit the cap");
+        let parallel = sweep(&config, 4).expect_err("parallel sweep must hit the cap");
+
+        let fields = |error| match error {
+            CandidateCertificationError::SimulatorEventCapExceeded {
+                manifest_index,
+                used,
+                limit,
+            } => (manifest_index, used, limit),
+            other => panic!("unexpected sweep error: {other}"),
+        };
+        let serial_fields = fields(serial);
+        let parallel_fields = fields(parallel);
+        assert_eq!(parallel_fields, serial_fields);
+        assert_eq!(serial_fields.0, 0);
+
+        let empty = TransitionManifest::new(Vec::new());
+        assert!(sweep_manifest_with_threads(
+            world.world(),
+            &candidate,
+            &netlist,
+            &compatibility,
+            &empty,
+            &config,
+            4,
+        )
+        .expect("empty sweep")
+        .is_empty());
     }
 
     #[test]
