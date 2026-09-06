@@ -2305,6 +2305,143 @@ mod tests {
         assert_eq!(pruned.prunes, vec![choice]);
     }
 
+    /// Block Pull-X on the real hierarchical `ripple_adder(8)`: the first
+    /// block edge (structural slack first) with a feasible pull moves its
+    /// sink one X cell toward the source, changes no compiled block,
+    /// survives the unchanged full certifier, and strictly improves quality.
+    #[test]
+    #[ignore = "minutes: compiles ripple_adder(8)'s block and certifies the top twice"]
+    fn block_pull_x_improves_ripple_adder8() {
+        let design = crate::circuits::hierarchical_builder::circuits::ripple_adder(8)
+            .specialise_constants()
+            .unwrap();
+        let lowered = lower_hierarchy(&design).unwrap();
+        let order = lowered.as_hierarchical().module_order().unwrap();
+        let library = Library::default_library();
+        let search_config = SearchConfig::checked_defaults();
+        let services = seed_services(&library, &search_config);
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let blocks = compile_blocks(&lowered, &order, threads).expect("blocks compile");
+        let ordered = ordered_blocks(&lowered, &lowered.top, &order, &blocks);
+        let blocks_before = ordered
+            .iter()
+            .map(|block| block.candidate.routes.clone())
+            .collect::<Vec<_>>();
+        let variant = SeedVariant::default();
+        let (_, graph) = parent_planning_graph(
+            &lowered,
+            &lowered.top,
+            &ordered,
+            &library,
+            &variant,
+        )
+        .unwrap();
+        let block_delays = graph
+            .blocks
+            .iter()
+            .map(|block| (block.id, ordered[block.block as usize].delay.0))
+            .collect::<BTreeMap<_, _>>();
+        let analysis = analyse_instance_dag(&graph, &block_delays).expect("dag analyses");
+        let edges = explicit_block_edges(&graph, &analysis.edges);
+        assert!(!edges.is_empty(), "ripple_adder(8) has block-to-block edges");
+        let (source_outputs, sink_inputs) =
+            compiled_port_lookup(&graph, &ordered).expect("compiled ports resolve");
+
+        let compile = |placements: &BTreeMap<InstanceId, BlockPlacementOffset>| {
+            let started = std::time::Instant::now();
+            let result = compile_module_with_blocks(
+                &lowered,
+                &lowered.top,
+                &ordered,
+                None,
+                services,
+                &variant,
+                placements,
+                &[],
+                &[],
+            );
+            println!(
+                "pull-x test: {} placement(s) compiled in {:?}: {:?}",
+                placements.len(),
+                started.elapsed(),
+                result.as_ref().map(|candidate| candidate.certified.metrics().quality)
+            );
+            result
+        };
+        let baseline = compile(&BTreeMap::new()).expect("baseline certifies");
+        let (edge, proposal) = edges
+            .iter()
+            .find_map(|edge| {
+                block_pull_x_proposal(
+                    edge,
+                    &source_outputs,
+                    &sink_inputs,
+                    &baseline.realised_block_offsets,
+                    &baseline.block_placements,
+                )
+                .map(|proposal| (*edge, proposal))
+            })
+            .expect("ripple_adder(8) must have a block edge whose ports differ in X");
+        let source_x = source_outputs[&(edge.source_block, edge.source_port)].cell.x
+            + baseline.realised_block_offsets[&edge.source_block].dx;
+        let sink_x = sink_inputs[&(edge.sink_block, edge.sink_input)].cell.x
+            + baseline.realised_block_offsets[&edge.sink_block].dx;
+        let step = (source_x - sink_x).signum();
+        println!("pull-x test: edge {edge:?}, step {step}, proposal {proposal:?}");
+
+        let pulled = compile(&proposal).expect("the pull-x proposal certifies");
+        println!(
+            "pull-x test: baseline {:?} pulled {:?}",
+            baseline.certified.metrics().quality,
+            pulled.certified.metrics().quality
+        );
+        assert!(
+            pulled.certified.metrics().quality < baseline.certified.metrics().quality,
+            "pull-x must strictly improve quality: pulled={:?} baseline={:?}",
+            pulled.certified.metrics().quality,
+            baseline.certified.metrics().quality
+        );
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|block| block.candidate.routes.clone())
+                .collect::<Vec<_>>(),
+            blocks_before,
+            "the compiled blocks are never mutated"
+        );
+        // `BlockPlacementOffset` has no `PartialEq`; compare as plain tuples.
+        let flat = |placements: &BTreeMap<InstanceId, BlockPlacementOffset>| {
+            placements
+                .iter()
+                .map(|(&block, offset)| (block, (offset.dx, offset.dz)))
+                .collect::<BTreeMap<_, _>>()
+        };
+        assert_eq!(
+            flat(&proposal),
+            BTreeMap::from([(edge.sink_block, (step, 0))]),
+            "the proposal moves only the sink, one X toward the source"
+        );
+        for (block, before) in &baseline.realised_block_offsets {
+            let after = pulled.realised_block_offsets[block];
+            let expected_dx = if *block == edge.sink_block {
+                before.dx + step
+            } else {
+                before.dx
+            };
+            assert_eq!(
+                (after.dx, after.dy, after.dz),
+                (expected_dx, before.dy, before.dz),
+                "only the chosen sink {:?} moves, by one X toward the source",
+                edge.sink_block
+            );
+        }
+        assert_eq!(
+            flat(&pulled.block_placements),
+            flat(&proposal),
+            "the candidate carries the proposed placement map"
+        );
+    }
+
     /// Input Seam Absorption applied to ONE stamped `adder_row` of
     /// `multiplier4` (the parent stamps three): the parent's boundary
     /// repeater on the lever stays, the selected child repeater becomes
