@@ -53,6 +53,7 @@ use crate::compile::fragment_synth::api::{
     SynthesisInput, SynthesisResult,
 };
 use crate::compile::fragment_synth::blocks::{compile_block, BlockPort, CompiledBlock};
+use crate::compile::fragment_synth::candidate::RealisedRouteTree;
 use crate::compile::fragment_synth::certification::{
     CertifiedCandidate, CompleteCandidateCertifier,
 };
@@ -77,7 +78,8 @@ use crate::compile::fragment_synth::services::{
     DurableSeedEmitter, DurableSeedVerifier, TopologyAwareSeedPlacer,
 };
 use crate::compile::fragment_synth::union::{
-    planning_netlist, union_candidate, BlockSpecOwned, UnionInput,
+    first_internal_repeater, input_route, planning_netlist, union_candidate, BlockSpecOwned,
+    InputSeamChoice, UnionInput,
 };
 use crate::compile::hierarchy::{
     instance_prefix, lower_hierarchy, GatePath, HierarchicalNetlist, LoweredHierarchy, PortBinding,
@@ -151,6 +153,7 @@ pub(crate) fn compile_hierarchical_with_threads(
         services,
         &SeedVariant::default(),
         &BTreeMap::new(),
+        &[],
     )
     .map_err(|error| SynthesisError::Seed(format!("{}: {error}", lowered.top)))?;
     let (_, graph) = parent_planning_graph(
@@ -180,6 +183,11 @@ pub(crate) fn compile_hierarchical_with_threads(
     let edges = explicit_block_edges(&graph, &analysis.edges);
     let (source_outputs, sink_inputs) = compiled_port_lookup(&graph, &ordered)
         .map_err(|error| SynthesisError::Seed(format!("{}: {error}", lowered.top)))?;
+    let seams = seam_descriptors(&graph, |block, input| {
+        ordered
+            .get(block as usize)
+            .and_then(|compiled| input_route(&compiled.candidate, input))
+    });
 
     let flat_input = SynthesisInput {
         lowered: &lowered.flat,
@@ -197,7 +205,8 @@ pub(crate) fn compile_hierarchical_with_threads(
     ));
 
     let clock = SystemMonotonicClock::start();
-    let compile = |block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>| {
+    let compile = |block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
+                   seams: &[InputSeamChoice]| {
         compile_module_with_blocks(
             &lowered,
             &lowered.top,
@@ -206,10 +215,16 @@ pub(crate) fn compile_hierarchical_with_threads(
             services,
             &SeedVariant::default(),
             block_placements,
+            seams,
         )
     };
-    let mut proposals =
-        HierarchicalProposalStream::new(edges, source_outputs, sink_inputs, Box::new(compile));
+    let mut proposals = HierarchicalProposalStream::new(
+        edges,
+        source_outputs,
+        sink_inputs,
+        seams,
+        Box::new(compile),
+    );
     let summary = run_budgeted_proposals(certified, budget, &clock, &mut proposals);
 
     let compiled = compiled_from_certified(&summary.best.certified, &lowered.flat)?;
@@ -253,6 +268,7 @@ fn compile_module_with_blocks(
     services: SeedServices<'_>,
     variant: &SeedVariant,
     block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
+    seams: &[InputSeamChoice],
 ) -> Result<HierarchicalCandidate, SeedError> {
     let parent_gates = u32::try_from(lowered.modules[module].gates.len())
         .map_err(|_| SeedError::IdentityOverflow)?;
@@ -305,6 +321,7 @@ fn compile_module_with_blocks(
         flat: &flat,
         paths: &paths,
         library: services.library,
+        seams,
     })
     .map_err(|error| SeedError::Union(error.to_string()))?;
     let certified = certify_planned(union, &flat, services)?;
@@ -312,6 +329,7 @@ fn compile_module_with_blocks(
         certified,
         block_placements: block_placements.clone(),
         realised_block_offsets,
+        seams: seams.to_vec(),
     })
 }
 
@@ -356,6 +374,20 @@ struct HierarchicalChoiceFingerprint<'a> {
     block_placements: Vec<(InstanceId, i32, i32)>,
 }
 
+/// The seam stage has no block edge: its descriptor is the choice itself.
+#[derive(Serialize)]
+struct SeamFingerprint {
+    schema: &'static str,
+    seam: InputSeamChoice,
+}
+
+#[derive(Serialize)]
+struct SeamChoiceFingerprint<'a> {
+    schema: &'static str,
+    seam: InputSeamChoice,
+    incumbent_fingerprint: &'a str,
+}
+
 fn serialized_fingerprint(descriptor: &impl Serialize) -> crate::compile::metrics::Fingerprint {
     canonical_fingerprint(
         &serde_json::to_vec(descriptor).expect("hierarchical proposal descriptor serializes"),
@@ -384,6 +416,48 @@ fn hierarchical_choice_fingerprint(
             .map(|(&block, offset)| (block, offset.dx, offset.dz))
             .collect(),
     })
+}
+
+fn seam_choice_fingerprint(
+    schema: &'static str,
+    seam: InputSeamChoice,
+    incumbent: &HierarchicalCandidate,
+) -> crate::compile::metrics::Fingerprint {
+    serialized_fingerprint(&SeamChoiceFingerprint {
+        schema,
+        seam,
+        incumbent_fingerprint: incumbent.candidate_fingerprint().as_str(),
+    })
+}
+
+/// Every Input Seam Absorption descriptor the stream will offer, in stream
+/// order: one per stamped block input whose compiled route carries a
+/// non-terminal route-owned repeater, whatever drives that input (a sibling
+/// block, a parent primary input, or parent glue). `graph.blocks` lists the
+/// stamped instances and their input counts; `routes` answers "the block at
+/// this index, its route out of this input". Ordered by sink instance then
+/// input, so the order is fixed by the hierarchy alone.
+fn seam_descriptors<'a>(
+    graph: &InstanceGraph,
+    routes: impl Fn(u32, u16) -> Option<&'a RealisedRouteTree>,
+) -> Vec<InputSeamChoice> {
+    let mut seams = Vec::new();
+    for block in &graph.blocks {
+        for index in 0..block.inputs.len() {
+            let Ok(input) = u16::try_from(index) else {
+                break;
+            };
+            if let Some(at) = routes(block.block, input).and_then(first_internal_repeater) {
+                seams.push(InputSeamChoice {
+                    sink_block: block.id,
+                    input,
+                    at,
+                });
+            }
+        }
+    }
+    seams.sort();
+    seams
 }
 
 fn explicit_block_edges(graph: &InstanceGraph, facts: &[EdgeFacts]) -> Vec<BlockEdge> {
@@ -562,6 +636,8 @@ struct HierarchicalCandidate {
     certified: CertifiedCandidate,
     block_placements: BTreeMap<InstanceId, BlockPlacementOffset>,
     realised_block_offsets: BTreeMap<InstanceId, Offset>,
+    /// Accepted seam choices, cumulative like `block_placements`.
+    seams: Vec<InputSeamChoice>,
 }
 
 impl SearchCandidate for HierarchicalCandidate {
@@ -574,7 +650,10 @@ impl SearchCandidate for HierarchicalCandidate {
     }
 }
 
-type HierarchicalCompiler<'a> = dyn Fn(&BTreeMap<InstanceId, BlockPlacementOffset>) -> Result<HierarchicalCandidate, SeedError>
+type HierarchicalCompiler<'a> = dyn Fn(
+        &BTreeMap<InstanceId, BlockPlacementOffset>,
+        &[InputSeamChoice],
+    ) -> Result<HierarchicalCandidate, SeedError>
     + 'a;
 
 struct HierarchicalProposalStream<'a> {
@@ -582,6 +661,10 @@ struct HierarchicalProposalStream<'a> {
     /// Pull-X descriptors, frozen from the incumbent when the alignment
     /// stage is exhausted. Edges whose ports already share an X are omitted.
     pull_x_edges: Option<Vec<BlockEdge>>,
+    /// Seam descriptors, offered once each after Pull-X is exhausted. They
+    /// read only the compiled blocks, which never change, so they are fixed
+    /// at construction rather than frozen from an incumbent.
+    seams: Vec<InputSeamChoice>,
     source_outputs: BTreeMap<(InstanceId, u16), BlockPort>,
     sink_inputs: BTreeMap<(InstanceId, u16), BlockPort>,
     compile: Box<HierarchicalCompiler<'a>>,
@@ -592,15 +675,27 @@ impl<'a> HierarchicalProposalStream<'a> {
         edges: Vec<BlockEdge>,
         source_outputs: BTreeMap<(InstanceId, u16), BlockPort>,
         sink_inputs: BTreeMap<(InstanceId, u16), BlockPort>,
+        seams: Vec<InputSeamChoice>,
         compile: Box<HierarchicalCompiler<'a>>,
     ) -> Self {
         Self {
             edges,
             pull_x_edges: None,
+            seams,
             source_outputs,
             sink_inputs,
             compile,
         }
+    }
+
+    /// The seam descriptor at stream position `index`, which lies past every
+    /// alignment edge and every frozen Pull-X edge. Only meaningful once
+    /// Pull-X has been frozen; before that the Pull-X stage owns the index.
+    fn seam(&self, index: usize) -> Option<InputSeamChoice> {
+        let pull_x = self.pull_x_edges.as_ref().map_or(0, Vec::len);
+        self.seams
+            .get(index.checked_sub(self.edges.len() + pull_x)?)
+            .copied()
     }
 
     fn pull_x_edge(
@@ -635,7 +730,9 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
         incumbent: &HierarchicalCandidate,
     ) -> Option<ProposalEvaluation<HierarchicalCandidate>> {
         let index = usize::try_from(proposal_index).ok()?;
-        let (edge, block_placements, fragment_schema, choice_schema) =
+        // Each stage yields its two fingerprints and, unless the descriptor
+        // is stale, the block placements and cumulative seams to compile.
+        let (fragment_fingerprint, choice_fingerprint, proposal) =
             if let Some(&edge) = self.edges.get(index) {
                 let placements = block_alignment_proposal(
                     &edge,
@@ -645,13 +742,16 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                     &incumbent.block_placements,
                 );
                 (
-                    edge,
-                    Some(placements),
-                    "hierarchical-block-fragment-v1",
-                    "hierarchical-block-choice-v1",
+                    block_edge_fingerprint("hierarchical-block-fragment-v1", edge),
+                    hierarchical_choice_fingerprint(
+                        "hierarchical-block-choice-v1",
+                        edge,
+                        incumbent,
+                        &placements,
+                    ),
+                    Some((placements, incumbent.seams.clone())),
                 )
-            } else {
-                let edge = self.pull_x_edge(index - self.edges.len(), incumbent)?;
+            } else if let Some(edge) = self.pull_x_edge(index - self.edges.len(), incumbent) {
                 // A descriptor whose ports now share an X is stale: refuse it
                 // rather than retarget.
                 let placements = block_pull_x_proposal(
@@ -662,31 +762,41 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                     &incumbent.block_placements,
                 );
                 (
-                    edge,
-                    placements,
-                    "hierarchical-block-pull-x-fragment-v1",
-                    "hierarchical-block-pull-x-choice-v1",
+                    block_edge_fingerprint("hierarchical-block-pull-x-fragment-v1", edge),
+                    hierarchical_choice_fingerprint(
+                        "hierarchical-block-pull-x-choice-v1",
+                        edge,
+                        incumbent,
+                        placements.as_ref().unwrap_or(&incumbent.block_placements),
+                    ),
+                    placements.map(|placements| (placements, incumbent.seams.clone())),
+                )
+            } else {
+                // Block placements never change here; the union refuses a
+                // seam whose anchor is no longer a route-owned repeater.
+                let seam = self.seam(index)?;
+                let mut seams = incumbent.seams.clone();
+                seams.push(seam);
+                (
+                    serialized_fingerprint(&SeamFingerprint {
+                        schema: "hierarchical-input-seam-fragment-v1",
+                        seam,
+                    }),
+                    seam_choice_fingerprint("hierarchical-input-seam-choice-v1", seam, incumbent),
+                    Some((incumbent.block_placements.clone(), seams)),
                 )
             };
-        let fragment_fingerprint = block_edge_fingerprint(fragment_schema, edge);
         let mut cap_work = CapWorkCounters::default();
-        let Some(block_placements) = block_placements else {
+        let Some((block_placements, seams)) = proposal else {
             return Some(ProposalEvaluation {
                 fragment_fingerprint,
-                choice_fingerprint: hierarchical_choice_fingerprint(
-                    choice_schema,
-                    edge,
-                    incumbent,
-                    &incumbent.block_placements,
-                ),
+                choice_fingerprint,
                 terminal: ProposalTerminal::Refused,
                 cap_work,
                 certified: None,
             });
         };
-        let choice_fingerprint =
-            hierarchical_choice_fingerprint(choice_schema, edge, incumbent, &block_placements);
-        match (self.compile)(&block_placements) {
+        match (self.compile)(&block_placements, &seams) {
             Ok(candidate) => Some(ProposalEvaluation {
                 fragment_fingerprint,
                 choice_fingerprint,
@@ -818,6 +928,7 @@ fn compile_blocks(
             services,
             &SeedVariant::default(),
             &BTreeMap::new(),
+            &[],
         )
         .map_err(|error| SynthesisError::Seed(format!("{name}: {error}")))?;
         // The netlist this block carries must be the one its candidate was
@@ -1860,6 +1971,190 @@ mod tests {
         assert_eq!(run().trace, first.trace, "the full trace is deterministic");
     }
 
+    /// The multiplier shape without compiling it: a stamped block whose
+    /// input 3 is fed by a parent lever, so no block-to-block edge names
+    /// it. The seam stage must still offer that input, and must offer it
+    /// at the first stream position after alignment and Pull-X.
+    #[test]
+    fn seam_stage_proposes_lever_fed_block_inputs() {
+        let fixture = block_proposal_fixture();
+        let edges = explicit_block_edges(&fixture.graph, &fixture.structural_edges);
+        assert!(
+            edges.iter().all(|edge| edge.sink_input != 3),
+            "input 3 is driven by PrimaryInput(0), never by a block edge"
+        );
+        let tree = crate::compile::fragment_synth::union::tests::seam_tree(3, 4);
+        let at = first_internal_repeater(&tree).unwrap();
+        let sink_index = fixture.graph.block(fixture.sink).unwrap().block;
+        let seams = seam_descriptors(&fixture.graph, |block, input| {
+            (block == sink_index && input == 3).then_some(&tree)
+        });
+        let lever_fed = InputSeamChoice {
+            sink_block: fixture.sink,
+            input: 3,
+            at,
+        };
+        assert_eq!(seams, vec![lever_fed]);
+
+        let stream = HierarchicalProposalStream::new(
+            edges.clone(),
+            fixture.source_outputs.clone(),
+            fixture.sink_inputs.clone(),
+            seams,
+            Box::new(
+                |_: &BTreeMap<InstanceId, BlockPlacementOffset>, _: &[InputSeamChoice]| {
+                    unreachable!("the descriptor lookup never compiles")
+                },
+            ),
+        );
+        assert_eq!(stream.seam(edges.len() - 1), None, "alignment owns that index");
+        assert_eq!(stream.seam(edges.len()), Some(lever_fed));
+        assert_eq!(stream.seam(edges.len() + 1), None, "each descriptor is offered once");
+    }
+
+    /// Input Seam Absorption applied to ONE stamped `adder_row` of
+    /// `multiplier4` (the parent stamps three): the parent's boundary
+    /// repeater on the lever stays, the selected child repeater becomes
+    /// dust in that instance only, the route repeater count falls by
+    /// exactly one, the compiled block is untouched, the unchanged full
+    /// certifier accepts the result, and quality strictly improves.
+    ///
+    /// `adder_row/x1` is the input the local strength walk accepts;
+    /// `full_adder` and `slice` inputs are all refused by it.
+    #[test]
+    #[ignore = "minutes: compiles multiplier4's blocks and certifies the top twice"]
+    fn input_seam_absorption_removes_the_child_refresh() {
+        let design = crate::circuits::hierarchical_builder::circuits::multiplier4();
+        let design = design.specialise_constants().unwrap();
+        let lowered = lower_hierarchy(&design).unwrap();
+        let order = lowered.as_hierarchical().module_order().unwrap();
+        let library = Library::default_library();
+        let search_config = SearchConfig::checked_defaults();
+        let services = seed_services(&library, &search_config);
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+        let blocks = compile_blocks(&lowered, &order, threads).expect("blocks compile");
+        let ordered = ordered_blocks(&lowered, &lowered.top, &order, &blocks);
+        let (_, graph) = parent_planning_graph(
+            &lowered,
+            &lowered.top,
+            &ordered,
+            &library,
+            &SeedVariant::default(),
+        )
+        .unwrap();
+        let row = |name: &str| {
+            graph
+                .blocks
+                .iter()
+                .find(|block| block.path == [name.to_string()])
+                .unwrap_or_else(|| panic!("top stamps `{name}`"))
+        };
+        let (sink_block, other_block) = (row("row2"), row("row1"));
+        let compiled = &ordered[sink_block.block as usize];
+        assert_eq!(compiled.module, "adder_row");
+        assert_eq!(other_block.block, sink_block.block, "both rows stamp one block");
+        let compiled_before = compiled.candidate.routes.clone();
+        let input = u16::try_from(
+            compiled
+                .lowered
+                .inputs
+                .iter()
+                .position(|port| port == "x1")
+                .expect("adder_row declares x1"),
+        )
+        .unwrap();
+        let at = input_route(&compiled.candidate, input)
+            .and_then(first_internal_repeater)
+            .expect("adder_row's x1 route carries a non-terminal repeater");
+        let (other, sink) = (other_block.id, sink_block.id);
+        let choice = InputSeamChoice {
+            sink_block: sink,
+            input,
+            at,
+        };
+        let compile = |seams: &[InputSeamChoice]| {
+            let started = std::time::Instant::now();
+            let result = compile_module_with_blocks(
+                &lowered,
+                &lowered.top,
+                &ordered,
+                None,
+                services,
+                &SeedVariant::default(),
+                &BTreeMap::new(),
+                seams,
+            );
+            println!(
+                "seam test: {} seam(s) compiled in {:?}: {:?}",
+                seams.len(),
+                started.elapsed(),
+                result.as_ref().map(|c| c.certified.metrics().quality)
+            );
+            result
+        };
+        let baseline = compile(&[]).expect("baseline certifies");
+        let seamed = compile(&[choice]).expect("the seam proposal must certify unchanged");
+        assert_eq!(
+            compiled.candidate.routes, compiled_before,
+            "the compiled block is never mutated"
+        );
+        assert!(
+            seamed.certified.metrics().quality < baseline.certified.metrics().quality,
+            "seam must strictly improve quality: seamed={:?} baseline={:?}",
+            seamed.certified.metrics().quality,
+            baseline.certified.metrics().quality
+        );
+
+        let kind_at = |candidate: &HierarchicalCandidate, at: Anchor| {
+            candidate
+                .certified
+                .candidate()
+                .routes
+                .values()
+                .flat_map(|route| &route.cells)
+                .find(|cell| cell.at == at)
+                .map(|cell| cell.state.kind)
+        };
+        let repeaters = |candidate: &HierarchicalCandidate| {
+            candidate
+                .certified
+                .candidate()
+                .routes
+                .values()
+                .flat_map(|route| &route.cells)
+                .filter(|cell| cell.state.kind == crate::redstone::world::block::BlockKind::Repeater)
+                .count()
+        };
+        let shift = |block: InstanceId, at: Anchor| {
+            let offset = seamed.realised_block_offsets[&block];
+            Anchor {
+                x: at.x + offset.dx,
+                y: at.y + offset.dy,
+                z: at.z + offset.dz,
+            }
+        };
+        let lever = shift(sink, compiled.inputs["x1"].cell);
+        let kind = crate::redstone::world::block::BlockKind::Repeater;
+        assert_eq!(kind_at(&baseline, shift(sink, at)), Some(kind));
+        assert_eq!(
+            kind_at(&seamed, shift(sink, at)),
+            Some(crate::redstone::world::block::BlockKind::RedstoneWire),
+            "the selected child repeater becomes dust"
+        );
+        assert_eq!(
+            kind_at(&seamed, lever),
+            Some(kind),
+            "the parent boundary repeater is retained"
+        );
+        assert_eq!(
+            kind_at(&seamed, shift(other, at)),
+            Some(kind),
+            "the sibling instance is untouched"
+        );
+        assert_eq!(repeaters(&seamed) + 1, repeaters(&baseline));
+        assert_eq!(seamed.seams, vec![choice]);
+    }
+
     /// The two proposals a block-stamping parent cannot represent, and the
     /// one it can.
     ///
@@ -1887,6 +2182,7 @@ mod tests {
                 services,
                 variant,
                 &BTreeMap::new(),
+                &[],
             )
         };
 

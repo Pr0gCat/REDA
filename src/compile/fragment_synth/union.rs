@@ -71,9 +71,11 @@ use crate::compile::fragment_synth::relocate::{self, IdMap, Offset, RelocateErro
 use crate::compile::fragment_synth::seed::{refresh_exact_route_delays, PlannedParent};
 use crate::compile::geometry::Anchor;
 use crate::compile::hierarchy::{GatePath, LoweredHierarchy, PortBinding};
-use crate::compile::routing::DelayedOwner;
+use crate::compile::routing::{DelayedOwner, TerminalRecord};
 use crate::compile::topology::{GateKind, Library};
 use crate::compile::{Gate, Netlist};
+use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
+use crate::redstone::world::block::BlockKind;
 
 /// Everything the union needs: the planned parent, the compiled blocks it
 /// stamps, and the flattened netlist (plus one [`GatePath`] per flat gate)
@@ -134,6 +136,129 @@ pub(crate) struct UnionInput<'a> {
     /// One per flat gate.
     pub paths: &'a [GatePath],
     pub library: &'a Library,
+    /// Accepted Input Seam Absorption choices, applied to the named
+    /// instance's clone only, before translation.
+    pub seams: &'a [InputSeamChoice],
+}
+
+/// One Input Seam Absorption choice in the sink block's own coordinates:
+/// the route-owned repeater at `at` on the block's route out of `input`
+/// becomes dust in the stamped clone of `sink_block`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
+pub(crate) struct InputSeamChoice {
+    pub sink_block: InstanceId,
+    pub input: u16,
+    pub at: Anchor,
+}
+
+/// The block's own route out of primary input `input`.
+pub(crate) fn input_route(
+    candidate: &ExpandedPhysicalCandidate,
+    input: u16,
+) -> Option<&RealisedRouteTree> {
+    let source = PhysicalEndpointId::PrimaryInput(PortId(u32::from(input)));
+    candidate.routes.values().find(|tree| tree.source == source)
+}
+
+/// The first route-owned repeater along the tree's branches that is not a
+/// branch terminal: the one cell Input Seam Absorption may select.
+pub(crate) fn first_internal_repeater(tree: &RealisedRouteTree) -> Option<Anchor> {
+    let terminals: BTreeSet<Anchor> = tree.branches.iter().map(|b| b.terminal.at).collect();
+    let repeaters: BTreeSet<Anchor> = tree
+        .cells
+        .iter()
+        .filter(|cell| cell.state.kind == BlockKind::Repeater)
+        .map(|cell| cell.at)
+        .collect();
+    tree.branches
+        .iter()
+        .flat_map(|branch| branch.path.iter().copied())
+        .find(|at| repeaters.contains(at) && !terminals.contains(at))
+}
+
+/// The parent's delivery terminal into block input `input`, in the parent's
+/// own coordinates: the boundary cell Input Seam Absorption keeps.
+pub(crate) fn parent_boundary(
+    parent: &ExpandedPhysicalCandidate,
+    block: InstanceId,
+    input: u16,
+) -> Option<&TerminalRecord> {
+    let target = RouteTarget::Connection(ConnectionId::External {
+        instance: block,
+        input_index: input,
+    });
+    parent
+        .routes
+        .values()
+        .flat_map(|tree| &tree.branches)
+        .find(|branch| branch.target == target)
+        .map(|branch| &branch.terminal)
+}
+
+/// Replace the non-terminal route-owned repeater at `at` with dust, then
+/// prove every branch through it still carries signal from the retained
+/// parent `boundary` terminal, which must itself be a repeater (strength 15
+/// into the block's root dust). A dust boundary
+/// (`DirectedDustIntoSupport`) has no strength to lend and is refused.
+///
+/// On `Err` the tree is left modified; callers only ever pass a clone they
+/// then discard. On `Ok` every affected branch's `terminal.repeaters` is
+/// stale by one: the union's `normalise_routes_and_connections` is the one
+/// refresh for every tree it splices or mutates, so nothing is refreshed
+/// here.
+pub(crate) fn absorb_input_seam(
+    tree: &mut RealisedRouteTree,
+    at: Anchor,
+    boundary: &TerminalRecord,
+) -> Result<(), UnionError> {
+    if boundary.state.kind != BlockKind::Repeater {
+        return Err(UnionError::Incomplete(
+            "parent boundary into the block is not a retained repeater",
+        ));
+    }
+    if tree.branches.iter().any(|branch| branch.terminal.at == at) {
+        return Err(UnionError::Incomplete("seam anchor is a terminal repeater"));
+    }
+    let cell = tree
+        .cells
+        .iter_mut()
+        .find(|cell| cell.at == at && cell.state.kind == BlockKind::Repeater)
+        .ok_or(UnionError::Incomplete(
+            "seam anchor is not a route-owned repeater",
+        ))?;
+    cell.state = crate::compile::dust();
+    let cells: BTreeMap<Anchor, BlockKind> =
+        tree.cells.iter().map(|cell| (cell.at, cell.state.kind)).collect();
+    let mut affected = tree
+        .branches
+        .iter()
+        .filter(|branch| branch.path.contains(&at))
+        .peekable();
+    if affected.peek().is_none() {
+        return Err(UnionError::Incomplete("seam anchor is on no branch path"));
+    }
+    for branch in affected {
+        if branch.path.last() != Some(&branch.terminal.at) {
+            return Err(UnionError::Incomplete("seam branch terminal is off its path"));
+        }
+        // `root` is `path[0]` (the router records it that way), so the
+        // path alone is the whole conductor sequence after the boundary
+        // repeater validated above.
+        let mut strength = MAX_SIGNAL_STRENGTH;
+        for at in &branch.path {
+            match cells.get(at) {
+                Some(BlockKind::Repeater) => strength = MAX_SIGNAL_STRENGTH,
+                Some(BlockKind::RedstoneWire) => {
+                    strength -= 1;
+                    if strength == 0 {
+                        return Err(UnionError::Incomplete("seam absorption starves a branch"));
+                    }
+                }
+                _ => return Err(UnionError::Incomplete("seam branch walks a non-conductor")),
+            }
+        }
+    }
+    Ok(())
 }
 
 #[derive(Debug, Error)]
@@ -395,6 +520,18 @@ pub(crate) fn union_candidate(
             .get(&block.id)
             .ok_or(UnionError::Incomplete("planned block offset"))?;
         let mut candidate = compiled.candidate.clone();
+        for seam in input.seams.iter().filter(|seam| seam.sink_block == block.id) {
+            let tree = candidate
+                .routes
+                .values_mut()
+                .find(|tree| {
+                    tree.source == PhysicalEndpointId::PrimaryInput(PortId(u32::from(seam.input)))
+                })
+                .ok_or(UnionError::Incomplete("seam input has no block route"))?;
+            let boundary = parent_boundary(parent_candidate, block.id, seam.input)
+                .ok_or(UnionError::Incomplete("seam input has no parent delivery"))?;
+            absorb_input_seam(tree, seam.at, boundary)?;
+        }
         relocate::translate(&mut candidate, offset);
         let span = candidate.routes.keys().map(|id| id.0 + 1).max().unwrap_or(0);
         let route_offset = next_route;
@@ -921,9 +1058,10 @@ fn normalise_routes_and_connections(
                 );
             }
         }
-        // The boundary repeaters became ordinary mid-route refreshes, so
-        // every branch's tick count has to be measured again over the joined
-        // path.
+        // Parent boundary repeaters became ordinary mid-route refreshes, and
+        // `absorb_input_seam` turned selected child refreshes into dust, so
+        // every joined path needs a fresh tick count. This is the union's only
+        // refresh; the mutations above rely on it.
         refresh_exact_route_delays(route);
     }
     union.connections = connections;
@@ -956,11 +1094,11 @@ fn refresh_declared_output_owners(union: &mut ExpandedPhysicalCandidate) {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::compile::fragment_synth::seed::{ParentBlocks, SeedInput};
     use crate::compile::routing::{RouteTerminalKind, TerminalRecord};
-    use crate::redstone::world::block::BlockKind;
+    use crate::redstone::world::block::Facing;
 
     fn anchor(x: i32) -> Anchor {
         Anchor { x, y: 0, z: 0 }
@@ -1220,6 +1358,7 @@ mod tests {
             flat: &lowered.flat,
             paths: &lowered.paths,
             library,
+            seams: &[],
         });
         (lowered, block, planned, union)
     }
@@ -1527,6 +1666,7 @@ mod tests {
             flat: &lowered.flat,
             paths: &lowered.paths,
             library: &library,
+            seams: &[],
         })
         .expect("unions");
         union.validate_shape().expect("flat shape");
@@ -1653,5 +1793,113 @@ mod tests {
         )
         .expect("certifies");
         assert!(certified.metrics().quality.observed_settle > 0);
+    }
+
+    /// A block input route: `trunk` dust cells, one repeater, then two
+    /// branches of `tail` dust each ending in a terminal repeater.
+    pub(crate) fn seam_tree(trunk: usize, tail: usize) -> RealisedRouteTree {
+        let cell = |x: i32, z: i32, state: crate::redstone::world::block::BlockState| PlacedBlock {
+            at: Anchor { x, y: 0, z },
+            state,
+        };
+        let refresh = trunk as i32;
+        let mut cells = (0..refresh).map(|x| cell(x, 0, crate::compile::dust())).collect::<Vec<_>>();
+        cells.push(cell(refresh, 0, crate::compile::repeater(Facing::East)));
+        let mut branches = Vec::new();
+        for z in [0, 1] {
+            let mut path = (0..=refresh).map(|x| Anchor { x, y: 0, z: 0 }).collect::<Vec<_>>();
+            for x in refresh + 1..=refresh + tail as i32 {
+                cells.push(cell(x, z, crate::compile::dust()));
+                path.push(Anchor { x, y: 0, z });
+            }
+            let end = Anchor { x: refresh + tail as i32 + 1, y: 0, z };
+            cells.push(cell(end.x, end.z, crate::compile::repeater(Facing::East)));
+            path.push(end);
+            let mut branch = a_branch(RouteTarget::DeclaredOutput(PortId(z as u32)), path[0], &path);
+            branch.terminal.state = crate::compile::repeater(Facing::East);
+            branches.push(branch);
+        }
+        let mut tree = a_tree(0, PhysicalEndpointId::PrimaryInput(PortId(0)), branches);
+        tree.cells = cells;
+        tree
+    }
+
+    /// The parent's delivery terminal on the block's lever, one cell west
+    /// of the tree's root dust.
+    fn boundary(kind: RouteTerminalKind) -> TerminalRecord {
+        let state = match kind {
+            RouteTerminalKind::DirectedDustIntoSupport => crate::compile::dust(),
+            _ => crate::compile::repeater(Facing::East),
+        };
+        TerminalRecord {
+            sink: RoutedSinkId {
+                route: RouteId(9),
+                ordinal: 0,
+            },
+            at: anchor(-1),
+            state,
+            kind,
+            repeaters: 0,
+            delayed_owner: None,
+        }
+    }
+
+    #[test]
+    fn seam_absorption_requires_every_branch_to_keep_signal() {
+        let repeater = boundary(RouteTerminalKind::RepeaterIntoSupport);
+        let mut short = seam_tree(3, 4);
+        let at = first_internal_repeater(&short).expect("the mid-route repeater is selectable");
+        assert_eq!(at, Anchor { x: 3, y: 0, z: 0 }, "terminal repeaters are never selected");
+        absorb_input_seam(&mut short, at, &repeater)
+            .expect("3 + 4 dust from a strength-15 boundary keeps signal");
+        let replaced = short.cells.iter().find(|cell| cell.at == at).unwrap();
+        assert_eq!(replaced.state.kind, BlockKind::RedstoneWire);
+
+        let mut long = seam_tree(3, 12);
+        let error = absorb_input_seam(&mut long, at, &repeater).expect_err("3 + 12 dust reaches zero");
+        assert!(matches!(error, UnionError::Incomplete(_)), "{error}");
+
+        let mut terminal = seam_tree(3, 4);
+        let end = terminal.branches[0].terminal.at;
+        absorb_input_seam(&mut terminal, end, &repeater).expect_err("a terminal repeater is refused");
+        absorb_input_seam(&mut terminal, Anchor { x: 1, y: 0, z: 0 }, &repeater)
+            .expect_err("a dust cell is not a repeater and is refused");
+
+        let mut stale = seam_tree(3, 4);
+        let orphan = Anchor { x: 40, y: 0, z: 0 };
+        stale.cells.push(PlacedBlock {
+            at: orphan,
+            state: crate::compile::repeater(Facing::East),
+        });
+        absorb_input_seam(&mut stale, orphan, &repeater)
+            .expect_err("a repeater on no branch path is a stale descriptor");
+    }
+
+    /// The strength walk starts from the parent's real boundary state: a
+    /// dust delivery has no strength to lend, so nothing is absorbed behind
+    /// it even when the walk from a repeater would pass.
+    #[test]
+    fn seam_absorption_refuses_a_dust_parent_boundary() {
+        let mut tree = seam_tree(3, 4);
+        let at = first_internal_repeater(&tree).unwrap();
+        let error = absorb_input_seam(
+            &mut tree,
+            at,
+            &boundary(RouteTerminalKind::DirectedDustIntoSupport),
+        )
+        .expect_err("DirectedDustIntoSupport is not a retained repeater");
+        assert!(matches!(error, UnionError::Incomplete(_)), "{error}");
+        let untouched = tree.cells.iter().find(|cell| cell.at == at).unwrap();
+        assert_eq!(
+            untouched.state.kind,
+            BlockKind::Repeater,
+            "the boundary is checked before any cell is rewritten"
+        );
+        absorb_input_seam(
+            &mut seam_tree(3, 4),
+            at,
+            &boundary(RouteTerminalKind::OutputTerminalRepeater),
+        )
+        .expect("any repeater terminal is a valid boundary");
     }
 }
