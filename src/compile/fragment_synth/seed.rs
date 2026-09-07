@@ -4253,9 +4253,15 @@ pub(crate) mod tests {
     // tests. Logic is untouched.
     pub(crate) mod extra_circuits {
         use crate::circuits::netlist_builder::NetlistBuilder;
-        use crate::compile::fragment_synth::api::{compile_fragment_synth, SynthesisInput};
+        use crate::compile::fragment_synth::api::{
+            compile_fragment_synth, SynthesisInput, SynthesisResult,
+        };
+        use crate::compile::fragment_synth::benchmark::canonical_world_fingerprint;
+        use crate::compile::fragment_synth::certification::{
+            certification_thread_budget, with_certification_threads,
+        };
         use crate::compile::fragment_synth::search::SynthesisBudget;
-        use crate::compile::Netlist;
+        use crate::compile::{HierarchicalNetlist, Netlist};
 
         fn xor(b: &mut NetlistBuilder, x: &str, y: &str) -> String {
             let nx = b.not(x);
@@ -4644,20 +4650,27 @@ pub(crate) mod tests {
             assert_eq!(failures, Vec::<String>::new());
         }
 
-        #[test]
-        #[ignore = "release-only: run with `cargo test --release --lib large_circuits -- --ignored`"]
-        fn every_large_circuit_certifies_with_the_topology_aware_seed() {
-            run_cases(vec![
+        /// The four large flat cases, shared by the release corpus test
+        /// below and by the thread-count matrix, so neither list can drift
+        /// from the other.
+        fn large_circuit_cases() -> Vec<(String, Netlist)> {
+            vec![
                 ("ripple_adder8".into(), ripple_adder(8)),
                 ("alu4".into(), alu4()),
                 ("alu4_full".into(), alu4_full()),
                 ("multiplier4".into(), multiplier4()),
-            ]);
+            ]
         }
 
         #[test]
-        #[ignore = "release-only: run with `cargo test --release --lib extra_circuits -- --ignored`"]
-        fn every_extra_circuit_certifies_with_the_topology_aware_seed() {
+        #[ignore = "release-only: run with `cargo test --release --lib large_circuits -- --ignored`"]
+        fn every_large_circuit_certifies_with_the_topology_aware_seed() {
+            run_cases(large_circuit_cases());
+        }
+
+        /// The sixteen extra flat cases, shared exactly as
+        /// [`large_circuit_cases`] is.
+        fn extra_circuit_cases() -> Vec<(String, Netlist)> {
             let mut cases: Vec<(String, Netlist)> = Vec::new();
             for segment in 1..7 {
                 let (netlist, _) =
@@ -4677,7 +4690,13 @@ pub(crate) mod tests {
             cases.push(("incrementer4".into(), half_adder_chain(4)));
             cases.push(("ripple_adder2".into(), ripple_adder(2)));
             cases.push(("ripple_adder4".into(), ripple_adder(4)));
-            run_cases(cases);
+            cases
+        }
+
+        #[test]
+        #[ignore = "release-only: run with `cargo test --release --lib extra_circuits -- --ignored`"]
+        fn every_extra_circuit_certifies_with_the_topology_aware_seed() {
+            run_cases(extra_circuit_cases());
         }
 
         /// Every distinct module reachable from `design.top` (`top` itself
@@ -4827,6 +4846,18 @@ pub(crate) mod tests {
             assert_eq!(failures, Vec::<String>::new());
         }
 
+        /// The four hierarchy cases, shared exactly as
+        /// [`large_circuit_cases`] is.
+        fn hierarchical_circuit_cases() -> Vec<(String, HierarchicalNetlist)> {
+            use crate::circuits::hierarchical_builder::circuits as h;
+            vec![
+                ("ripple_adder8".into(), h::ripple_adder(8)),
+                ("alu4_full".into(), h::alu4_full()),
+                ("multiplier4".into(), h::multiplier4()),
+                ("alu8".into(), h::alu8()),
+            ]
+        }
+
         /// The plan's hierarchical acceptance corpus: the same four shapes
         /// [`every_large_circuit_certifies_with_the_topology_aware_seed`]
         /// certifies flat, this time built as a real module hierarchy
@@ -4853,13 +4884,7 @@ pub(crate) mod tests {
         #[test]
         #[ignore = "release-only: run with `cargo test --release --lib every_hierarchical_circuit -- --ignored --nocapture`"]
         fn every_hierarchical_circuit_certifies_through_module_floorplan() {
-            use crate::circuits::hierarchical_builder::circuits as h;
-            run_hierarchical_cases(vec![
-                ("ripple_adder8".into(), h::ripple_adder(8)),
-                ("alu4_full".into(), h::alu4_full()),
-                ("multiplier4".into(), h::multiplier4()),
-                ("alu8".into(), h::alu8()),
-            ]);
+            run_hierarchical_cases(hierarchical_circuit_cases());
         }
 
         /// Task 4's target oracle: does `ripple_adder8`'s hierarchical
@@ -4947,6 +4972,202 @@ pub(crate) mod tests {
                 "{label}: stream exhaustion must use fewer than u64::MAX evaluations, \
                  got {evaluations_used}"
             );
+        }
+
+        /// The certification worker counts Task 4's acceptance matrix runs:
+        /// the one-worker reference, two workers, and this host's automatic
+        /// budget -- each clamped by the single
+        /// [`certification_thread_budget`] policy and deduplicated, so a
+        /// two-core host does not compile the whole corpus a third time for
+        /// a count it has already run. On a one-core host the matrix is the
+        /// reference alone, because that is the only budget the policy will
+        /// hand out there.
+        ///
+        /// The counts are scoped in process with Task 2's own
+        /// [`with_certification_threads`]; nothing here writes
+        /// `REDA_CERT_THREADS`, which is process-wide state a concurrent
+        /// test would see.
+        fn certification_thread_counts() -> Vec<usize> {
+            let auto = std::thread::available_parallelism().map_or(1, |count| count.get());
+            let mut counts = vec![1];
+            for requested in [2, auto] {
+                let clamped = certification_thread_budget(auto, Some(requested));
+                if !counts.contains(&clamped) {
+                    counts.push(clamped);
+                }
+            }
+            counts
+        }
+
+        /// Every stable field of a [`SynthesisResult`], compared exactly as
+        /// `hierarchy_api::tests::parallel_and_sequential_block_compiles_agree`
+        /// compares its own one-vs-many pair.
+        ///
+        /// `CandidateMetrics` is one comparison covering many of Task 4's
+        /// rows at once: quality, the transition manifest hash, count and
+        /// cap, the worst transition indices, and the equivalence-certificate,
+        /// timing-graph, candidate and emitted-world fingerprints. Terminal
+        /// classification and the cap-work counters ride each
+        /// `ProposalTrace`, so the trace comparison owns those rows.
+        ///
+        /// The one row no `SynthesisResult` field exposes is the
+        /// per-transition manifest measurements; those are compared directly
+        /// on `CertifiedCandidate` at one, two and four workers by
+        /// `certification::tests::certified_candidate_is_identical_at_one_two_and_four_workers`,
+        /// and are not re-derived here.
+        fn assert_same_result(
+            label: &str,
+            reference: &SynthesisResult,
+            observed: &SynthesisResult,
+        ) {
+            assert_eq!(
+                observed.case_fingerprint, reference.case_fingerprint,
+                "{label}: case fingerprint"
+            );
+            assert_eq!(
+                observed.candidate_fingerprint, reference.candidate_fingerprint,
+                "{label}: candidate fingerprint"
+            );
+            assert_eq!(observed.metrics, reference.metrics, "{label}: metrics");
+            assert_eq!(
+                canonical_world_fingerprint(&observed.compiled.world),
+                canonical_world_fingerprint(&reference.compiled.world),
+                "{label}: emitted world"
+            );
+            assert_eq!(
+                observed.compiled.input_positions, reference.compiled.input_positions,
+                "{label}: input positions"
+            );
+            assert_eq!(
+                observed.compiled.output_positions, reference.compiled.output_positions,
+                "{label}: output positions"
+            );
+            assert_eq!(
+                observed.compiled.gate_output_positions, reference.compiled.gate_output_positions,
+                "{label}: gate output positions"
+            );
+            assert_eq!(
+                observed.compiled.gate_facings, reference.compiled.gate_facings,
+                "{label}: gate facings"
+            );
+            assert_eq!(
+                observed.evaluations_used, reference.evaluations_used,
+                "{label}: evaluations used"
+            );
+            assert_eq!(
+                observed.stop_reason, reference.stop_reason,
+                "{label}: stop reason"
+            );
+            assert_eq!(observed.trace, reference.trace, "{label}: proposal trace");
+        }
+
+        /// Task 4's 1/2/auto acceptance matrix over one corpus: compile every
+        /// case inside a one-worker scope as the reference, then again at
+        /// each remaining count, and require the whole stable result back
+        /// each time.
+        ///
+        /// The budget is one evaluation, not zero: a zero-evaluation compile
+        /// has an empty trace, which would leave the proposal-trace, terminal
+        /// and cap-work rows vacuous. The closing assertion states that at
+        /// least one case really did evaluate a proposal, so a corpus that
+        /// never reaches its proposal stream cannot pass as coverage of
+        /// those rows.
+        ///
+        /// A refusal at any count fails the matrix: these corpora certify.
+        fn assert_matrix_agrees<T, E: std::fmt::Display>(
+            cases: Vec<(String, T)>,
+            compile: impl Fn(&T) -> Result<SynthesisResult, E>,
+        ) {
+            let counts = certification_thread_counts();
+            let mut traced = false;
+            for (name, case) in &cases {
+                let run = |threads: usize| {
+                    let started = std::time::Instant::now();
+                    let result = with_certification_threads(threads, || compile(case))
+                        .unwrap_or_else(|error| {
+                            panic!("{name} must certify at {threads} worker(s): {error}")
+                        });
+                    eprintln!(
+                        "THREADS {name} workers={threads}: ticks={} blocks={} \
+                         evaluations={} trace={} in {:?}",
+                        result.metrics.quality.observed_settle,
+                        result.metrics.quality.non_air_blocks,
+                        result.evaluations_used,
+                        result.trace.len(),
+                        started.elapsed()
+                    );
+                    result
+                };
+                let reference = run(counts[0]);
+                traced |= !reference.trace.is_empty();
+                for &threads in &counts[1..] {
+                    assert_same_result(
+                        &format!("{name} at {threads} worker(s)"),
+                        &reference,
+                        &run(threads),
+                    );
+                }
+            }
+            assert!(
+                traced,
+                "the matrix must compare at least one real proposal trace, \
+                 or its trace, terminal and cap-work rows prove nothing"
+            );
+        }
+
+        fn assert_thread_counts_agree(cases: Vec<(String, Netlist)>) {
+            assert_matrix_agrees(cases, |netlist: &Netlist| {
+                compile_fragment_synth(
+                    SynthesisInput {
+                        lowered: netlist,
+                        source_provenance: None,
+                        pins: None,
+                    },
+                    SynthesisBudget::Evaluations(1),
+                )
+            });
+        }
+
+        fn assert_hierarchical_thread_counts_agree(cases: Vec<(String, HierarchicalNetlist)>) {
+            assert_matrix_agrees(cases, |design: &HierarchicalNetlist| {
+                crate::compile::compile_hierarchical(design, SynthesisBudget::Evaluations(1), None)
+            });
+        }
+
+        /// The matrix over the sixteen flat extra cases.
+        ///
+        /// The six-case `fragment_acceptance` corpus and the pinned
+        /// seven-segment IO contract are covered by Task 4's two command-line
+        /// rows -- the `fragment_acceptance` binary run at each setting and
+        /// `build_circuit_pins::compile_hierarchical_preserves_the_checked_seven_segment_pin_contract`
+        /// -- and the refusal rows by
+        /// `certification::tests::exhaustive_cap_refusal_reports_the_same_lowest_mask_at_every_worker_count`,
+        /// `certification::tests::simulator_event_cap_refuses_instead_of_returning_a_capped_score`,
+        /// `certification::tests::divergence_is_a_named_transition_refusal`
+        /// and
+        /// `certification::tests::earlier_manifest_error_wins_over_a_later_worker_panic`,
+        /// so neither is repeated over these corpora.
+        #[test]
+        #[ignore = "release-only: run with `cargo test --release --lib certification_thread_counts -- --ignored --nocapture`"]
+        fn every_extra_circuit_agrees_across_certification_thread_counts() {
+            assert_thread_counts_agree(extra_circuit_cases());
+        }
+
+        /// The matrix over the four flat large cases.
+        #[test]
+        #[ignore = "release-only: run with `cargo test --release --lib certification_thread_counts -- --ignored --nocapture`"]
+        fn every_large_circuit_agrees_across_certification_thread_counts() {
+            assert_thread_counts_agree(large_circuit_cases());
+        }
+
+        /// The matrix over the four hierarchy cases, where leaf workers, the
+        /// sequential parent loop and the top proposal stream all carry real
+        /// work -- `parallel_and_sequential_block_compiles_agree` proves the
+        /// same equality only on its seconds-sized three-level fixture.
+        #[test]
+        #[ignore = "release-only: run with `cargo test --release --lib certification_thread_counts -- --ignored --nocapture`"]
+        fn every_hierarchical_circuit_agrees_across_certification_thread_counts() {
+            assert_hierarchical_thread_counts_agree(hierarchical_circuit_cases());
         }
     }
 
