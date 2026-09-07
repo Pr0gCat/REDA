@@ -1,7 +1,9 @@
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::compile::fragment_synth::certification::{CandidateMetrics, CompleteCandidateCertifier};
+use crate::compile::fragment_synth::certification::{
+    with_compile_worker_budget, CandidateMetrics, CompleteCandidateCertifier,
+};
 use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
 use crate::compile::fragment_synth::fragment::FragmentProposalStream;
 use crate::compile::fragment_synth::manifest::TransitionManifest;
@@ -92,7 +94,11 @@ pub fn compile_fragment_synth(
     budget: SynthesisBudget,
 ) -> Result<SynthesisResult, SynthesisError> {
     let search_config = SearchConfig::checked_defaults();
-    compile_fragment_synth_with_config(input, budget, &search_config)
+    // One parse and clamp for the complete flat compile: the seed, every
+    // proposal and both certification sweeps run inside this one budget. A
+    // caller that already owns a budget -- a leaf worker, or the hierarchical
+    // flat fast path -- keeps it.
+    with_compile_worker_budget(|_| compile_fragment_synth_with_config(input, budget, &search_config))
 }
 
 fn compile_fragment_synth_with_config(
@@ -318,14 +324,63 @@ fn pin_descriptor(name: &str, pin: PortPin) -> PinDescriptor<'_> {
 #[cfg(test)]
 mod tests {
     use super::{
-        compile_fragment_synth_with_config,
+        compile_fragment_synth, compile_fragment_synth_with_config,
         compile_fragment_synth_with_config_and_placement_revision_override,
         synthesis_case_fingerprint, SynthesisInput,
+    };
+    use crate::compile::fragment_synth::certification::{
+        record_caller_certification_budgets, with_certification_threads, with_compile_worker_budget,
     };
     use crate::circuits::and4::build_and4_netlist;
     use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
     use crate::compile::topology::Library;
     use crate::compile::{Gate, Netlist};
+
+    /// The public flat entry is one of the two places the worker budget is
+    /// parsed and clamped, and it owns that budget for the complete compile:
+    /// seed, every proposal and both certification sweeps.
+    ///
+    /// Only the calling thread is recorded, so this sees exactly the
+    /// certifications this compile ran on the entry thread and nothing a
+    /// concurrent test happens to be doing.
+    #[test]
+    fn the_public_flat_entry_scopes_every_certification_with_one_parsed_budget() {
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["y".into()],
+            gates: vec![Gate::nor("y", &["a"])],
+        };
+        let input = || SynthesisInput {
+            lowered: &netlist,
+            source_provenance: None,
+            pins: None,
+        };
+        let budget = crate::compile::fragment_synth::search::SynthesisBudget::Evaluations(1);
+
+        let expected = with_compile_worker_budget(|budget| budget);
+        let (result, observed) =
+            record_caller_certification_budgets(|| compile_fragment_synth(input(), budget));
+        result.expect("the fixture must compile");
+        assert!(
+            !observed.is_empty(),
+            "a complete flat compile certifies at least once"
+        );
+        assert!(
+            observed.iter().all(|seen| *seen == Some(expected)),
+            "every certification of one flat compile owns the same parsed budget: {observed:?}"
+        );
+
+        // A leaf worker calls this same entry with a budget of one; it must
+        // not reopen the whole machine underneath its parent.
+        let (result, observed) = with_certification_threads(1, || {
+            record_caller_certification_budgets(|| compile_fragment_synth(input(), budget))
+        });
+        result.expect("the fixture must compile inside a worker budget");
+        assert!(
+            observed.iter().all(|seen| *seen == Some(1)),
+            "a worker-sized budget survives the public flat entry: {observed:?}"
+        );
+    }
 
     #[test]
     fn complete_syntheses_at_larger_evaluation_budgets_extend_one_trace_prefix() {

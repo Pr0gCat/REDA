@@ -32,7 +32,19 @@ use crate::redstone::simulator::{BoundedSimulationError, SimulationError, Simula
 use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::storage::World;
 
-const MAX_MANIFEST_SWEEP_THREADS: usize = 12;
+/// Bytes one compile may spend on the worlds its certification workers own.
+///
+/// Runtime scheduling state, not a fingerprinted config field:
+/// `REDA_CERT_MEMORY_BYTES` overrides it for an operator or a test.
+const CERT_WORKER_MEMORY_BUDGET_BYTES: usize = 1 << 30;
+/// Worlds one certification worker is assumed to hold at once.
+///
+/// A worker owns the certified world it sweeps plus the simulator copy it
+/// drives, and a copy may be in flight while the next one is built, so four
+/// dense worlds is the starting estimate. The benchmark task checks peak
+/// working set against `workers * per_worker_bytes` and raises this number if
+/// the measurement does not fit inside it; it is not measured yet.
+const WORLD_COPY_HEADROOM: usize = 4;
 /// Minimum canonical items one certification worker must own.
 ///
 /// Measured on this host with a release build: the real exhaustive sweep at one
@@ -42,14 +54,26 @@ const MAX_MANIFEST_SWEEP_THREADS: usize = 12;
 /// unit, so sharing this one threshold with the manifest sweep is conservative
 /// for it.
 const MIN_ITEMS_PER_CERTIFICATION_WORKER: usize = 8;
-static MANIFEST_SWEEP_LOCK: Mutex<()> = Mutex::new(());
+static CERTIFICATION_SWEEP_LOCK: Mutex<()> = Mutex::new(());
+
+/// One compile's worker budget plus the only thing a sweep needs to know
+/// about where it came from.
+///
+/// `explicit` carries the operator's `REDA_CERT_THREADS` override so a sweep
+/// can memory-clamp an automatic budget without second-guessing a deliberate
+/// one. `Copy`, so the thread-local below stays a plain `Cell`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ScopedWorkerBudget {
+    workers: usize,
+    explicit: Option<usize>,
+}
 
 thread_local! {
     /// One compile's certification worker budget, owned by the thread that
     /// opened the scope. This is runtime scheduling state: it is never
     /// fingerprinted, and a spawned worker starts without it rather than
     /// inheriting a second full budget.
-    static CERTIFICATION_THREADS: Cell<Option<usize>> = const { Cell::new(None) };
+    static CERTIFICATION_THREADS: Cell<Option<ScopedWorkerBudget>> = const { Cell::new(None) };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
@@ -352,7 +376,7 @@ fn certify_exhaustive_truth(
     compatibility: &CompatibilityViews,
     config: &CertificationConfig,
 ) -> Result<usize, CandidateCertificationError> {
-    let threads = requested_certification_threads();
+    let threads = certification_sweep_threads(world);
     if std::env::var_os("REDA_PHASE_TIMING").is_some() {
         eprintln!(
             "WORK exhaustive_workers {}",
@@ -413,7 +437,7 @@ fn sweep_manifest(
     manifest: &TransitionManifest,
     config: &CertificationConfig,
 ) -> Result<Vec<TransitionMeasurement>, CandidateCertificationError> {
-    let threads = requested_certification_threads();
+    let threads = certification_sweep_threads(world);
     if std::env::var_os("REDA_PHASE_TIMING").is_some() {
         eprintln!(
             "WORK manifest_workers {}",
@@ -431,26 +455,123 @@ fn sweep_manifest(
     )
 }
 
-fn manifest_sweep_threads(available: usize, requested: Option<usize>) -> usize {
-    requested
-        .unwrap_or(available)
-        .clamp(1, available.clamp(1, MAX_MANIFEST_SWEEP_THREADS))
+/// One compilation-wide budget rule.
+///
+/// Auto and a deliberate `REDA_CERT_THREADS` override both clamp to at least
+/// one worker and to the host's own parallelism. There is no machine-derived
+/// ceiling above that: an operator asking for 32 workers on a 32-core host
+/// gets 32, and on a one-core host gets one.
+pub(super) fn certification_thread_budget(available: usize, requested: Option<usize>) -> usize {
+    let available = available.max(1);
+    requested.unwrap_or(available).clamp(1, available)
+}
+
+/// The only parser for `REDA_CERT_THREADS`.
+///
+/// Anything that is not a plain decimal count -- empty, signed, fractional or
+/// wider than `usize` -- is not an override, so the compile stays automatic.
+fn parse_certification_threads(raw: Option<&str>) -> Option<usize> {
+    raw.and_then(|value| value.parse::<usize>().ok())
+}
+
+/// The only parser for `REDA_CERT_MEMORY_BYTES`, falling back to the default
+/// policy constant. A malformed budget is not a reason to abandon the ceiling.
+fn certification_memory_budget_bytes(raw: Option<&str>) -> usize {
+    raw.and_then(|value| value.parse::<usize>().ok())
+        .unwrap_or(CERT_WORKER_MEMORY_BUDGET_BYTES)
+}
+
+/// Bytes one certification worker is estimated to own for `size`.
+///
+/// The formula estimates the dense cell vector directly: `World` stores one
+/// palette index per cell, so one copy is `size_of::<u32>() * volume`. A
+/// `World` also carries `positions_by_kind` and `dirty`, which this does not
+/// model cell by cell; their clone cost is folded conservatively into
+/// `WORLD_COPY_HEADROOM` along with the copies a worker holds at once.
+///
+/// The arithmetic saturates rather than overflowing: an absurd world reports
+/// `usize::MAX` and therefore one worker, and an empty world still reports one
+/// byte so it can never become a zero divisor.
+fn world_worker_memory_bytes(size: (i32, i32, i32)) -> usize {
+    let axis = |value: i32| usize::try_from(value).unwrap_or(0);
+    let (x, y, z) = size;
+    let volume = axis(x).saturating_mul(axis(y)).saturating_mul(axis(z));
+    std::mem::size_of::<u32>()
+        .saturating_mul(volume)
+        .saturating_mul(WORLD_COPY_HEADROOM)
+        .max(1)
+}
+
+/// How many workers `budget_bytes` pays for, clamped to at least one.
+fn memory_worker_ceiling(per_worker_bytes: usize, budget_bytes: usize) -> usize {
+    (budget_bytes / per_worker_bytes.max(1)).max(1)
+}
+
+/// The worker budget one sweep of `world_size` may actually open.
+///
+/// An automatic budget is clamped by the byte ceiling, so a 64- or 128-core
+/// host cannot multiply cloned worlds without bound. A deliberate operator
+/// override is a decision, not a guess, and is left alone.
+fn sweep_worker_budget(
+    budget: usize,
+    world_size: (i32, i32, i32),
+    explicit: Option<usize>,
+    memory_budget_bytes: usize,
+) -> usize {
+    let budget = budget.max(1);
+    if explicit.is_some() {
+        return budget;
+    }
+    budget.min(memory_worker_ceiling(
+        world_worker_memory_bytes(world_size),
+        memory_budget_bytes,
+    ))
 }
 
 /// Run `body` with `threads` as this thread's certification worker budget.
 ///
 /// The budget is restored on normal return and on unwind, so a nested scope
-/// cannot widen or narrow its parent's budget after it finishes.
-#[cfg_attr(not(test), allow(dead_code))]
+/// cannot widen or narrow its parent's budget after it finishes. Whether this
+/// compile's count came from an operator override is inherited, because
+/// narrowing a budget does not turn a deliberate one into a guess.
 pub(super) fn with_certification_threads<T>(threads: usize, body: impl FnOnce() -> T) -> T {
-    let _restore = CertificationThreadsReset(CERTIFICATION_THREADS.replace(Some(threads)));
+    let explicit = CERTIFICATION_THREADS
+        .get()
+        .and_then(|budget| budget.explicit);
+    let scoped = ScopedWorkerBudget {
+        workers: threads,
+        explicit,
+    };
+    let _restore = CertificationThreadsReset(CERTIFICATION_THREADS.replace(Some(scoped)));
     body()
+}
+
+/// Parse and clamp this compile's worker budget once, then own it for the
+/// whole compile.
+///
+/// A public entry reached inside a budget that is already owned -- a leaf
+/// worker compiling its own module, or the hierarchical flat fast path --
+/// keeps that budget instead of reopening the machine underneath its parent.
+pub(super) fn with_compile_worker_budget<T>(body: impl FnOnce(usize) -> T) -> T {
+    if let Some(budget) = CERTIFICATION_THREADS.get() {
+        return body(budget.workers.max(1));
+    }
+    let raw = std::env::var("REDA_CERT_THREADS").ok();
+    let explicit = parse_certification_threads(raw.as_deref());
+    let available = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1);
+    let workers = certification_thread_budget(available, explicit);
+    let _restore = CertificationThreadsReset(CERTIFICATION_THREADS.replace(Some(
+        ScopedWorkerBudget { workers, explicit },
+    )));
+    body(workers)
 }
 
 /// Private reset guard: it restores the previous budget when `body` returns or
 /// panics, and cannot be moved to another thread because it never leaves
-/// `with_certification_threads`.
-struct CertificationThreadsReset(Option<usize>);
+/// `with_certification_threads` or `with_compile_worker_budget`.
+struct CertificationThreadsReset(Option<ScopedWorkerBudget>);
 
 impl Drop for CertificationThreadsReset {
     fn drop(&mut self) {
@@ -460,27 +581,95 @@ impl Drop for CertificationThreadsReset {
     }
 }
 
-fn scoped_certification_threads() -> Option<usize> {
-    CERTIFICATION_THREADS.get()
+pub(super) fn scoped_certification_threads() -> Option<usize> {
+    CERTIFICATION_THREADS.get().map(|budget| budget.workers)
 }
 
 /// The requested worker budget for one certification sweep.
 ///
-/// A scope owns the whole compile's budget. Without one, this keeps the
-/// existing `REDA_CERT_THREADS` override and machine-derived default; Task 3
-/// replaces that policy and its 12-worker ceiling with one clamped
-/// compilation-wide budget.
+/// A scope owns the whole compile's budget. Without one -- a sweep reached
+/// outside any public entry, which only tests do -- the same policy is applied
+/// to the environment directly, so there is one parse and one clamp either way.
 fn requested_certification_threads() -> usize {
+    #[cfg(test)]
+    record_observed_worker_budget(scoped_certification_threads());
     if let Some(threads) = scoped_certification_threads() {
         return threads.max(1);
     }
+    let raw = std::env::var("REDA_CERT_THREADS").ok();
     let available = std::thread::available_parallelism()
         .map(|count| count.get())
         .unwrap_or(1);
-    let requested = std::env::var("REDA_CERT_THREADS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok());
-    manifest_sweep_threads(available, requested)
+    certification_thread_budget(available, parse_certification_threads(raw.as_deref()))
+}
+
+/// The deliberate override this sweep is running under, if any.
+fn scoped_explicit_threads() -> Option<usize> {
+    match CERTIFICATION_THREADS.get() {
+        Some(budget) => budget.explicit,
+        None => {
+            let raw = std::env::var("REDA_CERT_THREADS").ok();
+            parse_certification_threads(raw.as_deref())
+        }
+    }
+}
+
+/// The budget one sweep over `world` may open: this compile's budget, with the
+/// byte memory ceiling applied to an automatic one.
+///
+/// Both sweeps come through here, so exhaustive and manifest work can never
+/// disagree about the budget or about the memory that pays for it.
+fn certification_sweep_threads(world: &World) -> usize {
+    let raw_bytes = std::env::var("REDA_CERT_MEMORY_BYTES").ok();
+    sweep_worker_budget(
+        requested_certification_threads(),
+        world.size(),
+        scoped_explicit_threads(),
+        certification_memory_budget_bytes(raw_bytes.as_deref()),
+    )
+}
+
+/// Test-only: the worker budget every certification sweep on THIS thread
+/// observed while `body` ran.
+///
+/// Per calling thread on purpose -- a concurrent compile in another test
+/// cannot pollute the record, and a leaf worker's own budget is observed where
+/// that worker runs, not here.
+#[cfg(test)]
+pub(super) fn record_caller_certification_budgets<T>(
+    body: impl FnOnce() -> T,
+) -> (T, Vec<Option<usize>>) {
+    /// Restores whatever recorder was running before, on return or on unwind.
+    struct RecorderReset(Option<Vec<Option<usize>>>);
+
+    impl Drop for RecorderReset {
+        fn drop(&mut self) {
+            let _ = BUDGET_RECORDER.try_with(|recorder| *recorder.borrow_mut() = self.0.take());
+        }
+    }
+
+    let _restore =
+        RecorderReset(BUDGET_RECORDER.with(|recorder| recorder.borrow_mut().replace(Vec::new())));
+    let value = body();
+    let recorded = BUDGET_RECORDER
+        .with(|recorder| recorder.borrow_mut().take())
+        .unwrap_or_default();
+    (value, recorded)
+}
+
+#[cfg(test)]
+thread_local! {
+    static BUDGET_RECORDER: std::cell::RefCell<Option<Vec<Option<usize>>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn record_observed_worker_budget(budget: Option<usize>) {
+    let _ = BUDGET_RECORDER.try_with(|recorder| {
+        if let Some(observed) = recorder.borrow_mut().as_mut() {
+            observed.push(budget);
+        }
+    });
 }
 
 /// The one actual-worker rule shared by every certification sweep.
@@ -515,12 +704,15 @@ where
     // compiles serialize their above-threshold sweeps rather than share the
     // machine. Replace it with a process-wide budget arbiter when concurrent
     // compile throughput matters more than one compile's latency.
-    let _sweep = (workers > 1).then(manifest_sweep_guard);
+    let _sweep = (workers > 1).then(certification_sweep_guard);
     run_indexed_chunks(items, workers.max(1), work)
 }
 
-fn manifest_sweep_guard() -> std::sync::MutexGuard<'static, ()> {
-    MANIFEST_SWEEP_LOCK
+/// The process-wide certification-sweep boundary, shared by the exhaustive and
+/// manifest sweeps: two independent compiles cannot each open the full worker
+/// count at once.
+fn certification_sweep_guard() -> std::sync::MutexGuard<'static, ()> {
+    CERTIFICATION_SWEEP_LOCK
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
@@ -876,13 +1068,15 @@ fn bits_of(mask: usize, width: usize) -> Vec<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        canonical_world_fingerprint, certification_workers, certify_exhaustive_truth_with_threads,
-        external_signal_is_high, manifest_sweep_guard, manifest_sweep_threads,
+        canonical_world_fingerprint, certification_memory_budget_bytes, certification_sweep_guard,
+        certification_thread_budget, certification_workers, certify_exhaustive_truth_with_threads,
+        external_signal_is_high, memory_worker_ceiling, parse_certification_threads,
         run_certification_chunks, run_indexed_chunks, scoped_certification_threads, settle,
-        sweep_manifest_with_threads, with_certification_threads, CandidateCertificationError,
+        sweep_manifest_with_threads, sweep_worker_budget, with_certification_threads,
+        with_compile_worker_budget, world_worker_memory_bytes, CandidateCertificationError,
         CompleteCandidateCertifier, ExpandedCandidateCertifier, RealisedTimingGraph,
-        TimingGraphError, TransitionManifest, TransitionPhase, MANIFEST_SWEEP_LOCK,
-        MIN_ITEMS_PER_CERTIFICATION_WORKER,
+        TimingGraphError, TransitionManifest, TransitionPhase, CERTIFICATION_SWEEP_LOCK,
+        CERT_WORKER_MEMORY_BUDGET_BYTES, MIN_ITEMS_PER_CERTIFICATION_WORKER, WORLD_COPY_HEADROOM,
     };
     use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
     use crate::compile::fragment_synth::legacy_adapter::LegacyCandidateAdapter;
@@ -903,12 +1097,177 @@ mod tests {
         assert!(external_signal_is_high(15));
     }
 
+    /// One compile-wide budget policy, shared by the flat and hierarchical
+    /// entries and by both certification sweeps.
+    ///
+    /// The old machine-derived 12-worker ceiling is gone: a deliberate
+    /// operator override is honoured up to the host parallelism, never past it.
     #[test]
-    fn manifest_worker_count_is_bounded_and_tunable() {
-        assert_eq!(manifest_sweep_threads(8, None), 8);
-        assert_eq!(manifest_sweep_threads(8, Some(4)), 4);
-        assert_eq!(manifest_sweep_threads(8, Some(0)), 1);
-        assert_eq!(manifest_sweep_threads(32, Some(32)), 12);
+    fn certification_thread_budget_replaces_the_twelve_worker_ceiling() {
+        assert_eq!(certification_thread_budget(8, None), 8);
+        assert_eq!(certification_thread_budget(8, Some(4)), 4);
+        assert_eq!(certification_thread_budget(8, Some(0)), 1);
+        assert_eq!(
+            certification_thread_budget(32, Some(32)),
+            32,
+            "an explicit override clamps only to available parallelism"
+        );
+        assert_eq!(
+            certification_thread_budget(1, Some(32)),
+            1,
+            "a one-core host never opens 32 workers"
+        );
+        assert_eq!(certification_thread_budget(64, None), 64);
+        assert_eq!(certification_thread_budget(0, None), 1);
+    }
+
+    /// `World` is dense, so one worker costs
+    /// `size_of::<u32>() * volume * WORLD_COPY_HEADROOM` bytes. Auto
+    /// parallelism divides the byte budget by that estimate; a deliberate
+    /// operator override is not memory-clamped.
+    #[test]
+    fn auto_workers_obey_the_dense_world_byte_memory_ceiling() {
+        let size = (16, 8, 32);
+        let volume = 16 * 8 * 32;
+        assert!(WORLD_COPY_HEADROOM >= 1, "a worker owns at least one world");
+        assert_eq!(
+            world_worker_memory_bytes(size),
+            std::mem::size_of::<u32>() * volume * WORLD_COPY_HEADROOM
+        );
+        assert_eq!(
+            world_worker_memory_bytes((i32::MAX, i32::MAX, i32::MAX)),
+            usize::MAX,
+            "an absurd dense volume saturates instead of overflowing"
+        );
+        assert!(
+            world_worker_memory_bytes((0, 0, 0)) >= 1,
+            "an empty world must not become a zero divisor"
+        );
+
+        let per_worker = world_worker_memory_bytes(size);
+        assert_eq!(memory_worker_ceiling(per_worker, per_worker * 3), 3);
+        assert_eq!(
+            memory_worker_ceiling(per_worker, per_worker - 1),
+            1,
+            "the ceiling is clamped to at least one worker"
+        );
+        assert_eq!(memory_worker_ceiling(per_worker, 0), 1);
+        assert!(
+            memory_worker_ceiling(0, 1024) >= 1,
+            "a zero-byte estimate must not divide by zero"
+        );
+
+        assert_eq!(sweep_worker_budget(32, size, None, per_worker * 3), 3);
+        assert_eq!(sweep_worker_budget(32, size, None, per_worker * 64), 32);
+        assert_eq!(
+            sweep_worker_budget(32, size, Some(32), per_worker),
+            32,
+            "an explicit operator override is not memory-clamped"
+        );
+        assert_eq!(sweep_worker_budget(32, size, None, 0), 1);
+        assert_eq!(sweep_worker_budget(0, size, None, usize::MAX), 1);
+
+        // ponytail: the memory ceiling is applied where a `World` exists -- the
+        // sweep -- because no public entry holds one yet. The entry contributes
+        // only the parse and the parallelism clamp. Move the ceiling to the
+        // entry when a compile can estimate its emitted world up front.
+
+        let world = World::new(4, 3, 5);
+        assert_eq!(
+            world_worker_memory_bytes(world.size()),
+            std::mem::size_of::<u32>() * 4 * 3 * 5 * WORLD_COPY_HEADROOM,
+            "the estimate reads the certified world's own dense size"
+        );
+    }
+
+    /// One parser for both certification environment overrides. Anything
+    /// that is not a plain decimal count is not an override at all.
+    #[test]
+    fn the_certification_environment_overrides_are_parsed_by_one_policy() {
+        assert_eq!(parse_certification_threads(None), None);
+        assert_eq!(parse_certification_threads(Some("4")), Some(4));
+        assert_eq!(
+            parse_certification_threads(Some("0")),
+            Some(0),
+            "zero is a deliberate override; the budget policy clamps it to one"
+        );
+        assert!(
+            CERT_WORKER_MEMORY_BUDGET_BYTES >= 1,
+            "the measured byte budget must fit at least one worker"
+        );
+        assert_eq!(
+            certification_memory_budget_bytes(None),
+            CERT_WORKER_MEMORY_BUDGET_BYTES
+        );
+        assert_eq!(certification_memory_budget_bytes(Some("1048576")), 1_048_576);
+        assert_eq!(certification_memory_budget_bytes(Some("0")), 0);
+        for junk in ["", " ", "-1", "two", "4.0", "1e3", "99999999999999999999999999"] {
+            assert_eq!(
+                parse_certification_threads(Some(junk)),
+                None,
+                "`{junk}` is not a worker count"
+            );
+            assert_eq!(
+                certification_memory_budget_bytes(Some(junk)),
+                CERT_WORKER_MEMORY_BUDGET_BYTES,
+                "`{junk}` is not a byte budget"
+            );
+        }
+    }
+
+    /// A public entry parses and clamps once, owns the budget for the whole
+    /// compile, and never widens a budget it was handed.
+    #[test]
+    fn one_compile_scope_owns_the_parsed_and_clamped_worker_budget() {
+        let available = std::thread::available_parallelism().map_or(1, |count| count.get());
+        let expected = certification_thread_budget(
+            available,
+            parse_certification_threads(std::env::var("REDA_CERT_THREADS").ok().as_deref()),
+        );
+
+        let observed = with_compile_worker_budget(|budget| {
+            assert_eq!(
+                budget, expected,
+                "the public entry applies the one shared parse and clamp policy"
+            );
+            assert_eq!(scoped_certification_threads(), Some(budget));
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    assert_eq!(
+                        scoped_certification_threads(),
+                        None,
+                        "a worker must not inherit an accidental wider budget"
+                    )
+                });
+            });
+            budget
+        });
+        assert_eq!(observed, expected);
+        assert_eq!(
+            scoped_certification_threads(),
+            None,
+            "the compile scope closes on return"
+        );
+
+        with_certification_threads(1, || {
+            with_compile_worker_budget(|budget| {
+                assert_eq!(
+                    budget, 1,
+                    "a public entry inside an owned budget must not reopen the machine"
+                )
+            });
+            assert_eq!(scoped_certification_threads(), Some(1));
+        });
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_compile_worker_budget(|_| panic!("entry panic"));
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(
+            scoped_certification_threads(),
+            None,
+            "a panicking entry restores the previous budget"
+        );
     }
 
     #[test]
@@ -1084,14 +1443,14 @@ mod tests {
     }
 
     #[test]
-    fn manifest_sweeps_serialize_and_recover_after_poison() {
-        let held = manifest_sweep_guard();
+    fn certification_sweeps_serialize_and_recover_after_poison() {
+        let held = certification_sweep_guard();
         std::thread::scope(|scope| {
             let (started_tx, started_rx) = std::sync::mpsc::channel();
             let (acquired_tx, acquired_rx) = std::sync::mpsc::channel();
             scope.spawn(move || {
                 started_tx.send(()).unwrap();
-                let _guard = manifest_sweep_guard();
+                let _guard = certification_sweep_guard();
                 acquired_tx.send(()).unwrap();
             });
             started_rx.recv().unwrap();
@@ -1105,13 +1464,13 @@ mod tests {
         });
 
         let panic = std::panic::catch_unwind(|| {
-            let _guard = manifest_sweep_guard();
+            let _guard = certification_sweep_guard();
             panic!("poison the sweep lock");
         });
         assert!(panic.is_err());
-        assert!(MANIFEST_SWEEP_LOCK.is_poisoned());
-        drop(manifest_sweep_guard());
-        MANIFEST_SWEEP_LOCK.clear_poison();
+        assert!(CERTIFICATION_SWEEP_LOCK.is_poisoned());
+        drop(certification_sweep_guard());
+        CERTIFICATION_SWEEP_LOCK.clear_poison();
     }
 
     fn not_netlist() -> Netlist {

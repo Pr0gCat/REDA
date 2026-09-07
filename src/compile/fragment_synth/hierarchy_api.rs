@@ -55,6 +55,7 @@ use crate::compile::fragment_synth::api::{
 use crate::compile::fragment_synth::blocks::{compile_block, BlockPort, CompiledBlock};
 use crate::compile::fragment_synth::candidate::RealisedRouteTree;
 use crate::compile::fragment_synth::certification::{
+    certification_thread_budget, with_certification_threads, with_compile_worker_budget,
     CertifiedCandidate, CompleteCandidateCertifier,
 };
 use crate::compile::fragment_synth::compile_fragment_synth;
@@ -103,15 +104,38 @@ pub fn compile_hierarchical(
     budget: SynthesisBudget,
     pins: Option<&PortPlacements>,
 ) -> Result<SynthesisResult, SynthesisError> {
-    let threads = std::thread::available_parallelism()
-        .map(|count| count.get())
-        .unwrap_or(1);
-    compile_hierarchical_with_threads(design, budget, pins, threads)
+    // One parse and clamp for the whole compile; every path below spends this
+    // one budget, on modules or inside one module, never on both at once.
+    with_compile_worker_budget(|threads| {
+        compile_hierarchical_with_threads(design, budget, pins, threads)
+    })
 }
 
-/// [`compile_hierarchical`] with the leaf-block worker count pinned, so a
-/// test can prove the result does not depend on it.
+/// [`compile_hierarchical`] with the whole compile's worker budget pinned, so
+/// a test can prove the result does not depend on it.
+///
+/// `threads` is the complete compile's budget, not just a leaf-worker count:
+/// it is clamped to the host's own parallelism and owned for the whole compile,
+/// exactly as an automatic budget is.
 pub(crate) fn compile_hierarchical_with_threads(
+    design: &HierarchicalNetlist,
+    budget: SynthesisBudget,
+    pins: Option<&PortPlacements>,
+    threads: usize,
+) -> Result<SynthesisResult, SynthesisError> {
+    let available = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1);
+    let threads = certification_thread_budget(available, Some(threads));
+    with_certification_threads(threads, || {
+        compile_hierarchical_scoped(design, budget, pins, threads)
+    })
+}
+
+/// [`compile_hierarchical_with_threads`] with the budget already owned by this
+/// thread: the flat fast path, the leaf workers, the sequential parents, the
+/// top seed and the proposal stream all run inside that one scope.
+fn compile_hierarchical_scoped(
     design: &HierarchicalNetlist,
     budget: SynthesisBudget,
     pins: Option<&PortPlacements>,
@@ -1041,78 +1065,132 @@ fn instantiated_modules(lowered: &LoweredHierarchy) -> BTreeSet<String> {
     instantiated
 }
 
+/// How one compile's budget is spent on the leaves that are ready now.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct LeafWorkerPlan {
+    /// Threads to spawn. Zero means the caller drains the queue itself: one
+    /// ready leaf, or a one-core budget, must not pay for a worker.
+    workers: usize,
+    /// The certification budget one leaf compile owns.
+    leaf_budget: usize,
+}
+
+/// Choose the one active parallel dimension for the ready leaves.
+///
+/// More than one ready leaf spends the budget on modules, so each leaf gets a
+/// single certification worker. Exactly one ready leaf spends the whole budget
+/// inside that one compile, on the caller thread.
+fn leaf_worker_plan(budget: usize, ready_leaves: usize) -> LeafWorkerPlan {
+    let budget = budget.max(1);
+    let workers = match budget.min(ready_leaves) {
+        0 | 1 => 0,
+        workers => workers,
+    };
+    let leaf_budget = if ready_leaves > 1 { 1 } else { budget };
+    LeafWorkerPlan {
+        workers,
+        leaf_budget,
+    }
+}
+
+/// Compile every ready leaf through the plan for `budget` and reduce in name
+/// order.
+///
+/// Zero leaves execute nothing. One leaf compiles on the caller thread with
+/// the whole budget, through the same reduction a worker uses rather than
+/// returning its failure directly. Every queued leaf is attempted -- which
+/// module a racing worker would have got to next is the one thing about a
+/// thread pool that is not reproducible -- and the lexicographically lowest
+/// failing module is reported, never the first by wall clock.
+fn drain_ready_leaves<T, F>(
+    leaves: Vec<String>,
+    budget: usize,
+    compile_leaf: F,
+) -> Result<BTreeMap<String, T>, (String, String)>
+where
+    T: Send,
+    F: Fn(&str) -> Result<T, String> + Sync,
+{
+    let plan = leaf_worker_plan(budget, leaves.len());
+    let queue = Mutex::new(VecDeque::from(leaves));
+    let compiled = Mutex::new(BTreeMap::<String, T>::new());
+    // Module name plus rendered error, reduced by name.
+    let failure = Mutex::new(None::<(String, String)>);
+
+    let drain = || {
+        with_certification_threads(plan.leaf_budget, || loop {
+            let next = queue.lock().expect("leaf queue").pop_front();
+            let Some(name) = next else { break };
+            match compile_leaf(&name) {
+                Ok(value) => {
+                    compiled.lock().expect("compiled leaves").insert(name, value);
+                }
+                Err(reason) => {
+                    let mut slot = failure.lock().expect("leaf failure");
+                    let lowest = match slot.as_ref() {
+                        None => true,
+                        Some((earlier, _)) => name < *earlier,
+                    };
+                    if lowest {
+                        *slot = Some((name, reason));
+                    }
+                }
+            }
+        })
+    };
+
+    if plan.workers > 1 {
+        std::thread::scope(|scope| {
+            for _ in 0..plan.workers {
+                scope.spawn(&drain);
+            }
+        });
+    } else {
+        drain();
+    }
+
+    match failure.into_inner().expect("leaf failure") {
+        Some(failure) => Err(failure),
+        None => Ok(compiled.into_inner().expect("compiled leaves")),
+    }
+}
+
 /// Compile every module the design instantiates, children before parents.
 ///
-/// Leaves go out to `threads` scoped workers; a module that instantiates
-/// something is compiled here, in `module_order`, once all of its own
-/// children are present. Results are keyed by module name and the worker
-/// pool only ever inserts into that map, so nothing in the outcome depends
-/// on which thread finished first.
+/// Ready leaves go out through [`drain_ready_leaves`]; a module that
+/// instantiates something is compiled here, in `module_order`, once all of its
+/// own children are present. Results are keyed by module name, so nothing in
+/// the outcome depends on which thread finished first.
 fn compile_blocks(
     lowered: &LoweredHierarchy,
     order: &[String],
     threads: usize,
 ) -> Result<BTreeMap<String, CompiledBlock>, SynthesisError> {
     let instantiated = instantiated_modules(lowered);
-    let leaves: VecDeque<String> = order
+    let leaves: Vec<String> = order
         .iter()
         .filter(|name| instantiated.contains(*name) && lowered.modules[*name].instances.is_empty())
         .cloned()
         .collect();
 
-    let queue = Mutex::new(leaves);
-    let compiled = Mutex::new(BTreeMap::<String, CompiledBlock>::new());
-    // Module name plus rendered error. The first failure by NAME wins, not
-    // the first by wall clock, and the queue is deliberately not drained on
-    // a failure: which module a racing worker would have got to next is the
-    // one thing about a thread pool that is not reproducible, so every
-    // queued leaf is attempted and the reported failure is a function of the
-    // design alone.
-    let failure = Mutex::new(None::<(String, String)>);
-
-    std::thread::scope(|scope| {
-        for _ in 0..threads.max(1) {
-            scope.spawn(|| {
-                let library = Library::default_library();
-                let search_config = SearchConfig::checked_defaults();
-                let services = seed_services(&library, &search_config);
-                loop {
-                    let next = queue.lock().expect("block queue").pop_front();
-                    let Some(name) = next else { break };
-                    let netlist = lowered.block_netlist(&name);
-                    match compile_block(&name, &netlist, services) {
-                        Ok(block) => {
-                            compiled
-                                .lock()
-                                .expect("compiled blocks")
-                                .insert(name, block);
-                        }
-                        Err(error) => {
-                            let mut slot = failure.lock().expect("block failure");
-                            let first = match slot.as_ref() {
-                                None => true,
-                                Some((earlier, _)) => name < *earlier,
-                            };
-                            if first {
-                                *slot = Some((name, error.to_string()));
-                            }
-                        }
-                    }
-                }
-            });
-        }
+    let compiled = drain_ready_leaves(leaves, threads, |name| {
+        // `SeedServices` carries `&dyn` trait objects and is not `Sync`, so a
+        // leaf compile still builds its own, exactly as the worker pool did.
+        let library = Library::default_library();
+        let search_config = SearchConfig::checked_defaults();
+        let services = seed_services(&library, &search_config);
+        let netlist = lowered.block_netlist(name);
+        compile_block(name, &netlist, services).map_err(|error| error.to_string())
     });
 
-    if let Some((module, reason)) = failure.into_inner().expect("block failure") {
+    let mut compiled = compiled.map_err(|(module, reason)| {
         let first_path = first_instance_path(lowered, &module);
-        return Err(SynthesisError::Block {
+        SynthesisError::Block {
             module,
             first_path,
             reason,
-        });
-    }
-
-    let mut compiled = compiled.into_inner().expect("compiled blocks");
+        }
+    })?;
     let library = Library::default_library();
     let search_config = SearchConfig::checked_defaults();
     let services = seed_services(&library, &search_config);
@@ -1327,8 +1405,11 @@ fn hierarchy_descriptor_bytes(design: &HierarchicalNetlist) -> Vec<u8> {
 mod tests {
     use super::*;
     use crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate;
+    use crate::compile::fragment_synth::benchmark::canonical_world_fingerprint;
     use crate::compile::fragment_synth::certification::{
-        CandidateCertificationError, ExpandedCandidateCertifier,
+        certification_thread_budget, record_caller_certification_budgets,
+        scoped_certification_threads, with_compile_worker_budget, CandidateCertificationError,
+        ExpandedCandidateCertifier,
     };
     use crate::compile::fragment_synth::identity::{
         GateIndex, ImplementationKey, InputMask, PortId, PrimitiveId, TopologyNodeId,
@@ -1976,13 +2057,321 @@ mod tests {
         assert_eq!(parents.len(), 1, "the parent loop must run: {parents:?}");
 
         let many =
-            compile_hierarchical_with_threads(&design, SynthesisBudget::Evaluations(0), None, 4)
+            compile_hierarchical_with_threads(&design, SynthesisBudget::Evaluations(1), None, 4)
                 .unwrap();
         let one =
-            compile_hierarchical_with_threads(&design, SynthesisBudget::Evaluations(0), None, 1)
+            compile_hierarchical_with_threads(&design, SynthesisBudget::Evaluations(1), None, 1)
                 .unwrap();
         assert_eq!(many.candidate_fingerprint, one.candidate_fingerprint);
         assert_eq!(many.case_fingerprint, one.case_fingerprint);
+        // A fingerprint pair is not the whole result: the worker count must not
+        // move one metric, one emitted block, one trace entry, one cap counter
+        // or the reason the search stopped.
+        assert_eq!(many.metrics, one.metrics);
+        assert_eq!(
+            canonical_world_fingerprint(&many.compiled.world),
+            canonical_world_fingerprint(&one.compiled.world)
+        );
+        assert_eq!(many.compiled.input_positions, one.compiled.input_positions);
+        assert_eq!(many.compiled.output_positions, one.compiled.output_positions);
+        assert_eq!(
+            many.compiled.gate_output_positions,
+            one.compiled.gate_output_positions
+        );
+        assert_eq!(many.compiled.gate_facings, one.compiled.gate_facings);
+        assert_eq!(many.evaluations_used, one.evaluations_used);
+        assert_eq!(many.stop_reason, one.stop_reason);
+        assert!(
+            !many.trace.is_empty(),
+            "the budget must reach the parent proposal stream"
+        );
+        assert_eq!(many.trace, one.trace);
+        assert_eq!(
+            many.trace
+                .iter()
+                .map(|proposal| proposal.cap_work)
+                .collect::<Vec<_>>(),
+            one.trace
+                .iter()
+                .map(|proposal| proposal.cap_work)
+                .collect::<Vec<_>>(),
+            "cap work is counted once per proposal, whatever compiled it"
+        );
+    }
+
+    /// One compilation-wide budget picks one active parallel dimension.
+    ///
+    /// More than one ready leaf spends the budget on modules and gives each
+    /// leaf a single certification worker; a single ready leaf spends the
+    /// whole budget inside that one compile, on the caller thread.
+    #[test]
+    fn leaf_workers_take_the_budget_only_when_more_than_one_leaf_is_ready() {
+        assert_eq!(
+            leaf_worker_plan(4, 0),
+            LeafWorkerPlan {
+                workers: 0,
+                leaf_budget: 4
+            },
+            "zero ready leaves execute nothing"
+        );
+        assert_eq!(
+            leaf_worker_plan(32, 1),
+            LeafWorkerPlan {
+                workers: 0,
+                leaf_budget: 32
+            },
+            "one ready leaf compiles on the caller thread with the whole budget"
+        );
+        assert_eq!(
+            leaf_worker_plan(32, 2),
+            LeafWorkerPlan {
+                workers: 2,
+                leaf_budget: 1
+            },
+            "a 32-worker budget with two ready leaves spawns no useless worker"
+        );
+        assert_eq!(
+            leaf_worker_plan(3, 8),
+            LeafWorkerPlan {
+                workers: 3,
+                leaf_budget: 1
+            }
+        );
+        assert_eq!(
+            leaf_worker_plan(1, 5),
+            LeafWorkerPlan {
+                workers: 0,
+                leaf_budget: 1
+            },
+            "a one-core compile spawns nothing"
+        );
+        assert_eq!(
+            leaf_worker_plan(0, 5),
+            LeafWorkerPlan {
+                workers: 0,
+                leaf_budget: 1
+            }
+        );
+
+        // Thread counts 1, 2 and auto each select one dimension.
+        assert_eq!(
+            leaf_worker_plan(2, 1),
+            LeafWorkerPlan {
+                workers: 0,
+                leaf_budget: 2
+            },
+            "two workers and one ready leaf certify that leaf in parallel"
+        );
+        assert_eq!(
+            leaf_worker_plan(2, 4),
+            LeafWorkerPlan {
+                workers: 2,
+                leaf_budget: 1
+            },
+            "two workers and four ready leaves compile modules in parallel"
+        );
+        let auto = with_compile_worker_budget(|budget| budget);
+        assert!(auto >= 1);
+        assert_eq!(
+            leaf_worker_plan(auto, 1),
+            LeafWorkerPlan {
+                workers: 0,
+                leaf_budget: auto
+            }
+        );
+        assert!(
+            leaf_worker_plan(auto, 64).workers <= auto,
+            "auto never spawns more leaf workers than the compile budget"
+        );
+    }
+
+    /// The plan is what actually runs: which thread compiles a leaf, and the
+    /// certification budget that leaf compile owns.
+    #[test]
+    fn ready_leaves_run_on_the_planned_threads_with_the_planned_budget() {
+        let caller = std::thread::current().id();
+        let seen = Mutex::new(Vec::new());
+        let compile = |name: &str| {
+            seen.lock().expect("leaf probe").push((
+                name.to_string(),
+                std::thread::current().id(),
+                scoped_certification_threads(),
+            ));
+            Ok::<_, String>(name.to_string())
+        };
+        let take = || std::mem::take(&mut *seen.lock().expect("leaf probe"));
+
+        let none = drain_ready_leaves(Vec::new(), 32, &compile).expect("no leaf can fail");
+        assert!(none.is_empty());
+        assert!(take().is_empty(), "zero ready leaves compile nothing");
+
+        let one =
+            drain_ready_leaves(vec!["only".to_string()], 32, &compile).expect("the leaf compiles");
+        assert_eq!(one.len(), 1);
+        assert_eq!(
+            take(),
+            vec![("only".to_string(), caller, Some(32))],
+            "one ready leaf compiles on the caller thread with the whole budget"
+        );
+
+        let leaves = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let many = drain_ready_leaves(leaves.clone(), 32, &compile).expect("every leaf compiles");
+        assert_eq!(many.keys().cloned().collect::<Vec<_>>(), leaves);
+        let entries = take();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|(name, _, _)| name.clone())
+                .collect::<BTreeSet<_>>(),
+            leaves.iter().cloned().collect::<BTreeSet<_>>(),
+            "every ready leaf is compiled exactly once"
+        );
+        assert!(
+            entries
+                .iter()
+                .all(|(_, thread, budget)| *thread != caller && *budget == Some(1)),
+            "more than one ready leaf: each leaf worker owns one certification worker: {entries:?}"
+        );
+        assert!(
+            entries
+                .iter()
+                .map(|(_, thread, _)| *thread)
+                .collect::<std::collections::HashSet<_>>()
+                .len()
+                <= leaf_worker_plan(32, leaves.len()).workers,
+            "no leaf runs on a thread the plan did not ask for: {entries:?}"
+        );
+        // ponytail: an upper bound, not an equality -- workers share one queue,
+        // so a fast worker may take a second leaf and leave a planned thread
+        // idle. The exact spawn count is pinned by `leaf_worker_plan` above.
+
+        let one_core = drain_ready_leaves(leaves.clone(), 1, &compile).expect("every leaf compiles");
+        assert_eq!(one_core.len(), leaves.len());
+        let entries = take();
+        assert!(
+            entries
+                .iter()
+                .all(|(_, thread, budget)| *thread == caller && *budget == Some(1)),
+            "a one-core compile drains the queue on the caller thread: {entries:?}"
+        );
+    }
+
+    /// The failure contract survives the budget: every queued leaf is
+    /// attempted and the lexicographically lowest failing module is reported,
+    /// never the first wall-clock failure -- including on the one-leaf caller
+    /// path, which reduces through the same ordered reduction.
+    #[test]
+    fn every_queued_leaf_is_attempted_and_the_lowest_named_failure_is_reported() {
+        let attempted = Mutex::new(BTreeSet::new());
+        let compile = |name: &str| {
+            attempted.lock().expect("leaf probe").insert(name.to_string());
+            if name.ends_with("_bad") {
+                Err(format!("{name} refused"))
+            } else {
+                Ok(name.to_string())
+            }
+        };
+        // Queue order deliberately puts the higher-named failure first, so a
+        // first-failure short circuit would report `z_bad`.
+        let leaves = vec![
+            "z_bad".to_string(),
+            "b_bad".to_string(),
+            "m_ok".to_string(),
+        ];
+
+        for budget in [1, 2, 32] {
+            attempted.lock().expect("leaf probe").clear();
+            let failure = drain_ready_leaves(leaves.clone(), budget, &compile)
+                .expect_err("a failing leaf refuses the compile");
+            assert_eq!(
+                failure,
+                ("b_bad".to_string(), "b_bad refused".to_string()),
+                "budget {budget} must report the lexicographically lowest failing module"
+            );
+            assert_eq!(
+                *attempted.lock().expect("leaf probe"),
+                leaves.iter().cloned().collect::<BTreeSet<_>>(),
+                "budget {budget} must attempt every queued leaf"
+            );
+        }
+
+        let failure = drain_ready_leaves(vec!["z_bad".to_string()], 32, &compile)
+            .expect_err("the single failing leaf refuses the compile");
+        assert_eq!(
+            failure,
+            ("z_bad".to_string(), "z_bad refused".to_string()),
+            "the one-leaf caller path reduces its failure instead of returning it directly"
+        );
+    }
+
+    /// Every path of the hierarchical entry certifies inside the compile's own
+    /// worker budget: the flat fast path, the sequential intermediate parents,
+    /// the top seed and the proposal stream all run on the calling thread, and
+    /// only the leaf workers give up the whole budget.
+    ///
+    /// Recording is per calling thread, so this observes exactly the
+    /// certifications these compiles ran here.
+    #[test]
+    fn every_hierarchy_path_certifies_inside_one_compile_worker_budget() {
+        let available = std::thread::available_parallelism().map_or(1, |count| count.get());
+        let wide = certification_thread_budget(available, Some(32));
+        let design = three_level_design();
+
+        let (_, one_budgets) = record_caller_certification_budgets(|| {
+            compile_hierarchical_with_threads(&design, SynthesisBudget::Evaluations(1), None, 1)
+                .expect("certifies at one worker")
+        });
+        assert!(
+            !one_budgets.is_empty(),
+            "a hierarchical compile certifies on its calling thread"
+        );
+        assert!(
+            one_budgets.iter().all(|seen| *seen == Some(1)),
+            "a one-core hierarchy compile keeps every path on the caller thread: {one_budgets:?}"
+        );
+
+        let (_, many_budgets) = record_caller_certification_budgets(|| {
+            compile_hierarchical_with_threads(&design, SynthesisBudget::Evaluations(1), None, 32)
+                .expect("certifies at the whole budget")
+        });
+        assert!(
+            !many_budgets.is_empty(),
+            "the caller thread must still certify the parents, top seed and proposals"
+        );
+        assert!(
+            many_budgets.iter().all(|seen| *seen == Some(wide)),
+            "the parents, top seed and proposals own the whole compile budget: {many_budgets:?}"
+        );
+        if available > 1 {
+            // ponytail: a one-core host cannot move leaves off the caller
+            // thread at all, so this row is host-conditional. What each leaf
+            // worker owns is proven by `drain_ready_leaves`, which observes the
+            // worker thread directly instead of the caller.
+            assert!(
+                many_budgets.len() < one_budgets.len(),
+                "two ready leaves must certify on leaf workers, not the caller thread"
+            );
+        }
+
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["y".into()],
+            gates: vec![Gate::nor("y", &["a"])],
+        };
+        let (_, flat_budgets) = record_caller_certification_budgets(|| {
+            compile_hierarchical_with_threads(
+                &single_module(&netlist, "top"),
+                SynthesisBudget::Evaluations(0),
+                None,
+                32,
+            )
+            .expect("the flat fast path certifies")
+        });
+        assert!(!flat_budgets.is_empty());
+        assert!(
+            flat_budgets.iter().all(|seen| *seen == Some(wide)),
+            "the flat fast path is scoped by the same policy: {flat_budgets:?}"
+        );
     }
 
     /// The budgeted search really runs over a hierarchical top: the
