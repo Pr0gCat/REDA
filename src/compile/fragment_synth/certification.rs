@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::sync::Mutex;
@@ -32,7 +33,24 @@ use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::storage::World;
 
 const MAX_MANIFEST_SWEEP_THREADS: usize = 12;
+/// Minimum canonical items one certification worker must own.
+///
+/// Measured on this host with a release build: the real exhaustive sweep at one
+/// and two workers over 4 to 256 canonical vectors lost at 4 and 8 vectors and
+/// won from 16 upward, repeatably across two independent runs, so 16 vectors
+/// over two workers is the first crossover. Exhaustive vectors are the lighter
+/// unit, so sharing this one threshold with the manifest sweep is conservative
+/// for it.
+const MIN_ITEMS_PER_CERTIFICATION_WORKER: usize = 8;
 static MANIFEST_SWEEP_LOCK: Mutex<()> = Mutex::new(());
+
+thread_local! {
+    /// One compile's certification worker budget, owned by the thread that
+    /// opened the scope. This is runtime scheduling state: it is never
+    /// fingerprinted, and a spawned worker starts without it rather than
+    /// inheriting a second full budget.
+    static CERTIFICATION_THREADS: Cell<Option<usize>> = const { Cell::new(None) };
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct QualityKey {
@@ -334,10 +352,36 @@ fn certify_exhaustive_truth(
     compatibility: &CompatibilityViews,
     config: &CertificationConfig,
 ) -> Result<usize, CandidateCertificationError> {
-    let state_count = 1usize
+    let threads = requested_certification_threads();
+    if std::env::var_os("REDA_PHASE_TIMING").is_some() {
+        eprintln!(
+            "WORK exhaustive_workers {}",
+            certification_workers(exhaustive_state_count(lowered)?, threads)
+        );
+    }
+    certify_exhaustive_truth_with_threads(world, candidate, lowered, compatibility, config, threads)
+}
+
+fn exhaustive_state_count(lowered: &Netlist) -> Result<usize, CandidateCertificationError> {
+    1usize
         .checked_shl(u32::try_from(lowered.inputs.len()).unwrap_or(u32::MAX))
-        .ok_or(CandidateCertificationError::CounterOverflow)?;
-    for mask in 0..state_count {
+        .ok_or(CandidateCertificationError::CounterOverflow)
+}
+
+fn certify_exhaustive_truth_with_threads(
+    world: &World,
+    candidate: &ExpandedPhysicalCandidate,
+    lowered: &Netlist,
+    compatibility: &CompatibilityViews,
+    config: &CertificationConfig,
+    threads: usize,
+) -> Result<usize, CandidateCertificationError> {
+    let state_count = exhaustive_state_count(lowered)?;
+    // The canonical mask range is the only thing retained per vector: each
+    // worker owns one simulator at a time and reduces `()`, so a wide sweep
+    // costs workers, not one world per mask.
+    let masks = (0..state_count).collect::<Vec<_>>();
+    run_certification_chunks(&masks, threads, |_, &mask| {
         let vector = bits_of(mask, lowered.inputs.len());
         let mut simulator = fresh_simulator(world, candidate, lowered);
         drive_vector(&mut simulator, candidate, lowered, compatibility, &vector)?;
@@ -356,8 +400,8 @@ fn certify_exhaustive_truth(
             compatibility,
             &vector,
             mask,
-        )?;
-    }
+        )
+    })?;
     Ok(state_count)
 }
 
@@ -369,13 +413,13 @@ fn sweep_manifest(
     manifest: &TransitionManifest,
     config: &CertificationConfig,
 ) -> Result<Vec<TransitionMeasurement>, CandidateCertificationError> {
-    let available = std::thread::available_parallelism()
-        .map(|count| count.get())
-        .unwrap_or(1);
-    let requested = std::env::var("REDA_CERT_THREADS")
-        .ok()
-        .and_then(|value| value.parse::<usize>().ok());
-    let threads = manifest_sweep_threads(available, requested);
+    let threads = requested_certification_threads();
+    if std::env::var_os("REDA_PHASE_TIMING").is_some() {
+        eprintln!(
+            "WORK manifest_workers {}",
+            certification_workers(manifest.transitions().len(), threads)
+        );
+    }
     sweep_manifest_with_threads(
         world,
         candidate,
@@ -391,6 +435,88 @@ fn manifest_sweep_threads(available: usize, requested: Option<usize>) -> usize {
     requested
         .unwrap_or(available)
         .clamp(1, available.clamp(1, MAX_MANIFEST_SWEEP_THREADS))
+}
+
+/// Run `body` with `threads` as this thread's certification worker budget.
+///
+/// The budget is restored on normal return and on unwind, so a nested scope
+/// cannot widen or narrow its parent's budget after it finishes.
+#[cfg_attr(not(test), allow(dead_code))]
+pub(super) fn with_certification_threads<T>(threads: usize, body: impl FnOnce() -> T) -> T {
+    let _restore = CertificationThreadsReset(CERTIFICATION_THREADS.replace(Some(threads)));
+    body()
+}
+
+/// Private reset guard: it restores the previous budget when `body` returns or
+/// panics, and cannot be moved to another thread because it never leaves
+/// `with_certification_threads`.
+struct CertificationThreadsReset(Option<usize>);
+
+impl Drop for CertificationThreadsReset {
+    fn drop(&mut self) {
+        // Ignore a destroyed thread-local: panicking inside a drop that already
+        // runs during unwinding would abort the process.
+        let _ = CERTIFICATION_THREADS.try_with(|threads| threads.set(self.0));
+    }
+}
+
+fn scoped_certification_threads() -> Option<usize> {
+    CERTIFICATION_THREADS.get()
+}
+
+/// The requested worker budget for one certification sweep.
+///
+/// A scope owns the whole compile's budget. Without one, this keeps the
+/// existing `REDA_CERT_THREADS` override and machine-derived default; Task 3
+/// replaces that policy and its 12-worker ceiling with one clamped
+/// compilation-wide budget.
+fn requested_certification_threads() -> usize {
+    if let Some(threads) = scoped_certification_threads() {
+        return threads.max(1);
+    }
+    let available = std::thread::available_parallelism()
+        .map(|count| count.get())
+        .unwrap_or(1);
+    let requested = std::env::var("REDA_CERT_THREADS")
+        .ok()
+        .and_then(|value| value.parse::<usize>().ok());
+    manifest_sweep_threads(available, requested)
+}
+
+/// The one actual-worker rule shared by every certification sweep.
+///
+/// Empty work reports zero workers and runs no closure. Otherwise workers are
+/// the requested budget capped by whole `MIN_ITEMS_PER_CERTIFICATION_WORKER`
+/// chunks, clamped to at least one, so work too small to amortize thread
+/// startup stays on the caller thread.
+fn certification_workers(items: usize, requested: usize) -> usize {
+    if items == 0 {
+        return 0;
+    }
+    requested
+        .min(items / MIN_ITEMS_PER_CERTIFICATION_WORKER)
+        .max(1)
+}
+
+/// Apply the shared worker policy to `items`, then reduce in logical index order.
+///
+/// The actual worker count is derived once here and decides both whether this
+/// sweep takes the process-wide lock and how `run_indexed_chunks` partitions,
+/// so the lock can never disagree with the parallelism it guards.
+fn run_certification_chunks<T, U, E, F>(items: &[T], requested: usize, work: F) -> Result<Vec<U>, E>
+where
+    T: Sync,
+    U: Send,
+    E: Send,
+    F: Fn(usize, &T) -> Result<U, E> + Sync,
+{
+    let workers = certification_workers(items.len(), requested);
+    // ponytail: the ceiling here is one process-wide lock, so two concurrent
+    // compiles serialize their above-threshold sweeps rather than share the
+    // machine. Replace it with a process-wide budget arbiter when concurrent
+    // compile throughput matters more than one compile's latency.
+    let _sweep = (workers > 1).then(manifest_sweep_guard);
+    run_indexed_chunks(items, workers.max(1), work)
 }
 
 fn manifest_sweep_guard() -> std::sync::MutexGuard<'static, ()> {
@@ -409,15 +535,7 @@ fn sweep_manifest_with_threads(
     threads: usize,
 ) -> Result<Vec<TransitionMeasurement>, CandidateCertificationError> {
     let transitions = manifest.transitions();
-    let worker_count = threads.max(1).min(transitions.len().max(1));
-    // ponytail: one sweep owns the worker budget; use a shared pool only if
-    // concurrent compile throughput becomes more important than one compile's latency.
-    let _sweep = if worker_count > 1 {
-        Some(manifest_sweep_guard())
-    } else {
-        None
-    };
-    run_indexed_chunks(transitions, worker_count, |manifest_index, transition| {
+    run_certification_chunks(transitions, threads, |manifest_index, transition| {
         measure_transition(
             world,
             candidate,
@@ -758,10 +876,13 @@ fn bits_of(mask: usize, width: usize) -> Vec<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        external_signal_is_high, manifest_sweep_guard, manifest_sweep_threads, run_indexed_chunks,
-        settle, sweep_manifest_with_threads, CandidateCertificationError,
+        canonical_world_fingerprint, certification_workers, certify_exhaustive_truth_with_threads,
+        external_signal_is_high, manifest_sweep_guard, manifest_sweep_threads,
+        run_certification_chunks, run_indexed_chunks, scoped_certification_threads, settle,
+        sweep_manifest_with_threads, with_certification_threads, CandidateCertificationError,
         CompleteCandidateCertifier, ExpandedCandidateCertifier, RealisedTimingGraph,
         TimingGraphError, TransitionManifest, TransitionPhase, MANIFEST_SWEEP_LOCK,
+        MIN_ITEMS_PER_CERTIFICATION_WORKER,
     };
     use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
     use crate::compile::fragment_synth::legacy_adapter::LegacyCandidateAdapter;
@@ -788,6 +909,47 @@ mod tests {
         assert_eq!(manifest_sweep_threads(8, Some(4)), 4);
         assert_eq!(manifest_sweep_threads(8, Some(0)), 1);
         assert_eq!(manifest_sweep_threads(32, Some(32)), 12);
+    }
+
+    #[test]
+    fn certification_worker_count_is_one_pure_threshold_rule() {
+        let min = MIN_ITEMS_PER_CERTIFICATION_WORKER;
+        assert!(
+            min >= 2,
+            "a measured crossover below two items cannot keep small work on the caller thread"
+        );
+
+        assert_eq!(certification_workers(0, 8), 0, "empty work runs no closure");
+        assert_eq!(certification_workers(min - 1, 8), 1);
+        assert_eq!(certification_workers(min, 8), 1);
+        assert_eq!(certification_workers(min * 2, 8), 2);
+        assert_eq!(certification_workers(min * 8, 3), 3);
+        assert_eq!(certification_workers(min * 8, 1), 1);
+        assert_eq!(certification_workers(min * 8, 0), 1);
+    }
+
+    #[test]
+    fn certification_chunks_below_the_threshold_stay_on_the_caller_thread() {
+        let caller = std::thread::current().id();
+        let items: Vec<usize> = (0..MIN_ITEMS_PER_CERTIFICATION_WORKER - 1).collect();
+
+        let values = run_certification_chunks(&items, 8, |index, item| {
+            assert_eq!(
+                std::thread::current().id(),
+                caller,
+                "work below the measured threshold must not spawn a worker"
+            );
+            Ok::<_, CandidateCertificationError>(index + item)
+        })
+        .expect("every chunk succeeds");
+        assert_eq!(values, items.iter().map(|item| item * 2).collect::<Vec<_>>());
+
+        let empty: Vec<usize> = Vec::new();
+        assert!(run_certification_chunks(&empty, 8, |_, _| Err::<usize, _>(
+            CandidateCertificationError::CounterOverflow
+        ))
+        .expect("empty work runs no closure")
+        .is_empty());
     }
 
     #[test]
@@ -869,6 +1031,59 @@ mod tests {
     }
 
     #[test]
+    fn certification_thread_scope_restores_the_previous_budget_after_success_and_panic() {
+        assert_eq!(
+            scoped_certification_threads(),
+            None,
+            "no compile owns the worker budget by default"
+        );
+
+        with_certification_threads(4, || {
+            assert_eq!(scoped_certification_threads(), Some(4));
+            with_certification_threads(1, || {
+                assert_eq!(scoped_certification_threads(), Some(1));
+            });
+            assert_eq!(
+                scoped_certification_threads(),
+                Some(4),
+                "a finished nested scope restores its parent budget"
+            );
+
+            let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                with_certification_threads(2, || panic!("nested budget panic"));
+            }));
+            assert!(panicked.is_err());
+            assert_eq!(
+                scoped_certification_threads(),
+                Some(4),
+                "a panicking nested scope restores its parent budget"
+            );
+
+            // The budget belongs to one compile on one thread; a worker must not
+            // inherit it and reopen the full worker count underneath.
+            std::thread::scope(|scope| {
+                scope.spawn(|| assert_eq!(scoped_certification_threads(), None));
+            });
+        });
+
+        assert_eq!(
+            scoped_certification_threads(),
+            None,
+            "the outermost scope clears the budget on return"
+        );
+
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            with_certification_threads(3, || panic!("outer budget panic"));
+        }));
+        assert!(panicked.is_err());
+        assert_eq!(
+            scoped_certification_threads(),
+            None,
+            "the outermost scope clears the budget on panic"
+        );
+    }
+
+    #[test]
     fn manifest_sweeps_serialize_and_recover_after_poison() {
         let held = manifest_sweep_guard();
         std::thread::scope(|scope| {
@@ -907,12 +1122,20 @@ mod tests {
         }
     }
 
-    fn two_input_not_netlist() -> Netlist {
+    // One real NOR driven by `i0`, with `width - 1` declared but unused
+    // inputs. The canonical state count grows with width while the realised
+    // circuit stays the shape legacy routing is known to build, so a test can
+    // reach worker counts above the threshold without a routing-shaped refusal.
+    fn not_netlist_with_inputs(width: usize) -> Netlist {
         Netlist {
-            inputs: vec!["a".into(), "b".into()],
+            inputs: (0..width).map(|index| format!("i{index}")).collect(),
             outputs: vec!["y".into()],
-            gates: vec![Gate::nor("y", &["a"])],
+            gates: vec![Gate::nor("y", &["i0"])],
         }
+    }
+
+    fn two_input_not_netlist() -> Netlist {
+        not_netlist_with_inputs(2)
     }
 
     #[test]
@@ -1020,7 +1243,7 @@ mod tests {
 
     #[test]
     fn parallel_manifest_sweep_matches_serial_results() {
-        let netlist = two_input_not_netlist();
+        let netlist = not_netlist_with_inputs(5);
         let compiled = compile_legacy(&netlist).expect("legacy migration fixture");
         let candidate = LegacyCandidateAdapter::adapt(&netlist, &compiled)
             .expect("typed migration fixture")
@@ -1087,6 +1310,125 @@ mod tests {
         )
         .expect("empty sweep")
         .is_empty());
+    }
+
+    #[test]
+    fn certified_candidate_is_identical_at_one_two_and_four_workers() {
+        let netlist = not_netlist_with_inputs(5);
+        let compiled = compile_legacy(&netlist).expect("legacy migration fixture");
+        let candidate = LegacyCandidateAdapter::adapt(&netlist, &compiled)
+            .expect("typed migration fixture")
+            .candidate;
+        let library = Library::default_library();
+        let config = CertificationConfig::from_search(&SearchConfig::checked_defaults());
+        let certify = |workers| {
+            with_certification_threads(workers, || {
+                CompleteCandidateCertifier
+                    .certify(candidate.clone(), &netlist, &library, &config)
+                    .expect("the fixture must certify at every worker count")
+            })
+        };
+
+        let serial = certify(1);
+        for workers in [2, 4] {
+            let parallel = certify(workers);
+            assert_eq!(
+                parallel.candidate().fingerprint(),
+                serial.candidate().fingerprint(),
+                "{workers} workers must certify the same candidate"
+            );
+            assert_eq!(
+                canonical_world_fingerprint(parallel.world()),
+                canonical_world_fingerprint(serial.world()),
+                "{workers} workers must emit the same world"
+            );
+            assert_eq!(
+                parallel.equivalence_certificate(),
+                serial.equivalence_certificate(),
+                "{workers} workers must seal the same equivalence certificate"
+            );
+            assert_eq!(
+                parallel.timing_graph(),
+                serial.timing_graph(),
+                "{workers} workers must derive the same timing graph"
+            );
+            assert_eq!(
+                parallel.manifest(),
+                serial.manifest(),
+                "{workers} workers must build the same manifest"
+            );
+            assert_eq!(
+                parallel.manifest().fingerprint(),
+                serial.manifest().fingerprint(),
+                "{workers} workers must seal the same manifest fingerprint"
+            );
+            assert_eq!(
+                parallel.measurements(),
+                serial.measurements(),
+                "{workers} workers must measure every transition identically"
+            );
+            assert_eq!(
+                parallel.metrics(),
+                serial.metrics(),
+                "{workers} workers must report the same metrics"
+            );
+        }
+    }
+
+    #[test]
+    fn exhaustive_cap_refusal_reports_the_same_lowest_mask_at_every_worker_count() {
+        let netlist = not_netlist_with_inputs(5);
+        let compiled = compile_legacy(&netlist).expect("legacy migration fixture");
+        let candidate = LegacyCandidateAdapter::adapt(&netlist, &compiled)
+            .expect("typed migration fixture")
+            .candidate;
+        let library = Library::default_library();
+        let world = realise_and_verify_expanded(&candidate, &netlist, &library)
+            .expect("fixture must realise");
+        let compatibility = candidate
+            .compatibility_views(&netlist)
+            .expect("fixture compatibility views");
+        let mut config = CertificationConfig::from_search(&SearchConfig::checked_defaults());
+        let exhaustive = |config: &CertificationConfig, threads| {
+            certify_exhaustive_truth_with_threads(
+                world.world(),
+                &candidate,
+                &netlist,
+                &compatibility,
+                config,
+                threads,
+            )
+        };
+
+        for threads in [1, 2, 4] {
+            assert_eq!(
+                exhaustive(&config, threads).expect("every canonical vector must certify"),
+                1 << netlist.inputs.len(),
+                "{threads} workers must certify the whole canonical mask range"
+            );
+        }
+
+        // Every mask refuses under a zero event cap, so the reported mask is a
+        // completion-order detector: only ordered reduction keeps reporting the
+        // lowest one.
+        config.max_simulator_events_per_transition = 0;
+        let fields = |error| match error {
+            CandidateCertificationError::SimulatorEventCapExceeded {
+                manifest_index,
+                used,
+                limit,
+            } => (manifest_index, used, limit),
+            other => panic!("unexpected exhaustive error: {other}"),
+        };
+        let serial = fields(exhaustive(&config, 1).expect_err("serial must hit the event cap"));
+        assert_eq!(serial.0, 0, "mask 0 is the lowest failing vector");
+        for threads in [2, 4] {
+            assert_eq!(
+                fields(exhaustive(&config, threads).expect_err("parallel must hit the event cap")),
+                serial,
+                "{threads} workers must report the same lowest failing mask"
+            );
+        }
     }
 
     #[test]
