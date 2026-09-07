@@ -5,14 +5,12 @@ use crate::compile::fragment_synth::certification::{CandidateMetrics, CompleteCa
 use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
 use crate::compile::fragment_synth::fragment::FragmentProposalStream;
 use crate::compile::fragment_synth::manifest::TransitionManifest;
+use crate::compile::fragment_synth::placement::TopologyAwareSeedPlacer;
 use crate::compile::fragment_synth::search::{
     run_budgeted_proposals, ProposalTrace, StopReason, SynthesisBudget, SystemMonotonicClock,
 };
 use crate::compile::fragment_synth::seed::{
     compile_sparse_seed_with_services, SeedInput, SeedServices,
-};
-use crate::compile::fragment_synth::services::{
-    DurableSeedEmitter, DurableSeedVerifier, TopologyAwareSeedPlacer,
 };
 use crate::compile::geometry::Anchor;
 use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
@@ -152,8 +150,6 @@ fn compile_fragment_synth_with_case_fingerprint(
         library,
         placer: &TopologyAwareSeedPlacer,
         router: &GuardedPhysicalRouter,
-        emitter: &DurableSeedEmitter,
-        verifier: &DurableSeedVerifier,
         certifier: &CompleteCandidateCertifier,
         search_config,
     };

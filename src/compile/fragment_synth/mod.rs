@@ -19,7 +19,6 @@ pub(crate) mod route_opt;
 pub(crate) mod route_schedule;
 mod search;
 pub(crate) mod seed;
-pub(crate) mod services;
 pub mod timing_graph;
 pub mod topology;
 pub(crate) mod union;

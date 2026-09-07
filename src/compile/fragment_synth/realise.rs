@@ -423,7 +423,7 @@ fn terminal_kind(kind: RouteTerminalKind) -> TerminalKind {
 /// Public emission failure without exposing crate-private emission internals.
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error(transparent)]
-pub struct EmissionFailure(EmissionError);
+pub struct EmissionFailure(pub(crate) EmissionError);
 
 impl From<EmissionError> for EmissionFailure {
     fn from(source: EmissionError) -> Self {

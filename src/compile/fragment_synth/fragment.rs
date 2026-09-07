@@ -881,15 +881,14 @@ mod tests {
         TimingNodeId,
     };
     use crate::compile::fragment_synth::manifest::Transition;
+    use crate::compile::fragment_synth::placement::TopologyAwareSeedPlacer;
+    use crate::compile::fragment_synth::realise::CertificationError as PhysicalCertificationError;
     use crate::compile::fragment_synth::search::{
         run_budgeted_proposals, ProposalStream, ProposalTerminal, SynthesisBudget,
         SystemMonotonicClock,
     };
     use crate::compile::fragment_synth::seed::{
         compile_sparse_seed_with_services, SeedInput, SeedServices,
-    };
-    use crate::compile::fragment_synth::services::{
-        DurableSeedEmitter, DurableSeedVerifier, SeedVerifier, TopologyAwareSeedPlacer,
     };
     use crate::compile::fragment_synth::timing_graph::{
         ExactDelay, RealisedTimingGraph, TimingArc, TimingArcKind,
@@ -964,8 +963,6 @@ mod tests {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
                 router: &DurablePhysicalRouter,
-                emitter: &DurableSeedEmitter,
-                verifier: &DurableSeedVerifier,
                 certifier: &CompleteCandidateCertifier,
                 search_config: &config,
             },
@@ -1025,8 +1022,6 @@ mod tests {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
                 router: &DurablePhysicalRouter,
-                emitter: &DurableSeedEmitter,
-                verifier: &DurableSeedVerifier,
                 certifier: &CompleteCandidateCertifier,
                 search_config: &config,
             },
@@ -1085,8 +1080,6 @@ mod tests {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
                 router: &DurablePhysicalRouter,
-                emitter: &DurableSeedEmitter,
-                verifier: &DurableSeedVerifier,
                 certifier: &CompleteCandidateCertifier,
                 search_config: &config,
             },
@@ -1147,8 +1140,6 @@ mod tests {
             library: &library,
             placer: &TopologyAwareSeedPlacer,
             router: &DurablePhysicalRouter,
-            emitter: &DurableSeedEmitter,
-            verifier: &DurableSeedVerifier,
             certifier: &CompleteCandidateCertifier,
             search_config: &config,
         };
@@ -1193,8 +1184,6 @@ mod tests {
             library: &library,
             placer: &TopologyAwareSeedPlacer,
             router: &DurablePhysicalRouter,
-            emitter: &DurableSeedEmitter,
-            verifier: &DurableSeedVerifier,
             certifier: &CompleteCandidateCertifier,
             search_config: &config,
         };
@@ -1241,8 +1230,6 @@ mod tests {
             library: &library,
             placer: &TopologyAwareSeedPlacer,
             router: &DurablePhysicalRouter,
-            emitter: &DurableSeedEmitter,
-            verifier: &DurableSeedVerifier,
             certifier: &CompleteCandidateCertifier,
             search_config: &config,
         };
@@ -1305,8 +1292,6 @@ mod tests {
             library: &library,
             placer: &TopologyAwareSeedPlacer,
             router: &DurablePhysicalRouter,
-            emitter: &DurableSeedEmitter,
-            verifier: &DurableSeedVerifier,
             certifier: &CompleteCandidateCertifier,
             search_config: &config,
         };
@@ -1338,18 +1323,26 @@ mod tests {
         }
     }
 
-    struct RefusingVerifier;
+    /// The one transaction refusing at its durable physical verification step
+    /// -- the only way that failure can now reach the proposal stream, and it
+    /// must still arrive as `SeedError::Verification`.
+    struct RefusingCertifier;
 
-    impl SeedVerifier for RefusingVerifier {
-        fn verify(
+    impl ExpandedCandidateCertifier for RefusingCertifier {
+        fn certify(
             &self,
-            _candidate: &ExpandedPhysicalCandidate,
-            _emitted: &crate::compile::emission::EmittedWorld,
-        ) -> Result<(), ExpandedPhysicalError> {
-            Err(ExpandedPhysicalError::ObservationMismatch {
-                observation: ObservationId::PrimaryInput(PortId(0)),
-                at: Anchor { x: 0, y: 0, z: 0 },
-            })
+            _candidate: ExpandedPhysicalCandidate,
+            _lowered: &Netlist,
+            _library: &Library,
+            _config: &crate::compile::fragment_synth::config::CertificationConfig,
+        ) -> Result<CertifiedCandidate, CandidateCertificationError> {
+            Err(PhysicalCertificationError::from(
+                ExpandedPhysicalError::ObservationMismatch {
+                    observation: ObservationId::PrimaryInput(PortId(0)),
+                    at: Anchor { x: 0, y: 0, z: 0 },
+                },
+            )
+            .into())
         }
     }
 
@@ -1383,7 +1376,6 @@ mod tests {
 
     fn assert_failed_transaction_is_atomic(
         router: &dyn PhysicalRouter,
-        verifier: &dyn SeedVerifier,
         certifier: &dyn ExpandedCandidateCertifier,
         config: &SearchConfig,
         expected_terminal: ProposalTerminal,
@@ -1406,8 +1398,6 @@ mod tests {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
                 router: &DurablePhysicalRouter,
-                emitter: &DurableSeedEmitter,
-                verifier: &DurableSeedVerifier,
                 certifier: &CompleteCandidateCertifier,
                 search_config: &parent_config,
             },
@@ -1421,8 +1411,6 @@ mod tests {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
                 router,
-                emitter: &DurableSeedEmitter,
-                verifier,
                 certifier,
                 search_config: config,
             },
@@ -1457,28 +1445,24 @@ mod tests {
 
         assert_failed_transaction_is_atomic(
             &CappedRouter,
-            &DurableSeedVerifier,
             &CompleteCandidateCertifier,
             &config,
             ProposalTerminal::RouterCapExhausted,
         );
         assert_failed_transaction_is_atomic(
             &DurablePhysicalRouter,
-            &RefusingVerifier,
-            &CompleteCandidateCertifier,
+            &RefusingCertifier,
             &config,
             ProposalTerminal::VerificationFailed,
         );
         assert_failed_transaction_is_atomic(
             &DurablePhysicalRouter,
-            &DurableSeedVerifier,
             &ProofCappedCertifier,
             &config,
             ProposalTerminal::ProofCapExhausted,
         );
         assert_failed_transaction_is_atomic(
             &DurablePhysicalRouter,
-            &DurableSeedVerifier,
             &TransitionCappedCertifier,
             &config,
             ProposalTerminal::CertificationCapExhausted,
@@ -1487,7 +1471,6 @@ mod tests {
         config.max_seed_shell_radius = 0;
         assert_failed_transaction_is_atomic(
             &DurablePhysicalRouter,
-            &DurableSeedVerifier,
             &CompleteCandidateCertifier,
             &config,
             ProposalTerminal::BacktrackCapExhausted,
@@ -1497,7 +1480,6 @@ mod tests {
         config.max_fragment_backtracks_per_proposal = 0;
         assert_failed_transaction_is_atomic(
             &DurablePhysicalRouter,
-            &DurableSeedVerifier,
             &CompleteCandidateCertifier,
             &config,
             ProposalTerminal::BacktrackCapExhausted,

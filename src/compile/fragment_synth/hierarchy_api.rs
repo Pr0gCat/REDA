@@ -64,7 +64,9 @@ use crate::compile::fragment_synth::identity::{InstanceId, RouteId};
 use crate::compile::fragment_synth::instance_graph::{
     BlockSpec, InstanceDriver, InstanceGraph, LogicalSignalId, PhysicalDriver, PhysicalSink,
 };
-use crate::compile::fragment_synth::placement::{analyse_instance_dag, EdgeFacts};
+use crate::compile::fragment_synth::placement::{
+    analyse_instance_dag, EdgeFacts, TopologyAwareSeedPlacer,
+};
 use crate::compile::fragment_synth::relocate::Offset;
 use crate::compile::fragment_synth::route_opt::{
     prune_descriptors, prune_route, ParentRouteChoice,
@@ -76,9 +78,6 @@ use crate::compile::fragment_synth::search::{
 use crate::compile::fragment_synth::seed::{
     certify_planned, plan_parent_with_services, BlockPlacementOffset, ParentBlocks, PlannedParent,
     SeedError, SeedInput, SeedServices, SeedVariant,
-};
-use crate::compile::fragment_synth::services::{
-    DurableSeedEmitter, DurableSeedVerifier, TopologyAwareSeedPlacer,
 };
 use crate::compile::fragment_synth::union::{
     first_internal_repeater, input_route, planning_netlist, union_candidate, BlockSpecOwned,
@@ -257,8 +256,6 @@ fn seed_services<'a>(library: &'a Library, search_config: &'a SearchConfig) -> S
         library,
         placer: &TopologyAwareSeedPlacer,
         router: &GuardedPhysicalRouter,
-        emitter: &DurableSeedEmitter,
-        verifier: &DurableSeedVerifier,
         certifier: &CompleteCandidateCertifier,
         search_config,
     }

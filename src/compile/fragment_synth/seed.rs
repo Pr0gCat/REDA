@@ -32,12 +32,13 @@ use crate::compile::fragment_synth::placement::{
     SeedPlacementRequest, SeedPlacer,
 };
 use crate::compile::fragment_synth::placement::{LateralWindow, LayoutRepair, PlacementFrame};
-use crate::compile::fragment_synth::realise::{ExpandedAdapterError, ExpandedCandidateAdapter};
+use crate::compile::fragment_synth::realise::{
+    CertificationError as PhysicalCertificationError, ExpandedAdapterError,
+};
 use crate::compile::fragment_synth::relocate::Offset;
 use crate::compile::fragment_synth::route_schedule::{
     RouteObligation, RouteSchedule, TargetObligation,
 };
-use crate::compile::fragment_synth::services::{SeedEmitter, SeedVerifier};
 use crate::compile::fragment_synth::topology::{
     ConnectionSource, ConnectionTarget, ContributorSpec, OutputSpec,
 };
@@ -71,8 +72,6 @@ pub(crate) struct SeedServices<'a> {
     pub library: &'a Library,
     pub placer: &'a dyn SeedPlacer,
     pub router: &'a dyn PhysicalRouter,
-    pub emitter: &'a dyn SeedEmitter,
-    pub verifier: &'a dyn SeedVerifier,
     pub certifier: &'a dyn ExpandedCandidateCertifier,
     pub search_config: &'a SearchConfig,
 }
@@ -134,8 +133,10 @@ pub(crate) enum SeedError {
     Emission(#[from] EmissionError),
     #[error("durable physical verification failed: {0}")]
     Verification(#[from] ExpandedPhysicalError),
+    // `#[source]` rather than `#[from]`: the conversion is hand-written below
+    // so the certifier's physical half lands in the outer variants above.
     #[error("complete candidate certification failed: {0}")]
-    Certification(#[from] CandidateCertificationError),
+    Certification(#[source] CandidateCertificationError),
     #[error("typed identity width exceeded")]
     IdentityOverflow,
     #[error("seed topology is internally incomplete: {0}")]
@@ -150,6 +151,30 @@ pub(crate) enum SeedError {
     BlockTooWide { block: InstanceId },
     #[error("flat union failed: {0}")]
     Union(String),
+}
+
+impl From<CandidateCertificationError> for SeedError {
+    /// The certifier owns the only adapter/emission/physical-verification
+    /// transaction, so its physical half is unwrapped back into the same outer
+    /// variants the seed used to raise itself.  Callers -- including the
+    /// proposal stream's terminal classification -- keep seeing the exact
+    /// typed payload and category they saw when the seed ran that transaction
+    /// a second time.  Every other certification failure stays a certification
+    /// failure.
+    fn from(error: CandidateCertificationError) -> Self {
+        match error {
+            CandidateCertificationError::Physical(PhysicalCertificationError::Adapter(adapter)) => {
+                Self::Adapter(adapter)
+            }
+            CandidateCertificationError::Physical(PhysicalCertificationError::Emission(
+                emission,
+            )) => Self::Emission(emission.0),
+            CandidateCertificationError::Physical(PhysicalCertificationError::Physical(
+                physical,
+            )) => Self::Verification(physical),
+            other => Self::Certification(other),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -736,8 +761,9 @@ impl SparseSeedBuilder {
         Ok((candidate, block_offsets))
     }
 
-    /// The finishing half: shape and ownership validation, emission,
-    /// verification and certification.
+    /// The finishing half: shape and ownership validation, then the one
+    /// certification transaction -- the only place adaptation, emission and
+    /// durable physical verification happen.
     fn finish_attempt(
         candidate: ExpandedPhysicalCandidate,
         input: &SeedInput<'_>,
@@ -753,14 +779,6 @@ impl SparseSeedBuilder {
         };
         candidate.validate_shape()?;
         candidate.validate_physical_ownership()?;
-
-        let adapter = ExpandedCandidateAdapter::new(&candidate)?;
-        let size = adapter.deterministic_world_size()?;
-        let emitted = services.emitter.emit(&adapter, size)?;
-        if let Err(error) = services.verifier.verify(&candidate, &emitted) {
-            return Err(error.into());
-        }
-        phase("emit+verify", &mut phase_started);
 
         let certification = CertificationConfig::from_search(services.search_config);
         let certified = services
@@ -3091,14 +3109,12 @@ pub(crate) mod tests {
 
     use super::*;
     use crate::circuits::and4::build_and4_netlist;
-    use crate::compile::emission::{EmittedWorld, PhysicalCandidateView};
     use crate::compile::fragment_synth::certification::CompleteCandidateCertifier;
     use crate::compile::fragment_synth::legacy_adapter::{LegacyCandidateAdapter, LegacyOracle};
     use crate::compile::fragment_synth::placement::{
         PreferredInstancePose, SeedPlacementError, SeedPlacementPlan, SeedPlacementRequest,
         SeedPlacer, TopologyAwareSeedPlacer,
     };
-    use crate::compile::fragment_synth::services::{DurableSeedEmitter, DurableSeedVerifier};
     use crate::compile::metrics::canonical_fingerprint;
     use crate::compile::routing::{GuardedPhysicalRouter, RealisedRouteTree, RouteRequest};
     use crate::compile::topology::GateKind;
@@ -3403,8 +3419,6 @@ pub(crate) mod tests {
                 library: &library,
                 placer: &placer,
                 router: &GuardedPhysicalRouter,
-                emitter: &DurableSeedEmitter,
-                verifier: &DurableSeedVerifier,
                 certifier: &CompleteCandidateCertifier,
                 search_config: &config,
             },
@@ -3465,8 +3479,6 @@ pub(crate) mod tests {
             library,
             placer: &TopologyAwareSeedPlacer,
             router: &GuardedPhysicalRouter,
-            emitter: &DurableSeedEmitter,
-            verifier: &DurableSeedVerifier,
             certifier: &CompleteCandidateCertifier,
             search_config: config,
         }
@@ -3488,8 +3500,6 @@ pub(crate) mod tests {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
                 router: &GuardedPhysicalRouter,
-                emitter: &DurableSeedEmitter,
-                verifier: &DurableSeedVerifier,
                 certifier: &CompleteCandidateCertifier,
                 search_config: &config,
             },
@@ -3512,8 +3522,6 @@ pub(crate) mod tests {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
                 router: &GuardedPhysicalRouter,
-                emitter: &DurableSeedEmitter,
-                verifier: &DurableSeedVerifier,
                 certifier: &CompleteCandidateCertifier,
                 search_config: &config,
             },
@@ -3574,8 +3582,6 @@ pub(crate) mod tests {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
                 router: &GuardedPhysicalRouter,
-                emitter: &DurableSeedEmitter,
-                verifier: &DurableSeedVerifier,
                 certifier: &CompleteCandidateCertifier,
                 search_config: &config,
             },
@@ -3616,38 +3622,6 @@ pub(crate) mod tests {
         fn route(&self, request: RouteRequest<'_>) -> Result<RealisedRouteTree, RouterFailure> {
             self.calls.set(self.calls.get() + 1);
             GuardedPhysicalRouter.route(request)
-        }
-    }
-
-    #[derive(Default)]
-    struct CountingEmitter {
-        calls: Cell<u32>,
-    }
-
-    impl SeedEmitter for CountingEmitter {
-        fn emit(
-            &self,
-            candidate: &dyn PhysicalCandidateView,
-            size: (i32, i32, i32),
-        ) -> Result<EmittedWorld, EmissionError> {
-            self.calls.set(self.calls.get() + 1);
-            DurableSeedEmitter.emit(candidate, size)
-        }
-    }
-
-    #[derive(Default)]
-    struct CountingVerifier {
-        calls: Cell<u32>,
-    }
-
-    impl SeedVerifier for CountingVerifier {
-        fn verify(
-            &self,
-            candidate: &ExpandedPhysicalCandidate,
-            emitted: &EmittedWorld,
-        ) -> Result<(), ExpandedPhysicalError> {
-            self.calls.set(self.calls.get() + 1);
-            DurableSeedVerifier.verify(candidate, emitted)
         }
     }
 
@@ -3722,13 +3696,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn production_seed_uses_every_durable_service_and_no_legacy_entrypoint() {
+    fn production_seed_has_one_finishing_authority() {
         let (netlist, _) = build_and4_netlist();
         let library = Library::default_library();
         let config = SearchConfig::checked_defaults();
         let router = CountingRouter::default();
-        let emitter = CountingEmitter::default();
-        let verifier = CountingVerifier::default();
         let certifier = CountingCertifier::default();
         let legacy = CountingLegacyOracle::default();
 
@@ -3742,22 +3714,22 @@ pub(crate) mod tests {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
                 router: &router,
-                emitter: &emitter,
-                verifier: &verifier,
                 certifier: &certifier,
                 search_config: &config,
             },
         )
-        .unwrap();
+        .expect("fixture certifies");
 
         assert_eq!(
             certified.candidate().instances.instances.len(),
             netlist.gates.len()
         );
         assert!(router.calls.get() > 0);
-        assert!(emitter.calls.get() > 0);
-        assert!(verifier.calls.get() > 0);
-        assert!(certifier.calls.get() > 0);
+        assert_eq!(certifier.calls.get(), 1);
+        assert_eq!(
+            certified.metrics().candidate_fingerprint,
+            certified.candidate().fingerprint(),
+        );
         assert_eq!(legacy.calls.get(), 0);
         assert_eq!(legacy.compile_legacy_calls.get(), 0);
         assert_eq!(legacy.compile_planned_calls.get(), 0);
@@ -3909,8 +3881,6 @@ pub(crate) mod tests {
         let library = Library::default_library();
         let config = SearchConfig::checked_defaults();
         let router = CountingRouter::default();
-        let emitter = CountingEmitter::default();
-        let verifier = CountingVerifier::default();
         let certifier = CountingCertifier::default();
 
         let error = compile_sparse_seed_with_services(
@@ -3923,8 +3893,6 @@ pub(crate) mod tests {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
                 router: &router,
-                emitter: &emitter,
-                verifier: &verifier,
                 certifier: &certifier,
                 search_config: &config,
             },
@@ -3936,8 +3904,6 @@ pub(crate) mod tests {
             SeedError::InstanceGraph(SynthesisError::UnsupportedStatefulTopology { .. })
         ));
         assert_eq!(router.calls.get(), 0);
-        assert_eq!(emitter.calls.get(), 0);
-        assert_eq!(verifier.calls.get(), 0);
         assert_eq!(certifier.calls.get(), 0);
     }
 
@@ -3949,8 +3915,6 @@ pub(crate) mod tests {
         let library = Library::default_library();
         let config = SearchConfig::checked_defaults();
         let router = CountingRouter::default();
-        let emitter = CountingEmitter::default();
-        let verifier = CountingVerifier::default();
         let certifier = CountingCertifier::default();
 
         let error = compile_sparse_seed_with_services(
@@ -3963,8 +3927,6 @@ pub(crate) mod tests {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
                 router: &router,
-                emitter: &emitter,
-                verifier: &verifier,
                 certifier: &certifier,
                 search_config: &config,
             },
@@ -3973,8 +3935,6 @@ pub(crate) mod tests {
 
         assert!(matches!(error, SeedError::InvalidPins(_)));
         assert_eq!(router.calls.get(), 0);
-        assert_eq!(emitter.calls.get(), 0);
-        assert_eq!(verifier.calls.get(), 0);
         assert_eq!(certifier.calls.get(), 0);
     }
 
@@ -3994,8 +3954,6 @@ pub(crate) mod tests {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
                 router: &GuardedPhysicalRouter,
-                emitter: &DurableSeedEmitter,
-                verifier: &DurableSeedVerifier,
                 certifier: &CompleteCandidateCertifier,
                 search_config: &config,
             },
@@ -4068,8 +4026,6 @@ pub(crate) mod tests {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
                 router: &router,
-                emitter: &DurableSeedEmitter,
-                verifier: &DurableSeedVerifier,
                 certifier: &CompleteCandidateCertifier,
                 search_config: &config,
             },
@@ -4248,8 +4204,6 @@ pub(crate) mod tests {
                 library: &library,
                 placer: &TopologyAwareSeedPlacer,
                 router: &router,
-                emitter: &DurableSeedEmitter,
-                verifier: &DurableSeedVerifier,
                 certifier: &CompleteCandidateCertifier,
                 search_config: &config,
             },
