@@ -34,9 +34,6 @@ use crate::redstone::world::storage::World;
 const MAX_MANIFEST_SWEEP_THREADS: usize = 12;
 static MANIFEST_SWEEP_LOCK: Mutex<()> = Mutex::new(());
 
-type ManifestChunkOutcome =
-    std::thread::Result<Result<Vec<TransitionMeasurement>, CandidateCertificationError>>;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 pub struct QualityKey {
     pub observed_settle: u64,
@@ -413,30 +410,52 @@ fn sweep_manifest_with_threads(
 ) -> Result<Vec<TransitionMeasurement>, CandidateCertificationError> {
     let transitions = manifest.transitions();
     let worker_count = threads.max(1).min(transitions.len().max(1));
+    // ponytail: one sweep owns the worker budget; use a shared pool only if
+    // concurrent compile throughput becomes more important than one compile's latency.
+    let _sweep = if worker_count > 1 {
+        Some(manifest_sweep_guard())
+    } else {
+        None
+    };
+    run_indexed_chunks(transitions, worker_count, |manifest_index, transition| {
+        measure_transition(
+            world,
+            candidate,
+            lowered,
+            compatibility,
+            transition,
+            manifest_index,
+            config,
+        )
+    })
+}
+
+/// Run `work` over contiguous chunks of `items` and reduce in logical index order.
+///
+/// One worker, or no items, runs on the caller thread and spawns nothing. Every
+/// handle is joined before the reduction, so the lowest-index typed error wins
+/// over any later error, and the lowest-index panic is resumed when no earlier
+/// typed error exists, whatever order the workers finished in.
+fn run_indexed_chunks<T, U, E, F>(items: &[T], threads: usize, work: F) -> Result<Vec<U>, E>
+where
+    T: Sync,
+    U: Send,
+    E: Send,
+    F: Fn(usize, &T) -> Result<U, E> + Sync,
+{
+    let worker_count = threads.max(1).min(items.len().max(1));
     if worker_count == 1 {
-        return transitions
+        return items
             .iter()
             .enumerate()
-            .map(|(manifest_index, transition)| {
-                measure_transition(
-                    world,
-                    candidate,
-                    lowered,
-                    compatibility,
-                    transition,
-                    manifest_index,
-                    config,
-                )
-            })
+            .map(|(index, item)| work(index, item))
             .collect();
     }
 
-    // ponytail: one sweep owns the worker budget; use a shared pool only if
-    // concurrent compile throughput becomes more important than one compile's latency.
-    let _sweep = manifest_sweep_guard();
-    let chunk_len = transitions.len().div_ceil(worker_count);
+    let work = &work;
+    let chunk_len = items.len().div_ceil(worker_count);
     std::thread::scope(|scope| {
-        let handles = transitions
+        let handles = items
             .chunks(chunk_len)
             .enumerate()
             .map(|(chunk_index, chunk)| {
@@ -444,17 +463,7 @@ fn sweep_manifest_with_threads(
                     chunk
                         .iter()
                         .enumerate()
-                        .map(|(index, transition)| {
-                            measure_transition(
-                                world,
-                                candidate,
-                                lowered,
-                                compatibility,
-                                transition,
-                                chunk_index * chunk_len + index,
-                                config,
-                            )
-                        })
+                        .map(|(index, item)| work(chunk_index * chunk_len + index, item))
                         .collect::<Result<Vec<_>, _>>()
                 })
             })
@@ -463,22 +472,15 @@ fn sweep_manifest_with_threads(
             .into_iter()
             .map(|handle| handle.join())
             .collect::<Vec<_>>();
-        collect_manifest_chunks(outcomes, transitions.len())
-    })
-}
-
-fn collect_manifest_chunks(
-    outcomes: impl IntoIterator<Item = ManifestChunkOutcome>,
-    capacity: usize,
-) -> Result<Vec<TransitionMeasurement>, CandidateCertificationError> {
-    let mut measurements = Vec::with_capacity(capacity);
-    for outcome in outcomes {
-        match outcome {
-            Ok(chunk) => measurements.extend(chunk?),
-            Err(payload) => std::panic::resume_unwind(payload),
+        let mut values = Vec::with_capacity(items.len());
+        for outcome in outcomes {
+            match outcome {
+                Ok(chunk) => values.extend(chunk?),
+                Err(payload) => std::panic::resume_unwind(payload),
+            }
         }
-    }
-    Ok(measurements)
+        Ok(values)
+    })
 }
 
 fn measure_transition(
@@ -756,8 +758,8 @@ fn bits_of(mask: usize, width: usize) -> Vec<bool> {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_manifest_chunks, external_signal_is_high, manifest_sweep_guard,
-        manifest_sweep_threads, settle, sweep_manifest_with_threads, CandidateCertificationError,
+        external_signal_is_high, manifest_sweep_guard, manifest_sweep_threads, run_indexed_chunks,
+        settle, sweep_manifest_with_threads, CandidateCertificationError,
         CompleteCandidateCertifier, ExpandedCandidateCertifier, RealisedTimingGraph,
         TimingGraphError, TransitionManifest, TransitionPhase, MANIFEST_SWEEP_LOCK,
     };
@@ -789,14 +791,42 @@ mod tests {
     }
 
     #[test]
+    fn indexed_chunks_return_logical_order_not_completion_order() {
+        let items: Vec<usize> = (0..4).collect();
+        // Release chunks from the highest logical index downwards, so completion
+        // order is the exact reverse of the logical order.
+        let next = std::sync::Mutex::new(items.len() - 1);
+        let released = std::sync::Condvar::new();
+
+        let values = run_indexed_chunks(&items, items.len(), |index, item| {
+            let mut turn = next.lock().unwrap();
+            while *turn != index {
+                let (guard, timeout) = released
+                    .wait_timeout(turn, std::time::Duration::from_secs(5))
+                    .unwrap();
+                assert!(!timeout.timed_out(), "chunk {index} never ran concurrently");
+                turn = guard;
+            }
+            *turn = index.wrapping_sub(1);
+            released.notify_all();
+            Ok::<_, CandidateCertificationError>(item * 10)
+        })
+        .expect("every chunk succeeds");
+
+        assert_eq!(values, vec![0, 10, 20, 30]);
+    }
+
+    #[test]
     fn earlier_manifest_error_wins_over_a_later_worker_panic() {
-        let outcomes = vec![
-            Ok(Err(CandidateCertificationError::CounterOverflow)),
-            Err(Box::new("later panic") as Box<dyn std::any::Any + Send>),
-        ];
+        let items: Vec<usize> = (0..4).collect();
 
         let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            collect_manifest_chunks(outcomes, 0)
+            run_indexed_chunks(&items, items.len(), |index, _| match index {
+                1 => Err(CandidateCertificationError::CounterOverflow),
+                2 => Err(CandidateCertificationError::CombinationalCycle),
+                3 => panic!("later panic"),
+                _ => Ok(index),
+            })
         }));
 
         assert!(matches!(
@@ -804,16 +834,38 @@ mod tests {
             Ok(Err(CandidateCertificationError::CounterOverflow))
         ));
 
-        let outcomes = vec![
-            Err(Box::new("first panic") as Box<dyn std::any::Any + Send>),
-            Ok(Err(CandidateCertificationError::CounterOverflow)),
-            Err(Box::new("later panic") as Box<dyn std::any::Any + Send>),
-        ];
         let panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            collect_manifest_chunks(outcomes, 0)
+            run_indexed_chunks(&items, items.len(), |index, _| match index {
+                0 => panic!("first panic"),
+                1 => Err(CandidateCertificationError::CounterOverflow),
+                3 => panic!("later panic"),
+                _ => Ok(index),
+            })
         }))
         .expect_err("the earliest panic must be resumed");
         assert_eq!(panic.downcast_ref::<&str>(), Some(&"first panic"));
+    }
+
+    #[test]
+    fn indexed_chunks_stay_on_the_caller_thread_for_zero_or_one_worker() {
+        let caller = std::thread::current().id();
+        let empty: Vec<usize> = Vec::new();
+        let items: Vec<usize> = (0..3).collect();
+
+        for threads in [0, 1] {
+            let none = run_indexed_chunks(&empty, threads, |_, _| {
+                Err::<usize, _>(CandidateCertificationError::CounterOverflow)
+            })
+            .expect("no chunk runs without items");
+            assert!(none.is_empty());
+
+            let values = run_indexed_chunks(&items, threads, |index, item| {
+                assert_eq!(std::thread::current().id(), caller);
+                Ok::<_, CandidateCertificationError>(index + item)
+            })
+            .expect("every chunk succeeds");
+            assert_eq!(values, vec![0, 2, 4]);
+        }
     }
 
     #[test]
