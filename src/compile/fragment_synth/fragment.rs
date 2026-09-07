@@ -869,6 +869,7 @@ mod tests {
         active_arcs_for_transition, duplication_choice, rank_hotspots, single_instance_choice,
         FragmentId,
     };
+    use crate::compile::emission::EmissionError;
     use crate::compile::equivalence::EquivalenceError;
     use crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate;
     use crate::compile::fragment_synth::certification::{
@@ -882,7 +883,9 @@ mod tests {
     };
     use crate::compile::fragment_synth::manifest::Transition;
     use crate::compile::fragment_synth::placement::TopologyAwareSeedPlacer;
-    use crate::compile::fragment_synth::realise::CertificationError as PhysicalCertificationError;
+    use crate::compile::fragment_synth::realise::{
+        CertificationError as PhysicalCertificationError, EmissionFailure, ExpandedAdapterError,
+    };
     use crate::compile::fragment_synth::search::{
         run_budgeted_proposals, ProposalStream, ProposalTerminal, SynthesisBudget,
         SystemMonotonicClock,
@@ -1346,6 +1349,48 @@ mod tests {
         }
     }
 
+    /// The one transaction refusing while adapting the candidate.  Certification
+    /// now owns that step, but the failure must still surface as
+    /// `SeedError::Adapter` and therefore `Refused` -- not as a certification
+    /// failure, which would read as `VerificationFailed`.
+    struct AdapterRefusingCertifier;
+
+    impl ExpandedCandidateCertifier for AdapterRefusingCertifier {
+        fn certify(
+            &self,
+            _candidate: ExpandedPhysicalCandidate,
+            _lowered: &Netlist,
+            _library: &Library,
+            _config: &crate::compile::fragment_synth::config::CertificationConfig,
+        ) -> Result<CertifiedCandidate, CandidateCertificationError> {
+            Err(PhysicalCertificationError::from(
+                ExpandedAdapterError::NegativeWorldCoordinate {
+                    at: Anchor { x: -1, y: 0, z: 0 },
+                },
+            )
+            .into())
+        }
+    }
+
+    /// The same, one step later: certification owns emission too, and an
+    /// emission refusal must still arrive as `SeedError::Emission` / `Refused`.
+    struct EmissionRefusingCertifier;
+
+    impl ExpandedCandidateCertifier for EmissionRefusingCertifier {
+        fn certify(
+            &self,
+            _candidate: ExpandedPhysicalCandidate,
+            _lowered: &Netlist,
+            _library: &Library,
+            _config: &crate::compile::fragment_synth::config::CertificationConfig,
+        ) -> Result<CertifiedCandidate, CandidateCertificationError> {
+            Err(PhysicalCertificationError::from(EmissionFailure::from(
+                EmissionError::InvalidWorldSize { size: (0, 0, 0) },
+            ))
+            .into())
+        }
+    }
+
     struct ProofCappedCertifier;
 
     impl ExpandedCandidateCertifier for ProofCappedCertifier {
@@ -1454,6 +1499,23 @@ mod tests {
             &RefusingCertifier,
             &config,
             ProposalTerminal::VerificationFailed,
+        );
+        // Certification owns adaptation and emission now, so both halves must
+        // still map back out to `Refused`.  Without the `Physical(Adapter(..))`
+        // and `Physical(Emission(..))` arms in `From<CandidateCertificationError>
+        // for SeedError`, each would fall through to `Certification(..)` and be
+        // classified `VerificationFailed` instead.
+        assert_failed_transaction_is_atomic(
+            &DurablePhysicalRouter,
+            &AdapterRefusingCertifier,
+            &config,
+            ProposalTerminal::Refused,
+        );
+        assert_failed_transaction_is_atomic(
+            &DurablePhysicalRouter,
+            &EmissionRefusingCertifier,
+            &config,
+            ProposalTerminal::Refused,
         );
         assert_failed_transaction_is_atomic(
             &DurablePhysicalRouter,
