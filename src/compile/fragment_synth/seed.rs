@@ -5088,10 +5088,12 @@ pub(crate) mod tests {
             compile: impl Fn(&T) -> Result<SynthesisResult, E>,
         ) {
             let counts = certification_thread_counts();
+            let mut ran = 0usize;
             for (name, case) in &cases {
                 if !case_is_selected(name) {
                     continue;
                 }
+                ran += 1;
                 let run = |threads: usize| {
                     let started = std::time::Instant::now();
                     let result = with_certification_threads(threads, || compile(case))
@@ -5122,6 +5124,11 @@ pub(crate) mod tests {
                     );
                 }
             }
+            assert!(
+                ran > 0,
+                "REDA_EXTRA_CIRCUITS={:?} selected no case, so nothing was compared",
+                std::env::var("REDA_EXTRA_CIRCUITS").ok()
+            );
         }
 
         fn assert_thread_counts_agree(cases: Vec<(String, Netlist)>) {
