@@ -84,7 +84,7 @@ pub(crate) struct InstancePlacementOverride {
     pub dz: i32,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BlockPlacementOffset {
     pub(crate) dx: i32,
     pub(crate) dz: i32,

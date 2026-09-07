@@ -44,7 +44,7 @@
 //! fingerprint, same metrics as the flat front door, byte for byte.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 
@@ -74,8 +74,8 @@ use crate::compile::fragment_synth::search::{
     SearchCandidate, SynthesisBudget, SystemMonotonicClock,
 };
 use crate::compile::fragment_synth::seed::{
-    certify_planned, plan_parent_with_services, BlockPlacementOffset, ParentBlocks, SeedError,
-    SeedInput, SeedServices, SeedVariant,
+    certify_planned, plan_parent_with_services, BlockPlacementOffset, ParentBlocks, PlannedParent,
+    SeedError, SeedInput, SeedServices, SeedVariant,
 };
 use crate::compile::fragment_synth::services::{
     DurableSeedEmitter, DurableSeedVerifier, TopologyAwareSeedPlacer,
@@ -209,16 +209,16 @@ pub(crate) fn compile_hierarchical_with_threads(
     ));
 
     let clock = SystemMonotonicClock::start();
-    let compile = |block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
+    let compile = |incumbent: &HierarchicalCandidate,
+                   block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
                    seams: &[InputSeamChoice],
                    prunes: &[ParentRouteChoice]| {
-        compile_module_with_blocks(
+        compile_proposal(
             &lowered,
-            &lowered.top,
             &ordered,
             pins,
             services,
-            &SeedVariant::default(),
+            incumbent,
             block_placements,
             seams,
             prunes,
@@ -305,10 +305,104 @@ fn compile_module_with_blocks(
         ));
     }
 
+    let planned = plan_parent(
+        lowered,
+        module,
+        ordered,
+        pins,
+        services,
+        variant,
+        block_placements,
+    )?;
+    union_and_certify(
+        lowered,
+        module,
+        ordered,
+        services,
+        Arc::new(planned),
+        block_placements,
+        seams,
+        prunes,
+    )
+}
+
+/// Compile one top-level proposal against `incumbent`.
+///
+/// Placing and routing the parent depends on `block_placements` alone --
+/// `lowered`, `ordered`, `pins` and the default variant are fixed for the
+/// whole search -- so a proposal that moves no block away from where the
+/// incumbent has it, which is every seam and prune proposal, reuses the
+/// incumbent's routed plan. The union and full certification still run on
+/// every call.
+fn compile_proposal(
+    lowered: &LoweredHierarchy,
+    ordered: &[CompiledBlock],
+    pins: Option<&PortPlacements>,
+    services: SeedServices<'_>,
+    incumbent: &HierarchicalCandidate,
+    block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
+    seams: &[InputSeamChoice],
+    prunes: &[ParentRouteChoice],
+) -> Result<HierarchicalCandidate, SeedError> {
+    // The variant is always the default here, which is what makes
+    // `compile_module_with_blocks`'s two variant guards vacuous on this
+    // path; a stage that ever proposes an implementation or a placement has
+    // to bring them back.
+    let module = lowered.top.as_str();
+    let planned = if moved_blocks(&incumbent.block_placements).eq(moved_blocks(block_placements)) {
+        Arc::clone(&incumbent.planned)
+    } else {
+        Arc::new(plan_parent(
+            lowered,
+            module,
+            ordered,
+            pins,
+            services,
+            &SeedVariant::default(),
+            block_placements,
+        )?)
+    };
+    union_and_certify(
+        lowered,
+        module,
+        ordered,
+        services,
+        planned,
+        block_placements,
+        seams,
+        prunes,
+    )
+}
+
+/// The entries that actually move a block, in key order.
+///
+/// An absent offset and an explicit `{dx: 0, dz: 0}` plan the very same
+/// parent, so the reuse key must not tell them apart --
+/// `block_alignment_proposal` writes a zero entry whenever its delta works
+/// out to zero, and the proposal maps keep those entries because the choice
+/// fingerprints are taken over them.
+fn moved_blocks(
+    placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
+) -> impl Iterator<Item = (&InstanceId, &BlockPlacementOffset)> + '_ {
+    placements
+        .iter()
+        .filter(|(_, offset)| (offset.dx, offset.dz) != (0, 0))
+}
+
+/// Place and route `module` around its blocks: the expensive half of a
+/// compile, and the only half that depends on `block_placements` alone.
+fn plan_parent(
+    lowered: &LoweredHierarchy,
+    module: &str,
+    ordered: &[CompiledBlock],
+    pins: Option<&PortPlacements>,
+    services: SeedServices<'_>,
+    variant: &SeedVariant,
+    block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
+) -> Result<PlannedParent, SeedError> {
     let (planning, graph) =
         parent_planning_graph(lowered, module, ordered, services.library, variant)?;
-
-    let planned = plan_parent_with_services(
+    plan_parent_with_services(
         SeedInput {
             lowered: &planning,
             source_provenance: None,
@@ -319,7 +413,22 @@ fn compile_module_with_blocks(
         ParentBlocks { compiled: ordered },
         &variant.placements,
         block_placements,
-    )?;
+    )
+}
+
+/// Dissolve the planned parent's blocks into one flat candidate with
+/// `seams` and `prunes` applied, and certify it. The candidate keeps
+/// `planned`, so a later proposal at the same placements can reuse it.
+fn union_and_certify(
+    lowered: &LoweredHierarchy,
+    module: &str,
+    ordered: &[CompiledBlock],
+    services: SeedServices<'_>,
+    planned: Arc<PlannedParent>,
+    block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
+    seams: &[InputSeamChoice],
+    prunes: &[ParentRouteChoice],
+) -> Result<HierarchicalCandidate, SeedError> {
     let realised_block_offsets = planned.block_offsets.clone();
     let (flat, paths) = module_flattening(lowered, module)?;
     // Decided on the pre-union trees, which are the ones the union prunes.
@@ -340,6 +449,7 @@ fn compile_module_with_blocks(
     let certified = certify_planned(union, &flat, services)?;
     Ok(HierarchicalCandidate {
         certified,
+        planned,
         block_placements: block_placements.clone(),
         realised_block_offsets,
         seams: seams.to_vec(),
@@ -673,6 +783,9 @@ fn block_pull_x_proposal(
 
 struct HierarchicalCandidate {
     certified: CertifiedCandidate,
+    /// The routed parent this candidate was unioned from, for a proposal
+    /// that keeps `block_placements` and so needs no new plan.
+    planned: Arc<PlannedParent>,
     block_placements: BTreeMap<InstanceId, BlockPlacementOffset>,
     realised_block_offsets: BTreeMap<InstanceId, Offset>,
     /// Accepted seam choices, cumulative like `block_placements`.
@@ -697,6 +810,7 @@ impl SearchCandidate for HierarchicalCandidate {
 }
 
 type HierarchicalCompiler<'a> = dyn Fn(
+        &HierarchicalCandidate,
         &BTreeMap<InstanceId, BlockPlacementOffset>,
         &[InputSeamChoice],
         &[ParentRouteChoice],
@@ -882,7 +996,7 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                 certified: None,
             });
         };
-        match (self.compile)(&block_placements, &seams, &prunes) {
+        match (self.compile)(incumbent, &block_placements, &seams, &prunes) {
             Ok(candidate) => Some(ProposalEvaluation {
                 fragment_fingerprint,
                 choice_fingerprint,
@@ -1211,11 +1325,18 @@ fn hierarchy_descriptor_bytes(design: &HierarchicalNetlist) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate;
+    use crate::compile::fragment_synth::certification::{
+        CandidateCertificationError, ExpandedCandidateCertifier,
+    };
     use crate::compile::fragment_synth::identity::{
         GateIndex, ImplementationKey, InputMask, PortId, PrimitiveId, TopologyNodeId,
     };
     use crate::compile::fragment_synth::instance_graph::{
         BlockInstance, DuplicateRequest, SinkAssignment,
+    };
+    use crate::compile::fragment_synth::placement::{
+        LayoutRepair, SeedPlacementError, SeedPlacementPlan, SeedPlacementRequest, SeedPlacer,
     };
     use crate::compile::fragment_synth::search::StopReason;
     use crate::compile::fragment_synth::seed::InstancePlacementOverride;
@@ -1223,6 +1344,7 @@ mod tests {
     use crate::compile::hierarchy::{Module, ModuleInstance};
     use crate::compile::Gate;
     use crate::redstone::world::block::Facing;
+    use std::cell::Cell;
 
     struct BlockProposalFixture {
         graph: InstanceGraph,
@@ -2089,7 +2211,8 @@ mod tests {
             fixture.sink_inputs.clone(),
             seams,
             Box::new(
-                |_: &BTreeMap<InstanceId, BlockPlacementOffset>,
+                |_: &HierarchicalCandidate,
+                 _: &BTreeMap<InstanceId, BlockPlacementOffset>,
                  _: &[InputSeamChoice],
                  _: &[ParentRouteChoice]| {
                     unreachable!("the descriptor lookup never compiles")
@@ -2121,7 +2244,8 @@ mod tests {
             fixture.sink_inputs.clone(),
             vec![seam],
             Box::new(
-                |_: &BTreeMap<InstanceId, BlockPlacementOffset>,
+                |_: &HierarchicalCandidate,
+                 _: &BTreeMap<InstanceId, BlockPlacementOffset>,
                  _: &[InputSeamChoice],
                  _: &[ParentRouteChoice]| {
                     unreachable!("the descriptor lookup never compiles")
@@ -2682,6 +2806,164 @@ mod tests {
             refusal(&duplicates),
             "a duplicate proposal cannot be represented in a parent that stamps blocks"
         );
+    }
+
+    #[derive(Default)]
+    struct CountingPlacer {
+        calls: Cell<u32>,
+    }
+
+    impl SeedPlacer for CountingPlacer {
+        fn plan(
+            &self,
+            request: SeedPlacementRequest<'_>,
+        ) -> Result<SeedPlacementPlan, SeedPlacementError> {
+            self.calls.set(self.calls.get() + 1);
+            TopologyAwareSeedPlacer.plan(request)
+        }
+
+        fn plan_with_repairs(
+            &self,
+            request: SeedPlacementRequest<'_>,
+            repairs: &[LayoutRepair],
+        ) -> Result<SeedPlacementPlan, SeedPlacementError> {
+            self.calls.set(self.calls.get() + 1);
+            TopologyAwareSeedPlacer.plan_with_repairs(request, repairs)
+        }
+    }
+
+    #[derive(Default)]
+    struct CountingCertifier {
+        calls: Cell<u32>,
+    }
+
+    impl ExpandedCandidateCertifier for CountingCertifier {
+        fn certify(
+            &self,
+            candidate: ExpandedPhysicalCandidate,
+            lowered: &Netlist,
+            library: &Library,
+            config: &CertificationConfig,
+        ) -> Result<CertifiedCandidate, CandidateCertificationError> {
+            self.calls.set(self.calls.get() + 1);
+            CompleteCandidateCertifier.certify(candidate, lowered, library, config)
+        }
+    }
+
+    /// A proposal that keeps every block where the incumbent has it --
+    /// which is every seam and prune proposal, and equally one that names a
+    /// block with an explicit zero offset -- reuses the incumbent's
+    /// already-routed parent instead of placing and routing it again, while
+    /// still going through the union and the full certifier. A proposal
+    /// that really moves a block plans afresh and owns the result; the
+    /// incumbent it was compiled against is untouched, so the next proposal
+    /// at the incumbent's placements still reuses the incumbent's plan.
+    #[test]
+    fn unchanged_block_placements_reuse_the_incumbent_plan() {
+        let design = crate::circuits::hierarchical_builder::circuits::ripple_adder(2);
+        let design = design.specialise_constants().unwrap();
+        let lowered = lower_hierarchy(&design).unwrap();
+        let order = lowered.as_hierarchical().module_order().unwrap();
+        let library = Library::default_library();
+        let search_config = SearchConfig::checked_defaults();
+        let placer = CountingPlacer::default();
+        let certifier = CountingCertifier::default();
+        let services = SeedServices {
+            placer: &placer,
+            certifier: &certifier,
+            ..seed_services(&library, &search_config)
+        };
+        let blocks = compile_blocks(&lowered, &order, 1).expect("blocks compile");
+        let ordered = ordered_blocks(&lowered, &lowered.top, &order, &blocks);
+        let fingerprint = |candidate: &HierarchicalCandidate| {
+            candidate.certified.metrics().candidate_fingerprint.clone()
+        };
+        let propose =
+            |incumbent: &HierarchicalCandidate,
+             placements: &BTreeMap<InstanceId, BlockPlacementOffset>| {
+                compile_proposal(
+                    &lowered,
+                    &ordered,
+                    None,
+                    services,
+                    incumbent,
+                    placements,
+                    &[],
+                    &[],
+                )
+            };
+
+        // Deltas throughout: a channel widening retries the placer, so no
+        // step here may assume a single call.
+        let placed_before = placer.calls.get();
+        let certified_before = certifier.calls.get();
+        let baseline = compile_module_with_blocks(
+            &lowered,
+            &lowered.top,
+            &ordered,
+            None,
+            services,
+            &SeedVariant::default(),
+            &BTreeMap::new(),
+            &[],
+            &[],
+        )
+        .expect("baseline certifies");
+        assert!(
+            placer.calls.get() > placed_before,
+            "the baseline plans the parent"
+        );
+        assert_eq!(
+            certifier.calls.get(),
+            certified_before + 1,
+            "the baseline certifies once"
+        );
+
+        let moved_block = *baseline
+            .realised_block_offsets
+            .keys()
+            .next()
+            .expect("the top stamps a block");
+        // Not every displacement of a block still routes; the contract is
+        // about the ones that do, so take the first that certifies and fail
+        // loudly if the fixture has none.
+        let placed_before = placer.calls.get();
+        let moved = [(0, 1), (0, 2), (1, 0), (0, -1)]
+            .into_iter()
+            .find_map(|(dx, dz)| {
+                let placements = BTreeMap::from([(moved_block, BlockPlacementOffset { dx, dz })]);
+                propose(&baseline, &placements).ok()
+            })
+            .expect("some displacement of a block must still certify");
+        let placed_after = placer.calls.get();
+        assert!(
+            placed_after > placed_before,
+            "changed placements plan again"
+        );
+        assert!(
+            !Arc::ptr_eq(&moved.planned, &baseline.planned),
+            "a moved proposal owns its own plan"
+        );
+        // The incumbent was only borrowed, so it stands unchanged whether
+        // the search goes on to accept this candidate or drop it.
+        let certified_before = certifier.calls.get();
+
+        let reused = propose(&baseline, &BTreeMap::new()).expect("same placements certify");
+        // An explicit zero moves nothing, so it must reuse just the same.
+        let explicit_zero = BTreeMap::from([(moved_block, BlockPlacementOffset { dx: 0, dz: 0 })]);
+        let reused_zero = propose(&baseline, &explicit_zero).expect("an explicit zero certifies");
+        assert_eq!(
+            (placer.calls.get(), certifier.calls.get()),
+            (placed_after, certified_before + 2),
+            "the incumbent's placements skip the placer but still run the certifier"
+        );
+        for candidate in [&reused, &reused_zero] {
+            assert_eq!(fingerprint(candidate), fingerprint(&baseline));
+            assert!(
+                Arc::ptr_eq(&candidate.planned, &baseline.planned),
+                "the reused candidate carries the incumbent's own plan"
+            );
+        }
     }
 
     /// The hierarchy is part of the case, not just its flattening. Two
