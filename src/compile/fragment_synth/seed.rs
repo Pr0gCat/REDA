@@ -4611,14 +4611,19 @@ pub(crate) mod tests {
             }
         }
 
+        /// The `REDA_EXTRA_CIRCUITS` subset/resume filter every corpus
+        /// harness here honours, in one place: no variable set runs the whole
+        /// corpus, a comma-separated list runs exactly the cases it names.
+        fn case_is_selected(name: &str) -> bool {
+            std::env::var("REDA_EXTRA_CIRCUITS")
+                .map_or(true, |selected| selected.split(',').any(|s| s == name))
+        }
+
         fn run_cases(cases: Vec<(String, Netlist)>) {
-            let selected = std::env::var("REDA_EXTRA_CIRCUITS").ok();
             let mut failures = Vec::new();
             for (name, netlist) in cases {
-                if let Some(selected) = &selected {
-                    if !selected.split(',').any(|s| s == name) {
-                        continue;
-                    }
+                if !case_is_selected(&name) {
+                    continue;
                 }
                 let started = std::time::Instant::now();
                 let result = compile_fragment_synth(
@@ -4803,13 +4808,10 @@ pub(crate) mod tests {
         fn run_hierarchical_cases(cases: Vec<(String, crate::compile::HierarchicalNetlist)>) {
             use crate::compile::compile_hierarchical;
 
-            let selected = std::env::var("REDA_EXTRA_CIRCUITS").ok();
             let mut failures = Vec::new();
             for (name, design) in cases {
-                if let Some(selected) = &selected {
-                    if !selected.split(',').any(|s| s == name) {
-                        continue;
-                    }
+                if !case_is_selected(&name) {
+                    continue;
                 }
                 let gate_count = design
                     .specialise_constants()
@@ -5051,6 +5053,10 @@ pub(crate) mod tests {
                 "{label}: gate facings"
             );
             assert_eq!(
+                observed.compiled.observations, reference.compiled.observations,
+                "{label}: circuit observations"
+            );
+            assert_eq!(
                 observed.evaluations_used, reference.evaluations_used,
                 "{label}: evaluations used"
             );
@@ -5068,10 +5074,13 @@ pub(crate) mod tests {
         ///
         /// The budget is one evaluation, not zero: a zero-evaluation compile
         /// has an empty trace, which would leave the proposal-trace, terminal
-        /// and cap-work rows vacuous. The closing assertion states that at
-        /// least one case really did evaluate a proposal, so a corpus that
-        /// never reaches its proposal stream cannot pass as coverage of
-        /// those rows.
+        /// and cap-work rows vacuous. Every reference compile must therefore
+        /// evaluate a proposal, so a case that never reaches its proposal
+        /// stream fails here instead of quietly proving nothing.
+        ///
+        /// Cases are subset by `REDA_EXTRA_CIRCUITS` through the same
+        /// [`case_is_selected`] filter the sibling corpus harnesses use, so an
+        /// interrupted release run can resume on the cases it has left.
         ///
         /// A refusal at any count fails the matrix: these corpora certify.
         fn assert_matrix_agrees<T, E: std::fmt::Display>(
@@ -5079,8 +5088,10 @@ pub(crate) mod tests {
             compile: impl Fn(&T) -> Result<SynthesisResult, E>,
         ) {
             let counts = certification_thread_counts();
-            let mut traced = false;
             for (name, case) in &cases {
+                if !case_is_selected(name) {
+                    continue;
+                }
                 let run = |threads: usize| {
                     let started = std::time::Instant::now();
                     let result = with_certification_threads(threads, || compile(case))
@@ -5099,7 +5110,10 @@ pub(crate) mod tests {
                     result
                 };
                 let reference = run(counts[0]);
-                traced |= !reference.trace.is_empty();
+                assert!(
+                    !reference.trace.is_empty(),
+                    "{name}: the reference compile must evaluate one proposal"
+                );
                 for &threads in &counts[1..] {
                     assert_same_result(
                         &format!("{name} at {threads} worker(s)"),
@@ -5108,11 +5122,6 @@ pub(crate) mod tests {
                     );
                 }
             }
-            assert!(
-                traced,
-                "the matrix must compare at least one real proposal trace, \
-                 or its trace, terminal and cap-work rows prove nothing"
-            );
         }
 
         fn assert_thread_counts_agree(cases: Vec<(String, Netlist)>) {
@@ -5148,14 +5157,14 @@ pub(crate) mod tests {
         /// `certification::tests::earlier_manifest_error_wins_over_a_later_worker_panic`,
         /// so neither is repeated over these corpora.
         #[test]
-        #[ignore = "release-only: run with `cargo test --release --lib certification_thread_counts -- --ignored --nocapture`"]
+        #[ignore = "release-only, serial: run with `cargo test --release --lib certification_thread_counts -- --ignored --nocapture --test-threads=1`"]
         fn every_extra_circuit_agrees_across_certification_thread_counts() {
             assert_thread_counts_agree(extra_circuit_cases());
         }
 
         /// The matrix over the four flat large cases.
         #[test]
-        #[ignore = "release-only: run with `cargo test --release --lib certification_thread_counts -- --ignored --nocapture`"]
+        #[ignore = "release-only, serial: run with `cargo test --release --lib certification_thread_counts -- --ignored --nocapture --test-threads=1`"]
         fn every_large_circuit_agrees_across_certification_thread_counts() {
             assert_thread_counts_agree(large_circuit_cases());
         }
@@ -5165,7 +5174,7 @@ pub(crate) mod tests {
         /// work -- `parallel_and_sequential_block_compiles_agree` proves the
         /// same equality only on its seconds-sized three-level fixture.
         #[test]
-        #[ignore = "release-only: run with `cargo test --release --lib certification_thread_counts -- --ignored --nocapture`"]
+        #[ignore = "release-only, serial: run with `cargo test --release --lib certification_thread_counts -- --ignored --nocapture --test-threads=1`"]
         fn every_hierarchical_circuit_agrees_across_certification_thread_counts() {
             assert_hierarchical_thread_counts_agree(hierarchical_circuit_cases());
         }
