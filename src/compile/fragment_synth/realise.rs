@@ -22,8 +22,8 @@ use crate::compile::fragment_synth::identity::{
 };
 use crate::compile::fragment_synth::topology::ConnectionTarget;
 use crate::compile::fragment_synth::verify::{
-    certify_expanded_structure, CertificationError as StructuralCertificationError,
-    StructuralCertificate,
+    certify_expanded_structure_with_identity, CertificationError as StructuralCertificationError,
+    CertificationIdentity, StructuralCertificate,
 };
 use crate::compile::geometry::Anchor;
 use crate::compile::planner::RouteTerminalKind;
@@ -478,8 +478,10 @@ pub(crate) fn prepare_expanded_for_physical_verification(
     candidate: &ExpandedPhysicalCandidate,
     netlist: &Netlist,
     library: &Library,
+    identity: &CertificationIdentity,
 ) -> Result<PendingPhysicalVerification, CertificationError> {
-    let structure = certify_expanded_structure(candidate, netlist, library)?;
+    let structure =
+        certify_expanded_structure_with_identity(candidate, netlist, library, identity)?;
     let adapter = ExpandedCandidateAdapter::new(candidate)?;
     let size = adapter.deterministic_world_size()?;
     let emitted = emit_candidate(&adapter, size).map_err(EmissionFailure::from)?;
@@ -489,12 +491,27 @@ pub(crate) fn prepare_expanded_for_physical_verification(
 /// Structurally certify, adapt and emit an expanded candidate, then run the
 /// durable typed physical verifier over the exact emitted world and ownership
 /// ledger before sealing the result.
+///
+/// Callers that hold no sealed identity pay for one here.
 pub fn realise_and_verify_expanded(
     candidate: &ExpandedPhysicalCandidate,
     netlist: &Netlist,
     library: &Library,
 ) -> Result<CertifiedWorld, CertificationError> {
-    let pending = prepare_expanded_for_physical_verification(candidate, netlist, library)?;
+    let identity = CertificationIdentity::seal(candidate, library);
+    realise_and_verify_expanded_with_identity(candidate, netlist, library, &identity)
+}
+
+/// [`realise_and_verify_expanded`] for a candidate whose identity is already
+/// sealed. The returned world's structural certificate carries that identity.
+pub(crate) fn realise_and_verify_expanded_with_identity(
+    candidate: &ExpandedPhysicalCandidate,
+    netlist: &Netlist,
+    library: &Library,
+    identity: &CertificationIdentity,
+) -> Result<CertifiedWorld, CertificationError> {
+    let pending =
+        prepare_expanded_for_physical_verification(candidate, netlist, library, identity)?;
     verify_expanded_candidate(candidate, &pending.emitted)?;
     Ok(CertifiedWorld {
         emitted: pending.emitted,

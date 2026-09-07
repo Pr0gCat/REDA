@@ -13,7 +13,7 @@ use crate::compile::fragment_synth::identity::{
     PhysicalEndpointId, PrimitiveId, RouteId, RoutedSinkId,
 };
 use crate::compile::fragment_synth::topology::{ConnectionTarget, ContributorSpec, OutputSpec};
-use crate::compile::fragment_synth::verify::StructuralCertificate;
+use crate::compile::fragment_synth::verify::{CertificationIdentity, StructuralCertificate};
 use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
 use crate::compile::topology::Primitive;
 use crate::redstone::simulator::component::{
@@ -119,7 +119,29 @@ impl RealisedTimingGraph {
                 actual,
             });
         }
+        Self::derive_graph(candidate)
+    }
 
+    /// [`derive`](Self::derive) for a caller that sealed this candidate's
+    /// identity before certification began. The certificate was issued under
+    /// that seal, so checking it against the seal costs a fingerprint
+    /// comparison rather than a second serialization of the whole candidate,
+    /// and still refuses a certificate belonging to another candidate.
+    pub(crate) fn derive_with_identity(
+        candidate: &ExpandedPhysicalCandidate,
+        certificate: &StructuralCertificate,
+        identity: &CertificationIdentity,
+    ) -> Result<Self, TimingGraphError> {
+        if certificate.candidate_fingerprint != identity.candidate {
+            return Err(TimingGraphError::CertificateMismatch {
+                certified: certificate.candidate_fingerprint.clone(),
+                actual: identity.candidate.clone(),
+            });
+        }
+        Self::derive_graph(candidate)
+    }
+
+    fn derive_graph(candidate: &ExpandedPhysicalCandidate) -> Result<Self, TimingGraphError> {
         let mut builder = TimingGraphBuilder::default();
 
         for &port in &candidate.instances.primary_inputs {

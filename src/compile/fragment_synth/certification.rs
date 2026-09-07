@@ -6,7 +6,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::compile::equivalence::{
-    prove_combinational_equivalence, EquivalenceCertificate, EquivalenceError,
+    prove_combinational_equivalence_with_identity, EquivalenceCertificate, EquivalenceError,
 };
 use crate::compile::fragment_synth::benchmark::canonical_world_fingerprint;
 use crate::compile::fragment_synth::candidate::{
@@ -15,11 +15,13 @@ use crate::compile::fragment_synth::candidate::{
 use crate::compile::fragment_synth::config::CertificationConfig;
 use crate::compile::fragment_synth::manifest::{Transition, TransitionManifest};
 use crate::compile::fragment_synth::realise::{
-    realise_and_verify_expanded, CertificationError as PhysicalCertificationError, CertifiedWorld,
+    realise_and_verify_expanded_with_identity, CertificationError as PhysicalCertificationError,
+    CertifiedWorld,
 };
 use crate::compile::fragment_synth::timing_graph::{
     ExactDelay, RealisedTimingGraph, TimingGraphError,
 };
+use crate::compile::fragment_synth::verify::CertificationIdentity;
 use crate::compile::metrics::{physical_metrics, Fingerprint};
 use crate::compile::topology::Library;
 use crate::compile::{self, Netlist};
@@ -187,6 +189,26 @@ impl ExpandedCandidateCertifier for CompleteCandidateCertifier {
         library: &Library,
         config: &CertificationConfig,
     ) -> Result<CertifiedCandidate, CandidateCertificationError> {
+        let identity = CertificationIdentity::seal(&candidate, library);
+        self.certify_with_identity(candidate, lowered, library, config, &identity)
+    }
+}
+
+impl CompleteCandidateCertifier {
+    /// Certify under one already-sealed identity.
+    ///
+    /// The candidate and the library revision are fingerprinted once, by
+    /// whoever built `identity`; structural certification, timing derivation,
+    /// the equivalence proof and the metrics all borrow that seal instead of
+    /// serializing the candidate again per certificate.
+    pub(crate) fn certify_with_identity(
+        &self,
+        candidate: ExpandedPhysicalCandidate,
+        lowered: &Netlist,
+        library: &Library,
+        config: &CertificationConfig,
+        identity: &CertificationIdentity,
+    ) -> Result<CertifiedCandidate, CandidateCertificationError> {
         let timing = std::env::var_os("REDA_PHASE_TIMING").is_some();
         let mut phase_started = std::time::Instant::now();
         let phase = |name: &str, started: &mut std::time::Instant| {
@@ -195,16 +217,22 @@ impl ExpandedCandidateCertifier for CompleteCandidateCertifier {
             }
             *started = std::time::Instant::now();
         };
-        let world = realise_and_verify_expanded(&candidate, lowered, library)?;
+        let world =
+            realise_and_verify_expanded_with_identity(&candidate, lowered, library, identity)?;
         phase("structure+emit+verify", &mut phase_started);
-        let timing_graph = RealisedTimingGraph::derive(&candidate, world.structural_certificate())?;
+        let timing_graph = RealisedTimingGraph::derive_with_identity(
+            &candidate,
+            world.structural_certificate(),
+            identity,
+        )?;
         let static_timing = timing_graph.analyse()?;
         phase("timing", &mut phase_started);
-        let equivalence = prove_combinational_equivalence(
+        let equivalence = prove_combinational_equivalence_with_identity(
             lowered,
             &candidate,
             library,
             config.max_equivalence_proof_steps,
+            identity,
         )?;
         phase("equivalence", &mut phase_started);
         let compatibility = candidate.compatibility_views(lowered)?;
@@ -271,7 +299,7 @@ impl ExpandedCandidateCertifier for CompleteCandidateCertifier {
                 > usize::from(config.exhaustive_input_threshold))
             .then(|| equivalence.fingerprint.clone()),
             realised_timing_graph_fingerprint: timing_graph.fingerprint(),
-            candidate_fingerprint: candidate.fingerprint(),
+            candidate_fingerprint: identity.candidate.clone(),
             emitted_world_fingerprint: canonical_world_fingerprint(world.world()),
         };
         phase("metrics+fingerprints", &mut phase_started);
@@ -718,12 +746,14 @@ fn bits_of(mask: usize, width: usize) -> Vec<bool> {
 mod tests {
     use super::{
         collect_manifest_chunks, external_signal_is_high, manifest_sweep_guard,
-        manifest_sweep_threads, realise_and_verify_expanded, settle, sweep_manifest_with_threads,
-        CandidateCertificationError, CompleteCandidateCertifier, ExpandedCandidateCertifier,
-        TransitionManifest, TransitionPhase, MANIFEST_SWEEP_LOCK,
+        manifest_sweep_threads, settle, sweep_manifest_with_threads, CandidateCertificationError,
+        CompleteCandidateCertifier, ExpandedCandidateCertifier, RealisedTimingGraph,
+        TimingGraphError, TransitionManifest, TransitionPhase, MANIFEST_SWEEP_LOCK,
     };
     use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
     use crate::compile::fragment_synth::legacy_adapter::LegacyCandidateAdapter;
+    use crate::compile::fragment_synth::realise::realise_and_verify_expanded;
+    use crate::compile::fragment_synth::verify::CertificationIdentity;
     use crate::compile::metrics::canonical_fingerprint;
     use crate::compile::topology::Library;
     use crate::compile::{compile_legacy, Gate, Netlist};
@@ -858,6 +888,63 @@ mod tests {
             certified.timing_graph().fingerprint(),
             certified.metrics().realised_timing_graph_fingerprint
         );
+    }
+
+    #[test]
+    fn certification_identity_is_shared_by_every_certificate() {
+        let netlist = not_netlist();
+        let compiled = compile_legacy(&netlist).expect("legacy migration fixture");
+        let candidate = LegacyCandidateAdapter::adapt(&netlist, &compiled)
+            .expect("typed migration fixture")
+            .candidate;
+        let library = Library::default_library();
+        let config = CertificationConfig::from_search(&SearchConfig::checked_defaults());
+        let identity = CertificationIdentity {
+            candidate: candidate.fingerprint(),
+            library_revision: library.revision_fingerprint(),
+        };
+
+        let certified = CompleteCandidateCertifier
+            .certify_with_identity(candidate, &netlist, &library, &config, &identity)
+            .expect("a valid NOT must receive complete certification");
+
+        let structure = certified.world.structural_certificate();
+        assert_eq!(structure.candidate_fingerprint, identity.candidate);
+        assert_eq!(structure.library_revision, identity.library_revision);
+        assert_eq!(
+            certified.equivalence_certificate().candidate_fingerprint,
+            identity.candidate
+        );
+        assert_eq!(
+            certified.equivalence_certificate().library_revision,
+            identity.library_revision
+        );
+        assert_eq!(certified.metrics().candidate_fingerprint, identity.candidate);
+        assert_eq!(
+            certified.metrics().realised_timing_graph_fingerprint,
+            certified.timing_graph().fingerprint()
+        );
+        assert_eq!(
+            &RealisedTimingGraph::derive(certified.candidate(), structure)
+                .expect("the sealed identity must derive its own timing graph"),
+            certified.timing_graph(),
+            "the sealed timing graph must be the graph this identity derives"
+        );
+
+        // The identity is a seal, not a bypass: a certificate carrying another
+        // real candidate's identity must still be refused.
+        let other = two_input_not_netlist();
+        let other_compiled = compile_legacy(&other).expect("legacy migration fixture");
+        let other_candidate = LegacyCandidateAdapter::adapt(&other, &other_compiled)
+            .expect("typed migration fixture")
+            .candidate;
+        let other_world = realise_and_verify_expanded(&other_candidate, &other, &library)
+            .expect("fixture must realise");
+        let other_structure = other_world.structural_certificate();
+        assert!(matches!(
+            RealisedTimingGraph::derive(certified.candidate(), other_structure),
+            Err(TimingGraphError::CertificateMismatch { .. })
+        ));
     }
 
     #[test]

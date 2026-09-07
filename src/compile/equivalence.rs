@@ -88,6 +88,7 @@ use crate::compile::fragment_synth::instance_graph::{
 use crate::compile::fragment_synth::topology::{
     instantiate, prove_topology_semantics, TopologyError, TopologySemanticsError,
 };
+use crate::compile::fragment_synth::verify::CertificationIdentity;
 use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
 use crate::compile::topology::{GateKind, Library};
 use crate::redstone::rules::taxonomy::flags_of;
@@ -287,11 +288,34 @@ fn append_proof_step(
 /// This proof never enumerates input vectors. Each selected implementation is
 /// instantiated independently, then stable graph assignments preserve the
 /// already-proved symbolic meaning of each logical signal.
+///
+/// Callers that hold no sealed identity pay for one here.
 pub fn prove_combinational_equivalence(
     lowered: &Netlist,
     candidate: &ExpandedPhysicalCandidate,
     library: &Library,
     max_equivalence_proof_steps: u64,
+) -> Result<EquivalenceCertificate, EquivalenceError> {
+    let identity = CertificationIdentity::seal(candidate, library);
+    prove_combinational_equivalence_with_identity(
+        lowered,
+        candidate,
+        library,
+        max_equivalence_proof_steps,
+        &identity,
+    )
+}
+
+/// [`prove_combinational_equivalence`] for a candidate whose identity is
+/// already sealed: the proof is unchanged, and the certificate clones the
+/// candidate fingerprint and library revision from the seal instead of
+/// serializing either a second time.
+pub(crate) fn prove_combinational_equivalence_with_identity(
+    lowered: &Netlist,
+    candidate: &ExpandedPhysicalCandidate,
+    library: &Library,
+    max_equivalence_proof_steps: u64,
+    identity: &CertificationIdentity,
 ) -> Result<EquivalenceCertificate, EquivalenceError> {
     for (index, gate) in lowered.gates.iter().enumerate() {
         if gate.kind.is_sequential() {
@@ -396,8 +420,8 @@ pub fn prove_combinational_equivalence(
     }
 
     let lowered_netlist_hash = lowered_netlist_fingerprint(lowered);
-    let candidate_fingerprint = candidate.fingerprint();
-    let library_revision = library.revision_fingerprint();
+    let candidate_fingerprint = identity.candidate.clone();
+    let library_revision = identity.library_revision.clone();
     let work_used = u64::try_from(proof_steps.len()).map_err(|_| {
         EquivalenceError::ProofExhausted {
             used: u64::MAX,

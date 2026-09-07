@@ -67,6 +67,29 @@ pub struct StructuralCertificate {
     pub instance_count: usize,
 }
 
+/// The single identity one candidate is certified under.
+///
+/// Fingerprinting a candidate or the library means serializing it, and every
+/// certificate a certification run seals carries the same two values. They are
+/// therefore computed once at certification entry and borrowed by structural
+/// certification, timing derivation, the equivalence proof and metrics, each of
+/// which clones the fingerprints it owns so no public lifetime changes.
+#[derive(Debug, Clone)]
+pub(crate) struct CertificationIdentity {
+    pub candidate: Fingerprint,
+    pub library_revision: Fingerprint,
+}
+
+impl CertificationIdentity {
+    /// Serialize the candidate and the library exactly once.
+    pub(crate) fn seal(candidate: &ExpandedPhysicalCandidate, library: &Library) -> Self {
+        Self {
+            candidate: candidate.fingerprint(),
+            library_revision: library.revision_fingerprint(),
+        }
+    }
+}
+
 type CertificationResult<T> = Result<T, CertificationError>;
 
 #[derive(Default)]
@@ -79,10 +102,25 @@ struct Authority {
 
 /// Re-instantiate all selected implementations from `library`, then certify
 /// candidate structure without invoking emission or the physical verifier.
+///
+/// Callers that hold no sealed identity pay for one here.
 pub fn certify_expanded_structure(
     candidate: &ExpandedPhysicalCandidate,
     netlist: &Netlist,
     library: &Library,
+) -> CertificationResult<StructuralCertificate> {
+    let identity = CertificationIdentity::seal(candidate, library);
+    certify_expanded_structure_with_identity(candidate, netlist, library, &identity)
+}
+
+/// [`certify_expanded_structure`] for a candidate whose identity is already
+/// sealed: every structural check is unchanged, only the certificate's two
+/// fingerprints are cloned from the seal instead of serialized a second time.
+pub(crate) fn certify_expanded_structure_with_identity(
+    candidate: &ExpandedPhysicalCandidate,
+    netlist: &Netlist,
+    library: &Library,
+    identity: &CertificationIdentity,
 ) -> CertificationResult<StructuralCertificate> {
     let authority = reinstantiate_authority(candidate, netlist, library)?;
     validate_instance_graph(candidate, netlist)?;
@@ -101,8 +139,8 @@ pub fn certify_expanded_structure(
         .validate_physical_ownership()
         .map_err(|error| physical_ownership_error(candidate, error))?;
     Ok(StructuralCertificate {
-        candidate_fingerprint: candidate.fingerprint(),
-        library_revision: library.revision_fingerprint(),
+        candidate_fingerprint: identity.candidate.clone(),
+        library_revision: identity.library_revision.clone(),
         instance_count: authority.instances.len(),
     })
 }
