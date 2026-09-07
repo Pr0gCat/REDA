@@ -146,23 +146,11 @@ pub(crate) fn compile_hierarchical_with_threads(
 
     let blocks = compile_blocks(&lowered, &order, threads)?;
     let ordered = ordered_blocks(&lowered, &lowered.top, &order, &blocks);
-    // Built before the seed compile and borrowed by it, by the block-edge
-    // analysis below and by every proposal the stream evaluates: the top's
-    // planning graph and flattening are the same for all of them.
-    let context = ModuleCompileContext::build(
-        &lowered,
-        &lowered.top,
-        &ordered,
-        &library,
-        &SeedVariant::default(),
-    )
-    .map_err(|error| SynthesisError::Seed(format!("{}: {error}", lowered.top)))?;
 
     let certified = compile_module_with_blocks(
         &lowered,
         &lowered.top,
         &ordered,
-        &context,
         pins,
         services,
         &SeedVariant::default(),
@@ -171,8 +159,15 @@ pub(crate) fn compile_hierarchical_with_threads(
         &[],
     )
     .map_err(|error| SynthesisError::Seed(format!("{}: {error}", lowered.top)))?;
-    let block_delays = context
-        .graph
+    let (_, graph) = parent_planning_graph(
+        &lowered,
+        &lowered.top,
+        &ordered,
+        &library,
+        &SeedVariant::default(),
+    )
+    .map_err(|error| SynthesisError::Seed(format!("{}: {error}", lowered.top)))?;
+    let block_delays = graph
         .blocks
         .iter()
         .map(|block| {
@@ -186,12 +181,12 @@ pub(crate) fn compile_hierarchical_with_threads(
         })
         .collect::<Result<BTreeMap<_, _>, SeedError>>()
         .map_err(|error| SynthesisError::Seed(format!("{}: {error}", lowered.top)))?;
-    let analysis = analyse_instance_dag(&context.graph, &block_delays)
+    let analysis = analyse_instance_dag(&graph, &block_delays)
         .map_err(|error| SynthesisError::Seed(format!("{}: {error}", lowered.top)))?;
-    let edges = explicit_block_edges(&context.graph, &analysis.edges);
-    let (source_outputs, sink_inputs) = compiled_port_lookup(&context.graph, &ordered)
+    let edges = explicit_block_edges(&graph, &analysis.edges);
+    let (source_outputs, sink_inputs) = compiled_port_lookup(&graph, &ordered)
         .map_err(|error| SynthesisError::Seed(format!("{}: {error}", lowered.top)))?;
-    let seams = seam_descriptors(&context.graph, |block, input| {
+    let seams = seam_descriptors(&graph, |block, input| {
         ordered
             .get(block as usize)
             .and_then(|compiled| input_route(&compiled.candidate, input))
@@ -218,8 +213,8 @@ pub(crate) fn compile_hierarchical_with_threads(
                    seams: &[InputSeamChoice],
                    prunes: &[ParentRouteChoice]| {
         compile_proposal(
+            &lowered,
             &ordered,
-            &context,
             pins,
             services,
             incumbent,
@@ -266,50 +261,12 @@ fn seed_services<'a>(library: &'a Library, search_config: &'a SearchConfig) -> S
     }
 }
 
-/// Everything about compiling one module that no proposal can change: the
-/// planning netlist and instance graph its parent is placed around, and the
-/// module's own flattening, which every union and certification is measured
-/// against. Built once per compiled module and borrowed by every candidate
-/// of it, because a proposal only ever moves blocks, absorbs a seam or
-/// prunes a route -- none of which is an input to any of these four.
-///
-/// `graph` is the one part that is not a function of the module alone: it is
-/// built from `variant.implementations`, so a context serves exactly the
-/// variants that re-implement the same gates the same way. The compiler
-/// proper only ever plans a parent with `SeedVariant::default()`.
-struct ModuleCompileContext {
-    planning: Netlist,
-    graph: InstanceGraph,
-    flat: Netlist,
-    paths: Vec<GatePath>,
-}
-
-impl ModuleCompileContext {
-    fn build(
-        lowered: &LoweredHierarchy,
-        module: &str,
-        ordered: &[CompiledBlock],
-        library: &Library,
-        variant: &SeedVariant,
-    ) -> Result<Self, SeedError> {
-        let (planning, graph) = parent_planning_graph(lowered, module, ordered, library, variant)?;
-        let (flat, paths) = module_flattening(lowered, module)?;
-        Ok(Self {
-            planning,
-            graph,
-            flat,
-            paths,
-        })
-    }
-}
-
 /// Plan `module` around its blocks with `variant` applied to the module's
 /// own gates, dissolve the blocks into one flat candidate and certify it.
 fn compile_module_with_blocks(
     lowered: &LoweredHierarchy,
     module: &str,
     ordered: &[CompiledBlock],
-    context: &ModuleCompileContext,
     pins: Option<&PortPlacements>,
     services: SeedServices<'_>,
     variant: &SeedVariant,
@@ -345,10 +302,19 @@ fn compile_module_with_blocks(
         ));
     }
 
-    let planned = plan_parent(ordered, context, pins, services, variant, block_placements)?;
-    union_and_certify(
+    let planned = plan_parent(
+        lowered,
+        module,
         ordered,
-        context,
+        pins,
+        services,
+        variant,
+        block_placements,
+    )?;
+    union_and_certify(
+        lowered,
+        module,
+        ordered,
         services,
         Arc::new(planned),
         block_placements,
@@ -360,15 +326,14 @@ fn compile_module_with_blocks(
 /// Compile one top-level proposal against `incumbent`.
 ///
 /// Placing and routing the parent depends on `block_placements` alone --
-/// `context`, `ordered`, `pins` and the default variant are fixed for the
+/// `lowered`, `ordered`, `pins` and the default variant are fixed for the
 /// whole search -- so a proposal that moves no block away from where the
 /// incumbent has it, which is every seam and prune proposal, reuses the
-/// incumbent's routed plan and the prunable routes decided from it. A
-/// proposal that really moves a block routes a whole new `RoutedParent`. The
-/// union and full certification still run on every call.
+/// incumbent's routed plan. The union and full certification still run on
+/// every call.
 fn compile_proposal(
+    lowered: &LoweredHierarchy,
     ordered: &[CompiledBlock],
-    context: &ModuleCompileContext,
     pins: Option<&PortPlacements>,
     services: SeedServices<'_>,
     incumbent: &HierarchicalCandidate,
@@ -380,12 +345,14 @@ fn compile_proposal(
     // `compile_module_with_blocks`'s two variant guards vacuous on this
     // path; a stage that ever proposes an implementation or a placement has
     // to bring them back.
+    let module = lowered.top.as_str();
     let planned = if moved_blocks(&incumbent.block_placements).eq(moved_blocks(block_placements)) {
         Arc::clone(&incumbent.planned)
     } else {
         Arc::new(plan_parent(
+            lowered,
+            module,
             ordered,
-            context,
             pins,
             services,
             &SeedVariant::default(),
@@ -393,8 +360,9 @@ fn compile_proposal(
         )?)
     };
     union_and_certify(
+        lowered,
+        module,
         ordered,
-        context,
         services,
         planned,
         block_placements,
@@ -418,79 +386,58 @@ fn moved_blocks(
         .filter(|(_, offset)| (offset.dx, offset.dz) != (0, 0))
 }
 
-/// A routed parent plan and the parent routes a prune proposal could
-/// actually change, which are a function of that plan's routes and nothing
-/// else. They are computed together and travel together so a candidate can
-/// never end up holding one plan's sidecar next to another plan's routes:
-/// moving a block routes the parent afresh, and the new trees are prunable
-/// in their own places, not the old ones.
-struct RoutedParent {
-    planned: PlannedParent,
-    prunable_routes: BTreeSet<RouteId>,
-}
-
-impl RoutedParent {
-    fn new(planned: PlannedParent) -> Self {
-        // Decided on the pre-union trees, which are the ones the union prunes.
-        let prunable_routes = prunable_parent_routes(&planned.candidate.routes);
-        Self {
-            planned,
-            prunable_routes,
-        }
-    }
-}
-
-/// Place and route the context's module around its blocks: the expensive
-/// half of a compile, and the only half that depends on `block_placements`
-/// alone.
+/// Place and route `module` around its blocks: the expensive half of a
+/// compile, and the only half that depends on `block_placements` alone.
 fn plan_parent(
+    lowered: &LoweredHierarchy,
+    module: &str,
     ordered: &[CompiledBlock],
-    context: &ModuleCompileContext,
     pins: Option<&PortPlacements>,
     services: SeedServices<'_>,
     variant: &SeedVariant,
     block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
-) -> Result<RoutedParent, SeedError> {
+) -> Result<PlannedParent, SeedError> {
+    let (planning, graph) =
+        parent_planning_graph(lowered, module, ordered, services.library, variant)?;
     plan_parent_with_services(
         SeedInput {
-            lowered: &context.planning,
+            lowered: &planning,
             source_provenance: None,
             pins,
         },
         services,
-        // The channel-widening loop re-plans from a fresh graph on every
-        // repair, so the planner owns the one it is handed; the context
-        // keeps the original for the next placement to clone.
-        context.graph.clone(),
+        graph,
         ParentBlocks { compiled: ordered },
         &variant.placements,
         block_placements,
     )
-    .map(RoutedParent::new)
 }
 
-/// Dissolve the routed parent's blocks into one flat candidate with `seams`
-/// and `prunes` applied, and certify it against the context's flattening.
-/// The candidate keeps `routed`, so a later proposal at the same placements
-/// can reuse both the plan and the prunable routes decided from it.
+/// Dissolve the planned parent's blocks into one flat candidate with
+/// `seams` and `prunes` applied, and certify it. The candidate keeps
+/// `planned`, so a later proposal at the same placements can reuse it.
 fn union_and_certify(
+    lowered: &LoweredHierarchy,
+    module: &str,
     ordered: &[CompiledBlock],
-    context: &ModuleCompileContext,
     services: SeedServices<'_>,
-    routed: Arc<RoutedParent>,
+    planned: Arc<PlannedParent>,
     block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
     seams: &[InputSeamChoice],
     prunes: &[ParentRouteChoice],
 ) -> Result<HierarchicalCandidate, SeedError> {
-    let realised_block_offsets = routed.planned.block_offsets.clone();
+    let realised_block_offsets = planned.block_offsets.clone();
+    let (flat, paths) = module_flattening(lowered, module)?;
+    // Decided on the pre-union trees, which are the ones the union prunes.
+    let prunable = prunable_parent_routes(&planned.candidate.routes);
     // Certification keeps the union's route ids, so `parent_routes` names
     // the trees in the certified candidate's timing graph.
     let union_started = std::time::Instant::now();
     let (union, mut parent_routes) = union_candidate(UnionInput {
-        parent: &routed.planned,
+        parent: &planned,
         blocks: ordered,
-        flat: &context.flat,
-        paths: &context.paths,
+        flat: &flat,
+        paths: &paths,
         library: services.library,
         seams,
         prunes,
@@ -499,11 +446,11 @@ fn union_and_certify(
     if std::env::var_os("REDA_PHASE_TIMING").is_some() {
         eprintln!("PHASE union {}", union_started.elapsed().as_millis());
     }
-    parent_routes.retain(|route, _| routed.prunable_routes.contains(route));
-    let certified = certify_planned(union, &context.flat, services)?;
+    parent_routes.retain(|route, _| prunable.contains(route));
+    let certified = certify_planned(union, &flat, services)?;
     Ok(HierarchicalCandidate {
         certified,
-        planned: routed,
+        planned,
         block_placements: block_placements.clone(),
         realised_block_offsets,
         seams: seams.to_vec(),
@@ -837,10 +784,9 @@ fn block_pull_x_proposal(
 
 struct HierarchicalCandidate {
     certified: CertifiedCandidate,
-    /// The routed parent this candidate was unioned from, with the prunable
-    /// routes decided from it, for a proposal that keeps `block_placements`
-    /// and so needs no new plan.
-    planned: Arc<RoutedParent>,
+    /// The routed parent this candidate was unioned from, for a proposal
+    /// that keeps `block_placements` and so needs no new plan.
+    planned: Arc<PlannedParent>,
     block_placements: BTreeMap<InstanceId, BlockPlacementOffset>,
     realised_block_offsets: BTreeMap<InstanceId, Offset>,
     /// Accepted seam choices, cumulative like `block_placements`.
@@ -1175,22 +1121,10 @@ fn compile_blocks(
             continue;
         }
         let ordered = ordered_blocks(lowered, name, order, &compiled);
-        // One context for this module's single compile: nothing here
-        // proposes anything, so it is built, used once and dropped with the
-        // module.
-        let context = ModuleCompileContext::build(
-            lowered,
-            name,
-            &ordered,
-            &library,
-            &SeedVariant::default(),
-        )
-        .map_err(|error| SynthesisError::Seed(format!("{name}: {error}")))?;
         let certified = compile_module_with_blocks(
             lowered,
             name,
             &ordered,
-            &context,
             None,
             services,
             &SeedVariant::default(),
@@ -1205,14 +1139,16 @@ fn compile_blocks(
         // only. See `CompiledBlock::lowered`: a block whose netlist is
         // narrower than its candidate is internally inconsistent, and the
         // union one level up reads that netlist to decide which of the
-        // block's ports anything behind them actually consumes. That is
-        // exactly the flattening the context already holds and the candidate
-        // was certified against.
-        let block = CompiledBlock::from_certified(name, &context.flat, &certified.certified)
-            .map_err(|error| SynthesisError::Block {
-                module: name.clone(),
-                first_path: first_instance_path(lowered, name),
-                reason: error.to_string(),
+        // block's ports anything behind them actually consumes.
+        let (flat, _) = module_flattening(lowered, name)
+            .map_err(|error| SynthesisError::Seed(format!("{name}: {error}")))?;
+        let block =
+            CompiledBlock::from_certified(name, &flat, &certified.certified).map_err(|error| {
+                SynthesisError::Block {
+                    module: name.clone(),
+                    first_path: first_instance_path(lowered, name),
+                    reason: error.to_string(),
+                }
             })?;
         compiled.insert(name.clone(), block);
     }
@@ -2387,22 +2323,22 @@ mod tests {
         let blocks = compile_blocks(&lowered, &order, threads).expect("blocks compile");
         let ordered = ordered_blocks(&lowered, &lowered.top, &order, &blocks);
         let variant = SeedVariant::default();
-        let context = ModuleCompileContext::build(
+        let (planning, graph) = parent_planning_graph(
             &lowered,
             &lowered.top,
             &ordered,
             &library,
             &variant,
         )
-        .expect("the top module's compile invariants build");
+        .unwrap();
         let planned = plan_parent_with_services(
             SeedInput {
-                lowered: &context.planning,
+                lowered: &planning,
                 source_provenance: None,
                 pins: None,
             },
             services,
-            context.graph.clone(),
+            graph,
             ParentBlocks { compiled: &ordered },
             &variant.placements,
             &BTreeMap::new(),
@@ -2434,7 +2370,6 @@ mod tests {
                 &lowered,
                 &lowered.top,
                 &ordered,
-                &context,
                 None,
                 services,
                 &variant,
@@ -2518,25 +2453,24 @@ mod tests {
             .map(|block| block.candidate.routes.clone())
             .collect::<Vec<_>>();
         let variant = SeedVariant::default();
-        let context = ModuleCompileContext::build(
+        let (_, graph) = parent_planning_graph(
             &lowered,
             &lowered.top,
             &ordered,
             &library,
             &variant,
         )
-        .expect("the top module's compile invariants build");
-        let block_delays = context
-            .graph
+        .unwrap();
+        let block_delays = graph
             .blocks
             .iter()
             .map(|block| (block.id, ordered[block.block as usize].delay.0))
             .collect::<BTreeMap<_, _>>();
-        let analysis = analyse_instance_dag(&context.graph, &block_delays).expect("dag analyses");
-        let edges = explicit_block_edges(&context.graph, &analysis.edges);
+        let analysis = analyse_instance_dag(&graph, &block_delays).expect("dag analyses");
+        let edges = explicit_block_edges(&graph, &analysis.edges);
         assert!(!edges.is_empty(), "ripple_adder(8) has block-to-block edges");
         let (source_outputs, sink_inputs) =
-            compiled_port_lookup(&context.graph, &ordered).expect("compiled ports resolve");
+            compiled_port_lookup(&graph, &ordered).expect("compiled ports resolve");
 
         let compile = |placements: &BTreeMap<InstanceId, BlockPlacementOffset>| {
             let started = std::time::Instant::now();
@@ -2544,7 +2478,6 @@ mod tests {
                 &lowered,
                 &lowered.top,
                 &ordered,
-                &context,
                 None,
                 services,
                 &variant,
@@ -2656,17 +2589,16 @@ mod tests {
         let threads = std::thread::available_parallelism().map_or(1, |n| n.get());
         let blocks = compile_blocks(&lowered, &order, threads).expect("blocks compile");
         let ordered = ordered_blocks(&lowered, &lowered.top, &order, &blocks);
-        let context = ModuleCompileContext::build(
+        let (_, graph) = parent_planning_graph(
             &lowered,
             &lowered.top,
             &ordered,
             &library,
             &SeedVariant::default(),
         )
-        .expect("the top module's compile invariants build");
+        .unwrap();
         let row = |name: &str| {
-            context
-                .graph
+            graph
                 .blocks
                 .iter()
                 .find(|block| block.path == [name.to_string()])
@@ -2701,7 +2633,6 @@ mod tests {
                 &lowered,
                 &lowered.top,
                 &ordered,
-                &context,
                 None,
                 services,
                 &SeedVariant::default(),
@@ -2798,24 +2729,11 @@ mod tests {
             u32::try_from(lowered.modules[&lowered.top].gates.len()).expect("narrow");
         assert!(parent_gates > 0, "the top must own gates of its own");
         let block_gate = InstanceId(parent_gates);
-        // Every variant below that gets as far as planning re-implements
-        // nothing -- the ones that do are refused before `plan_parent` --
-        // so the default variant's graph is the graph all of them plan
-        // against, and one context serves the lot.
-        let context = ModuleCompileContext::build(
-            &lowered,
-            &lowered.top,
-            &ordered,
-            &library,
-            &SeedVariant::default(),
-        )
-        .expect("the top module's compile invariants build");
         let compile = |variant: &SeedVariant| {
             compile_module_with_blocks(
                 &lowered,
                 &lowered.top,
                 &ordered,
-                &context,
                 None,
                 services,
                 variant,
@@ -2941,11 +2859,6 @@ mod tests {
     /// that really moves a block plans afresh and owns the result; the
     /// incumbent it was compiled against is untouched, so the next proposal
     /// at the incumbent's placements still reuses the incumbent's plan.
-    ///
-    /// Every compile here borrows one `ModuleCompileContext`: the planning
-    /// netlist, the instance graph and the module's flattening are the same
-    /// whatever a proposal moves, so they are built once for the module and
-    /// never rebuilt per candidate.
     #[test]
     fn unchanged_block_placements_reuse_the_incumbent_plan() {
         let design = crate::circuits::hierarchical_builder::circuits::ripple_adder(2);
@@ -2963,14 +2876,6 @@ mod tests {
         };
         let blocks = compile_blocks(&lowered, &order, 1).expect("blocks compile");
         let ordered = ordered_blocks(&lowered, &lowered.top, &order, &blocks);
-        let context = ModuleCompileContext::build(
-            &lowered,
-            &lowered.top,
-            &ordered,
-            &library,
-            &SeedVariant::default(),
-        )
-        .expect("the top module's compile invariants build");
         let fingerprint = |candidate: &HierarchicalCandidate| {
             candidate.certified.metrics().candidate_fingerprint.clone()
         };
@@ -2978,8 +2883,8 @@ mod tests {
             |incumbent: &HierarchicalCandidate,
              placements: &BTreeMap<InstanceId, BlockPlacementOffset>| {
                 compile_proposal(
+                    &lowered,
                     &ordered,
-                    &context,
                     None,
                     services,
                     incumbent,
@@ -2997,7 +2902,6 @@ mod tests {
             &lowered,
             &lowered.top,
             &ordered,
-            &context,
             None,
             services,
             &SeedVariant::default(),
