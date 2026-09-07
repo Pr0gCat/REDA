@@ -201,7 +201,18 @@ impl CompleteCandidateCertifier {
     /// whoever built `identity`; structural certification, timing derivation,
     /// the equivalence proof and the metrics all borrow that seal instead of
     /// serializing the candidate again per certificate.
-    pub(crate) fn certify_with_identity(
+    ///
+    /// # Precondition
+    ///
+    /// `identity` must have been sealed from the very `candidate` and `library`
+    /// passed to this call, as `CertificationIdentity::seal(&candidate,
+    /// library)` does. Every certificate returned here stamps the seal's
+    /// fingerprints rather than recomputing them, so an identity sealed from
+    /// some other candidate would label all of them with that other candidate
+    /// and no later check could notice. That is why this stays private: the
+    /// only callers are `certify` above, which seals immediately before
+    /// calling, and this module's own tests.
+    fn certify_with_identity(
         &self,
         candidate: ExpandedPhysicalCandidate,
         lowered: &Netlist,
@@ -890,6 +901,14 @@ mod tests {
         );
     }
 
+    // What this proves: every certificate and metric a run seals carries one
+    // shared identity value, and the mutation guards still refuse a foreign
+    // certificate. What it cannot prove: that the value was computed once. A
+    // certificate exposes only the value, so cloning the seal and recomputing an
+    // equal fingerprint are indistinguishable from here, and no counting hook
+    // was added to production to make them distinguishable. "Fingerprint the
+    // candidate once" is enforced by code review of the call sites and by the
+    // REDA_PHASE_TIMING phase benchmarks instead.
     #[test]
     fn certification_identity_is_shared_by_every_certificate() {
         let netlist = not_netlist();
