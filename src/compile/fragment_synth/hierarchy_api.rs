@@ -435,6 +435,7 @@ fn union_and_certify(
     let prunable = prunable_parent_routes(&planned.candidate.routes);
     // Certification keeps the union's route ids, so `parent_routes` names
     // the trees in the certified candidate's timing graph.
+    let union_started = std::time::Instant::now();
     let (union, mut parent_routes) = union_candidate(UnionInput {
         parent: &planned,
         blocks: ordered,
@@ -445,6 +446,9 @@ fn union_and_certify(
         prunes,
     })
     .map_err(|error| SeedError::Union(error.to_string()))?;
+    if std::env::var_os("REDA_PHASE_TIMING").is_some() {
+        eprintln!("PHASE union {}", union_started.elapsed().as_millis());
+    }
     parent_routes.retain(|route, _| prunable.contains(route));
     let certified = certify_planned(union, &flat, services)?;
     Ok(HierarchicalCandidate {

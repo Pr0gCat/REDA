@@ -187,15 +187,26 @@ impl ExpandedCandidateCertifier for CompleteCandidateCertifier {
         library: &Library,
         config: &CertificationConfig,
     ) -> Result<CertifiedCandidate, CandidateCertificationError> {
+        let timing = std::env::var_os("REDA_PHASE_TIMING").is_some();
+        let mut phase_started = std::time::Instant::now();
+        let phase = |name: &str, started: &mut std::time::Instant| {
+            if timing {
+                eprintln!("PHASE {name} {}", started.elapsed().as_millis());
+            }
+            *started = std::time::Instant::now();
+        };
         let world = realise_and_verify_expanded(&candidate, lowered, library)?;
+        phase("structure+emit+verify", &mut phase_started);
         let timing_graph = RealisedTimingGraph::derive(&candidate, world.structural_certificate())?;
         let static_timing = timing_graph.analyse()?;
+        phase("timing", &mut phase_started);
         let equivalence = prove_combinational_equivalence(
             lowered,
             &candidate,
             library,
             config.max_equivalence_proof_steps,
         )?;
+        phase("equivalence", &mut phase_started);
         let compatibility = candidate.compatibility_views(lowered)?;
         let manifest =
             TransitionManifest::for_kind(lowered.inputs.clone(), config.transition_manifest_kind);
@@ -208,8 +219,18 @@ impl ExpandedCandidateCertifier for CompleteCandidateCertifier {
             });
         }
 
-        if lowered.inputs.len() <= usize::from(config.exhaustive_input_threshold) {
-            certify_exhaustive_truth(world.world(), &candidate, lowered, &compatibility, config)?;
+        // Manifest construction belongs to neither simulation phase, so it
+        // gets its own label rather than inflating one of them.
+        phase("compatibility+manifest_build", &mut phase_started);
+        let exhaustive = lowered.inputs.len() <= usize::from(config.exhaustive_input_threshold);
+        let exhaustive_vectors = if exhaustive {
+            certify_exhaustive_truth(world.world(), &candidate, lowered, &compatibility, config)?
+        } else {
+            0
+        };
+        phase("exhaustive", &mut phase_started);
+        if timing {
+            eprintln!("WORK exhaustive_vectors {exhaustive_vectors}");
         }
 
         let measurements = sweep_manifest(
@@ -220,6 +241,10 @@ impl ExpandedCandidateCertifier for CompleteCandidateCertifier {
             &manifest,
             config,
         )?;
+        phase("manifest", &mut phase_started);
+        if timing {
+            eprintln!("WORK manifest_transitions {transition_count}");
+        }
         let worst = measurements
             .iter()
             .map(|measurement| measurement.settle_game_ticks)
@@ -249,6 +274,7 @@ impl ExpandedCandidateCertifier for CompleteCandidateCertifier {
             candidate_fingerprint: candidate.fingerprint(),
             emitted_world_fingerprint: canonical_world_fingerprint(world.world()),
         };
+        phase("metrics+fingerprints", &mut phase_started);
         Ok(CertifiedCandidate {
             candidate,
             world,
@@ -271,7 +297,7 @@ fn certify_exhaustive_truth(
     lowered: &Netlist,
     compatibility: &CompatibilityViews,
     config: &CertificationConfig,
-) -> Result<(), CandidateCertificationError> {
+) -> Result<usize, CandidateCertificationError> {
     let state_count = 1usize
         .checked_shl(u32::try_from(lowered.inputs.len()).unwrap_or(u32::MAX))
         .ok_or(CandidateCertificationError::CounterOverflow)?;
@@ -296,7 +322,7 @@ fn certify_exhaustive_truth(
             mask,
         )?;
     }
-    Ok(())
+    Ok(state_count)
 }
 
 fn sweep_manifest(
