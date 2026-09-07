@@ -1,15 +1,17 @@
 # Portable Performance Foundation — Baseline and Retention Report
 
-Status: baseline captured; Layer 0 observability measured; later layers and
-their retention decisions pending.
+Status: foundation measured and verified. Phase observability, one physical
+certification transaction and shared certification identity are retained.
+Immutable hierarchy context reuse was reverted by its measurement gate.
 
 ## Environment
 
 - Date: 2026-09-07
 - Worktree: `topology-aware-seed-v2-6f8f7e`
-- HEAD: `f6e4f6d` (`perf: reuse routed hierarchical parent plans`)
-- Production prerequisite under measurement: committed incumbent routed-parent
-  reuse in `hierarchy_api.rs` and equality support in `seed.rs`
+- HEAD: `95b6b9d` (`Revert "perf: reuse hierarchical compile invariants"`)
+- Retained stack under measurement: incumbent routed-parent reuse, complete
+  phase observability, one physical certification transaction and one shared
+  certification identity
 - Build: Cargo release profile, already built before samples
 - Timing: `REDA_PHASE_TIMING=1`
 
@@ -246,21 +248,217 @@ The label measures 0 ms on this fixture, so the timings above stand unchanged;
 compatibility-view and manifest construction is real work but too small to
 register here, and it will be visible on the large fixtures.
 `cargo test --lib compile::fragment_synth::certification::tests -- --nocapture`
-passed 10 of 10, 0 failed. Certification sub-phases now account for the whole
-`PHASE certify` interval.
+passed 10 of 10, 0 failed. Certification sub-phases account for the measured
+certifier body inside `PHASE certify`; shape and ownership validation remain a
+small unlabeled prefix.
 
-## Pending measurements
+## Revision-isolated focused measurements
 
-- Before/after single-certification-transaction samples.
-- Post-change `multiplier4` and `alu8` samples.
-- Thread counts 1, 2 and auto after portable parallel certification exists.
-- Peak working set and final no-regression calculation.
+The focused release fixture was run three times at each revision that bounds a
+targeted change, in a detached worktree with the same target directory and no
+concurrent Cargo process. Build time is excluded. These revisions all execute
+four parent candidates, so the comparison is like-for-like.
+
+| Revision | State | Raw end-to-end samples | Median |
+|---|---|---|---:|
+| `98003af` | before one-transaction change | 12.91 s, 12.85 s, 13.03 s | 12.91 s |
+| `7ec3116` | after one transaction | 12.94 s, 12.90 s, 12.92 s | 12.92 s |
+| `4b96b41` | after shared identity | 12.98 s, 12.90 s, 12.89 s | 12.90 s |
+| `14aead2` | after immutable hierarchy context | 13.00 s, 12.99 s, 12.95 s | 12.99 s |
+| `95b6b9d` | final stack after context revert | 13.15 s, 13.06 s, 13.14 s | 13.14 s |
+
+The 10.77 s median near the beginning of this report is not comparable: that
+older form of the fixture compiled three parent candidates, while every row
+above compiles four. Its later 13.14 s observability sample and the
+revision-isolated rows have the same candidate count.
+
+### One physical certification transaction
+
+The phase total is summed within each sample before taking the median; adding
+component medians would incorrectly manufacture a 57 ms sample that never
+occurred.
+
+| Revision | Sample | Leaf outer + durable = total | Parent outer + durable = total |
+|---|---:|---:|---:|
+| `98003af` | 1 | 6 + 7 = 13 ms | 27 + 34 = 61 ms |
+| `98003af` | 2 | 6 + 8 = 14 ms | 26 + 30 = 56 ms |
+| `98003af` | 3 | 6 + 7 = 13 ms | 25 + 31 = 56 ms |
+| `7ec3116` | 1 | 0 + 8 = 8 ms | 0 + 31 = 31 ms |
+| `7ec3116` | 2 | 0 + 7 = 7 ms | 0 + 30 = 30 ms |
+| `7ec3116` | 3 | 0 + 7 = 7 ms | 0 + 32 = 32 ms |
+
+Before `7ec3116`, the parent median was therefore 56 ms. After the change it
+pays only one durable transaction, with a 31 ms median:
+
+```text
+targeted speedup = 56 / 31 = 1.81x
+timer-quantisation worst case = 56 / 31.999 = 1.75x
+leaf cross-check = 13 / 7 = 1.86x
+end-to-end change = (12.92 - 12.91) / 12.91 = +0.08%
+```
+
+The targeted phase clears 1.5x. End-to-end is dominated by the exhaustive and
+manifest sweeps, so the saved tens of milliseconds remain below whole-test
+noise.
+
+### Shared certification identity
+
+Again, each row is summed before the median is selected:
+
+| Revision | Sample | Parent timing + equivalence + metrics = total |
+|---|---:|---:|
+| `7ec3116` | 1 | 5 + 4 + 6 = 15 ms |
+| `7ec3116` | 2 | 4 + 3 + 6 = 13 ms |
+| `7ec3116` | 3 | 4 + 3 + 6 = 13 ms |
+| `4b96b41` | 1 | 0 + 0 + 3 = 3 ms |
+| `4b96b41` | 2 | 0 + 0 + 3 = 3 ms |
+| `4b96b41` | 3 | 0 + 0 + 3 = 3 ms |
+
+Before `4b96b41`, a parent spent median `4 + 3 + 6 = 13 ms` in timing,
+equivalence and metrics/fingerprints. After identity reuse the same displayed
+phases are `0 + 0 + 3 = 3 ms`:
+
+```text
+targeted speedup = 13 / 3 = 4.33x
+timer-quantisation worst case = 13 / (0.999 + 0.999 + 3.999) = 2.17x
+metrics/fingerprints alone = 6 / 3 = 2.00x
+end-to-end change = (12.90 - 12.92) / 12.92 = -0.15%
+```
+
+The public compatibility wrappers remain, but the identity-bearing certifier
+entry is module-private and no third API layer is warranted.
+
+### Immutable hierarchy context
+
+`14aead2` removed repeated planning and flattening calls but added 96 net lines,
+had no dedicated targeted-phase measurement, and changed the focused median
+from 12.90 s to 12.99 s. The 0.70% difference is noise, not evidence of a
+regression, but there is no 1.5x evidence with which to retain the change.
+
+The hoist also depended on a context/variant compatibility invariant that no
+production guard enforced. An independent Opus review therefore required the
+change to be reverted before the representative corpus run. `95b6b9d` performs
+that revert without rewriting history.
+
+### Final retained raw phase samples
+
+All values below are milliseconds except the final column. `absent` means that
+incumbent-plan reuse emitted no routing phase.
+
+| Sample | Candidate | Route | Union | Structure | Timing | Equiv. | Compat. | Exhaustive / vectors | Manifest / transitions | Metrics | Certify | End to end |
+|---:|---|---:|---:|---:|---:|---:|---:|---|---|---:|---:|---:|
+| 1 | leaf | 585 | absent | 6 | 0 | 0 | 0 | 154 / 8 | 262 / 56 | 1 | 427 | |
+| 1 | baseline | 504 | 3 | 27 | 0 | 0 | 0 | 2369 / 32 | 345 / 20 | 3 | 2753 | |
+| 1 | moved | 522 | 3 | 26 | 1 | 0 | 0 | 2367 / 32 | 324 / 20 | 3 | 2730 | |
+| 1 | reused | absent | 3 | 26 | 0 | 0 | 0 | 2409 / 32 | 336 / 20 | 3 | 2783 | |
+| 1 | reused zero | absent | 3 | 26 | 0 | 0 | 0 | 2426 / 32 | 318 / 20 | 3 | 2781 | 13.15 s |
+| 2 | leaf | 550 | absent | 6 | 0 | 0 | 0 | 151 / 8 | 244 / 56 | 1 | 407 | |
+| 2 | baseline | 499 | 3 | 26 | 0 | 0 | 0 | 2387 / 32 | 335 / 20 | 3 | 2761 | |
+| 2 | moved | 502 | 3 | 26 | 0 | 0 | 0 | 2364 / 32 | 329 / 20 | 3 | 2731 | |
+| 2 | reused | absent | 3 | 26 | 0 | 0 | 0 | 2392 / 32 | 349 / 20 | 3 | 2778 | |
+| 2 | reused zero | absent | 3 | 26 | 0 | 0 | 0 | 2410 / 32 | 320 / 20 | 3 | 2769 | 13.06 s |
+| 3 | leaf | 560 | absent | 6 | 0 | 0 | 0 | 152 / 8 | 243 / 56 | 1 | 406 | |
+| 3 | baseline | 518 | 3 | 27 | 0 | 0 | 0 | 2433 / 32 | 329 / 20 | 3 | 2801 | |
+| 3 | moved | 503 | 3 | 26 | 0 | 0 | 0 | 2381 / 32 | 334 / 20 | 3 | 2754 | |
+| 3 | reused | absent | 3 | 26 | 0 | 0 | 0 | 2373 / 32 | 330 / 20 | 3 | 2741 | |
+| 3 | reused zero | absent | 3 | 26 | 0 | 0 | 0 | 2411 / 32 | 341 / 20 | 3 | 2789 | 13.14 s |
+| Median | leaf | 560 | absent | 6 | 0 | 0 | 0 | 152 / 8 | 244 / 56 | 1 | 407 | |
+| Median | baseline | 504 | 3 | 27 | 0 | 0 | 0 | 2387 / 32 | 335 / 20 | 3 | 2761 | |
+| Median | moved | 503 | 3 | 26 | 0 | 0 | 0 | 2367 / 32 | 329 / 20 | 3 | 2731 | |
+| Median | reused | absent | 3 | 26 | 0 | 0 | 0 | 2392 / 32 | 336 / 20 | 3 | 2778 | |
+| Median | reused zero | absent | 3 | 26 | 0 | 0 | 0 | 2411 / 32 | 320 / 20 | 3 | 2781 | 13.14 s |
+
+The final 13.14 s median is 1.78% above the like-for-like 12.91 s pre-change
+median, below the 5% no-regression gate.
+
+## Cross-revision identity and quality
+
+A temporary print-only test edit was run at `98003af`, `7ec3116`, `4b96b41`
+and `95b6b9d`, then reversed before each clean disposable worktree was removed.
+All four revisions produced exactly:
+
+```text
+Fingerprint("7e0ce2faad3ba9cc76806bf132c1b4ec09991be87f5ded77bd6439ba8540a75a")
+QualityKey { observed_settle: 170, non_air_blocks: 7511,
+  occupied_volume: 147108, static_routed_delay: ExactDelay(172) }
+```
+
+This is a cross-revision equality check, not merely the fixture's existing
+within-run assertion.
+
+The single transaction deliberately changes precedence for a candidate that is
+invalid both structurally and during adaptation: structural certification now
+reports first. The typed category mapping itself is unchanged, and the retained
+fixtures cover adapter, emission and verification refusals.
+
+## Representative retained corpus
+
+Command:
+
+```powershell
+$env:REDA_PHASE_TIMING='1'
+$env:REDA_EXTRA_CIRCUITS='ripple_adder8,multiplier4,alu8'
+cargo test --release --lib every_hierarchical_circuit -- --ignored --nocapture
+```
+
+Cargo's test summary was `1 passed, 0 failed` in 1134.64 s. The controller
+shell merged stderr into stdout, so its wrapper reported status 1 despite the
+explicit passing Cargo summary; this report does not claim a zero wrapper exit.
+
+| Case | Retained | Baseline median | Change | Quality |
+|---|---:|---:|---:|---|
+| `ripple_adder8` | 35.4519594 s | 35.4198535 s | +0.09% | 608 ticks / 70,603 blocks |
+| `multiplier4` | 975.3214186 s | 977.6524666 s | -0.24% | 1,039 ticks / 124,948 blocks |
+| `alu8` | 123.8449690 s | 133.1050031 s | -6.96% | 972 ticks / 213,833 blocks |
+
+No case exceeds the 5% regression limit, and all three quality pairs match
+their baseline exactly. The retained corpus peak working set was 1,640,177,664
+bytes versus 1,629,446,144 bytes at baseline, a 0.66% increase.
+The corpus harness exposes ticks and block count for this comparison; complete
+fingerprint, occupied-volume and static-delay equality was checked by the
+focused fixture above, not by these three corpus rows.
+
+The post-change phase split confirms the next portable target:
+
+- `ripple_adder8` top: 16,929 ms routing and 17,328 ms certification.
+- `multiplier4` intermediate: 2,568 ms routing and 71,625 ms certification;
+  top: 41,923 ms routing and 857,916 ms certification. Its exhaustive portions
+  alone were 69,597 ms and 832,622 ms for 256 vectors each.
+- `alu8` leaf: 2,214 ms routing and 8,890 ms certification; `alu4`: 13,864 ms
+  routing and 9,623 ms certification; top: 34,796 ms routing and 53,744 ms
+  certification.
+
+`multiplier4` directly supports deterministic multi-core exhaustive work as
+the next layer, while `alu8` preserves the routing-heavy counterexample needed
+to prevent over-specialising for that one case.
+
+The Input Seam fixture was not rerun. This is a deliberate deviation from Task
+6's literal three-run instruction: the fixture takes about 31 minutes, compiles
+two different candidates from scratch and cannot isolate incumbent context
+reuse or either retained change. The independent Opus retention adjudication
+accepted the revision-isolated focused samples as the valid retention comparison;
+this report makes no retention claim from the Input Seam result.
+
+## Complete retained-stack verification
+
+All commands ran serially at `95b6b9d`:
+
+- `cargo test --lib` — exit 0; 911 passed, 0 failed, 71 ignored in 668.42 s.
+- pinned seven-segment contract — exit 0; 1 passed, 0 failed in 421.08 s.
+- `cargo clippy --lib --tests` — exit 0 with the branch's existing warnings.
+- `git diff --check` — clean.
+- Tracked worktree — clean before this report edit.
 
 ## Retention table
 
-| Change | Targeted phase before | Targeted phase after | Speedup | Largest regression | Decision |
+| Change | Targeted phase before | Targeted phase after | Speedup | Largest observed regression | Decision |
 |---|---:|---:|---:|---:|---|
-| Complete phase observability | not measurable | measured, see the post-observability split | not a speedup change | none observed; focused test 1/1 in 13.00 s, certification tests 10/10 | RETAIN |
-| One certification transaction | pending | pending | pending | pending | PENDING |
-| Shared certification identity | pending | pending | pending | pending | PENDING |
-| Immutable hierarchy context | pending | pending | pending | pending | PENDING |
+| Complete phase observability | not measurable | measured | diagnostic | none | RETAIN |
+| One certification transaction | 56 ms | 31 ms | 1.81x; 1.75x quantised worst case | final focused stack +1.78%; corpus +0.09% | KEEP |
+| Shared certification identity | 13 ms | 3 ms | 4.33x; 2.17x quantised worst case | final focused stack +1.78%; corpus +0.09% | KEEP |
+| Immutable hierarchy context | unmeasured | unmeasured | no 1.5x evidence | no reliable regression claim | REVERTED in `95b6b9d` |
+
+The retained changes meet their targeted-phase gates, preserve exact candidate
+identity and quality, and keep every representative regression under 5%. They
+do not materially improve whole-compile wall time because exhaustive simulation
+and routing dominate; they are foundation cleanup, not the final 2x result.
