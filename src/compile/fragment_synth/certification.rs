@@ -54,9 +54,15 @@ const WORLD_COPY_HEADROOM: usize = 4;
 const MIN_VECTORS_PER_CERTIFICATION_WORKER: usize = 8;
 /// Minimum manifest transitions one certification worker must own.
 ///
-/// A transition drives a full measured settle, not one vector's, so it pays for
-/// its own worker and needs no crossover. Sharing the exhaustive threshold cost
-/// the widest manifest sweeps two thirds of their granted workers.
+/// A deliberate choice measured on large sweeps, not a measured crossover.
+/// Sharing the exhaustive threshold capped ripple_adder8's 68-transition top
+/// manifest at 8 of its 12 granted workers; one transition per worker restores
+/// the 12 the retained revision used, and the aggregate `cargo test` time shows
+/// no regression from the extra workers the smaller sweeps now open.
+///
+/// ponytail: the 2-to-7-transition range is unmeasured, so the win at 68 is
+/// evidence for wide sweeps only, not proof that one is optimal everywhere.
+/// Benchmark small manifest sweeps before raising this above one.
 const MIN_TRANSITIONS_PER_CERTIFICATION_WORKER: usize = 1;
 static CERTIFICATION_SWEEP_LOCK: Mutex<()> = Mutex::new(());
 
@@ -1325,10 +1331,13 @@ mod tests {
     }
 
     #[test]
-    fn manifest_sweeps_open_one_worker_per_heavy_transition() {
-        // Both thresholds are read from the constants the manifest and
-        // exhaustive callsites pass, so pointing a production sweep at the
-        // other unit fails here rather than passing on a matching literal.
+    fn worker_policy_scales_each_threshold_independently() {
+        // This calls `certification_workers` directly. It pins the policy each
+        // threshold produces; it does NOT prove that `sweep_manifest` and
+        // `certify_exhaustive_truth` pass the thresholds named here. Reading the
+        // constants rather than bare literals keeps the two in step by
+        // inspection, and that is the whole of the guarantee -- repointing a
+        // production callsite at the other constant would still pass here.
         let transition = MIN_TRANSITIONS_PER_CERTIFICATION_WORKER;
         assert_eq!(
             transition, 1,
@@ -1880,6 +1889,63 @@ mod tests {
                 fields(exhaustive(&config, threads).expect_err("parallel must hit the event cap")),
                 serial,
                 "{threads} workers must report the same lowest failing mask"
+            );
+        }
+    }
+
+    #[test]
+    fn exhaustive_functional_mismatch_names_the_same_output_at_every_worker_count() {
+        // The world really realises `y = NOR(i0)`, so it computes NOT i0.
+        let netlist = not_netlist_with_inputs(5);
+        let compiled = compile_legacy(&netlist).expect("legacy migration fixture");
+        let candidate = LegacyCandidateAdapter::adapt(&netlist, &compiled)
+            .expect("typed migration fixture")
+            .candidate;
+        let library = Library::default_library();
+        let world = realise_and_verify_expanded(&candidate, &netlist, &library)
+            .expect("fixture must realise");
+        let compatibility = candidate
+            .compatibility_views(&netlist)
+            .expect("fixture compatibility views");
+        let config = CertificationConfig::from_search(&SearchConfig::checked_defaults());
+
+        // Same inputs and same output, but the spec is BUF built from two NORs,
+        // so it computes i0. Every vector therefore disagrees with the world and
+        // the refusal comes from the real `check_outputs`, not a stub.
+        let buffered = Netlist {
+            inputs: netlist.inputs.clone(),
+            outputs: netlist.outputs.clone(),
+            gates: vec![Gate::nor("n0", &["i0"]), Gate::nor("y", &["n0"])],
+        };
+
+        // By hand: `bits_of` puts `i0` in the mask's high bit, so mask 0 drives
+        // every input low. The spec gives `y = i0 = false`; the world gives
+        // `y = NOT i0 = true`. `check_outputs` receives the mask as its
+        // `manifest_index`, so the lowest failing vector is index 0. Masks with
+        // `i0` high disagree the other way round, so every one of the 32 vectors
+        // fails and the reported mask is a completion-order detector: only the
+        // ordered reduction keeps reporting mask 0.
+        for threads in [1, 2, 4] {
+            let error = certify_exhaustive_truth_with_threads(
+                world.world(),
+                &candidate,
+                &buffered,
+                &compatibility,
+                &config,
+                threads,
+            )
+            .expect_err("a BUF spec must not certify against a NOT world");
+            assert!(
+                matches!(
+                    error,
+                    CandidateCertificationError::FunctionalMismatch {
+                        manifest_index: 0,
+                        ref output,
+                        expected: false,
+                        actual: true,
+                    } if output == "y"
+                ),
+                "{threads} workers must refuse with the lowest failing vector: {error:?}"
             );
         }
     }
