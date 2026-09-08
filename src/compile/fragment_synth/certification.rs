@@ -50,11 +50,14 @@ const WORLD_COPY_HEADROOM: usize = 4;
 /// Measured on this host with a release build: the real exhaustive sweep at one
 /// and two workers over 4 to 256 canonical vectors lost at 4 and 8 vectors and
 /// won from 16 upward, repeatably across two independent runs, so 16 vectors
-/// over two workers is the first crossover. A manifest transition is the
-/// heavier unit and passes one instead: it already pays for its own worker, and
-/// sharing this threshold with it cost the widest manifest sweeps two thirds of
-/// their workers.
+/// over two workers is the first crossover.
 const MIN_VECTORS_PER_CERTIFICATION_WORKER: usize = 8;
+/// Minimum manifest transitions one certification worker must own.
+///
+/// A transition drives a full measured settle, not one vector's, so it pays for
+/// its own worker and needs no crossover. Sharing the exhaustive threshold cost
+/// the widest manifest sweeps two thirds of their granted workers.
+const MIN_TRANSITIONS_PER_CERTIFICATION_WORKER: usize = 1;
 static CERTIFICATION_SWEEP_LOCK: Mutex<()> = Mutex::new(());
 
 /// One compile's worker budget plus the only thing a sweep needs to know
@@ -451,7 +454,11 @@ fn sweep_manifest(
     if std::env::var_os("REDA_PHASE_TIMING").is_some() {
         eprintln!(
             "WORK manifest_workers {}",
-            certification_workers(manifest.transitions().len(), threads, 1)
+            certification_workers(
+                manifest.transitions().len(),
+                threads,
+                MIN_TRANSITIONS_PER_CERTIFICATION_WORKER
+            )
         );
     }
     sweep_manifest_with_threads(
@@ -686,10 +693,15 @@ fn record_observed_worker_budget(budget: Option<usize>) {
 ///
 /// Empty work reports zero workers and runs no closure. Otherwise workers are
 /// the requested budget capped by whole `min_items_per_worker` chunks, clamped
-/// to at least one, so work too small to amortize thread startup stays on the
-/// caller thread. Callers pass the threshold measured for their own unit;
-/// `requested` already carries the compile-wide budget, the memory ceiling and
-/// the host's parallelism, so this only ever narrows it.
+/// to at least one.
+///
+/// Each caller passes the threshold its own unit needs, and the two are not the
+/// same kind of number: `MIN_VECTORS_PER_CERTIFICATION_WORKER` is a measured
+/// crossover that keeps exhaustive work too small to amortize thread startup on
+/// the caller thread, while `MIN_TRANSITIONS_PER_CERTIFICATION_WORKER` is one
+/// because a transition already pays for a worker per item. `requested` already
+/// carries the compile-wide budget, the memory ceiling and the host's
+/// parallelism, so this only ever narrows it.
 fn certification_workers(items: usize, requested: usize, min_items_per_worker: usize) -> usize {
     if items == 0 {
         return 0;
@@ -742,17 +754,22 @@ fn sweep_manifest_with_threads(
     threads: usize,
 ) -> Result<Vec<TransitionMeasurement>, CandidateCertificationError> {
     let transitions = manifest.transitions();
-    run_certification_chunks(transitions, threads, 1, |manifest_index, transition| {
-        measure_transition(
-            world,
-            candidate,
-            lowered,
-            compatibility,
-            transition,
-            manifest_index,
-            config,
-        )
-    })
+    run_certification_chunks(
+        transitions,
+        threads,
+        MIN_TRANSITIONS_PER_CERTIFICATION_WORKER,
+        |manifest_index, transition| {
+            measure_transition(
+                world,
+                candidate,
+                lowered,
+                compatibility,
+                transition,
+                manifest_index,
+                config,
+            )
+        },
+    )
 }
 
 /// Run `work` over contiguous chunks of `items` and reduce in logical index order.
@@ -1091,7 +1108,8 @@ mod tests {
         with_compile_worker_budget, world_worker_memory_bytes, CandidateCertificationError,
         CompleteCandidateCertifier, ExpandedCandidateCertifier, RealisedTimingGraph,
         TimingGraphError, TransitionManifest, TransitionPhase, CERTIFICATION_SWEEP_LOCK,
-        CERT_WORKER_MEMORY_BUDGET_BYTES, MIN_VECTORS_PER_CERTIFICATION_WORKER, WORLD_COPY_HEADROOM,
+        CERT_WORKER_MEMORY_BUDGET_BYTES, MIN_TRANSITIONS_PER_CERTIFICATION_WORKER,
+        MIN_VECTORS_PER_CERTIFICATION_WORKER, WORLD_COPY_HEADROOM,
     };
     use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
     use crate::compile::fragment_synth::legacy_adapter::LegacyCandidateAdapter;
@@ -1308,34 +1326,43 @@ mod tests {
 
     #[test]
     fn manifest_sweeps_open_one_worker_per_heavy_transition() {
+        // Both thresholds are read from the constants the manifest and
+        // exhaustive callsites pass, so pointing a production sweep at the
+        // other unit fails here rather than passing on a matching literal.
+        let transition = MIN_TRANSITIONS_PER_CERTIFICATION_WORKER;
+        assert_eq!(
+            transition, 1,
+            "a manifest transition pays for a worker per item"
+        );
+
         // ripple_adder8's top manifest at the auto budget: 68 transitions and a
         // requested 12 must open 12 workers, as the retained serial-exhaustive
         // revision did. The same count of lighter exhaustive vectors keeps the
-        // measured eight-per-worker threshold.
-        assert_eq!(certification_workers(68, 12, 1), 12);
+        // measured eight-per-worker crossover.
+        assert_eq!(certification_workers(68, 12, transition), 12);
         assert_eq!(
             certification_workers(68, 12, MIN_VECTORS_PER_CERTIFICATION_WORKER),
             8
         );
 
         assert_eq!(
-            certification_workers(0, 12, 1),
+            certification_workers(0, 12, transition),
             0,
             "empty work runs no closure at either threshold"
         );
         assert_eq!(
-            certification_workers(1, 12, 1),
+            certification_workers(1, 12, transition),
             1,
             "one transition never opens a worker with nothing to do"
         );
-        assert_eq!(certification_workers(3, 12, 1), 3);
+        assert_eq!(certification_workers(3, 12, transition), 3);
         assert_eq!(
-            certification_workers(68, 4, 1),
+            certification_workers(68, 4, transition),
             4,
             "the compile-wide budget still bounds a heavy sweep"
         );
         assert_eq!(
-            certification_workers(68, 0, 1),
+            certification_workers(68, 0, transition),
             1,
             "a zero budget still runs the sweep on the caller thread"
         );
@@ -1364,9 +1391,12 @@ mod tests {
 
         let empty: Vec<usize> = Vec::new();
         assert!(
-            run_certification_chunks(&empty, 8, 1, |_, _| Err::<usize, _>(
-                CandidateCertificationError::CounterOverflow
-            ))
+            run_certification_chunks(
+                &empty,
+                8,
+                MIN_TRANSITIONS_PER_CERTIFICATION_WORKER,
+                |_, _| Err::<usize, _>(CandidateCertificationError::CounterOverflow)
+            )
             .expect("empty work runs no closure")
             .is_empty()
         );
