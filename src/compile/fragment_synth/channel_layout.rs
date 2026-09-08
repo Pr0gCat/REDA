@@ -26,8 +26,9 @@ use super::seed::{reserve_route, step, step_many, SourceGeometry, TargetGeometry
 use crate::compile::geometry::Anchor;
 use crate::compile::routing::{
     NonEmptyRouteSinks, PhysicalReservationKind, PhysicalReservationOwner, PhysicalReservations,
-    PhysicalRouter, PlacedBlock, RealisedRouteTree, RouteEndpoint, RouteRequest, RouteSink,
+    PhysicalRouter, PlacedBlock, RealisedRouteTree, ReservationStore, RouteEndpoint, RouteSink,
     RouteTarget, RouteTerminalKind, RouterLimits, TerminalContract, TerminalRequirement,
+    TransactionalRouteRequest,
 };
 use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
 use crate::redstone::world::block::Facing;
@@ -192,7 +193,7 @@ pub(crate) fn plan_channel_layout(
     window: LateralWindow,
     nets: &[NetGeometry],
     router: &dyn PhysicalRouter,
-    reservations: &PhysicalReservations,
+    reservations: &mut PhysicalReservations,
     limits: RouterLimits,
 ) -> Result<ChannelLayout, ChannelLayoutError> {
     let frame = Frame {
@@ -595,7 +596,7 @@ pub(crate) fn plan_channel_layout(
                 let end = frame.cell(edge, c, ground);
                 let before = step(end, entry_from);
                 let support = step(end, support_step);
-                let mut scratch = reservations.clone();
+                let mut scratch = reservations.transaction();
                 for tree in &committed {
                     reserve_route(&mut scratch, tree, &BTreeSet::new());
                 }
@@ -649,7 +650,7 @@ pub(crate) fn plan_channel_layout(
                 let Ok(sinks) = NonEmptyRouteSinks::new(sinks) else {
                     continue;
                 };
-                let request = RouteRequest {
+                let request = TransactionalRouteRequest {
                     id: route,
                     source: RouteEndpoint {
                         id: port.net,
@@ -660,11 +661,11 @@ pub(crate) fn plan_channel_layout(
                         },
                     },
                     sinks: &sinks,
-                    reservations: &scratch,
+                    reservations: &mut scratch,
                     limits,
                     no_refresh: None,
                 };
-                if let Ok(tree) = router.route(request) {
+                if let Ok(tree) = router.route_transactional(request) {
                     found = Some((c, tree));
                     break;
                 }

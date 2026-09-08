@@ -6,18 +6,101 @@
 //! 所以同一個電路擺在任何座標結果都相同。這是 Alternate Current 的思路。
 
 use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Arc, Weak};
 
 use serde::Serialize;
 
-use crate::redstone::rules::taxonomy::{flags_of, power_emitted_by, power_emitted_toward, BlockPower, PowerOutput};
-use crate::redstone::world::block::Facing;
-use crate::redstone::simulator::connectivity::{dust_connections, dust_powers_block_toward};
+use crate::redstone::rules::taxonomy::{
+    flags_of, power_emitted_by, power_emitted_toward, BlockPower, PowerOutput,
+};
+use crate::redstone::simulator::connectivity::{
+    dust_connections, dust_powers_block_toward, Connections,
+};
 use crate::redstone::simulator::position::{Position, ALL_SIX, HORIZONTAL};
 use crate::redstone::world::block::BlockKind;
+use crate::redstone::world::block::Facing;
 use crate::redstone::world::storage::World;
 
 /// 紅石訊號的最大強度。
 pub const MAX_SIGNAL_STRENGTH: u8 = 15;
+
+#[derive(Debug, Clone, Default)]
+pub(crate) struct DustTopologyCache {
+    identity: Weak<u8>,
+    epoch: u64,
+    components: Vec<Vec<Position>>,
+    dust_by_position: HashMap<Position, CachedDust>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct CachedDust {
+    component: usize,
+    connections: [Connections; HORIZONTAL.len()],
+}
+
+impl DustTopologyCache {
+    fn build(world: &World) -> Self {
+        let mut components = Vec::new();
+        let mut visited = HashSet::new();
+
+        for flat in world.positions_of(BlockKind::RedstoneWire) {
+            let (x, y, z) = world.decode(flat);
+            let seed = Position::new(x, y, z);
+            if visited.contains(&seed) {
+                continue;
+            }
+            let component = weak_dust_component(world, seed, &mut visited);
+            components.push(component);
+        }
+
+        let dust_by_position = components
+            .iter()
+            .enumerate()
+            .flat_map(|(component, positions)| {
+                positions.iter().copied().map(move |position| {
+                    (
+                        position,
+                        CachedDust {
+                            component,
+                            connections: HORIZONTAL
+                                .map(|facing| dust_connections(world, position, facing)),
+                        },
+                    )
+                })
+            })
+            .collect();
+
+        DustTopologyCache {
+            identity: Arc::downgrade(world.dust_topology_identity()),
+            epoch: world.dust_topology_epoch(),
+            components,
+            dust_by_position,
+        }
+    }
+
+    fn connections(&self, position: Position, direction_index: usize) -> Connections {
+        self.dust_by_position[&position].connections[direction_index]
+    }
+
+    fn active_positions(&self, world: &World, dirty: &[usize]) -> Vec<Position> {
+        let mut selected = Vec::new();
+        for &flat in dirty {
+            let (x, y, z) = world.decode(flat);
+            for seed in positions_within_two_hops(Position::new(x, y, z)) {
+                if let Some(dust) = self.dust_by_position.get(&seed) {
+                    selected.push(dust.component);
+                }
+            }
+        }
+
+        selected.sort_unstable();
+        selected.dedup();
+        selected
+            .into_iter()
+            .flat_map(|component| self.components[component].iter().copied())
+            .collect()
+    }
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub enum PropagationPolicy {
@@ -77,12 +160,38 @@ fn recompute_directed_dust_component(world: &mut World) -> Vec<Position> {
     }
 
     let active_dust = active_dust_networks(world, &dirty);
+    recompute_active_dust(world, &active_dust, None)
+}
 
+pub(crate) fn recompute_dust_strengths_cached(
+    world: &mut World,
+    cache: &mut Arc<DustTopologyCache>,
+) -> Vec<Position> {
+    if cache.identity.as_ptr() != Arc::as_ptr(world.dust_topology_identity())
+        || cache.epoch != world.dust_topology_epoch()
+    {
+        *cache = Arc::new(DustTopologyCache::build(world));
+    }
+
+    let dirty = world.take_dirty();
+    if dirty.is_empty() {
+        return Vec::new();
+    }
+
+    let active_dust = cache.active_positions(world, &dirty);
+    recompute_active_dust(world, &active_dust, Some(cache))
+}
+
+fn recompute_active_dust(
+    world: &mut World,
+    active_dust: &[Position],
+    cache: Option<&DustTopologyCache>,
+) -> Vec<Position> {
     let mut queue: VecDeque<(Position, u8)> = VecDeque::new();
     let mut target: HashMap<Position, u8> = HashMap::with_capacity(active_dust.len());
 
     // 每格紅石粉的初始強度：來自相鄰的非紅石粉訊號源
-    for &pos in &active_dust {
+    for &pos in active_dust {
         let mut best = 0u8;
 
         // 直接驅動紅石粉的元件（紅石塊、拉桿、中繼器正前方…）
@@ -127,8 +236,12 @@ fn recompute_directed_dust_component(world: &mut World) -> Vec<Position> {
             continue;
         }
         let next_strength = strength - 1;
-        for facing in HORIZONTAL {
-            for neighbour in dust_connections(world, pos, facing).iter() {
+        for (direction_index, facing) in HORIZONTAL.into_iter().enumerate() {
+            let connections = match cache {
+                Some(cache) => cache.connections(pos, direction_index),
+                None => dust_connections(world, pos, facing),
+            };
+            for neighbour in connections.iter() {
                 let current = target.get(&neighbour).copied().unwrap_or(0);
                 if next_strength > current {
                     target.insert(neighbour, next_strength);
@@ -140,7 +253,7 @@ fn recompute_directed_dust_component(world: &mut World) -> Vec<Position> {
 
     // 寫回，收集改變的位置
     let mut changed = Vec::new();
-    for &pos in &active_dust {
+    for &pos in active_dust {
         let want = target.get(&pos).copied().unwrap_or(0);
         let state = world.get(pos.x, pos.y, pos.z);
         if state.power != want {
@@ -197,23 +310,7 @@ fn active_dust_networks(world: &World, dirty: &[usize]) -> Vec<Position> {
 
     for &flat in dirty {
         let (x, y, z) = world.decode(flat);
-        let origin = Position::new(x, y, z);
-
-        // 2 跳鄰域：origin 本身、它的 6 個鄰居、以及鄰居的鄰居。
-        let mut frontier = vec![origin];
-        let mut within_two_hops = vec![origin];
-        for _ in 0..2 {
-            let mut next = Vec::with_capacity(frontier.len() * ALL_SIX.len());
-            for &p in &frontier {
-                for facing in ALL_SIX {
-                    next.push(p.offset(facing));
-                }
-            }
-            within_two_hops.extend_from_slice(&next);
-            frontier = next;
-        }
-
-        for seed in within_two_hops {
+        for seed in positions_within_two_hops(Position::new(x, y, z)) {
             if visited.contains(&seed) {
                 continue;
             }
@@ -221,50 +318,66 @@ fn active_dust_networks(world: &World, dirty: &[usize]) -> Vec<Position> {
                 continue;
             }
 
-            // 種子找到了，沿著連接關係洪水填滿整個網路
-            visited.insert(seed);
-            active.push(seed);
-            let mut stack = vec![seed];
-            while let Some(pos) = stack.pop() {
-                for facing in HORIZONTAL {
-                    for neighbour in dust_connections(world, pos, facing).iter() {
-                        if visited.insert(neighbour) {
-                            active.push(neighbour);
-                            stack.push(neighbour);
-                        }
-                    }
-
-                    // Incoming edges too: `dust_connections` is directed, and
-                    // a one-way edge (see the doc comment) would otherwise
-                    // leave this cell's only feeder outside the active set --
-                    // whose write-back then zeroes a run its feeder still
-                    // feeds. Same-layer edges are symmetric by construction
-                    // (each end merely requires the other to hold dust), so
-                    // only the two diagonal candidates can carry an edge the
-                    // outgoing walk does not mirror -- and the edge itself is
-                    // still asked of `dust_connections`, from the candidate's
-                    // side, so the connection rules stay defined in exactly
-                    // one place.
-                    let sideways = pos.offset(facing);
-                    for feeder in [sideways.up(), sideways.down()] {
-                        if world.get(feeder.x, feeder.y, feeder.z).kind != BlockKind::RedstoneWire {
-                            continue;
-                        }
-                        if dust_connections(world, feeder, facing.opposite())
-                            .iter()
-                            .any(|target| target == pos)
-                            && visited.insert(feeder)
-                        {
-                            active.push(feeder);
-                            stack.push(feeder);
-                        }
-                    }
-                }
-            }
+            active.extend(weak_dust_component(world, seed, &mut visited));
         }
     }
 
     active
+}
+
+fn positions_within_two_hops(origin: Position) -> Vec<Position> {
+    let mut frontier = vec![origin];
+    let mut positions = vec![origin];
+    for _ in 0..2 {
+        let mut next = Vec::with_capacity(frontier.len() * ALL_SIX.len());
+        for &position in &frontier {
+            for facing in ALL_SIX {
+                next.push(position.offset(facing));
+            }
+        }
+        positions.extend_from_slice(&next);
+        frontier = next;
+    }
+    positions
+}
+
+fn weak_dust_component(
+    world: &World,
+    seed: Position,
+    visited: &mut HashSet<Position>,
+) -> Vec<Position> {
+    visited.insert(seed);
+    let mut component = vec![seed];
+    let mut stack = vec![seed];
+    while let Some(pos) = stack.pop() {
+        for facing in HORIZONTAL {
+            for neighbour in dust_connections(world, pos, facing).iter() {
+                if visited.insert(neighbour) {
+                    component.push(neighbour);
+                    stack.push(neighbour);
+                }
+            }
+
+            // Preserve the incoming half of the weak component. Dust edges can
+            // be one-way on climbs and descents, so outgoing adjacency alone
+            // would omit a live feeder from write-back.
+            let sideways = pos.offset(facing);
+            for feeder in [sideways.up(), sideways.down()] {
+                if world.get(feeder.x, feeder.y, feeder.z).kind != BlockKind::RedstoneWire {
+                    continue;
+                }
+                if dust_connections(world, feeder, facing.opposite())
+                    .iter()
+                    .any(|target| target == pos)
+                    && visited.insert(feeder)
+                {
+                    component.push(feeder);
+                    stack.push(feeder);
+                }
+            }
+        }
+    }
+    component
 }
 
 /// What the dust at `pos` puts into the block lying in `direction`.
@@ -413,12 +526,15 @@ pub fn diode_rear_signal(world: &World, rear: Position) -> u8 {
 
 /// 從 `from` 看向 `to` 是哪個方向。兩者不相鄰時回傳 `None`。
 fn direction_from(from: Position, to: Position) -> Option<Facing> {
-    ALL_SIX.into_iter().find(|&facing| from.offset(facing) == to)
+    ALL_SIX
+        .into_iter()
+        .find(|&facing| from.offset(facing) == to)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::redstone::simulator::Simulator;
     use crate::redstone::world::block::{BlockKind, BlockState, Facing};
 
     fn named(name: &str, kind: BlockKind) -> BlockState {
@@ -499,7 +615,11 @@ mod tests {
         recompute_dust_strengths(&mut w);
 
         for x in 1..=5 {
-            assert_eq!(w.get(x, 1, 0).power, 0, "dust at x={x} after source removal");
+            assert_eq!(
+                w.get(x, 1, 0).power,
+                0,
+                "dust at x={x} after source removal"
+            );
         }
     }
 
@@ -549,12 +669,16 @@ mod tests {
         let w_pos = Position::new(1, 1, 0);
         let x_pos = Position::new(2, 2, 0);
         assert!(
-            dust_connections(&w, w_pos, Facing::East).iter().any(|p| p == x_pos),
+            dust_connections(&w, w_pos, Facing::East)
+                .iter()
+                .any(|p| p == x_pos),
             "the climb W -> X must exist for this test to test anything"
         );
         for facing in HORIZONTAL {
             assert!(
-                !dust_connections(&w, x_pos, facing).iter().any(|p| p == w_pos),
+                !dust_connections(&w, x_pos, facing)
+                    .iter()
+                    .any(|p| p == w_pos),
                 "X -> W must not exist -- the edge must be one-way"
             );
         }
@@ -578,6 +702,35 @@ mod tests {
             "X's only remaining source is W, one climb step away -- a flood \
              over outgoing edges alone leaves this stale at 0"
         );
+    }
+
+    #[test]
+    fn cached_partition_survives_topology_rebuild_with_a_one_way_edge() {
+        let mut world = World::new(6, 4, 3);
+        world.set(0, 1, 0, redstone_block());
+        world.set(1, 0, 0, stone());
+        world.set(1, 1, 0, dust());
+        world.set(1, 2, 0, named("minecraft:glass", BlockKind::Glass));
+        world.set(2, 1, 0, stone());
+        world.set(2, 2, 0, dust());
+        let mut lever = named("minecraft:lever", BlockKind::Lever);
+        lever.lit = true;
+        world.set(3, 2, 0, lever);
+
+        let mut simulator = Simulator::new(world);
+        simulator
+            .run_until_stable(50)
+            .expect("the initial dirty set drains");
+        simulator.world_mut().set(5, 0, 2, stone());
+        let mut lever = simulator.world().get(3, 2, 0).clone();
+        lever.lit = false;
+        simulator.world_mut().set(3, 2, 0, lever);
+        simulator
+            .run_until_stable(50)
+            .expect("the one-way rig settles after rebuilding the cache");
+
+        let upper = Position::new(2, 2, 0);
+        assert_eq!(simulator.world().get(upper.x, upper.y, upper.z).power, 14);
     }
 
     #[test]
@@ -631,7 +784,11 @@ mod tests {
         w.set(0, 1, 0, redstone_block());
 
         let changed = recompute_dust_strengths(&mut w);
-        assert_eq!(changed.len(), 5, "all five dust cells went from 0 to non-zero");
+        assert_eq!(
+            changed.len(),
+            5,
+            "all five dust cells went from 0 to non-zero"
+        );
 
         let changed_again = recompute_dust_strengths(&mut w);
         assert_eq!(changed_again.len(), 0, "a second pass changes nothing");
@@ -680,7 +837,11 @@ mod tests {
         let elapsed = start.elapsed();
 
         // 先確認結果正確，不是只圖快而算錯
-        assert_eq!(changed.len(), 5, "all five dust cells should light up from the source");
+        assert_eq!(
+            changed.len(),
+            5,
+            "all five dust cells should light up from the source"
+        );
         assert_eq!(w.get(1, 1, 0).power, 15, "adjacent to the source");
         assert_eq!(w.get(5, 1, 0).power, 11);
 
@@ -716,7 +877,11 @@ mod tests {
         w.set(4, 1, 5, comparator);
 
         let (kind, strength) = block_signal_at(&w, Position::new(5, 1, 5));
-        assert_eq!(kind, BlockPower::Strong, "the comparator strongly powers the stone");
+        assert_eq!(
+            kind,
+            BlockPower::Strong,
+            "the comparator strongly powers the stone"
+        );
         assert_eq!(strength, 7, "and it must pass on 7, not 15");
     }
 
@@ -754,7 +919,11 @@ mod tests {
         // `power_emitted_toward`'s dust arm claimed this file handled it.
         let w = run_into_a_block(3);
         let (kind, strength) = block_signal_at(&w, Position::new(4, 1, 2));
-        assert_eq!(kind, BlockPower::Weak, "a run's far block is weakly powered");
+        assert_eq!(
+            kind,
+            BlockPower::Weak,
+            "a run's far block is weakly powered"
+        );
         assert_eq!(strength, 13, "and carries the run's own strength, not 15");
     }
 

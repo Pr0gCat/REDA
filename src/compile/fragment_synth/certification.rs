@@ -312,8 +312,19 @@ impl CompleteCandidateCertifier {
         // gets its own label rather than inflating one of them.
         phase("compatibility+manifest_build", &mut phase_started);
         let exhaustive = lowered.inputs.len() <= usize::from(config.exhaustive_input_threshold);
-        let exhaustive_vectors = if exhaustive {
-            certify_exhaustive_truth(world.world(), &candidate, lowered, &compatibility, config)?
+        let exhaustive_states = exhaustive
+            .then(|| exhaustive_state_count(lowered))
+            .transpose()?;
+        let baseline = fresh_simulator(world.world(), &candidate, lowered);
+        let exhaustive_vectors = if let Some(state_count) = exhaustive_states {
+            certify_exhaustive_truth(
+                &baseline,
+                &candidate,
+                lowered,
+                &compatibility,
+                config,
+                state_count,
+            )?
         } else {
             0
         };
@@ -323,7 +334,7 @@ impl CompleteCandidateCertifier {
         }
 
         let measurements = sweep_manifest(
-            world.world(),
+            &baseline,
             &candidate,
             lowered,
             &compatibility,
@@ -381,24 +392,29 @@ pub fn external_signal_is_high(strength: u8) -> bool {
 }
 
 fn certify_exhaustive_truth(
-    world: &World,
+    baseline: &Simulator,
     candidate: &ExpandedPhysicalCandidate,
     lowered: &Netlist,
     compatibility: &CompatibilityViews,
     config: &CertificationConfig,
+    state_count: usize,
 ) -> Result<usize, CandidateCertificationError> {
-    let threads = certification_sweep_threads(world);
+    let threads = certification_sweep_threads(baseline.world());
     if std::env::var_os("REDA_PHASE_TIMING").is_some() {
         eprintln!(
             "WORK exhaustive_workers {}",
-            certification_workers(
-                exhaustive_state_count(lowered)?,
-                threads,
-                MIN_VECTORS_PER_CERTIFICATION_WORKER
-            )
+            certification_workers(state_count, threads, MIN_VECTORS_PER_CERTIFICATION_WORKER)
         );
     }
-    certify_exhaustive_truth_with_threads(world, candidate, lowered, compatibility, config, threads)
+    certify_exhaustive_truth_with_threads(
+        baseline,
+        candidate,
+        lowered,
+        compatibility,
+        config,
+        state_count,
+        threads,
+    )
 }
 
 fn exhaustive_state_count(lowered: &Netlist) -> Result<usize, CandidateCertificationError> {
@@ -408,14 +424,14 @@ fn exhaustive_state_count(lowered: &Netlist) -> Result<usize, CandidateCertifica
 }
 
 fn certify_exhaustive_truth_with_threads(
-    world: &World,
+    baseline: &Simulator,
     candidate: &ExpandedPhysicalCandidate,
     lowered: &Netlist,
     compatibility: &CompatibilityViews,
     config: &CertificationConfig,
+    state_count: usize,
     threads: usize,
 ) -> Result<usize, CandidateCertificationError> {
-    let state_count = exhaustive_state_count(lowered)?;
     // The canonical mask range is the only thing retained per vector: each
     // worker owns one simulator at a time and reduces `()`, so a wide sweep
     // costs workers, not one world per mask.
@@ -426,7 +442,7 @@ fn certify_exhaustive_truth_with_threads(
         MIN_VECTORS_PER_CERTIFICATION_WORKER,
         |_, &mask| {
             let vector = bits_of(mask, lowered.inputs.len());
-            let mut simulator = fresh_simulator(world, candidate, lowered);
+            let mut simulator = baseline.clone();
             drive_vector(&mut simulator, candidate, lowered, compatibility, &vector)?;
             settle(
                 &mut simulator,
@@ -450,16 +466,16 @@ fn certify_exhaustive_truth_with_threads(
 }
 
 fn sweep_manifest(
-    world: &World,
+    baseline: &Simulator,
     candidate: &ExpandedPhysicalCandidate,
     lowered: &Netlist,
     compatibility: &CompatibilityViews,
     manifest: &TransitionManifest,
     config: &CertificationConfig,
 ) -> Result<Vec<TransitionMeasurement>, CandidateCertificationError> {
-    let threads = certification_sweep_threads(world);
+    let threads = certification_sweep_threads(baseline.world());
     sweep_manifest_with_threads(
-        world,
+        baseline,
         candidate,
         lowered,
         compatibility,
@@ -576,9 +592,9 @@ pub(super) fn with_compile_worker_budget<T>(body: impl FnOnce(usize) -> T) -> T 
         .map(|count| count.get())
         .unwrap_or(1);
     let workers = certification_thread_budget(available, explicit);
-    let _restore = CertificationThreadsReset(CERTIFICATION_THREADS.replace(Some(
-        ScopedWorkerBudget { workers, explicit },
-    )));
+    let _restore = CertificationThreadsReset(
+        CERTIFICATION_THREADS.replace(Some(ScopedWorkerBudget { workers, explicit })),
+    );
     body(workers)
 }
 
@@ -743,7 +759,7 @@ fn certification_sweep_guard() -> std::sync::MutexGuard<'static, ()> {
 }
 
 fn sweep_manifest_with_threads(
-    world: &World,
+    baseline: &Simulator,
     candidate: &ExpandedPhysicalCandidate,
     lowered: &Netlist,
     compatibility: &CompatibilityViews,
@@ -770,7 +786,7 @@ fn sweep_manifest_with_threads(
                 .iter()
                 .map(|(manifest_index, transitions)| {
                     measure_transition_group(
-                        world,
+                        baseline,
                         candidate,
                         lowered,
                         compatibility,
@@ -881,7 +897,7 @@ where
 }
 
 fn measure_transition_group(
-    world: &World,
+    baseline: &Simulator,
     candidate: &ExpandedPhysicalCandidate,
     lowered: &Netlist,
     compatibility: &CompatibilityViews,
@@ -896,7 +912,7 @@ fn measure_transition_group(
         .iter()
         .all(|transition| transition.from == first.from));
     let (simulator, events_before) = prepare_transition_source(
-        world,
+        baseline.clone(),
         candidate,
         lowered,
         compatibility,
@@ -933,7 +949,7 @@ fn measure_transition_group(
 }
 
 fn prepare_transition_source(
-    world: &World,
+    mut simulator: Simulator,
     candidate: &ExpandedPhysicalCandidate,
     lowered: &Netlist,
     compatibility: &CompatibilityViews,
@@ -941,7 +957,6 @@ fn prepare_transition_source(
     manifest_index: usize,
     config: &CertificationConfig,
 ) -> Result<(Simulator, u64), CandidateCertificationError> {
-    let mut simulator = fresh_simulator(world, candidate, lowered);
     let events_before = simulator.work_done();
     drive_vector(&mut simulator, candidate, lowered, compatibility, from)?;
     settle(
@@ -1023,7 +1038,7 @@ fn measure_transition_fresh(
     config: &CertificationConfig,
 ) -> Result<TransitionMeasurement, CandidateCertificationError> {
     let (simulator, events_before) = prepare_transition_source(
-        world,
+        fresh_simulator(world, candidate, lowered),
         candidate,
         lowered,
         compatibility,
@@ -1251,8 +1266,8 @@ mod tests {
     use super::{
         canonical_world_fingerprint, certification_memory_budget_bytes, certification_sweep_guard,
         certification_thread_budget, certification_workers, certify_exhaustive_truth_with_threads,
-        drive_vector, external_signal_is_high, fresh_simulator, memory_worker_ceiling,
-        measure_transition_fresh, parse_certification_threads, run_certification_chunks,
+        drive_vector, external_signal_is_high, fresh_simulator, measure_transition_fresh,
+        memory_worker_ceiling, parse_certification_threads, run_certification_chunks,
         run_indexed_chunks, scoped_certification_threads, settle, sweep_manifest_with_threads,
         sweep_worker_budget, transition_group_batches, transition_source_groups,
         with_certification_threads, with_compile_worker_budget, world_worker_memory_bytes,
@@ -1383,9 +1398,20 @@ mod tests {
             certification_memory_budget_bytes(None),
             CERT_WORKER_MEMORY_BUDGET_BYTES
         );
-        assert_eq!(certification_memory_budget_bytes(Some("1048576")), 1_048_576);
+        assert_eq!(
+            certification_memory_budget_bytes(Some("1048576")),
+            1_048_576
+        );
         assert_eq!(certification_memory_budget_bytes(Some("0")), 0);
-        for junk in ["", " ", "-1", "two", "4.0", "1e3", "99999999999999999999999999"] {
+        for junk in [
+            "",
+            " ",
+            "-1",
+            "two",
+            "4.0",
+            "1e3",
+            "99999999999999999999999999",
+        ] {
             assert_eq!(
                 parse_certification_threads(Some(junk)),
                 None,
@@ -1542,19 +1568,20 @@ mod tests {
             },
         )
         .expect("every chunk succeeds");
-        assert_eq!(values, items.iter().map(|item| item * 2).collect::<Vec<_>>());
+        assert_eq!(
+            values,
+            items.iter().map(|item| item * 2).collect::<Vec<_>>()
+        );
 
         let empty: Vec<usize> = Vec::new();
-        assert!(
-            run_certification_chunks(
-                &empty,
-                8,
-                MIN_TRANSITIONS_PER_CERTIFICATION_WORKER,
-                |_, _| Err::<usize, _>(CandidateCertificationError::CounterOverflow)
-            )
-            .expect("empty work runs no closure")
-            .is_empty()
-        );
+        assert!(run_certification_chunks(
+            &empty,
+            8,
+            MIN_TRANSITIONS_PER_CERTIFICATION_WORKER,
+            |_, _| Err::<usize, _>(CandidateCertificationError::CounterOverflow)
+        )
+        .expect("empty work runs no closure")
+        .is_empty());
     }
 
     #[test]
@@ -1776,10 +1803,7 @@ mod tests {
             .world()
             .index(pinned.x, pinned.y, pinned.z)
             .unwrap();
-        let lever_index = simulator
-            .world()
-            .index(lever.0, lever.1, lever.2)
-            .unwrap();
+        let lever_index = simulator.world().index(lever.0, lever.1, lever.2).unwrap();
 
         assert_eq!(
             simulator.world().get(pinned.x, pinned.y, pinned.z).kind,
@@ -1809,10 +1833,7 @@ mod tests {
             &[true, false],
         )
         .expect("pinned input changes");
-        assert_eq!(
-            simulator.world_mut().take_dirty(),
-            vec![pinned_index]
-        );
+        assert_eq!(simulator.world_mut().take_dirty(), vec![pinned_index]);
         assert_eq!(
             simulator.world().get(pinned.x, pinned.y, pinned.z).kind,
             BlockKind::RedstoneBlock
@@ -1905,7 +1926,10 @@ mod tests {
             certified.equivalence_certificate().library_revision,
             identity.library_revision
         );
-        assert_eq!(certified.metrics().candidate_fingerprint, identity.candidate);
+        assert_eq!(
+            certified.metrics().candidate_fingerprint,
+            identity.candidate
+        );
         assert_eq!(
             certified.metrics().realised_timing_graph_fingerprint,
             certified.timing_graph().fingerprint()
@@ -1949,9 +1973,10 @@ mod tests {
         let mut config = CertificationConfig::from_search(&SearchConfig::checked_defaults());
         let manifest =
             TransitionManifest::for_kind(netlist.inputs.clone(), config.transition_manifest_kind);
+        let baseline = fresh_simulator(world.world(), &candidate, &netlist);
         let sweep = |config: &CertificationConfig, threads| {
             sweep_manifest_with_threads(
-                world.world(),
+                &baseline,
                 &candidate,
                 &netlist,
                 &compatibility,
@@ -2040,7 +2065,7 @@ mod tests {
 
         let empty = TransitionManifest::new(Vec::new());
         assert!(sweep_manifest_with_threads(
-            world.world(),
+            &baseline,
             &candidate,
             &netlist,
             &compatibility,
@@ -2062,7 +2087,9 @@ mod tests {
         for (start, group) in groups {
             assert_eq!(start, next_index);
             assert!(!group.is_empty());
-            assert!(group.iter().all(|transition| transition.from == group[0].from));
+            assert!(group
+                .iter()
+                .all(|transition| transition.from == group[0].from));
             assert_eq!(
                 group,
                 &manifest.transitions()[start..start + group.len()],
@@ -2172,13 +2199,16 @@ mod tests {
             .compatibility_views(&netlist)
             .expect("fixture compatibility views");
         let mut config = CertificationConfig::from_search(&SearchConfig::checked_defaults());
+        let baseline = fresh_simulator(world.world(), &candidate, &netlist);
+        let state_count = 1 << netlist.inputs.len();
         let exhaustive = |config: &CertificationConfig, threads| {
             certify_exhaustive_truth_with_threads(
-                world.world(),
+                &baseline,
                 &candidate,
                 &netlist,
                 &compatibility,
                 config,
+                state_count,
                 threads,
             )
         };
@@ -2238,6 +2268,7 @@ mod tests {
             outputs: netlist.outputs.clone(),
             gates: vec![Gate::nor("n0", &["i0"]), Gate::nor("y", &["n0"])],
         };
+        let baseline = fresh_simulator(world.world(), &candidate, &buffered);
 
         // By hand: `bits_of` puts `i0` in the mask's high bit, so mask 0 drives
         // every input low. The spec gives `y = i0 = false`; the world gives
@@ -2257,11 +2288,12 @@ mod tests {
                 "{threads} requested workers must actually open over {state_count} vectors"
             );
             let error = certify_exhaustive_truth_with_threads(
-                world.world(),
+                &baseline,
                 &candidate,
                 &buffered,
                 &compatibility,
                 &config,
+                state_count,
                 threads,
             )
             .expect_err("a BUF spec must not certify against a NOT world");

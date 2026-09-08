@@ -47,9 +47,10 @@ use crate::compile::metrics::Fingerprint;
 use crate::compile::physical::{self, PortKind};
 use crate::compile::planner::{PortPlacements, PortRole};
 use crate::compile::routing::{
-    DelayedComponent, DelayedOwner, NonEmptyRouteSinks, OwnedRouteRequest, PhysicalReservationKind,
-    PhysicalReservationOwner, PhysicalReservations, PhysicalRouter, RouteEndpoint, RouteSink,
-    RouterFailure, RouterLimitKind, RouterRefusalCategory, TerminalContract, TerminalRequirement,
+    DelayedComponent, DelayedOwner, NonEmptyRouteSinks, PhysicalReservationKind,
+    PhysicalReservationOwner, PhysicalReservations, PhysicalRouter, ReservationStore,
+    RouteEndpoint, RouteSink, RouterFailure, RouterLimitKind, RouterRefusalCategory,
+    TerminalContract, TerminalRequirement, TransactionalRouteRequest,
 };
 use crate::compile::topology::{Library, Primitive};
 use crate::compile::verification::ExpandedPhysicalError;
@@ -2600,24 +2601,26 @@ fn route_all(
             })
             .collect::<Result<Vec<_>, SeedError>>()?;
         let sinks = NonEmptyRouteSinks::new(sinks).map_err(|_| SeedError::EmptyRoute)?;
-        let mut attempt_reservations = reservations.clone();
-        reserve_foreign_private_cells(&mut attempt_reservations, &layout, source_id, &protected);
-        reserve_source_refresh(&mut attempt_reservations, source_id, &source, route)?;
-        let routed = router.route_owned(OwnedRouteRequest {
-            id: route,
-            source: RouteEndpoint {
-                id: source_id,
-                anchor: source.route_anchor,
-                allowed_exit: source.allowed_exit,
-                terminal: TerminalContract::Source {
-                    signal_strength: MAX_SIGNAL_STRENGTH,
+        let routed = {
+            let mut attempt = reservations.transaction();
+            reserve_foreign_private_cells(&mut attempt, &layout, source_id, &protected);
+            reserve_source_refresh(&mut attempt, source_id, &source, route)?;
+            router.route_transactional(TransactionalRouteRequest {
+                id: route,
+                source: RouteEndpoint {
+                    id: source_id,
+                    anchor: source.route_anchor,
+                    allowed_exit: source.allowed_exit,
+                    terminal: TerminalContract::Source {
+                        signal_strength: MAX_SIGNAL_STRENGTH,
+                    },
                 },
-            },
-            sinks: &sinks,
-            reservations: attempt_reservations,
-            limits: config.router_limits,
-            no_refresh: layout.departures.get(&source_id),
-        });
+                sinks: &sinks,
+                reservations: &mut attempt,
+                limits: config.router_limits,
+                no_refresh: layout.departures.get(&source_id),
+            })
+        };
         let mut tree = match routed {
             Ok(tree) => tree,
             Err(failure) => {
@@ -2660,7 +2663,7 @@ fn route_all(
 /// Closes every other net's private plan cells for this attempt.  The
 /// owner's own cells stay free, and pre-reserved terminals are untouched.
 fn reserve_foreign_private_cells(
-    attempt: &mut PhysicalReservations,
+    attempt: &mut impl ReservationStore,
     layout: &ChannelLayout,
     owner: PhysicalEndpointId,
     protected: &BTreeSet<Anchor>,
@@ -2689,7 +2692,7 @@ fn reserve_foreign_private_cells(
 /// anchor is promoted to an exact route conductor and its two side cells are
 /// kept clear of foreign dust.
 fn reserve_source_refresh(
-    reservations: &mut PhysicalReservations,
+    reservations: &mut impl ReservationStore,
     source_id: PhysicalEndpointId,
     source: &SourceGeometry,
     route: RouteId,
@@ -2870,7 +2873,7 @@ fn reservations_for_components(
 }
 
 pub(crate) fn reserve_route(
-    reservations: &mut PhysicalReservations,
+    reservations: &mut impl ReservationStore,
     tree: &crate::compile::routing::RealisedRouteTree,
     protected: &BTreeSet<Anchor>,
 ) {
@@ -4265,9 +4268,7 @@ pub(crate) mod tests {
             compile_fragment_synth, SynthesisInput, SynthesisResult,
         };
         use crate::compile::fragment_synth::benchmark::canonical_world_fingerprint;
-        use crate::compile::fragment_synth::certification::{
-            certification_thread_budget, with_certification_threads,
-        };
+        use crate::compile::fragment_synth::certification::with_certification_threads;
         use crate::compile::fragment_synth::search::SynthesisBudget;
         use crate::compile::{HierarchicalNetlist, Netlist};
 
@@ -4984,31 +4985,6 @@ pub(crate) mod tests {
             );
         }
 
-        /// The certification worker counts Task 4's acceptance matrix runs:
-        /// the one-worker reference, two workers, and this host's automatic
-        /// budget -- each clamped by the single
-        /// [`certification_thread_budget`] policy and deduplicated, so a
-        /// two-core host does not compile the whole corpus a third time for
-        /// a count it has already run. On a one-core host the matrix is the
-        /// reference alone, because that is the only budget the policy will
-        /// hand out there.
-        ///
-        /// The counts are scoped in process with Task 2's own
-        /// [`with_certification_threads`]; nothing here writes
-        /// `REDA_CERT_THREADS`, which is process-wide state a concurrent
-        /// test would see.
-        fn certification_thread_counts() -> Vec<usize> {
-            let auto = std::thread::available_parallelism().map_or(1, |count| count.get());
-            let mut counts = vec![1];
-            for requested in [2, auto] {
-                let clamped = certification_thread_budget(auto, Some(requested));
-                if !counts.contains(&clamped) {
-                    counts.push(clamped);
-                }
-            }
-            counts
-        }
-
         /// Every stable field of a [`SynthesisResult`], compared exactly as
         /// `hierarchy_api::tests::parallel_and_sequential_block_compiles_agree`
         /// compares its own one-vs-many pair.
@@ -5075,7 +5051,7 @@ pub(crate) mod tests {
             assert_eq!(observed.trace, reference.trace, "{label}: proposal trace");
         }
 
-        /// Task 4's 1/2/auto acceptance matrix over one corpus: compile every
+        /// Task 4's 1/2/4 acceptance matrix over one corpus: compile every
         /// case inside a one-worker scope as the reference, then again at
         /// each remaining count, and require the whole stable result back
         /// each time.
@@ -5095,7 +5071,7 @@ pub(crate) mod tests {
             cases: Vec<(String, T)>,
             compile: impl Fn(&T) -> Result<SynthesisResult, E>,
         ) {
-            let counts = certification_thread_counts();
+            let counts = [1, 2, 4];
             let mut ran = 0usize;
             for (name, case) in &cases {
                 if !case_is_selected(name) {

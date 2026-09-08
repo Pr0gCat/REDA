@@ -350,6 +350,210 @@ impl PhysicalReservations {
     pub fn get(&self, at: &Anchor) -> Option<&PhysicalReservation> {
         self.cells.get(at)
     }
+
+    pub(crate) fn transaction(&mut self) -> ReservationTransaction<'_> {
+        ReservationTransaction {
+            reservations: self,
+            undo: BTreeMap::new(),
+        }
+    }
+
+    fn requested_route_conductors(&self, route: RouteId) -> PhysicalReservations {
+        PhysicalReservations {
+            cells: self
+                .cells
+                .iter()
+                .filter(|(_, claim)| {
+                    owned_by_route(claim.owner, route) && reservation_is_conductor(claim)
+                })
+                .map(|(&at, claim)| (at, claim.clone()))
+                .collect(),
+        }
+    }
+}
+
+/// Attempt-local writes over the shared reservation map. Dropping the value
+/// restores every touched cell, including replacements of endpoint claims.
+#[doc(hidden)]
+pub struct ReservationTransaction<'a> {
+    reservations: &'a mut PhysicalReservations,
+    undo: BTreeMap<Anchor, Option<PhysicalReservation>>,
+}
+
+impl ReservationTransaction<'_> {
+    fn remember(&mut self, at: Anchor) {
+        if !self.undo.contains_key(&at) {
+            self.undo
+                .insert(at, self.reservations.cells.get(&at).cloned());
+        }
+    }
+
+    fn requested_route_conductors(&self, route: RouteId) -> PhysicalReservations {
+        self.reservations.requested_route_conductors(route)
+    }
+
+    fn as_reservations(&self) -> &PhysicalReservations {
+        self.reservations
+    }
+}
+
+impl Drop for ReservationTransaction<'_> {
+    fn drop(&mut self) {
+        for (at, previous) in std::mem::take(&mut self.undo) {
+            match previous {
+                Some(previous) => {
+                    self.reservations.cells.insert(at, previous);
+                }
+                None => {
+                    self.reservations.cells.remove(&at);
+                }
+            }
+        }
+    }
+}
+
+pub(crate) trait ReservationStore {
+    fn get(&self, at: &Anchor) -> Option<&PhysicalReservation>;
+    fn reserve(
+        &mut self,
+        at: Anchor,
+        owner: PhysicalReservationOwner,
+        kind: PhysicalReservationKind,
+    ) -> Option<PhysicalReservation>;
+    fn reserve_if_free(
+        &mut self,
+        at: Anchor,
+        owner: PhysicalReservationOwner,
+        kind: PhysicalReservationKind,
+    ) -> bool;
+    fn restate_route_conductor(&mut self, at: Anchor, route: RouteId, state: BlockState) -> bool;
+    fn promote_endpoint_conductor(
+        &mut self,
+        at: Anchor,
+        endpoint: PhysicalEndpointId,
+        route: RouteId,
+        state: BlockState,
+    ) -> bool;
+}
+
+impl ReservationStore for PhysicalReservations {
+    fn get(&self, at: &Anchor) -> Option<&PhysicalReservation> {
+        self.get(at)
+    }
+
+    fn reserve(
+        &mut self,
+        at: Anchor,
+        owner: PhysicalReservationOwner,
+        kind: PhysicalReservationKind,
+    ) -> Option<PhysicalReservation> {
+        self.reserve(at, owner, kind)
+    }
+
+    fn reserve_if_free(
+        &mut self,
+        at: Anchor,
+        owner: PhysicalReservationOwner,
+        kind: PhysicalReservationKind,
+    ) -> bool {
+        self.reserve_if_free(at, owner, kind)
+    }
+
+    fn restate_route_conductor(&mut self, at: Anchor, route: RouteId, state: BlockState) -> bool {
+        self.restate_route_conductor(at, route, state)
+    }
+
+    fn promote_endpoint_conductor(
+        &mut self,
+        at: Anchor,
+        endpoint: PhysicalEndpointId,
+        route: RouteId,
+        state: BlockState,
+    ) -> bool {
+        self.promote_endpoint_conductor(at, endpoint, route, state)
+    }
+}
+
+impl ReservationStore for ReservationTransaction<'_> {
+    fn get(&self, at: &Anchor) -> Option<&PhysicalReservation> {
+        self.reservations.get(at)
+    }
+
+    fn reserve(
+        &mut self,
+        at: Anchor,
+        owner: PhysicalReservationOwner,
+        kind: PhysicalReservationKind,
+    ) -> Option<PhysicalReservation> {
+        if self.reservations.cells.contains_key(&at) {
+            return None;
+        }
+        self.remember(at);
+        self.reservations
+            .cells
+            .insert(at, PhysicalReservation { owner, kind })
+    }
+
+    fn reserve_if_free(
+        &mut self,
+        at: Anchor,
+        owner: PhysicalReservationOwner,
+        kind: PhysicalReservationKind,
+    ) -> bool {
+        if self.reservations.cells.contains_key(&at) {
+            return false;
+        }
+        self.remember(at);
+        self.reservations
+            .cells
+            .insert(at, PhysicalReservation { owner, kind });
+        true
+    }
+
+    fn restate_route_conductor(&mut self, at: Anchor, route: RouteId, state: BlockState) -> bool {
+        if !matches!(
+            self.reservations.cells.get(&at),
+            Some(PhysicalReservation {
+                owner: PhysicalReservationOwner::Route(owner),
+                kind: PhysicalReservationKind::Conductor(_),
+            }) if *owner == route
+        ) {
+            return false;
+        }
+        self.remember(at);
+        self.reservations.cells.insert(
+            at,
+            PhysicalReservation {
+                owner: PhysicalReservationOwner::Route(route),
+                kind: PhysicalReservationKind::Conductor(state),
+            },
+        );
+        true
+    }
+
+    fn promote_endpoint_conductor(
+        &mut self,
+        at: Anchor,
+        endpoint: PhysicalEndpointId,
+        route: RouteId,
+        state: BlockState,
+    ) -> bool {
+        if !self.reservations.cells.get(&at).is_some_and(|existing| {
+            existing.owner == PhysicalReservationOwner::Endpoint(endpoint)
+                && existing.kind == PhysicalReservationKind::KeepOut
+        }) {
+            return false;
+        }
+        self.remember(at);
+        self.reservations.cells.insert(
+            at,
+            PhysicalReservation {
+                owner: PhysicalReservationOwner::Route(route),
+                kind: PhysicalReservationKind::Conductor(state),
+            },
+        );
+        true
+    }
 }
 
 pub struct RouteRequest<'a> {
@@ -371,6 +575,29 @@ pub struct OwnedRouteRequest<'a> {
     pub reservations: PhysicalReservations,
     pub limits: RouterLimits,
     pub no_refresh: Option<&'a BTreeSet<Anchor>>,
+}
+
+#[doc(hidden)]
+pub struct TransactionalRouteRequest<'request, 'reservations> {
+    pub id: RouteId,
+    pub source: RouteEndpoint,
+    pub sinks: &'request NonEmptyRouteSinks,
+    pub reservations: &'request mut ReservationTransaction<'reservations>,
+    pub limits: RouterLimits,
+    pub no_refresh: Option<&'request BTreeSet<Anchor>>,
+}
+
+impl TransactionalRouteRequest<'_, '_> {
+    fn borrowed(&self) -> RouteRequest<'_> {
+        RouteRequest {
+            id: self.id,
+            source: self.source.clone(),
+            sinks: self.sinks,
+            reservations: self.reservations.as_reservations(),
+            limits: self.limits,
+            no_refresh: self.no_refresh,
+        }
+    }
 }
 
 impl OwnedRouteRequest<'_> {
@@ -408,6 +635,20 @@ pub trait PhysicalRouter {
     ) -> Result<RealisedRouteTree, RouterFailure> {
         self.route(request.borrowed())
     }
+
+    fn route_transactional(
+        &self,
+        request: TransactionalRouteRequest<'_, '_>,
+    ) -> Result<RealisedRouteTree, RouterFailure> {
+        self.route_owned(OwnedRouteRequest {
+            id: request.id,
+            source: request.source,
+            sinks: request.sinks,
+            reservations: request.reservations.as_reservations().clone(),
+            limits: request.limits,
+            no_refresh: request.no_refresh,
+        })
+    }
 }
 
 /// Name-free fragment-side adapter.  It deliberately performs no coordinate
@@ -434,6 +675,13 @@ impl<R: PhysicalRouter> PhysicalRouter for FragmentRouterAdapter<R> {
         request: OwnedRouteRequest<'_>,
     ) -> Result<RealisedRouteTree, RouterFailure> {
         self.router.route_owned(request)
+    }
+
+    fn route_transactional(
+        &self,
+        request: TransactionalRouteRequest<'_, '_>,
+    ) -> Result<RealisedRouteTree, RouterFailure> {
+        self.router.route_transactional(request)
     }
 }
 
@@ -578,6 +826,20 @@ impl PhysicalRouter for GuardedPhysicalRouter {
         request: OwnedRouteRequest<'_>,
     ) -> Result<RealisedRouteTree, RouterFailure> {
         route_with_local_policy(
+            request,
+            RoutingJoinPolicy::Wide,
+            RoutePhysics::GUARDED,
+            true,
+            |_| 0,
+            |_, _, _| {},
+        )
+    }
+
+    fn route_transactional(
+        &self,
+        request: TransactionalRouteRequest<'_, '_>,
+    ) -> Result<RealisedRouteTree, RouterFailure> {
+        route_with_transactional_policy(
             request,
             RoutingJoinPolicy::Wide,
             RoutePhysics::GUARDED,
@@ -751,8 +1013,8 @@ fn route_with_local_policy<Price, Claim>(
     join_policy: RoutingJoinPolicy,
     physics: RoutePhysics,
     strict_local: bool,
-    mut price: Price,
-    mut claim: Claim,
+    price: Price,
+    claim: Claim,
 ) -> Result<RealisedRouteTree, RouterFailure>
 where
     Price: FnMut(&Anchor) -> u64,
@@ -767,14 +1029,82 @@ where
         limits,
         no_refresh,
     } = request;
-    let requested_route_conductors = PhysicalReservations {
-        cells: requested
-            .cells
-            .iter()
-            .filter(|(_, claim)| owned_by_route(claim.owner, id) && reservation_is_conductor(claim))
-            .map(|(&at, claim)| (at, claim.clone()))
-            .collect(),
-    };
+    let requested_route_conductors = requested.requested_route_conductors(id);
+    let mut reservations = requested;
+    route_with_reservation_store(
+        id,
+        source,
+        sinks,
+        &mut reservations,
+        requested_route_conductors,
+        limits,
+        no_refresh,
+        join_policy,
+        physics,
+        strict_local,
+        price,
+        claim,
+    )
+}
+
+fn route_with_transactional_policy<Price, Claim>(
+    request: TransactionalRouteRequest<'_, '_>,
+    join_policy: RoutingJoinPolicy,
+    physics: RoutePhysics,
+    strict_local: bool,
+    price: Price,
+    claim: Claim,
+) -> Result<RealisedRouteTree, RouterFailure>
+where
+    Price: FnMut(&Anchor) -> u64,
+    Claim: FnMut(Anchor, PhysicalReservationOwner, PhysicalReservationKind),
+{
+    validate_request(&request.borrowed())?;
+    let TransactionalRouteRequest {
+        id,
+        source,
+        sinks,
+        reservations,
+        limits,
+        no_refresh,
+    } = request;
+    let requested_route_conductors = reservations.requested_route_conductors(id);
+    route_with_reservation_store(
+        id,
+        source,
+        sinks,
+        reservations,
+        requested_route_conductors,
+        limits,
+        no_refresh,
+        join_policy,
+        physics,
+        strict_local,
+        price,
+        claim,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn route_with_reservation_store<Reservations, Price, Claim>(
+    id: RouteId,
+    source: RouteEndpoint,
+    sinks: &NonEmptyRouteSinks,
+    reservations: &mut Reservations,
+    requested_route_conductors: PhysicalReservations,
+    limits: RouterLimits,
+    no_refresh: Option<&BTreeSet<Anchor>>,
+    join_policy: RoutingJoinPolicy,
+    physics: RoutePhysics,
+    strict_local: bool,
+    mut price: Price,
+    mut claim: Claim,
+) -> Result<RealisedRouteTree, RouterFailure>
+where
+    Reservations: ReservationStore,
+    Price: FnMut(&Anchor) -> u64,
+    Claim: FnMut(Anchor, PhysicalReservationOwner, PhysicalReservationKind),
+{
     let source_strength =
         source
             .terminal
@@ -784,7 +1114,6 @@ where
                 source: source.id,
                 sink: None,
             })?;
-    let mut reservations = requested;
     let request = RouteRequest {
         id,
         source,
@@ -807,14 +1136,14 @@ where
     for sink in request.sinks.as_slice() {
         let approach = step(sink.anchor, sink.allowed_entry);
         let own_join =
-            TypedOwnJoinCheck::for_branch(join_policy, request.id, &cell_states, &reservations);
+            TypedOwnJoinCheck::for_branch(join_policy, request.id, &cell_states, reservations);
         let mut path = search_path(
             &request,
             sink,
             start,
             approach,
             &cell_states,
-            &reservations,
+            reservations,
             &own_join,
             physics,
             strict_local,
@@ -829,7 +1158,7 @@ where
         if path.last() != Some(&sink.anchor) {
             path.push(sink.anchor);
         }
-        reserve_typed_path(request.id, &path, &mut reservations, &mut claim);
+        reserve_typed_path(request.id, &path, reservations, &mut claim);
 
         let shared = path
             .iter()
@@ -970,7 +1299,7 @@ where
             .get(path.len().saturating_sub(2))
             .copied()
             .unwrap_or(request.source.anchor);
-        let isolated = terminal_is_isolated_typed(&reservations, predecessor, sink.anchor, support);
+        let isolated = terminal_is_isolated_typed(reservations, predecessor, sink.anchor, support);
         let kind = select_terminal_kind(
             requirement,
             budget_needs_repeater,
@@ -1002,7 +1331,7 @@ where
             predecessor,
             sink.anchor,
             support,
-            &mut reservations,
+            reservations,
             &mut claim,
         );
         if strict_local {
@@ -1026,7 +1355,7 @@ where
             },
         });
 
-        if let Some((repeater, ring)) = ring_closed_in_typed(&cell_states, &reservations) {
+        if let Some((repeater, ring)) = ring_closed_in_typed(&cell_states, reservations) {
             let branch = branches
                 .last()
                 .expect("the checked branch was just recorded");
@@ -1166,11 +1495,7 @@ fn staircase_clearance_typed(from: Anchor, to: Anchor) -> Vec<Anchor> {
     }
 }
 
-fn ancestry_from(
-    previous: &BTreeMap<Anchor, Anchor>,
-    at: Anchor,
-    ancestry: &mut Vec<Anchor>,
-) {
+fn ancestry_from(previous: &BTreeMap<Anchor, Anchor>, at: Anchor, ancestry: &mut Vec<Anchor>) {
     ancestry.clear();
     ancestry.extend(std::iter::successors(Some(at), |cell| {
         previous.get(cell).copied()
@@ -1233,7 +1558,7 @@ fn anchor_is_free_for_typed(
     start: Anchor,
     goal: Anchor,
     terminal_support: Anchor,
-    reservations: &PhysicalReservations,
+    reservations: &impl ReservationStore,
 ) -> bool {
     if anchor != start
         && anchor != goal
@@ -1271,7 +1596,7 @@ fn staircase_cell_is_blocked(
     from: Anchor,
     to: Anchor,
     cell: Anchor,
-    reservations: &PhysicalReservations,
+    reservations: &impl ReservationStore,
     reuse_own_stair_clearance: bool,
 ) -> bool {
     let is_riser = to.y > from.y && cell.y == from.y;
@@ -1334,7 +1659,7 @@ fn horizontal_neighbours_typed(anchor: Anchor) -> [Anchor; 4] {
 fn reserve_typed_path<Claim>(
     route: RouteId,
     path: &[Anchor],
-    reservations: &mut PhysicalReservations,
+    reservations: &mut impl ReservationStore,
     claim: &mut Claim,
 ) where
     Claim: FnMut(Anchor, PhysicalReservationOwner, PhysicalReservationKind),
@@ -1368,7 +1693,7 @@ fn reserve_typed_path<Claim>(
 }
 
 fn terminal_is_isolated_typed(
-    reservations: &PhysicalReservations,
+    reservations: &impl ReservationStore,
     predecessor: Anchor,
     terminal: Anchor,
     support: Anchor,
@@ -1416,7 +1741,7 @@ fn reserve_terminal_guard<Claim>(
     predecessor: Anchor,
     terminal: Anchor,
     support: Anchor,
-    reservations: &mut PhysicalReservations,
+    reservations: &mut impl ReservationStore,
     claim: &mut Claim,
 ) where
     Claim: FnMut(Anchor, PhysicalReservationOwner, PhysicalReservationKind),
@@ -1448,15 +1773,14 @@ fn join_lid_typed(anchor: Anchor, neighbour: Anchor) -> Option<Anchor> {
 }
 
 fn dust_join_neighbours_typed(cell: Anchor, sealed: &impl Fn(Anchor) -> bool) -> Vec<Anchor> {
-    keep_out_typed(cell)
-        .into_iter()
-        .filter(|neighbour| !join_lid_typed(cell, *neighbour).is_some_and(sealed))
-        .collect()
+    let mut neighbours = keep_out_typed(cell);
+    neighbours.retain(|neighbour| !join_lid_typed(cell, *neighbour).is_some_and(sealed));
+    neighbours
 }
 
 fn ring_closed_in_typed(
     states: &BTreeMap<Anchor, BlockState>,
-    reservations: &PhysicalReservations,
+    reservations: &impl ReservationStore,
 ) -> Option<(Anchor, BTreeSet<Anchor>)> {
     let sealed = |lid: Anchor| {
         !states.contains_key(&lid) && reservations.get(&lid).is_some_and(reservation_is_floor)
@@ -1571,7 +1895,7 @@ impl TypedOwnJoinCheck {
         policy: RoutingJoinPolicy,
         route: RouteId,
         states: &BTreeMap<Anchor, BlockState>,
-        reservations: &PhysicalReservations,
+        reservations: &impl ReservationStore,
     ) -> Self {
         if policy != RoutingJoinPolicy::Narrow {
             return Self {
@@ -1619,7 +1943,7 @@ impl TypedOwnJoinCheck {
         at: Anchor,
         start: Anchor,
         goal: Anchor,
-        reservations: &PhysicalReservations,
+        reservations: &impl ReservationStore,
         ancestry: &[Anchor],
     ) -> bool {
         if self.policy == RoutingJoinPolicy::Off {
@@ -1633,12 +1957,10 @@ impl TypedOwnJoinCheck {
         if own_wire(&next) {
             return !(at == start || next == goal || own_wire(&at));
         }
-        let halo: Vec<_> = dust_join_neighbours_typed(next, &|lid| {
+        let mut halo = dust_join_neighbours_typed(next, &|lid| {
             reservations.get(&lid).is_some_and(reservation_is_floor)
-        })
-        .into_iter()
-        .filter(|cell| *cell != at && *cell != goal)
-        .collect();
+        });
+        halo.retain(|cell| *cell != at && *cell != goal);
         for cell in &halo {
             if !own_wire(cell) {
                 continue;
@@ -1681,7 +2003,7 @@ fn search_path<Price>(
     start: Anchor,
     goal: Anchor,
     laid: &BTreeMap<Anchor, BlockState>,
-    reservations: &PhysicalReservations,
+    reservations: &impl ReservationStore,
     own_join: &TypedOwnJoinCheck,
     physics: RoutePhysics,
     strict_local: bool,
@@ -1890,19 +2212,22 @@ fn reconstruct_path(previous: BTreeMap<Anchor, Anchor>, goal: Anchor) -> Vec<Anc
     path
 }
 
-fn neighbours(anchor: Anchor) -> Vec<Anchor> {
-    let mut out = Vec::with_capacity(12);
-    for horizontal in [Facing::West, Facing::East, Facing::North, Facing::South] {
+fn neighbours(anchor: Anchor) -> [Anchor; 12] {
+    let mut out = [anchor; 12];
+    for (slots, horizontal) in
+        out.chunks_exact_mut(3)
+            .zip([Facing::West, Facing::East, Facing::North, Facing::South])
+    {
         let sideways = step(anchor, horizontal);
-        out.push(sideways);
-        out.push(Anchor {
+        slots[0] = sideways;
+        slots[1] = Anchor {
             y: sideways.y + 1,
             ..sideways
-        });
-        out.push(Anchor {
+        };
+        slots[2] = Anchor {
             y: sideways.y - 1,
             ..sideways
-        });
+        };
     }
     out
 }
@@ -2361,6 +2686,95 @@ mod tests {
                 owner: PhysicalReservationOwner::Route(route),
                 kind: PhysicalReservationKind::Conductor(exact),
             })
+        );
+    }
+
+    #[test]
+    fn reservation_transaction_rolls_back_insert_promotion_and_restate() {
+        let endpoint_at = at(3, 1, 4);
+        let endpoint = PhysicalEndpointId::Junction(InstanceId(7));
+        let route = RouteId(9);
+        let conductor_at = at(4, 1, 4);
+        let mut reservations = PhysicalReservations::new();
+        reservations.reserve(
+            endpoint_at,
+            PhysicalReservationOwner::Endpoint(endpoint),
+            PhysicalReservationKind::KeepOut,
+        );
+        reservations.reserve_conductor(conductor_at, route, crate::compile::dust());
+        let original = reservations.clone();
+
+        {
+            let mut transaction = reservations.transaction();
+            transaction.reserve(
+                at(5, 1, 4),
+                PhysicalReservationOwner::KeepOut(1),
+                PhysicalReservationKind::MandatoryAir,
+            );
+            assert!(transaction.promote_endpoint_conductor(
+                endpoint_at,
+                endpoint,
+                route,
+                crate::compile::repeater(Facing::North),
+            ));
+            assert!(transaction.restate_route_conductor(
+                conductor_at,
+                route,
+                crate::compile::repeater(Facing::West),
+            ));
+        }
+        assert_eq!(reservations, original);
+    }
+
+    #[test]
+    fn transactional_fallback_preserves_route_owned_overrides() {
+        struct OwnedOnlyRouter;
+
+        impl PhysicalRouter for OwnedOnlyRouter {
+            fn route(&self, _: RouteRequest<'_>) -> Result<RealisedRouteTree, RouterFailure> {
+                panic!("transactional fallback bypassed route_owned")
+            }
+
+            fn route_owned(
+                &self,
+                request: OwnedRouteRequest<'_>,
+            ) -> Result<RealisedRouteTree, RouterFailure> {
+                Err(RouterFailure::InvalidRequest {
+                    route: request.id,
+                    source: request.source.id,
+                    sink: None,
+                })
+            }
+        }
+
+        let route = RouteId(27);
+        let source = endpoint(route);
+        let sinks = NonEmptyRouteSinks::new(vec![sink(route, 0, at(4, 1, 0))]).unwrap();
+        let mut reservations = PhysicalReservations::new();
+        let error = {
+            let mut transaction = reservations.transaction();
+            OwnedOnlyRouter
+                .route_transactional(TransactionalRouteRequest {
+                    id: route,
+                    source: source.clone(),
+                    sinks: &sinks,
+                    reservations: &mut transaction,
+                    limits: RouterLimits {
+                        max_node_expansions: 1,
+                        max_queue_entries: 1,
+                    },
+                    no_refresh: None,
+                })
+                .unwrap_err()
+        };
+
+        assert_eq!(
+            error,
+            RouterFailure::InvalidRequest {
+                route,
+                source: source.id,
+                sink: None,
+            }
         );
     }
 
@@ -2918,18 +3332,12 @@ mod tests {
     fn candidate_checks_are_not_reordered_at_coordinate_boundaries() {
         let ordinary = at(0, 1, 0);
         assert!(can_reorder_candidate_checks(ordinary, ordinary));
-        assert!(!can_reorder_candidate_checks(
-            ordinary,
-            at(i32::MAX, 1, 0)
-        ));
+        assert!(!can_reorder_candidate_checks(ordinary, at(i32::MAX, 1, 0)));
         assert!(!can_reorder_candidate_checks(
             ordinary,
             at(0, i32::MIN + 1, 0)
         ));
-        assert!(!can_reorder_candidate_checks(
-            at(0, i32::MAX, 0),
-            ordinary
-        ));
+        assert!(!can_reorder_candidate_checks(at(0, i32::MAX, 0), ordinary));
     }
 
     #[test]

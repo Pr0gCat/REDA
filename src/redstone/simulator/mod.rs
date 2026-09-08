@@ -14,6 +14,7 @@ pub mod propagate;
 pub mod schedule;
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use serde::Serialize;
 
@@ -36,6 +37,7 @@ pub struct Simulator {
     torch_changes: std::collections::HashMap<position::Position, Vec<u64>>,
     /// 這次模擬總共處理了幾筆排程，用來偵測發散
     work_done: u64,
+    dust_topology_cache: Arc<propagate::DustTopologyCache>,
     /// Optional dynamic-timing-analysis observer. `None` unless
     /// `attach_observer` was called -- and when it is `None`, `step` and
     /// `run_until_stable` take exactly the path they always have (see
@@ -271,6 +273,7 @@ impl Simulator {
             queue: TickQueue::new(),
             torch_changes: HashMap::new(),
             work_done: 0,
+            dust_topology_cache: Arc::new(propagate::DustTopologyCache::default()),
             observer: None,
         };
 
@@ -281,7 +284,7 @@ impl Simulator {
             );
         }
 
-        propagate::recompute_dust_strengths(&mut simulator.world);
+        simulator.recompute_dust_strengths();
         simulator
     }
 
@@ -316,10 +319,7 @@ impl Simulator {
 
     /// Attach an identity-preserving observer. Several sites may share one
     /// coordinate or one display label and still produce independent events.
-    pub fn attach_typed_observer(
-        &mut self,
-        watched: impl IntoIterator<Item = ObservationSite>,
-    ) {
+    pub fn attach_typed_observer(&mut self, watched: impl IntoIterator<Item = ObservationSite>) {
         let mut observer = Observer::typed(watched);
         observer.reset(&self.world);
         self.observer = Some(observer);
@@ -456,11 +456,15 @@ impl Simulator {
     /// 有別的排程「順便」觸發重算才會被看見；佇列若一直是空的，粉的
     /// 強度就會一直停留在過期的值，而呼叫端永遠不會被告知。
     fn settle_from_current_state(&mut self) {
-        propagate::recompute_dust_strengths(&mut self.world);
+        self.recompute_dust_strengths();
         self.schedule_mismatched_torches();
         self.schedule_mismatched_repeaters();
         self.schedule_mismatched_comparators();
         self.schedule_mismatched_lamps();
+    }
+
+    fn recompute_dust_strengths(&mut self) -> Vec<Position> {
+        propagate::recompute_dust_strengths_cached(&mut self.world, &mut self.dust_topology_cache)
     }
 
     /// 找出目前狀態與「應該是什麼狀態」不一致的火把，把它們排入佇列。
@@ -499,7 +503,7 @@ impl Simulator {
             }
         }
 
-        changed += propagate::recompute_dust_strengths(&mut self.world).len();
+        changed += self.recompute_dust_strengths().len();
 
         if let Some(observer) = self.observer.as_mut() {
             observer.sample(&self.world, now);
@@ -524,7 +528,7 @@ impl Simulator {
         if exhausted {
             return Err(());
         }
-        changed += propagate::recompute_dust_strengths(&mut self.world).len();
+        changed += self.recompute_dust_strengths().len();
         if let Some(observer) = self.observer.as_mut() {
             observer.sample(&self.world, now);
         }
@@ -1009,7 +1013,12 @@ mod tests {
 
         // 前方（輸出端）放一個一直充能的紅石塊 -- 如果中繼器誤把它當輸入，
         // 就會被觸發開啟
-        world.set(3, 0, 2, named("minecraft:redstone_block", BlockKind::RedstoneBlock));
+        world.set(
+            3,
+            0,
+            2,
+            named("minecraft:redstone_block", BlockKind::RedstoneBlock),
+        );
 
         let mut simulator = Simulator::new(world);
         for _ in 0..10 {
@@ -1271,7 +1280,12 @@ mod tests {
         // sides does not.
         let mut world = World::new(5, 5, 5);
         let repeater_pos = Position::new(2, 0, 2);
-        world.set(repeater_pos.x, repeater_pos.y, repeater_pos.z, repeater(Facing::North, 1, false));
+        world.set(
+            repeater_pos.x,
+            repeater_pos.y,
+            repeater_pos.z,
+            repeater(Facing::North, 1, false),
+        );
 
         let mut on_lever = lever();
         on_lever.lit = true;
@@ -1285,7 +1299,10 @@ mod tests {
             .expect("a lever feeding a repeater's input must settle");
 
         assert!(
-            simulator.world().get(repeater_pos.x, repeater_pos.y, repeater_pos.z).lit,
+            simulator
+                .world()
+                .get(repeater_pos.x, repeater_pos.y, repeater_pos.z)
+                .lit,
             "facing=North must read its input from the north, where the lit lever sits"
         );
         assert!(
@@ -1311,7 +1328,12 @@ mod tests {
         // the south.
         let mut world = World::new(5, 5, 5);
         let comparator_pos = Position::new(2, 0, 2);
-        world.set(comparator_pos.x, comparator_pos.y, comparator_pos.z, comparator(Facing::North, 0, false));
+        world.set(
+            comparator_pos.x,
+            comparator_pos.y,
+            comparator_pos.z,
+            comparator(Facing::North, 0, false),
+        );
 
         let mut on_lever = lever();
         on_lever.lit = true;
@@ -1325,7 +1347,11 @@ mod tests {
             .expect("a lever feeding a comparator's rear input must settle");
 
         assert!(
-            simulator.world().get(comparator_pos.x, comparator_pos.y, comparator_pos.z).power > 0,
+            simulator
+                .world()
+                .get(comparator_pos.x, comparator_pos.y, comparator_pos.z)
+                .power
+                > 0,
             "facing=North must read its main signal from the north, where the lit lever sits"
         );
         assert!(
@@ -1371,6 +1397,74 @@ mod tests {
             simulator.world().get(1, 1, 0).power,
             15,
             "flipping the lever must reach the dust without a manual step() in between"
+        );
+    }
+
+    #[test]
+    fn clones_share_cache_until_only_one_world_changes_dust_topology() {
+        let mut world = World::new(6, 3, 3);
+        world.set(0, 1, 0, lever());
+        for x in 1..=3 {
+            world.set(x, 0, 0, stone());
+        }
+        world.set(1, 1, 0, dust());
+        world.set(3, 1, 0, dust());
+
+        let mut simulator = Simulator::new(world);
+        let clone = simulator.clone();
+        assert!(std::sync::Arc::ptr_eq(
+            &simulator.dust_topology_cache,
+            &clone.dust_topology_cache
+        ));
+
+        simulator.world_mut().set(2, 1, 0, dust());
+        simulator
+            .run_until_stable(50)
+            .expect("the bridged wire settles");
+        assert!(!std::sync::Arc::ptr_eq(
+            &simulator.dust_topology_cache,
+            &clone.dust_topology_cache
+        ));
+        assert_eq!(
+            clone.world().get(2, 1, 0).kind,
+            BlockKind::Air,
+            "the clone kept its own world"
+        );
+    }
+
+    #[test]
+    fn replacing_world_with_same_epoch_rebuilds_dust_cache() {
+        fn world_with_second_dust_at(x: i32) -> World {
+            let mut world = World::new(6, 3, 3);
+            world.set(
+                0,
+                1,
+                0,
+                named("minecraft:redstone_block", BlockKind::RedstoneBlock),
+            );
+            world.set(1, 1, 0, dust());
+            world.set(x, 1, 0, dust());
+            world
+        }
+
+        let old_world = world_with_second_dust_at(3);
+        let replacement = world_with_second_dust_at(2);
+        assert_eq!(
+            old_world.dust_topology_epoch(),
+            replacement.dust_topology_epoch(),
+            "the regression requires equal local epochs"
+        );
+
+        let mut simulator = Simulator::new(old_world);
+        *simulator.world_mut() = replacement;
+        simulator
+            .run_until_stable(50)
+            .expect("the replacement world settles");
+
+        assert_eq!(
+            simulator.world().get(2, 1, 0).power,
+            14,
+            "replacing the whole World must not reuse the old topology"
         );
     }
 

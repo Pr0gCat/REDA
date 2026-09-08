@@ -8,9 +8,25 @@
 //! cache-friendly 的線性存取，巢狀 Vec 會造成三次指標追蹤。
 
 use std::collections::{BTreeSet, HashMap, HashSet};
+use std::sync::Arc;
 
+use crate::redstone::rules::taxonomy::flags_of;
 use crate::redstone::world::block::{BlockKind, BlockState};
 use crate::redstone::world::palette::Palette;
+
+fn dust_topology_key(state: &BlockState) -> u8 {
+    let flags = flags_of(state);
+    u8::from(state.kind == BlockKind::RedstoneWire)
+        | (u8::from(flags.can_carry_dust()) << 1)
+        | (u8::from(flags.is_conductive()) << 2)
+}
+
+fn dust_topology_changed(old: &BlockState, new: &BlockState) -> bool {
+    if old.kind == new.kind && old.half == new.half && old.name == new.name {
+        return false;
+    }
+    dust_topology_key(old) != dust_topology_key(new)
+}
 
 #[derive(Debug, Clone)]
 pub struct World {
@@ -52,12 +68,19 @@ pub struct World {
     /// 沒有清單示什麼都沒變，`recompute_dust_strengths` 可以直接跳過整個
     /// tick 的計算 —— 這在等待中繼器延遲、佇列暫時空著的 tick 尤其重要。
     dirty: HashSet<usize>,
+    /// 只在紅石粉連通圖可能改變時遞增；動態功率狀態不算拓樸。
+    dust_topology_epoch: u64,
+    /// Clones share this identity until one clone changes topology.
+    dust_topology_identity: Arc<u8>,
 }
 
 impl World {
     /// 建立全空氣的世界。
     pub fn new(size_x: i32, size_y: i32, size_z: i32) -> Self {
-        assert!(size_x > 0 && size_y > 0 && size_z > 0, "world size must be positive");
+        assert!(
+            size_x > 0 && size_y > 0 && size_z > 0,
+            "world size must be positive"
+        );
         let mut palette = Palette::new();
         let air_index = palette.intern(BlockState::air());
         let count = (size_x as usize) * (size_y as usize) * (size_z as usize);
@@ -70,6 +93,8 @@ impl World {
             air_index,
             positions_by_kind: HashMap::new(),
             dirty: HashSet::new(),
+            dust_topology_epoch: 0,
+            dust_topology_identity: Arc::new(0),
         }
     }
 
@@ -117,16 +142,24 @@ impl World {
     ///   過期狀態）。
     pub fn set(&mut self, x: i32, y: i32, z: i32, state: BlockState) {
         if let Some(i) = self.index(x, y, z) {
-            let old_kind = self
+            let old_state = self
                 .palette
                 .get(self.cells[i])
-                .expect("palette index out of range")
-                .kind;
+                .expect("palette index out of range");
+            let old_kind = old_state.kind;
             let new_kind = state.kind;
+            let topology_changed = dust_topology_changed(old_state, &state);
 
             let idx = self.palette.intern(state);
             self.cells[i] = idx;
             self.dirty.insert(i);
+            if topology_changed {
+                let next_epoch = self.dust_topology_epoch.wrapping_add(1);
+                if next_epoch == 0 || Arc::strong_count(&self.dust_topology_identity) > 1 {
+                    self.dust_topology_identity = Arc::new(0);
+                }
+                self.dust_topology_epoch = next_epoch;
+            }
 
             if old_kind != new_kind {
                 if old_kind != BlockKind::Air {
@@ -135,7 +168,10 @@ impl World {
                     }
                 }
                 if new_kind != BlockKind::Air {
-                    self.positions_by_kind.entry(new_kind).or_default().insert(i);
+                    self.positions_by_kind
+                        .entry(new_kind)
+                        .or_default()
+                        .insert(i);
                 }
             }
         }
@@ -149,6 +185,14 @@ impl World {
     /// 所以這裡不提供唯讀版本。
     pub fn take_dirty(&mut self) -> Vec<usize> {
         std::mem::take(&mut self.dirty).into_iter().collect()
+    }
+
+    pub(crate) fn dust_topology_epoch(&self) -> u64 {
+        self.dust_topology_epoch
+    }
+
+    pub(crate) fn dust_topology_identity(&self) -> &Arc<u8> {
+        &self.dust_topology_identity
     }
 
     pub fn palette(&self) -> &Palette {
@@ -170,7 +214,11 @@ impl World {
     /// 空氣一律回傳空迭代器（見 `positions_by_kind` 的說明：空氣沒有被
     /// 追蹤）。
     pub fn positions_of(&self, kind: BlockKind) -> impl Iterator<Item = usize> + '_ {
-        self.positions_by_kind.get(&kind).into_iter().flatten().copied()
+        self.positions_by_kind
+            .get(&kind)
+            .into_iter()
+            .flatten()
+            .copied()
     }
 
     /// 把扁平索引還原成座標。跟 `index` 互為反函數。
@@ -228,6 +276,8 @@ impl World {
             air_index,
             positions_by_kind,
             dirty,
+            dust_topology_epoch: 0,
+            dust_topology_identity: Arc::new(0),
         }
     }
 }
@@ -235,7 +285,7 @@ impl World {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::redstone::world::block::{BlockKind, BlockState};
+    use crate::redstone::world::block::{BlockKind, BlockState, SlabHalf};
 
     #[test]
     fn new_world_is_all_air() {
@@ -292,7 +342,11 @@ mod tests {
     #[test]
     fn positions_of_never_reports_air() {
         let w = World::new(4, 4, 4);
-        assert_eq!(w.positions_of(BlockKind::Air).count(), 0, "air is never tracked");
+        assert_eq!(
+            w.positions_of(BlockKind::Air).count(),
+            0,
+            "air is never tracked"
+        );
     }
 
     #[test]
@@ -350,6 +404,55 @@ mod tests {
     }
 
     #[test]
+    fn dust_topology_epoch_ignores_dynamic_state_and_tracks_connectivity_flags() {
+        let mut w = World::new(4, 4, 4);
+        assert_eq!(w.dust_topology_epoch(), 0);
+
+        let mut wire = BlockState::air();
+        wire.kind = BlockKind::RedstoneWire;
+        wire.name = "minecraft:redstone_wire".to_string();
+        w.set(1, 1, 1, wire.clone());
+        let after_wire = w.dust_topology_epoch();
+        assert_eq!(after_wire, 1, "inserting dust changes the partition");
+
+        wire.power = 12;
+        w.set(1, 1, 1, wire);
+        assert_eq!(w.dust_topology_epoch(), after_wire, "dust power is dynamic");
+
+        let mut lever = BlockState::air();
+        lever.kind = BlockKind::Lever;
+        lever.name = "minecraft:lever".to_string();
+        w.set(3, 1, 1, lever.clone());
+        lever.lit = true;
+        w.set(3, 1, 1, lever);
+        assert_eq!(w.dust_topology_epoch(), after_wire, "lever lit is dynamic");
+
+        let mut slab = BlockState::air();
+        slab.kind = BlockKind::Slab;
+        slab.name = "minecraft:smooth_stone_slab".to_string();
+        slab.half = Some(SlabHalf::Bottom);
+        w.set(2, 1, 1, slab.clone());
+        assert_eq!(
+            w.dust_topology_epoch(),
+            after_wire,
+            "a bottom slab changes no dust flag"
+        );
+
+        slab.half = Some(SlabHalf::Top);
+        w.set(2, 1, 1, slab.clone());
+        let after_support = w.dust_topology_epoch();
+        assert_eq!(after_support, after_wire + 1, "top slab can carry dust");
+
+        slab.half = Some(SlabHalf::Double);
+        w.set(2, 1, 1, slab);
+        assert_eq!(
+            w.dust_topology_epoch(),
+            after_support + 1,
+            "double slab additionally becomes conductive"
+        );
+    }
+
+    #[test]
     fn from_parts_guarantees_air_for_out_of_bounds_reads() {
         // litematic 檔案的 palette 不保證含空氣
         let mut palette = Palette::new();
@@ -380,6 +483,10 @@ mod tests {
         let w = World::from_parts(2, 1, 1, palette, vec![stone_idx, air_idx]);
 
         let flats: Vec<usize> = w.positions_of(BlockKind::Solid).collect();
-        assert_eq!(flats, vec![0], "only the stone cell should be tracked, not the air one");
+        assert_eq!(
+            flats,
+            vec![0],
+            "only the stone cell should be tracked, not the air one"
+        );
     }
 }
