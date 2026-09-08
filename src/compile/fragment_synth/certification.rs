@@ -1549,9 +1549,12 @@ mod tests {
                 .recv_timeout(std::time::Duration::from_millis(20))
                 .is_err());
             drop(held);
-            acquired_rx
-                .recv_timeout(std::time::Duration::from_secs(1))
-                .unwrap();
+            // Blocking, not deadlined: the sweep lock is admission control with
+            // an unbounded hold time and no fairness, so a concurrent test's
+            // sweep may legitimately win this handoff first. The contract under
+            // test is that the waiter is admitted once the lock is free, not
+            // that it is admitted within any wall-clock bound.
+            acquired_rx.recv().unwrap();
         });
 
         let panic = std::panic::catch_unwind(|| {
