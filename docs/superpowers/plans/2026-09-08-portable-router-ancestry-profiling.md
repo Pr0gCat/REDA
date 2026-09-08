@@ -319,3 +319,18 @@ Commit diagnostics only:
    checkpoint -> commit or revert)
 4. If gate failed: Phase 4 (RED -> GREEN -> verify -> benchmark -> review
    checkpoint -> commit), stop — no overlay implementation.
+
+## Execution outcome — 2026-09-08
+
+The diagnostic ancestry timer was removed: timing every predecessor lookup
+measurably distorted `route_nets`, so its ancestry fraction was not accepted
+as retention evidence. Clean coarse `route_nets` measurements replaced it.
+
+The retained candidate reached 11.246720 s on ripple_adder8 versus a
+17.892804 s baseline (1.59x), and 30.953307 s on alu8 versus 50.313820 s
+(1.63x). Both retained identical ticks and block counts.
+
+A boundary-safe fallback preserves the original predicate order where `i32`
+coordinate arithmetic could overflow. All 17 routing tests and the pinned
+seven-segment IO contract passed afterward; independent static review returned
+APPROVED. The post-fallback full library suite passed 930/930 with 74 ignored.

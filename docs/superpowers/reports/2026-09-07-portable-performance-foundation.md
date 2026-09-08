@@ -462,3 +462,23 @@ The retained changes meet their targeted-phase gates, preserve exact candidate
 identity and quality, and keep every representative regression under 5%. They
 do not materially improve whole-compile wall time because exhaustive simulation
 and routing dominate; they are foundation cleanup, not the final 2x result.
+
+## Router ancestry milestone — 2026-09-08
+
+The fine-grained ancestry profiler was removed because its per-lookup timing
+introduced a material observer effect. Clean `route_nets` medians were used
+for the retention decision instead.
+
+| Circuit | Clean baseline | Candidate | Speedup | Quality |
+|---|---:|---:|---:|---|
+| ripple_adder8 | 17.892804 s | 11.246720 s | 1.59x | unchanged: 608 ticks / 70,603 blocks |
+| alu8 | 50.313820 s | 30.953307 s | 1.63x | unchanged: 972 ticks / 213,833 blocks |
+
+The candidate reuses one predecessor-chain snapshot per expansion and performs
+cheap candidate rejection early only where coordinate arithmetic is safe.
+Boundary coordinates retain the original predicate order.
+
+Verification evidence: all 17 routing tests and the pinned seven-segment IO
+contract passed after the boundary fallback. The full library suite passed
+930/930 with 74 ignored, and `cargo clippy --lib` exited 0 with the branch's
+existing warnings. Independent static review: APPROVED.

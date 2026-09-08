@@ -262,11 +262,6 @@ impl PhysicalReservations {
         Self::default()
     }
 
-    /// Number of reserved cells; temporary Phase 4 profiler diagnostic.
-    pub(crate) fn len(&self) -> usize {
-        self.cells.len()
-    }
-
     pub fn reserve(
         &mut self,
         at: Anchor,
@@ -630,121 +625,13 @@ struct SearchState {
     at: Anchor,
 }
 
-/// Diagnostic-only accounting for the predecessor (`previous`) walks the
-/// router performs while it expands a node: how many walking calls were made,
-/// how many `BTreeMap` gets those walks actually issued, and how long those
-/// gets took.  Nothing here may ever be read by a routing decision.
-#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
-struct AncestryWalkStats {
-    calls: u64,
-    steps: u64,
-    elapsed_nanos: u64,
-}
-
-/// The `previous.get` calls issued by one predecessor-chain walk.  Each get
-/// is timed on its own, so `elapsed_nanos` never picks up the halo or
-/// reservation lookups a caller does around the walk.  A walk that returns
-/// before it ever calls `previous.get` -- `self_obstructs` blocking on the
-/// very first cell it inspects -- leaves `steps` at zero and is not counted
-/// as a call at all.
-#[derive(Debug, Default)]
-struct AncestryWalkTally {
-    steps: u64,
-    elapsed_nanos: u64,
-}
-
-impl AncestryWalkTally {
-    fn get(&mut self, previous: &BTreeMap<Anchor, Anchor>, cell: &Anchor) -> Option<Anchor> {
-        let started = std::time::Instant::now();
-        let result = previous.get(cell).copied();
-        self.elapsed_nanos = self
-            .elapsed_nanos
-            .saturating_add(started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64);
-        self.steps += 1;
-        result
-    }
-}
-
 #[derive(Debug, Default)]
 struct RouterWork {
     node_expansions: u64,
     queue_entries: u64,
-    /// Read once from `REDA_PHASE_TIMING` when the request starts; while
-    /// false every measured call site takes the exact branch the router took
-    /// before these diagnostics existed.
-    measuring: bool,
-    ancestry: AncestryWalkStats,
 }
 
 impl RouterWork {
-    fn for_request() -> Self {
-        Self {
-            node_expansions: 0,
-            queue_entries: 0,
-            measuring: std::env::var_os("REDA_PHASE_TIMING").is_some(),
-            ancestry: AncestryWalkStats::default(),
-        }
-    }
-
-    /// Folds one walk's tally into the request total.  A walk that issued no
-    /// `previous.get` at all leaves no trace, per `AncestryWalkTally`.
-    fn fold_ancestry(&mut self, tally: AncestryWalkTally) {
-        if tally.steps == 0 {
-            return;
-        }
-        self.ancestry.calls = self.ancestry.calls.saturating_add(1);
-        self.ancestry.steps = self.ancestry.steps.saturating_add(tally.steps);
-        self.ancestry.elapsed_nanos =
-            self.ancestry.elapsed_nanos.saturating_add(tally.elapsed_nanos);
-    }
-
-    /// `self_obstructs_typed` under the ancestry diagnostics.  Inactive
-    /// diagnostics make the exact call the router always made.
-    fn self_obstructs(
-        &mut self,
-        previous: &BTreeMap<Anchor, Anchor>,
-        at: Anchor,
-        next: Anchor,
-        own_floor_of_earlier: bool,
-    ) -> bool {
-        if !self.measuring {
-            return self_obstructs_typed(previous, at, next, own_floor_of_earlier);
-        }
-        let mut tally = AncestryWalkTally::default();
-        let outcome = self_obstructs_typed_walking::<true>(
-            previous,
-            at,
-            next,
-            own_floor_of_earlier,
-            &mut tally,
-        );
-        self.fold_ancestry(tally);
-        outcome
-    }
-
-    /// `TypedOwnJoinCheck::blocks` under the ancestry diagnostics.  Inactive
-    /// diagnostics make the exact call the router always made.
-    #[allow(clippy::too_many_arguments)]
-    fn own_join_blocks(
-        &mut self,
-        own_join: &TypedOwnJoinCheck,
-        next: Anchor,
-        at: Anchor,
-        start: Anchor,
-        goal: Anchor,
-        reservations: &PhysicalReservations,
-        previous: &BTreeMap<Anchor, Anchor>,
-    ) -> bool {
-        if !self.measuring {
-            return own_join.blocks(next, at, start, goal, reservations, previous);
-        }
-        let mut tally = AncestryWalkTally::default();
-        let outcome =
-            own_join.blocks_walking::<true>(next, at, start, goal, reservations, previous, &mut tally);
-        self.fold_ancestry(tally);
-        outcome
-    }
-
     fn queue(
         &mut self,
         request: &RouteRequest<'_>,
@@ -781,26 +668,6 @@ impl RouterWork {
             });
         }
         Ok(())
-    }
-}
-
-impl Drop for RouterWork {
-    /// Dropping a route request's `RouterWork` is the one point every exit of
-    /// `route_with_local_policy` after it is constructed passes through: the
-    /// success return, each `?`, and each early `RouterFailure`.  A request
-    /// that fails validation or has no source strength returns before a
-    /// `RouterWork` for it ever exists, so those refusals produce no line and
-    /// do no ancestry work; one line here is exactly one routed request.
-    fn drop(&mut self) {
-        if !self.measuring {
-            return;
-        }
-        eprintln!(
-            "PHASE ancestry calls={} steps={} elapsed_ms={:.3}",
-            self.ancestry.calls,
-            self.ancestry.steps,
-            self.ancestry.elapsed_nanos as f64 / 1_000_000.0,
-        );
     }
 }
 
@@ -927,7 +794,7 @@ where
         no_refresh,
     };
     let start = request.source.anchor;
-    let mut work = RouterWork::for_request();
+    let mut work = RouterWork::default();
     let mut cell_states = BTreeMap::<Anchor, BlockState>::new();
     let mut cell_order = Vec::<Anchor>::new();
     let mut floor_states = BTreeMap::<Anchor, BlockState>::new();
@@ -1299,31 +1166,32 @@ fn staircase_clearance_typed(from: Anchor, to: Anchor) -> Vec<Anchor> {
     }
 }
 
-fn self_obstructs_typed(
+fn ancestry_from(
     previous: &BTreeMap<Anchor, Anchor>,
     at: Anchor,
-    next: Anchor,
-    own_floor_of_earlier: bool,
-) -> bool {
-    self_obstructs_typed_walking::<false>(
-        previous,
-        at,
-        next,
-        own_floor_of_earlier,
-        &mut AncestryWalkTally::default(),
-    )
+    ancestry: &mut Vec<Anchor>,
+) {
+    ancestry.clear();
+    ancestry.extend(std::iter::successors(Some(at), |cell| {
+        previous.get(cell).copied()
+    }));
 }
 
-/// The one body of the self-obstruction predecessor walk.  `MEASURED` is a
-/// compile-time switch: the unmeasured instantiation calls `previous.get`
-/// directly and carries no counter update at all, so a route with the
-/// diagnostics off pays nothing for them.
-fn self_obstructs_typed_walking<const MEASURED: bool>(
-    previous: &BTreeMap<Anchor, Anchor>,
+fn can_reorder_candidate_checks(at: Anchor, next: Anchor) -> bool {
+    next.x.checked_sub(1).is_some()
+        && next.x.checked_add(1).is_some()
+        && next.z.checked_sub(1).is_some()
+        && next.z.checked_add(1).is_some()
+        && next.y.checked_sub(2).is_some()
+        && next.y.checked_add(1).is_some()
+        && at.y.checked_add(1).is_some()
+}
+
+fn self_obstructs_typed(
+    ancestry: &[Anchor],
     at: Anchor,
     next: Anchor,
     own_floor_of_earlier: bool,
-    tally: &mut AncestryWalkTally,
 ) -> bool {
     let drop_blocker = (next.y < at.y).then(|| Anchor {
         x: next.x,
@@ -1346,8 +1214,7 @@ fn self_obstructs_typed_walking<const MEASURED: bool>(
         ..next
     });
     let mut successor = None;
-    let mut walk = Some(at);
-    while let Some(cell) = walk {
+    for &cell in ancestry {
         if Some(cell) == drop_blocker
             || cell == crushed_below
             || Some(cell) == floor_of_earlier
@@ -1356,11 +1223,6 @@ fn self_obstructs_typed_walking<const MEASURED: bool>(
             return true;
         }
         successor = Some(cell);
-        walk = if MEASURED {
-            tally.get(previous, &cell)
-        } else {
-            previous.get(&cell).copied()
-        };
     }
     false
 }
@@ -1758,34 +1620,7 @@ impl TypedOwnJoinCheck {
         start: Anchor,
         goal: Anchor,
         reservations: &PhysicalReservations,
-        previous: &BTreeMap<Anchor, Anchor>,
-    ) -> bool {
-        self.blocks_walking::<false>(
-            next,
-            at,
-            start,
-            goal,
-            reservations,
-            previous,
-            &mut AncestryWalkTally::default(),
-        )
-    }
-
-    /// The one body of the own-join check.  `MEASURED` is a compile-time
-    /// switch over the two predecessor walks below: the unmeasured
-    /// instantiation calls `previous.get` directly and carries no counter
-    /// update at all, so a route with the diagnostics off pays nothing for
-    /// them.
-    #[allow(clippy::too_many_arguments)]
-    fn blocks_walking<const MEASURED: bool>(
-        &self,
-        next: Anchor,
-        at: Anchor,
-        start: Anchor,
-        goal: Anchor,
-        reservations: &PhysicalReservations,
-        previous: &BTreeMap<Anchor, Anchor>,
-        tally: &mut AncestryWalkTally,
+        ancestry: &[Anchor],
     ) -> bool {
         if self.policy == RoutingJoinPolicy::Off {
             return false;
@@ -1811,15 +1646,11 @@ impl TypedOwnJoinCheck {
             match self.policy {
                 RoutingJoinPolicy::Wide => return true,
                 RoutingJoinPolicy::Narrow => {
-                    let departure = std::iter::successors(Some(at), |cell| {
-                        if MEASURED {
-                            tally.get(previous, cell)
-                        } else {
-                            previous.get(cell).copied()
-                        }
-                    })
-                    .find(|cell| own_wire(cell))
-                    .unwrap_or(start);
+                    let departure = ancestry
+                        .iter()
+                        .copied()
+                        .find(|cell| own_wire(cell))
+                        .unwrap_or(start);
                     let same_component = self
                         .dust_component
                         .get(&departure)
@@ -1833,20 +1664,10 @@ impl TypedOwnJoinCheck {
             }
         }
         if self.policy == RoutingJoinPolicy::Wide {
-            let mut walk = if MEASURED {
-                tally.get(previous, &at)
-            } else {
-                previous.get(&at).copied()
-            };
-            while let Some(cell) = walk {
+            for &cell in ancestry.iter().skip(1) {
                 if halo.contains(&cell) {
                     return true;
                 }
-                walk = if MEASURED {
-                    tally.get(previous, &cell)
-                } else {
-                    previous.get(&cell).copied()
-                };
             }
         }
         false
@@ -1889,6 +1710,7 @@ where
     }]);
     let mut travelled = BTreeMap::from([(start, 0u64)]);
     let mut previous = BTreeMap::<Anchor, Anchor>::new();
+    let mut ancestry = Vec::new();
 
     while let Some(state) = frontier.iter().next().copied() {
         frontier.remove(&state);
@@ -1899,15 +1721,48 @@ where
             continue;
         }
         work.expand(request, sink.id)?;
+        ancestry_from(&previous, state.at, &mut ancestry);
         for next in neighbours(state.at) {
             if strict_local && next == sink.anchor && next != goal {
                 continue;
             }
-            if work.self_obstructs(&previous, state.at, next, physics.own_floor_of_earlier) {
+            let candidate_is_blocked = || {
+                next.x < min.x
+                    || next.x > max.x
+                    || next.y < min.y
+                    || next.y > max.y
+                    || next.z < min.z
+                    || next.z > max.z
+                    || !anchor_is_free_for_typed(
+                        request.id,
+                        next,
+                        start,
+                        goal,
+                        sink.anchor,
+                        reservations,
+                    )
+                    || staircase_clearance_typed(state.at, next)
+                        .into_iter()
+                        .any(|cell| {
+                            staircase_cell_is_blocked(
+                                request.id,
+                                state.at,
+                                next,
+                                cell,
+                                reservations,
+                                physics.reuse_own_stair_clearance,
+                            )
+                        })
+            };
+            let reorder_checks = can_reorder_candidate_checks(state.at, next);
+            if reorder_checks && candidate_is_blocked() {
+                continue;
+            }
+            if self_obstructs_typed(&ancestry, state.at, next, physics.own_floor_of_earlier) {
                 continue;
             }
             if strict_local {
-                if let Some(&before) = previous.get(&state.at) {
+                if let Some(&before) = ancestry.get(1) {
                     let exact = laid.get(&state.at).cloned().or_else(|| {
                         request.reservations.get(&state.at).and_then(|claim| {
                             owned_by_route(claim.owner, request.id)
@@ -1927,34 +1782,10 @@ where
                     }
                 }
             }
-            if work.own_join_blocks(own_join, next, state.at, start, goal, reservations, &previous)
-            {
+            if own_join.blocks(next, state.at, start, goal, reservations, &ancestry) {
                 continue;
             }
-            if next.x < min.x
-                || next.x > max.x
-                || next.y < min.y
-                || next.y > max.y
-                || next.z < min.z
-                || next.z > max.z
-            {
-                continue;
-            }
-            let anchor_free =
-                anchor_is_free_for_typed(request.id, next, start, goal, sink.anchor, reservations);
-            let stair_blocked = staircase_clearance_typed(state.at, next)
-                .into_iter()
-                .any(|cell| {
-                    staircase_cell_is_blocked(
-                        request.id,
-                        state.at,
-                        next,
-                        cell,
-                        reservations,
-                        physics.reuse_own_stair_clearance,
-                    )
-                });
-            if !anchor_free || stair_blocked {
+            if !reorder_checks && candidate_is_blocked() {
                 continue;
             }
             // Preserve the legacy distance kernel exactly while it is routed
@@ -3060,11 +2891,45 @@ mod tests {
         let side = at(36, 1, 55);
         let under = at(37, 1, 55);
         let previous = BTreeMap::from([(side, upper), (upper, at(37, 3, 56))]);
+        let mut ancestry = Vec::new();
+        ancestry_from(&previous, side, &mut ancestry);
 
-        assert!(self_obstructs_typed(&previous, side, under, true));
-        assert!(!self_obstructs_typed(&previous, side, at(35, 1, 55), true));
+        assert!(self_obstructs_typed(&ancestry, side, under, true));
+        assert!(!self_obstructs_typed(&ancestry, side, at(35, 1, 55), true));
         // The legacy planner keeps its recorded behaviour.
-        assert!(!self_obstructs_typed(&previous, side, under, false));
+        assert!(!self_obstructs_typed(&ancestry, side, under, false));
+    }
+
+    #[test]
+    fn ancestry_snapshot_uses_the_current_predecessor_chain() {
+        let start = at(0, 1, 0);
+        let mid = at(1, 1, 0);
+        let detour = at(0, 1, 1);
+        let goal = at(2, 1, 0);
+        let mut previous = BTreeMap::from([(mid, start), (detour, start), (goal, detour)]);
+        previous.insert(goal, mid);
+        let mut ancestry = Vec::new();
+        ancestry_from(&previous, goal, &mut ancestry);
+
+        assert_eq!(ancestry, vec![goal, mid, start]);
+    }
+
+    #[test]
+    fn candidate_checks_are_not_reordered_at_coordinate_boundaries() {
+        let ordinary = at(0, 1, 0);
+        assert!(can_reorder_candidate_checks(ordinary, ordinary));
+        assert!(!can_reorder_candidate_checks(
+            ordinary,
+            at(i32::MAX, 1, 0)
+        ));
+        assert!(!can_reorder_candidate_checks(
+            ordinary,
+            at(0, i32::MIN + 1, 0)
+        ));
+        assert!(!can_reorder_candidate_checks(
+            at(0, i32::MAX, 0),
+            ordinary
+        ));
     }
 
     #[test]
@@ -3086,160 +2951,5 @@ mod tests {
             "the production insertion path must skip a non-prefix re-entry"
         );
         assert_eq!(cells.get(&trunk_at), Some(&exact));
-    }
-
-    #[test]
-    fn ancestry_walk_diagnostics_count_matches_calls() {
-        // The chain (37,3,56) <- (37,2,55) <- (36,1,55) is the fixture of
-        // `a_path_cannot_step_into_the_floor_cell_of_its_own_earlier_dust`.
-        // Every count below is read off that topology by hand, so the
-        // diagnostics are checked against the graph rather than against a
-        // second copy of themselves.
-        let root = at(37, 3, 56);
-        let upper = at(37, 2, 55);
-        let side = at(36, 1, 55);
-        let previous = BTreeMap::from([(side, upper), (upper, root)]);
-        let laid = BTreeMap::<Anchor, BlockState>::new();
-        let reservations = PhysicalReservations::new();
-        let route = RouteId(4);
-        let mut work = RouterWork::default();
-        work.measuring = true;
-
-        // Stepping under `upper` reaches the floor-of-earlier-dust rejection at
-        // the second cell visited, so the walk performs exactly one get: the
-        // one that advanced from `side` to `upper`.
-        assert!(work.self_obstructs(&previous, side, at(37, 1, 55), true));
-        assert_eq!(work.ancestry.calls, 1);
-        assert_eq!(work.ancestry.steps, 1);
-
-        // Stepping aside rejects nothing, so the walk runs the chain out: gets
-        // at `side`, at `upper`, and at `root` returning `None`.
-        assert!(!work.self_obstructs(&previous, side, at(35, 1, 55), true));
-        assert_eq!(work.ancestry.calls, 2);
-        assert_eq!(work.ancestry.steps, 4);
-
-        // `at` itself is already the crushed-below cell of `next`, so the
-        // rejection fires before the walk issues a single `previous.get`.
-        // That must not be an ancestry call.
-        assert!(work.self_obstructs(&BTreeMap::new(), at(0, 4, 0), at(0, 5, 0), false));
-        assert_eq!(work.ancestry.calls, 2);
-        assert_eq!(work.ancestry.steps, 4);
-
-        // A `Wide` own-join check against an empty world finds no owned wire in
-        // the halo of a far-away cell and walks the same three gets from `side`.
-        let wide =
-            TypedOwnJoinCheck::for_branch(RoutingJoinPolicy::Wide, route, &laid, &reservations);
-        assert!(!work.own_join_blocks(
-            &wide,
-            at(50, 1, 50),
-            side,
-            at(0, 1, 0),
-            at(60, 1, 60),
-            &reservations,
-            &previous,
-        ));
-        assert_eq!(work.ancestry.calls, 3);
-        assert_eq!(work.ancestry.steps, 7);
-
-        // `Off` returns before it can reach `previous`, so it is not an
-        // ancestry call at all.
-        let off =
-            TypedOwnJoinCheck::for_branch(RoutingJoinPolicy::Off, route, &laid, &reservations);
-        assert!(!work.own_join_blocks(
-            &off,
-            at(50, 1, 50),
-            side,
-            at(0, 1, 0),
-            at(60, 1, 60),
-            &reservations,
-            &previous,
-        ));
-        assert_eq!(work.ancestry.calls, 3);
-        assert_eq!(work.ancestry.steps, 7);
-
-        // A `Narrow` own-join check whose departure cell is itself the owned
-        // wire finds it on the first element `std::iter::successors` yields.
-        // `successors` still costs one `previous.get` to precompute what
-        // would come after that first element before it is ever inspected,
-        // so this is one ancestry call of exactly one step -- not the zero
-        // its early match might suggest.
-        let narrow_next = at(10, 5, 10);
-        let narrow_at = at(9, 5, 10);
-        let narrow_halo_wire = at(11, 5, 10);
-        let mut narrow_reservations = PhysicalReservations::new();
-        narrow_reservations.reserve(
-            narrow_at,
-            PhysicalReservationOwner::Route(route),
-            PhysicalReservationKind::Conductor(dust()),
-        );
-        narrow_reservations.reserve(
-            narrow_halo_wire,
-            PhysicalReservationOwner::Route(route),
-            PhysicalReservationKind::Conductor(dust()),
-        );
-        let narrow = TypedOwnJoinCheck::for_branch(
-            RoutingJoinPolicy::Narrow,
-            route,
-            &laid,
-            &narrow_reservations,
-        );
-        assert!(work.own_join_blocks(
-            &narrow,
-            narrow_next,
-            narrow_at,
-            at(0, 5, 0),
-            at(0, 5, 0),
-            &narrow_reservations,
-            &previous,
-        ));
-        assert_eq!(work.ancestry.calls, 4);
-        assert_eq!(work.ancestry.steps, 8);
-
-        // The production search must return the same path and the same work
-        // either way, and must record nothing at all while inactive.
-        let source = endpoint(route);
-        let sinks = NonEmptyRouteSinks::new(vec![sink(route, 0, at(5, 1, 0))]).unwrap();
-        let request = RouteRequest {
-            id: route,
-            source: source.clone(),
-            sinks: &sinks,
-            reservations: &reservations,
-            limits: RouterLimits {
-                max_node_expansions: 10_000,
-                max_queue_entries: 50_000,
-            },
-            no_refresh: None,
-        };
-        let target = &sinks.as_slice()[0];
-        let goal = step(target.anchor, target.allowed_entry);
-        let search = |work: &mut RouterWork| {
-            search_path(
-                &request,
-                target,
-                source.anchor,
-                goal,
-                &laid,
-                &reservations,
-                &wide,
-                RoutePhysics::GUARDED,
-                true,
-                work,
-                &mut |_: &Anchor| 0,
-            )
-        };
-
-        let mut quiet = RouterWork::default();
-        let quiet_path = search(&mut quiet).unwrap();
-        let mut measured = RouterWork::default();
-        measured.measuring = true;
-        let measured_path = search(&mut measured).unwrap();
-
-        assert!(quiet_path.is_some(), "the fixture must actually route");
-        assert_eq!(measured_path, quiet_path);
-        assert_eq!(measured.node_expansions, quiet.node_expansions);
-        assert_eq!(measured.queue_entries, quiet.queue_entries);
-        assert_eq!(quiet.ancestry, AncestryWalkStats::default());
-        assert!(measured.ancestry.calls > 0);
-        assert!(measured.ancestry.steps > 0);
     }
 }
