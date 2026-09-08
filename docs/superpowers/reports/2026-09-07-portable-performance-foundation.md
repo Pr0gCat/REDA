@@ -1,14 +1,15 @@
 # Portable Performance Foundation — Baseline and Retention Report
 
-Status: foundation measured and verified. Phase observability, one physical
-certification transaction and shared certification identity are retained.
-Immutable hierarchy context reuse was reverted by its measurement gate.
+Status: portable speedup measured and verified. The retained stack now also
+includes routing rollback journals, a static dust-topology cache and one
+pristine simulator baseline per certification. Immutable hierarchy context
+reuse was reverted by its measurement gate.
 
-## Environment
+## Foundation measurement environment
 
 - Date: 2026-09-07
 - Worktree: `topology-aware-seed-v2-6f8f7e`
-- HEAD: `95b6b9d` (`Revert "perf: reuse hierarchical compile invariants"`)
+- Foundation HEAD: `95b6b9d` (`Revert "perf: reuse hierarchical compile invariants"`)
 - Retained stack under measurement: incumbent routed-parent reuse, complete
   phase observability, one physical certification transaction and one shared
   certification identity
@@ -519,3 +520,76 @@ The existing automatic memory policy remains a conservative heuristic based on
 world volume and four-copy headroom; this milestone does not claim measured peak
 RSS or a hard cross-machine memory ceiling. No GPU path or new dependency was
 added.
+
+## Routing rollback and simulator topology-cache milestone — 2026-09-09
+
+Retained implementation commit: `f6e54ea` (`perf: cache dust topology and
+journal routing attempts`), measured against parent `75a2cd8`.
+
+The router now journals only cells touched by one failed route attempt and rolls
+them back on drop. The shipping guarded router uses that transaction directly;
+the trait fallback still clones and calls `route_owned`, preserving compatibility
+with external router implementations. Certification builds one pristine
+simulator and clones it for independent vectors and source groups. The simulator
+caches static dust weak-components and directed adjacency behind a clone-aware
+World lineage plus topology epoch; dynamic power and lit changes do not rebuild
+the cache.
+
+Exact budget-zero benchmark command, run serially with a prebuilt release
+profile and no certification environment overrides:
+
+```powershell
+$test = 'compile::fragment_synth::seed::tests::extra_circuits::every_hierarchical_circuit_certifies_through_module_floorplan'
+$env:REDA_PHASE_TIMING = '1'
+Remove-Item Env:REDA_CERT_THREADS -ErrorAction SilentlyContinue
+Remove-Item Env:REDA_CERT_MEMORY_BYTES -ErrorAction SilentlyContinue
+$env:REDA_EXTRA_CIRCUITS = '<one circuit name>'
+cargo test --release --lib $test -- --exact --ignored --nocapture --test-threads=1
+```
+
+End-to-end time is the harness's `CIRCUIT ... in ...` interval, excluding Cargo
+build time. The hard gate was a 1.5x median speedup on `ripple_adder8` and
+`alu8`; `multiplier4` is the independent dust-heavy larger case.
+
+| Circuit | Baseline median | Retained samples | Retained median | Speedup | Quality |
+|---|---:|---:|---:|---:|---|
+| `ripple_adder8` | 21.7669945 s | 13.0702246 / 13.1204520 / 13.2202067 s | 13.1204520 s | 1.66x | unchanged: 608 ticks / 70,603 blocks |
+| `alu8` | 75.0356823 s | 46.7984661 / 46.7875583 / 46.5762006 s | 46.7875583 s | 1.60x | unchanged: 972 ticks / 213,833 blocks |
+| `multiplier4` | 230.5988662 s | 162.2779329 / 161.8450070 / 164.5257223 s | 162.2779329 s | 1.42x | unchanged: 1,039 ticks / 124,948 blocks |
+
+The routing phase moved from about 29.7 s to 12.8–12.9 s on `alu8`, and from
+about 31.9 s to a three-sample median of 11.366 s on `multiplier4`. The retained
+`ripple_adder8` routing samples sum to 4.850 / 4.809 / 4.857 s across hierarchy
+levels. On the final `multiplier4` samples, top exhaustive certification remains
+the dominant 126–129 s phase, so the next speed project has a measured target
+rather than another routing rewrite.
+
+The fixed worker-count acceptance matrix was changed from `1/2/auto` to
+`1/2/4`. It compares case and candidate fingerprints, all metrics, emitted-world
+fingerprint, IO positions, observations, stop reason and the non-empty proposal
+trace:
+
+| Circuit | 1 worker | 2 workers | 4 workers | Exact result |
+|---|---:|---:|---:|---|
+| `ripple_adder8` | 84.147 s | 73.793 s | 45.014 s | PASS; 590 ticks / 70,659 blocks / trace 1 |
+| `alu8` | 288.472 s | 238.094 s | 143.733 s | PASS; 972 ticks / 213,833 blocks / trace 1 |
+
+Final verification:
+
+- `cargo test --lib -- --test-threads=1`: 941 passed, 0 failed, 74 ignored in
+  1035.57 s. The later Ponytail cleanup changed tests only; affected focused
+  routing, cache and certification tests were rerun and passed.
+- Fixed `1/2/4` release matrix over `ripple_adder8,alu8`: passed in 873.70 s.
+- Pinned seven-segment release contract: 1 passed in 12.22 s; all eleven fixed
+  coordinates, handover states and flat/hierarchical fingerprints agree.
+- `cargo clippy --lib --tests`: exit 0 with the branch's existing warning set.
+- `git diff --check`: clean.
+- Independent routing, simulator/certification and Ponytail reviews: APPROVED;
+  no Critical or Important findings.
+- Claude Sonnet's read-only report and arithmetic audit: APPROVED.
+
+Two attempted extensions were rejected. Caching palette state transitions had
+no measurable benefit and was removed. Splitting manifest transitions without
+respecting source groups repeated source settling and remained 20.98% slower
+than the retained grouping. No fixture-specific branch, GPU path or dependency
+was added.
