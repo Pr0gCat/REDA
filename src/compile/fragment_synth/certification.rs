@@ -60,9 +60,10 @@ const MIN_VECTORS_PER_CERTIFICATION_WORKER: usize = 8;
 /// the 12 the retained revision used, and the aggregate `cargo test` time shows
 /// no regression from the extra workers the smaller sweeps now open.
 ///
-/// ponytail: the 2-to-7-transition range is unmeasured, so the win at 68 is
-/// evidence for wide sweeps only, not proof that one is optimal everywhere.
-/// Benchmark small manifest sweeps before raising this above one.
+/// ponytail: 68 transitions is the smallest case measured, so every sweep
+/// narrower than that is unmeasured. The win at 68 is evidence for wide sweeps
+/// only, not proof that one is optimal everywhere. Benchmark narrow manifest
+/// sweeps before raising this above one.
 const MIN_TRANSITIONS_PER_CERTIFICATION_WORKER: usize = 1;
 static CERTIFICATION_SWEEP_LOCK: Mutex<()> = Mutex::new(());
 
@@ -701,13 +702,14 @@ fn record_observed_worker_budget(budget: Option<usize>) {
 /// the requested budget capped by whole `min_items_per_worker` chunks, clamped
 /// to at least one.
 ///
-/// Each caller passes the threshold its own unit needs, and the two are not the
-/// same kind of number: `MIN_VECTORS_PER_CERTIFICATION_WORKER` is a measured
+/// Each caller passes the threshold its own unit needs, and the two rest on
+/// different evidence: `MIN_VECTORS_PER_CERTIFICATION_WORKER` is a measured
 /// crossover that keeps exhaustive work too small to amortize thread startup on
 /// the caller thread, while `MIN_TRANSITIONS_PER_CERTIFICATION_WORKER` is one
-/// because a transition already pays for a worker per item. `requested` already
-/// carries the compile-wide budget, the memory ceiling and the host's
-/// parallelism, so this only ever narrows it.
+/// because that measured better on the wide manifest sweeps -- narrower ones
+/// are unmeasured, so it is not a claim that a transition always pays for its
+/// own worker. `requested` already carries the compile-wide budget, the memory
+/// ceiling and the host's parallelism, so this only ever narrows it.
 fn certification_workers(items: usize, requested: usize, min_items_per_worker: usize) -> usize {
     if items == 0 {
         return 0;
@@ -1341,7 +1343,8 @@ mod tests {
         let transition = MIN_TRANSITIONS_PER_CERTIFICATION_WORKER;
         assert_eq!(
             transition, 1,
-            "a manifest transition pays for a worker per item"
+            "one transition per worker measured better on the wide manifest \
+             sweeps; narrower sweeps are unmeasured"
         );
 
         // ripple_adder8's top manifest at the auto budget: 68 transitions and a
@@ -1925,7 +1928,16 @@ mod tests {
         // `i0` high disagree the other way round, so every one of the 32 vectors
         // fails and the reported mask is a completion-order detector: only the
         // ordered reduction keeps reporting mask 0.
+        let state_count = 1 << netlist.inputs.len();
         for threads in [1, 2, 4] {
+            // Without this the coverage above could go silently serial: raising
+            // the exhaustive threshold would collapse 2 and 4 workers to 1 and
+            // the ordering assertion would still pass, proving nothing.
+            assert_eq!(
+                certification_workers(state_count, threads, MIN_VECTORS_PER_CERTIFICATION_WORKER),
+                threads,
+                "{threads} requested workers must actually open over {state_count} vectors"
+            );
             let error = certify_exhaustive_truth_with_threads(
                 world.world(),
                 &candidate,
