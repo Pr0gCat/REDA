@@ -338,7 +338,10 @@ pub fn comparator_side_positions(state: &BlockState, pos: Position) -> [Option<P
 /// `mode` 屬性缺席一律視為比較模式 —— 這是原版的預設值，也是 A1 階段
 /// 保留未建模屬性的直接後果：讀檔給什麼字串就照什麼字串判斷，缺席不猜。
 pub fn comparator_is_subtract_mode(state: &BlockState) -> bool {
-    state.extra_properties.get("mode").is_some_and(|mode| mode == "subtract")
+    state
+        .extra_properties
+        .get("mode")
+        .is_some_and(|mode| mode == "subtract")
 }
 
 /// 比較器後方讀進來的主訊號強度。
@@ -495,7 +498,9 @@ mod tests {
         state.power = power;
         state.lit = lit;
         if let Some(mode) = mode {
-            state.extra_properties.insert("mode".to_string(), mode.to_string());
+            state
+                .extra_properties
+                .insert("mode".to_string(), mode.to_string());
         }
         state
     }
@@ -503,7 +508,10 @@ mod tests {
     #[test]
     fn a_standing_torch_is_attached_to_the_block_below() {
         let pos = Position::new(3, 4, 5);
-        assert_eq!(torch_support_position(&torch(), pos), Some(Position::new(3, 3, 5)));
+        assert_eq!(
+            torch_support_position(&torch(), pos),
+            Some(Position::new(3, 3, 5))
+        );
     }
 
     #[test]
@@ -582,7 +590,11 @@ mod tests {
     #[test]
     fn a_bent_run_leaves_the_same_torch_lit() {
         let world = run_into_a_torchs_support(true);
-        assert_eq!(world.get(3, 1, 2).power, 13, "the run is powered just the same");
+        assert_eq!(
+            world.get(3, 1, 2).power,
+            13,
+            "the run is powered just the same"
+        );
         assert!(
             torch_should_be_lit(&world, Position::new(4, 2, 2)),
             "one perpendicular branch costs the run its direction, and the \
@@ -663,7 +675,10 @@ mod tests {
     fn burnout_recovers_once_old_changes_leave_the_window() {
         // 讓火把燒毀來換取收斂是錯的做法 -- 它必須會恢復
         let changes: Vec<u64> = (1..=9).collect();
-        assert!(is_burned_out(&changes, 60), "第一筆改變（tick 1）還在視窗內");
+        assert!(
+            is_burned_out(&changes, 60),
+            "第一筆改變（tick 1）還在視窗內"
+        );
         assert!(
             !is_burned_out(&changes, 61),
             "第一筆改變滑出視窗後只剩 8 次，燒毀應該解除"
@@ -699,7 +714,10 @@ mod tests {
     #[test]
     fn a_zero_delay_is_treated_as_one() {
         // 檔案裡可能有任何東西
-        assert_eq!(repeater_delay_game_ticks(&repeater(Facing::East, 0, false)), 2);
+        assert_eq!(
+            repeater_delay_game_ticks(&repeater(Facing::East, 0, false)),
+            2
+        );
     }
 
     #[test]
@@ -808,7 +826,12 @@ mod tests {
         let mut world = World::new(5, 5, 5);
         let pos = Position::new(2, 0, 2);
         // facing=West -> rear input west, at (1,0,2)
-        world.set(pos.x, pos.y, pos.z, comparator(Facing::West, None, 0, false));
+        world.set(
+            pos.x,
+            pos.y,
+            pos.z,
+            comparator(Facing::West, None, 0, false),
+        );
 
         // 後方是另一個朝同方向、輸出朝東（進到我們後方）的比較器，直接送出
         // 類比值 9（不是固定的 15，才能抓到「硬編成開關」的錯誤實作）
@@ -829,7 +852,12 @@ mod tests {
     fn compare_mode_outputs_zero_when_a_side_is_stronger() {
         let mut world = World::new(5, 5, 5);
         let pos = Position::new(2, 0, 2);
-        world.set(pos.x, pos.y, pos.z, comparator(Facing::West, None, 0, false));
+        world.set(
+            pos.x,
+            pos.y,
+            pos.z,
+            comparator(Facing::West, None, 0, false),
+        );
         world.set(1, 0, 2, comparator(Facing::West, None, 9, true));
 
         // 北側石頭被另一個比較器強充能到 12，比後方的 9 強
@@ -850,7 +878,12 @@ mod tests {
         // rear 12, side 5 -> 7
         let mut world = World::new(5, 5, 5);
         let pos = Position::new(2, 0, 2);
-        world.set(pos.x, pos.y, pos.z, comparator(Facing::West, Some("subtract"), 0, false));
+        world.set(
+            pos.x,
+            pos.y,
+            pos.z,
+            comparator(Facing::West, Some("subtract"), 0, false),
+        );
         world.set(1, 0, 2, comparator(Facing::West, None, 12, true));
 
         world.set(2, 0, 1, stone());
@@ -865,7 +898,12 @@ mod tests {
         // rear 3, side 9 -> 0，不是負數繞回
         let mut world = World::new(5, 5, 5);
         let pos = Position::new(2, 0, 2);
-        world.set(pos.x, pos.y, pos.z, comparator(Facing::West, Some("subtract"), 0, false));
+        world.set(
+            pos.x,
+            pos.y,
+            pos.z,
+            comparator(Facing::West, Some("subtract"), 0, false),
+        );
         world.set(1, 0, 2, comparator(Facing::West, None, 3, true));
 
         world.set(2, 0, 1, stone());

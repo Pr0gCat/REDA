@@ -23,10 +23,14 @@ use reda::circuits::full_adder::{build_full_adder_netlist, INPUT_NAMES as ADDER_
 use reda::circuits::seven_segment::{
     build_seven_segment_netlist, build_single_segment_netlist, INPUT_NAMES as DECODER_INPUTS,
 };
-use reda::compile::routing_stats::{analyze, distinct_totals_by_part, EdgeRoute, PartTotals, RoutePart, ALL_PARTS};
+use reda::compile::routing_stats::{
+    analyze, distinct_totals_by_part, EdgeRoute, PartTotals, RoutePart, ALL_PARTS,
+};
 use reda::compile::{compile_legacy, Netlist};
 use reda::redstone::simulator::Simulator;
-use reda::timing::{observations_to_result, summarize_worst_case, watch_all_nets, TransitionResult};
+use reda::timing::{
+    observations_to_result, summarize_worst_case, watch_all_nets, TransitionResult,
+};
 
 const MAX_TICKS: u64 = 4000;
 
@@ -45,8 +49,14 @@ fn sweep(simulator: &mut Simulator, lever_positions: &[(i32, i32, i32)]) -> Vec<
             let mut state = simulator.world().get(x, y, z).clone();
             state.lit = bit;
             simulator.world_mut().set(x, y, z, state);
-            let settle = simulator.run_until_stable(MAX_TICKS).expect("reference circuits must settle");
-            transitions.push(observations_to_result(simulator.observations(), start_tick, settle));
+            let settle = simulator
+                .run_until_stable(MAX_TICKS)
+                .expect("reference circuits must settle");
+            transitions.push(observations_to_result(
+                simulator.observations(),
+                start_tick,
+                settle,
+            ));
         }
     }
     transitions
@@ -69,8 +79,17 @@ fn stats(values: &[i64]) -> Stats {
     v.sort_unstable();
     let n = v.len();
     let mean = v.iter().sum::<i64>() as f64 / n as f64;
-    let median = if n % 2 == 1 { v[n / 2] as f64 } else { (v[n / 2 - 1] + v[n / 2]) as f64 / 2.0 };
-    Stats { min: v[0], median, mean, max: v[n - 1] }
+    let median = if n % 2 == 1 {
+        v[n / 2] as f64
+    } else {
+        (v[n / 2 - 1] + v[n / 2]) as f64 / 2.0
+    };
+    Stats {
+        min: v[0],
+        median,
+        mean,
+        max: v[n - 1],
+    }
 }
 
 fn print_stats_row(label: &str, length_values: &[i64], repeater_values: &[i64]) {
@@ -96,7 +115,10 @@ fn print_distribution(title: &str, edges: &[&EdgeRoute]) {
     println!("{title} (n={}):", edges.len());
     for &part in &ALL_PARTS {
         let lengths: Vec<i64> = edges.iter().map(|e| e.part(part).length).collect();
-        let repeaters: Vec<i64> = edges.iter().map(|e| e.part(part).repeaters as i64).collect();
+        let repeaters: Vec<i64> = edges
+            .iter()
+            .map(|e| e.part(part).repeaters as i64)
+            .collect();
         print_stats_row(part_name(part), &lengths, &repeaters);
     }
     let total_lengths: Vec<i64> = edges.iter().map(|e| e.total().length).collect();
@@ -110,7 +132,11 @@ fn print_distribution(title: &str, edges: &[&EdgeRoute]) {
 
 /// Map a critical path (a chain of signal names, source to output) onto the
 /// specific `EdgeRoute`s that carry each consecutive hop.
-fn critical_edges<'a>(netlist: &Netlist, edges: &'a [EdgeRoute], critical_path: &[String]) -> Vec<&'a EdgeRoute> {
+fn critical_edges<'a>(
+    netlist: &Netlist,
+    edges: &'a [EdgeRoute],
+    critical_path: &[String],
+) -> Vec<&'a EdgeRoute> {
     let mut result = Vec::new();
     for window in critical_path.windows(2) {
         let (a, b) = (&window[0], &window[1]);
@@ -143,7 +169,8 @@ fn run_and_report(label: &str, netlist: &Netlist, input_names: &[&str], outputs:
 
     let compiled = compile_legacy(netlist).expect("reference circuits must compile");
     let report = analyze(netlist, &compiled).expect("reference circuits must analyze");
-    let by_part = distinct_totals_by_part(netlist, &compiled).expect("reference circuits must analyze");
+    let by_part =
+        distinct_totals_by_part(netlist, &compiled).expect("reference circuits must analyze");
 
     println!(
         "channels={}, tracks-per-channel={:?}, total tracks={}",
@@ -157,9 +184,17 @@ fn run_and_report(label: &str, netlist: &Netlist, input_names: &[&str], outputs:
     for &part in &ALL_PARTS {
         let t = by_part.get(&part).copied().unwrap_or_default();
         grand += t;
-        println!("  {:<12} length={:<6} repeaters={}", part_name(part), t.length, t.repeaters);
+        println!(
+            "  {:<12} length={:<6} repeaters={}",
+            part_name(part),
+            t.length,
+            t.repeaters
+        );
     }
-    println!("  {:<12} length={:<6} repeaters={}", "TOTAL", grand.length, grand.repeaters);
+    println!(
+        "  {:<12} length={:<6} repeaters={}",
+        "TOTAL", grand.length, grand.repeaters
+    );
 
     let all_edges: Vec<&EdgeRoute> = report.edges.iter().collect();
     println!();
@@ -171,21 +206,28 @@ fn run_and_report(label: &str, netlist: &Netlist, input_names: &[&str], outputs:
     }
     println!("Hop-count histogram (edges by channels crossed): {hop_histogram:?}");
 
-    let bypassed = all_edges.iter().filter(|e| e.part(RoutePart::Bypass).length > 0).count();
+    let bypassed = all_edges
+        .iter()
+        .filter(|e| e.part(RoutePart::Bypass).length > 0)
+        .count();
     println!(
         "Bypass vs track: {bypassed}/{} edges routed directly at GATE_Y (no ramp, no track)",
         all_edges.len()
     );
 
-    let lever_positions: Vec<(i32, i32, i32)> =
-        input_names.iter().map(|&n| *compiled.input_positions.get(n).unwrap()).collect();
+    let lever_positions: Vec<(i32, i32, i32)> = input_names
+        .iter()
+        .map(|&n| *compiled.input_positions.get(n).unwrap())
+        .collect();
     let watched = watch_all_nets(&compiled);
     // Simulate on a clone of the world -- `compiled` is kept intact (its
     // block kinds/positions never change during simulation) so it can still
     // be handed to `summarize_worst_case` below, which needs it to count the
     // actual measured critical path's repeaters.
     let mut simulator = Simulator::new(compiled.world.clone());
-    simulator.run_until_stable(MAX_TICKS).expect("must settle before the first reading");
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("must settle before the first reading");
     simulator.attach_observer(watched);
     let transitions = sweep(&mut simulator, &lever_positions);
     let summary = summarize_worst_case(netlist, &compiled, outputs, &transitions);
@@ -225,7 +267,12 @@ fn run_and_report(label: &str, netlist: &Netlist, input_names: &[&str], outputs:
         for &part in &ALL_PARTS {
             let p = edge.part(part);
             if p.length > 0 {
-                println!("      {:<12} length={:<6} repeaters={}", part_name(part), p.length, p.repeaters);
+                println!(
+                    "      {:<12} length={:<6} repeaters={}",
+                    part_name(part),
+                    p.length,
+                    p.repeaters
+                );
             }
         }
     }
@@ -245,11 +292,19 @@ fn main() {
         "full_adder",
         &full_adder,
         &ADDER_INPUTS,
-        &[full_adder_outputs["sum"].clone(), full_adder_outputs["cout"].clone()],
+        &[
+            full_adder_outputs["sum"].clone(),
+            full_adder_outputs["cout"].clone(),
+        ],
     );
 
     let (segment_a, segment_a_output) = build_single_segment_netlist(0);
-    run_and_report("segment_a", &segment_a, &DECODER_INPUTS, &[segment_a_output]);
+    run_and_report(
+        "segment_a",
+        &segment_a,
+        &DECODER_INPUTS,
+        &[segment_a_output],
+    );
 
     let (seven_segment, seven_segment_outputs) = build_seven_segment_netlist();
     let mut outputs: Vec<String> = seven_segment_outputs.values().cloned().collect();

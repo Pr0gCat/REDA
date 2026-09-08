@@ -65,7 +65,10 @@ pub(crate) mod project_for_test {
     /// a fixture that shared a name would be testing the exemption instead.
     pub fn two_free_bodies(a: [f64; 3], b: [f64; 3]) -> BodyGraph {
         let body = |position: [f64; 3]| Body {
-            what: BodyKind::Primitive { node: 0, kind: Primitive::Torch },
+            what: BodyKind::Primitive {
+                node: 0,
+                kind: Primitive::Torch,
+            },
             position,
             inputs: vec![format!("net{}{}{}", position[0], position[1], position[2])],
             output: None,
@@ -202,7 +205,10 @@ pub struct RelaxEffort {
 
 impl Default for RelaxEffort {
     fn default() -> Self {
-        RelaxEffort { iterations: 256, seed: 0 }
+        RelaxEffort {
+            iterations: 256,
+            seed: 0,
+        }
     }
 }
 
@@ -568,7 +574,10 @@ fn choose_facings(graph: &mut BodyGraph) -> bool {
 /// terminal has one realisation and there is nothing to sweep. Returning one
 /// facing rather than filtering three is what makes that unmissable -- no code
 /// path downstream can pick a different neighbour, because none is offered.
-fn terminal_lawful_facings(graph: &BodyGraph, body: usize) -> Vec<crate::compile::geometry::CellFacing> {
+fn terminal_lawful_facings(
+    graph: &BodyGraph,
+    body: usize,
+) -> Vec<crate::compile::geometry::CellFacing> {
     use crate::compile::geometry::CellFacing;
     match graph.bodies[body].what {
         build::BodyKind::InputTerminal { toward } | build::BodyKind::OutputTerminal { toward } => {
@@ -759,7 +768,9 @@ fn settle(
         // against three `O(n^2)` solves, which at a couple of hundred bodies
         // is not the cost worth optimising.
         let factorisation = Factorisation::of(&laplacian(&bodies, &free, order, anchor), order)
-            .map_err(|error| RelaxError::Unsolvable { component_row: error.row })?;
+            .map_err(|error| RelaxError::Unsolvable {
+                component_row: error.row,
+            })?;
 
         // What each spring asks for this step, linearised about the
         // configuration the step starts in -- which is the last projection's
@@ -958,14 +969,17 @@ mod tests {
     /// here claims and not what the `k = 1024` corner of [`ANCHOR_GROWTH`]'s
     /// sweep would be caught by.
     fn starting_layout(netlist: &Netlist, pinned: &PortPlacements) -> Result<Vec<Anchor>, String> {
-        crate::compile::planner::starting_layout(netlist, pinned)
-            .map_err(|error| error.to_string())
+        crate::compile::planner::starting_layout(netlist, pinned).map_err(|error| error.to_string())
     }
 
     fn relaxed(netlist: &Netlist, effort: RelaxEffort) -> ContinuousPlacement {
         let graph = expand(netlist, &Library::default_library()).expect("expands");
         let start: Vec<Anchor> = (0..netlist.gates.len() + netlist.inputs.len())
-            .map(|index| Anchor { x: index as i32 * 20, y: 1, z: index as i32 * 16 })
+            .map(|index| Anchor {
+                x: index as i32 * 20,
+                y: 1,
+                z: index as i32 * 16,
+            })
             .collect();
         let mut placements = PortPlacements::default();
         placements.pin(
@@ -982,11 +996,19 @@ mod tests {
     #[test]
     fn the_same_input_relaxes_to_the_same_bits() {
         let netlist = chain();
-        let effort = RelaxEffort { iterations: 64, seed: 0x26_02 };
+        let effort = RelaxEffort {
+            iterations: 64,
+            seed: 0x26_02,
+        };
         let first = relaxed(&netlist, effort);
         let second = relaxed(&netlist, effort);
 
-        for (index, (left, right)) in first.graph.bodies.iter().zip(&second.graph.bodies).enumerate()
+        for (index, (left, right)) in first
+            .graph
+            .bodies
+            .iter()
+            .zip(&second.graph.bodies)
+            .enumerate()
         {
             assert_eq!(
                 left.position.map(f64::to_bits),
@@ -1072,7 +1094,12 @@ mod tests {
 
         let terminal = &placement.graph.bodies[placement.graph.anchor_body[2]];
         assert!(
-            matches!(terminal.what, build::BodyKind::InputTerminal { toward: Facing::West }),
+            matches!(
+                terminal.what,
+                build::BodyKind::InputTerminal {
+                    toward: Facing::West
+                }
+            ),
             "the pinned input is a terminal"
         );
         assert_eq!(
@@ -1122,7 +1149,11 @@ mod tests {
 
         let a = &placement.graph.bodies[placement.graph.anchor_body[1]];
         let b = &placement.graph.bodies[placement.graph.anchor_body[2]];
-        assert_eq!(a.facing.direction(), Facing::North, "a reads where its pin says");
+        assert_eq!(
+            a.facing.direction(),
+            Facing::North,
+            "a reads where its pin says"
+        );
         assert_eq!(b.facing.direction(), Facing::North, "and so does b");
     }
 
@@ -1144,7 +1175,11 @@ mod tests {
         let netlist = chain();
         let graph = expand(&netlist, &Library::default_library()).expect("expands");
         let start: Vec<Anchor> = (0..3)
-            .map(|index| Anchor { x: index * 20, y: 1, z: index * 16 })
+            .map(|index| Anchor {
+                x: index * 20,
+                y: 1,
+                z: index * 16,
+            })
             .collect();
 
         let placement = relax(
@@ -1156,7 +1191,10 @@ mod tests {
             RelaxEffort::default(),
         )
         .expect("the anchor is what makes an unpinned system solvable");
-        assert!(placement.converged, "it stopped without the two bounds meeting");
+        assert!(
+            placement.converged,
+            "it stopped without the two bounds meeting"
+        );
     }
 
     /// A relaxation that ran out of iterations says so rather than handing
@@ -1183,10 +1221,16 @@ mod tests {
             &start,
             &PortPlacements::default(),
             Axes::IN_PLANE,
-            RelaxEffort { iterations: 1, seed: 0 },
+            RelaxEffort {
+                iterations: 1,
+                seed: 0,
+            },
         )
         .expect_err("one iteration from a knot cannot converge");
-        assert!(matches!(error, RelaxError::DidNotConverge { iterations: 1, .. }));
+        assert!(matches!(
+            error,
+            RelaxError::DidNotConverge { iterations: 1, .. }
+        ));
     }
 
     /// A slack constraint set is not a settled relaxation, and `gap` alone
@@ -1210,9 +1254,13 @@ mod tests {
         let netlist = chain();
         let graph = expand(&netlist, &Library::default_library()).expect("expands");
         let start = vec![
-            Anchor { x: 0, y: 1, z: -60 },  // gate b
-            Anchor { x: 0, y: 1, z: -120 }, // gate c
-            Anchor { x: 0, y: 1, z: 0 },    // input a
+            Anchor { x: 0, y: 1, z: -60 }, // gate b
+            Anchor {
+                x: 0,
+                y: 1,
+                z: -120,
+            }, // gate c
+            Anchor { x: 0, y: 1, z: 0 },   // input a
         ];
         let mut placements = PortPlacements::default();
         placements.pin("a", start[2], crate::redstone::world::block::Facing::South);
@@ -1357,7 +1405,11 @@ mod tests {
         let netlist = chain();
         let graph = expand(&netlist, &Library::default_library()).expect("expands");
         let start: Vec<Anchor> = (0..3)
-            .map(|index| Anchor { x: index * 20, y: 1, z: index * 16 })
+            .map(|index| Anchor {
+                x: index * 20,
+                y: 1,
+                z: index * 16,
+            })
             .collect();
         let mut placements = PortPlacements::default();
         placements.pin("a", start[2], crate::redstone::world::block::Facing::South);
@@ -1437,7 +1489,10 @@ mod tests {
         let graph = |at: [f64; 3], rest: f64| BodyGraph {
             bodies: vec![
                 Body {
-                    what: BodyKind::Primitive { node: 0, kind: Primitive::Torch },
+                    what: BodyKind::Primitive {
+                        node: 0,
+                        kind: Primitive::Torch,
+                    },
                     position: [0.0, 0.0, 0.0],
                     inputs: Vec::new(),
                     output: Some("n".into()),
@@ -1445,7 +1500,10 @@ mod tests {
                     pinned: true,
                 },
                 Body {
-                    what: BodyKind::Primitive { node: 1, kind: Primitive::Torch },
+                    what: BodyKind::Primitive {
+                        node: 1,
+                        kind: Primitive::Torch,
+                    },
                     position: at,
                     inputs: vec!["n".into()],
                     output: None,
@@ -1618,7 +1676,10 @@ mod tests {
                     right.position.map(f64::to_bits),
                     "body {index} landed somewhere else through the seam"
                 );
-                assert_eq!(left.facing, right.facing, "body {index} turned a different way");
+                assert_eq!(
+                    left.facing, right.facing,
+                    "body {index} turned a different way"
+                );
             }
         }
     }
@@ -1654,8 +1715,12 @@ mod tests {
                 SIGNAL_REST_LENGTH,
             )
             .expect("relaxes");
-            for (index, (left, right)) in
-                direct.graph.bodies.iter().zip(&seam.graph.bodies).enumerate()
+            for (index, (left, right)) in direct
+                .graph
+                .bodies
+                .iter()
+                .zip(&seam.graph.bodies)
+                .enumerate()
             {
                 assert_eq!(
                     left.position.map(f64::to_bits),
@@ -1693,8 +1758,14 @@ mod tests {
             }
             let matrix = laplacian(&bodies, &free, order, ANCHOR_STIFFNESS);
             assert_eq!(
-                matrix.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
-                reference.iter().map(|value| value.to_bits()).collect::<Vec<_>>(),
+                matrix
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
+                reference
+                    .iter()
+                    .map(|value| value.to_bits())
+                    .collect::<Vec<_>>(),
                 "rest {rest} changed the matrix, so the positive-definiteness argument no longer \
                  holds and one factorisation no longer serves three axes"
             );
@@ -1723,7 +1794,10 @@ mod tests {
     fn a_rest_length_converges_at_every_radius_the_sweep_used() {
         for (name, netlist) in [
             ("and4", crate::circuits::and4::build_and4_netlist().0),
-            ("full_adder", crate::circuits::full_adder::build_full_adder_netlist().0),
+            (
+                "full_adder",
+                crate::circuits::full_adder::build_full_adder_netlist().0,
+            ),
         ] {
             let graph = expand(&netlist, &Library::default_library()).expect("expands");
             let start = starting_layout(&netlist, &PortPlacements::default()).expect("lays out");
@@ -1823,9 +1897,16 @@ mod tests {
         use crate::compile::physical::PortKind;
 
         let repeater = |position: [f64; 3], net: &str, pinned: bool| Body {
-            what: BodyKind::Primitive { node: 0, kind: Primitive::Repeater },
+            what: BodyKind::Primitive {
+                node: 0,
+                kind: Primitive::Repeater,
+            },
             position,
-            inputs: if pinned { Vec::new() } else { vec![net.to_string()] },
+            inputs: if pinned {
+                Vec::new()
+            } else {
+                vec![net.to_string()]
+            },
             output: if pinned { Some(net.to_string()) } else { None },
             facing: CellFacing::NORTH,
             pinned,

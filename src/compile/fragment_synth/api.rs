@@ -98,7 +98,9 @@ pub fn compile_fragment_synth(
     // proposal and both certification sweeps run inside this one budget. A
     // caller that already owns a budget -- a leaf worker, or the hierarchical
     // flat fast path -- keeps it.
-    with_compile_worker_budget(|_| compile_fragment_synth_with_config(input, budget, &search_config))
+    with_compile_worker_budget(|_| {
+        compile_fragment_synth_with_config(input, budget, &search_config)
+    })
 }
 
 fn compile_fragment_synth_with_config(
@@ -328,10 +330,10 @@ mod tests {
         compile_fragment_synth_with_config_and_placement_revision_override,
         synthesis_case_fingerprint, SynthesisInput,
     };
+    use crate::circuits::and4::build_and4_netlist;
     use crate::compile::fragment_synth::certification::{
         record_caller_certification_budgets, with_certification_threads, with_compile_worker_budget,
     };
-    use crate::circuits::and4::build_and4_netlist;
     use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
     use crate::compile::topology::Library;
     use crate::compile::{Gate, Netlist};

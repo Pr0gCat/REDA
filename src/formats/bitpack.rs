@@ -83,10 +83,7 @@ pub fn pack(values: &[u32], bits: u32) -> Vec<i64> {
     let mask: u64 = (1u64 << bits) - 1;
 
     for (i, &v) in values.iter().enumerate() {
-        debug_assert!(
-            (v as u64) <= mask,
-            "value {v} does not fit in {bits} bits"
-        );
+        debug_assert!((v as u64) <= mask, "value {v} does not fit in {bits} bits");
         let value = (v as u64) & mask;
         let bit_offset = (i as u64) * (bits as u64);
         let start_long = (bit_offset / 64) as usize;

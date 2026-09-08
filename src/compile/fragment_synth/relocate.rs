@@ -19,11 +19,14 @@ use thiserror::Error;
 
 use crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate;
 use crate::compile::fragment_synth::identity::{
-    ConnectionId, InstanceId, ObservationId, PhysicalEndpointId, PrimitiveId, RouteId,
-    RoutedSinkId,
+    ConnectionId, InstanceId, ObservationId, PhysicalEndpointId, PrimitiveId, RouteId, RoutedSinkId,
 };
-use crate::compile::fragment_synth::instance_graph::{InstanceDriver, PhysicalDriver, PhysicalSink};
-use crate::compile::fragment_synth::topology::{ConnectionSource, ConnectionTarget, ContributorSpec, OutputSpec};
+use crate::compile::fragment_synth::instance_graph::{
+    InstanceDriver, PhysicalDriver, PhysicalSink,
+};
+use crate::compile::fragment_synth::topology::{
+    ConnectionSource, ConnectionTarget, ContributorSpec, OutputSpec,
+};
 use crate::compile::geometry::Anchor;
 use crate::compile::planner::PortPlacements;
 use crate::compile::routing::{DelayedOwner, RealisedRouteTree, RouteTarget};
@@ -70,8 +73,7 @@ impl IdMap {
     }
 
     fn route(&self, id: RouteId) -> Result<RouteId, RelocateError> {
-        id.0
-            .checked_add(self.route_offset)
+        id.0.checked_add(self.route_offset)
             .map(RouteId)
             .ok_or(RelocateError::RouteIdOverflow(id))
     }
@@ -536,7 +538,14 @@ mod tests {
     fn translate_moves_every_anchor_by_the_offset_and_nothing_else() {
         let before = full_adder_candidate();
         let mut after = before.clone();
-        translate(&mut after, Offset { dx: 7, dy: 0, dz: -3 });
+        translate(
+            &mut after,
+            Offset {
+                dx: 7,
+                dy: 0,
+                dz: -3,
+            },
+        );
         let a = anchors_of(&before);
         let b = anchors_of(&after);
         assert_eq!(a.len(), b.len());
@@ -545,12 +554,28 @@ mod tests {
         }
         // The anchor walk covers every field the fingerprint sees: translating
         // back restores the fingerprint exactly.
-        translate(&mut after, Offset { dx: -7, dy: 0, dz: 3 });
+        translate(
+            &mut after,
+            Offset {
+                dx: -7,
+                dy: 0,
+                dz: 3,
+            },
+        );
         assert_eq!(after.fingerprint(), before.fingerprint());
         // And a translated candidate is still a well-formed candidate.
         let mut moved = before.clone();
-        translate(&mut moved, Offset { dx: 40, dy: 0, dz: 40 });
-        moved.validate_shape().expect("translated candidate keeps its shape");
+        translate(
+            &mut moved,
+            Offset {
+                dx: 40,
+                dy: 0,
+                dz: 40,
+            },
+        );
+        moved
+            .validate_shape()
+            .expect("translated candidate keeps its shape");
     }
 
     #[test]
@@ -587,8 +612,13 @@ mod tests {
             .connections
             .values()
             .all(|c| c.sink.route == c.route && c.route.0 >= 50));
-        assert_eq!(after.instances.instances.len(), before.instances.instances.len());
-        after.validate_shape().expect("renumbered candidate keeps its shape");
+        assert_eq!(
+            after.instances.instances.len(),
+            before.instances.instances.len()
+        );
+        after
+            .validate_shape()
+            .expect("renumbered candidate keeps its shape");
     }
 
     #[test]
@@ -679,18 +709,14 @@ mod tests {
         // never exercise this.
         let ids: Vec<InstanceId> = before.instances.instances.iter().map(|i| i.id).collect();
         let map = IdMap {
-            instances: ids
-                .iter()
-                .copied()
-                .zip(ids.iter().copied().rev())
-                .collect(),
+            instances: ids.iter().copied().zip(ids.iter().copied().rev()).collect(),
             route_offset: 50,
         };
         renumber(&mut after, &map).expect("renumbers");
 
         let (netlist, _) = crate::circuits::full_adder::build_full_adder_netlist();
-        let lowered = crate::compile::lowering::lower_optimised(&netlist)
-            .expect("full adder netlist lowers");
+        let lowered =
+            crate::compile::lowering::lower_optimised(&netlist).expect("full adder netlist lowers");
         after
             .instances
             .validate(&lowered)

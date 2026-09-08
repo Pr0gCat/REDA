@@ -246,7 +246,10 @@ fn run_synth(
         stderr = String::from_utf8_lossy(&output.stdout).into_owned();
     }
     if stderr.trim().is_empty() {
-        stderr = format!("synth.py exited with status {:?} and produced no diagnostic output", output.status.code());
+        stderr = format!(
+            "synth.py exited with status {:?} and produced no diagnostic output",
+            output.status.code()
+        );
     }
     Err(FrontendError::SynthesisFailed { stderr })
 }
@@ -272,11 +275,18 @@ mod tests {
         let library = Library::default_library();
         for (cell_type, kind) in topology::known_yosys_cell_types() {
             if kind.is_sequential() {
-                assert_eq!(kind, GateKind::DffPosedge, "only the named DFF is stateful today");
+                assert_eq!(
+                    kind,
+                    GateKind::DffPosedge,
+                    "only the named DFF is stateful today"
+                );
                 continue;
             }
             let expansion = topology::expansion_for(kind);
-            assert!(!expansion.steps.is_empty(), "{cell_type} ({kind:?}) has no expansion");
+            assert!(
+                !expansion.steps.is_empty(),
+                "{cell_type} ({kind:?}) has no expansion"
+            );
 
             // Every step of every expansion is a NOR or a merge of an arity
             // `Library` ships an entry for -- so nothing the frontend
@@ -303,7 +313,10 @@ mod tests {
     fn an_unmapped_cell_type_has_no_gate_kind() {
         assert!(topology::gate_kind_for_yosys_cell("$__ZERO").is_none());
         assert!(topology::gate_kind_for_yosys_cell("$__ONE").is_none());
-        assert_eq!(topology::gate_kind_for_yosys_cell("$_DFF_P_"), Some(GateKind::DffPosedge));
+        assert_eq!(
+            topology::gate_kind_for_yosys_cell("$_DFF_P_"),
+            Some(GateKind::DffPosedge)
+        );
         assert!(topology::gate_kind_for_yosys_cell("$_DLATCH_P_").is_none());
         assert!(topology::gate_kind_for_yosys_cell("$_TBUF_").is_none());
         assert!(topology::gate_kind_for_yosys_cell("").is_none());

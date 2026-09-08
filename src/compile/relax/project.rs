@@ -304,7 +304,10 @@ struct Offence {
 /// measurement away, and both are the first thing to try if layouts come out
 /// sparse.
 fn offence(left: &[PlacedCell], right: &[PlacedCell], required: f64) -> Offence {
-    let mut found = Offence { shortfall: 0.0, deficit: [0.0; 3] };
+    let mut found = Offence {
+        shortfall: 0.0,
+        deficit: [0.0; 3],
+    };
     for here in left {
         for there in right {
             if !unseparated(here, there, required) {
@@ -457,7 +460,9 @@ fn welded_partners(graph: &BodyGraph) -> Vec<Vec<usize>> {
     let mut partners = vec![Vec::new(); graph.bodies.len()];
     for weld in &graph.welds {
         let (one, other) = match *weld {
-            Weld::AtSocket { repeater, junction, .. } => (repeater, junction),
+            Weld::AtSocket {
+                repeater, junction, ..
+            } => (repeater, junction),
             Weld::BesideAt { lock, data, .. } => (lock, data),
         };
         partners[one].push(other);
@@ -528,7 +533,11 @@ pub fn worst_violation(graph: &BodyGraph, required: &[f64]) -> Option<Violation>
             let need = required[left].max(required[right]);
             let short = offence(&cells[left], &cells[right], need).shortfall;
             if short > SETTLED && worst.is_none_or(|current| short > current.shortfall) {
-                worst = Some(Violation { left, right, shortfall: short });
+                worst = Some(Violation {
+                    left,
+                    right,
+                    shortfall: short,
+                });
             }
         }
     }
@@ -697,11 +706,19 @@ fn separate(graph: &mut BodyGraph, left: usize, right: usize, axis: usize, cost:
 /// weld has to be restored at the facing that will actually be built.
 fn satisfy(graph: &mut BodyGraph, weld: &Weld) -> bool {
     let (held, anchor, offset) = match *weld {
-        Weld::AtSocket { repeater, junction, input_index } => {
+        Weld::AtSocket {
+            repeater,
+            junction,
+            input_index,
+        } => {
             let facing = graph.bodies[junction].facing;
             let direction = geometry::input_directions(facing)[input_index];
             let step = Position::new(0, 0, 0).offset(direction);
-            (repeater, junction, [step.x as f64, step.y as f64, step.z as f64])
+            (
+                repeater,
+                junction,
+                [step.x as f64, step.y as f64, step.z as f64],
+            )
         }
         Weld::BesideAt { lock, data, side } => {
             let facing = graph.bodies[data].facing;
@@ -747,7 +764,10 @@ mod tests {
     /// projection can be asked about.
     fn body(x: f64, y: f64, z: f64) -> Body {
         Body {
-            what: BodyKind::Primitive { node: 0, kind: Primitive::Torch },
+            what: BodyKind::Primitive {
+                node: 0,
+                kind: Primitive::Torch,
+            },
             position: [x, y, z],
             inputs: vec![format!("net{x}{y}{z}")],
             output: None,
@@ -786,7 +806,10 @@ mod tests {
 
         let gap = (graph.bodies[0].position[0] - graph.bodies[1].position[0]).abs();
         assert!(gap >= 3.0 - 1e-9, "they are still {gap} apart");
-        assert!(gap <= 3.0 + 1e-9, "they were pushed to {gap}, further than asked");
+        assert!(
+            gap <= 3.0 + 1e-9,
+            "they were pushed to {gap}, further than asked"
+        );
     }
 
     /// Two pinned bodies inside each other's requirement are the weld-sibling
@@ -798,7 +821,10 @@ mod tests {
     /// deadlocked the projection until pinned pairs joined the exemption.
     #[test]
     fn two_pinned_bodies_are_exempt_from_separation_rather_than_a_deadlock() {
-        let mut graph = graph_of(vec![body(10.0, 1.0, 10.0), body(12.0, 1.0, 10.0)], Vec::new());
+        let mut graph = graph_of(
+            vec![body(10.0, 1.0, 10.0), body(12.0, 1.0, 10.0)],
+            Vec::new(),
+        );
         graph.bodies[0].pinned = true;
         graph.bodies[1].pinned = true;
 
@@ -852,7 +878,11 @@ mod tests {
     #[test]
     fn in_plane_projection_never_moves_a_body_in_y() {
         let mut graph = graph_of(
-            vec![body(0.0, 1.0, 0.0), body(0.1, 1.0, 0.1), body(0.2, 1.0, 0.2)],
+            vec![
+                body(0.0, 1.0, 0.0),
+                body(0.1, 1.0, 0.1),
+                body(0.2, 1.0, 0.2),
+            ],
             Vec::new(),
         );
         let required = vec![3.0; 3];
@@ -884,8 +914,16 @@ mod tests {
         // Two welded bodies and a third crowding them, with the separation set
         // so wide that satisfying it would have to break the weld.
         let mut graph = graph_of(
-            vec![body(0.0, 1.0, 0.0), body(-1.0, 1.0, 0.0), body(0.4, 1.0, 0.0)],
-            vec![Weld::AtSocket { repeater: 1, junction: 0, input_index: 0 }],
+            vec![
+                body(0.0, 1.0, 0.0),
+                body(-1.0, 1.0, 0.0),
+                body(0.4, 1.0, 0.0),
+            ],
+            vec![Weld::AtSocket {
+                repeater: 1,
+                junction: 0,
+                input_index: 0,
+            }],
         );
         let required = vec![8.0; 3];
         let _ = project(&mut graph, &required, Axes::IN_PLANE);
@@ -897,7 +935,11 @@ mod tests {
             repeater[1] - junction[1],
             repeater[2] - junction[2],
         ];
-        assert_eq!(offset, [-1.0, 0.0, 0.0], "input 0's socket is one cell west");
+        assert_eq!(
+            offset,
+            [-1.0, 0.0, 0.0],
+            "input 0's socket is one cell west"
+        );
 
         // The weld holding is only interesting if something was pulling on it.
         // A projection that moved nothing at all would pass the assertion
@@ -1043,10 +1085,22 @@ mod tests {
     #[test]
     fn two_repeaters_welded_into_one_junctions_sockets_place() {
         let mut graph = graph_of(
-            vec![body(0.0, 1.0, 0.0), body(-1.0, 1.0, 0.0), body(1.0, 1.0, 0.0)],
             vec![
-                Weld::AtSocket { repeater: 1, junction: 0, input_index: 0 },
-                Weld::AtSocket { repeater: 2, junction: 0, input_index: 1 },
+                body(0.0, 1.0, 0.0),
+                body(-1.0, 1.0, 0.0),
+                body(1.0, 1.0, 0.0),
+            ],
+            vec![
+                Weld::AtSocket {
+                    repeater: 1,
+                    junction: 0,
+                    input_index: 0,
+                },
+                Weld::AtSocket {
+                    repeater: 2,
+                    junction: 0,
+                    input_index: 1,
+                },
             ],
         );
         // What `required_separations` derived for the real five-gate netlist.
@@ -1096,7 +1150,11 @@ mod tests {
         crowder.pinned = true;
         let mut graph = graph_of(
             vec![anchor, held, crowder],
-            vec![Weld::AtSocket { repeater: 1, junction: 0, input_index: 0 }],
+            vec![Weld::AtSocket {
+                repeater: 1,
+                junction: 0,
+                input_index: 0,
+            }],
         );
         // Wider than a welded body and a pinned one can ever become.
         let required = vec![9.0; 3];

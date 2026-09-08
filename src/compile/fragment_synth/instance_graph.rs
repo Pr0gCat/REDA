@@ -435,7 +435,8 @@ impl InstanceGraph {
 
         let (signals, primary_inputs) = signal_table(planning)?;
 
-        let base_id = u32::try_from(planning.gates.len()).map_err(|_| SynthesisError::IdentityOverflow)?;
+        let base_id =
+            u32::try_from(planning.gates.len()).map_err(|_| SynthesisError::IdentityOverflow)?;
         let mut block_instances = Vec::with_capacity(blocks.len());
         for (k, spec) in blocks.iter().enumerate() {
             let offset = u32::try_from(k).map_err(|_| SynthesisError::IdentityOverflow)?;
@@ -448,12 +449,11 @@ impl InstanceGraph {
                 .inputs
                 .iter()
                 .map(|name| {
-                    signals
-                        .get(name.as_str())
-                        .copied()
-                        .ok_or_else(|| SynthesisError::UndrivenSignal {
+                    signals.get(name.as_str()).copied().ok_or_else(|| {
+                        SynthesisError::UndrivenSignal {
                             signal: name.clone(),
-                        })
+                        }
+                    })
                 })
                 .collect::<Result<Vec<_>, _>>()?;
             let output_gates = spec
@@ -592,8 +592,11 @@ impl InstanceGraph {
         // outputs, checking range + distinctness for every entry also proves
         // the whole set of claimed gates *is* the tail, not merely a subset
         // of it.
-        let synthetic_outputs: usize =
-            self.blocks.iter().map(|block| block.output_gates.len()).sum();
+        let synthetic_outputs: usize = self
+            .blocks
+            .iter()
+            .map(|block| block.output_gates.len())
+            .sum();
         let real_gates = netlist
             .gates
             .len()
@@ -671,7 +674,9 @@ impl InstanceGraph {
         }
         let mut block_by_id = BTreeMap::new();
         for block in &self.blocks {
-            if instance_by_id.contains_key(&block.id) || block_by_id.insert(block.id, block).is_some() {
+            if instance_by_id.contains_key(&block.id)
+                || block_by_id.insert(block.id, block).is_some()
+            {
                 return Err(SynthesisError::DuplicateInstanceId { instance: block.id });
             }
         }
@@ -835,13 +840,12 @@ fn instantiate_gates(
             .get(&instance)
             .copied()
             .unwrap_or(default_implementation);
-        let expanded =
-            instantiate(library, gate, instance, &implementation).map_err(|source| {
-                SynthesisError::Topology {
-                    gate: gate_index,
-                    source,
-                }
-            })?;
+        let expanded = instantiate(library, gate, instance, &implementation).map_err(|source| {
+            SynthesisError::Topology {
+                gate: gate_index,
+                source,
+            }
+        })?;
         instances.push(Instance {
             id: instance,
             logical_gate: gate_index,
@@ -1417,8 +1421,8 @@ pub(crate) mod tests {
 
     /// top: x -> [block u0: inputs a; outputs y, w] ; y -> nor g0 -> z ; w declared output.
     /// Shared with the placement tests (Task 9).
-    pub(crate) fn planning_with_one_block() -> (Netlist, Vec<(String, u32, Vec<String>, Vec<String>)>)
-    {
+    pub(crate) fn planning_with_one_block(
+    ) -> (Netlist, Vec<(String, u32, Vec<String>, Vec<String>)>) {
         let planning = Netlist {
             inputs: vec!["x".into()],
             outputs: vec!["z".into(), "w".into()],
@@ -1472,8 +1476,13 @@ pub(crate) mod tests {
     fn a_block_joins_the_graph_with_one_driver_per_output_and_one_sink_per_input() {
         let (planning, owned) = planning_with_one_block();
         let library = Library::default_library();
-        let graph = InstanceGraph::with_blocks(&planning, &library, &specs_of(&owned)).expect("builds");
-        assert_eq!(graph.instances.len(), 1, "only the real gate is instantiated");
+        let graph =
+            InstanceGraph::with_blocks(&planning, &library, &specs_of(&owned)).expect("builds");
+        assert_eq!(
+            graph.instances.len(),
+            1,
+            "only the real gate is instantiated"
+        );
         assert_eq!(graph.blocks.len(), 1);
         let block = &graph.blocks[0];
         assert_eq!(block.id, InstanceId(3));
@@ -1575,7 +1584,8 @@ pub(crate) mod tests {
     fn a_wide_block_wires_every_input_and_every_output() {
         let (planning, owned) = planning_with_wide_block();
         let library = Library::default_library();
-        let graph = InstanceGraph::with_blocks(&planning, &library, &specs_of(&owned)).expect("builds");
+        let graph =
+            InstanceGraph::with_blocks(&planning, &library, &specs_of(&owned)).expect("builds");
         assert_eq!(graph.instances.len(), 0, "no real gates besides the block");
         assert_eq!(graph.blocks.len(), 1);
         let block = &graph.blocks[0];
@@ -1627,7 +1637,8 @@ pub(crate) mod tests {
     fn validate_accepts_a_graph_containing_blocks() {
         let (planning, owned) = planning_with_one_block();
         let library = Library::default_library();
-        let graph = InstanceGraph::with_blocks(&planning, &library, &specs_of(&owned)).expect("builds");
+        let graph =
+            InstanceGraph::with_blocks(&planning, &library, &specs_of(&owned)).expect("builds");
         assert_eq!(graph.validate(&planning), Ok(()));
     }
 
@@ -1635,7 +1646,8 @@ pub(crate) mod tests {
     fn a_graph_with_blocks_keeps_assignments_sorted_by_sink() {
         let (planning, owned) = planning_with_wide_block();
         let library = Library::default_library();
-        let graph = InstanceGraph::with_blocks(&planning, &library, &specs_of(&owned)).expect("builds");
+        let graph =
+            InstanceGraph::with_blocks(&planning, &library, &specs_of(&owned)).expect("builds");
         assert!(!graph.blocks.is_empty());
         assert!(graph
             .assignments
@@ -1693,13 +1705,27 @@ pub(crate) mod tests {
             ],
         };
         let owned = vec![
-            ("u0".to_string(), 0u32, vec!["x".to_string()], vec!["y".to_string()]),
-            ("u1".to_string(), 1u32, vec!["y".to_string()], vec!["z".to_string()]),
+            (
+                "u0".to_string(),
+                0u32,
+                vec!["x".to_string()],
+                vec!["y".to_string()],
+            ),
+            (
+                "u1".to_string(),
+                1u32,
+                vec!["y".to_string()],
+                vec!["z".to_string()],
+            ),
         ];
         let library = Library::default_library();
-        let graph = InstanceGraph::with_blocks(&planning, &library, &specs_of(&owned))
-            .expect("builds");
-        assert_eq!(graph.instances.len(), 0, "both gates are synthetic block outputs");
+        let graph =
+            InstanceGraph::with_blocks(&planning, &library, &specs_of(&owned)).expect("builds");
+        assert_eq!(
+            graph.instances.len(),
+            0,
+            "both gates are synthetic block outputs"
+        );
         assert_eq!(graph.blocks.len(), 2);
         let producer = graph.blocks.iter().find(|b| b.block == 0).unwrap();
         let consumer = graph.blocks.iter().find(|b| b.block == 1).unwrap();

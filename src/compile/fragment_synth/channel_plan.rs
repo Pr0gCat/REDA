@@ -672,5 +672,4 @@ mod tests {
             plan_channel(&reversed, &no_jogs())
         );
     }
-
 }

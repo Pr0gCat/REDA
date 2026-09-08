@@ -611,10 +611,9 @@ fn the_lever_bug_is_an_extra_edge_of_mechanism_three() {
     let (world, emitter, mediator, foreign) = leak_over_a_conductor(lever);
 
     let reach = reach_of(&world, &[emitter]);
-    let arrival = reach
-        .arrival
-        .get(&foreign)
-        .expect("a lit lever strongly powers the block above it, and that block drives the dust on top");
+    let arrival = reach.arrival.get(&foreign).expect(
+        "a lit lever strongly powers the block above it, and that block drives the dust on top",
+    );
     assert_eq!(arrival.mechanism, Mechanism::StrongBlockToDust);
     assert_eq!(arrival.via, Some(mediator));
     assert_eq!(arrival.from, emitter);
@@ -639,10 +638,9 @@ fn the_torch_bug_is_an_extra_edge_of_mechanism_three() {
     let (world, emitter, mediator, foreign) = leak_over_a_conductor(torch);
 
     let reach = reach_of(&world, &[emitter]);
-    let arrival = reach
-        .arrival
-        .get(&foreign)
-        .expect("a lit torch strongly powers the block above it, and that block drives the dust on top");
+    let arrival = reach.arrival.get(&foreign).expect(
+        "a lit torch strongly powers the block above it, and that block drives the dust on top",
+    );
     assert_eq!(arrival.mechanism, Mechanism::StrongBlockToDust);
     assert_eq!(arrival.via, Some(mediator));
 
@@ -846,10 +844,7 @@ fn circuits() -> Vec<(String, Netlist)> {
         ("and4".to_string(), build_and4_netlist().0),
         ("full_adder".to_string(), build_full_adder_netlist().0),
         ("segment_a".to_string(), build_single_segment_netlist(0).0),
-        (
-            "seven_segment".to_string(),
-            build_seven_segment_netlist().0,
-        ),
+        ("seven_segment".to_string(), build_seven_segment_netlist().0),
     ];
     for circuit in verilog::CIRCUITS {
         let (gate_level, _labels) = circuit.baked_netlist();
@@ -990,8 +985,7 @@ fn sweep_report() -> String {
                     continue;
                 };
                 let torch = Position::new(x, y, z);
-                if let Some(support) =
-                    torch_support_position(realisation.world.get(x, y, z), torch)
+                if let Some(support) = torch_support_position(realisation.world.get(x, y, z), torch)
                 {
                     supports.insert((support.x, support.y, support.z), gate);
                 }
@@ -1119,17 +1113,14 @@ fn regenerate_the_extras_record() {
 /// the ones whose cleanliness is worth an assertion of its own.
 #[test]
 fn and4_realises_no_extra_edge_on_either_path() {
-    for (name, netlist) in [
-        ("and4".to_string(), build_and4_netlist().0),
-        {
-            let circuit = verilog::find("verilog:and4").expect("the catalog has verilog:and4");
-            let (gate_level, _labels) = circuit.baked_netlist();
-            (
-                circuit.name.to_string(),
-                lower(&gate_level).expect("verilog:and4 must lower"),
-            )
-        },
-    ] {
+    for (name, netlist) in [("and4".to_string(), build_and4_netlist().0), {
+        let circuit = verilog::find("verilog:and4").expect("the catalog has verilog:and4");
+        let (gate_level, _labels) = circuit.baked_netlist();
+        (
+            circuit.name.to_string(),
+            lower(&gate_level).expect("verilog:and4 must lower"),
+        )
+    }] {
         for path in [Path::Relaxation, Path::Legacy] {
             let realisation = realise(&netlist, path)
                 .unwrap_or_else(|| panic!("{name} builds on both paths, including {:?}", path));
@@ -1529,11 +1520,12 @@ fn no_extra_edge_is_carried_by_the_cell_above_a_lever_or_a_torch() {
         crate::redstone::world::block::Facing::North,
     );
     let mut lost_coverage = Vec::new();
-    match planner::plan_from_netlist_within(&netlist, &placements, planner::RIP_UP_ROUNDS)
-        .and_then(|candidate| {
+    match planner::plan_from_netlist_within(&netlist, &placements, planner::RIP_UP_ROUNDS).and_then(
+        |candidate| {
             let size = planner::candidate_world_size(&candidate);
             planner::verify_and_expose(&candidate, &netlist, size)
-        }) {
+        },
+    ) {
         Ok(verified) => {
             let pinned = Realisation {
                 world: verified.realised.world,
@@ -1687,10 +1679,14 @@ fn review_dump_the_realised_graph_sweep() {
     for line in &lines {
         eprintln!("{line}");
     }
-    eprintln!("REVIEW TOTAL extra edges = {edges}, foreign reads = {reads} (record baseline: 41 / 2)");
+    eprintln!(
+        "REVIEW TOTAL extra edges = {edges}, foreign reads = {reads} (record baseline: 41 / 2)"
+    );
     if let Ok(path) = std::env::var("REDA_REVIEW_SWEEP") {
         let mut body = lines.join("\n");
-        body.push_str(&format!("\n\nTOTAL {edges} extra edge(s), {reads} foreign read(s)\n"));
+        body.push_str(&format!(
+            "\n\nTOTAL {edges} extra edge(s), {reads} foreign read(s)\n"
+        ));
         std::fs::write(&path, body).expect("scratch path must be writable");
         eprintln!("wrote {path}");
     }

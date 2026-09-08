@@ -665,7 +665,11 @@ impl Solver {
             }
             if self.assign[variable] == UNDEF {
                 let literal = variable as i32 + 1;
-                return Some(if self.phase[variable] { literal } else { -literal });
+                return Some(if self.phase[variable] {
+                    literal
+                } else {
+                    -literal
+                });
             }
         }
         None
@@ -688,8 +692,11 @@ impl Solver {
         }
         removable.sort_unstable();
         let drop_count = removable.len() / 2;
-        let doomed: BTreeSet<usize> =
-            removable.into_iter().take(drop_count).map(|(_, index)| index).collect();
+        let doomed: BTreeSet<usize> = removable
+            .into_iter()
+            .take(drop_count)
+            .map(|(_, index)| index)
+            .collect();
         if doomed.is_empty() {
             return;
         }
@@ -811,8 +818,9 @@ impl Solver {
                     }
                     match self.pick() {
                         None => {
-                            let model =
-                                (0..self.vars).map(|variable| self.assign[variable] == 1).collect();
+                            let model = (0..self.vars)
+                                .map(|variable| self.assign[variable] == 1)
+                                .collect();
                             return Outcome::Sat(model);
                         }
                         Some(literal) => {
@@ -926,7 +934,10 @@ mod tests {
         let model = outcome.model().expect("five into five fits").to_vec();
         for (pigeon, holes_for_it) in place.iter().enumerate() {
             assert_eq!(
-                holes_for_it.iter().filter(|&&slot| value(&model, slot)).count(),
+                holes_for_it
+                    .iter()
+                    .filter(|&&slot| value(&model, slot))
+                    .count(),
                 1,
                 "pigeon {pigeon} takes exactly one hole"
             );
@@ -946,7 +957,10 @@ mod tests {
             cnf.add([literals[chosen]], group);
             let outcome = cnf.solve(100_000);
             let model = outcome.model().expect("one is allowed").to_vec();
-            assert_eq!(literals.iter().filter(|&&slot| value(&model, slot)).count(), 1);
+            assert_eq!(
+                literals.iter().filter(|&&slot| value(&model, slot)).count(),
+                1
+            );
         }
         let mut cnf = Cnf::new();
         let group = cnf.group("amo");
@@ -1059,25 +1073,37 @@ mod tests {
             });
             match cnf.solve(10_000_000) {
                 Outcome::Sat(model) => {
-                    assert!(expected, "solver said SAT where exhaustive search said UNSAT");
+                    assert!(
+                        expected,
+                        "solver said SAT where exhaustive search said UNSAT"
+                    );
                     for clause in &raw {
                         assert!(
-                            clause.iter().any(|&literal| {
-                                value(&model, literal.abs()) == (literal > 0)
-                            }),
+                            clause
+                                .iter()
+                                .any(|&literal| { value(&model, literal.abs()) == (literal > 0) }),
                             "the model does not satisfy {clause:?}"
                         );
                     }
                     sat += 1;
                 }
                 Outcome::Unsat => {
-                    assert!(!expected, "solver said UNSAT where exhaustive search said SAT");
+                    assert!(
+                        !expected,
+                        "solver said UNSAT where exhaustive search said SAT"
+                    );
                     unsat += 1;
                 }
                 Outcome::Unknown => panic!("ten million conflicts is not a budget problem here"),
             }
         }
-        assert!(sat > 20, "the generator produced too few satisfiable instances: {sat}");
-        assert!(unsat > 20, "the generator produced too few unsatisfiable instances: {unsat}");
+        assert!(
+            sat > 20,
+            "the generator produced too few satisfiable instances: {sat}"
+        );
+        assert!(
+            unsat > 20,
+            "the generator produced too few unsatisfiable instances: {unsat}"
+        );
     }
 }

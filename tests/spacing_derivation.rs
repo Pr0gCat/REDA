@@ -170,7 +170,12 @@ fn a_repeater_terminated_socket_does_not_cross_talk_even_when_a_foreign_net_touc
     let output_probe = (3, 1, 3);
     world.set(lever_a.0, lever_a.1, lever_a.2, raw_lever(false));
     floor_under(&mut world, repeater_pos.0, repeater_pos.1, repeater_pos.2);
-    world.set(repeater_pos.0, repeater_pos.1, repeater_pos.2, raw_repeater(Facing::East));
+    world.set(
+        repeater_pos.0,
+        repeater_pos.1,
+        repeater_pos.2,
+        raw_repeater(Facing::East),
+    );
     floor_under(&mut world, output_probe.0, output_probe.1, output_probe.2);
     world.set(output_probe.0, output_probe.1, output_probe.2, dust());
 
@@ -187,7 +192,10 @@ fn a_repeater_terminated_socket_does_not_cross_talk_even_when_a_foreign_net_touc
     let mut simulator = Simulator::new(world);
     simulator.run_until_stable(MAX_TICKS).expect("must settle");
 
-    let output_power = simulator.world().get(output_probe.0, output_probe.1, output_probe.2).power;
+    let output_power = simulator
+        .world()
+        .get(output_probe.0, output_probe.1, output_probe.2)
+        .power;
     assert_eq!(
         output_power, 0,
         "lever a is off and lever b is fully on, touching the repeater's own side -- a nonzero \
@@ -199,10 +207,21 @@ fn a_repeater_terminated_socket_does_not_cross_talk_even_when_a_foreign_net_touc
     // Confirm the rig actually works (net a's own signal still gets through
     // once it is genuinely driven), so the assertion above is "isolated",
     // not "broken".
-    let mut on_state = simulator.world().get(lever_a.0, lever_a.1, lever_a.2).clone();
+    let mut on_state = simulator
+        .world()
+        .get(lever_a.0, lever_a.1, lever_a.2)
+        .clone();
     on_state.lit = true;
-    simulator.world_mut().set(lever_a.0, lever_a.1, lever_a.2, on_state);
+    simulator
+        .world_mut()
+        .set(lever_a.0, lever_a.1, lever_a.2, on_state);
     simulator.run_until_stable(MAX_TICKS).expect("must settle");
-    let output_power = simulator.world().get(output_probe.0, output_probe.1, output_probe.2).power;
-    assert!(output_power > 0, "net a's own signal must still reach past its own repeater once driven");
+    let output_power = simulator
+        .world()
+        .get(output_probe.0, output_probe.1, output_probe.2)
+        .power;
+    assert!(
+        output_power > 0,
+        "net a's own signal must still reach past its own repeater once driven"
+    );
 }

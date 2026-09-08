@@ -27,13 +27,15 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Instant;
 
-use reda::circuits::seven_segment::{build_seven_segment_netlist, INPUT_NAMES, SEGMENT_NAMES, TRUTH_TABLE};
+use reda::circuits::seven_segment::{
+    build_seven_segment_netlist, INPUT_NAMES, SEGMENT_NAMES, TRUTH_TABLE,
+};
 use reda::compile::{compile, CompiledCircuit, Netlist, PlannerKind};
 use reda::formats::litematic;
 use reda::redstone::simulator::Simulator;
 use reda::timing::{
-    game_ticks_to_redstone_ticks, game_ticks_to_seconds, observations_to_result, summarize_worst_case,
-    watch_all_nets, TransitionResult,
+    game_ticks_to_redstone_ticks, game_ticks_to_seconds, observations_to_result,
+    summarize_worst_case, watch_all_nets, TransitionResult,
 };
 
 /// 期望的真值表，展開成全部 16 個輸入組合（10-15 全熄滅），方便測試逐項比對。
@@ -50,8 +52,13 @@ fn expected_segments(value: u8) -> [bool; 7] {
 // ---------------------------------------------------------------------
 
 /// 依照網表的拓樸順序，直接在布林值上算出每個訊號的值。
-fn evaluate_netlist(netlist: &Netlist, input_values: &HashMap<&str, bool>) -> HashMap<String, bool> {
-    let order = netlist.topological_order().expect("netlist must be acyclic");
+fn evaluate_netlist(
+    netlist: &Netlist,
+    input_values: &HashMap<&str, bool>,
+) -> HashMap<String, bool> {
+    let order = netlist
+        .topological_order()
+        .expect("netlist must be acyclic");
     let mut values: HashMap<String, bool> = HashMap::new();
     for (&name, &value) in input_values {
         values.insert(name.to_string(), value);
@@ -59,9 +66,12 @@ fn evaluate_netlist(netlist: &Netlist, input_values: &HashMap<&str, bool>) -> Ha
     for &gate_index in &order {
         let gate = &netlist.gates[gate_index];
         let nor_output = !gate.inputs.iter().any(|input| {
-            *values
-                .get(input.as_str())
-                .unwrap_or_else(|| panic!("signal {input} has no value yet when evaluating {}", gate.output))
+            *values.get(input.as_str()).unwrap_or_else(|| {
+                panic!(
+                    "signal {input} has no value yet when evaluating {}",
+                    gate.output
+                )
+            })
         });
         values.insert(gate.output.clone(), nor_output);
     }
@@ -74,9 +84,17 @@ fn the_netlist_is_logically_correct_before_placement() {
 
     let mut mismatches = Vec::new();
     for value in 0u8..16 {
-        let bits = [(value >> 3) & 1, (value >> 2) & 1, (value >> 1) & 1, value & 1];
-        let input_values: HashMap<&str, bool> =
-            INPUT_NAMES.iter().zip(bits.iter()).map(|(&name, &bit)| (name, bit == 1)).collect();
+        let bits = [
+            (value >> 3) & 1,
+            (value >> 2) & 1,
+            (value >> 1) & 1,
+            value & 1,
+        ];
+        let input_values: HashMap<&str, bool> = INPUT_NAMES
+            .iter()
+            .zip(bits.iter())
+            .map(|(&name, &bit)| (name, bit == 1))
+            .collect();
 
         let values = evaluate_netlist(&netlist, &input_values);
         let expected = expected_segments(value);
@@ -93,7 +111,11 @@ fn the_netlist_is_logically_correct_before_placement() {
         }
     }
 
-    assert!(mismatches.is_empty(), "netlist logic is wrong:\n{}", mismatches.join("\n"));
+    assert!(
+        mismatches.is_empty(),
+        "netlist logic is wrong:\n{}",
+        mismatches.join("\n")
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -103,10 +125,17 @@ fn the_netlist_is_logically_correct_before_placement() {
 const MAX_TICKS: u64 = 2000;
 
 fn set_lever(simulator: &mut Simulator, position: (i32, i32, i32), on: bool) {
-    let mut state = simulator.world().get(position.0, position.1, position.2).clone();
+    let mut state = simulator
+        .world()
+        .get(position.0, position.1, position.2)
+        .clone();
     state.lit = on;
-    simulator.world_mut().set(position.0, position.1, position.2, state);
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle after changing an input");
+    simulator
+        .world_mut()
+        .set(position.0, position.1, position.2, state);
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle after changing an input");
 }
 
 /// Same as `set_lever`, but also records the transition's timing -- the
@@ -121,11 +150,18 @@ fn set_lever_and_record(
     let start_tick = simulator.current_tick();
     set_lever(simulator, position, on);
     let settle_game_ticks = simulator.current_tick() - start_tick;
-    transitions.push(observations_to_result(simulator.observations(), start_tick, settle_game_ticks));
+    transitions.push(observations_to_result(
+        simulator.observations(),
+        start_tick,
+        settle_game_ticks,
+    ));
 }
 
 fn read_output(simulator: &Simulator, position: (i32, i32, i32)) -> bool {
-    simulator.world().get(position.0, position.1, position.2).lit
+    simulator
+        .world()
+        .get(position.0, position.1, position.2)
+        .lit
 }
 
 /// Print the worst case across an instrumented sweep: settle time (game
@@ -224,7 +260,9 @@ fn the_compiled_decoder_matches_its_truth_table() {
         for x in 0..size_x {
             for y in 0..size_y {
                 for z in 0..size_z {
-                    if compiled.world.get(x, y, z).kind != reda::redstone::world::block::BlockKind::Air {
+                    if compiled.world.get(x, y, z).kind
+                        != reda::redstone::world::block::BlockKind::Air
+                    {
                         count += 1;
                     }
                 }
@@ -254,7 +292,9 @@ fn the_compiled_decoder_matches_its_truth_table() {
     // `compile::routing_stats::analyze` afterwards to count the actual
     // measured critical path's repeaters.
     let mut simulator = Simulator::new(compiled.world.clone());
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle before the first reading");
     simulator.attach_observer(watched);
 
     let lever_positions: HashMap<&str, (i32, i32, i32)> = INPUT_NAMES
@@ -263,16 +303,34 @@ fn the_compiled_decoder_matches_its_truth_table() {
         .collect();
     let output_positions: HashMap<&str, (i32, i32, i32)> = SEGMENT_NAMES
         .iter()
-        .map(|&name| (name, *compiled.output_positions.get(&segment_signal[name]).unwrap()))
+        .map(|&name| {
+            (
+                name,
+                *compiled
+                    .output_positions
+                    .get(&segment_signal[name])
+                    .unwrap(),
+            )
+        })
         .collect();
 
     let simulate_start = Instant::now();
     let mut mismatches = Vec::new();
     let mut transitions: Vec<TransitionResult> = Vec::new();
     for value in 0u8..16 {
-        let bits = [(value >> 3) & 1, (value >> 2) & 1, (value >> 1) & 1, value & 1];
+        let bits = [
+            (value >> 3) & 1,
+            (value >> 2) & 1,
+            (value >> 1) & 1,
+            value & 1,
+        ];
         for (&name, &bit) in INPUT_NAMES.iter().zip(bits.iter()) {
-            set_lever_and_record(&mut simulator, lever_positions[name], bit == 1, &mut transitions);
+            set_lever_and_record(
+                &mut simulator,
+                lever_positions[name],
+                bit == 1,
+                &mut transitions,
+            );
         }
 
         let expected = expected_segments(value);
@@ -296,7 +354,10 @@ fn the_compiled_decoder_matches_its_truth_table() {
         mismatches.join("\n")
     );
 
-    let outputs: Vec<String> = SEGMENT_NAMES.iter().map(|&name| segment_signal[name].clone()).collect();
+    let outputs: Vec<String> = SEGMENT_NAMES
+        .iter()
+        .map(|&name| segment_signal[name].clone())
+        .collect();
     report_timing("seven_segment", &netlist, &compiled, &outputs, &transitions);
 }
 
@@ -312,14 +373,19 @@ fn the_compiled_decoder_saves_to_a_litematic() {
     // in-game. Print ours alongside it so the number is comparable.
 
     let mut path = PathBuf::from(
-        std::env::var("CARGO_TARGET_TMPDIR").unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().to_string()),
+        std::env::var("CARGO_TARGET_TMPDIR")
+            .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().to_string()),
     );
     path.push("reda_seven_segment.litematic");
 
     litematic::save(&path, &compiled.world, "seven_segment_decoder").expect("saving must succeed");
     let loaded = litematic::load(&path).expect("loading must succeed");
 
-    assert_eq!(loaded.size(), compiled.world.size(), "loaded world must have the same dimensions");
+    assert_eq!(
+        loaded.size(),
+        compiled.world.size(),
+        "loaded world must have the same dimensions"
+    );
 
     let mut non_air_blocks = 0usize;
     for x in 0..size_x {
@@ -327,9 +393,18 @@ fn the_compiled_decoder_saves_to_a_litematic() {
             for z in 0..size_z {
                 let original = compiled.world.get(x, y, z);
                 let round_tripped = loaded.get(x, y, z);
-                assert_eq!(original.kind, round_tripped.kind, "block kind mismatch at ({x},{y},{z})");
-                assert_eq!(original.name, round_tripped.name, "block name mismatch at ({x},{y},{z})");
-                assert_eq!(original.facing, round_tripped.facing, "facing mismatch at ({x},{y},{z})");
+                assert_eq!(
+                    original.kind, round_tripped.kind,
+                    "block kind mismatch at ({x},{y},{z})"
+                );
+                assert_eq!(
+                    original.name, round_tripped.name,
+                    "block name mismatch at ({x},{y},{z})"
+                );
+                assert_eq!(
+                    original.facing, round_tripped.facing,
+                    "facing mismatch at ({x},{y},{z})"
+                );
                 if original.kind != reda::redstone::world::block::BlockKind::Air {
                     non_air_blocks += 1;
                 }

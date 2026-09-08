@@ -6,9 +6,9 @@
 //!
 //! 原版用 game tick 計數，1 個紅石刻 = 2 個 game tick。
 
+use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::collections::HashSet;
-use std::cmp::Ordering;
 
 use serde::Serialize;
 
@@ -158,11 +158,14 @@ impl TickQueue {
         // 「下一次 advance 就會發生」，跟 delay 1 落在同一格 -- see
         // `MIN_SCHEDULE_DELAY_GAME_TICKS`.
         let at_game_tick = self.current_tick + delay_game_ticks.max(MIN_SCHEDULE_DELAY_GAME_TICKS);
-        self.pending.entry(at_game_tick).or_default().push(ScheduledTick {
-            position,
-            at_game_tick,
-            priority,
-        });
+        self.pending
+            .entry(at_game_tick)
+            .or_default()
+            .push(ScheduledTick {
+                position,
+                at_game_tick,
+                priority,
+            });
         self.pending_count += 1;
         true
     }

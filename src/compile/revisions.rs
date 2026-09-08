@@ -415,9 +415,7 @@ mod tests {
                 ),
                 ComponentSupportRegistration::unsupported(SimulatorComponentKind::Observer),
                 ComponentSupportRegistration::unsupported(SimulatorComponentKind::Target),
-                ComponentSupportRegistration::unsupported(
-                    SimulatorComponentKind::DaylightDetector,
-                ),
+                ComponentSupportRegistration::unsupported(SimulatorComponentKind::DaylightDetector,),
                 ComponentSupportRegistration::supported(SimulatorComponentKind::Other),
             ]
         );
@@ -506,11 +504,19 @@ mod tests {
 
         let mut changed = descriptor.clone();
         changed.components[0].support = ComponentSupport::Unsupported;
-        assert_ne!(original, descriptor_fingerprint(&changed), "component support");
+        assert_ne!(
+            original,
+            descriptor_fingerprint(&changed),
+            "component support"
+        );
 
         let mut changed = descriptor.clone();
         changed.delays.torch_game_ticks += 1;
-        assert_ne!(original, descriptor_fingerprint(&changed), "component delays");
+        assert_ne!(
+            original,
+            descriptor_fingerprint(&changed),
+            "component delays"
+        );
 
         let mut changed = descriptor.clone();
         changed.burnout.change_limit += 1;
@@ -518,11 +524,19 @@ mod tests {
 
         let mut changed = descriptor.clone();
         changed.repeater_priority_rules[0].priority = TickPriority::Normal;
-        assert_ne!(original, descriptor_fingerprint(&changed), "repeater priority mapping");
+        assert_ne!(
+            original,
+            descriptor_fingerprint(&changed),
+            "repeater priority mapping"
+        );
 
         let mut changed = descriptor.clone();
         changed.comparator_priority_rules[0].priority = TickPriority::Normal;
-        assert_ne!(original, descriptor_fingerprint(&changed), "comparator priority mapping");
+        assert_ne!(
+            original,
+            descriptor_fingerprint(&changed),
+            "comparator priority mapping"
+        );
 
         let mut changed = descriptor.clone();
         changed.tick_order.semantic_version += 1;
@@ -530,11 +544,19 @@ mod tests {
 
         let mut changed = descriptor.clone();
         changed.propagation.semantic_version += 1;
-        assert_ne!(original, descriptor_fingerprint(&changed), "propagation rules");
+        assert_ne!(
+            original,
+            descriptor_fingerprint(&changed),
+            "propagation rules"
+        );
 
         let mut changed = descriptor;
         changed.wire_observation.semantic_version += 1;
-        assert_ne!(original, descriptor_fingerprint(&changed), "wire observation");
+        assert_ne!(
+            original,
+            descriptor_fingerprint(&changed),
+            "wire observation"
+        );
     }
 
     #[test]

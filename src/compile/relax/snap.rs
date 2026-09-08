@@ -74,7 +74,11 @@ pub fn snap(placement: &ContinuousPlacement) -> Result<Vec<SnappedNode>, RelaxEr
     if !placement.converged {
         let required = required_separations(&placement.graph);
         let worst = worst_violation(&placement.graph, &required).unwrap_or(
-            crate::compile::relax::Violation { left: 0, right: 0, shortfall: 0.0 },
+            crate::compile::relax::Violation {
+                left: 0,
+                right: 0,
+                shortfall: 0.0,
+            },
         );
         return Err(RelaxError::DidNotConverge {
             iterations: placement.iterations,
@@ -259,7 +263,11 @@ mod tests {
         let netlist = isolated_merge();
         let graph = expand(&netlist, &Library::default_library()).expect("expands");
         let start: Vec<Anchor> = (0..netlist.gates.len() + netlist.inputs.len())
-            .map(|index| Anchor { x: index as i32 * 20, y: 1, z: index as i32 * 16 })
+            .map(|index| Anchor {
+                x: index as i32 * 20,
+                y: 1,
+                z: index as i32 * 16,
+            })
             .collect();
 
         let placement = relax(
@@ -280,11 +288,19 @@ mod tests {
             8,
             "the isolated branch's welded repeater is what makes bodies outnumber nodes"
         );
-        assert_eq!(placement.graph.anchor_body.len(), 7, "five gates and two inputs");
+        assert_eq!(
+            placement.graph.anchor_body.len(),
+            7,
+            "five gates and two inputs"
+        );
 
         let snapped = snap(&placement).expect("a converged placement rounds");
 
-        assert_eq!(snapped.len(), 7, "one answer per candidate node, not per body");
+        assert_eq!(
+            snapped.len(),
+            7,
+            "one answer per candidate node, not per body"
+        );
         for (index, node) in snapped.iter().enumerate() {
             assert_eq!(node.node, index, "answers are not in candidate order");
             let anchor = &placement.graph.bodies[placement.graph.anchor_body[index]];
@@ -325,14 +341,25 @@ mod tests {
         let netlist = chain();
         let graph = expand(&netlist, &Library::default_library()).expect("expands");
         let start: Vec<Anchor> = (0..3)
-            .map(|index| Anchor { x: index * 20, y: 1, z: index * 16 })
+            .map(|index| Anchor {
+                x: index * 20,
+                y: 1,
+                z: index * 16,
+            })
             .collect();
         let pinned_at = Anchor { x: 37, y: 1, z: 41 };
         let mut placements = PortPlacements::default();
         placements.pin("a", pinned_at, crate::redstone::world::block::Facing::South);
 
-        let placement = relax(&netlist, &graph, &start, &placements, Axes::IN_PLANE, RelaxEffort::default())
-            .expect("relaxes");
+        let placement = relax(
+            &netlist,
+            &graph,
+            &start,
+            &placements,
+            Axes::IN_PLANE,
+            RelaxEffort::default(),
+        )
+        .expect("relaxes");
         let snapped = snap(&placement).expect("rounds");
 
         assert_eq!(snapped[2].anchor, pinned_at, "input `a` was pinned");
@@ -428,7 +455,10 @@ mod tests {
         .expect("builds");
 
         let required = required_separations(&built);
-        assert_eq!(required[0], 3.75, "`m` is the degree-three body this fixture is for");
+        assert_eq!(
+            required[0], 3.75,
+            "`m` is the degree-three body this fixture is for"
+        );
         let gap = required[0].max(required[1]) + 2.0;
         built.bodies[0].position = [0.5, 1.0, 0.5];
         built.bodies[1].position = [0.5 + gap, 1.0, 0.5];
@@ -444,19 +474,30 @@ mod tests {
         let a_hair: Vec<f64> = required.iter().map(|need| need + 2.0 * SETTLED).collect();
         let pinched = worst_violation(&built, &a_hair)
             .expect("and at the requirement with nothing to spare, or it tests nothing");
-        assert_eq!((pinched.left, pinched.right), (0, 1), "the wrong pair is the tight one");
+        assert_eq!(
+            (pinched.left, pinched.right),
+            (0, 1),
+            "the wrong pair is the tight one"
+        );
 
         let west = built.bodies[0].position[0];
         let east = built.bodies[1].position[0];
         assert!(west.round() > west, "the west body has to round up");
-        assert!(east.round() < east, "and the east body down, or they do not approach at all");
+        assert!(
+            east.round() < east,
+            "and the east body down, or they do not approach at all"
+        );
         assert_eq!(
             (east - west) - (east.round() - west.round()),
             0.75,
             "the pair has to close by the whole fraction its requirement carries"
         );
 
-        let placement = ContinuousPlacement { graph: built, converged: true, iterations: 1 };
+        let placement = ContinuousPlacement {
+            graph: built,
+            converged: true,
+            iterations: 1,
+        };
         snap(&placement).expect("what the projection guarantees has to survive rounding");
     }
 
@@ -554,9 +595,15 @@ mod tests {
         built.bodies[2].position = [0.0, 1.0, 60.0];
         built.bodies[3].position = [0.0, 1.0, 120.0];
 
-        let placement = ContinuousPlacement { graph: built, converged: true, iterations: 1 };
+        let placement = ContinuousPlacement {
+            graph: built,
+            converged: true,
+            iterations: 1,
+        };
         let error = snap(&placement).expect_err("this one is genuinely too tight");
-        assert!(matches!(error, RelaxError::SurvivedSnap { .. }), "got {error}");
+        assert!(
+            matches!(error, RelaxError::SurvivedSnap { .. }),
+            "got {error}"
+        );
     }
 }
-

@@ -61,7 +61,11 @@ pub enum HierarchyError {
     #[error("top module `{0}` is not in the design")]
     UnknownTop(String),
     #[error("constant on `{instance}.{port}` cannot be folded into a {kind:?} gate")]
-    UnfoldableConstant { instance: String, port: String, kind: GateKind },
+    UnfoldableConstant {
+        instance: String,
+        port: String,
+        kind: GateKind,
+    },
     #[error(
         "instance `{instance}` still binds `{port}` to a constant; call specialise_constants \
          before flatten"
@@ -160,10 +164,13 @@ impl HierarchicalNetlist {
             }
             marks.insert(name, Mark::Open);
             stack.push(name.to_string());
-            let module = design.modules.get(name).ok_or_else(|| HierarchyError::UnknownModule {
-                instance: String::new(),
-                module: name.to_string(),
-            })?;
+            let module = design
+                .modules
+                .get(name)
+                .ok_or_else(|| HierarchyError::UnknownModule {
+                    instance: String::new(),
+                    module: name.to_string(),
+                })?;
             for instance in &module.instances {
                 visit(design, &instance.module, marks, order, stack)?;
             }
@@ -219,7 +226,9 @@ impl HierarchicalNetlist {
                 }
                 let target = &mut rewritten.instances[index];
                 target.module = clone_name;
-                target.ports.retain(|_, binding| matches!(binding, PortBinding::Signal(_)));
+                target
+                    .ports
+                    .retain(|_, binding| matches!(binding, PortBinding::Signal(_)));
             }
             out.modules.insert(parent_name, rewritten);
         }
@@ -250,7 +259,11 @@ impl HierarchicalNetlist {
                 }
             }
         }
-        Netlist { inputs, outputs, gates: module.gates.clone() }
+        Netlist {
+            inputs,
+            outputs,
+            gates: module.gates.clone(),
+        }
     }
 
     /// The flat netlist certification uses, plus the origin of every gate.
@@ -267,7 +280,11 @@ impl HierarchicalNetlist {
         let mut paths = Vec::new();
         self.flatten_into(&self.top, &[], &BTreeMap::new(), &mut gates, &mut paths)?;
         Ok((
-            Netlist { inputs: top.inputs.clone(), outputs: top.outputs.clone(), gates },
+            Netlist {
+                inputs: top.inputs.clone(),
+                outputs: top.outputs.clone(),
+                gates,
+            },
             paths,
         ))
     }
@@ -286,13 +303,21 @@ impl HierarchicalNetlist {
             if let Some(alias) = aliases.get(signal) {
                 return alias.clone();
             }
-            if prefix.is_empty() { signal.to_string() } else { format!("{prefix}.{signal}") }
+            if prefix.is_empty() {
+                signal.to_string()
+            } else {
+                format!("{prefix}.{signal}")
+            }
         };
         // A gate's own name is always path-prefixed, never alias-rewritten:
         // `aliases` is keyed by this module's *port* names, and a gate that
         // happens to be named after one of them is not that port.
         let path_prefixed = |signal: &str| -> String {
-            if prefix.is_empty() { signal.to_string() } else { format!("{prefix}.{signal}") }
+            if prefix.is_empty() {
+                signal.to_string()
+            } else {
+                format!("{prefix}.{signal}")
+            }
         };
         for (index, gate) in module.gates.iter().enumerate() {
             gates.push(Gate {
@@ -301,7 +326,11 @@ impl HierarchicalNetlist {
                 output: rename(&gate.output),
                 kind: gate.kind,
             });
-            paths.push(GatePath { path: path.to_vec(), module: module_name.to_string(), gate: index });
+            paths.push(GatePath {
+                path: path.to_vec(),
+                module: module_name.to_string(),
+                gate: index,
+            });
         }
         for instance in &module.instances {
             let mut child_aliases = BTreeMap::new();
@@ -370,14 +399,19 @@ pub enum LowerHierarchyError {
 /// `design` if it ties any instance port to a constant -- same precondition
 /// `flatten` documents, since flattening the lowered modules is exactly what
 /// this does last.
-pub fn lower_hierarchy(design: &HierarchicalNetlist) -> Result<LoweredHierarchy, LowerHierarchyError> {
+pub fn lower_hierarchy(
+    design: &HierarchicalNetlist,
+) -> Result<LoweredHierarchy, LowerHierarchyError> {
     let order = design.module_order()?;
     let mut modules: BTreeMap<String, Module> = BTreeMap::new();
     for name in &order {
         let original = &design.modules[name];
         let boundary = design.boundary_netlist(name);
-        let lowered = lower_optimised(&boundary)
-            .map_err(|source| LowerHierarchyError::Lowering { module: name.clone(), source })?;
+        let lowered =
+            lower_optimised(&boundary).map_err(|source| LowerHierarchyError::Lowering {
+                module: name.clone(),
+                source,
+            })?;
         modules.insert(
             name.clone(),
             Module {
@@ -388,9 +422,17 @@ pub fn lower_hierarchy(design: &HierarchicalNetlist) -> Result<LoweredHierarchy,
             },
         );
     }
-    let lowered_design = HierarchicalNetlist { top: design.top.clone(), modules };
+    let lowered_design = HierarchicalNetlist {
+        top: design.top.clone(),
+        modules,
+    };
     let (flat, paths) = lowered_design.flatten()?;
-    Ok(LoweredHierarchy { modules: lowered_design.modules, top: lowered_design.top, flat, paths })
+    Ok(LoweredHierarchy {
+        modules: lowered_design.modules,
+        top: lowered_design.top,
+        flat,
+        paths,
+    })
 }
 
 impl LoweredHierarchy {
@@ -399,11 +441,18 @@ impl LoweredHierarchy {
     /// child instances.
     pub fn block_netlist(&self, module: &str) -> Netlist {
         let module = &self.modules[module];
-        Netlist { inputs: module.inputs.clone(), outputs: module.outputs.clone(), gates: module.gates.clone() }
+        Netlist {
+            inputs: module.inputs.clone(),
+            outputs: module.outputs.clone(),
+            gates: module.gates.clone(),
+        }
     }
 
     pub fn as_hierarchical(&self) -> HierarchicalNetlist {
-        HierarchicalNetlist { top: self.top.clone(), modules: self.modules.clone() }
+        HierarchicalNetlist {
+            top: self.top.clone(),
+            modules: self.modules.clone(),
+        }
     }
 }
 
@@ -419,7 +468,9 @@ fn specialise_module(
     instance: &str,
 ) -> Result<Module, HierarchyError> {
     let mut clone = child.clone();
-    clone.inputs.retain(|port| !constants.contains_key(port.as_str()));
+    clone
+        .inputs
+        .retain(|port| !constants.contains_key(port.as_str()));
     for gate in &mut clone.gates {
         let mut inputs = Vec::with_capacity(gate.inputs.len());
         for input in &gate.inputs {
@@ -466,7 +517,11 @@ fn specialise_module(
         for binding in instance.ports.values_mut() {
             if let PortBinding::Signal(signal) = binding {
                 if let Some(&bit) = constants.get(signal.as_str()) {
-                    *binding = if bit { PortBinding::One } else { PortBinding::Zero };
+                    *binding = if bit {
+                        PortBinding::One
+                    } else {
+                        PortBinding::Zero
+                    };
                 }
             }
         }
@@ -484,7 +539,10 @@ fn specialise_module(
 /// as a `Buf` for lowering instead of aliasing the port away.
 fn alias_single_input_ors(module: &mut Module) {
     loop {
-        let Some(index) = module.gates.iter().position(|gate| matches!(gate.kind, GateKind::Or(1)))
+        let Some(index) = module
+            .gates
+            .iter()
+            .position(|gate| matches!(gate.kind, GateKind::Or(1)))
         else {
             break;
         };
@@ -566,7 +624,10 @@ mod tests {
                 ],
             },
         );
-        HierarchicalNetlist { top: "top".into(), modules }
+        HierarchicalNetlist {
+            top: "top".into(),
+            modules,
+        }
     }
 
     #[test]
@@ -580,8 +641,22 @@ mod tests {
         assert_eq!(flat.gates[1].inputs, vec!["mid".to_string()]);
         assert_eq!(flat.gates[1].output, "z".to_string());
         assert_eq!(flat.gates[0].name, "u0.g0");
-        assert_eq!(paths[0], GatePath { path: vec!["u0".into()], module: "inv".into(), gate: 0 });
-        assert_eq!(paths[1], GatePath { path: vec!["u1".into()], module: "inv".into(), gate: 0 });
+        assert_eq!(
+            paths[0],
+            GatePath {
+                path: vec!["u0".into()],
+                module: "inv".into(),
+                gate: 0
+            }
+        );
+        assert_eq!(
+            paths[1],
+            GatePath {
+                path: vec!["u1".into()],
+                module: "inv".into(),
+                gate: 0
+            }
+        );
     }
 
     #[test]
@@ -592,24 +667,45 @@ mod tests {
         design.modules.insert("inv".into(), inv.clone());
         design.top = "inv".into();
         let (flat, paths) = design.flatten().expect("flattens");
-        assert_eq!(flat, Netlist { inputs: inv.inputs, outputs: inv.outputs, gates: inv.gates });
-        assert_eq!(paths, vec![GatePath { path: vec![], module: "inv".into(), gate: 0 }]);
+        assert_eq!(
+            flat,
+            Netlist {
+                inputs: inv.inputs,
+                outputs: inv.outputs,
+                gates: inv.gates
+            }
+        );
+        assert_eq!(
+            paths,
+            vec![GatePath {
+                path: vec![],
+                module: "inv".into(),
+                gate: 0
+            }]
+        );
     }
 
     #[test]
     fn a_module_cycle_is_refused_by_name() {
         let mut design = two_level();
-        design.modules.get_mut("inv").unwrap().instances.push(ModuleInstance {
-            name: "loop".into(),
-            module: "top".into(),
-            ports: BTreeMap::from([
-                ("x".to_string(), PortBinding::Signal("a".into())),
-                ("z".to_string(), PortBinding::Signal("unused".into())),
-            ]),
-        });
+        design
+            .modules
+            .get_mut("inv")
+            .unwrap()
+            .instances
+            .push(ModuleInstance {
+                name: "loop".into(),
+                module: "top".into(),
+                ports: BTreeMap::from([
+                    ("x".to_string(), PortBinding::Signal("a".into())),
+                    ("z".to_string(), PortBinding::Signal("unused".into())),
+                ]),
+            });
         match design.validate() {
             Err(HierarchyError::Cycle { modules }) => {
-                assert!(modules.contains(&"inv".to_string()) && modules.contains(&"top".to_string()))
+                assert!(
+                    modules.contains(&"inv".to_string()) && modules.contains(&"top".to_string())
+                )
             }
             other => panic!("expected a cycle, got {other:?}"),
         }
@@ -624,7 +720,9 @@ mod tests {
             Err(HierarchyError::UnknownModule { ref instance, ref module }) if instance == "u0" && module == "nope"
         ));
         let mut design = two_level();
-        design.modules.get_mut("top").unwrap().instances[1].ports.remove("a");
+        design.modules.get_mut("top").unwrap().instances[1]
+            .ports
+            .remove("a");
         assert!(matches!(
             design.validate(),
             Err(HierarchyError::UnconnectedPort { ref instance, ref port }) if instance == "u1" && port == "a"
@@ -665,7 +763,10 @@ mod tests {
                 instances: vec![instance("u0", "p"), instance("u1", "q")],
             },
         );
-        let design = HierarchicalNetlist { top: "top".into(), modules };
+        let design = HierarchicalNetlist {
+            top: "top".into(),
+            modules,
+        };
         let specialised = design.specialise_constants().expect("specialises");
         assert_eq!(specialised.modules.len(), 3, "or2, or2@b=0 and top");
         let clone = &specialised.modules["or2@b=0"];
@@ -694,8 +795,16 @@ mod tests {
             instances: vec![],
         };
         alias_single_input_ors(&mut module);
-        assert_eq!(module.gates.len(), 1, "the Or(1) alias gate is removed entirely");
-        assert_eq!(module.gates[0].inputs, vec!["a".to_string()], "downstream gate now reads the alias's source");
+        assert_eq!(
+            module.gates.len(),
+            1,
+            "the Or(1) alias gate is removed entirely"
+        );
+        assert_eq!(
+            module.gates[0].inputs,
+            vec!["a".to_string()],
+            "downstream gate now reads the alias's source"
+        );
         assert_eq!(module.gates[0].output, "y".to_string());
     }
 
@@ -733,14 +842,27 @@ mod tests {
                 }],
             },
         );
-        let design = HierarchicalNetlist { top: "top".into(), modules };
+        let design = HierarchicalNetlist {
+            top: "top".into(),
+            modules,
+        };
         let specialised = design.specialise_constants().expect("specialises");
         let clone = &specialised.modules["wire_or@b=0"];
-        assert_eq!(clone.outputs, vec!["y".to_string()], "the declared output port must survive specialisation");
+        assert_eq!(
+            clone.outputs,
+            vec!["y".to_string()],
+            "the declared output port must survive specialisation"
+        );
         assert_eq!(clone.gates, vec![gate("g0", &["a"], "y", GateKind::Buf)]);
-        specialised.validate().expect("the parent's `y` binding must still match a declared port");
+        specialised
+            .validate()
+            .expect("the parent's `y` binding must still match a declared port");
         let (flat, _) = specialised.flatten().expect("flattens");
-        let z_gate = flat.gates.iter().find(|g| g.output == "z").expect("a gate drives z");
+        let z_gate = flat
+            .gates
+            .iter()
+            .find(|g| g.output == "z")
+            .expect("a gate drives z");
         assert_eq!(z_gate.inputs, vec!["x".to_string()]);
         lower_hierarchy(&specialised).expect("the kept gate must be lowerable");
     }
@@ -753,19 +875,31 @@ mod tests {
         top.gates.push(gate("g0", &["z"], "w", GateKind::Nor(1)));
         top.outputs = vec!["w".into()];
         let boundary = design.boundary_netlist("top");
-        assert_eq!(boundary.inputs, vec!["x".to_string(), "mid".to_string(), "z".to_string()]);
-        assert_eq!(boundary.outputs, vec!["w".to_string(), "x".to_string(), "mid".to_string()]);
+        assert_eq!(
+            boundary.inputs,
+            vec!["x".to_string(), "mid".to_string(), "z".to_string()]
+        );
+        assert_eq!(
+            boundary.outputs,
+            vec!["w".to_string(), "x".to_string(), "mid".to_string()]
+        );
         assert_eq!(boundary.gates.len(), 1);
     }
 
     #[test]
     fn module_order_lists_children_before_parents() {
-        assert_eq!(two_level().module_order().unwrap(), vec!["inv".to_string(), "top".to_string()]);
+        assert_eq!(
+            two_level().module_order().unwrap(),
+            vec!["inv".to_string(), "top".to_string()]
+        );
     }
 
     #[test]
     fn instance_prefixes_sanitise_paramod_names() {
-        assert_eq!(instance_prefix(&["a".into(), "$paramod\\fa\\W=4".into()]), "a.__paramod_fa_W_4");
+        assert_eq!(
+            instance_prefix(&["a".into(), "$paramod\\fa\\W=4".into()]),
+            "a.__paramod_fa_W_4"
+        );
     }
 
     /// Regression for review finding "Critical 1": specialising a module
@@ -820,17 +954,26 @@ mod tests {
                 }],
             },
         );
-        let design = HierarchicalNetlist { top: "top".into(), modules };
+        let design = HierarchicalNetlist {
+            top: "top".into(),
+            modules,
+        };
         let specialised = design.specialise_constants().expect("specialises");
 
         // The clone chain: mid@b=0 exists, and its own uleaf binding, having
         // inherited a=0 from the tied-off `b`, was itself specialised into
         // leaf@a=0. Without the fix, `uleaf` in `mid@b=0` keeps a stale
         // `Signal("b")` binding and this second-level clone never appears.
-        let mid_clone = specialised.modules.get("mid@b=0").expect("mid@b=0 clone exists");
+        let mid_clone = specialised
+            .modules
+            .get("mid@b=0")
+            .expect("mid@b=0 clone exists");
         assert_eq!(mid_clone.instances.len(), 1);
         assert_eq!(mid_clone.instances[0].module, "leaf@a=0");
-        assert!(specialised.modules.contains_key("leaf@a=0"), "the re-queued clone was specialised in turn");
+        assert!(
+            specialised.modules.contains_key("leaf@a=0"),
+            "the re-queued clone was specialised in turn"
+        );
 
         // No module anywhere in the result still carries a constant
         // binding: every tie was folded into a specialised module.
@@ -846,7 +989,9 @@ mod tests {
             }
         }
 
-        specialised.flatten().expect("the fully specialised design flattens");
+        specialised
+            .flatten()
+            .expect("the fully specialised design flattens");
     }
 
     /// Regression for review finding "Critical 2": folding away every input
@@ -883,7 +1028,10 @@ mod tests {
                 }],
             },
         );
-        let design = HierarchicalNetlist { top: "top".into(), modules };
+        let design = HierarchicalNetlist {
+            top: "top".into(),
+            modules,
+        };
         match design.specialise_constants() {
             Err(HierarchyError::UnfoldableConstant { instance, .. }) => {
                 assert_eq!(instance, "u0");
@@ -925,13 +1073,20 @@ mod tests {
                 }],
             },
         );
-        let design = HierarchicalNetlist { top: "top".into(), modules };
+        let design = HierarchicalNetlist {
+            top: "top".into(),
+            modules,
+        };
         let (flat, _) = design.flatten().expect("flattens");
         assert_eq!(
             flat.gates[0].name, "u0.a",
             "the gate's own name must be path-prefixed, not aliased to the port binding"
         );
-        assert_eq!(flat.gates[0].inputs, vec!["x".to_string()], "the gate's inputs still alias through the port binding");
+        assert_eq!(
+            flat.gates[0].inputs,
+            vec!["x".to_string()],
+            "the gate's inputs still alias through the port binding"
+        );
     }
 
     /// Regression for review finding "Important 4": `flatten` must enforce
@@ -968,9 +1123,11 @@ mod tests {
         design.modules.insert("inv".into(), inv.clone());
         design.top = "inv".into();
         let lowered = lower_hierarchy(&design).expect("lowers");
-        let expected = crate::compile::lowering::lower_optimised(
-            &Netlist { inputs: inv.inputs, outputs: inv.outputs, gates: inv.gates },
-        )
+        let expected = crate::compile::lowering::lower_optimised(&Netlist {
+            inputs: inv.inputs,
+            outputs: inv.outputs,
+            gates: inv.gates,
+        })
         .expect("lowers");
         assert_eq!(lowered.flat, expected);
     }
@@ -979,14 +1136,30 @@ mod tests {
     fn two_instances_of_one_module_lower_identically() {
         let lowered = lower_hierarchy(&two_level()).expect("lowers");
         let inv = &lowered.modules["inv"];
-        let first: Vec<_> = lowered.paths.iter().enumerate().filter(|(_, p)| p.path == ["u0"]).map(|(i, _)| &lowered.flat.gates[i]).collect();
-        let second: Vec<_> = lowered.paths.iter().enumerate().filter(|(_, p)| p.path == ["u1"]).map(|(i, _)| &lowered.flat.gates[i]).collect();
+        let first: Vec<_> = lowered
+            .paths
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.path == ["u0"])
+            .map(|(i, _)| &lowered.flat.gates[i])
+            .collect();
+        let second: Vec<_> = lowered
+            .paths
+            .iter()
+            .enumerate()
+            .filter(|(_, p)| p.path == ["u1"])
+            .map(|(i, _)| &lowered.flat.gates[i])
+            .collect();
         assert_eq!(first.len(), inv.gates.len());
         assert_eq!(first.len(), second.len());
         for (a, b) in first.iter().zip(&second) {
             assert_eq!(a.kind, b.kind);
         }
-        assert!(lowered.flat.gates.iter().all(|g| matches!(g.kind, GateKind::Nor(_) | GateKind::Or(_))));
+        assert!(lowered
+            .flat
+            .gates
+            .iter()
+            .all(|g| matches!(g.kind, GateKind::Nor(_) | GateKind::Or(_))));
     }
 
     /// A module that just passes one of its own inputs straight to a
@@ -1002,11 +1175,23 @@ mod tests {
         let mut modules = BTreeMap::new();
         modules.insert(
             "pass".to_string(),
-            Module { inputs: vec!["a".into()], outputs: vec!["a".into()], gates: vec![], instances: vec![] },
+            Module {
+                inputs: vec!["a".into()],
+                outputs: vec!["a".into()],
+                gates: vec![],
+                instances: vec![],
+            },
         );
-        let design = HierarchicalNetlist { top: "pass".into(), modules };
+        let design = HierarchicalNetlist {
+            top: "pass".into(),
+            modules,
+        };
         let lowered = lower_hierarchy(&design).expect("a pass-through module lowers");
-        assert!(lowered.flat.gates.iter().all(|g| matches!(g.kind, GateKind::Nor(_) | GateKind::Or(_))));
+        assert!(lowered
+            .flat
+            .gates
+            .iter()
+            .all(|g| matches!(g.kind, GateKind::Nor(_) | GateKind::Or(_))));
 
         let mut for_true = BTreeMap::new();
         for_true.insert("a".to_string(), true);
@@ -1023,13 +1208,18 @@ mod tests {
     /// module boundary, and nothing missing. Also checks the lowered design
     /// still computes the same function as the unlowered one.
     #[test]
-    fn lowering_a_hierarchical_design_is_exactly_the_union_of_lowered_instance_gates_and_preserves_the_function() {
+    fn lowering_a_hierarchical_design_is_exactly_the_union_of_lowered_instance_gates_and_preserves_the_function(
+    ) {
         let design = circuits::ripple_adder(2);
         let (unlowered_flat, _) = design.flatten().expect("the unlowered design flattens");
         let lowered = lower_hierarchy(&design).expect("lowers");
 
         assert!(
-            lowered.flat.gates.iter().all(|g| matches!(g.kind, GateKind::Nor(_) | GateKind::Or(_))),
+            lowered
+                .flat
+                .gates
+                .iter()
+                .all(|g| matches!(g.kind, GateKind::Nor(_) | GateKind::Or(_))),
             "lowering must leave only the two realisable kinds"
         );
 
@@ -1040,8 +1230,9 @@ mod tests {
         // group here would disagree with its module's own kind sequence.
         let mut by_path: BTreeMap<Vec<String>, (String, Vec<GateKind>)> = BTreeMap::new();
         for (gate, path) in lowered.flat.gates.iter().zip(&lowered.paths) {
-            let entry =
-                by_path.entry(path.path.clone()).or_insert_with(|| (path.module.clone(), Vec::new()));
+            let entry = by_path
+                .entry(path.path.clone())
+                .or_insert_with(|| (path.module.clone(), Vec::new()));
             entry.1.push(gate.kind);
         }
         assert!(!by_path.is_empty());
@@ -1055,14 +1246,21 @@ mod tests {
             );
             total += kinds.len();
         }
-        assert_eq!(total, lowered.flat.gates.len(), "every flattened gate must belong to exactly one instance");
+        assert_eq!(
+            total,
+            lowered.flat.gates.len(),
+            "every flattened gate must belong to exactly one instance"
+        );
 
         // The lowering must still compute the same function: enumerate every
         // input assignment and check the lowered netlist agrees with the
         // original, unlowered flattening (both are already Nor/Or-only, so
         // `eval::evaluate` can score them both).
         let top_inputs = design.modules[&design.top].inputs.clone();
-        assert!(top_inputs.len() <= 8, "exhaustive enumeration below assumes a small input count");
+        assert!(
+            top_inputs.len() <= 8,
+            "exhaustive enumeration below assumes a small input count"
+        );
         for mask in 0u32..(1 << top_inputs.len()) {
             let assignment: BTreeMap<String, bool> = top_inputs
                 .iter()
@@ -1106,12 +1304,17 @@ mod tests {
     /// that emits a non-realisable kind other than the low-level, crate-only
     /// `cell`). Kept local: nothing else in this file needs a general-kind
     /// oracle.
-    fn evaluate_any_kind(netlist: &Netlist, assignment: &BTreeMap<String, bool>) -> BTreeMap<String, bool> {
+    fn evaluate_any_kind(
+        netlist: &Netlist,
+        assignment: &BTreeMap<String, bool>,
+    ) -> BTreeMap<String, bool> {
         let mut values: BTreeMap<String, bool> = BTreeMap::new();
         for name in &netlist.inputs {
             values.insert(name.clone(), assignment[name]);
         }
-        let order = netlist.combinational_order().expect("evaluate_any_kind: netlist must be acyclic");
+        let order = netlist
+            .combinational_order()
+            .expect("evaluate_any_kind: netlist must be acyclic");
         for index in order {
             let gate = &netlist.gates[index];
             let inputs: Vec<bool> = gate.inputs.iter().map(|input| values[input]).collect();
@@ -1150,7 +1353,11 @@ mod tests {
         // this fixture actually takes the branch the test targets: the
         // gate producing the declared output `m` is really assigned the
         // negative rail, and `y` has no reason to flip.
-        let boundary = Netlist { inputs: leaf.inputs.clone(), outputs: leaf.outputs.clone(), gates: leaf.gates.clone() };
+        let boundary = Netlist {
+            inputs: leaf.inputs.clone(),
+            outputs: leaf.outputs.clone(),
+            gates: leaf.gates.clone(),
+        };
         let assignment = assign_polarities(&boundary).expect("assigns");
         assert_eq!(
             assignment,
@@ -1176,13 +1383,23 @@ mod tests {
         modules.insert(
             "top".to_string(),
             Module {
-                inputs: vec!["a0".into(), "b0".into(), "c0".into(), "a1".into(), "b1".into(), "c1".into()],
+                inputs: vec![
+                    "a0".into(),
+                    "b0".into(),
+                    "c0".into(),
+                    "a1".into(),
+                    "b1".into(),
+                    "c1".into(),
+                ],
                 outputs: vec!["m0".into(), "y0".into(), "m1".into(), "y1".into()],
                 gates: vec![],
                 instances: vec![instance("u0", "0"), instance("u1", "1")],
             },
         );
-        let design = HierarchicalNetlist { top: "top".into(), modules };
+        let design = HierarchicalNetlist {
+            top: "top".into(),
+            modules,
+        };
 
         let lowered = lower_hierarchy(&design).expect("lowers");
 
@@ -1195,13 +1412,20 @@ mod tests {
             leaf.gates.len(),
             lowered.modules["leaf"].gates.len()
         );
-        assert!(lowered.modules["leaf"].gates.iter().all(|g| matches!(g.kind, GateKind::Nor(_) | GateKind::Or(_))));
+        assert!(lowered.modules["leaf"]
+            .gates
+            .iter()
+            .all(|g| matches!(g.kind, GateKind::Nor(_) | GateKind::Or(_))));
 
         // Two instances of one module -- now lowered under a real polarity
         // decision instead of the trivial all-positive compatibility path --
         // still lower to the identical gate-kind sequence, matched through
         // `GatePath`. Same property as `two_instances_of_one_module_lower_identically`.
-        let leaf_lowered_kinds: Vec<GateKind> = lowered.modules["leaf"].gates.iter().map(|g| g.kind).collect();
+        let leaf_lowered_kinds: Vec<GateKind> = lowered.modules["leaf"]
+            .gates
+            .iter()
+            .map(|g| g.kind)
+            .collect();
         for path in [["u0"], ["u1"]] {
             let kinds: Vec<GateKind> = lowered
                 .paths
@@ -1210,7 +1434,10 @@ mod tests {
                 .filter(|(_, p)| p.path == path)
                 .map(|(i, _)| lowered.flat.gates[i].kind)
                 .collect();
-            assert_eq!(kinds, leaf_lowered_kinds, "instance {path:?} must reproduce the leaf's own lowered gates exactly");
+            assert_eq!(
+                kinds, leaf_lowered_kinds,
+                "instance {path:?} must reproduce the leaf's own lowered gates exactly"
+            );
         }
 
         // The child's declared output really is on the positive rail --
@@ -1220,7 +1447,10 @@ mod tests {
         // truth on every mask where `a & b` is true.
         let (unlowered_flat, _) = design.flatten().expect("the unlowered design flattens");
         let top_inputs = &unlowered_flat.inputs;
-        assert!(top_inputs.len() <= 8, "exhaustive enumeration below assumes a small input count");
+        assert!(
+            top_inputs.len() <= 8,
+            "exhaustive enumeration below assumes a small input count"
+        );
         for mask in 0u32..(1 << top_inputs.len()) {
             let assignment: BTreeMap<String, bool> = top_inputs
                 .iter()

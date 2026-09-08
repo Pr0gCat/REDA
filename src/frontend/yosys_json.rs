@@ -65,7 +65,10 @@ const CELL_PINS: &[(&str, &[&str])] = &[
 ];
 
 fn pins_for(cell_type: &str) -> Option<&'static [&'static str]> {
-    CELL_PINS.iter().find(|&&(name, _)| name == cell_type).map(|&(_, pins)| pins)
+    CELL_PINS
+        .iter()
+        .find(|&&(name, _)| name == cell_type)
+        .map(|&(_, pins)| pins)
 }
 
 /// Yosys calls the output of its combinational simple cells `Y`, but a
@@ -89,7 +92,9 @@ fn unsupported(message: impl Into<String>) -> FrontendError {
 /// `module_from_json`, which must report this *before* it ever goes looking
 /// for a `Y`/`Q` connection that a genuinely unknown cell may not have.
 fn unknown_cell_error(cell_name: &str, cell_type: &str) -> FrontendError {
-    let known: Vec<&str> = topology::known_yosys_cell_types().map(|(name, _)| name).collect();
+    let known: Vec<&str> = topology::known_yosys_cell_types()
+        .map(|(name, _)| name)
+        .collect();
     unsupported(format!(
         "cell `{cell_name}` has type `{cell_type}`, which this project's topology library has no \
          realization for. Supported: {known:?}. (A `$__ZERO`/`$__ONE` drives a hard-wired \
@@ -114,7 +119,9 @@ enum Bit {
 fn parse_bit(value: &Value) -> Result<Bit, FrontendError> {
     match value {
         Value::Number(n) => {
-            let id = n.as_i64().ok_or_else(|| unsupported(format!("net id `{n}` is not an integer")))?;
+            let id = n
+                .as_i64()
+                .ok_or_else(|| unsupported(format!("net id `{n}` is not an integer")))?;
             Ok(Bit::Net(id))
         }
         Value::String(s) => match s.as_str() {
@@ -125,20 +132,28 @@ fn parse_bit(value: &Value) -> Result<Bit, FrontendError> {
                  a real net in redstone"
             ))),
         },
-        other => Err(unsupported(format!("unexpected bit value in yosys JSON: {other}"))),
+        other => Err(unsupported(format!(
+            "unexpected bit value in yosys JSON: {other}"
+        ))),
     }
 }
 
 fn as_object<'a>(value: &'a Value, what: &str) -> Result<&'a Map<String, Value>, FrontendError> {
-    value.as_object().ok_or_else(|| unsupported(format!("expected {what} to be a JSON object")))
+    value
+        .as_object()
+        .ok_or_else(|| unsupported(format!("expected {what} to be a JSON object")))
 }
 
 fn as_array<'a>(value: &'a Value, what: &str) -> Result<&'a Vec<Value>, FrontendError> {
-    value.as_array().ok_or_else(|| unsupported(format!("expected {what} to be a JSON array")))
+    value
+        .as_array()
+        .ok_or_else(|| unsupported(format!("expected {what} to be a JSON array")))
 }
 
 fn as_str<'a>(value: &'a Value, what: &str) -> Result<&'a str, FrontendError> {
-    value.as_str().ok_or_else(|| unsupported(format!("expected {what} to be a JSON string")))
+    value
+        .as_str()
+        .ok_or_else(|| unsupported(format!("expected {what} to be a JSON string")))
 }
 
 /// The single bit on `pin` of a cell's `connections` object. Every Yosys
@@ -146,7 +161,11 @@ fn as_str<'a>(value: &'a Value, what: &str) -> Result<&'a str, FrontendError> {
 /// `$_*_` family -- so a pin that is not exactly 1 bit wide means Yosys
 /// emitted something this frontend does not expect (a word-level `$and`,
 /// say, which means `techmap` did not run).
-fn single_bit<'a>(connections: &'a Map<String, Value>, pin: &str, cell_name: &str) -> Result<&'a Value, FrontendError> {
+fn single_bit<'a>(
+    connections: &'a Map<String, Value>,
+    pin: &str,
+    cell_name: &str,
+) -> Result<&'a Value, FrontendError> {
     let bits = connections
         .get(pin)
         .ok_or_else(|| unsupported(format!("cell `{cell_name}` has no `{pin}` connection")))?;
@@ -212,10 +231,11 @@ impl<'a> Context<'a> {
             )));
         }
 
-        let cell = self
-            .driver_of
-            .remove(&net_id)
-            .ok_or_else(|| unsupported(format!("net {net_id} is driven by neither a primary input nor a cell")))?;
+        let cell = self.driver_of.remove(&net_id).ok_or_else(|| {
+            unsupported(format!(
+                "net {net_id} is driven by neither a primary input nor a cell"
+            ))
+        })?;
         let name = self.build_cell(&cell)?;
 
         self.in_progress.remove(&net_id);
@@ -235,7 +255,12 @@ impl<'a> Context<'a> {
     /// rejects a constant there by name rather than guessing which
     /// simplification Yosys meant. In practice `opt` has already removed
     /// them; this is the path that says so out loud if it ever has not.
-    fn resolve_input_pin(&mut self, connections: &Map<String, Value>, pin: &str, cell_name: &str) -> Result<Option<String>, FrontendError> {
+    fn resolve_input_pin(
+        &mut self,
+        connections: &Map<String, Value>,
+        pin: &str,
+        cell_name: &str,
+    ) -> Result<Option<String>, FrontendError> {
         let bit = single_bit(connections, pin, cell_name)?;
         match parse_bit(bit)? {
             Bit::Net(id) => Ok(Some(self.resolve(id)?)),
@@ -250,7 +275,11 @@ impl<'a> Context<'a> {
     /// Every pin of `cell`, resolved, in the cell type's own declaration
     /// order. `None` entries are constant-0 pins, left in place so the
     /// caller can decide whether folding one is sound for its kind.
-    fn inputs_of(&mut self, cell: &CellInfo<'a>, pins: &[&str]) -> Result<Vec<Option<String>>, FrontendError> {
+    fn inputs_of(
+        &mut self,
+        cell: &CellInfo<'a>,
+        pins: &[&str],
+    ) -> Result<Vec<Option<String>>, FrontendError> {
         let mut resolved = Vec::with_capacity(pins.len());
         for &pin in pins {
             resolved.push(self.resolve_input_pin(cell.connections, pin, &cell.name)?);
@@ -272,8 +301,12 @@ impl<'a> Context<'a> {
         let Some(kind) = topology::gate_kind_for_yosys_cell(cell.cell_type) else {
             return Err(unknown_cell_error(&cell.name, cell.cell_type));
         };
-        let pins = pins_for(cell.cell_type)
-            .unwrap_or_else(|| panic!("`{}` has a GateKind but no pin names -- CELL_PINS is out of step", cell.cell_type));
+        let pins = pins_for(cell.cell_type).unwrap_or_else(|| {
+            panic!(
+                "`{}` has a GateKind but no pin names -- CELL_PINS is out of step",
+                cell.cell_type
+            )
+        });
         let resolved = self.inputs_of(cell, pins)?;
 
         match kind {
@@ -304,7 +337,10 @@ impl<'a> Context<'a> {
                     // `OR(x) == x` is a bare wire, not a gate of any kind --
                     // this cell's net becomes a plain alias for its one
                     // surviving input rather than a new gate.
-                    1 => Ok(inputs.into_iter().next().expect("checked: exactly one input")),
+                    1 => Ok(inputs
+                        .into_iter()
+                        .next()
+                        .expect("checked: exactly one input")),
                     _ => Ok(self.builder.merge(&inputs)),
                 }
             }
@@ -351,7 +387,9 @@ fn bit_names(port_name: &str, bits: &[Value]) -> Vec<String> {
     if bits.len() == 1 {
         vec![port_name.to_string()]
     } else {
-        (0..bits.len()).map(|i| format!("{port_name}[{i}]")).collect()
+        (0..bits.len())
+            .map(|i| format!("{port_name}[{i}]"))
+            .collect()
     }
 }
 
@@ -359,23 +397,37 @@ fn bit_names(port_name: &str, bits: &[Value]) -> Vec<String> {
 /// `(bit_name, net_id, is_output)`, LSB-first per port -- the shape both the
 /// port-declaration loop and the instance-cell loops need, so this is the
 /// one place that reads a `"ports"` object.
-fn module_port_bits(module_json: &Map<String, Value>, module_name: &str) -> Result<Vec<(String, i64, bool)>, FrontendError> {
+fn module_port_bits(
+    module_json: &Map<String, Value>,
+    module_name: &str,
+) -> Result<Vec<(String, i64, bool)>, FrontendError> {
     let ports = as_object(
-        module_json.get("ports").ok_or_else(|| unsupported(format!("module `{module_name}` has no `ports` key")))?,
+        module_json
+            .get("ports")
+            .ok_or_else(|| unsupported(format!("module `{module_name}` has no `ports` key")))?,
         "`ports`",
     )?;
     let mut out = Vec::new();
     for (port_name, port) in ports {
         let direction = as_str(
-            port.get("direction").ok_or_else(|| unsupported(format!("port `{port_name}` has no `direction`")))?,
+            port.get("direction")
+                .ok_or_else(|| unsupported(format!("port `{port_name}` has no `direction`")))?,
             "port direction",
         )?;
         let is_output = match direction {
             "output" => true,
             "input" => false,
-            other => return Err(unsupported(format!("port `{port_name}` has unsupported direction `{other}`"))),
+            other => {
+                return Err(unsupported(format!(
+                    "port `{port_name}` has unsupported direction `{other}`"
+                )))
+            }
         };
-        let bits = as_array(port.get("bits").ok_or_else(|| unsupported(format!("port `{port_name}` has no `bits`")))?, "port bits")?;
+        let bits = as_array(
+            port.get("bits")
+                .ok_or_else(|| unsupported(format!("port `{port_name}` has no `bits`")))?,
+            "port bits",
+        )?;
         for (name, bit) in bit_names(port_name, bits).into_iter().zip(bits.iter()) {
             let id = match parse_bit(bit)? {
                 Bit::Net(id) => id,
@@ -439,9 +491,16 @@ fn module_from_json(
     module_name: &str,
     is_top: bool,
 ) -> Result<(Module, HashMap<String, String>), FrontendError> {
-    let module_value = modules.get(module_name).unwrap_or_else(|| panic!("module `{module_name}` must be present -- caller iterates modules.keys()"));
+    let module_value = modules.get(module_name).unwrap_or_else(|| {
+        panic!("module `{module_name}` must be present -- caller iterates modules.keys()")
+    });
     let module_json = as_object(module_value, &format!("module `{module_name}`"))?;
-    let cells = as_object(module_json.get("cells").ok_or_else(|| unsupported(format!("module `{module_name}` has no `cells` key")))?, "`cells`")?;
+    let cells = as_object(
+        module_json
+            .get("cells")
+            .ok_or_else(|| unsupported(format!("module `{module_name}` has no `cells` key")))?,
+        "`cells`",
+    )?;
 
     let port_bits = module_port_bits(module_json, module_name)?;
 
@@ -458,7 +517,9 @@ fn module_from_json(
 
     for (name, id, is_output) in &port_bits {
         if *is_output {
-            reserved_output_names.entry(*id).or_insert_with(|| name.clone());
+            reserved_output_names
+                .entry(*id)
+                .or_insert_with(|| name.clone());
             output_bits.push((name.clone(), *id));
         } else {
             signal_of.insert(*id, name.clone());
@@ -477,11 +538,23 @@ fn module_from_json(
     let mut driver_of: HashMap<i64, CellInfo> = HashMap::new();
     let mut instance_cells: Vec<InstanceInfo> = Vec::new();
     for (cell_name, cell) in cells {
-        let cell_type = as_str(cell.get("type").ok_or_else(|| unsupported(format!("cell `{cell_name}` has no `type`")))?, "cell type")?;
-        let connections = as_object(cell.get("connections").ok_or_else(|| unsupported(format!("cell `{cell_name}` has no `connections`")))?, "cell connections")?;
+        let cell_type = as_str(
+            cell.get("type")
+                .ok_or_else(|| unsupported(format!("cell `{cell_name}` has no `type`")))?,
+            "cell type",
+        )?;
+        let connections = as_object(
+            cell.get("connections")
+                .ok_or_else(|| unsupported(format!("cell `{cell_name}` has no `connections`")))?,
+            "cell connections",
+        )?;
 
         if module_names.contains(cell_type) {
-            instance_cells.push(InstanceInfo { cell_name: cell_name.clone(), child_module: cell_type, connections });
+            instance_cells.push(InstanceInfo {
+                cell_name: cell_name.clone(),
+                child_module: cell_type,
+                connections,
+            });
             continue;
         }
         if topology::gate_kind_for_yosys_cell(cell_type).is_none() {
@@ -490,7 +563,14 @@ fn module_from_json(
         let out_bit = single_bit(connections, output_pin_for(cell_type), cell_name)?;
         match parse_bit(out_bit)? {
             Bit::Net(id) => {
-                driver_of.insert(id, CellInfo { name: cell_name.clone(), cell_type, connections });
+                driver_of.insert(
+                    id,
+                    CellInfo {
+                        name: cell_name.clone(),
+                        cell_type,
+                        connections,
+                    },
+                );
             }
             Bit::Zero | Bit::One => {
                 return Err(unsupported(format!("cell `{cell_name}` ({cell_type}) has a constant output, which is never something ABC needs written to a real net")));
@@ -504,15 +584,26 @@ fn module_from_json(
     // otherwise unresolvable by the parent's own gates.
     let mut instance_outputs: Vec<(String, String, String)> = Vec::new(); // (cell_name, child_port_bit, signal)
     for instance in &instance_cells {
-        let child_value = modules.get(instance.child_module).ok_or_else(|| unsupported(format!("instance `{}` names unknown module `{}`", instance.cell_name, instance.child_module)))?;
+        let child_value = modules.get(instance.child_module).ok_or_else(|| {
+            unsupported(format!(
+                "instance `{}` names unknown module `{}`",
+                instance.cell_name, instance.child_module
+            ))
+        })?;
         let child_json = as_object(child_value, &format!("module `{}`", instance.child_module))?;
         let child_ports = as_object(
-            child_json.get("ports").ok_or_else(|| unsupported(format!("module `{}` has no `ports` key", instance.child_module)))?,
+            child_json.get("ports").ok_or_else(|| {
+                unsupported(format!(
+                    "module `{}` has no `ports` key",
+                    instance.child_module
+                ))
+            })?,
             "`ports`",
         )?;
         for (port_name, port) in child_ports {
             let direction = as_str(
-                port.get("direction").ok_or_else(|| unsupported(format!("port `{port_name}` has no `direction`")))?,
+                port.get("direction")
+                    .ok_or_else(|| unsupported(format!("port `{port_name}` has no `direction`")))?,
                 "port direction",
             )?;
             if direction != "output" {
@@ -523,12 +614,23 @@ fn module_from_json(
             // guessing a value for it, so `HierarchicalNetlist::validate`'s
             // `UnconnectedPort` catches it downstream instead of this
             // reader silently tying it to anything.
-            let Some(conn) = instance.connections.get(port_name.as_str()) else { continue };
-            let conn_bits = as_array(conn, &format!("instance `{}` pin `{port_name}`", instance.cell_name))?;
-            for (bit_name, bit) in bit_names(port_name, conn_bits).into_iter().zip(conn_bits.iter()) {
+            let Some(conn) = instance.connections.get(port_name.as_str()) else {
+                continue;
+            };
+            let conn_bits = as_array(
+                conn,
+                &format!("instance `{}` pin `{port_name}`", instance.cell_name),
+            )?;
+            for (bit_name, bit) in bit_names(port_name, conn_bits)
+                .into_iter()
+                .zip(conn_bits.iter())
+            {
                 let signal = match parse_bit(bit)? {
                     Bit::Net(id) => {
-                        let signal = reserved_output_names.get(&id).cloned().unwrap_or_else(|| format!("{}__{bit_name}", instance.cell_name));
+                        let signal = reserved_output_names
+                            .get(&id)
+                            .cloned()
+                            .unwrap_or_else(|| format!("{}__{bit_name}", instance.cell_name));
                         signal_of.insert(id, signal.clone());
                         signal
                     }
@@ -629,23 +731,39 @@ fn module_from_json(
     // first split out above.
     let mut instance_inputs: Vec<(String, String, PortBinding)> = Vec::new();
     for instance in &instance_cells {
-        let child_value = modules.get(instance.child_module).expect("instance module presence already checked above");
+        let child_value = modules
+            .get(instance.child_module)
+            .expect("instance module presence already checked above");
         let child_json = as_object(child_value, &format!("module `{}`", instance.child_module))?;
         let child_ports = as_object(
-            child_json.get("ports").ok_or_else(|| unsupported(format!("module `{}` has no `ports` key", instance.child_module)))?,
+            child_json.get("ports").ok_or_else(|| {
+                unsupported(format!(
+                    "module `{}` has no `ports` key",
+                    instance.child_module
+                ))
+            })?,
             "`ports`",
         )?;
         for (port_name, port) in child_ports {
             let direction = as_str(
-                port.get("direction").ok_or_else(|| unsupported(format!("port `{port_name}` has no `direction`")))?,
+                port.get("direction")
+                    .ok_or_else(|| unsupported(format!("port `{port_name}` has no `direction`")))?,
                 "port direction",
             )?;
             if direction != "input" {
                 continue;
             }
-            let Some(conn) = instance.connections.get(port_name.as_str()) else { continue };
-            let conn_bits = as_array(conn, &format!("instance `{}` pin `{port_name}`", instance.cell_name))?;
-            for (bit_name, bit) in bit_names(port_name, conn_bits).into_iter().zip(conn_bits.iter()) {
+            let Some(conn) = instance.connections.get(port_name.as_str()) else {
+                continue;
+            };
+            let conn_bits = as_array(
+                conn,
+                &format!("instance `{}` pin `{port_name}`", instance.cell_name),
+            )?;
+            for (bit_name, bit) in bit_names(port_name, conn_bits)
+                .into_iter()
+                .zip(conn_bits.iter())
+            {
                 let binding = match parse_bit(bit)? {
                     Bit::Net(id) => PortBinding::Signal(ctx.resolve(id)?),
                     Bit::Zero => PortBinding::Zero,
@@ -663,7 +781,10 @@ fn module_from_json(
         // signals a real gap in this reader's assumptions rather than
         // ordinary leftover synthesis debris.
         let leftover: Vec<&str> = ctx.driver_of.values().map(|c| c.name.as_str()).collect();
-        return Err(unsupported(format!("{} cell(s) are never used to drive any output: {leftover:?}", leftover.len())));
+        return Err(unsupported(format!(
+            "{} cell(s) are never used to drive any output: {leftover:?}",
+            leftover.len()
+        )));
     }
 
     let mut gates = ctx.builder.into_gates();
@@ -696,10 +817,22 @@ fn module_from_json(
                 ports.insert(port_bit.clone(), binding.clone());
             }
         }
-        instances.push(ModuleInstance { name: instance.cell_name.clone(), module: instance.child_module.to_string(), ports });
+        instances.push(ModuleInstance {
+            name: instance.cell_name.clone(),
+            module: instance.child_module.to_string(),
+            ports,
+        });
     }
 
-    Ok((Module { inputs, outputs, gates, instances }, port_map))
+    Ok((
+        Module {
+            inputs,
+            outputs,
+            gates,
+            instances,
+        },
+        port_map,
+    ))
 }
 
 /// Read every module out of Yosys's JSON (as produced by `write_json` after
@@ -710,11 +843,20 @@ fn module_from_json(
 /// Returns the design together with a lookup from each of `top_module`'s own
 /// declared output port names to that output's actual signal name -- the
 /// same shape [`netlist_from_json`] has always returned.
-pub(super) fn hierarchical_netlist_from_json(json: &Value, top_module: &str) -> Result<(HierarchicalNetlist, HashMap<String, String>), FrontendError> {
-    let modules_json = as_object(json.get("modules").ok_or_else(|| unsupported("yosys JSON has no `modules` key"))?, "`modules`")?;
+pub(super) fn hierarchical_netlist_from_json(
+    json: &Value,
+    top_module: &str,
+) -> Result<(HierarchicalNetlist, HashMap<String, String>), FrontendError> {
+    let modules_json = as_object(
+        json.get("modules")
+            .ok_or_else(|| unsupported("yosys JSON has no `modules` key"))?,
+        "`modules`",
+    )?;
     if !modules_json.contains_key(top_module) {
         let available: Vec<&str> = modules_json.keys().map(String::as_str).collect();
-        return Err(unsupported(format!("yosys JSON has no module named `{top_module}`; found: {available:?}")));
+        return Err(unsupported(format!(
+            "yosys JSON has no module named `{top_module}`; found: {available:?}"
+        )));
     }
 
     let module_names: BTreeSet<String> = modules_json.keys().cloned().collect();
@@ -722,15 +864,21 @@ pub(super) fn hierarchical_netlist_from_json(json: &Value, top_module: &str) -> 
     let mut modules: BTreeMap<String, Module> = BTreeMap::new();
     let mut top_port_map: HashMap<String, String> = HashMap::new();
     for name in &module_names {
-        let (module, port_map) = module_from_json(modules_json, &module_names, name, name == top_module)?;
+        let (module, port_map) =
+            module_from_json(modules_json, &module_names, name, name == top_module)?;
         if name == top_module {
             top_port_map = port_map;
         }
         modules.insert(name.clone(), module);
     }
 
-    let design = HierarchicalNetlist { top: top_module.to_string(), modules };
-    design.validate().map_err(|error| unsupported(error.to_string()))?;
+    let design = HierarchicalNetlist {
+        top: top_module.to_string(),
+        modules,
+    };
+    design
+        .validate()
+        .map_err(|error| unsupported(error.to_string()))?;
     Ok((design, top_port_map))
 }
 
@@ -742,10 +890,17 @@ pub(super) fn hierarchical_netlist_from_json(json: &Value, top_module: &str) -> 
 /// map as before this reader learned to keep hierarchy at all -- see
 /// [`hierarchical_netlist_from_json`]'s and [`module_from_json`]'s own doc
 /// comments for why nothing about that path changed.
-pub(super) fn netlist_from_json(json: &Value, top_module: &str) -> Result<(Netlist, HashMap<String, String>), FrontendError> {
+pub(super) fn netlist_from_json(
+    json: &Value,
+    top_module: &str,
+) -> Result<(Netlist, HashMap<String, String>), FrontendError> {
     let (design, port_map) = hierarchical_netlist_from_json(json, top_module)?;
-    let design = design.specialise_constants().map_err(|error| unsupported(error.to_string()))?;
-    let (flat, _) = design.flatten().map_err(|error| unsupported(error.to_string()))?;
+    let design = design
+        .specialise_constants()
+        .map_err(|error| unsupported(error.to_string()))?;
+    let (flat, _) = design
+        .flatten()
+        .map_err(|error| unsupported(error.to_string()))?;
     Ok((flat, port_map))
 }
 
@@ -777,7 +932,9 @@ fn resolve_output_net(ctx: &mut Context<'_>, net_id: i64) -> Result<String, Fron
         // sharing the same net (fan-out to two output ports).
         return Ok(name);
     }
-    Err(unsupported(format!("output net {net_id} is driven by neither a primary input nor a cell")))
+    Err(unsupported(format!(
+        "output net {net_id} is driven by neither a primary input nor a cell"
+    )))
 }
 
 #[cfg(test)]
@@ -793,10 +950,18 @@ mod tests {
     #[test]
     fn every_known_cell_type_has_pin_names_and_vice_versa() {
         for (cell_type, kind) in topology::known_yosys_cell_types() {
-            let pins = pins_for(cell_type).unwrap_or_else(|| panic!("{cell_type} has no CELL_PINS entry"));
-            assert!(!pins.contains(&"Y"), "{cell_type}: `Y` is the output, not an input pin");
+            let pins =
+                pins_for(cell_type).unwrap_or_else(|| panic!("{cell_type} has no CELL_PINS entry"));
+            assert!(
+                !pins.contains(&"Y"),
+                "{cell_type}: `Y` is the output, not an input pin"
+            );
             if let Some(fixed) = kind.fixed_arity() {
-                assert_eq!(pins.len(), fixed, "{cell_type}: {kind:?} takes {fixed} input(s)");
+                assert_eq!(
+                    pins.len(),
+                    fixed,
+                    "{cell_type}: {kind:?} takes {fixed} input(s)"
+                );
             } else {
                 // `Nor`/`Or` carry a declared arity that constant folding is
                 // free to shrink; the pin list is the *declared* one.
@@ -834,7 +999,8 @@ mod tests {
             }
         });
 
-        let (netlist, port_map) = netlist_from_json(&json, "top").expect("a lone $_BUF_ cell must synthesize");
+        let (netlist, port_map) =
+            netlist_from_json(&json, "top").expect("a lone $_BUF_ cell must synthesize");
 
         assert_eq!(netlist.inputs, vec!["a".to_string()]);
         assert_eq!(netlist.gates.len(), 1, "one Yosys cell is one netlist gate");
@@ -868,11 +1034,15 @@ mod tests {
             }
         });
 
-        let (netlist, output_labels) = netlist_from_json(&json, "top").expect("a $_DFF_P_ must be a supported gate-level cell");
+        let (netlist, output_labels) = netlist_from_json(&json, "top")
+            .expect("a $_DFF_P_ must be a supported gate-level cell");
 
         assert_eq!(netlist.gates.len(), 1);
         assert_eq!(netlist.gates[0].kind, GateKind::DffPosedge);
-        assert_eq!(netlist.gates[0].inputs, vec!["d".to_string(), "clk".to_string()]);
+        assert_eq!(
+            netlist.gates[0].inputs,
+            vec!["d".to_string(), "clk".to_string()]
+        );
         assert_eq!(output_labels["q"], netlist.gates[0].output);
         assert_eq!(crate::compile::lowering::lower(&netlist).unwrap(), netlist);
     }
@@ -899,7 +1069,8 @@ mod tests {
             }
         });
 
-        let (netlist, _) = netlist_from_json(&json, "top").expect("a lone $_MUX_ cell must synthesize");
+        let (netlist, _) =
+            netlist_from_json(&json, "top").expect("a lone $_MUX_ cell must synthesize");
         assert_eq!(netlist.gates.len(), 1);
         assert_eq!(netlist.gates[0].kind, GateKind::Mux);
         assert_eq!(
@@ -931,10 +1102,19 @@ mod tests {
             }
         });
 
-        let (netlist, port_map) = netlist_from_json(&json, "top").expect("NOR with one constant-0 pin must synthesize");
+        let (netlist, port_map) =
+            netlist_from_json(&json, "top").expect("NOR with one constant-0 pin must synthesize");
 
-        assert_eq!(netlist.gates.len(), 1, "folding must not synthesize an extra gate");
-        assert_eq!(netlist.gates[0].inputs, vec!["a".to_string()], "the folded B pin must not appear");
+        assert_eq!(
+            netlist.gates.len(),
+            1,
+            "folding must not synthesize an extra gate"
+        );
+        assert_eq!(
+            netlist.gates[0].inputs,
+            vec!["a".to_string()],
+            "the folded B pin must not appear"
+        );
         assert_eq!(netlist.gates[0].kind, GateKind::Nor(1));
         assert_eq!(port_map["y"], netlist.gates[0].output);
     }
@@ -965,7 +1145,10 @@ mod tests {
             Ok(_) => panic!("a constant pin on an $_AND_ must not be silently folded"),
             Err(error) => error.to_string(),
         };
-        assert!(message.contains("and0"), "error must name the cell: {message}");
+        assert!(
+            message.contains("and0"),
+            "error must name the cell: {message}"
+        );
         assert!(message.contains('B'), "error must name the pin: {message}");
     }
 
@@ -996,8 +1179,14 @@ mod tests {
             Ok(_) => panic!("an unmapped cell type must not silently synthesize"),
             Err(error) => error.to_string(),
         };
-        assert!(message.contains("tbuf0"), "error must name the cell: {message}");
-        assert!(message.contains("$_TBUF_"), "error must name the cell's type: {message}");
+        assert!(
+            message.contains("tbuf0"),
+            "error must name the cell: {message}"
+        );
+        assert!(
+            message.contains("$_TBUF_"),
+            "error must name the cell's type: {message}"
+        );
     }
 
     fn inv_module(input_bit: u64, output_bit: u64) -> serde_json::Value {
@@ -1037,7 +1226,10 @@ mod tests {
         assert_eq!(top.instances[0].name, "u0");
         assert_eq!(top.instances[0].module, "inv");
         assert_eq!(top.instances[0].ports["a"], PortBinding::Signal("x".into()));
-        let mid = match &top.instances[0].ports["y"] { PortBinding::Signal(s) => s.clone(), other => panic!("{other:?}") };
+        let mid = match &top.instances[0].ports["y"] {
+            PortBinding::Signal(s) => s.clone(),
+            other => panic!("{other:?}"),
+        };
         assert_eq!(top.instances[1].ports["a"], PortBinding::Signal(mid));
         assert_eq!(top.instances[1].ports["y"], PortBinding::Signal("z".into()));
         assert_eq!(port_map["z"], "z");
@@ -1063,7 +1255,10 @@ mod tests {
         });
         let (design, _) = hierarchical_netlist_from_json(&json, "top").expect("reads");
         assert!(design.modules.contains_key("$paramod\\inv\\W=1"));
-        assert_eq!(design.modules["top"].instances[0].module, "$paramod\\inv\\W=1");
+        assert_eq!(
+            design.modules["top"].instances[0].module,
+            "$paramod\\inv\\W=1"
+        );
     }
 
     #[test]
@@ -1080,7 +1275,10 @@ mod tests {
             }
         });
         let (design, _) = hierarchical_netlist_from_json(&json, "top").expect("reads");
-        assert_eq!(design.modules["top"].instances[0].ports["a"], PortBinding::Zero);
+        assert_eq!(
+            design.modules["top"].instances[0].ports["a"],
+            PortBinding::Zero
+        );
     }
 
     #[test]
@@ -1098,7 +1296,9 @@ mod tests {
                 }
             }
         });
-        let error = hierarchical_netlist_from_json(&json, "top").unwrap_err().to_string();
+        let error = hierarchical_netlist_from_json(&json, "top")
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("$weird"), "{error}");
         assert!(!error.contains("no `Y` connection"), "{error}");
     }
@@ -1175,12 +1375,26 @@ mod tests {
         let json = dual_output_json();
         let (design, _) = hierarchical_netlist_from_json(&json, "top").expect("reads");
         let dual = &design.modules["dual"];
-        assert!(dual.outputs.contains(&"y1".to_string()), "outputs = {:?}", dual.outputs);
-        assert!(dual.outputs.contains(&"y2".to_string()), "outputs = {:?}", dual.outputs);
+        assert!(
+            dual.outputs.contains(&"y1".to_string()),
+            "outputs = {:?}",
+            dual.outputs
+        );
+        assert!(
+            dual.outputs.contains(&"y2".to_string()),
+            "outputs = {:?}",
+            dual.outputs
+        );
         assert_eq!(dual.outputs.len(), 2, "outputs = {:?}", dual.outputs);
         let top = &design.modules["top"];
-        assert_eq!(top.instances[0].ports["y1"], PortBinding::Signal("p".into()));
-        assert_eq!(top.instances[0].ports["y2"], PortBinding::Signal("q".into()));
+        assert_eq!(
+            top.instances[0].ports["y1"],
+            PortBinding::Signal("p".into())
+        );
+        assert_eq!(
+            top.instances[0].ports["y2"],
+            PortBinding::Signal("q".into())
+        );
     }
 
     /// End to end through `netlist_from_json` (`specialise_constants` then
@@ -1193,8 +1407,16 @@ mod tests {
         let (flat, port_map) = netlist_from_json(&json, "top").expect("flattens");
         assert_eq!(port_map["p"], "p");
         assert_eq!(port_map["q"], "q");
-        let p_gate = flat.gates.iter().find(|g| g.output == "p").expect("a gate drives p");
-        let q_gate = flat.gates.iter().find(|g| g.output == "q").expect("a gate drives q");
+        let p_gate = flat
+            .gates
+            .iter()
+            .find(|g| g.output == "p")
+            .expect("a gate drives p");
+        let q_gate = flat
+            .gates
+            .iter()
+            .find(|g| g.output == "q")
+            .expect("a gate drives q");
         assert_eq!(p_gate.inputs, vec!["x".to_string()]);
         // q's gate is a fork of p's own signal (a buffer synthesized for
         // the second port), not a second, disconnected driver of `n`.
@@ -1229,9 +1451,23 @@ mod tests {
         assert_eq!(flat.inputs, vec!["x".to_string()]);
         assert_eq!(flat.outputs, vec!["z".to_string()]);
         assert_eq!(flat.gates.len(), 2);
-        assert!(flat.gates.iter().all(|g| g.name.starts_with("u0.") || g.name.starts_with("u1.")), "gates = {:?}", flat.gates);
-        let u0_gate = flat.gates.iter().find(|g| g.name.starts_with("u0.")).expect("u0's gate is present");
-        let u1_gate = flat.gates.iter().find(|g| g.name.starts_with("u1.")).expect("u1's gate is present");
+        assert!(
+            flat.gates
+                .iter()
+                .all(|g| g.name.starts_with("u0.") || g.name.starts_with("u1.")),
+            "gates = {:?}",
+            flat.gates
+        );
+        let u0_gate = flat
+            .gates
+            .iter()
+            .find(|g| g.name.starts_with("u0."))
+            .expect("u0's gate is present");
+        let u1_gate = flat
+            .gates
+            .iter()
+            .find(|g| g.name.starts_with("u1."))
+            .expect("u1's gate is present");
         assert_eq!(u0_gate.inputs, vec!["x".to_string()]);
         // The signal chaining the two instances together is literally the
         // same string on both ends -- not `u0`'s generated name on one side
@@ -1379,13 +1615,21 @@ mod tests {
         let dual = &design.modules["dual"];
         assert_eq!(dual.gates.len(), 3, "two inverters plus one output fork");
         assert_eq!(
-            dual.gates.iter().map(|gate| gate.name.as_str()).collect::<HashSet<_>>().len(),
+            dual.gates
+                .iter()
+                .map(|gate| gate.name.as_str())
+                .collect::<HashSet<_>>()
+                .len(),
             dual.gates.len(),
             "every gate name must be unique: {:?}",
             dual.gates
         );
         assert_eq!(
-            dual.gates.iter().map(|gate| gate.output.as_str()).collect::<HashSet<_>>().len(),
+            dual.gates
+                .iter()
+                .map(|gate| gate.output.as_str())
+                .collect::<HashSet<_>>()
+                .len(),
             dual.gates.len(),
             "every gate output must be unique: {:?}",
             dual.gates

@@ -33,7 +33,10 @@ struct GateNet {
 
 impl GateNet {
     fn new() -> Self {
-        GateNet { gates: Vec::new(), counter: 0 }
+        GateNet {
+            gates: Vec::new(),
+            counter: 0,
+        }
     }
 
     fn fresh(&mut self) -> String {
@@ -43,7 +46,11 @@ impl GateNet {
     }
 
     fn nor(&mut self, inputs: &[&str]) -> String {
-        assert!(!inputs.is_empty() && inputs.len() <= 3, "NOR fan-in must be 1..=3, got {}", inputs.len());
+        assert!(
+            !inputs.is_empty() && inputs.len() <= 3,
+            "NOR fan-in must be 1..=3, got {}",
+            inputs.len()
+        );
         let output = self.fresh();
         self.gates.push(Gate {
             name: output.clone(),
@@ -62,7 +69,11 @@ impl GateNet {
     /// `compile` sees it) as a bare join or a per-branch isolated one,
     /// never as a torch.
     fn merge(&mut self, inputs: &[&str]) -> String {
-        assert!(inputs.len() >= 2, "a merge needs at least two branches to be interesting, got {}", inputs.len());
+        assert!(
+            inputs.len() >= 2,
+            "a merge needs at least two branches to be interesting, got {}",
+            inputs.len()
+        );
         let output = self.fresh();
         self.gates.push(Gate {
             name: output.clone(),
@@ -113,10 +124,17 @@ fn count_kind(world: &World, kind: BlockKind) -> usize {
 
 fn set_lever(simulator: &mut Simulator, position: (i32, i32, i32), on: bool) -> u64 {
     let start = simulator.current_tick();
-    let mut state = simulator.world().get(position.0, position.1, position.2).clone();
+    let mut state = simulator
+        .world()
+        .get(position.0, position.1, position.2)
+        .clone();
     state.lit = on;
-    simulator.world_mut().set(position.0, position.1, position.2, state);
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle after changing an input");
+    simulator
+        .world_mut()
+        .set(position.0, position.1, position.2, state);
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle after changing an input");
     simulator.current_tick() - start
 }
 
@@ -146,11 +164,18 @@ fn measure(
     truth: impl Fn(&[bool]) -> Vec<bool>,
 ) -> CellCost {
     let real_gates = netlist.gates.iter().filter(|g| !g.is_merge()).count();
-    let compiled = compile(netlist).unwrap_or_else(|err| panic!("{label} failed to compile: {err}"));
+    let compiled =
+        compile(netlist).unwrap_or_else(|err| panic!("{label} failed to compile: {err}"));
     let blocks = count_non_air(&compiled.world);
 
-    let lever_positions: Vec<(i32, i32, i32)> = inputs.iter().map(|name| compiled.input_positions[*name]).collect();
-    let output_positions: Vec<(i32, i32, i32)> = outputs.iter().map(|name| compiled.output_positions[*name]).collect();
+    let lever_positions: Vec<(i32, i32, i32)> = inputs
+        .iter()
+        .map(|name| compiled.input_positions[*name])
+        .collect();
+    let output_positions: Vec<(i32, i32, i32)> = outputs
+        .iter()
+        .map(|name| compiled.output_positions[*name])
+        .collect();
 
     let mut simulator = Simulator::new(compiled.world.clone());
     simulator
@@ -166,8 +191,14 @@ fn measure(
             worst_settle = worst_settle.max(ticks);
         }
         let expected = truth(&bits);
-        for (output_name, (&position, &expected)) in outputs.iter().zip(output_positions.iter().zip(expected.iter())) {
-            let actual = simulator.world().get(position.0, position.1, position.2).lit;
+        for (output_name, (&position, &expected)) in outputs
+            .iter()
+            .zip(output_positions.iter().zip(expected.iter()))
+        {
+            let actual = simulator
+                .world()
+                .get(position.0, position.1, position.2)
+                .lit;
             assert_eq!(
                 actual, expected,
                 "{label}: output `{output_name}`, inputs {inputs:?}={bits:?} -> expected {expected}, got {actual}"
@@ -175,7 +206,11 @@ fn measure(
         }
     }
 
-    CellCost { real_gates, blocks, settle_game_ticks: worst_settle }
+    CellCost {
+        real_gates,
+        blocks,
+        settle_game_ticks: worst_settle,
+    }
 }
 
 // ---------------------------------------------------------------------
@@ -186,7 +221,11 @@ fn measure(
 fn build_or_via_merge() -> Netlist {
     let mut net = GateNet::new();
     let y = net.merge(&["a", "b"]);
-    Netlist { inputs: vec!["a".to_string(), "b".to_string()], outputs: vec![y], gates: net.gates }
+    Netlist {
+        inputs: vec!["a".to_string(), "b".to_string()],
+        outputs: vec![y],
+        gates: net.gates,
+    }
 }
 
 /// The same function, built the expensive way every reference circuit in
@@ -197,26 +236,41 @@ fn build_or_via_nor() -> Netlist {
     let mut net = GateNet::new();
     let n = net.nor(&["a", "b"]);
     let y = net.not(&n);
-    Netlist { inputs: vec!["a".to_string(), "b".to_string()], outputs: vec![y], gates: net.gates }
+    Netlist {
+        inputs: vec!["a".to_string(), "b".to_string()],
+        outputs: vec![y],
+        gates: net.gates,
+    }
 }
 
 #[test]
 fn a_private_branch_merge_compiles_to_zero_real_gates_and_matches_its_truth_table() {
     let netlist = build_or_via_merge();
-    let cost = measure("OR (merge, private branches)", &netlist, &["a", "b"], &["g0"], |bits| {
-        vec![bits[0] || bits[1]]
-    });
+    let cost = measure(
+        "OR (merge, private branches)",
+        &netlist,
+        &["a", "b"],
+        &["g0"],
+        |bits| vec![bits[0] || bits[1]],
+    );
 
-    assert_eq!(cost.real_gates, 0, "a bare wire-merge OR places no gate body at all");
+    assert_eq!(
+        cost.real_gates, 0,
+        "a bare wire-merge OR places no gate body at all"
+    );
     eprintln!(
         "OR via merge (private branches): {} real gates, {} blocks, {} settle ticks",
         cost.real_gates, cost.blocks, cost.settle_game_ticks
     );
 
     let nor_netlist = build_or_via_nor();
-    let nor_cost = measure("OR (NOR-built control)", &nor_netlist, &["a", "b"], &["g1"], |bits| {
-        vec![bits[0] || bits[1]]
-    });
+    let nor_cost = measure(
+        "OR (NOR-built control)",
+        &nor_netlist,
+        &["a", "b"],
+        &["g1"],
+        |bits| vec![bits[0] || bits[1]],
+    );
     eprintln!(
         "OR via NOR (control): {} real gates, {} blocks, {} settle ticks",
         nor_cost.real_gates, nor_cost.blocks, nor_cost.settle_game_ticks
@@ -268,10 +322,15 @@ fn a_private_branch_merge_compiles_to_zero_real_gates_and_matches_its_truth_tabl
 #[test]
 fn a_private_branch_merge_places_no_torch_anywhere() {
     let netlist = build_or_via_merge();
-    let compiled = compile(&netlist).expect("a two-input merge with both branches private compiles");
+    let compiled =
+        compile(&netlist).expect("a two-input merge with both branches private compiles");
 
-    let torches = count_kind(&compiled.world, BlockKind::WallTorch) + count_kind(&compiled.world, BlockKind::Torch);
-    assert_eq!(torches, 0, "a bare merge places no torch -- see place_merge_gate's own doc comment");
+    let torches = count_kind(&compiled.world, BlockKind::WallTorch)
+        + count_kind(&compiled.world, BlockKind::Torch);
+    assert_eq!(
+        torches, 0,
+        "a bare merge places no torch -- see place_merge_gate's own doc comment"
+    );
 }
 
 // ---------------------------------------------------------------------
@@ -308,7 +367,10 @@ fn a_shared_branch_is_isolated_automatically_and_both_outputs_match_their_truth_
     );
 
     // `sentinel` is a real NOR gate; the merge itself places none.
-    assert_eq!(cost.real_gates, 1, "only the sentinel NOR is a real gate -- the merge places nothing");
+    assert_eq!(
+        cost.real_gates, 1,
+        "only the sentinel NOR is a real gate -- the merge places nothing"
+    );
     eprintln!(
         "OR via merge (one shared branch): {} real gates, {} blocks, {} settle ticks",
         cost.real_gates, cost.blocks, cost.settle_game_ticks
@@ -425,8 +487,12 @@ fn floor_under(world: &mut World, x: i32, y: i32, z: i32) {
 }
 
 fn set_raw_lever(simulator: &mut Simulator, pos: (i32, i32, i32), on: bool) {
-    simulator.world_mut().set(pos.0, pos.1, pos.2, raw_lever(on));
-    simulator.run_until_stable(MAX_TICKS).expect("hand-built probe circuit must settle");
+    simulator
+        .world_mut()
+        .set(pos.0, pos.1, pos.2, raw_lever(on));
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("hand-built probe circuit must settle");
 }
 
 /// Lever `a` drives a fork; one branch runs through a repeater into a
@@ -455,9 +521,24 @@ fn build_backflow_probe(isolate: bool) -> BackflowProbe {
     floor_under(&mut world, fork.0, fork.1, fork.2);
     world.set(fork.0, fork.1, fork.2, dust());
     floor_under(&mut world, repeater_pos.0, repeater_pos.1, repeater_pos.2);
-    world.set(repeater_pos.0, repeater_pos.1, repeater_pos.2, raw_repeater(Facing::East));
-    world.set(consumer_support.0, consumer_support.1, consumer_support.2, stone());
-    world.set(consumer_torch.0, consumer_torch.1, consumer_torch.2, standing_torch());
+    world.set(
+        repeater_pos.0,
+        repeater_pos.1,
+        repeater_pos.2,
+        raw_repeater(Facing::East),
+    );
+    world.set(
+        consumer_support.0,
+        consumer_support.1,
+        consumer_support.2,
+        stone(),
+    );
+    world.set(
+        consumer_torch.0,
+        consumer_torch.1,
+        consumer_torch.2,
+        standing_torch(),
+    );
 
     floor_under(&mut world, branch2.0, branch2.1, branch2.2);
     if isolate {
@@ -476,12 +557,17 @@ fn build_backflow_probe(isolate: bool) -> BackflowProbe {
 fn without_isolation_a_shared_branch_lets_backflow_corrupt_its_other_consumer() {
     let (world, lever_a, lever_b, consumer_torch) = build_backflow_probe(false);
     let mut simulator = Simulator::new(world);
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle before the first reading");
 
     set_raw_lever(&mut simulator, lever_a, false);
     set_raw_lever(&mut simulator, lever_b, true);
 
-    let torch_lit = simulator.world().get(consumer_torch.0, consumer_torch.1, consumer_torch.2).lit;
+    let torch_lit = simulator
+        .world()
+        .get(consumer_torch.0, consumer_torch.1, consumer_torch.2)
+        .lit;
     assert!(
         !torch_lit,
         "backflow claim not reproduced: with a=0, b=1, the unisolated consumer torch should read \
@@ -493,16 +579,27 @@ fn without_isolation_a_shared_branch_lets_backflow_corrupt_its_other_consumer() 
 fn with_isolation_the_same_shared_branch_protects_its_other_consumer() {
     let (world, lever_a, lever_b, consumer_torch) = build_backflow_probe(true);
     let mut simulator = Simulator::new(world);
-    simulator.run_until_stable(MAX_TICKS).expect("circuit must settle before the first reading");
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("circuit must settle before the first reading");
 
     set_raw_lever(&mut simulator, lever_a, false);
     set_raw_lever(&mut simulator, lever_b, true);
-    let torch_lit = simulator.world().get(consumer_torch.0, consumer_torch.1, consumer_torch.2).lit;
-    assert!(torch_lit, "isolated: NOT(a=0) = 1 regardless of b, but the consumer torch reads dark");
+    let torch_lit = simulator
+        .world()
+        .get(consumer_torch.0, consumer_torch.1, consumer_torch.2)
+        .lit;
+    assert!(
+        torch_lit,
+        "isolated: NOT(a=0) = 1 regardless of b, but the consumer torch reads dark"
+    );
 
     set_raw_lever(&mut simulator, lever_a, true);
     set_raw_lever(&mut simulator, lever_b, false);
-    let torch_lit = simulator.world().get(consumer_torch.0, consumer_torch.1, consumer_torch.2).lit;
+    let torch_lit = simulator
+        .world()
+        .get(consumer_torch.0, consumer_torch.1, consumer_torch.2)
+        .lit;
     assert!(!torch_lit, "NOT(a=1) = 0, but the consumer torch is lit");
 }
 
@@ -520,13 +617,25 @@ fn or_merge_cost_table() {
     let merge_netlist = build_or_via_merge();
     rows.push((
         "OR via merge (private)",
-        measure("OR (merge, private)", &merge_netlist, &["a", "b"], &["g0"], |bits| vec![bits[0] || bits[1]]),
+        measure(
+            "OR (merge, private)",
+            &merge_netlist,
+            &["a", "b"],
+            &["g0"],
+            |bits| vec![bits[0] || bits[1]],
+        ),
     ));
 
     let nor_netlist = build_or_via_nor();
     rows.push((
         "OR via NOR (control)",
-        measure("OR (NOR control)", &nor_netlist, &["a", "b"], &["g1"], |bits| vec![bits[0] || bits[1]]),
+        measure(
+            "OR (NOR control)",
+            &nor_netlist,
+            &["a", "b"],
+            &["g1"],
+            |bits| vec![bits[0] || bits[1]],
+        ),
     ));
 
     let (shared_netlist, sentinel, merge_output) = build_shared_branch_circuit();
@@ -541,8 +650,14 @@ fn or_merge_cost_table() {
         ),
     ));
 
-    eprintln!("\n{:<36} {:>10} {:>8} {:>8}", "construction", "real gates", "blocks", "ticks");
+    eprintln!(
+        "\n{:<36} {:>10} {:>8} {:>8}",
+        "construction", "real gates", "blocks", "ticks"
+    );
     for (label, cost) in &rows {
-        eprintln!("{label:<36} {:>10} {:>8} {:>8}", cost.real_gates, cost.blocks, cost.settle_game_ticks);
+        eprintln!(
+            "{label:<36} {:>10} {:>8} {:>8}",
+            cost.real_gates, cost.blocks, cost.settle_game_ticks
+        );
     }
 }

@@ -5,13 +5,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
-pub use crate::compile::fragment_synth::identity::{TimingArcId, TimingNodeId};
 use crate::compile::fragment_synth::candidate::{
     ExpandedPhysicalCandidate, RealisedRouteBranch, RealisedRouteTree,
 };
 use crate::compile::fragment_synth::identity::{
     PhysicalEndpointId, PrimitiveId, RouteId, RoutedSinkId,
 };
+pub use crate::compile::fragment_synth::identity::{TimingArcId, TimingNodeId};
 use crate::compile::fragment_synth::topology::{ConnectionTarget, ContributorSpec, OutputSpec};
 use crate::compile::fragment_synth::verify::{CertificationIdentity, StructuralCertificate};
 use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
@@ -62,7 +62,13 @@ impl TimingArc {
         kind: TimingArcKind,
         delay: ExactDelay,
     ) -> Self {
-        Self { id, from, to, kind, delay }
+        Self {
+            id,
+            from,
+            to,
+            kind,
+            delay,
+        }
     }
 }
 
@@ -76,7 +82,10 @@ pub enum TimingGraphError {
     #[error("timing arc {arc:?} is duplicated")]
     DuplicateArc { arc: TimingArcId },
     #[error("timing arc {arc:?} references missing node {node:?}")]
-    MissingNode { arc: TimingArcId, node: TimingNodeId },
+    MissingNode {
+        arc: TimingArcId,
+        node: TimingNodeId,
+    },
     #[error("realised timing graph contains a cycle")]
     Cycle,
     #[error("timing identity width exceeded")]
@@ -195,11 +204,8 @@ impl RealisedTimingGraph {
                             what: "primitive specification",
                             node: output,
                         })?;
-                    let delay = primitive_delay(
-                        candidate,
-                        specification.id,
-                        specification.primitive,
-                    )?;
+                    let delay =
+                        primitive_delay(candidate, specification.id, specification.primitive)?;
                     builder.arc(
                         landing,
                         output,
@@ -228,12 +234,7 @@ impl RealisedTimingGraph {
                                 TimingNodeId::PrimitiveOutput(*primitive)
                             }
                         };
-                        builder.arc(
-                            from,
-                            junction,
-                            TimingArcKind::Junction,
-                            ExactDelay(0),
-                        )?;
+                        builder.arc(from, junction, TimingArcKind::Junction, ExactDelay(0))?;
                     }
                     builder.arc(
                         junction,
@@ -246,13 +247,14 @@ impl RealisedTimingGraph {
         }
 
         for (&connection, binding) in &candidate.connections {
-            let route = candidate
-                .routes
-                .get(&binding.route)
-                .ok_or(TimingGraphError::Unresolved {
-                    what: "connection route",
-                    node: TimingNodeId::Landing(connection),
-                })?;
+            let route =
+                candidate
+                    .routes
+                    .get(&binding.route)
+                    .ok_or(TimingGraphError::Unresolved {
+                        what: "connection route",
+                        node: TimingNodeId::Landing(connection),
+                    })?;
             let branch = branch_for_sink(route, binding.sink, TimingNodeId::Landing(connection))?;
             builder.arc(
                 endpoint_node(binding.source),
@@ -326,7 +328,9 @@ impl RealisedTimingGraph {
             self.nodes.iter().copied().map(|node| (node, 0)).collect();
         let mut outgoing = BTreeMap::<TimingNodeId, Vec<TimingArc>>::new();
         for arc in self.arcs.values() {
-            *indegree.get_mut(&arc.to).expect("arc endpoints were validated") += 1;
+            *indegree
+                .get_mut(&arc.to)
+                .expect("arc endpoints were validated") += 1;
             outgoing.entry(arc.from).or_default().push(*arc);
         }
         for arcs in outgoing.values_mut() {
@@ -340,7 +344,9 @@ impl RealisedTimingGraph {
         while let Some(node) = ready.pop_first() {
             order.push(node);
             for arc in outgoing.get(&node).into_iter().flatten() {
-                let degree = indegree.get_mut(&arc.to).expect("arc endpoints were validated");
+                let degree = indegree
+                    .get_mut(&arc.to)
+                    .expect("arc endpoints were validated");
                 *degree -= 1;
                 if *degree == 0 {
                     ready.insert(arc.to);
@@ -379,9 +385,7 @@ impl RealisedTimingGraph {
                     .copied()
                     .unwrap_or_default()
                     .checked_add(arc.delay)?;
-                if arrival > best
-                    || (arrival == best && best_arc.is_none_or(|id| arc.id < id))
-                {
+                if arrival > best || (arrival == best && best_arc.is_none_or(|id| arc.id < id)) {
                     best = arrival;
                     best_arc = Some(arc.id);
                 }
@@ -412,7 +416,13 @@ impl RealisedTimingGraph {
             slack.insert(arc.id, ExactDelay(critical_delay.0.saturating_sub(used.0)));
         }
 
-        Ok(StaticTiming { head, tail, predecessor, slack, critical_delay })
+        Ok(StaticTiming {
+            head,
+            tail,
+            predecessor,
+            slack,
+            critical_delay,
+        })
     }
 }
 
@@ -452,9 +462,7 @@ fn endpoint_node(endpoint: PhysicalEndpointId) -> TimingNodeId {
     match endpoint {
         PhysicalEndpointId::PrimaryInput(port) => TimingNodeId::PrimaryInput(port),
         PhysicalEndpointId::DeclaredOutput(port) => TimingNodeId::DeclaredOutput(port),
-        PhysicalEndpointId::PrimitiveOutput(primitive) => {
-            TimingNodeId::PrimitiveOutput(primitive)
-        }
+        PhysicalEndpointId::PrimitiveOutput(primitive) => TimingNodeId::PrimitiveOutput(primitive),
         PhysicalEndpointId::Landing(connection) => TimingNodeId::Landing(connection),
         PhysicalEndpointId::Junction(instance) => TimingNodeId::JunctionOutput(instance),
     }
@@ -493,9 +501,7 @@ fn primitive_delay(
             require_observation(candidate, node)?;
             let state = placement
                 .delayed
-                .and_then(|delayed| {
-                    placement.blocks.iter().find(|block| block.at == delayed.at)
-                })
+                .and_then(|delayed| placement.blocks.iter().find(|block| block.at == delayed.at))
                 .or_else(|| {
                     placement
                         .blocks
@@ -561,10 +567,7 @@ fn route_delay(
     Ok(delay)
 }
 
-fn delay_of_state(
-    state: &BlockState,
-    node: TimingNodeId,
-) -> Result<ExactDelay, TimingGraphError> {
+fn delay_of_state(state: &BlockState, node: TimingNodeId) -> Result<ExactDelay, TimingGraphError> {
     match state.kind {
         BlockKind::Torch | BlockKind::WallTorch => Ok(ExactDelay(TORCH_DELAY_GAME_TICKS)),
         BlockKind::Repeater => Ok(ExactDelay(repeater_delay_game_ticks(state))),
@@ -675,7 +678,10 @@ mod tests {
             Primitive::Lever => BlockKind::Lever,
             Primitive::Lamp => BlockKind::Lamp,
         };
-        let block = PlacedBlock { at, state: state(kind) };
+        let block = PlacedBlock {
+            at,
+            state: state(kind),
+        };
         candidate.placements.insert(
             id,
             PrimitivePlacement {
@@ -690,7 +696,12 @@ mod tests {
                 blocks: vec![block.clone()],
             },
         );
-        observe(candidate, ObservationId::PrimitiveOutput(id), at, block.state);
+        observe(
+            candidate,
+            ObservationId::PrimitiveOutput(id),
+            at,
+            block.state,
+        );
     }
 
     fn add_route(
@@ -770,7 +781,11 @@ mod tests {
                 &mut candidate,
                 specification.id,
                 specification.primitive,
-                Anchor { x: 10 + index as i32 * 4, y: 1, z: 10 },
+                Anchor {
+                    x: 10 + index as i32 * 4,
+                    y: 1,
+                    z: 10,
+                },
             );
         }
         observe(
@@ -806,7 +821,11 @@ mod tests {
                 route,
                 source,
                 RouteTarget::Connection(connection.id),
-                Anchor { x: 6 + route_index as i32 * 4, y: 1, z: 10 },
+                Anchor {
+                    x: 6 + route_index as i32 * 4,
+                    y: 1,
+                    z: 10,
+                },
                 false,
             );
             candidate.connections.insert(
@@ -880,12 +899,20 @@ mod tests {
             let endpoint = PhysicalEndpointId::PrimaryInput(port);
             candidate.boundaries.insert(
                 endpoint,
-                BoundaryPlacement { endpoint, delayed: None, blocks: Vec::new() },
+                BoundaryPlacement {
+                    endpoint,
+                    delayed: None,
+                    blocks: Vec::new(),
+                },
             );
             observe(
                 &mut candidate,
                 ObservationId::PrimaryInput(port),
-                Anchor { x: 1, y: 1, z: 4 + port.0 as i32 * 2 },
+                Anchor {
+                    x: 1,
+                    y: 1,
+                    z: 4 + port.0 as i32 * 2,
+                },
                 state(BlockKind::Lever),
             );
         }
@@ -897,7 +924,11 @@ mod tests {
                 route,
                 source,
                 RouteTarget::Connection(connection.id),
-                Anchor { x: 5, y: 1, z: 4 + index as i32 * 2 },
+                Anchor {
+                    x: 5,
+                    y: 1,
+                    z: 4 + index as i32 * 2,
+                },
                 false,
             );
             candidate.connections.insert(
@@ -977,7 +1008,10 @@ mod tests {
                 output,
                 TimingArcKind::Route {
                     route: RouteId(19),
-                    sink: RoutedSinkId { route: RouteId(19), ordinal: 0 },
+                    sink: RoutedSinkId {
+                        route: RouteId(19),
+                        ordinal: 0,
+                    },
                 },
                 ExactDelay(6),
             ),
@@ -987,7 +1021,10 @@ mod tests {
                 output,
                 TimingArcKind::Route {
                     route: RouteId(20),
-                    sink: RoutedSinkId { route: RouteId(20), ordinal: 0 },
+                    sink: RoutedSinkId {
+                        route: RouteId(20),
+                        ordinal: 0,
+                    },
                 },
                 ExactDelay(0),
             ),
@@ -1081,10 +1118,15 @@ mod tests {
         let input = PhysicalEndpointId::PrimaryInput(PortId(0));
         let input_repeater = Anchor { x: 3, y: 1, z: 10 };
         let input_state = state(BlockKind::Repeater);
-        candidate.boundaries.get_mut(&input).unwrap().blocks.push(PlacedBlock {
-            at: input_repeater,
-            state: input_state,
-        });
+        candidate
+            .boundaries
+            .get_mut(&input)
+            .unwrap()
+            .blocks
+            .push(PlacedBlock {
+                at: input_repeater,
+                state: input_state,
+            });
         candidate.boundaries.get_mut(&input).unwrap().delayed = Some(DelayedComponent {
             at: input_repeater,
             owner: DelayedOwner::InputBinding(PortId(0)),
@@ -1136,7 +1178,9 @@ mod tests {
     fn derivation_rejects_mutation_after_certification() {
         let mut candidate = buf_candidate();
         let certificate = certificate(&candidate);
-        candidate.routes.get_mut(&RouteId(0)).unwrap().cells[0].state.power = 7;
+        candidate.routes.get_mut(&RouteId(0)).unwrap().cells[0]
+            .state
+            .power = 7;
         assert!(matches!(
             RealisedTimingGraph::derive(&candidate, &certificate),
             Err(TimingGraphError::CertificateMismatch { .. })
@@ -1146,7 +1190,11 @@ mod tests {
     #[test]
     fn delayed_primitive_without_typed_observation_is_rejected() {
         let mut candidate = mixed_merge_candidate();
-        let primitive = candidate.instances.instances[0].expanded.topology.primitives[0].id;
+        let primitive = candidate.instances.instances[0]
+            .expanded
+            .topology
+            .primitives[0]
+            .id;
         candidate
             .observations
             .remove(&ObservationId::PrimitiveOutput(primitive));
@@ -1171,7 +1219,9 @@ mod tests {
         );
         assert_eq!(
             RealisedTimingGraph::new([a, b], [arc, arc]),
-            Err(TimingGraphError::DuplicateArc { arc: TimingArcId(0) })
+            Err(TimingGraphError::DuplicateArc {
+                arc: TimingArcId(0)
+            })
         );
         assert_eq!(
             RealisedTimingGraph::new(

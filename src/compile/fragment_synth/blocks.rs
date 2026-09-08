@@ -16,7 +16,9 @@ use crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate;
 use crate::compile::fragment_synth::certification::{CandidateMetrics, CertifiedCandidate};
 use crate::compile::fragment_synth::identity::{PhysicalEndpointId, PortId};
 use crate::compile::fragment_synth::relocate;
-use crate::compile::fragment_synth::seed::{compile_sparse_seed_with_services, SeedError, SeedInput, SeedServices};
+use crate::compile::fragment_synth::seed::{
+    compile_sparse_seed_with_services, SeedError, SeedInput, SeedServices,
+};
 use crate::compile::fragment_synth::timing_graph::ExactDelay;
 use crate::compile::geometry::Anchor;
 use crate::compile::Netlist;
@@ -136,9 +138,11 @@ impl CompiledBlock {
 
         let mut inputs = BTreeMap::new();
         for (index, name) in lowered.inputs.iter().enumerate() {
-            let port = PortId(u32::try_from(index).map_err(|_| BlockError::IdentityOverflow {
-                module: module.to_string(),
-            })?);
+            let port = PortId(
+                u32::try_from(index).map_err(|_| BlockError::IdentityOverflow {
+                    module: module.to_string(),
+                })?,
+            );
             let endpoint = PhysicalEndpointId::PrimaryInput(port);
             let lever = candidate
                 .boundaries
@@ -164,9 +168,11 @@ impl CompiledBlock {
 
         let mut outputs = BTreeMap::new();
         for (index, name) in lowered.outputs.iter().enumerate() {
-            let port = PortId(u32::try_from(index).map_err(|_| BlockError::IdentityOverflow {
-                module: module.to_string(),
-            })?);
+            let port = PortId(
+                u32::try_from(index).map_err(|_| BlockError::IdentityOverflow {
+                    module: module.to_string(),
+                })?,
+            );
             let endpoint = PhysicalEndpointId::DeclaredOutput(port);
             let lamp = candidate
                 .boundaries
@@ -239,8 +245,12 @@ mod tests {
 
     #[test]
     fn a_full_adder_block_exposes_lever_inputs_west_and_lamp_outputs_east() {
-        let netlist = crate::compile::lowering::lower_optimised(&crate::circuits::full_adder::build_full_adder_netlist().0).unwrap();
-        let (library, config) = crate::compile::fragment_synth::seed::tests::default_services_parts();
+        let netlist = crate::compile::lowering::lower_optimised(
+            &crate::circuits::full_adder::build_full_adder_netlist().0,
+        )
+        .unwrap();
+        let (library, config) =
+            crate::compile::fragment_synth::seed::tests::default_services_parts();
         let services = crate::compile::fragment_synth::seed::tests::services(&library, &config);
         let block = compile_block("full_adder", &netlist, services).expect("compiles");
         assert_eq!(block.inputs.len(), 3);
@@ -248,13 +258,38 @@ mod tests {
         for port in block.inputs.values() {
             assert_eq!(port.toward, Facing::East);
             assert!(port.cell.x < block.outputs.values().map(|p| p.cell.x).min().unwrap());
-            assert_eq!(block.candidate.boundaries.values().flat_map(|b| &b.blocks).find(|b| b.at == port.cell).unwrap().state.kind, BlockKind::Lever);
+            assert_eq!(
+                block
+                    .candidate
+                    .boundaries
+                    .values()
+                    .flat_map(|b| &b.blocks)
+                    .find(|b| b.at == port.cell)
+                    .unwrap()
+                    .state
+                    .kind,
+                BlockKind::Lever
+            );
         }
         for port in block.outputs.values() {
             assert_eq!(port.toward, Facing::East);
-            assert_eq!(block.candidate.boundaries.values().flat_map(|b| &b.blocks).find(|b| b.at == port.cell).unwrap().state.kind, BlockKind::Lamp);
+            assert_eq!(
+                block
+                    .candidate
+                    .boundaries
+                    .values()
+                    .flat_map(|b| &b.blocks)
+                    .find(|b| b.at == port.cell)
+                    .unwrap()
+                    .state
+                    .kind,
+                BlockKind::Lamp
+            );
         }
-        assert!(block.bounds.min.x >= 16 && block.bounds.min.z >= 16, "unpinned seed shifts to the origin margin");
+        assert!(
+            block.bounds.min.x >= 16 && block.bounds.min.z >= 16,
+            "unpinned seed shifts to the origin margin"
+        );
         assert_eq!(block.bounds.min.y, 0, "floors under the ground row");
         assert!(block.bounds.max.y <= 4);
         assert_eq!(block.delay, block.metrics.quality.static_routed_delay);
@@ -301,8 +336,14 @@ mod tests {
         let expected_outputs: BTreeSet<String> = netlist.outputs.iter().cloned().collect();
         let actual_inputs: BTreeSet<String> = block.inputs.keys().cloned().collect();
         let actual_outputs: BTreeSet<String> = block.outputs.keys().cloned().collect();
-        assert_eq!(actual_inputs, expected_inputs, "missing or extra input ports");
-        assert_eq!(actual_outputs, expected_outputs, "missing or extra output ports");
+        assert_eq!(
+            actual_inputs, expected_inputs,
+            "missing or extra input ports"
+        );
+        assert_eq!(
+            actual_outputs, expected_outputs,
+            "missing or extra output ports"
+        );
     }
 
     #[test]

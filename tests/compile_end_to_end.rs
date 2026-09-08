@@ -224,7 +224,10 @@ fn assert_worlds_identical(realised: &World, expected: &World, what: &str) {
         if got != want {
             total += 1;
             if shown.len() < 12 {
-                shown.push(format!("  ({x}, {y}, {z}): got {:?}, want {:?}", got.kind, want.kind));
+                shown.push(format!(
+                    "  ({x}, {y}, {z}): got {:?}, want {:?}",
+                    got.kind, want.kind
+                ));
             }
         }
     }
@@ -333,9 +336,7 @@ fn a_typed_one_to_one_candidate_re_emits_the_exact_legacy_world() {
                 PhysicalEndpointId::PrimitiveOutput(primitive) => {
                     ObservationId::PrimitiveOutput(primitive)
                 }
-                PhysicalEndpointId::Junction(instance) => {
-                    ObservationId::JunctionOutput(instance)
-                }
+                PhysicalEndpointId::Junction(instance) => ObservationId::JunctionOutput(instance),
                 other => panic!("{name}: route {:?} has invalid source {other:?}", route.id),
             };
             let source_at = adapted.candidate.observations[&source_observation].site.at;
@@ -367,9 +368,7 @@ fn a_typed_one_to_one_candidate_re_emits_the_exact_legacy_world() {
                     .count() as u64;
                 let topology_terminal = u64::from(matches!(
                     branch.terminal.delayed_owner,
-                    Some(
-                        reda::compile::fragment_synth::candidate::DelayedOwner::Primitive(_)
-                    )
+                    Some(reda::compile::fragment_synth::candidate::DelayedOwner::Primitive(_))
                 ));
                 assert_eq!(
                     branch.terminal.repeaters,
@@ -636,7 +635,10 @@ fn a_compiled_not_gate_matches_its_truth_table() {
         .run_until_stable(MAX_TICKS)
         .expect("circuit must settle before the first reading");
 
-    let lever_a = driver_for(simulator.world(), *compiled.input_positions.get("a").unwrap());
+    let lever_a = driver_for(
+        simulator.world(),
+        *compiled.input_positions.get("a").unwrap(),
+    );
     let output_y = *compiled.output_positions.get("y").unwrap();
 
     let rows: [(bool, bool); 2] = [(false, true), (true, false)];
@@ -660,8 +662,14 @@ fn a_compiled_and_gate_matches_its_truth_table() {
         .run_until_stable(MAX_TICKS)
         .expect("circuit must settle before the first reading");
 
-    let lever_a = driver_for(simulator.world(), *compiled.input_positions.get("a").unwrap());
-    let lever_b = driver_for(simulator.world(), *compiled.input_positions.get("b").unwrap());
+    let lever_a = driver_for(
+        simulator.world(),
+        *compiled.input_positions.get("a").unwrap(),
+    );
+    let lever_b = driver_for(
+        simulator.world(),
+        *compiled.input_positions.get("b").unwrap(),
+    );
     let output_y = *compiled.output_positions.get("y").unwrap();
 
     // 四列全測：00->0, 01->0, 10->0, 11->1
@@ -707,7 +715,11 @@ fn a_mixed_pinned_and_gate_computes_through_the_callers_own_cells() {
     let pinned_in = *compiled.input_positions.get("a").unwrap();
     let lever_b = *compiled.input_positions.get("b").unwrap();
     let pinned_out = *compiled.output_positions.get("y").unwrap();
-    assert_eq!(pinned_in, (10, 1, 40), "a pinned port records the caller's own cell");
+    assert_eq!(
+        pinned_in,
+        (10, 1, 40),
+        "a pinned port records the caller's own cell"
+    );
     assert_eq!(pinned_out, (16, 1, 40));
 
     // The caller's side, built after compilation and outside REDA's knowledge:
@@ -718,8 +730,14 @@ fn a_mixed_pinned_and_gate_computes_through_the_callers_own_cells() {
 
     let driver_a = driver_for(&compiled.world, pinned_in);
     let driver_b = driver_for(&compiled.world, lever_b);
-    assert!(matches!(driver_a, Driver::CallerCell(_)), "`a` is driven by the caller's cell");
-    assert!(matches!(driver_b, Driver::Lever(_)), "`b` keeps today's lever");
+    assert!(
+        matches!(driver_a, Driver::CallerCell(_)),
+        "`a` is driven by the caller's cell"
+    );
+    assert!(
+        matches!(driver_b, Driver::Lever(_)),
+        "`b` keeps today's lever"
+    );
 
     let mut simulator = Simulator::new(world);
     simulator
@@ -735,7 +753,10 @@ fn a_mixed_pinned_and_gate_computes_through_the_callers_own_cells() {
         set_lever(&mut simulator, driver_a, a);
         set_lever(&mut simulator, driver_b, b);
         let output = read_output(&simulator, pinned_out);
-        assert_eq!(output, expected, "AND({a}, {b}) should be {expected}, got {output}");
+        assert_eq!(
+            output, expected,
+            "AND({a}, {b}) should be {expected}, got {output}"
+        );
     }
 
     // The fixtures were the test's, never the circuit's -- the source the last

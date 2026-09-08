@@ -75,17 +75,30 @@ use reda::compile::Netlist;
 fn cases() -> Vec<(String, Netlist)> {
     let mut out: Vec<(String, Netlist)> = vec![
         ("and4".to_string(), and4::build_and4_netlist().0),
-        ("full_adder".to_string(), full_adder::build_full_adder_netlist().0),
-        ("segment_a".to_string(), seven_segment::build_single_segment_netlist(0).0),
-        ("seven_segment".to_string(), seven_segment::build_seven_segment_netlist().0),
+        (
+            "full_adder".to_string(),
+            full_adder::build_full_adder_netlist().0,
+        ),
+        (
+            "segment_a".to_string(),
+            seven_segment::build_single_segment_netlist(0).0,
+        ),
+        (
+            "seven_segment".to_string(),
+            seven_segment::build_seven_segment_netlist().0,
+        ),
     ];
     // `verilog:and4` lowers ordinarily and `verilog:seven_segment` optimised,
     // which is the pairing `mc_dump` and the condition sweeps both use.
     for (name, optimised) in [("verilog:and4", false), ("verilog:seven_segment", true)] {
         let circuit = verilog::find(name).expect("the catalog has it");
         let (gate_level, _) = circuit.baked_netlist();
-        let netlist = if optimised { lower_optimised(&gate_level) } else { lower(&gate_level) }
-            .expect("it lowers");
+        let netlist = if optimised {
+            lower_optimised(&gate_level)
+        } else {
+            lower(&gate_level)
+        }
+        .expect("it lowers");
         out.push((name.to_string(), netlist));
     }
     out
@@ -131,7 +144,11 @@ fn review_planner_cost_per_circuit() {
         match plan_from_netlist(&netlist, &PortPlacements::default()) {
             Ok(plan) => {
                 let cost = plan.cost();
-                let cells: usize = plan.routes().iter().map(|route| route.anchors().len()).sum();
+                let cells: usize = plan
+                    .routes()
+                    .iter()
+                    .map(|route| route.anchors().len())
+                    .sum();
                 println!(
                     "{name:24} delay {:>3}  wire {:>5}  turns {:>4}  {cells:>5} cells",
                     cost.delay, cost.wire, cost.turns

@@ -809,7 +809,11 @@ fn build_repeater_rig(offset: (i32, i32, i32), along: bool, remove_a: bool) -> (
         set(&mut world, cell.down(), Fill::Solid);
         set(&mut world, cell, Fill::Dust);
     }
-    set(&mut world, step_by(a, away, FEED_LEN + 1), Fill::RedstoneBlock);
+    set(
+        &mut world,
+        step_by(a, away, FEED_LEN + 1),
+        Fill::RedstoneBlock,
+    );
 
     (world, probe)
 }
@@ -1043,7 +1047,10 @@ fn the_rig_reads_a_join_at_distance_one_and_none_at_distance_two() {
 #[test]
 fn electricity_and_dust_connections_agree_wherever_the_rig_can_attribute() {
     let mut checked = 0usize;
-    let mut cases: Vec<Case> = table_one_offsets().into_iter().map(Case::as_built).collect();
+    let mut cases: Vec<Case> = table_one_offsets()
+        .into_iter()
+        .map(Case::as_built)
+        .collect();
     for offset in VERTICAL_OFFSETS {
         for gate in FILLS {
             cases.push(Case {
@@ -1173,7 +1180,10 @@ fn every_vertical_keep_out_cell_is_conditional_and_every_flat_one_is_not() {
 /// travel, so agreeing with both is a real constraint and not a restatement.
 #[test]
 fn the_closed_form_rule_reproduces_every_attributable_row() {
-    let mut cases: Vec<Case> = table_one_offsets().into_iter().map(Case::as_built).collect();
+    let mut cases: Vec<Case> = table_one_offsets()
+        .into_iter()
+        .map(Case::as_built)
+        .collect();
     for offset in VERTICAL_OFFSETS {
         for gate in FILLS {
             for ceiling in FILLS {

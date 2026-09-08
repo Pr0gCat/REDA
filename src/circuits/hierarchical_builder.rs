@@ -25,7 +25,9 @@ pub(crate) struct HierarchicalNetlistBuilder {
 
 impl HierarchicalNetlistBuilder {
     pub(crate) fn new() -> Self {
-        HierarchicalNetlistBuilder { modules: BTreeMap::new() }
+        HierarchicalNetlistBuilder {
+            modules: BTreeMap::new(),
+        }
     }
 
     /// Define a leaf or parent module from a closure that receives a
@@ -39,8 +41,10 @@ impl HierarchicalNetlistBuilder {
         outputs: &[&str],
         build: impl FnOnce(&mut ModuleBuilder),
     ) {
-        let mut builder =
-            ModuleBuilder { gates: NetlistBuilder::with_prefix("g".to_string()), instances: Vec::new() };
+        let mut builder = ModuleBuilder {
+            gates: NetlistBuilder::with_prefix("g".to_string()),
+            instances: Vec::new(),
+        };
         build(&mut builder);
         let module = Module {
             inputs: inputs.iter().map(|s| s.to_string()).collect(),
@@ -52,7 +56,10 @@ impl HierarchicalNetlistBuilder {
     }
 
     pub(crate) fn finish(self, top: &str) -> HierarchicalNetlist {
-        HierarchicalNetlist { top: top.to_string(), modules: self.modules }
+        HierarchicalNetlist {
+            top: top.to_string(),
+            modules: self.modules,
+        }
     }
 }
 
@@ -69,7 +76,11 @@ impl ModuleBuilder {
             .iter()
             .map(|(port, signal)| (port.to_string(), PortBinding::Signal(signal.to_string())))
             .collect();
-        self.instances.push(ModuleInstance { name: name.to_string(), module: module.to_string(), ports });
+        self.instances.push(ModuleInstance {
+            name: name.to_string(),
+            module: module.to_string(),
+            ports,
+        });
     }
 
     /// Like [`ModuleBuilder::instance`], but a binding may also be a
@@ -77,9 +88,21 @@ impl ModuleBuilder {
     /// `specialise_constants` folded it into a NOR/OR input somewhere in
     /// the child module's own gates -- see `compile::hierarchy` for the
     /// rule.
-    pub(crate) fn instance_with_constants(&mut self, name: &str, module: &str, ports: &[(&str, PortBinding)]) {
-        let ports = ports.iter().map(|(port, binding)| (port.to_string(), binding.clone())).collect();
-        self.instances.push(ModuleInstance { name: name.to_string(), module: module.to_string(), ports });
+    pub(crate) fn instance_with_constants(
+        &mut self,
+        name: &str,
+        module: &str,
+        ports: &[(&str, PortBinding)],
+    ) {
+        let ports = ports
+            .iter()
+            .map(|(port, binding)| (port.to_string(), binding.clone()))
+            .collect();
+        self.instances.push(ModuleInstance {
+            name: name.to_string(),
+            module: module.to_string(),
+            ports,
+        });
     }
 }
 
@@ -174,9 +197,17 @@ pub(crate) mod circuits {
             for i in 0..bits {
                 let a_i = format!("a{i}");
                 let b_i = format!("b{i}");
-                let cin_i = if i == 0 { "cin".to_string() } else { format!("c{}", i - 1) };
+                let cin_i = if i == 0 {
+                    "cin".to_string()
+                } else {
+                    format!("c{}", i - 1)
+                };
                 let sum_i = format!("s{i}");
-                let cout_i = if i + 1 == bits { "cout".to_string() } else { format!("c{i}") };
+                let cout_i = if i + 1 == bits {
+                    "cout".to_string()
+                } else {
+                    format!("c{i}")
+                };
                 mb.instance(
                     &format!("fa{i}"),
                     "full_adder",
@@ -282,7 +313,11 @@ pub(crate) mod circuits {
                 let mut sel = Vec::new();
                 for op in 0..8u8 {
                     let bit = |k: usize| -> String {
-                        if (op >> k) & 1 == 1 { s[k].to_string() } else { n[k].clone() }
+                        if (op >> k) & 1 == 1 {
+                            s[k].to_string()
+                        } else {
+                            n[k].clone()
+                        }
                     };
                     sel.push(gates.and_reduce(vec![bit(0), bit(1), bit(2)]));
                 }
@@ -293,8 +328,16 @@ pub(crate) mod circuits {
             for i in 0..4 {
                 let a_i = format!("a{i}");
                 let b_i = format!("b{i}");
-                let cin_i = if i == 0 { sub.clone() } else { format!("c{}", i - 1) };
-                let cout_i = if i == 3 { "cout".to_string() } else { format!("c{i}") };
+                let cin_i = if i == 0 {
+                    sub.clone()
+                } else {
+                    format!("c{}", i - 1)
+                };
+                let cout_i = if i == 3 {
+                    "cout".to_string()
+                } else {
+                    format!("c{i}")
+                };
                 let r_i = format!("r{i}");
                 let shift_in: PortBinding = if i == 0 {
                     PortBinding::Zero
@@ -318,7 +361,12 @@ pub(crate) mod circuits {
             }
 
             let gates = &mut mb.gates;
-            let any = gates.or_reduce(vec!["r0".to_string(), "r1".to_string(), "r2".to_string(), "r3".to_string()]);
+            let any = gates.or_reduce(vec![
+                "r0".to_string(),
+                "r1".to_string(),
+                "r2".to_string(),
+                "r3".to_string(),
+            ]);
             let zero = gates.not(&any);
             expose(gates, &zero, "zero");
         });
@@ -342,10 +390,50 @@ pub(crate) mod circuits {
                     let nx0 = gates.not("x0");
                     gates.and_reduce(vec!["x0".to_string(), nx0])
                 };
-                mb.instance("fa0", "full_adder", &[("a", "x0"), ("b", "y0"), ("cin", &zero), ("sum", "s0"), ("cout", "c0")]);
-                mb.instance("fa1", "full_adder", &[("a", "x1"), ("b", "y1"), ("cin", "c0"), ("sum", "s1"), ("cout", "c1")]);
-                mb.instance("fa2", "full_adder", &[("a", "x2"), ("b", "y2"), ("cin", "c1"), ("sum", "s2"), ("cout", "c2")]);
-                mb.instance("fa3", "full_adder", &[("a", "x3"), ("b", "y3"), ("cin", "c2"), ("sum", "s3"), ("cout", "cout")]);
+                mb.instance(
+                    "fa0",
+                    "full_adder",
+                    &[
+                        ("a", "x0"),
+                        ("b", "y0"),
+                        ("cin", &zero),
+                        ("sum", "s0"),
+                        ("cout", "c0"),
+                    ],
+                );
+                mb.instance(
+                    "fa1",
+                    "full_adder",
+                    &[
+                        ("a", "x1"),
+                        ("b", "y1"),
+                        ("cin", "c0"),
+                        ("sum", "s1"),
+                        ("cout", "c1"),
+                    ],
+                );
+                mb.instance(
+                    "fa2",
+                    "full_adder",
+                    &[
+                        ("a", "x2"),
+                        ("b", "y2"),
+                        ("cin", "c1"),
+                        ("sum", "s2"),
+                        ("cout", "c2"),
+                    ],
+                );
+                mb.instance(
+                    "fa3",
+                    "full_adder",
+                    &[
+                        ("a", "x3"),
+                        ("b", "y3"),
+                        ("cin", "c2"),
+                        ("sum", "s3"),
+                        ("cout", "cout"),
+                    ],
+                );
             },
         );
     }
@@ -508,8 +596,16 @@ pub(crate) mod circuits {
             for i in 0..4 {
                 let a_i = format!("a{i}");
                 let b_i = format!("b{i}");
-                let cin_i = if i == 0 { "cin".to_string() } else { format!("c{}", i - 1) };
-                let cout_i = if i == 3 { "cout".to_string() } else { format!("c{i}") };
+                let cin_i = if i == 0 {
+                    "cin".to_string()
+                } else {
+                    format!("c{}", i - 1)
+                };
+                let cout_i = if i == 3 {
+                    "cout".to_string()
+                } else {
+                    format!("c{i}")
+                };
                 let r_i = format!("r{i}");
                 mb.instance(
                     &format!("slice{i}"),
@@ -550,20 +646,44 @@ pub(crate) mod circuits {
                 "lo",
                 "alu4",
                 &[
-                    ("a0", "a0"), ("a1", "a1"), ("a2", "a2"), ("a3", "a3"),
-                    ("b0", "b0"), ("b1", "b1"), ("b2", "b2"), ("b3", "b3"),
-                    ("s1", "s1"), ("s0", "s0"), ("cin", "cin"),
-                    ("r0", "r0"), ("r1", "r1"), ("r2", "r2"), ("r3", "r3"), ("cout", "c4"),
+                    ("a0", "a0"),
+                    ("a1", "a1"),
+                    ("a2", "a2"),
+                    ("a3", "a3"),
+                    ("b0", "b0"),
+                    ("b1", "b1"),
+                    ("b2", "b2"),
+                    ("b3", "b3"),
+                    ("s1", "s1"),
+                    ("s0", "s0"),
+                    ("cin", "cin"),
+                    ("r0", "r0"),
+                    ("r1", "r1"),
+                    ("r2", "r2"),
+                    ("r3", "r3"),
+                    ("cout", "c4"),
                 ],
             );
             mb.instance(
                 "hi",
                 "alu4",
                 &[
-                    ("a0", "a4"), ("a1", "a5"), ("a2", "a6"), ("a3", "a7"),
-                    ("b0", "b4"), ("b1", "b5"), ("b2", "b6"), ("b3", "b7"),
-                    ("s1", "s1"), ("s0", "s0"), ("cin", "c4"),
-                    ("r0", "r4"), ("r1", "r5"), ("r2", "r6"), ("r3", "r7"), ("cout", "cout"),
+                    ("a0", "a4"),
+                    ("a1", "a5"),
+                    ("a2", "a6"),
+                    ("a3", "a7"),
+                    ("b0", "b4"),
+                    ("b1", "b5"),
+                    ("b2", "b6"),
+                    ("b3", "b7"),
+                    ("s1", "s1"),
+                    ("s0", "s0"),
+                    ("cin", "c4"),
+                    ("r0", "r4"),
+                    ("r1", "r5"),
+                    ("r2", "r6"),
+                    ("r3", "r7"),
+                    ("cout", "cout"),
                 ],
             );
         });
@@ -612,7 +732,10 @@ pub(crate) mod eval {
     /// interpret the netlist, so it asserts rather than risking a silently
     /// wrong answer -- the entire point of this evaluator is to be a
     /// trustworthy oracle.
-    pub(crate) fn evaluate(netlist: &Netlist, assignment: &BTreeMap<String, bool>) -> BTreeMap<String, bool> {
+    pub(crate) fn evaluate(
+        netlist: &Netlist,
+        assignment: &BTreeMap<String, bool>,
+    ) -> BTreeMap<String, bool> {
         let mut values: BTreeMap<String, bool> = BTreeMap::new();
         for name in &netlist.inputs {
             let value = *assignment
@@ -680,7 +803,10 @@ mod tests {
             true
         );
         let (flat, paths) = design.flatten().expect("flattens");
-        assert!(paths.iter().any(|p| p.path.len() == 2), "slice inside alu4 inside top");
+        assert!(
+            paths.iter().any(|p| p.path.len() == 2),
+            "slice inside alu4 inside top"
+        );
         assert!(flat.combinational_order().is_some());
     }
 
@@ -703,7 +829,10 @@ mod tests {
         assert_eq!(order.last().unwrap(), "top");
 
         // flatten refuses the raw `PortBinding::Zero` on bit 0's shift_in.
-        assert!(design.flatten().is_err(), "flatten must refuse an unspecialised constant");
+        assert!(
+            design.flatten().is_err(),
+            "flatten must refuse an unspecialised constant"
+        );
 
         let specialised = design.specialise_constants().expect("specialises");
         let (flat, paths) = specialised.flatten().expect("flattens after specialising");
@@ -716,8 +845,14 @@ mod tests {
         let design = circuits::multiplier4();
         design.validate().expect("validates");
         let order = design.module_order().expect("orders");
-        assert!(order.iter().position(|m| m == "full_adder").unwrap() < order.iter().position(|m| m == "adder_row").unwrap());
-        assert!(order.iter().position(|m| m == "adder_row").unwrap() < order.iter().position(|m| m == "top").unwrap());
+        assert!(
+            order.iter().position(|m| m == "full_adder").unwrap()
+                < order.iter().position(|m| m == "adder_row").unwrap()
+        );
+        assert!(
+            order.iter().position(|m| m == "adder_row").unwrap()
+                < order.iter().position(|m| m == "top").unwrap()
+        );
         let (flat, paths) = design.flatten().expect("flattens");
         assert_eq!(flat.inputs.len(), 8);
         assert_eq!(flat.outputs.len(), 8);
@@ -808,11 +943,22 @@ mod equivalence {
 
     /// Evaluate both netlists on `assignment` and assert every declared
     /// output agrees, matched by position (see the module doc comment).
-    fn assert_same_outputs(case: usize, assignment: &BTreeMap<String, bool>, hier: &Netlist, flat: &Netlist) {
-        assert_eq!(hier.outputs.len(), flat.outputs.len(), "case {case}: output counts differ");
+    fn assert_same_outputs(
+        case: usize,
+        assignment: &BTreeMap<String, bool>,
+        hier: &Netlist,
+        flat: &Netlist,
+    ) {
+        assert_eq!(
+            hier.outputs.len(),
+            flat.outputs.len(),
+            "case {case}: output counts differ"
+        );
         let hier_values = evaluate(hier, assignment);
         let flat_values = evaluate(flat, assignment);
-        for (position, (hier_name, flat_name)) in hier.outputs.iter().zip(flat.outputs.iter()).enumerate() {
+        for (position, (hier_name, flat_name)) in
+            hier.outputs.iter().zip(flat.outputs.iter()).enumerate()
+        {
             let hier_bit = hier_values[hier_name];
             let flat_bit = flat_values[flat_name];
             assert_eq!(
@@ -837,7 +983,9 @@ mod equivalence {
 
     #[test]
     fn alu4_full_matches_the_flat_builder_exhaustively() {
-        let design = circuits::alu4_full().specialise_constants().expect("specialises");
+        let design = circuits::alu4_full()
+            .specialise_constants()
+            .expect("specialises");
         let (hier, _) = design.flatten().expect("flattens after specialising");
         let flat_netlist = flat::alu4_full();
         assert_eq!(hier.inputs.len(), 11, "alu4_full() should have 11 inputs");
@@ -866,7 +1014,9 @@ mod equivalence {
     /// Reads an 8-bit little-endian value (`{prefix}0` is bit 0) out of an
     /// `evaluate()` result.
     fn read_u8(values: &BTreeMap<String, bool>, prefix: &str) -> u32 {
-        (0..8).fold(0u32, |acc, bit| acc | ((values[&format!("{prefix}{bit}")] as u32) << bit))
+        (0..8).fold(0u32, |acc, bit| {
+            acc | ((values[&format!("{prefix}{bit}")] as u32) << bit)
+        })
     }
 
     /// The 17 non-opcode inputs `alu8`/`ripple_adder(8)` share: two 8-bit
@@ -882,7 +1032,9 @@ mod equivalence {
     #[test]
     fn alu8_add_opcode_matches_8_bit_arithmetic_over_a_deterministic_sample() {
         let design = circuits::alu8();
-        let (hier, _) = design.flatten().expect("flattens (alu8 has no constants to specialise)");
+        let (hier, _) = design
+            .flatten()
+            .expect("flattens (alu8 has no constants to specialise)");
 
         let names = operand_and_carry_names();
         assert_eq!(names.len(), 17);

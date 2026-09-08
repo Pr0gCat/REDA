@@ -45,16 +45,44 @@ const CERT_WORKER_MEMORY_BUDGET_BYTES: usize = 1 << 30;
 /// working set against `workers * per_worker_bytes` and raises this number if
 /// the measurement does not fit inside it; it is not measured yet.
 const WORLD_COPY_HEADROOM: usize = 4;
-/// Minimum canonical items one certification worker must own.
+/// Minimum canonical exhaustive vectors one certification worker must own.
 ///
 /// Measured on this host with a release build: the real exhaustive sweep at one
 /// and two workers over 4 to 256 canonical vectors lost at 4 and 8 vectors and
 /// won from 16 upward, repeatably across two independent runs, so 16 vectors
-/// over two workers is the first crossover. Exhaustive vectors are the lighter
-/// unit, so sharing this one threshold with the manifest sweep is conservative
-/// for it.
-const MIN_ITEMS_PER_CERTIFICATION_WORKER: usize = 8;
+/// over two workers is the first crossover.
+const MIN_VECTORS_PER_CERTIFICATION_WORKER: usize = 8;
+/// Minimum manifest transitions one certification worker must own.
+///
+/// A transition drives a full measured settle, not one vector's, so it already
+/// pays for a worker on its own. Sharing the exhaustive threshold here cost the
+/// heaviest manifest sweeps two thirds of their workers, so the two units keep
+/// the counts they were measured with.
+const MIN_TRANSITIONS_PER_CERTIFICATION_WORKER: usize = 1;
 static CERTIFICATION_SWEEP_LOCK: Mutex<()> = Mutex::new(());
+
+/// The logical item one certification sweep partitions.
+///
+/// The two sweeps share every other rule -- one budget, one memory ceiling, one
+/// process-wide lock, one ordered reduction -- and differ only in how much work
+/// one item is worth, so that is the only thing this carries.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SweepUnit {
+    /// One canonical exhaustive truth vector.
+    ExhaustiveVector,
+    /// One manifest transition.
+    Transition,
+}
+
+impl SweepUnit {
+    /// Items one worker must own before opening it is worth the startup.
+    fn min_items_per_worker(self) -> usize {
+        match self {
+            SweepUnit::ExhaustiveVector => MIN_VECTORS_PER_CERTIFICATION_WORKER,
+            SweepUnit::Transition => MIN_TRANSITIONS_PER_CERTIFICATION_WORKER,
+        }
+    }
+}
 
 /// One compile's worker budget plus the only thing a sweep needs to know
 /// about where it came from.
@@ -380,7 +408,11 @@ fn certify_exhaustive_truth(
     if std::env::var_os("REDA_PHASE_TIMING").is_some() {
         eprintln!(
             "WORK exhaustive_workers {}",
-            certification_workers(exhaustive_state_count(lowered)?, threads)
+            certification_workers(
+                exhaustive_state_count(lowered)?,
+                threads,
+                SweepUnit::ExhaustiveVector
+            )
         );
     }
     certify_exhaustive_truth_with_threads(world, candidate, lowered, compatibility, config, threads)
@@ -405,7 +437,7 @@ fn certify_exhaustive_truth_with_threads(
     // worker owns one simulator at a time and reduces `()`, so a wide sweep
     // costs workers, not one world per mask.
     let masks = (0..state_count).collect::<Vec<_>>();
-    run_certification_chunks(&masks, threads, |_, &mask| {
+    run_certification_chunks(&masks, threads, SweepUnit::ExhaustiveVector, |_, &mask| {
         let vector = bits_of(mask, lowered.inputs.len());
         let mut simulator = fresh_simulator(world, candidate, lowered);
         drive_vector(&mut simulator, candidate, lowered, compatibility, &vector)?;
@@ -441,7 +473,7 @@ fn sweep_manifest(
     if std::env::var_os("REDA_PHASE_TIMING").is_some() {
         eprintln!(
             "WORK manifest_workers {}",
-            certification_workers(manifest.transitions().len(), threads)
+            certification_workers(manifest.transitions().len(), threads, SweepUnit::Transition)
         );
     }
     sweep_manifest_with_threads(
@@ -562,9 +594,9 @@ pub(super) fn with_compile_worker_budget<T>(body: impl FnOnce(usize) -> T) -> T 
         .map(|count| count.get())
         .unwrap_or(1);
     let workers = certification_thread_budget(available, explicit);
-    let _restore = CertificationThreadsReset(CERTIFICATION_THREADS.replace(Some(
-        ScopedWorkerBudget { workers, explicit },
-    )));
+    let _restore = CertificationThreadsReset(
+        CERTIFICATION_THREADS.replace(Some(ScopedWorkerBudget { workers, explicit })),
+    );
     body(workers)
 }
 
@@ -675,15 +707,16 @@ fn record_observed_worker_budget(budget: Option<usize>) {
 /// The one actual-worker rule shared by every certification sweep.
 ///
 /// Empty work reports zero workers and runs no closure. Otherwise workers are
-/// the requested budget capped by whole `MIN_ITEMS_PER_CERTIFICATION_WORKER`
-/// chunks, clamped to at least one, so work too small to amortize thread
-/// startup stays on the caller thread.
-fn certification_workers(items: usize, requested: usize) -> usize {
+/// the requested budget capped by whole `unit.min_items_per_worker()` chunks,
+/// clamped to at least one, so work too small to amortize thread startup stays
+/// on the caller thread. `requested` already carries the compile-wide budget,
+/// the memory ceiling and the host's parallelism, so this only ever narrows it.
+fn certification_workers(items: usize, requested: usize, unit: SweepUnit) -> usize {
     if items == 0 {
         return 0;
     }
     requested
-        .min(items / MIN_ITEMS_PER_CERTIFICATION_WORKER)
+        .min(items / unit.min_items_per_worker().max(1))
         .max(1)
 }
 
@@ -692,14 +725,19 @@ fn certification_workers(items: usize, requested: usize) -> usize {
 /// The actual worker count is derived once here and decides both whether this
 /// sweep takes the process-wide lock and how `run_indexed_chunks` partitions,
 /// so the lock can never disagree with the parallelism it guards.
-fn run_certification_chunks<T, U, E, F>(items: &[T], requested: usize, work: F) -> Result<Vec<U>, E>
+fn run_certification_chunks<T, U, E, F>(
+    items: &[T],
+    requested: usize,
+    unit: SweepUnit,
+    work: F,
+) -> Result<Vec<U>, E>
 where
     T: Sync,
     U: Send,
     E: Send,
     F: Fn(usize, &T) -> Result<U, E> + Sync,
 {
-    let workers = certification_workers(items.len(), requested);
+    let workers = certification_workers(items.len(), requested, unit);
     // ponytail: the ceiling here is one process-wide lock, so two concurrent
     // compiles serialize their above-threshold sweeps rather than share the
     // machine. Replace it with a process-wide budget arbiter when concurrent
@@ -727,17 +765,22 @@ fn sweep_manifest_with_threads(
     threads: usize,
 ) -> Result<Vec<TransitionMeasurement>, CandidateCertificationError> {
     let transitions = manifest.transitions();
-    run_certification_chunks(transitions, threads, |manifest_index, transition| {
-        measure_transition(
-            world,
-            candidate,
-            lowered,
-            compatibility,
-            transition,
-            manifest_index,
-            config,
-        )
-    })
+    run_certification_chunks(
+        transitions,
+        threads,
+        SweepUnit::Transition,
+        |manifest_index, transition| {
+            measure_transition(
+                world,
+                candidate,
+                lowered,
+                compatibility,
+                transition,
+                manifest_index,
+                config,
+            )
+        },
+    )
 }
 
 /// Run `work` over contiguous chunks of `items` and reduce in logical index order.
@@ -1074,9 +1117,10 @@ mod tests {
         run_certification_chunks, run_indexed_chunks, scoped_certification_threads, settle,
         sweep_manifest_with_threads, sweep_worker_budget, with_certification_threads,
         with_compile_worker_budget, world_worker_memory_bytes, CandidateCertificationError,
-        CompleteCandidateCertifier, ExpandedCandidateCertifier, RealisedTimingGraph,
+        CompleteCandidateCertifier, ExpandedCandidateCertifier, RealisedTimingGraph, SweepUnit,
         TimingGraphError, TransitionManifest, TransitionPhase, CERTIFICATION_SWEEP_LOCK,
-        CERT_WORKER_MEMORY_BUDGET_BYTES, MIN_ITEMS_PER_CERTIFICATION_WORKER, WORLD_COPY_HEADROOM,
+        CERT_WORKER_MEMORY_BUDGET_BYTES, MIN_TRANSITIONS_PER_CERTIFICATION_WORKER,
+        MIN_VECTORS_PER_CERTIFICATION_WORKER, WORLD_COPY_HEADROOM,
     };
     use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
     use crate::compile::fragment_synth::legacy_adapter::LegacyCandidateAdapter;
@@ -1199,9 +1243,20 @@ mod tests {
             certification_memory_budget_bytes(None),
             CERT_WORKER_MEMORY_BUDGET_BYTES
         );
-        assert_eq!(certification_memory_budget_bytes(Some("1048576")), 1_048_576);
+        assert_eq!(
+            certification_memory_budget_bytes(Some("1048576")),
+            1_048_576
+        );
         assert_eq!(certification_memory_budget_bytes(Some("0")), 0);
-        for junk in ["", " ", "-1", "two", "4.0", "1e3", "99999999999999999999999999"] {
+        for junk in [
+            "",
+            " ",
+            "-1",
+            "two",
+            "4.0",
+            "1e3",
+            "99999999999999999999999999",
+        ] {
             assert_eq!(
                 parse_certification_threads(Some(junk)),
                 None,
@@ -1272,41 +1327,93 @@ mod tests {
 
     #[test]
     fn certification_worker_count_is_one_pure_threshold_rule() {
-        let min = MIN_ITEMS_PER_CERTIFICATION_WORKER;
+        let min = MIN_VECTORS_PER_CERTIFICATION_WORKER;
+        let vector = SweepUnit::ExhaustiveVector;
         assert!(
             min >= 2,
             "a measured crossover below two items cannot keep small work on the caller thread"
         );
 
-        assert_eq!(certification_workers(0, 8), 0, "empty work runs no closure");
-        assert_eq!(certification_workers(min - 1, 8), 1);
-        assert_eq!(certification_workers(min, 8), 1);
-        assert_eq!(certification_workers(min * 2, 8), 2);
-        assert_eq!(certification_workers(min * 8, 3), 3);
-        assert_eq!(certification_workers(min * 8, 1), 1);
-        assert_eq!(certification_workers(min * 8, 0), 1);
+        assert_eq!(
+            certification_workers(0, 8, vector),
+            0,
+            "empty work runs no closure"
+        );
+        assert_eq!(certification_workers(min - 1, 8, vector), 1);
+        assert_eq!(certification_workers(min, 8, vector), 1);
+        assert_eq!(certification_workers(min * 2, 8, vector), 2);
+        assert_eq!(certification_workers(min * 8, 3, vector), 3);
+        assert_eq!(certification_workers(min * 8, 1, vector), 1);
+        assert_eq!(certification_workers(min * 8, 0, vector), 1);
+    }
+
+    #[test]
+    fn manifest_sweeps_open_one_worker_per_heavy_transition() {
+        assert_eq!(
+            MIN_TRANSITIONS_PER_CERTIFICATION_WORKER, 1,
+            "a manifest transition pays for a worker on its own"
+        );
+
+        // ripple_adder8's top manifest at the auto budget: 68 transitions and a
+        // requested 12 must open 12 workers, as the retained serial-exhaustive
+        // revision did. The same count of lighter exhaustive vectors keeps the
+        // measured eight-per-worker threshold.
+        assert_eq!(certification_workers(68, 12, SweepUnit::Transition), 12);
+        assert_eq!(
+            certification_workers(68, 12, SweepUnit::ExhaustiveVector),
+            8
+        );
+
+        assert_eq!(
+            certification_workers(0, 12, SweepUnit::Transition),
+            0,
+            "empty work runs no closure at either unit"
+        );
+        assert_eq!(
+            certification_workers(1, 12, SweepUnit::Transition),
+            1,
+            "one transition never opens a worker for nothing to do"
+        );
+        assert_eq!(certification_workers(3, 12, SweepUnit::Transition), 3);
+        assert_eq!(
+            certification_workers(68, 4, SweepUnit::Transition),
+            4,
+            "the compile-wide budget still bounds a heavy sweep"
+        );
+        assert_eq!(
+            certification_workers(68, 0, SweepUnit::Transition),
+            1,
+            "a zero budget still runs the sweep on the caller thread"
+        );
     }
 
     #[test]
     fn certification_chunks_below_the_threshold_stay_on_the_caller_thread() {
         let caller = std::thread::current().id();
-        let items: Vec<usize> = (0..MIN_ITEMS_PER_CERTIFICATION_WORKER - 1).collect();
+        let items: Vec<usize> = (0..MIN_VECTORS_PER_CERTIFICATION_WORKER - 1).collect();
 
-        let values = run_certification_chunks(&items, 8, |index, item| {
-            assert_eq!(
-                std::thread::current().id(),
-                caller,
-                "work below the measured threshold must not spawn a worker"
-            );
-            Ok::<_, CandidateCertificationError>(index + item)
-        })
-        .expect("every chunk succeeds");
-        assert_eq!(values, items.iter().map(|item| item * 2).collect::<Vec<_>>());
+        let values =
+            run_certification_chunks(&items, 8, SweepUnit::ExhaustiveVector, |index, item| {
+                assert_eq!(
+                    std::thread::current().id(),
+                    caller,
+                    "work below the measured threshold must not spawn a worker"
+                );
+                Ok::<_, CandidateCertificationError>(index + item)
+            })
+            .expect("every chunk succeeds");
+        assert_eq!(
+            values,
+            items.iter().map(|item| item * 2).collect::<Vec<_>>()
+        );
 
         let empty: Vec<usize> = Vec::new();
-        assert!(run_certification_chunks(&empty, 8, |_, _| Err::<usize, _>(
-            CandidateCertificationError::CounterOverflow
-        ))
+        assert!(run_certification_chunks(
+            &empty,
+            8,
+            SweepUnit::Transition,
+            |_, _| Err::<usize, _>(CandidateCertificationError::CounterOverflow)
+        )
         .expect("empty work runs no closure")
         .is_empty());
     }
@@ -1572,7 +1679,10 @@ mod tests {
             certified.equivalence_certificate().library_revision,
             identity.library_revision
         );
-        assert_eq!(certified.metrics().candidate_fingerprint, identity.candidate);
+        assert_eq!(
+            certified.metrics().candidate_fingerprint,
+            identity.candidate
+        );
         assert_eq!(
             certified.metrics().realised_timing_graph_fingerprint,
             certified.timing_graph().fingerprint()

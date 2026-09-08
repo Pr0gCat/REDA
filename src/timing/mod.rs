@@ -162,7 +162,10 @@ pub fn observations_to_result(
             .changes
             .push((relative_tick, observation.value));
     }
-    TransitionResult { settle_game_ticks, nets }
+    TransitionResult {
+        settle_game_ticks,
+        nets,
+    }
 }
 
 pub fn typed_observations_to_result(
@@ -184,7 +187,10 @@ pub fn typed_observations_to_result(
             .changes
             .push((observation.tick - start_tick, observation.value));
     }
-    TypedTransitionResult { settle_game_ticks, nets }
+    TypedTransitionResult {
+        settle_game_ticks,
+        nets,
+    }
 }
 
 /// Select a stable causal witness. A changed declared output wins; if no
@@ -228,12 +234,15 @@ pub fn transition_witness(
             activity: WitnessActivity::Active,
         });
     }
-    declared_outputs.first().copied().map(|observation| TransitionWitness {
-        transition_index,
-        observation,
-        arrival_tick: None,
-        activity: WitnessActivity::StaticFallback,
-    })
+    declared_outputs
+        .first()
+        .copied()
+        .map(|observation| TransitionWitness {
+            transition_index,
+            observation,
+            arrival_tick: None,
+            activity: WitnessActivity::StaticFallback,
+        })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -249,8 +258,14 @@ pub fn summarize_typed_worst_case(
     declared_outputs: &[ObservationId],
     transitions: &[TypedTransitionResult],
 ) -> TypedTimingSummary {
-    assert!(!transitions.is_empty(), "typed timing summary needs at least one transition");
-    assert!(!declared_outputs.is_empty(), "typed timing summary needs a declared output");
+    assert!(
+        !transitions.is_empty(),
+        "typed timing summary needs at least one transition"
+    );
+    assert!(
+        !declared_outputs.is_empty(),
+        "typed timing summary needs a declared output"
+    );
     let worst_settle_game_ticks = transitions
         .iter()
         .map(|transition| transition.settle_game_ticks)
@@ -294,7 +309,11 @@ pub fn measure_transition(
     let start_tick = simulator.current_tick();
     apply_input(simulator);
     let settle_game_ticks = simulator.run_until_stable(max_game_ticks)?;
-    Ok(observations_to_result(simulator.observations(), start_tick, settle_game_ticks))
+    Ok(observations_to_result(
+        simulator.observations(),
+        start_tick,
+        settle_game_ticks,
+    ))
 }
 
 pub fn measure_typed_transition(
@@ -320,9 +339,8 @@ pub fn measure_typed_transition(
 /// gate's actual output torch (which includes the netlist's declared
 /// outputs -- a declared output's signal name is some gate's `output`).
 pub fn watch_all_nets(compiled: &CompiledCircuit) -> Vec<(Position, String)> {
-    let mut watched = Vec::with_capacity(
-        compiled.input_positions.len() + compiled.gate_output_positions.len(),
-    );
+    let mut watched =
+        Vec::with_capacity(compiled.input_positions.len() + compiled.gate_output_positions.len());
     for (name, &(x, y, z)) in &compiled.input_positions {
         watched.push((Position::new(x, y, z), name.clone()));
     }
@@ -353,8 +371,12 @@ pub fn logic_depth(netlist: &Netlist) -> usize {
     let Some(order) = netlist.topological_order() else {
         return 0;
     };
-    let producer_of: HashMap<&str, usize> =
-        netlist.gates.iter().enumerate().map(|(i, gate)| (gate.output.as_str(), i)).collect();
+    let producer_of: HashMap<&str, usize> = netlist
+        .gates
+        .iter()
+        .enumerate()
+        .map(|(i, gate)| (gate.output.as_str(), i))
+        .collect();
 
     let mut depth = vec![0usize; netlist.gates.len()];
     for &g in &order {
@@ -414,9 +436,17 @@ pub fn logic_depth_bound_game_ticks(netlist: &Netlist) -> u64 {
 /// `planner::critical_path_delay` does have the per-edge weights and is
 /// exact on all six reference circuits, including these two. Where the two
 /// disagree, that one is the one to believe.
-pub fn critical_path(netlist: &Netlist, arrivals: &BTreeMap<String, u64>, output: &str) -> Vec<String> {
-    let producer_of: HashMap<&str, usize> =
-        netlist.gates.iter().enumerate().map(|(i, gate)| (gate.output.as_str(), i)).collect();
+pub fn critical_path(
+    netlist: &Netlist,
+    arrivals: &BTreeMap<String, u64>,
+    output: &str,
+) -> Vec<String> {
+    let producer_of: HashMap<&str, usize> = netlist
+        .gates
+        .iter()
+        .enumerate()
+        .map(|(i, gate)| (gate.output.as_str(), i))
+        .collect();
 
     let mut path = vec![output.to_string()];
     let mut current = output.to_string();
@@ -455,14 +485,18 @@ fn critical_path_non_merge_gate_count(netlist: &Netlist, path: &[String]) -> usi
     if path.len() < 2 {
         return 0;
     }
-    let producer_of: HashMap<&str, usize> =
-        netlist.gates.iter().enumerate().map(|(i, gate)| (gate.output.as_str(), i)).collect();
+    let producer_of: HashMap<&str, usize> = netlist
+        .gates
+        .iter()
+        .enumerate()
+        .map(|(i, gate)| (gate.output.as_str(), i))
+        .collect();
     path[1..]
         .iter()
         .filter(|signal| {
-            let &gate_index = producer_of
-                .get(signal.as_str())
-                .unwrap_or_else(|| panic!("critical path signal `{signal}` must be some gate's output"));
+            let &gate_index = producer_of.get(signal.as_str()).unwrap_or_else(|| {
+                panic!("critical path signal `{signal}` must be some gate's output")
+            });
             !netlist.gates[gate_index].is_merge()
         })
         .count()
@@ -504,33 +538,45 @@ pub fn critical_path_repeaters(
         return Some(0);
     }
 
-    let producer_of: HashMap<&str, usize> =
-        netlist.gates.iter().enumerate().map(|(i, gate)| (gate.output.as_str(), i)).collect();
+    let producer_of: HashMap<&str, usize> = netlist
+        .gates
+        .iter()
+        .enumerate()
+        .map(|(i, gate)| (gate.output.as_str(), i))
+        .collect();
     let report = routing_stats::analyze(netlist, compiled).ok()?;
 
-    Some(critical_path
-        .windows(2)
-        .map(|hop| {
-            let (source, sink_output) = (&hop[0], &hop[1]);
-            let &gate_index = producer_of
-                .get(sink_output.as_str())
-                .unwrap_or_else(|| panic!("critical path signal `{sink_output}` must be some gate's output"));
-            let gate = &netlist.gates[gate_index];
-            let input_index = gate
-                .inputs
-                .iter()
-                .position(|input| input == source)
-                .unwrap_or_else(|| panic!("critical path signal `{source}` must feed `{sink_output}`"));
-            let sink_label = format!("{sink_output}.in[{input_index}]");
-            report
-                .edges
-                .iter()
-                .find(|edge| &edge.source == source && edge.sink == sink_label)
-                .unwrap_or_else(|| panic!("no routed edge found for critical-path hop {source} -> {sink_label}"))
-                .total()
-                .repeaters
-        })
-        .sum())
+    Some(
+        critical_path
+            .windows(2)
+            .map(|hop| {
+                let (source, sink_output) = (&hop[0], &hop[1]);
+                let &gate_index = producer_of.get(sink_output.as_str()).unwrap_or_else(|| {
+                    panic!("critical path signal `{sink_output}` must be some gate's output")
+                });
+                let gate = &netlist.gates[gate_index];
+                let input_index = gate
+                    .inputs
+                    .iter()
+                    .position(|input| input == source)
+                    .unwrap_or_else(|| {
+                        panic!("critical path signal `{source}` must feed `{sink_output}`")
+                    });
+                let sink_label = format!("{sink_output}.in[{input_index}]");
+                report
+                    .edges
+                    .iter()
+                    .find(|edge| &edge.source == source && edge.sink == sink_label)
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "no routed edge found for critical-path hop {source} -> {sink_label}"
+                        )
+                    })
+                    .total()
+                    .repeaters
+            })
+            .sum(),
+    )
 }
 
 /// The corrected settle-time model: predicts settle time from the *actual
@@ -585,9 +631,14 @@ pub fn critical_path_settle_model_game_ticks(
     critical_path_repeaters: usize,
     lamp_turns_on: bool,
 ) -> u64 {
-    let lamp_delay = if lamp_turns_on { LAMP_TURN_ON_DELAY_GAME_TICKS } else { LAMP_TURN_OFF_DELAY_GAME_TICKS };
+    let lamp_delay = if lamp_turns_on {
+        LAMP_TURN_ON_DELAY_GAME_TICKS
+    } else {
+        LAMP_TURN_OFF_DELAY_GAME_TICKS
+    };
     let lamp_delay = lamp_delay.max(MIN_SCHEDULE_DELAY_GAME_TICKS);
-    TORCH_DELAY_GAME_TICKS * (critical_path_gate_count as u64 + critical_path_repeaters as u64) + lamp_delay
+    TORCH_DELAY_GAME_TICKS * (critical_path_gate_count as u64 + critical_path_repeaters as u64)
+        + lamp_delay
 }
 
 // ---------------------------------------------------------------------
@@ -674,8 +725,14 @@ pub fn summarize_worst_case(
     outputs: &[String],
     transitions: &[TransitionResult],
 ) -> TimingSummary {
-    assert!(!transitions.is_empty(), "summarize_worst_case needs at least one transition");
-    assert!(!outputs.is_empty(), "summarize_worst_case needs at least one output");
+    assert!(
+        !transitions.is_empty(),
+        "summarize_worst_case needs at least one transition"
+    );
+    assert!(
+        !outputs.is_empty(),
+        "summarize_worst_case needs at least one output"
+    );
 
     let mut glitch_counts: BTreeMap<String, usize> = BTreeMap::new();
     let worst_ticks = transitions
@@ -799,12 +856,19 @@ mod tests {
             ],
         };
         assert_eq!(logic_depth(&netlist), 3);
-        assert_eq!(logic_depth_bound_game_ticks(&netlist), 3 * TORCH_DELAY_GAME_TICKS);
+        assert_eq!(
+            logic_depth_bound_game_ticks(&netlist),
+            3 * TORCH_DELAY_GAME_TICKS
+        );
     }
 
     #[test]
     fn logic_depth_of_an_empty_netlist_is_zero() {
-        let netlist = Netlist { inputs: vec![], outputs: vec![], gates: vec![] };
+        let netlist = Netlist {
+            inputs: vec![],
+            outputs: vec![],
+            gates: vec![],
+        };
         assert_eq!(logic_depth(&netlist), 0);
     }
 
@@ -817,20 +881,33 @@ mod tests {
             outputs: vec!["out".to_string()],
             gates: vec![nor("p", &["x"]), nor("q", &["y"]), nor("out", &["p", "q"])],
         };
-        let arrivals: BTreeMap<String, u64> =
-            [("p".to_string(), 5), ("q".to_string(), 10), ("out".to_string(), 12)]
-                .into_iter()
-                .collect();
+        let arrivals: BTreeMap<String, u64> = [
+            ("p".to_string(), 5),
+            ("q".to_string(), 10),
+            ("out".to_string(), 12),
+        ]
+        .into_iter()
+        .collect();
 
         let path = critical_path(&netlist, &arrivals, "out");
-        assert_eq!(path, vec!["y".to_string(), "q".to_string(), "out".to_string()]);
+        assert_eq!(
+            path,
+            vec!["y".to_string(), "q".to_string(), "out".to_string()]
+        );
     }
 
     #[test]
     fn critical_path_of_a_primary_input_is_just_itself() {
-        let netlist = Netlist { inputs: vec!["x".to_string()], outputs: vec![], gates: vec![] };
+        let netlist = Netlist {
+            inputs: vec!["x".to_string()],
+            outputs: vec![],
+            gates: vec![],
+        };
         let arrivals = BTreeMap::new();
-        assert_eq!(critical_path(&netlist, &arrivals, "x"), vec!["x".to_string()]);
+        assert_eq!(
+            critical_path(&netlist, &arrivals, "x"),
+            vec!["x".to_string()]
+        );
     }
 
     #[test]
@@ -920,7 +997,10 @@ mod tests {
         assert_eq!(summary.worst_transition_index, 0);
         assert_eq!(summary.witnesses.len(), 2);
         assert_eq!(summary.witnesses[&0].activity, WitnessActivity::Active);
-        assert_eq!(summary.witnesses[&2].activity, WitnessActivity::StaticFallback);
+        assert_eq!(
+            summary.witnesses[&2].activity,
+            WitnessActivity::StaticFallback
+        );
     }
 
     #[test]
@@ -932,9 +1012,18 @@ mod tests {
         };
         let compiled = crate::compile::compile_legacy(&netlist).unwrap();
         let transitions = vec![
-            TransitionResult { settle_game_ticks: 6, nets: BTreeMap::new() },
-            TransitionResult { settle_game_ticks: 2, nets: BTreeMap::new() },
-            TransitionResult { settle_game_ticks: 6, nets: BTreeMap::new() },
+            TransitionResult {
+                settle_game_ticks: 6,
+                nets: BTreeMap::new(),
+            },
+            TransitionResult {
+                settle_game_ticks: 2,
+                nets: BTreeMap::new(),
+            },
+            TransitionResult {
+                settle_game_ticks: 6,
+                nets: BTreeMap::new(),
+            },
         ];
         let summary = summarize_worst_case(&netlist, &compiled, &["y".to_string()], &transitions);
         assert_eq!(summary.worst_transition_indices, vec![0, 2]);
@@ -957,8 +1046,12 @@ mod tests {
         let sites = compiled.observations.sites();
         assert_eq!(sites[&primitive].at, sites[&instance].at);
         assert_ne!(sites[&primitive].id, sites[&instance].id);
-        assert!(watch_all_typed(&compiled).iter().any(|site| site.id == primitive));
-        assert!(watch_all_typed(&compiled).iter().any(|site| site.id == instance));
+        assert!(watch_all_typed(&compiled)
+            .iter()
+            .any(|site| site.id == primitive));
+        assert!(watch_all_typed(&compiled)
+            .iter()
+            .any(|site| site.id == instance));
     }
 
     #[test]
@@ -978,7 +1071,10 @@ mod tests {
             instance: InstanceId(1),
             node: TopologyNodeId(0),
         };
-        assert!(compiled.observations.primitive_outputs.contains_key(&isolator));
+        assert!(compiled
+            .observations
+            .primitive_outputs
+            .contains_key(&isolator));
         assert!(compiled
             .observations
             .junction_outputs
@@ -1079,39 +1175,80 @@ mod tests {
         let support_b1 = lever_pos.offset(Facing::South);
         let torch_b1 = support_b1.offset(Facing::South);
         world.set(support_b1.x, support_b1.y, support_b1.z, stone());
-        world.set(torch_b1.x, torch_b1.y, torch_b1.z, wall_torch(Facing::South));
+        world.set(
+            torch_b1.x,
+            torch_b1.y,
+            torch_b1.z,
+            wall_torch(Facing::South),
+        );
 
         let support_b2 = torch_b1.offset(Facing::South);
         let torch_b2 = support_b2.offset(Facing::South);
         world.set(support_b2.x, support_b2.y, support_b2.z, stone());
-        world.set(torch_b2.x, torch_b2.y, torch_b2.z, wall_torch(Facing::South));
+        world.set(
+            torch_b2.x,
+            torch_b2.y,
+            torch_b2.z,
+            wall_torch(Facing::South),
+        );
 
         let support_b3 = torch_b2.offset(Facing::South);
         let torch_b3 = support_b3.offset(Facing::South);
         world.set(support_b3.x, support_b3.y, support_b3.z, stone());
-        world.set(torch_b3.x, torch_b3.y, torch_b3.z, wall_torch(Facing::South));
+        world.set(
+            torch_b3.x,
+            torch_b3.y,
+            torch_b3.z,
+            wall_torch(Facing::South),
+        );
 
         let repeater_b1 = torch_b3.offset(Facing::South);
         // facing=North -> input north, output south: continues the chain
-        world.set(repeater_b1.x, repeater_b1.y, repeater_b1.z, repeater(Facing::North));
+        world.set(
+            repeater_b1.x,
+            repeater_b1.y,
+            repeater_b1.z,
+            repeater(Facing::North),
+        );
         let lamp_b = repeater_b1.offset(Facing::South);
         world.set(lamp_b.x, lamp_b.y, lamp_b.z, lamp());
 
         let mut simulator = Simulator::new(world);
-        simulator.run_until_stable(200).expect("the lever-off steady state must settle");
+        simulator
+            .run_until_stable(200)
+            .expect("the lever-off steady state must settle");
         // Both chains have an odd number of inversions (1 and 3), so with the
         // lever off (unpowered support -> torch lit -> ... -> lamp lit) both
         // lamps rest lit, the same way a single NOT gate would.
-        assert!(simulator.world().get(lamp_a.x, lamp_a.y, lamp_a.z).lit, "lamp_a must start lit (lever off)");
-        assert!(simulator.world().get(lamp_b.x, lamp_b.y, lamp_b.z).lit, "lamp_b must start lit (lever off)");
+        assert!(
+            simulator.world().get(lamp_a.x, lamp_a.y, lamp_a.z).lit,
+            "lamp_a must start lit (lever off)"
+        );
+        assert!(
+            simulator.world().get(lamp_b.x, lamp_b.y, lamp_b.z).lit,
+            "lamp_b must start lit (lever off)"
+        );
 
-        let mut on_lever = simulator.world().get(lever_pos.x, lever_pos.y, lever_pos.z).clone();
+        let mut on_lever = simulator
+            .world()
+            .get(lever_pos.x, lever_pos.y, lever_pos.z)
+            .clone();
         on_lever.lit = true;
-        simulator.world_mut().set(lever_pos.x, lever_pos.y, lever_pos.z, on_lever);
-        let settle = simulator.run_until_stable(200).expect("this feedforward circuit must settle");
+        simulator
+            .world_mut()
+            .set(lever_pos.x, lever_pos.y, lever_pos.z, on_lever);
+        let settle = simulator
+            .run_until_stable(200)
+            .expect("this feedforward circuit must settle");
 
-        assert!(!simulator.world().get(lamp_a.x, lamp_a.y, lamp_a.z).lit, "lamp_a must end up dark (lever on)");
-        assert!(!simulator.world().get(lamp_b.x, lamp_b.y, lamp_b.z).lit, "lamp_b must end up dark (lever on)");
+        assert!(
+            !simulator.world().get(lamp_a.x, lamp_a.y, lamp_a.z).lit,
+            "lamp_a must end up dark (lever on)"
+        );
+        assert!(
+            !simulator.world().get(lamp_b.x, lamp_b.y, lamp_b.z).lit,
+            "lamp_b must end up dark (lever on)"
+        );
         assert_eq!(
             settle, 14,
             "see the hand-derived timeline above -- chain A (1 gate, 4 repeaters) is the true \

@@ -56,7 +56,11 @@ fn the_parse_is_the_artifact() {
         BTreeSet::from([(0, 0, 1)]),
         "Table 1 gives a repeater exactly one driven face, `facing.opposite()`"
     );
-    assert_eq!(repeater.hop2.len(), 5, "Table 2 gives it one mediator, five faces");
+    assert_eq!(
+        repeater.hop2.len(),
+        5,
+        "Table 2 gives it one mediator, five faces"
+    );
     assert_eq!(
         repeater.unmeasured,
         BTreeSet::from([
@@ -237,7 +241,11 @@ fn the_fan_out_holds_for_a_horizontal_mediator_too() {
             measured.push((into, face, verdict));
         }
     }
-    assert_eq!(measured.len(), 20, "four directions, five remaining faces each");
+    assert_eq!(
+        measured.len(),
+        20,
+        "four directions, five remaining faces each"
+    );
     let coupled = measured.iter().filter(|(_, _, yes)| *yes).count();
     assert_eq!(
         coupled, 20,

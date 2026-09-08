@@ -58,7 +58,8 @@ fn compiled_module_count(design: &HierarchicalNetlist) -> Result<usize, Hierarch
 #[test]
 #[ignore = "release-only: needs python + yosys; cargo test --release --test hierarchical_synthesis -- --ignored"]
 fn the_verilog_ripple_adder8_keeps_eight_full_adder_instances_and_certifies() {
-    let source = std::fs::read_to_string("tests/fixtures/ripple_adder8.v").expect("fixture must exist");
+    let source =
+        std::fs::read_to_string("tests/fixtures/ripple_adder8.v").expect("fixture must exist");
     let (design, _port_map) = synthesize_verilog_hierarchical(&source, "ripple_adder8")
         .unwrap_or_else(|error| panic!("ripple_adder8.v must synthesize: {error}"));
 
@@ -76,7 +77,10 @@ fn the_verilog_ripple_adder8_keeps_eight_full_adder_instances_and_certifies() {
          see `tests/fixtures/ripple_adder8.v`'s `(* keep_hierarchy *)` comment"
     );
     assert!(
-        design.modules.keys().any(|name| name.contains("full_adder")),
+        design
+            .modules
+            .keys()
+            .any(|name| name.contains("full_adder")),
         "expected a module named `full_adder` (possibly Yosys-mangled) among {:?}",
         design.modules.keys().collect::<Vec<_>>()
     );
@@ -94,8 +98,12 @@ fn the_verilog_ripple_adder8_keeps_eight_full_adder_instances_and_certifies() {
     eprintln!(
         "CIRCUIT verilog_ripple_adder8 (hierarchical): OK gates={} blocks_compiled={} \
          ticks={} blocks={} in {:?}",
-        gate_count.map(|count| count.to_string()).unwrap_or_else(|| "?".to_string()),
-        blocks_compiled.map(|count| count.to_string()).unwrap_or_else(|| "?".to_string()),
+        gate_count
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "?".to_string()),
+        blocks_compiled
+            .map(|count| count.to_string())
+            .unwrap_or_else(|| "?".to_string()),
         result.metrics.quality.observed_settle,
         result.metrics.quality.non_air_blocks,
         started.elapsed()

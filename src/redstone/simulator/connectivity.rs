@@ -47,11 +47,15 @@ pub struct Connections {
 
 impl Connections {
     pub fn none() -> Self {
-        Connections { items: [None, None] }
+        Connections {
+            items: [None, None],
+        }
     }
 
     pub fn one(pos: Position) -> Self {
-        Connections { items: [Some(pos), None] }
+        Connections {
+            items: [Some(pos), None],
+        }
     }
 
     fn push(&mut self, pos: Position) {
@@ -506,7 +510,11 @@ mod tests {
             1,
             "with a step-supporting neighbour only the up-rule may fire, got {targets:?}"
         );
-        assert_eq!(targets[0], Position::new(2, 3, 2), "it must be the upper wire");
+        assert_eq!(
+            targets[0],
+            Position::new(2, 3, 2),
+            "it must be the upper wire"
+        );
     }
 
     #[test]
@@ -531,7 +539,11 @@ mod tests {
             1,
             "with a non-supportive neighbour only the down-rule may fire, got {targets:?}"
         );
-        assert_eq!(targets[0], Position::new(2, 1, 2), "it must be the lower wire");
+        assert_eq!(
+            targets[0],
+            Position::new(2, 1, 2),
+            "it must be the lower wire"
+        );
     }
 
     #[test]
@@ -738,7 +750,10 @@ mod tests {
         let from = Position::new(1, 1, 2);
         assert!(dust_connections(&w, from, Facing::East).is_empty());
         let reach: Vec<Position> = dust_reach(&w, from, Facing::East).iter().collect();
-        assert!(reach.contains(&Position::new(2, 1, 2)), "reach was {reach:?}");
+        assert!(
+            reach.contains(&Position::new(2, 1, 2)),
+            "reach was {reach:?}"
+        );
     }
 
     #[test]
@@ -750,7 +765,10 @@ mod tests {
 
         let from = Position::new(1, 1, 2);
         let reach: Vec<Position> = dust_reach(&w, from, Facing::East).iter().collect();
-        assert!(reach.contains(&Position::new(2, 2, 2)), "reach was {reach:?}");
+        assert!(
+            reach.contains(&Position::new(2, 2, 2)),
+            "reach was {reach:?}"
+        );
     }
 
     #[test]
@@ -763,7 +781,10 @@ mod tests {
 
         let from = Position::new(1, 2, 2);
         let reach: Vec<Position> = dust_reach(&w, from, Facing::East).iter().collect();
-        assert!(reach.contains(&Position::new(2, 1, 2)), "reach was {reach:?}");
+        assert!(
+            reach.contains(&Position::new(2, 1, 2)),
+            "reach was {reach:?}"
+        );
     }
 
     #[test]
@@ -779,7 +800,10 @@ mod tests {
 
         let from = Position::new(1, 1, 2);
         let reach: Vec<Position> = dust_reach(&w, from, Facing::East).iter().collect();
-        assert!(reach.contains(&Position::new(2, 2, 2)), "reach was {reach:?}");
+        assert!(
+            reach.contains(&Position::new(2, 2, 2)),
+            "reach was {reach:?}"
+        );
     }
 
     #[test]
@@ -793,6 +817,9 @@ mod tests {
 
         let from = Position::new(1, 1, 2);
         let reach: Vec<Position> = dust_reach(&w, from, Facing::East).iter().collect();
-        assert!(!reach.contains(&Position::new(2, 2, 2)), "reach was {reach:?}");
+        assert!(
+            !reach.contains(&Position::new(2, 2, 2)),
+            "reach was {reach:?}"
+        );
     }
 }
