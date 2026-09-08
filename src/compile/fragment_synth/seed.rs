@@ -744,7 +744,8 @@ impl SparseSeedBuilder {
         refresh_primitive_targets(&candidate, &sockets, &mut targets)?;
         let mut reservations = reservations_for_components(&candidate)?;
         reserve_route_endpoints(&mut reservations, &candidate, &sources, &targets);
-        route_all(
+        let route_started = std::time::Instant::now();
+        let route_result = route_all(
             &mut candidate,
             services.router,
             services.search_config,
@@ -756,7 +757,14 @@ impl SparseSeedBuilder {
             &targets,
             &sockets,
             &mut reservations,
-        )?;
+        );
+        if timing {
+            eprintln!(
+                "PHASE route_nets {:.3}",
+                route_started.elapsed().as_secs_f64() * 1_000.0
+            );
+        }
+        route_result?;
         phase("layout+routing", &mut phase_started);
         Ok((candidate, block_offsets))
     }
@@ -2294,6 +2302,7 @@ fn route_all(
     sockets: &BTreeMap<ConnectionId, usize>,
     reservations: &mut PhysicalReservations,
 ) -> Result<(), SeedError> {
+    let phase_timing = std::env::var_os("REDA_PHASE_TIMING").is_some();
     let mut grouped = BTreeMap::<PhysicalEndpointId, Vec<PendingTarget>>::new();
     for instance in &candidate.instances.instances {
         for connection in &instance.expanded.topology.connections {
@@ -2592,9 +2601,19 @@ fn route_all(
             })
             .collect::<Result<Vec<_>, SeedError>>()?;
         let sinks = NonEmptyRouteSinks::new(sinks).map_err(|_| SeedError::EmptyRoute)?;
+        let clone_start = phase_timing.then(std::time::Instant::now);
         let mut attempt_reservations = reservations.clone();
+        if let Some(clone_start) = clone_start {
+            let elapsed_ms = clone_start.elapsed().as_secs_f64() * 1000.0;
+            eprintln!(
+                "PHASE reservations_clone elements={} elapsed_ms={:.3}",
+                reservations.len(),
+                elapsed_ms
+            );
+        }
         reserve_foreign_private_cells(&mut attempt_reservations, &layout, source_id, &protected);
         reserve_source_refresh(&mut attempt_reservations, source_id, &source, route)?;
+        let route_owned_start = phase_timing.then(std::time::Instant::now);
         let routed = router.route_owned(OwnedRouteRequest {
             id: route,
             source: RouteEndpoint {
@@ -2610,6 +2629,10 @@ fn route_all(
             limits: config.router_limits,
             no_refresh: layout.departures.get(&source_id),
         });
+        if let Some(route_owned_start) = route_owned_start {
+            let elapsed_ms = route_owned_start.elapsed().as_secs_f64() * 1000.0;
+            eprintln!("PHASE route_owned elapsed_ms={:.3}", elapsed_ms);
+        }
         let mut tree = match routed {
             Ok(tree) => tree,
             Err(failure) => {
