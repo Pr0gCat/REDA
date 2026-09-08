@@ -482,3 +482,40 @@ Verification evidence: all 17 routing tests and the pinned seven-segment IO
 contract passed after the boundary fallback. The full library suite passed
 930/930 with 74 ignored, and `cargo clippy --lib` exited 0 with the branch's
 existing warnings. Independent static review: APPROVED.
+
+## Settled-source certification milestone — 2026-09-08
+
+Manifest certification now settles each contiguous source vector once, clones
+that complete simulator state for its destinations, and preserves the original
+manifest order. Source groups are packed into contiguous, transition-weighted
+worker batches. The final destination consumes the prepared simulator, so the
+change performs exactly one complete world clone per transition rather than one
+extra clone per source group. Unchanged pinned and lever inputs also avoid
+creating dirty entries, and the unused certification observer was removed.
+
+Release measurements used the unchanged hierarchical floorplan acceptance test,
+three runs per circuit, with manifest time summed across hierarchy levels:
+
+| Circuit | Baseline samples | Retained samples | Median speedup | Quality |
+|---|---:|---:|---:|---|
+| `ripple_adder8` | 19.613 / 19.975 / 19.628 s | 10.038 / 10.102 / 10.310 s | 1.94x | unchanged: 608 ticks / 70,603 blocks |
+| `alu8` | 75.313 / 81.598 / 73.250 s | 38.106 / 38.532 / 37.984 s | 1.98x | unchanged: 972 ticks / 213,833 blocks |
+
+The leaf exhaustive medians moved from 0.160 to 0.154 seconds for
+`ripple_adder8`, and from 1.949 to 1.704 seconds for `alu8`. Those are secondary
+results; the retained gate is the manifest phase.
+
+Two alternatives were measured and rejected. Removing the dead observer and
+unchanged writes alone reached only 0.93x on `ripple_adder8` and 1.05x on
+`alu8`. Splitting transitions evenly before source grouping improved theoretical
+core occupancy but repeated expensive source settling at chunk boundaries; its
+`ripple_adder8` median was 12.221 seconds, 20.98% slower than the retained
+weighted whole-group result.
+
+Correctness is pinned by a fresh-per-transition reference sweep, fixed legacy
+measurement and cap fields, logical-order error reduction, and complete
+candidate/certificate/manifest/metric equality at one, two and four workers.
+The existing automatic memory policy remains a conservative heuristic based on
+world volume and four-copy headroom; this milestone does not claim measured peak
+RSS or a hard cross-machine memory ceiling. No GPU path or new dependency was
+added.

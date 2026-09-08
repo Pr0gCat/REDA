@@ -113,6 +113,7 @@ pub struct ScheduledTick {
 /// 這樣時間順序、優先權順序、插入順序三者都是確定的，不會有 `HashMap`
 /// 走訪順序不穩定的問題。另外用一個 `HashSet<Position>` 追蹤「這個位置
 /// 目前有沒有待處理的排程」，讓 `is_scheduled` 是 O(1)。
+#[derive(Clone)]
 pub struct TickQueue {
     current_tick: u64,
     pending: BTreeMap<u64, Vec<ScheduledTick>>,

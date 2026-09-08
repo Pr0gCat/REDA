@@ -28,6 +28,7 @@ use schedule::{TickPriority, TickQueue};
 /// 紅石模擬器。
 ///
 /// 逐 game tick 推進。1 redstone tick = 2 game ticks。
+#[derive(Clone)]
 pub struct Simulator {
     world: World,
     queue: schedule::TickQueue,

@@ -458,16 +458,6 @@ fn sweep_manifest(
     config: &CertificationConfig,
 ) -> Result<Vec<TransitionMeasurement>, CandidateCertificationError> {
     let threads = certification_sweep_threads(world);
-    if std::env::var_os("REDA_PHASE_TIMING").is_some() {
-        eprintln!(
-            "WORK manifest_workers {}",
-            certification_workers(
-                manifest.transitions().len(),
-                threads,
-                MIN_TRANSITIONS_PER_CERTIFICATION_WORKER
-            )
-        );
-    }
     sweep_manifest_with_threads(
         world,
         candidate,
@@ -761,23 +751,80 @@ fn sweep_manifest_with_threads(
     config: &CertificationConfig,
     threads: usize,
 ) -> Result<Vec<TransitionMeasurement>, CandidateCertificationError> {
-    let transitions = manifest.transitions();
-    run_certification_chunks(
-        transitions,
+    let groups = transition_source_groups(manifest.transitions());
+    let workers = certification_workers(
+        groups.len(),
         threads,
         MIN_TRANSITIONS_PER_CERTIFICATION_WORKER,
-        |manifest_index, transition| {
-            measure_transition(
-                world,
-                candidate,
-                lowered,
-                compatibility,
-                transition,
-                manifest_index,
-                config,
-            )
+    );
+    let batches = transition_group_batches(&groups, workers);
+    if std::env::var_os("REDA_PHASE_TIMING").is_some() {
+        eprintln!("WORK manifest_workers {}", batches.len());
+    }
+    let measurements = run_certification_chunks(
+        &batches,
+        workers,
+        MIN_TRANSITIONS_PER_CERTIFICATION_WORKER,
+        |_, batch| {
+            let groups = batch
+                .iter()
+                .map(|(manifest_index, transitions)| {
+                    measure_transition_group(
+                        world,
+                        candidate,
+                        lowered,
+                        compatibility,
+                        transitions,
+                        *manifest_index,
+                        config,
+                    )
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Ok::<_, CandidateCertificationError>(groups.into_iter().flatten().collect::<Vec<_>>())
         },
-    )
+    )?;
+    Ok(measurements.into_iter().flatten().collect())
+}
+
+fn transition_source_groups(transitions: &[Transition]) -> Vec<(usize, &[Transition])> {
+    let mut manifest_index = 0;
+    transitions
+        .chunk_by(|left, right| left.from == right.from)
+        .map(|group| {
+            let indexed = (manifest_index, group);
+            manifest_index += group.len();
+            indexed
+        })
+        .collect()
+}
+
+fn transition_group_batches<'groups, 'transitions>(
+    groups: &'groups [(usize, &'transitions [Transition])],
+    workers: usize,
+) -> Vec<&'groups [(usize, &'transitions [Transition])]> {
+    let batch_count = workers.max(1).min(groups.len());
+    let mut remaining_weight = groups.iter().map(|(_, group)| group.len()).sum::<usize>();
+    let mut start = 0;
+    let mut batches = Vec::with_capacity(batch_count);
+    while start < groups.len() {
+        let batches_left = batch_count - batches.len();
+        if batches_left == 1 {
+            batches.push(&groups[start..]);
+            break;
+        }
+        let target = remaining_weight.div_ceil(batches_left);
+        let latest_end = groups.len() - (batches_left - 1);
+        let mut end = start;
+        let mut weight = 0;
+        while end < latest_end && weight < target {
+            weight += groups[end].1.len();
+            end += 1;
+        }
+        batches.push(&groups[start..end]);
+        remaining_weight -= weight;
+        start = end;
+    }
+    batches
 }
 
 /// Run `work` over contiguous chunks of `items` and reduce in logical index order.
@@ -833,24 +880,70 @@ where
     })
 }
 
-fn measure_transition(
+fn measure_transition_group(
     world: &World,
     candidate: &ExpandedPhysicalCandidate,
     lowered: &Netlist,
     compatibility: &CompatibilityViews,
-    transition: &Transition,
-    manifest_index: usize,
+    transitions: &[Transition],
+    first_manifest_index: usize,
     config: &CertificationConfig,
-) -> Result<TransitionMeasurement, CandidateCertificationError> {
-    let mut simulator = fresh_simulator(world, candidate, lowered);
-    let events_before = simulator.work_done();
-    drive_vector(
-        &mut simulator,
+) -> Result<Vec<TransitionMeasurement>, CandidateCertificationError> {
+    let Some(first) = transitions.first() else {
+        return Ok(Vec::new());
+    };
+    debug_assert!(transitions
+        .iter()
+        .all(|transition| transition.from == first.from));
+    let (simulator, events_before) = prepare_transition_source(
+        world,
         candidate,
         lowered,
         compatibility,
-        &transition.from,
+        &first.from,
+        first_manifest_index,
+        config,
     )?;
+    let (last, prefix) = transitions.split_last().expect("the group is not empty");
+    let mut measurements = prefix
+        .iter()
+        .enumerate()
+        .map(|(offset, transition)| {
+            measure_transition_from_source(
+                (simulator.clone(), events_before),
+                candidate,
+                lowered,
+                compatibility,
+                transition,
+                first_manifest_index + offset,
+                config,
+            )
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    measurements.push(measure_transition_from_source(
+        (simulator, events_before),
+        candidate,
+        lowered,
+        compatibility,
+        last,
+        first_manifest_index + prefix.len(),
+        config,
+    )?);
+    Ok(measurements)
+}
+
+fn prepare_transition_source(
+    world: &World,
+    candidate: &ExpandedPhysicalCandidate,
+    lowered: &Netlist,
+    compatibility: &CompatibilityViews,
+    from: &[bool],
+    manifest_index: usize,
+    config: &CertificationConfig,
+) -> Result<(Simulator, u64), CandidateCertificationError> {
+    let mut simulator = fresh_simulator(world, candidate, lowered);
+    let events_before = simulator.work_done();
+    drive_vector(&mut simulator, candidate, lowered, compatibility, from)?;
     settle(
         &mut simulator,
         manifest_index,
@@ -864,15 +957,22 @@ fn measure_transition(
         candidate,
         lowered,
         compatibility,
-        &transition.from,
+        from,
         manifest_index,
     )?;
-    simulator.attach_typed_observer(
-        candidate
-            .observations
-            .values()
-            .map(|observation| observation.site.clone()),
-    );
+    Ok((simulator, events_before))
+}
+
+fn measure_transition_from_source(
+    source: (Simulator, u64),
+    candidate: &ExpandedPhysicalCandidate,
+    lowered: &Netlist,
+    compatibility: &CompatibilityViews,
+    transition: &Transition,
+    manifest_index: usize,
+    config: &CertificationConfig,
+) -> Result<TransitionMeasurement, CandidateCertificationError> {
+    let (mut simulator, events_before) = source;
     let start_tick = simulator.current_tick();
     drive_vector(
         &mut simulator,
@@ -910,6 +1010,36 @@ fn measure_transition(
             .ok_or(CandidateCertificationError::CounterOverflow)?,
         simulator_events,
     })
+}
+
+#[cfg(test)]
+fn measure_transition_fresh(
+    world: &World,
+    candidate: &ExpandedPhysicalCandidate,
+    lowered: &Netlist,
+    compatibility: &CompatibilityViews,
+    transition: &Transition,
+    manifest_index: usize,
+    config: &CertificationConfig,
+) -> Result<TransitionMeasurement, CandidateCertificationError> {
+    let (simulator, events_before) = prepare_transition_source(
+        world,
+        candidate,
+        lowered,
+        compatibility,
+        &transition.from,
+        manifest_index,
+        config,
+    )?;
+    measure_transition_from_source(
+        (simulator, events_before),
+        candidate,
+        lowered,
+        compatibility,
+        transition,
+        manifest_index,
+        config,
+    )
 }
 
 fn enforce_event_cap(
@@ -1002,16 +1132,27 @@ fn drive_vector(
             .map(|name| compatibility.input_positions[name]),
     ) {
         if let Some(pin) = candidate.pins.get(name) {
-            compile::drive_caller_cell(simulator.world_mut(), (pin.at.x, pin.at.y, pin.at.z), bit);
+            let current = simulator.world().get(pin.at.x, pin.at.y, pin.at.z).kind;
+            let already_driven = matches!(
+                (bit, current),
+                (true, BlockKind::RedstoneBlock) | (false, BlockKind::Air)
+            );
+            if !already_driven {
+                compile::drive_caller_cell(
+                    simulator.world_mut(),
+                    (pin.at.x, pin.at.y, pin.at.z),
+                    bit,
+                );
+            }
         } else {
-            let mut state = simulator
-                .world()
-                .get(position.0, position.1, position.2)
-                .clone();
-            state.lit = bit;
-            simulator
-                .world_mut()
-                .set(position.0, position.1, position.2, state);
+            let current = simulator.world().get(position.0, position.1, position.2);
+            if current.lit != bit {
+                let mut state = current.clone();
+                state.lit = bit;
+                simulator
+                    .world_mut()
+                    .set(position.0, position.1, position.2, state);
+            }
         }
     }
     Ok(())
@@ -1110,14 +1251,16 @@ mod tests {
     use super::{
         canonical_world_fingerprint, certification_memory_budget_bytes, certification_sweep_guard,
         certification_thread_budget, certification_workers, certify_exhaustive_truth_with_threads,
-        external_signal_is_high, memory_worker_ceiling, parse_certification_threads,
-        run_certification_chunks, run_indexed_chunks, scoped_certification_threads, settle,
-        sweep_manifest_with_threads, sweep_worker_budget, with_certification_threads,
-        with_compile_worker_budget, world_worker_memory_bytes, CandidateCertificationError,
-        CompleteCandidateCertifier, ExpandedCandidateCertifier, RealisedTimingGraph,
-        TimingGraphError, TransitionManifest, TransitionPhase, CERTIFICATION_SWEEP_LOCK,
-        CERT_WORKER_MEMORY_BUDGET_BYTES, MIN_TRANSITIONS_PER_CERTIFICATION_WORKER,
-        MIN_VECTORS_PER_CERTIFICATION_WORKER, WORLD_COPY_HEADROOM,
+        drive_vector, external_signal_is_high, fresh_simulator, memory_worker_ceiling,
+        measure_transition_fresh, parse_certification_threads, run_certification_chunks,
+        run_indexed_chunks, scoped_certification_threads, settle, sweep_manifest_with_threads,
+        sweep_worker_budget, transition_group_batches, transition_source_groups,
+        with_certification_threads, with_compile_worker_budget, world_worker_memory_bytes,
+        CandidateCertificationError, CompleteCandidateCertifier, ExpandedCandidateCertifier,
+        RealisedTimingGraph, TimingGraphError, TransitionManifest, TransitionMeasurement,
+        TransitionPhase, CERTIFICATION_SWEEP_LOCK, CERT_WORKER_MEMORY_BUDGET_BYTES,
+        MIN_TRANSITIONS_PER_CERTIFICATION_WORKER, MIN_VECTORS_PER_CERTIFICATION_WORKER,
+        WORLD_COPY_HEADROOM,
     };
     use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
     use crate::compile::fragment_synth::legacy_adapter::LegacyCandidateAdapter;
@@ -1604,6 +1747,90 @@ mod tests {
     }
 
     #[test]
+    fn drive_vector_only_writes_and_dirties_changed_inputs() {
+        let netlist = not_netlist_with_inputs(2);
+        let mut placements = crate::compile::planner::PortPlacements::default();
+        placements.pin(
+            "i0",
+            crate::compile::planner::Anchor { x: 10, y: 1, z: 40 },
+            Facing::North,
+        );
+        let plan = crate::compile::planner::plan_from_netlist(&netlist, &placements)
+            .expect("mixed pinned fixture must plan");
+        let realised = crate::compile::planner::realise_and_verify(
+            &plan,
+            &netlist,
+            crate::compile::planner::candidate_world_size(&plan),
+        )
+        .expect("mixed pinned fixture must realise");
+        let candidate = LegacyCandidateAdapter::adapt_plan(&netlist, &plan, &realised.world)
+            .expect("mixed pinned fixture must adapt")
+            .candidate;
+        let compatibility = candidate
+            .compatibility_views(&netlist)
+            .expect("fixture compatibility views");
+        let mut simulator = fresh_simulator(&realised.world, &candidate, &netlist);
+        let pinned = candidate.pins.get("i0").expect("i0 is pinned").at;
+        let lever = compatibility.input_positions["i1"];
+        let pinned_index = simulator
+            .world()
+            .index(pinned.x, pinned.y, pinned.z)
+            .unwrap();
+        let lever_index = simulator
+            .world()
+            .index(lever.0, lever.1, lever.2)
+            .unwrap();
+
+        assert_eq!(
+            simulator.world().get(pinned.x, pinned.y, pinned.z).kind,
+            BlockKind::Air
+        );
+        assert!(!simulator.world().get(lever.0, lever.1, lever.2).lit);
+        simulator.world_mut().take_dirty();
+
+        drive_vector(
+            &mut simulator,
+            &candidate,
+            &netlist,
+            &compatibility,
+            &[false, false],
+        )
+        .expect("unchanged vector drives");
+        assert!(
+            simulator.world_mut().take_dirty().is_empty(),
+            "an unchanged vector must not write either input"
+        );
+
+        drive_vector(
+            &mut simulator,
+            &candidate,
+            &netlist,
+            &compatibility,
+            &[true, false],
+        )
+        .expect("pinned input changes");
+        assert_eq!(
+            simulator.world_mut().take_dirty(),
+            vec![pinned_index]
+        );
+        assert_eq!(
+            simulator.world().get(pinned.x, pinned.y, pinned.z).kind,
+            BlockKind::RedstoneBlock
+        );
+
+        drive_vector(
+            &mut simulator,
+            &candidate,
+            &netlist,
+            &compatibility,
+            &[true, true],
+        )
+        .expect("lever input changes");
+        assert_eq!(simulator.world_mut().take_dirty(), vec![lever_index]);
+        assert!(simulator.world().get(lever.0, lever.1, lever.2).lit);
+    }
+
+    #[test]
     fn complete_certification_seals_structure_function_manifest_and_metrics() {
         let netlist = not_netlist();
         let compiled = compile_legacy(&netlist).expect("legacy migration fixture");
@@ -1736,8 +1963,36 @@ mod tests {
 
         let serial = sweep(&config, 1).expect("serial sweep");
         let parallel = sweep(&config, 4).expect("parallel sweep");
+        let fresh = manifest
+            .transitions()
+            .iter()
+            .enumerate()
+            .map(|(manifest_index, transition)| {
+                measure_transition_fresh(
+                    world.world(),
+                    &candidate,
+                    &netlist,
+                    &compatibility,
+                    transition,
+                    manifest_index,
+                    &config,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .expect("fresh-per-transition reference sweep");
+        assert_eq!(
+            fresh[0],
+            TransitionMeasurement {
+                manifest_index: 0,
+                start_tick: 7,
+                settle_game_ticks: 10,
+                simulator_events: 11,
+            },
+            "the independent fresh path pins the legacy measurement fields"
+        );
 
         assert_eq!(parallel, serial);
+        assert_eq!(serial, fresh);
         assert_eq!(
             parallel
                 .iter()
@@ -1747,6 +2002,24 @@ mod tests {
         );
 
         config.max_simulator_events_per_transition = 0;
+        let fresh = measure_transition_fresh(
+            world.world(),
+            &candidate,
+            &netlist,
+            &compatibility,
+            &manifest.transitions()[0],
+            0,
+            &config,
+        )
+        .expect_err("fresh reference must hit the cap");
+        assert!(matches!(
+            &fresh,
+            CandidateCertificationError::SimulatorEventCapExceeded {
+                manifest_index: 0,
+                used: 0,
+                limit: 0,
+            }
+        ));
         let serial = sweep(&config, 1).expect_err("serial sweep must hit the cap");
         let parallel = sweep(&config, 4).expect_err("parallel sweep must hit the cap");
 
@@ -1760,7 +2033,9 @@ mod tests {
         };
         let serial_fields = fields(serial);
         let parallel_fields = fields(parallel);
+        let fresh_fields = fields(fresh);
         assert_eq!(parallel_fields, serial_fields);
+        assert_eq!(serial_fields, fresh_fields);
         assert_eq!(serial_fields.0, 0);
 
         let empty = TransitionManifest::new(Vec::new());
@@ -1775,6 +2050,49 @@ mod tests {
         )
         .expect("empty sweep")
         .is_empty());
+    }
+
+    #[test]
+    fn manifest_source_groups_preserve_every_transition_and_index() {
+        let manifest = TransitionManifest::new((0..5).map(|index| format!("i{index}")).collect());
+        let groups = transition_source_groups(manifest.transitions());
+
+        assert!(groups.len() < manifest.transitions().len());
+        let mut next_index = 0;
+        for (start, group) in groups {
+            assert_eq!(start, next_index);
+            assert!(!group.is_empty());
+            assert!(group.iter().all(|transition| transition.from == group[0].from));
+            assert_eq!(
+                group,
+                &manifest.transitions()[start..start + group.len()],
+                "grouping must neither reorder nor drop transitions"
+            );
+            next_index += group.len();
+        }
+        assert_eq!(next_index, manifest.transitions().len());
+    }
+
+    #[test]
+    fn sparse_manifest_batches_balance_by_transition_count() {
+        let manifest = TransitionManifest::new((0..8).map(|index| format!("i{index}")).collect());
+        let groups = transition_source_groups(manifest.transitions());
+        let batches = transition_group_batches(&groups, 4);
+
+        assert_eq!(
+            batches
+                .iter()
+                .map(|batch| batch.iter().map(|(_, group)| group.len()).sum::<usize>())
+                .collect::<Vec<_>>(),
+            vec![8, 8, 8, 8]
+        );
+        assert_eq!(
+            batches
+                .into_iter()
+                .flat_map(|batch| batch.iter().copied())
+                .collect::<Vec<_>>(),
+            groups
+        );
     }
 
     #[test]

@@ -117,6 +117,7 @@ struct WatchRegistration {
 /// that drives it are the same net under two names in some callers), so
 /// labels are not required to be unique -- lookups always go the other way,
 /// from position to label.
+#[derive(Clone)]
 pub struct Observer {
     watched: BTreeMap<Position, Vec<WatchRegistration>>,
     last_value: HashMap<Position, bool>,
