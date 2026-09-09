@@ -28,7 +28,9 @@ use crate::compile::topology::Library;
 use crate::compile::{self, Netlist};
 use crate::redstone::simulator::position::Position;
 use crate::redstone::simulator::propagate::block_signal_at;
-use crate::redstone::simulator::{BoundedSimulationError, SimulationError, Simulator};
+use crate::redstone::simulator::{
+    BoundedSimulationError, SimulationError, Simulator, SimulatorWorkCounts,
+};
 use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::storage::World;
 
@@ -315,7 +317,21 @@ impl CompleteCandidateCertifier {
         let exhaustive_states = exhaustive
             .then(|| exhaustive_state_count(lowered))
             .transpose()?;
+        // TEMPORARY (Task 1 attribution): construction wall time for the one
+        // pristine baseline. Never added to any worker-ns sum. Carries the same
+        // `states`/`world` key as the sweep block below, so the two lines pair
+        // up even when several leaf compiles interleave on stderr.
+        let baseline_started = std::time::Instant::now();
         let baseline = fresh_simulator(world.world(), &candidate, lowered);
+        if timing && std::env::var_os("REDA_SIM_WORK_COUNTS").is_some() {
+            let build_wall_ns = baseline_started.elapsed().as_nanos();
+            let (size_x, size_y, size_z) = baseline.world().size();
+            eprintln!(
+                "SIM_WORK baseline states {} world {size_x}x{size_y}x{size_z} \
+                 baseline_build_wall_ns {build_wall_ns}",
+                exhaustive_states.unwrap_or(0)
+            );
+        }
         let exhaustive_vectors = if let Some(state_count) = exhaustive_states {
             certify_exhaustive_truth(
                 &baseline,
@@ -423,6 +439,129 @@ fn exhaustive_state_count(lowered: &Netlist) -> Result<usize, CandidateCertifica
         .ok_or(CandidateCertificationError::CounterOverflow)
 }
 
+/// TEMPORARY (Task 1 attribution): one row per exhaustive vector. Integer
+/// nanoseconds, so the reduction below saturates deterministically instead of
+/// drifting like a float sum. Removed before any optimization is benchmarked.
+#[derive(Clone, Copy, Default)]
+struct VectorWork {
+    clone_ns: u128,
+    drive_ns: u128,
+    settle_ns: u128,
+    check_ns: u128,
+}
+
+/// TEMPORARY (Task 1 attribution): the deterministic reduction of the rows.
+#[derive(Clone, Copy, Default)]
+struct VectorWorkSummary {
+    count: usize,
+    clone_sum_ns: u128,
+    clone_max_ns: u128,
+    drive_sum_ns: u128,
+    drive_max_ns: u128,
+    settle_sum_ns: u128,
+    settle_max_ns: u128,
+    check_sum_ns: u128,
+    check_max_ns: u128,
+}
+
+impl VectorWork {
+    /// Reduce the rows in logical mask order. These are worker nanoseconds --
+    /// the sum of concurrent per-vector spans -- never a wall-time interval.
+    fn summary(rows: &[VectorWork]) -> VectorWorkSummary {
+        let mut summary = VectorWorkSummary::default();
+        for row in rows {
+            summary.count = summary.count.saturating_add(1);
+            summary.clone_sum_ns = summary.clone_sum_ns.saturating_add(row.clone_ns);
+            summary.clone_max_ns = summary.clone_max_ns.max(row.clone_ns);
+            summary.drive_sum_ns = summary.drive_sum_ns.saturating_add(row.drive_ns);
+            summary.drive_max_ns = summary.drive_max_ns.max(row.drive_ns);
+            summary.settle_sum_ns = summary.settle_sum_ns.saturating_add(row.settle_ns);
+            summary.settle_max_ns = summary.settle_max_ns.max(row.settle_ns);
+            summary.check_sum_ns = summary.check_sum_ns.saturating_add(row.check_ns);
+            summary.check_max_ns = summary.check_max_ns.max(row.check_ns);
+        }
+        summary
+    }
+}
+
+/// TEMPORARY (Task 1 attribution): one vector's own simulator work, with the
+/// pristine baseline's constructor work subtracted out.
+fn work_counts_delta(
+    before: SimulatorWorkCounts,
+    after: SimulatorWorkCounts,
+) -> SimulatorWorkCounts {
+    SimulatorWorkCounts {
+        settle_iterations: after.settle_iterations.saturating_sub(before.settle_iterations),
+        game_ticks: after.game_ticks.saturating_sub(before.game_ticks),
+        due_events: after.due_events.saturating_sub(before.due_events),
+        dirty_origins: after.dirty_origins.saturating_sub(before.dirty_origins),
+        active_dust: after.active_dust.saturating_sub(before.active_dust),
+        changed_dust: after.changed_dust.saturating_sub(before.changed_dust),
+        topology_rebuilds: after.topology_rebuilds.saturating_sub(before.topology_rebuilds),
+        topology_rebuild_worker_ns: after
+            .topology_rebuild_worker_ns
+            .saturating_sub(before.topology_rebuild_worker_ns),
+        topology_cells: after.topology_cells.saturating_sub(before.topology_cells),
+        topology_probes: after.topology_probes.saturating_sub(before.topology_probes),
+        torch_predicates: after.torch_predicates.saturating_sub(before.torch_predicates),
+        repeater_predicates: after
+            .repeater_predicates
+            .saturating_sub(before.repeater_predicates),
+        comparator_predicates: after
+            .comparator_predicates
+            .saturating_sub(before.comparator_predicates),
+        lamp_predicates: after.lamp_predicates.saturating_sub(before.lamp_predicates),
+        torch_scan_worker_ns: after
+            .torch_scan_worker_ns
+            .saturating_sub(before.torch_scan_worker_ns),
+        repeater_scan_worker_ns: after
+            .repeater_scan_worker_ns
+            .saturating_sub(before.repeater_scan_worker_ns),
+        comparator_scan_worker_ns: after
+            .comparator_scan_worker_ns
+            .saturating_sub(before.comparator_scan_worker_ns),
+        lamp_scan_worker_ns: after
+            .lamp_scan_worker_ns
+            .saturating_sub(before.lamp_scan_worker_ns),
+    }
+}
+
+/// TEMPORARY (Task 1 attribution): fold one vector's delta into the aggregate.
+fn add_work_counts(total: &mut SimulatorWorkCounts, delta: &SimulatorWorkCounts) {
+    total.settle_iterations = total.settle_iterations.saturating_add(delta.settle_iterations);
+    total.game_ticks = total.game_ticks.saturating_add(delta.game_ticks);
+    total.due_events = total.due_events.saturating_add(delta.due_events);
+    total.dirty_origins = total.dirty_origins.saturating_add(delta.dirty_origins);
+    total.active_dust = total.active_dust.saturating_add(delta.active_dust);
+    total.changed_dust = total.changed_dust.saturating_add(delta.changed_dust);
+    total.topology_rebuilds = total.topology_rebuilds.saturating_add(delta.topology_rebuilds);
+    total.topology_rebuild_worker_ns = total
+        .topology_rebuild_worker_ns
+        .saturating_add(delta.topology_rebuild_worker_ns);
+    total.topology_cells = total.topology_cells.saturating_add(delta.topology_cells);
+    total.topology_probes = total.topology_probes.saturating_add(delta.topology_probes);
+    total.torch_predicates = total.torch_predicates.saturating_add(delta.torch_predicates);
+    total.repeater_predicates = total
+        .repeater_predicates
+        .saturating_add(delta.repeater_predicates);
+    total.comparator_predicates = total
+        .comparator_predicates
+        .saturating_add(delta.comparator_predicates);
+    total.lamp_predicates = total.lamp_predicates.saturating_add(delta.lamp_predicates);
+    total.torch_scan_worker_ns = total
+        .torch_scan_worker_ns
+        .saturating_add(delta.torch_scan_worker_ns);
+    total.repeater_scan_worker_ns = total
+        .repeater_scan_worker_ns
+        .saturating_add(delta.repeater_scan_worker_ns);
+    total.comparator_scan_worker_ns = total
+        .comparator_scan_worker_ns
+        .saturating_add(delta.comparator_scan_worker_ns);
+    total.lamp_scan_worker_ns = total
+        .lamp_scan_worker_ns
+        .saturating_add(delta.lamp_scan_worker_ns);
+}
+
 fn certify_exhaustive_truth_with_threads(
     baseline: &Simulator,
     candidate: &ExpandedPhysicalCandidate,
@@ -433,17 +572,41 @@ fn certify_exhaustive_truth_with_threads(
     threads: usize,
 ) -> Result<usize, CandidateCertificationError> {
     // The canonical mask range is the only thing retained per vector: each
-    // worker owns one simulator at a time and reduces `()`, so a wide sweep
-    // costs workers, not one world per mask.
+    // worker owns one simulator at a time and reduces one small fixed-size row
+    // -- `()` outside this temporary attribution revision, restored with it --
+    // so a wide sweep costs workers, not one world per mask.
     let masks = (0..state_count).collect::<Vec<_>>();
-    run_certification_chunks(
+    // TEMPORARY (Task 1 attribution): both variables must be set, so a plain
+    // `REDA_PHASE_TIMING` benchmark keeps exactly today's per-vector work.
+    let detailed = std::env::var_os("REDA_PHASE_TIMING").is_some()
+        && std::env::var_os("REDA_SIM_WORK_COUNTS").is_some();
+    // TEMPORARY (Task 1 attribution): same shape as the `phase` closure in
+    // `certify_with_identity`, but every span here is worker time on this
+    // worker's own thread -- never a wall-time interval.
+    let span = |started: &mut std::time::Instant| {
+        if !detailed {
+            return 0;
+        }
+        let elapsed = started.elapsed().as_nanos();
+        *started = std::time::Instant::now();
+        elapsed
+    };
+    let rows = run_certification_chunks(
         &masks,
         threads,
         MIN_VECTORS_PER_CERTIFICATION_WORKER,
         |_, &mask| {
+            // `bits_of` is deliberately outside every span: it stays
+            // unmeasured residual work.
             let vector = bits_of(mask, lowered.inputs.len());
+            // The clone copies the baseline's counters verbatim, so reading
+            // them off `baseline` keeps the snapshot out of every span.
+            let counts_before = baseline.work_counts().unwrap_or_default();
+            let mut started = std::time::Instant::now();
             let mut simulator = baseline.clone();
+            let clone_ns = span(&mut started);
             drive_vector(&mut simulator, candidate, lowered, compatibility, &vector)?;
+            let drive_ns = span(&mut started);
             settle(
                 &mut simulator,
                 mask,
@@ -451,7 +614,11 @@ fn certify_exhaustive_truth_with_threads(
                 0,
                 config,
             )?;
+            let settle_ns = span(&mut started);
             enforce_event_cap(&simulator, 0, mask, config)?;
+            // Cap accounting is unmeasured residual work: discarding this span
+            // keeps it out of `check_ns` rather than folding it in.
+            let _cap_residual_ns = span(&mut started);
             check_outputs(
                 simulator.world(),
                 candidate,
@@ -459,9 +626,92 @@ fn certify_exhaustive_truth_with_threads(
                 compatibility,
                 &vector,
                 mask,
-            )
+            )?;
+            let check_ns = span(&mut started);
+            Ok::<_, CandidateCertificationError>((
+                VectorWork {
+                    clone_ns,
+                    drive_ns,
+                    settle_ns,
+                    check_ns,
+                },
+                work_counts_delta(counts_before, simulator.work_counts().unwrap_or_default()),
+            ))
         },
     )?;
+    // TEMPORARY (Task 1 attribution): every worker has joined and `rows` is in
+    // logical mask order, so this reduction and its output are deterministic.
+    if detailed {
+        let works = rows.iter().map(|(work, _)| *work).collect::<Vec<_>>();
+        let summary = VectorWork::summary(&works);
+        let mut counts = SimulatorWorkCounts::default();
+        for (_, delta) in &rows {
+            add_work_counts(&mut counts, delta);
+        }
+        let (size_x, size_y, size_z) = baseline.world().size();
+        let total_worker_ns = summary
+            .clone_sum_ns
+            .saturating_add(summary.drive_sum_ns)
+            .saturating_add(summary.settle_sum_ns)
+            .saturating_add(summary.check_sum_ns);
+        // Every line repeats the `sweep` key, and the whole block goes out in
+        // one `eprintln!` -- one stderr lock acquisition -- so concurrent leaf
+        // compiles cannot interleave halfway through a sweep's attribution.
+        let key = format!("sweep states {state_count} world {size_x}x{size_y}x{size_z}");
+        let block = [
+            format!("SIM_WORK {key} vectors {}", summary.count),
+            format!(
+                "SIM_WORK {key} clone_worker_ns sum {} max {} count {}",
+                summary.clone_sum_ns, summary.clone_max_ns, summary.count
+            ),
+            format!(
+                "SIM_WORK {key} drive_worker_ns sum {} max {} count {}",
+                summary.drive_sum_ns, summary.drive_max_ns, summary.count
+            ),
+            format!(
+                "SIM_WORK {key} settle_worker_ns sum {} max {} count {}",
+                summary.settle_sum_ns, summary.settle_max_ns, summary.count
+            ),
+            format!(
+                "SIM_WORK {key} check_worker_ns sum {} max {} count {}",
+                summary.check_sum_ns, summary.check_max_ns, summary.count
+            ),
+            format!("SIM_WORK {key} vector_total_worker_ns {total_worker_ns}"),
+            format!(
+                "SIM_WORK {key} counts settle_iterations {} game_ticks {} due_events {}",
+                counts.settle_iterations, counts.game_ticks, counts.due_events
+            ),
+            format!(
+                "SIM_WORK {key} counts dirty_origins {} active_dust {} changed_dust {}",
+                counts.dirty_origins, counts.active_dust, counts.changed_dust
+            ),
+            format!(
+                "SIM_WORK {key} counts topology_rebuilds {} topology_rebuild_worker_ns {}",
+                counts.topology_rebuilds, counts.topology_rebuild_worker_ns
+            ),
+            format!(
+                "SIM_WORK {key} counts topology_cells {} topology_probes {}",
+                counts.topology_cells, counts.topology_probes
+            ),
+            format!(
+                "SIM_WORK {key} counts torch_predicates {} repeater_predicates {}",
+                counts.torch_predicates, counts.repeater_predicates
+            ),
+            format!(
+                "SIM_WORK {key} counts comparator_predicates {} lamp_predicates {}",
+                counts.comparator_predicates, counts.lamp_predicates
+            ),
+            format!(
+                "SIM_WORK {key} scan_worker_ns torch {} repeater {} comparator {} lamp {}",
+                counts.torch_scan_worker_ns,
+                counts.repeater_scan_worker_ns,
+                counts.comparator_scan_worker_ns,
+                counts.lamp_scan_worker_ns
+            ),
+        ]
+        .join("\n");
+        eprintln!("{block}");
+    }
     Ok(state_count)
 }
 
@@ -1273,7 +1523,7 @@ mod tests {
         with_certification_threads, with_compile_worker_budget, world_worker_memory_bytes,
         CandidateCertificationError, CompleteCandidateCertifier, ExpandedCandidateCertifier,
         RealisedTimingGraph, TimingGraphError, TransitionManifest, TransitionMeasurement,
-        TransitionPhase, CERTIFICATION_SWEEP_LOCK, CERT_WORKER_MEMORY_BUDGET_BYTES,
+        TransitionPhase, VectorWork, CERTIFICATION_SWEEP_LOCK, CERT_WORKER_MEMORY_BUDGET_BYTES,
         MIN_TRANSITIONS_PER_CERTIFICATION_WORKER, MIN_VECTORS_PER_CERTIFICATION_WORKER,
         WORLD_COPY_HEADROOM,
     };
@@ -1660,6 +1910,32 @@ mod tests {
             .expect("every chunk succeeds");
             assert_eq!(values, vec![0, 2, 4]);
         }
+    }
+
+    /// TEMPORARY (Task 1 attribution): removed with the rest of the
+    /// `REDA_SIM_WORK_COUNTS` instrumentation before any optimization lands.
+    #[test]
+    fn vector_work_summary_keeps_worker_units_and_logical_count() {
+        let rows = [
+            VectorWork {
+                clone_ns: 3,
+                drive_ns: 5,
+                settle_ns: 7,
+                check_ns: 11,
+            },
+            VectorWork {
+                clone_ns: 13,
+                drive_ns: 17,
+                settle_ns: 19,
+                check_ns: 23,
+            },
+        ];
+        let summary = VectorWork::summary(&rows);
+        assert_eq!(summary.count, 2);
+        assert_eq!((summary.clone_sum_ns, summary.clone_max_ns), (16, 13));
+        assert_eq!((summary.drive_sum_ns, summary.drive_max_ns), (22, 17));
+        assert_eq!((summary.settle_sum_ns, summary.settle_max_ns), (26, 19));
+        assert_eq!((summary.check_sum_ns, summary.check_max_ns), (34, 23));
     }
 
     #[test]
