@@ -9,7 +9,10 @@ instrumentation that produced it was removed in the same commit that adds this
 file; no counter, gate or disabled branch survives in the simulator hot path.
 Section 11 records Task 2 / Layer 1A, which is **KEEP** on its clean wall-time
 gate. Section 12 records the Step 7 post-retention re-attribution and the second
-removal of the temporary instrumentation.
+removal of the temporary instrumentation. Section 13 records Task 3 / Layer 1B
+Steps 1-5 only: the implemented change and its test status. **Layer 1B is not
+retained by this section** — its wall-time gate (plan Task 3 Step 6) has not been
+run, so no speedup is claimed for it anywhere in this report.
 
 ## 1. What was measured, and in which units
 
@@ -924,3 +927,143 @@ The temporary instrumentation now exists only in local history, at `e797853` and
 `8b7fe10`. Both are removed by the branch cleanup/squash named in the ledger's
 Task 1 split ruling; no counter, gate or disabled branch is in the working
 source.
+
+## 13. Layer 1B (Task 3, Steps 1-5): implementation and test status — **no retention decision yet**
+
+### 13.1 Scope and status
+
+This section covers plan Task 3 Steps 1 through 5 only. It records what was
+implemented and which tests were run. It records **no** performance number and
+makes **no** retention claim:
+
+- Step 6, the clean `B1,C1,C2,B2,B3,C3` three-circuit wall-time gate against the
+  immediately preceding retained revision `115c976`, **has not been run**.
+- No benchmark, worktree or target directory was created for this section.
+- Until Step 6 runs, Layer 1B is an unmeasured candidate. Whether it reduces
+  `multiplier4` top-exhaustive wall time by the required 10% is **unknown**, and
+  a `REVERT` outcome remains possible, in which case both the loop reshape and
+  the test-only scan counter are removed.
+
+The Task 1 and Task 2 attribution in sections 5, 6 and 12 remains the only
+evidence for *attempting* this candidate: on the retained Layer 1A revision the
+four component scans are 36.2590% of top-sweep vector worker-ns, which satisfies
+the plan's precondition. Worker-ns shares rank candidates; they never retain one.
+
+### 13.2 The change
+
+`src/redstone/simulator/mod.rs`, both stable APIs, minimum loop reshape only:
+
+- `run_until_stable` and `run_until_stable_bounded` each call
+  `settle_from_current_state()` exactly once **before** entering their loop. That
+  first settle stays unconditional, because the caller may have edited the world
+  through `world_mut()` and a pure-dust circuit has no component that could
+  detect the edit through the queue.
+- Inside each loop the post-advance settle is now conditional on the existing
+  `work_done` delta around the advance:
+
+```rust
+let work_before = self.work_done;
+self.advance_one_tick();
+game_ticks_run += 1;
+if self.work_done != work_before {
+    self.settle_from_current_state();
+}
+```
+
+- The bounded path uses the same ordering, and returns `WorkLimitExceeded`
+  immediately when `advance_one_tick_bounded` refuses an oversized due bucket:
+  no `game_ticks_run` increment, no observer sample, no settle after that error.
+- `step()` is unchanged, because an external caller may edit the world between
+  calls.
+- No abstraction, type, trait, clock, scheduler or dependency was added, and no
+  production field was added.
+
+Why the skipped scan cannot change behaviour: a game tick on which no scheduled
+event was due cannot change world state from inside the simulator, and every
+mismatch predicate is a pure function of the world. Any mismatch the previous
+scan found is therefore still exactly the same mismatch, and it is already in the
+queue — `TickQueue::schedule` accepts at most one entry per position, so
+rescanning could only re-derive the identical queue. The `work_done` delta, not a
+changed-cell count, is the decision variable precisely because a due event may be
+a no-op through burnout or repeater locking and still requires the next scan.
+
+Empty ticks are unchanged in every other respect: they still advance
+`current_tick`, still consume the game-tick budget, and still sample an attached
+observer, because all of that lives in `advance_one_tick`, which is untouched.
+
+### 13.3 Test-only instrumentation
+
+`Simulator` carries a `#[cfg(test)] component_scan_rounds: u64` field, initialized
+to zero, incremented once at the top of `settle_from_current_state`, and read
+through a private `#[cfg(test)] fn component_scan_rounds(&self)`. The field and
+the accessor do not exist in production builds, so the retained hot path gains no
+counter and no disabled branch. `Simulator::new` does not settle, so a freshly
+constructed simulator reports zero rounds.
+
+### 13.4 RED/GREEN and the pre-change differential
+
+Step 2's RED command failed on the intended assertion, with the pre-change loop
+performing nine scan rounds where two suffice:
+
+```
+cargo test --lib redstone::simulator::tests::empty_delay_ticks_do_not_repeat_component_scans -- --exact --nocapture
+assertion `left == right` failed  ...  left: 9   right: 2
+test result: FAILED. 0 passed; 1 failed
+```
+
+After the Step 3 reshape the same command passes.
+
+Step 4 added seven exact semantic regression cases, one per boundary the plan
+names (its second bullet names two distinct boundaries — burnout expiry and a
+locked repeater — which are two tests). They reuse the existing `torch`,
+`wall_torch`, `repeater`, `lamp`, `lever`, `dust`, `stone`, `attach_observer`,
+`observations` and `TickQueue` fixtures; the three-wall-torch ring the previous
+oscillator test built inline became a shared `ring_of_three_wall_torches()`
+fixture in the same test module.
+
+The approved review's test cleanup was then applied, touching no production
+logic: the pre-existing `an_oscillator_is_reported_as_diverged`, which only
+matched the `Diverged` variant, was deleted because
+`an_oscillator_reports_its_exact_diverged_payload` strictly subsumes it (its
+surviving rationale moved onto the subsuming test); a redundant
+"changes after tick 60 == 21" assertion was dropped from the burnout case, whose
+first-burnout/later-recovery replay already proves expiry; an implied
+`current_tick == 16` assertion was dropped from the observer case, where the two
+`Ok(8)` results and the pinned observation ticks already fix it; and the
+bounded-refusal case now watches the two torch positions the allowed due events
+actually flip, so its empty-log assertion is genuinely discriminating.
+
+These seven cases were run against the pre-change loops with the counter and
+tests kept in place. Every semantic assertion — `Ok`/`Err` payloads,
+`current_tick`, `work_done`, final world cells, stale dust power and the observer
+log — passed identically before the change. The only pre-change failures were the
+`component_scan_rounds` assertions, which is exactly what Layer 1B changes. The
+values pinned by those tests are therefore the recorded pre-change behaviour, not
+values invented after the fact.
+
+### 13.5 Step 5 gates, run serially
+
+```
+cargo test --lib redstone::simulator::tests -- --nocapture
+test result: ok. 28 passed; 0 failed; 0 ignored; 0 measured; 993 filtered out
+
+cargo test --test simulator_circuits -- --nocapture
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+cargo test --lib compile::fragment_synth::certification::tests -- --nocapture
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 995 filtered out
+```
+
+28 simulator tests = 21 pre-existing, minus the subsumed oscillator test, plus
+the RED test and the seven Step 4 cases. These are the counts after the review
+cleanup; the run above is the final one, made after the last edit to the source.
+
+The certification suite includes the exact cap and lowest-failing-mask tests
+(`exhaustive_cap_refusal_reports_the_same_lowest_mask_at_every_worker_count`,
+`certified_candidate_is_identical_at_one_two_and_four_workers`,
+`parallel_manifest_sweep_matches_serial_results`), all passing.
+
+Not run in this section, and therefore not claimed: the ignored wide
+full-resettle release suite, the 1/2/4-worker extra/large/hierarchical corpora,
+`cargo clippy --all-targets --all-features`, `check.sh`, and every wall-time
+benchmark.

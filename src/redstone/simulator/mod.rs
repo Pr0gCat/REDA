@@ -43,6 +43,12 @@ pub struct Simulator {
     /// `run_until_stable` take exactly the path they always have (see
     /// `advance_one_tick`, the only place this is consulted).
     observer: Option<Observer>,
+    /// Test-only count of complete component-scan rounds -- one per
+    /// `settle_from_current_state` call. It exists only under `cfg(test)`,
+    /// so the production `Simulator` carries no extra field and the settle
+    /// hot path has no extra write.
+    #[cfg(test)]
+    component_scan_rounds: u64,
 }
 
 /// 模擬過程的錯誤。
@@ -275,6 +281,8 @@ impl Simulator {
             work_done: 0,
             dust_topology_cache: Arc::new(propagate::DustTopologyCache::default()),
             observer: None,
+            #[cfg(test)]
+            component_scan_rounds: 0,
         };
 
         if let Some((position, name)) = find_unsupported_component(&simulator.world) {
@@ -302,6 +310,15 @@ impl Simulator {
 
     pub fn work_done(&self) -> u64 {
         self.work_done
+    }
+
+    /// Test-only: how many complete component-scan rounds
+    /// (`settle_from_current_state`) this simulator has run since it was
+    /// constructed. `Simulator::new` recomputes dust strengths without
+    /// scanning components, so a freshly built simulator reports zero.
+    #[cfg(test)]
+    fn component_scan_rounds(&self) -> u64 {
+        self.component_scan_rounds
     }
 
     /// Attach a dynamic-timing-analysis observer watching exactly these
@@ -367,16 +384,16 @@ impl Simulator {
             return Err(SimulationError::UnsupportedComponent { position, name });
         }
 
+        // 進迴圈前先從目前的世界狀態安定一次：這代表「從呼叫端現在讓
+        // 世界處於的狀態安定下來」，而不是「處理佇列裡剛好排到的東西」。
+        // 少了紅石粉重算這一步，透過 `world_mut()` 做的外部修改（例如
+        // 翻轉拉桿）在電路裡沒有任何主動元件直接偵測得到時 —— 純紅石
+        // 粉線路就是這樣 —— 佇列會一直是空的，這裡就會對著過期的粉強度
+        // 回報「已經穩定」。這一輪因此是無條件的。
+        self.settle_from_current_state();
+
         let mut game_ticks_run = 0u64;
         loop {
-            // 每一輪都先從目前的世界狀態重新安定下來：這代表「從呼叫端
-            // 現在讓世界處於的狀態安定下來」，而不是「處理佇列裡剛好排到
-            // 的東西」。少了紅石粉重算這一步，透過 `world_mut()` 做的外部
-            // 修改（例如翻轉拉桿）在電路裡沒有任何主動元件直接偵測得到
-            // 時 —— 純紅石粉線路就是這樣 —— 佇列會一直是空的，這裡就會
-            // 對著過期的粉強度回報「已經穩定」。
-            self.settle_from_current_state();
-
             if self.queue.is_empty() {
                 return Ok(game_ticks_run);
             }
@@ -394,8 +411,20 @@ impl Simulator {
                 });
             }
 
+            // 推進之後只有真的處理了排程才需要再掃一輪。判斷依據是
+            // `work_done` 的差值，不是「改了幾格」：到期的排程可能因為燒毀
+            // 或中繼器鎖存而是空操作，那仍然是一次真實的事件，下一輪掃描不能
+            // 省。反過來，沒有任何排程到期的 game tick 不可能從內部改變世界，
+            // 上一輪掃描找到的不一致也都已經在佇列裡（`TickQueue::schedule`
+            // 對同一個位置只會採納一筆），再掃一次一定得到一模一樣的結果。
+            // 空 tick 仍然推進時間、消耗 game tick 額度並且採樣觀察者 ——
+            // 這些都在 `advance_one_tick` 裡，沒有被跳過。
+            let work_before = self.work_done;
             self.advance_one_tick();
             game_ticks_run += 1;
+            if self.work_done != work_before {
+                self.settle_from_current_state();
+            }
         }
     }
 
@@ -413,9 +442,9 @@ impl Simulator {
             ));
         }
         let work_at_start = self.work_done;
+        self.settle_from_current_state();
         let mut game_ticks_run = 0u64;
         loop {
-            self.settle_from_current_state();
             if self.queue.is_empty() {
                 return Ok(game_ticks_run);
             }
@@ -432,6 +461,10 @@ impl Simulator {
                 .checked_sub(work_at_start)
                 .unwrap_or(u64::MAX);
             let remaining = max_events.saturating_sub(used);
+            // 跟無上限的路徑同一個判斷：只有真的處理了排程才重新掃描。
+            // 拒絕過大的到期桶是例外：直接回報，不加 game tick、不採樣觀
+            // 察者、也不再安定一次 —— 佇列就停在被拒絕的那個邊界上。
+            let work_before = self.work_done;
             if self.advance_one_tick_bounded(remaining).is_err() {
                 return Err(BoundedSimulationError::WorkLimitExceeded {
                     used: self
@@ -442,6 +475,9 @@ impl Simulator {
                 });
             }
             game_ticks_run += 1;
+            if self.work_done != work_before {
+                self.settle_from_current_state();
+            }
         }
     }
 
@@ -456,6 +492,10 @@ impl Simulator {
     /// 有別的排程「順便」觸發重算才會被看見；佇列若一直是空的，粉的
     /// 強度就會一直停留在過期的值，而呼叫端永遠不會被告知。
     fn settle_from_current_state(&mut self) {
+        #[cfg(test)]
+        {
+            self.component_scan_rounds += 1;
+        }
         self.recompute_dust_strengths();
         self.schedule_mismatched_torches();
         self.schedule_mismatched_repeaters();
@@ -775,6 +815,47 @@ mod tests {
         state
     }
 
+    /// 三個牆上火把接成的環 —— 一個數學上不可能收斂的振盪器。
+    ///
+    /// 每個火把附著在一個支撐塊上，同時緊鄰著下一個支撐塊、對它輸出訊號。
+    /// 三個反相器串成一個環，不存在一組亮/暗組合能同時滿足全部三條「跟前
+    /// 一個相反」的關係（NOT^3 沒有不動點）。
+    ///
+    /// 三個支撐塊放在單位立方體裡兩兩成面對角線（距離 sqrt(2)）的角落，
+    /// 火把放在它們之間唯一的共用鄰格上：這樣每個火把恰好只碰得到「它附
+    /// 著的支撐塊」跟「它要驅動的下一個支撐塊」，不會像排成一列那樣意外
+    /// 疊到其他格子上頭去多送一條訊號路徑出去。
+    fn ring_of_three_wall_torches() -> World {
+        let mut world = World::new(5, 5, 5);
+        let support_a = Position::new(0, 0, 0);
+        let support_b = Position::new(1, 1, 0);
+        let support_c = Position::new(0, 1, 1);
+
+        world.set(support_a.x, support_a.y, support_a.z, stone());
+        world.set(support_b.x, support_b.y, support_b.z, stone());
+        world.set(support_c.x, support_c.y, support_c.z, stone());
+
+        // torch_a：位於 (1,0,0)，附著在西邊的 support_a（頭朝東），
+        // 往上緊鄰 support_b、對它輸出。
+        let mut torch_a = wall_torch(Facing::East);
+        torch_a.lit = true;
+        world.set(1, 0, 0, torch_a);
+
+        // torch_b：位於 (1,1,1)，附著在北邊的 support_b（頭朝南），
+        // 往西緊鄰 support_c、對它輸出。
+        let mut torch_b = wall_torch(Facing::South);
+        torch_b.lit = false;
+        world.set(1, 1, 1, torch_b);
+
+        // torch_c：位於 (0,0,1)，附著在上方的 support_c（頭朝下），
+        // 往北緊鄰 support_a、對它輸出，閉合這個環。
+        let mut torch_c = wall_torch(Facing::Down);
+        torch_c.lit = true;
+        world.set(0, 0, 1, torch_c);
+
+        world
+    }
+
     fn comparator(facing: Facing, power: u8, lit: bool) -> BlockState {
         let mut state = named("minecraft:comparator", BlockKind::Comparator);
         state.facing = Some(facing);
@@ -923,57 +1004,6 @@ mod tests {
             simulator.run_until_stable(50),
             Ok(0),
             "已經穩定的電路再跑一次不該有任何新工作"
-        );
-    }
-
-    #[test]
-    fn an_oscillator_is_reported_as_diverged() {
-        // 火把接到自己的輸出 -- 必須回 Diverged，不能靠讓火把燒毀來假裝收斂。
-        //
-        // 三個牆上火把接成環：每個火把附著在一個支撐塊上，同時緊鄰著下一個
-        // 支撐塊、對它輸出訊號。三個反相器串成一個環，數學上不存在一組
-        // 亮/暗組合能同時滿足全部三條「跟前一個相反」的關係（NOT^3 沒有
-        // 不動點），所以它永遠振盪 —— 就算某個火把中途燒毀、暫時卡在暗，
-        // 只要它的輸入還跟現狀不同，`schedule_mismatched_torches` 就會不斷
-        // 把它排回佇列，佇列就不會真的清空。
-        //
-        // 三個支撐塊放在單位立方體裡兩兩成面對角線（距離 sqrt(2)）的角落，
-        // 火把放在它們之間唯一的共用鄰格上：這樣每個火把恰好只碰得到
-        // 「它附著的支撐塊」跟「它要驅動的下一個支撐塊」，不會像排成一列
-        // 那樣意外疊到其他格子上頭去多送一條訊號路徑出去。
-        let mut world = World::new(5, 5, 5);
-        let support_a = Position::new(0, 0, 0);
-        let support_b = Position::new(1, 1, 0);
-        let support_c = Position::new(0, 1, 1);
-
-        world.set(support_a.x, support_a.y, support_a.z, stone());
-        world.set(support_b.x, support_b.y, support_b.z, stone());
-        world.set(support_c.x, support_c.y, support_c.z, stone());
-
-        // torch_a：位於 (1,0,0)，附著在西邊的 support_a（頭朝東），
-        // 往上緊鄰 support_b、對它輸出。
-        let mut torch_a = wall_torch(Facing::East);
-        torch_a.lit = true;
-        world.set(1, 0, 0, torch_a);
-
-        // torch_b：位於 (1,1,1)，附著在北邊的 support_b（頭朝南），
-        // 往西緊鄰 support_c、對它輸出。
-        let mut torch_b = wall_torch(Facing::South);
-        torch_b.lit = false;
-        world.set(1, 1, 1, torch_b);
-
-        // torch_c：位於 (0,0,1)，附著在上方的 support_c（頭朝下），
-        // 往北緊鄰 support_a、對它輸出，閉合這個環。
-        let mut torch_c = wall_torch(Facing::Down);
-        torch_c.lit = true;
-        world.set(0, 0, 1, torch_c);
-
-        let mut simulator = Simulator::new(world);
-        let result = simulator.run_until_stable(50);
-
-        assert!(
-            matches!(result, Err(SimulationError::Diverged { .. })),
-            "a self-feeding ring of torches must never report Ok, got {result:?}"
         );
     }
 
@@ -1465,6 +1495,354 @@ mod tests {
             simulator.world().get(2, 1, 0).power,
             14,
             "replacing the whole World must not reuse the old topology"
+        );
+    }
+
+    #[test]
+    fn empty_delay_ticks_do_not_repeat_component_scans() {
+        // delay=4 的中繼器 = 8 個 game tick。中間那 7 個 game tick 沒有任何
+        // 到期排程，`advance_one_tick` 因此不可能改動世界，所以整段只需要
+        // 兩輪元件掃描：進迴圈前那一輪必要的掃描，以及真的處理了排程之後
+        // 的那一輪。空 tick 上重複掃描全部火把／中繼器／比較器／燈是純粹
+        // 浪費 —— 這個測試就是把「兩輪」釘住。
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, repeater(Facing::West, 4, false));
+        let mut on_lever = lever();
+        on_lever.lit = true;
+        world.set(1, 0, 2, on_lever); // 中繼器西邊 -- 就是它的輸入
+
+        let mut simulator = Simulator::new(world);
+        assert_eq!(
+            simulator.component_scan_rounds(),
+            0,
+            "new() 只重算紅石粉強度，不掃描元件"
+        );
+
+        let game_ticks = simulator
+            .run_until_stable(20)
+            .expect("a lever feeding a delay-4 repeater must settle");
+
+        assert_eq!(game_ticks, 8, "delay=4 redstone tick = 8 game tick");
+        assert_eq!(
+            simulator.work_done(),
+            1,
+            "整段只有中繼器那一筆排程真的被處理"
+        );
+        assert!(
+            simulator.world().get(2, 0, 2).lit,
+            "延遲跑完之後中繼器必須真的開啟"
+        );
+        assert_eq!(
+            simulator.component_scan_rounds(),
+            2,
+            "只有兩輪掃描是必要的：進迴圈前的第一輪，以及第 8 個 game tick \
+             處理完排程之後的那一輪；中間 7 個空 tick 什麼都沒改變"
+        );
+    }
+
+    #[test]
+    fn a_scheduled_no_op_still_causes_the_post_event_scan() {
+        // delay=4 的中繼器（8 game tick）：輸入短暫斷電、排定了「關閉」，
+        // 但輸入在到期前就恢復了，所以 `apply_repeater_tick` 把這次改變
+        // 吞掉 —— 世界一格都沒有改。它仍然是一筆真的被處理的排程，
+        // `work_done` 因此往前動了，之後那一輪元件掃描就不能省。
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, repeater(Facing::West, 4, true));
+        let mut on_lever = lever();
+        on_lever.lit = true;
+        world.set(1, 0, 2, on_lever.clone());
+
+        let mut simulator = Simulator::new(world);
+        simulator.step(); // 輸入與輸出一致，什麼都沒排程
+
+        let mut off_lever = lever();
+        off_lever.lit = false;
+        simulator.world_mut().set(1, 0, 2, off_lever);
+        simulator.step(); // 偵測到不一致，把「關閉」排在 8 個 game tick 之後
+
+        simulator.world_mut().set(1, 0, 2, on_lever); // 遠早於到期就恢復
+        let rounds_before = simulator.component_scan_rounds();
+
+        assert_eq!(
+            simulator.run_until_stable(20),
+            Ok(7),
+            "還剩 7 個 game tick 才會走到那筆排定在 tick 9 的排程"
+        );
+        assert_eq!(simulator.current_tick(), 9);
+        assert_eq!(simulator.work_done(), 1, "那一筆空操作仍然算一次事件");
+        assert!(
+            simulator.world().get(2, 0, 2).lit,
+            "短於延遲的關脈衝必須被完整吞掉"
+        );
+        assert_eq!(
+            simulator.component_scan_rounds() - rounds_before,
+            2,
+            "進迴圈前一輪 + 空操作事件之後一輪；中間 6 個空 tick 不掃描"
+        );
+    }
+
+    #[test]
+    fn burnout_expiry_keeps_its_exact_recorded_behaviour() {
+        // 200 個 game tick 遠長於 60 個 game tick 的 burnout 視窗，所以這個
+        // 環一定會燒毀、又因為視窗滑過去而恢復。跳過空 tick 的掃描不能動到
+        // 這條時間線上的任何一格。
+        let mut simulator = Simulator::new(ring_of_three_wall_torches());
+
+        assert_eq!(
+            simulator.run_until_stable(200),
+            Err(SimulationError::Diverged {
+                game_ticks: 200,
+                pending: 1,
+            })
+        );
+        assert_eq!(simulator.current_tick(), 200);
+        assert_eq!(simulator.work_done(), 100);
+        assert_eq!(
+            (
+                simulator.world().get(1, 0, 0).lit,
+                simulator.world().get(1, 1, 1).lit,
+                simulator.world().get(0, 0, 1).lit,
+            ),
+            (false, false, true),
+            "the exact frozen-in-time state at the tick limit"
+        );
+
+        let changes_a = simulator
+            .torch_changes
+            .get(&Position::new(1, 0, 0))
+            .expect("torch_a must have a change history");
+        assert_eq!(changes_a.len(), 30);
+
+        // `torch_changes` 只會在當下那個 tick 往後 push，所以把它截到 `now`
+        // 為止就正好是模擬器在 tick `now` 當下看到的那份紀錄。
+        let burned_out_at = |now: u64| {
+            let seen: Vec<u64> = changes_a.iter().copied().filter(|&at| at <= now).collect();
+            component::is_burned_out(&seen, now)
+        };
+        let first_burnout = (0..=200)
+            .find(|&now| burned_out_at(now))
+            .expect("this ring must actually burn out -- otherwise the test does not cover burnout");
+        assert!(
+            (first_burnout..=200).any(|now| !burned_out_at(now)),
+            "and the 60-game-tick window must slide off again: burnout expires"
+        );
+    }
+
+    #[test]
+    fn a_locked_repeater_stays_locked_across_empty_ticks() {
+        // 被鎖住的中繼器輸入不一致卻絕對不排程。這裡再放一個獨立的 delay=4
+        // 中繼器讓整段跑滿 8 個 game tick，其中 7 個是空的 —— 跳過那 7 輪
+        // 掃描之後，被鎖住的那個仍然一次都不能被排到。
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, repeater(Facing::West, 1, true)); // 輸入沒訊號，但被鎖住
+        world.set(2, 0, 1, repeater(Facing::North, 1, true)); // 北側鎖它
+        let mut lock_input = lever();
+        lock_input.lit = true;
+        world.set(2, 0, 0, lock_input);
+
+        // 完全獨立的計時來源：讓迴圈真的走過空 tick。
+        world.set(2, 2, 2, repeater(Facing::West, 4, false));
+        let mut on_lever = lever();
+        on_lever.lit = true;
+        world.set(1, 2, 2, on_lever);
+
+        let mut simulator = Simulator::new(world);
+        assert_eq!(
+            simulator.run_until_stable(20),
+            Ok(8),
+            "delay=4 的那個中繼器決定整段長度"
+        );
+        assert_eq!(simulator.current_tick(), 8);
+        assert_eq!(
+            simulator.work_done(),
+            1,
+            "只有 delay=4 那個中繼器被排程並處理；鎖住的那個一次都沒有"
+        );
+        assert!(
+            simulator.world().get(2, 0, 2).lit,
+            "a locked repeater must hold its output no matter what its input does"
+        );
+        assert!(simulator.world().get(2, 0, 1).lit);
+        assert!(simulator.world().get(2, 2, 2).lit);
+        assert_eq!(
+            simulator.component_scan_rounds(),
+            2,
+            "7 個空 tick 沒有多掃任何一輪"
+        );
+    }
+
+    #[test]
+    fn an_oscillator_reports_its_exact_diverged_payload() {
+        // 火把接到自己的輸出 —— 必須回 Diverged，不能靠讓火把燒毀來假裝
+        // 收斂。就算某個火把中途燒毀、暫時卡在暗，只要它的輸入還跟現狀
+        // 不同，`schedule_mismatched_torches` 就會不斷把它排回佇列，佇列
+        // 就不會真的清空。
+        //
+        // 這裡釘死的是整個 payload、事件計數與最後的世界狀態，而不只是
+        // 「有回報 Diverged」：迴圈改形之後回報的 `pending` 是在跳過掃描
+        // 的那一側算出來的。
+        let mut simulator = Simulator::new(ring_of_three_wall_torches());
+
+        assert_eq!(
+            simulator.run_until_stable(50),
+            Err(SimulationError::Diverged {
+                game_ticks: 50,
+                pending: 1,
+            })
+        );
+        assert_eq!(simulator.current_tick(), 50);
+        assert_eq!(simulator.work_done(), 25);
+        assert_eq!(
+            (
+                simulator.world().get(1, 0, 0).lit,
+                simulator.world().get(1, 1, 1).lit,
+                simulator.world().get(0, 0, 1).lit,
+            ),
+            (false, false, true)
+        );
+    }
+
+    #[test]
+    fn an_observer_samples_every_advanced_tick_including_empty_ones() {
+        // 觀察者記的是「絕對 game tick」。delay=4 的中繼器在兩次執行裡各
+        // 花 8 個 game tick，其中 7 個是空的；只要有任何一個空 tick 沒被
+        // 推進或沒被採樣，這兩個 tick 編號就會往前跑掉。
+        let mut world = World::new(5, 5, 5);
+        world.set(2, 0, 2, repeater(Facing::West, 4, false));
+        let mut on_lever = lever();
+        on_lever.lit = true;
+        world.set(1, 0, 2, on_lever);
+
+        let mut simulator = Simulator::new(world);
+        let watched = Position::new(2, 0, 2);
+        simulator.attach_observer(vec![(watched, "out".to_string())]);
+
+        assert_eq!(simulator.run_until_stable(20), Ok(8));
+
+        let mut off_lever = lever();
+        off_lever.lit = false;
+        simulator.world_mut().set(1, 0, 2, off_lever);
+        assert_eq!(simulator.run_until_stable(20), Ok(8));
+
+        assert_eq!(simulator.work_done(), 2);
+        assert_eq!(
+            simulator.observations(),
+            &[
+                Observation {
+                    tick: 8,
+                    position: watched,
+                    label: "out".to_string(),
+                    value: true,
+                },
+                Observation {
+                    tick: 16,
+                    position: watched,
+                    label: "out".to_string(),
+                    value: false,
+                },
+            ],
+            "empty ticks still advance the clock and still sample the observer"
+        );
+    }
+
+    #[test]
+    fn a_refused_oversized_due_bucket_stops_exactly_at_that_boundary() {
+        // 三個火把在同一個 game tick 到期，但事件額度只剩 2 —— 這個到期桶
+        // 比額度大，所以在套用第三筆之前就被拒絕。被拒絕之後不能再推進
+        // game tick、不能重算紅石粉、不能採樣觀察者、也不能再掃一輪元件。
+        let mut world = World::new(7, 3, 3);
+        for x in [0i32, 2, 4] {
+            world.set(x, 0, 0, stone());
+            world.set(x, 1, 0, torch()); // lit=false，但支撐塊沒充能 -> 不一致
+        }
+        world.set(1, 0, 0, stone());
+        world.set(1, 1, 0, dust()); // 緊鄰第一個火把：亮起來就該變成 15
+
+        let mut simulator = Simulator::new(world);
+        // 盯著那兩個「額度內真的被套用」的火把：它們在被拒絕的那個 game
+        // tick 上從暗變亮。所以只要拒絕之後還多採樣一次，這兩格的訊號改變
+        // 就會各留下一筆觀察紀錄 —— 空的紀錄在這裡是真的有鑑別力的。
+        // （改盯紅石粉就沒有：粉根本沒被重算，不管有沒有採樣都是空的。）
+        simulator.attach_observer(vec![
+            (Position::new(0, 1, 0), "torch_a".to_string()),
+            (Position::new(2, 1, 0), "torch_b".to_string()),
+        ]);
+
+        assert_eq!(
+            simulator.run_until_stable_bounded(20, 2),
+            Err(BoundedSimulationError::WorkLimitExceeded { used: 2, limit: 2 })
+        );
+        assert_eq!(
+            simulator.current_tick(),
+            2,
+            "佇列停在被拒絕的那個 game tick 上"
+        );
+        assert_eq!(simulator.work_done(), 2, "只有額度內的兩筆真的被套用");
+        assert_eq!(
+            (
+                simulator.world().get(0, 1, 0).lit,
+                simulator.world().get(2, 1, 0).lit,
+                simulator.world().get(4, 1, 0).lit,
+            ),
+            (true, true, false),
+            "第三個火把在額度用完之後就沒有被套用"
+        );
+        assert_eq!(
+            simulator.world().get(1, 1, 0).power,
+            0,
+            "拒絕之後沒有重算紅石粉 —— 粉還停在被拒絕前的值"
+        );
+        assert_eq!(
+            simulator.observations(),
+            &[],
+            "拒絕之後沒有採樣觀察者 —— 有採樣的話這兩個剛翻亮的火把會各留一筆"
+        );
+        assert_eq!(
+            simulator.component_scan_rounds(),
+            1,
+            "只有進迴圈前那一輪：空 tick 沒掃，拒絕之後也沒掃"
+        );
+    }
+
+    #[test]
+    fn a_delayed_lamp_that_becomes_desired_on_again_is_not_dropped() {
+        // 燈的關閉有 4 個 game tick 的延遲。排定關閉之後輸入又回來了，
+        // 那筆排程仍然必須被走完（`work_done` 往前動、之後掃一輪），
+        // 而燈必須留在亮著的狀態，不能被默默丟掉或關掉。
+        let mut world = World::new(5, 5, 5);
+        let mut on_lever = lever();
+        on_lever.lit = true;
+        world.set(0, 0, 0, on_lever.clone());
+        world.set(1, 0, 0, lamp());
+
+        let mut simulator = Simulator::new(world);
+        simulator.step(); // 燈立刻被排程並亮起
+        assert!(simulator.world().get(1, 0, 0).lit);
+
+        let mut off_lever = lever();
+        off_lever.lit = false;
+        simulator.world_mut().set(0, 0, 0, off_lever);
+        simulator.step(); // 排定 4 個 game tick 之後關閉
+
+        simulator.world_mut().set(0, 0, 0, on_lever); // 到期前輸入就回來了
+        let rounds_before = simulator.component_scan_rounds();
+
+        assert_eq!(simulator.run_until_stable(20), Ok(3));
+        assert_eq!(simulator.current_tick(), 5);
+        assert_eq!(
+            simulator.work_done(),
+            2,
+            "亮起那一筆，加上到期時變成空操作的關閉那一筆"
+        );
+        assert!(
+            simulator.world().get(1, 0, 0).lit,
+            "a lamp whose power came back before its delayed turn-off lands \
+             must stay lit"
+        );
+        assert_eq!(
+            simulator.component_scan_rounds() - rounds_before,
+            2,
+            "進迴圈前一輪 + 那筆到期排程之後一輪"
         );
     }
 
