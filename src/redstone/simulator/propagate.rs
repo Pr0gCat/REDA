@@ -179,7 +179,13 @@ pub(crate) fn recompute_dust_strengths_cached(
     }
 
     let active_dust = cache.active_positions(world, &dirty);
-    recompute_active_dust(world, &active_dust, Some(cache))
+    let changed = recompute_active_dust(world, &active_dust, Some(cache));
+    // 這次的髒格在上面 `take_dirty` 就已經全部消化完，而算完之後這裡握著
+    // `world` 唯一的可變借用 —— 所以此刻還留著的髒格，就只有寫回時自己
+    // 標上的那些紅石粉強度。改變的位置已經在 `changed` 裡回報給元件排程，
+    // 不必再讓下一輪把整條線重算一次。
+    let _derived_writeback = world.take_dirty();
+    changed
 }
 
 fn recompute_active_dust(
@@ -1001,6 +1007,32 @@ mod tests {
         assert_eq!(
             block_signal_at(&w, Position::new(5, 1, 5)),
             (BlockPower::None, 0)
+        );
+    }
+
+    #[test]
+    fn cached_recompute_returns_changes_without_redirtying_its_own_writeback() {
+        let mut source = World::new(5, 3, 3);
+        source.set(0, 1, 0, redstone_block());
+        source.set(1, 1, 0, dust());
+        source.set(2, 1, 0, dust());
+
+        let mut expected = source.clone();
+        let mut expected_changed = recompute_dust_strengths(&mut expected);
+        let mut actual = source;
+        let mut cache = Arc::new(DustTopologyCache::default());
+        let mut actual_changed = recompute_dust_strengths_cached(&mut actual, &mut cache);
+
+        actual_changed.sort();
+        expected_changed.sort();
+        assert_eq!(actual_changed, expected_changed);
+        for flat in 0..expected.cells().len() {
+            let (x, y, z) = expected.decode(flat);
+            assert_eq!(actual.get(x, y, z), expected.get(x, y, z));
+        }
+        assert!(
+            actual.take_dirty().is_empty(),
+            "cached write-back must consume only its own dirt"
         );
     }
 }

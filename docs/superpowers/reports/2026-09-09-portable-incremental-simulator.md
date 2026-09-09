@@ -1,12 +1,14 @@
-# Portable Incremental Simulator — Layer 0 attribution
+# Portable Incremental Simulator — Layer 0 attribution and Layer 1A retention
 
 Spec: `docs/superpowers/specs/2026-09-09-portable-incremental-simulator.md` (Revision 2, approved 2026-09-09)
 Plan: `docs/superpowers/plans/2026-09-09-portable-incremental-simulator.md`
 Baseline commit: `225d3e28c41616d5f975b740df60d1352f4512a7` (`225d3e2`).
 
-This report records the Task 1 / Layer 0 attribution only. The temporary
+Sections 1-10 record the Task 1 / Layer 0 attribution. The temporary
 instrumentation that produced it was removed in the same commit that adds this
 file; no counter, gate or disabled branch survives in the simulator hot path.
+Section 11 records Task 2 / Layer 1A, which is **KEEP** on its clean wall-time
+gate.
 
 ## 1. What was measured, and in which units
 
@@ -439,3 +441,285 @@ bar by three orders of magnitude.
 
 Each candidate is implemented independently, gated on `multiplier4`
 top-exhaustive **wall** time from a clean binary, and removed if it misses.
+
+## 11. Layer 1A (Task 2): implementation, semantic tests, the wide differential suite and the clean wall-time gate — **KEEP**
+
+### 11.1 Decision
+
+**KEEP.** Layer 1A passes its retention gate by a wide margin: `multiplier4`
+top-exhaustive median wall time falls from **129,185 ms** to **49,258 ms**, a
+**2.6226x** speedup and a **61.8702%** reduction, against a required reduction of
+at least 10% (`median(C) <= 0.90 * median(B)` = 116,266.5 ms). Both regression
+controls are far below their fixed ceilings and both got faster, so there is no
+regression to weigh. Every case reproduced identical gates, compiled blocks,
+ticks and blocks.
+
+The mandatory ignored release full-resettle suite (spec section 5.2) **passes**:
+5 passed, 0 failed, exit 0. Every semantic precondition the spec sets for
+retention is therefore met, not just the narrow ones.
+
+Step 7's post-retention re-attribution is **the one remaining open item**: no `VectorWork` or
+`SimulatorWorkCounts` evidence has been gathered on the retained revision, so the
+question the spec puts to it — whether component scans are still material enough
+to justify Task 3 — is unanswered. Task 3 has not been started.
+
+### 11.2 The change
+
+One call site in `recompute_dust_strengths_cached`
+(`src/redstone/simulator/propagate.rs`) calls the existing `World::take_dirty()`
+once after `recompute_active_dust` returns, discarding the derived dust
+write-back entries. Public `recompute_dust_strengths`, `World::set`,
+palette/index maintenance and topology epochs are unchanged; no writer
+abstraction was added.
+
+The premise holds structurally at this call site: the function itself already
+consumed all pre-existing dirt with a destructive `take_dirty`, and it holds the
+only `&mut World` borrow throughout, so the sole writer in between is the
+write-back loop. The discarded entries are therefore exactly the derived
+wire-power writes, and every one of them is simultaneously returned in `changed`
+to `settle_from_current_state`, which is what actually schedules mismatched
+components. The dirty set was carrying a redundant second copy whose only effect
+was to make the next cached recompute re-select and re-solve a component that had
+just reached its fixed point.
+
+### 11.3 TDD, semantic tests and the mandatory wide differential suite
+
+`cached_recompute_returns_changes_without_redirtying_its_own_writeback` failed
+only on its final dirty-set assertion before the change (exit 101,
+`cached write-back must consume only its own dirt`, at `propagate.rs:1027`) and
+passes after it. Critically, the two equivalence assertions that run first —
+sorted changed positions equal to the public path's, and every world cell equal
+to the public path's — passed in **both** the RED and GREEN states, so the discard
+changed neither the returned changed set nor the final world.
+
+| Command | Result |
+|---|---|
+| `cargo test --lib redstone::simulator::propagate::tests -- --nocapture` | 20 passed, 0 failed |
+| `cargo test --lib redstone::simulator::differential::tests -- --nocapture` | 4 passed, 0 failed |
+| `cargo test --lib compile::resettle_differential::the_reported_stale_dust_case_settles_clean -- --exact` | 1 passed, 0 failed |
+| `cargo test --lib compile::resettle_differential::and4s_full_sweep_is_differential_clean -- --exact` | 1 passed, 0 failed |
+
+The mandatory wide suite ran before the wall gate:
+
+```
+cargo test --release --lib compile::resettle_differential -- --ignored --nocapture --test-threads=1
+
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 1009 filtered out; finished in 55.31s
+EXIT=0
+```
+
+Spec section 5.2 names these oracles mandatory rather than optional measurement
+fixtures, because they deliberately remove the old self-dirty safety net — they
+are the harnesses that would expose an incomplete active-set selection. All five
+report zero stale cells:
+
+| Oracle | Evidence |
+|---|---|
+| 240 `and4` transitions | **0 / 480 stale** |
+| injected isolation | **0 / 4758 stale**, and **0 stale ZERO** |
+| baseline isolation | `and4` **0 / 11**, `full_adder` **0 / 25**, negotiated `full_adder` **0 / 25** |
+| negotiated plan | `full_adder` **0 / 8 vectors stale**; `segment_a` did not route and was **NOT MEASURED** |
+| six-condition | `and4`, `full_adder`, `segment_a`, `seven_segment`, `verilog:and4`, `verilog:seven_segment` — all **0 stale cells** and **0 output moves** |
+
+The 4758-cell injected-isolation figure is the sharpest of these: the injection
+deliberately manufactures stale dust, and the candidate still resolved every
+injected cell, including the separately counted stale-`ZERO` class. The
+six-condition harness additionally checks **0 output moves**, so no pinned output
+changed position.
+
+One coverage limit is recorded rather than smoothed over: in the negotiated-plan
+oracle `segment_a` **did not route**, so that circuit contributed no measurement
+on that harness. It is covered by the six-condition harness, which reports
+`segment_a` clean.
+
+### 11.4 Benchmark protocol as executed
+
+Clean phase-only binaries, no `REDA_SIM_WORK_COUNTS`, no build between samples.
+Baseline `B` executed in a detached worktree at `225d3e2` with its own
+`CARGO_TARGET_DIR`; candidate `C` executed from the active worktree with a
+separate `CARGO_TARGET_DIR`. Eighteen samples, six per case, in the mandated
+`B1,C1,C2,B2,B3,C3` order, one Cargo process at a time.
+
+The literal completion order of all eighteen samples confirms both the per-case
+sequence and strict serialization — no two samples overlap:
+
+```
+17:44:22 multiplier4 B1     17:53:44 ripple_adder8 B1     17:55:29 alu8 B1
+17:45:37 multiplier4 C1     17:53:55 ripple_adder8 C1     17:56:08 alu8 C1
+17:46:52 multiplier4 C2     17:54:05 ripple_adder8 C2     17:56:46 alu8 C2
+17:49:37 multiplier4 B2     17:54:18 ripple_adder8 B2     17:57:33 alu8 B2
+17:52:21 multiplier4 B3     17:54:32 ripple_adder8 B3     17:58:20 alu8 B3
+17:53:31 multiplier4 C3     17:54:42 ripple_adder8 C3     17:58:58 alu8 C3
+```
+
+Raw logs: `%TEMP%\reda-layer1a-{multiplier4|ripple_adder8|alu8}-{B1|C1|C2|B2|B3|C3}.txt`.
+
+**Provenance cross-check.** Every `B` sample reports `1012 filtered out` and
+every `C` sample reports `1013 filtered out`. The candidate carries exactly one
+extra test — the Layer 1A oracle — so the harness counts independently confirm
+that all nine `B` samples really executed the baseline checkout and all nine `C`
+samples the candidate. All eighteen report `test result: ok. 1 passed; 0 failed`.
+
+### 11.5 Raw values — all eighteen samples
+
+Top exhaustive is the final `PHASE exhaustive` before that case's `CIRCUIT` line,
+with the immediately following `WORK exhaustive_vectors` line quoted as the
+extraction guard (spec section 5.1 / section 3).
+
+`multiplier4` — all three modules carry exhaustive vectors:
+
+| Sample | leaf `PHASE exhaustive` (8 vec) | intermediate (256 vec) | **top `PHASE exhaustive`** | guard | `CIRCUIT` |
+|---|---:|---:|---:|---|---|
+| B1 | 106 | 9891 | **133783** | `WORK exhaustive_vectors 256` | `OK gates=337 blocks_compiled=3 ticks=1039 blocks=124948 in 171.3011467s` |
+| C1 | 43 | 3460 | **50059** | `WORK exhaustive_vectors 256` | `OK gates=337 blocks_compiled=3 ticks=1039 blocks=124948 in 74.657229s` |
+| C2 | 38 | 3602 | **49258** | `WORK exhaustive_vectors 256` | `OK gates=337 blocks_compiled=3 ticks=1039 blocks=124948 in 73.8856725s` |
+| B2 | 107 | 9675 | **129185** | `WORK exhaustive_vectors 256` | `OK gates=337 blocks_compiled=3 ticks=1039 blocks=124948 in 165.6771986s` |
+| B3 | 105 | 9557 | **127047** | `WORK exhaustive_vectors 256` | `OK gates=337 blocks_compiled=3 ticks=1039 blocks=124948 in 163.0727452s` |
+| C3 | 38 | 3541 | **46515** | `WORK exhaustive_vectors 256` | `OK gates=337 blocks_compiled=3 ticks=1039 blocks=124948 in 70.3501778s` |
+
+`ripple_adder8` — the top module certifies with **zero** exhaustive vectors:
+
+| Sample | child (8 vec) | **top `PHASE exhaustive`** | guard | `CIRCUIT` |
+|---|---:|---:|---|---|
+| B1 | 105 | **196** | `WORK exhaustive_vectors 0` | `OK gates=200 blocks_compiled=2 ticks=608 blocks=70603 in 13.2173563s` |
+| C1 | 37 | **215** | `WORK exhaustive_vectors 0` | `OK gates=200 blocks_compiled=2 ticks=608 blocks=70603 in 10.0056295s` |
+| C2 | 37 | **194** | `WORK exhaustive_vectors 0` | `OK gates=200 blocks_compiled=2 ticks=608 blocks=70603 in 9.8993233s` |
+| B2 | 113 | **134** | `WORK exhaustive_vectors 0` | `OK gates=200 blocks_compiled=2 ticks=608 blocks=70603 in 13.3594442s` |
+| B3 | 106 | **213** | `WORK exhaustive_vectors 0` | `OK gates=200 blocks_compiled=2 ticks=608 blocks=70603 in 13.2968716s` |
+| C3 | 37 | **193** | `WORK exhaustive_vectors 0` | `OK gates=200 blocks_compiled=2 ticks=608 blocks=70603 in 9.8902353s` |
+
+`alu8` — the first module carries 128 vectors; the second and top carry zero:
+
+| Sample | module 1 (128 vec) | module 2 (0 vec) | **top `PHASE exhaustive`** | guard | `CIRCUIT` |
+|---|---:|---:|---:|---|---|
+| B1 | 1020 | 147 | **454** | `WORK exhaustive_vectors 0` | `OK gates=400 blocks_compiled=3 ticks=972 blocks=213833 in 47.5957969s` |
+| C1 | 333 | 144 | **452** | `WORK exhaustive_vectors 0` | `OK gates=400 blocks_compiled=3 ticks=972 blocks=213833 in 38.4901755s` |
+| C2 | 338 | 160 | **441** | `WORK exhaustive_vectors 0` | `OK gates=400 blocks_compiled=3 ticks=972 blocks=213833 in 37.758613s` |
+| B2 | 1004 | 146 | **450** | `WORK exhaustive_vectors 0` | `OK gates=400 blocks_compiled=3 ticks=972 blocks=213833 in 47.1626962s` |
+| B3 | 1016 | 159 | **449** | `WORK exhaustive_vectors 0` | `OK gates=400 blocks_compiled=3 ticks=972 blocks=213833 in 46.9833758s` |
+| C3 | 344 | 144 | **441** | `WORK exhaustive_vectors 0` | `OK gates=400 blocks_compiled=3 ticks=972 blocks=213833 in 37.747627s` |
+
+### 11.6 Medians and the retention gate
+
+Medians are over the three samples of each arm, per spec section 5.1: retention
+uses the ratio of medians, not the median of paired ratios.
+
+**The gate — `multiplier4` top exhaustive:**
+
+| Arm | Samples (ms, sorted) | Median (ms) |
+|---|---|---:|
+| Baseline `B` | 127047, 129185, 133783 | **129185** |
+| Candidate `C` | 46515, 49258, 50059 | **49258** |
+
+- Speedup `median(B)/median(C)` = 129185 / 49258 = **2.622620x**
+- Reduction = **61.8702%**
+- Gate threshold `0.90 * median(B)` = 116,266.5 ms; candidate median 49,258 ms — **PASS**, with 6.19x the required reduction.
+
+**End-to-end medians:**
+
+| Case | `B` samples (s, sorted) | `B` median | `C` samples (s, sorted) | `C` median | Speedup | Ceiling | Under ceiling |
+|---|---|---:|---|---:|---:|---:|---|
+| `multiplier4` | 163.0727452, 165.6771986, 171.3011467 | **165.6771986** | 70.3501778, 73.8856725, 74.657229 | **73.8856725** | **2.242345x** | 119.9947335 (Goal 1) | yes |
+| `ripple_adder8` | 13.2173563, 13.2968716, 13.3594442 | **13.2968716** | 9.8902353, 9.8993233, 10.0056295 | **9.8993233** | 1.343210x | 15.36352587 | yes |
+| `alu8` | 46.9833758, 47.1626962, 47.5957969 | **47.1626962** | 37.747627, 37.758613, 38.4901755 | **37.758613** | 1.249058x | 54.17791974 | yes |
+
+No representative regression exists in either direction to test against the 5%
+bar: both controls are **faster** on the candidate, by 25.5515% (`ripple_adder8`)
+and 19.9397% (`alu8`). Both arms of both controls sit under their fixed ceilings.
+
+**Paired ratios** (`B1/C1`, `B2/C2`, `B3/C3`), reported only to expose drift and
+never used for retention:
+
+| Case | metric | B1/C1 | B2/C2 | B3/C3 |
+|---|---|---:|---:|---:|
+| `multiplier4` | top exhaustive | 2.672506 | 2.622620 | 2.731312 |
+| `multiplier4` | end to end | 2.294502 | 2.242345 | 2.318015 |
+| `ripple_adder8` | end to end | 1.320992 | 1.349531 | 1.344444 |
+| `alu8` | end to end | 1.236570 | 1.249058 | 1.244671 |
+
+The paired ratios are tight around the ratio of medians in every row, so the
+result is not an artifact of drift between arms.
+
+### 11.7 Identical-results evidence
+
+Every sample of a case reproduced a byte-identical `CIRCUIT` quality key, across
+both arms:
+
+| Case | gates | blocks_compiled | ticks | blocks | identical across |
+|---|---:|---:|---:|---:|---|
+| `multiplier4` | 337 | 3 | 1039 | 124948 | all 6 samples |
+| `ripple_adder8` | 200 | 2 | 608 | 70603 | all 6 samples |
+| `alu8` | 400 | 3 | 972 | 213833 | all 6 samples |
+
+Tick counts are the sharpest of these: 1039, 608 and 972 game ticks reproduce
+exactly, so the candidate did not shorten, lengthen or reorder any settle. Every
+sample also reproduced its module's `WORK exhaustive_vectors` and
+`WORK manifest_transitions` counts, so no vector or transition was skipped.
+
+### 11.8 Where the time went
+
+`multiplier4`'s B2 and C2 samples are simultaneously the median for top
+exhaustive and for end to end, so they decompose the win without mixing runs:
+
+| Span | B2 | C2 | Delta | Share of the 91.7915261 s end-to-end delta |
+|---|---:|---:|---:|---:|
+| top exhaustive | 129185 ms | 49258 ms | 79.927 s | 87.07% |
+| intermediate exhaustive (256 vec) | 9675 ms | 3602 ms | 6.073 s | 6.62% |
+| top manifest | 11093 ms | 6118 ms | 4.975 s | 5.42% |
+| leaf exhaustive (8 vec) | 107 ms | 38 ms | 0.069 s | 0.08% |
+
+Routing, placement, structure/emit/verify, timing, equivalence and
+metrics/fingerprints are unchanged within noise (top-module `route_nets`
+10870.672 ms vs 10729.244 ms; `metrics+fingerprints` 52 ms in both), which is
+expected: Layer 1A touches only the simulator.
+
+Two corroborating observations, both consistent with a general simulator
+improvement rather than a fixture-specific one:
+
+- **Every module that actually runs exhaustive vectors improved by a similar
+  factor**, independent of size: `multiplier4` leaf 2.7895x (8 vectors),
+  `multiplier4` intermediate 2.7323x (256), `multiplier4` top 2.6226x (256),
+  `ripple_adder8` child 2.8649x (8), `alu8` module 1 3.0059x (128).
+- **The manifest phase also improved**, because it drives the same simulator:
+  top-module manifest medians 11326 → 6118 ms (1.8513x) for `multiplier4`,
+  7049 → 3810 ms (1.8501x) for `ripple_adder8` and 22900 → 16069 ms (1.4251x)
+  for `alu8`.
+
+The second point is what explains the control speedups. Task 1's open concern 4
+warned that `ripple_adder8` and `alu8` certify their top modules with
+`WORK exhaustive_vectors 0`; that remains true, and their **top exhaustive**
+medians are accordingly noise on a sub-250 ms span (196 → 194 ms and 450 →
+441 ms) and are **not** evidence of a speedup. Their end-to-end gains come from
+the manifest sweep and from `alu8`'s 128-vector child module, not from their top
+exhaustive phase. Their role in the gate is unchanged: they bound regression
+against fixed ceilings, and they do so comfortably.
+
+### 11.9 Goal 1 status and caveats
+
+The candidate `multiplier4` end-to-end median of **73.8856725 s** is below Goal
+1's absolute target of 119.9947335 s. Measured against the spec section 1 fixed
+baseline of 179.9921003 s that is 2.436089x; measured against this session's own
+baseline arm it is 2.242345x. Both readings clear the 1.5x objective, and the
+same-session figure is the conservative one.
+
+Caveats that travel with this result:
+
+1. **This session's baseline arm is faster than the spec's fixed baseline**
+   (165.6771986 s vs 179.9921003 s, an 8.0% difference in host conditions
+   between sessions). The retention decision is unaffected — the gate is
+   same-session `B` vs `C` — but the fixed ceilings and the 179.9921003 s
+   figure come from an earlier session and should not be treated as
+   interchangeable with today's `B` arm.
+2. **One negotiated-plan circuit was not measured.** `segment_a` did not route
+   in that oracle, so it contributed no stale-cell count there. The
+   six-condition harness covers `segment_a` and reports it clean, but the
+   negotiated-plan path itself is unexercised for that circuit.
+3. **Step 7 post-retention attribution is the one open item.** No fresh clone/drive/settle/
+   check, dust/topology or per-kind component worker-ns shares exist for the
+   retained revision. Spec section 5.5 requires that evidence to still name
+   component scans as material before Task 3 is attempted, so Task 3's
+   eligibility is currently undetermined — not granted and not refused.
+4. **Task 1's open concern 1 is now partly settled by measurement.** The 84.96%
+   unsubdivided settle remainder did contain the dominant removable work: 61.87%
+   of top-exhaustive wall time was the redundant re-solve caused by the derived
+   dirty entries. What remains inside that span is still unsubdivided.
