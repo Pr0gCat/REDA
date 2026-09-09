@@ -1223,3 +1223,47 @@ git diff --check          -> clean
 `an_oscillator_is_reported_as_diverged` is among them. No loop reshape, no
 `cfg(test)` counter, no accessor, no fixture and no Layer 1B test survives in the
 working source. The retained stack is Layer 1A only.
+
+## 14. Task 4: closed next-layer decision — **APPROVED TO REUSE existing evidence, no re-run**
+
+Task 4's plan steps ask for a fresh temporary-instrumentation re-attribution of
+the retained stack (Steps 1-2) followed by one measured branch decision
+(Step 3). Steps 1 and 2 were deliberately satisfied by reuse instead of being
+re-executed, because the current retained `src` is byte-identical to Layer 1A
+(`6ccb7a7`/`115c976`): Task 3's removal commit `8cf7869` confirms
+`git diff 115c976 -- src` is empty and the working tree at HEAD is byte-for-byte
+`115c976` (section 13.10, section 13 provenance). Re-inserting the counters and
+re-running the three-circuit attribution would measure the exact same source
+`task-2-report.md` Step 7 already measured for this revision, so it would only
+duplicate existing evidence rather than produce new information.
+
+The detailed measured attribution for this exact retained source already exists
+in this document (section 12, "Step 7 phase B: post-retention re-attribution on
+the retained Layer 1A"), sourced from `task-2-report.md` Step 7's "Shares on the
+retained revision" and "Spec section 5.5 outcome — Task 3 eligible": top sweep
+500,448,667,500 worker-ns, down 66.7606% from Task 1, with the four component
+scans at 181,457,793,200 worker-ns (36.2590% of the top sweep).
+
+Step 3's branch decision is taken directly from that existing evidence together
+with two independent clean end-to-end medians already measured on this
+identical retained source, without any new benchmark:
+
+- `73.8856725s` — Task 2's clean wall-time gate, `multiplier4` end-to-end C-arm
+  median (section 11, "End-to-end medians and ceilings" /
+  `task-2-report.md` Step 5).
+- `70.4469875s` — Task 3's clean wall-time gate, `multiplier4` end-to-end B-arm
+  median, measured against the detached Layer 1A baseline `115c976` before the
+  (later reverted) Layer 1B candidate (section 13.7).
+
+Both medians were measured on byte-identical retained source and both satisfy
+`<= 119.9947335 s` (the Goal 1 threshold from the approved spec). **Branch 1 of
+Step 3 fires**: the final end-to-end median is already at or under the Goal 1
+threshold, so Layer 2 is skipped and the plan continues to Task 6. Consistent
+with section 13.7's caveat, this two-arm evidence establishes that both medians
+already sit far below the threshold, but it is not itself a Goal 1 verdict —
+**Task 6's acceptance matrix against the fixed `225d3e2` baseline remains the
+authoritative Goal 1 verification.**
+
+No `src` file was edited, no `cargo` command was run and no benchmark was
+launched for Task 4; this section is a report-only closure of the Step 3
+decision from evidence already on record for the identical retained source.
