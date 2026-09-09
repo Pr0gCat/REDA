@@ -10,9 +10,9 @@ file; no counter, gate or disabled branch survives in the simulator hot path.
 Section 11 records Task 2 / Layer 1A, which is **KEEP** on its clean wall-time
 gate. Section 12 records the Step 7 post-retention re-attribution and the second
 removal of the temporary instrumentation. Section 13 records Task 3 / Layer 1B
-Steps 1-5 only: the implemented change and its test status. **Layer 1B is not
-retained by this section** — its wall-time gate (plan Task 3 Step 6) has not been
-run, so no speedup is claimed for it anywhere in this report.
+in full, including its Step 6 wall-time gate. **Layer 1B is REVERTED**: it missed
+its own 10% top-exhaustive gate on `multiplier4` and was removed completely, so
+the retained stack at the end of this document is still exactly Layer 1A.
 
 ## 1. What was measured, and in which units
 
@@ -928,28 +928,42 @@ The temporary instrumentation now exists only in local history, at `e797853` and
 Task 1 split ruling; no counter, gate or disabled branch is in the working
 source.
 
-## 13. Layer 1B (Task 3, Steps 1-5): implementation and test status — **no retention decision yet**
+## 13. Layer 1B (Task 3): skip mismatch scans on empty due-event ticks — **REVERT**
 
-### 13.1 Scope and status
+### 13.1 Decision
 
-This section covers plan Task 3 Steps 1 through 5 only. It records what was
-implemented and which tests were run. It records **no** performance number and
-makes **no** retention claim:
+**REVERT.** Layer 1B missed its retention gate. The gate requires `multiplier4`
+top-exhaustive wall time at least 10% below the immediately preceding retained
+revision `115c976` (source-equivalent to Layer 1A `6ccb7a7`). Measured:
 
-- Step 6, the clean `B1,C1,C2,B2,B3,C3` three-circuit wall-time gate against the
-  immediately preceding retained revision `115c976`, **has not been run**.
-- No benchmark, worktree or target directory was created for this section.
-- Until Step 6 runs, Layer 1B is an unmeasured candidate. Whether it reduces
-  `multiplier4` top-exhaustive wall time by the required 10% is **unknown**, and
-  a `REVERT` outcome remains possible, in which case both the loop reshape and
-  the test-only scan counter are removed.
+- `median(B) = 46,691 ms`, `median(C) = 42,623 ms`;
+- ratio `median(B)/median(C) = 1.095441x`, a **8.7126%** reduction;
+- KEEP threshold `0.90 x 46,691 = 42,021.9 ms`; the candidate median is
+  **42,623 ms**, missing it by **601.1 ms**.
+
+The plan's KEEP condition is a conjunction of three clauses. Clauses two and
+three hold — both representative medians are far below their fixed ceilings, and
+every semantic key is byte-identical across all eighteen samples — but clause one
+fails, so the candidate is removed. A partial win is not retained; the spec's
+ladder measures each candidate independently and deletes the ones that miss.
+
+Everything Layer 1B added was therefore removed: the loop reshape in both stable
+APIs, the `#[cfg(test)] component_scan_rounds` field with its initializer,
+accessor and increment, the shared ring fixture, and all eight Layer 1B tests.
+`src/redstone/simulator/mod.rs` is byte-identical to `115c976` again; see
+section 13.8. Sections 13.2 and 13.3 below describe what the candidate *was* and
+are retained as the record of a rejected experiment, not as a description of the
+current source.
 
 The Task 1 and Task 2 attribution in sections 5, 6 and 12 remains the only
-evidence for *attempting* this candidate: on the retained Layer 1A revision the
-four component scans are 36.2590% of top-sweep vector worker-ns, which satisfies
-the plan's precondition. Worker-ns shares rank candidates; they never retain one.
+evidence that *attempting* this candidate was justified: on the retained Layer 1A
+revision the four component scans are 36.2590% of top-sweep vector worker-ns,
+which satisfied the plan's precondition. That precondition is about ranking, not
+retention — and this result is a concrete demonstration of the difference. A
+36.26% same-unit worker share bought 8.71% of wall time on the objective, so the
+share was a ceiling on plausibility, never a prediction.
 
-### 13.2 The change
+### 13.2 The change, as it was (now removed)
 
 `src/redstone/simulator/mod.rs`, both stable APIs, minimum loop reshape only:
 
@@ -991,7 +1005,7 @@ Empty ticks are unchanged in every other respect: they still advance
 `current_tick`, still consume the game-tick budget, and still sample an attached
 observer, because all of that lives in `advance_one_tick`, which is untouched.
 
-### 13.3 Test-only instrumentation
+### 13.3 Test-only instrumentation, as it was (now removed)
 
 `Simulator` carries a `#[cfg(test)] component_scan_rounds: u64` field, initialized
 to zero, incremented once at the top of `settle_from_current_state`, and read
@@ -1063,7 +1077,149 @@ The certification suite includes the exact cap and lowest-failing-mask tests
 `certified_candidate_is_identical_at_one_two_and_four_workers`,
 `parallel_manifest_sweep_matches_serial_results`), all passing.
 
-Not run in this section, and therefore not claimed: the ignored wide
-full-resettle release suite, the 1/2/4-worker extra/large/hierarchical corpora,
-`cargo clippy --all-targets --all-features`, `check.sh`, and every wall-time
-benchmark.
+Not run against the candidate, and therefore never claimed for it: the ignored
+wide full-resettle release suite, the 1/2/4-worker extra/large/hierarchical
+corpora, `cargo clippy --all-targets --all-features` and `check.sh`. Those gates
+were unnecessary once Step 6 rejected the candidate on wall time.
+
+### 13.6 Step 6 benchmark protocol as executed
+
+The clean `B1,C1,C2,B2,B3,C3` three-circuit protocol from spec section 5.1, with
+phase-only binaries — no `REDA_SIM_WORK_COUNTS` build exists on either arm, and
+no `SIM_WORK` or `worker_ns` line appears in any of the eighteen logs.
+
+| | B arm | C arm |
+|---|---|---|
+| Revision | `115c976` (retained Layer 1A) | `12bd58e` (Layer 1B candidate) |
+| Location | `$baselineRepo` under `Push-Location` | the active worktree |
+| `CARGO_TARGET_DIR` | `%TEMP%\reda-target-layer1a-baseline` | `%TEMP%\reda-target-layer1b-candidate` |
+| Executable path in log | `...\reda-target-layer1a-baseline\release\deps\reda-181582025761747b.exe` | `...\reda-target-layer1b-candidate\release\deps\reda-181582025761747b.exe` |
+| Lib test count implied | `1013 filtered out` + 1 run = 1014 | `1020 filtered out` + 1 run = 1021 |
+
+The implied test counts are an independent cross-check that each arm ran the
+intended revision: 1014 is the Layer 1A suite, and 1021 is that suite minus the
+one subsumed oscillator test plus the eight Layer 1B tests. Neither arm rebuilt
+between samples.
+
+Raw logs: `%TEMP%\reda-layer1b-{multiplier4,ripple_adder8,alu8}-{B1,C1,C2,B2,B3,C3}.txt`,
+eighteen files. All eighteen report
+`test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured`.
+
+`top exhaustive` is the final `PHASE exhaustive` line before that case's
+`CIRCUIT` line, the extraction rule fixed in section 3.
+
+### 13.7 Raw samples and medians, recomputed from the logs
+
+All values below were re-extracted from the eighteen raw logs and the medians
+recomputed independently, not copied from the run summary.
+
+`multiplier4` — top exhaustive, milliseconds (**the objective**):
+
+| Sample | B (115c976) | Sample | C (12bd58e) |
+|---|---:|---|---:|
+| B1 | 46,254 | C1 | 42,545 |
+| B2 | 46,691 | C2 | 42,623 |
+| B3 | 46,721 | C3 | 42,748 |
+| **median** | **46,691** | **median** | **42,623** |
+
+`median(B)/median(C) = 1.095441x`; reduction `(46,691 - 42,623) / 46,691 =
+8.7126%`; KEEP needs `median(C) <= 42,021.9`; actual 42,623. **FAIL.**
+
+End-to-end wall time, seconds:
+
+| Circuit | B raw | B median | C raw | C median | median(B)/median(C) | Fixed ceiling | Ceiling met |
+|---|---|---:|---|---:|---:|---:|---|
+| `multiplier4` | 69.7930199 / 70.7780746 / 70.4469875 | 70.4469875 | 64.6289979 / 64.3277207 / 64.3865282 | 64.3865282 | 1.094126x | — | — |
+| `ripple_adder8` | 9.8597617 / 10.003527 / 9.8472536 | 9.8597617 | 8.7306052 / 8.8913983 / 8.7495453 | 8.7495453 | 1.126888x | 15.36352587 | yes |
+| `alu8` | 38.1099869 / 37.8764883 / 37.9787956 | 37.9787956 | 29.9239544 / 30.184643 / 29.9162777 | 29.9239544 | 1.269177x | 54.17791974 | yes |
+
+Paired ratios, normalized `B1/C1`, `B2/C2`, `B3/C3` as the spec requires, reported
+to expose drift only — retention uses the ratio of medians:
+
+| Circuit | metric | B1/C1 | B2/C2 | B3/C3 |
+|---|---|---:|---:|---:|
+| `multiplier4` | top exhaustive | 1.087178 | 1.095441 | 1.092940 |
+| `multiplier4` | end to end | 1.079903 | 1.100273 | 1.094126 |
+| `ripple_adder8` | end to end | 1.129333 | 1.125079 | 1.125459 |
+| `alu8` | end to end | 1.273561 | 1.254826 | 1.269503 |
+
+The three `multiplier4` top-exhaustive paired ratios span 1.0872-1.0954. Every
+one is below the 1.1111 ratio that a 10% reduction requires, so the failure is
+not an artifact of choosing medians over paired ratios: the candidate misses on
+every pairing.
+
+**The end-to-end columns are not evidence for Layer 1B, and are not used to
+retain it.** Two facts in the same tables rule that out. First, `alu8` and
+`ripple_adder8` certify their top modules with `WORK exhaustive_vectors 0`
+(section 4), so they barely exercise the code Layer 1B changes — yet they show
+the *largest* end-to-end differences, 1.269x and 1.127x. Second, `alu8` top
+exhaustive is 449 ms on B against 456 ms on C, i.e. marginally *slower* on the
+candidate, while its end-to-end is 1.269x faster. A change that does not move the
+phase it targets cannot be the cause of a 1.27x end-to-end move. These
+differences belong to something outside the candidate diff — separate prebuilt
+binaries in separate target directories, and machine state across a 10-minute
+window — and the honest reading is that the two arms are not comparable end to
+end at that resolution. The objective gate is the top-exhaustive phase on
+`multiplier4`, which is measured on the phase Layer 1B actually touches, and it
+failed.
+
+For the same reason no Goal 1 claim is made here. Both arms already sit far below
+the 119.9947335 s Goal 1 threshold, but a Goal 1 verdict requires Task 6's
+acceptance matrix against the fixed `225d3e2` baseline, not this two-arm gate.
+
+### 13.8 Semantic identity across all eighteen samples
+
+Every sample produced byte-identical semantic output within its circuit:
+
+| Circuit | Quality key, identical in all 6 samples | `exhaustive_vectors` | `exhaustive_workers` | `manifest_transitions` |
+|---|---|---|---|---|
+| `multiplier4` | `OK gates=337 blocks_compiled=3 ticks=1039 blocks=124948` | 8, 256, 256 | 1, 12, 11 | 56, 32, 32 |
+| `ripple_adder8` | `OK gates=200 blocks_compiled=2 ticks=608 blocks=70603` | 8, 0 | 1 | 56, 68 |
+| `alu8` | `OK gates=400 blocks_compiled=3 ticks=972 blocks=213833` | 128, 0, 0 | 12 | 28, 44, 76 |
+
+Gates, compiled blocks, ticks, blocks, per-module vector counts, worker counts
+and manifest transition counts are identical between the B and C arms in every
+case. The candidate was semantically exact; it simply was not fast enough. This
+matters for the record: the reason for removal is the wall-time gate alone, and
+nothing here suggests the empty-tick skip was unsound.
+
+### 13.9 One arithmetic correction
+
+The run summary handed over with the logs reported the `multiplier4`
+top-exhaustive reduction as 8.7122%. Recomputing from the medians gives
+`4,068 / 46,691 = 0.0871260`, i.e. **8.7126%**. The stated ratio `1.095442x`
+matches to six significant figures (`1.0954415`). The difference is in the fourth
+decimal place of a percentage and changes nothing: both values are far below the
+10% threshold and both give the same `FAIL`. The recomputed figure is the one
+used throughout this section.
+
+### 13.10 Removal, verified
+
+The complete candidate was removed by restoring the one changed source file from
+the retained revision:
+
+```
+git checkout 115c976 -- src/redstone/simulator/mod.rs
+
+git diff 115c976 -- src              -> empty (byte-identical)
+git diff 115c976 --stat -- src       -> no output
+
+grep -rn "component_scan_rounds\|ring_of_three_wall_torches\|empty_delay_ticks" src
+                                     -> no matches
+
+cargo test --lib redstone::simulator::tests -- --nocapture
+test result: ok. 21 passed; 0 failed; 0 ignored; 0 measured; 993 filtered out
+
+cargo test --test simulator_circuits -- --nocapture
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out
+
+cargo test --lib compile::fragment_synth::certification::tests -- --nocapture
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 988 filtered out
+
+git diff --check          -> clean
+```
+
+21 simulator tests is the pre-Layer-1B count, and the restored
+`an_oscillator_is_reported_as_diverged` is among them. No loop reshape, no
+`cfg(test)` counter, no accessor, no fixture and no Layer 1B test survives in the
+working source. The retained stack is Layer 1A only.
