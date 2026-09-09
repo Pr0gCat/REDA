@@ -1267,3 +1267,207 @@ authoritative Goal 1 verification.**
 No `src` file was edited, no `cargo` command was run and no benchmark was
 launched for Task 4; this section is a report-only closure of the Step 3
 decision from evidence already on record for the identical retained source.
+
+## 15. Task 6: the final performance and semantic matrix — Goal 1 confirmed, KEEP
+
+### 15.1 Decision
+
+**Goal 1 is MET on the authoritative matrix.** `multiplier4` end-to-end
+`median(B)/median(C)` against a freshly built `225d3e2` baseline is
+**2.313261x** (162.7950036s -> 70.3746706s), comfortably past the 1.5x
+objective and with the candidate median (70.3746706s) under the spec's
+absolute ceiling of 119.9947335s. Against the spec's original fixed sample
+(179.9921003s) the same candidate median reads **2.557626x**; the
+same-session reading is the conservative one and is the one used for the
+verdict, consistent with the caveat already on record in section 11.9 that
+session baselines vary by host conditions. **The retained stack stays exactly
+Layer 1A** (`src/redstone/simulator/propagate.rs` is the entire production
+diff against `225d3e2` — `git diff 225d3e2 --stat -- src` confirms no other
+file changed). No Layer 2 candidate exists; Task 4 already skipped it on this
+evidence.
+
+The raw logs remain under `%TEMP%` as
+`reda-final-{multiplier4,ripple_adder8,alu8}-{B1,C1,C2,B2,B3,C3}.txt` and
+`reda-final-oneworker-multiplier4-{B1,C1,C2,B2,B3,C3}.txt`. The permanent
+record below includes every load-bearing sample because the more detailed
+`task-6-report.md` is in the ignored SDD ledger directory. This closure is
+report-only: no
+`src`, test or fixture file was edited, and no `cargo`/benchmark command was
+run in the session that wrote this section. All numbers below were
+independently re-extracted from the raw logs already on disk and recomputed,
+not copied from a prior summary.
+
+### 15.2 Final automatic-worker matrix (`B1,C1,C2,B2,B3,C3`), against fresh `225d3e2`
+
+Same protocol as sections 11.4 and 13.6: separate prebuilt release binaries,
+`reda-target-baseline-225d3e2` for every `B` sample and
+`reda-target-incremental-candidate` for every `C` sample, one Cargo process at
+a time, file timestamps strictly increasing in the mandated order for all
+three circuits. Every `B` log reports `1012 filtered out`, every `C` log
+`1013 filtered out`; all eighteen report `test result: ok. 1 passed; 0 failed`.
+
+`multiplier4` top exhaustive and end-to-end (the objective):
+
+| Sample | top exhaustive (ms) | end-to-end (s) |
+|---|---:|---|
+| B1 | 126214 | 162.5071466 |
+| C1 | 46638 | 70.3640188 |
+| C2 | 46645 | 70.3746706 |
+| B2 | 126656 | 162.7950036 |
+| B3 | 127028 | 163.3722516 |
+| C3 | 46801 | 70.59431 |
+
+| Metric | B median | C median | median(B)/median(C) |
+|---|---:|---:|---:|
+| top exhaustive | **126656 ms** | **46645 ms** | **2.715318x** |
+| end-to-end | **162.7950036 s** | **70.3746706 s** | **2.313261x** |
+
+Regression controls, end-to-end raw samples:
+
+| Circuit | B1 | C1 | C2 | B2 | B3 | C3 |
+|---|---:|---:|---:|---:|---:|---:|
+| `ripple_adder8` | 13.426723s | 9.9021756s | 9.9086086s | 13.5991117s | 13.2913092s | 9.8261249s |
+| `alu8` | 47.7247284s | 37.8353868s | 38.8996168s | 47.7604651s | 47.2594247s | 38.4111112s |
+
+Medians and fixed ceilings:
+
+| Circuit | B median | C median | median(B)/median(C) | Fixed ceiling | Under ceiling |
+|---|---:|---:|---:|---:|---|
+| `ripple_adder8` | 13.426723s | 9.9021756s | **1.355937x** | 15.36352587s | yes, by 35.55% |
+| `alu8` | 47.7247284s | 38.4111112s | **1.242472x** | 54.17791974s | yes, by 29.10% |
+
+Paired same-session drift checks (`B1/C1`, `B2/C2`, `B3/C3`) are
+`multiplier4` top exhaustive `2.706248x / 2.715318x / 2.714216x`,
+`multiplier4` end-to-end `2.309521x / 2.313261x / 2.314241x`,
+`ripple_adder8` end-to-end `1.355937x / 1.372454x / 1.352650x`, and `alu8`
+end-to-end `1.261378x / 1.227788x / 1.230358x`. The objective circuit is
+tightly paired; the control spread does not change either fixed-ceiling
+verdict.
+
+Quality is exact across all eighteen samples and every circuit contributed
+exactly one certified variant: `multiplier4` gates=337 blocks_compiled=3
+ticks=1039 blocks=124948; `ripple_adder8` gates=200 blocks_compiled=2
+ticks=608 blocks=70603; `alu8` gates=400 blocks_compiled=3 ticks=972
+blocks=213833.
+
+### 15.3 One-worker portability gate (`REDA_CERT_THREADS=1`, `multiplier4` only)
+
+Same two target directories, same `B1,C1,C2,B2,B3,C3` order, `WORK
+exhaustive_workers 1` confirmed in every one of the six logs, timestamps
+strictly increasing with no overlap.
+
+| Sample | top exhaustive (ms) | end-to-end (s) |
+|---|---:|---|
+| B1 | 679326 | 800.8971166 |
+| C1 | 237283 | 293.1765097 |
+| C2 | 235722 | 291.8741984 |
+| B2 | 678906 | 800.7302983 |
+| B3 | 677362 | 799.2847547 |
+| C3 | 235590 | 291.4296416 |
+
+Medians: top exhaustive `678906 ms -> 235722 ms` = **2.880113x**; end-to-end
+`800.7302983s -> 291.8741984s` = **2.743409x**. The plan's gate
+(`median(candidate) <= 1.05 * median(baseline)`) is checked on end-to-end
+time: ceiling `1.05 * 800.7302983 = 840.766813215s`; candidate median
+291.8741984s is **34.7152%** of that ceiling — **PASS**, with the candidate
+still faster than baseline even pinned to one worker. Quality is exact and
+identical to section 15.2: gates=337 blocks_compiled=3 ticks=1039
+blocks=124948 in every one-worker sample.
+
+### 15.4 Remaining gates: ordered certification, fixed corpora, pinned IO, acceptance
+
+Controller-run results from the Task 6 turn, also recorded in
+`.superpowers/sdd/2026-09-09-portable-incremental-simulator/progress.md`, but
+without separately saved command transcripts: ordered-certification gates
+**4/4 passed**; fixed
+1/2/4-worker corpora — extra **16/16** (1 test), large **4/4** (1 test,
+1172.80s), hierarchical **4/4** (1 test, 1930.44s), all exact at 1, 2 and 4
+workers; pinned seven-segment IO contract **1/1 passed**; acceptance
+integration suite **4/4 passed**. These were not rerun while writing this
+report; the lack of standalone transcripts is an explicit provenance limit,
+not independent evidence.
+
+**Independently re-verified in this session**, because the output survived in
+`%TEMP%`: the six-case, five-budget `fragment_acceptance` evaluator's
+`report.json` from a run against current HEAD and a run against clean
+`225d3e2` are **byte-for-byte identical** (`cmp`), both **173132 bytes**, both
+SHA-256 `006429a36bd9169b316b7a576e0667ee74f313461f4607992ac1d3360e1c9a8b`, both
+`"replacement_gate_passed": false`, `"shipping_evaluations": null`, and both
+list exactly **30** failure entries. The checked fixtures
+(`tests/fixtures/fragment_synth_baseline.json`,
+`tests/fixtures/fragment_synth_shipping.json`) carry no local modification
+(`git status --short`).
+
+### 15.5 `fragment_synth_baseline`: pre-existing fixture drift, not fixed
+
+Reported: 2 pass / 1 fail, the failure keyed to a stale verifier-revision
+fixture hash (`1af206...`) against the live verifier hash (`049a81...`), and
+the identical failure reproduces against a fixed `225d3e2` checkout.
+Independently corroborated in this session: `git diff 225d3e2 --stat -- src`
+shows the entire branch's production diff is confined to
+`src/redstone/simulator/propagate.rs`, nowhere near a verifier or
+fixture-generation path, and the fact that `225d3e2` itself — which predates
+every change on this branch — already fails identically rules out this
+branch's changes as the cause by construction. Classified **pre-existing
+fixture drift**. Not fixed, not softened, not retried; Task 6's scope is the
+retained candidate's performance/semantic matrix, not an unrelated
+verifier-revision mismatch that already existed at the branch point.
+
+### 15.6 Verdict recorded honestly
+
+Goal 1 is met and the retained Layer 1A stack passes the candidate-specific
+performance, semantic, determinism and pinned-IO gates. The separate
+`fragment_synth_baseline` fixture check remains red for the pre-existing hash
+drift described above; it is not counted as passing or fixed.
+
+## 16. Task 7: whole-repository verification and independent final review
+
+### 16.1 Checks on the retained tree
+
+- `bash ./check.sh` reached the root test suite and stopped at **1045 passed,
+  1 failed, 77 ignored**. The only failure is the exact stale
+  `fragment_synth_baseline` verifier hash from section 15.5.
+- `cargo clippy --all-targets --all-features` exits 0 with warnings. The strict
+  `cargo clippy --all-targets -- -D warnings` form fails with 27 library and
+  31 test-target diagnostics spread across pre-existing hierarchy, seed and
+  planner code; the same failure set reproduces at fixed baseline `225d3e2`.
+- Native viewer release tests pass: library 23/23, AND4 6/6, geometry 1/1,
+  placement 6/6 with 1 ignored, topology 1/1 and Verilog 6/6. The strict
+  viewer clippy run remains red on one viewer `needless_range_loop` plus the
+  same upstream warnings.
+- Both the viewer wasm test and `wasm-pack build --target web` fail at
+  `src/compile/fragment_synth/benchmark.rs:1223` with E0425 because
+  `atomic_publish` is not in scope. The identical failure reproduces at
+  `225d3e2`.
+- Whole-repository `cargo fmt -- --check` reports broad pre-existing formatting
+  drift. `rustfmt --edition 2021 --check
+  src/redstone/simulator/propagate.rs` passes for the only changed Rust file.
+- The temporary instrumentation search for
+  `REDA_SIM_WORK_COUNTS|VectorWork|SimulatorWorkCounts|worker_ns|SIM_WORK|baseline_build_wall_ns`
+  is empty; fixture diff is empty; `git diff --check` is clean.
+
+These baseline reproductions classify the strict-clippy, wasm and stale-fixture
+reds as existing repository debt, not regressions from Layer 1A. They remain
+unfixed because this task is limited to simulator acceleration and preserving
+observable results.
+
+### 16.2 Independent reviews
+
+- Final Claude Opus correctness review: **READY**, no Critical findings and no
+  production-logic change requested. It independently traced every cached
+  recompute caller, dirty-set writer/consumer, full-scan component scheduler,
+  differential oracle, deterministic ordering and all retained benchmark
+  arithmetic. Its report/provenance findings were applied in sections 15-16.
+- Ponytail full review: **APPROVED**, no blocker. Its only suggestions were
+  comment/report trimming; the misleading scheduling sentence was corrected,
+  while repeated rationale was retained where it carries an independent gate
+  or provenance boundary.
+
+### 16.3 Final verdict
+
+**READY TO COMMIT.** The retained algorithm is the single Layer 1A dirty-set
+consumption change plus its oracle. Goal 1 and portability pass with unchanged
+quality, worker determinism, certification ordering, pinned IO and acceptance
+output. The repository is not described as globally green: all remaining reds
+above reproduce at the fixed branch point and are explicitly carried as
+unrelated debt.

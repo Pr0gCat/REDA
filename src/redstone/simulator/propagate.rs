@@ -180,10 +180,9 @@ pub(crate) fn recompute_dust_strengths_cached(
 
     let active_dust = cache.active_positions(world, &dirty);
     let changed = recompute_active_dust(world, &active_dust, Some(cache));
-    // 這次的髒格在上面 `take_dirty` 就已經全部消化完，而算完之後這裡握著
-    // `world` 唯一的可變借用 —— 所以此刻還留著的髒格，就只有寫回時自己
-    // 標上的那些紅石粉強度。改變的位置已經在 `changed` 裡回報給元件排程，
-    // 不必再讓下一輪把整條線重算一次。
+    // 這次的髒格在上面 `take_dirty` 已全部消化；唯一可變借用的重算只會留下
+    // 紅石粉強度寫回時衍生的髒格。元件排程本身全掃描且不讀髒格清單，
+    // 所以丟棄它們不影響排程，也避免下一輪重算整條線。
     let _derived_writeback = world.take_dirty();
     changed
 }
