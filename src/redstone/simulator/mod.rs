@@ -43,44 +43,6 @@ pub struct Simulator {
     /// `run_until_stable` take exactly the path they always have (see
     /// `advance_one_tick`, the only place this is consulted).
     observer: Option<Observer>,
-    /// TEMPORARY (Task 1 attribution): `Some` only when both
-    /// `REDA_PHASE_TIMING` and `REDA_SIM_WORK_COUNTS` are set, so the
-    /// production hot path keeps exactly one `Option` check per boundary.
-    /// Removed with the rest of the detailed instrumentation.
-    work_counts: Option<SimulatorWorkCounts>,
-}
-
-/// TEMPORARY (Task 1 attribution): per-simulator work counters, cloned with
-/// the simulator so every exhaustive vector reports its own delta. Not an
-/// atomic and not global: each vector owns its simulator.
-#[derive(Clone, Copy, Default)]
-pub(crate) struct SimulatorWorkCounts {
-    pub settle_iterations: u64,
-    pub game_ticks: u64,
-    pub due_events: u64,
-    pub dirty_origins: u64,
-    pub active_dust: u64,
-    pub changed_dust: u64,
-    pub topology_rebuilds: u64,
-    pub topology_rebuild_worker_ns: u128,
-    pub topology_cells: u64,
-    pub topology_probes: u64,
-    pub torch_predicates: u64,
-    pub repeater_predicates: u64,
-    pub comparator_predicates: u64,
-    pub lamp_predicates: u64,
-    pub torch_scan_worker_ns: u128,
-    pub repeater_scan_worker_ns: u128,
-    pub comparator_scan_worker_ns: u128,
-    pub lamp_scan_worker_ns: u128,
-}
-
-/// TEMPORARY (Task 1 attribution): the two-variable detailed gate, read once
-/// per simulator in `Simulator::new`.
-fn detailed_work_counts() -> Option<SimulatorWorkCounts> {
-    (std::env::var_os("REDA_PHASE_TIMING").is_some()
-        && std::env::var_os("REDA_SIM_WORK_COUNTS").is_some())
-    .then(SimulatorWorkCounts::default)
 }
 
 /// 模擬過程的錯誤。
@@ -313,7 +275,6 @@ impl Simulator {
             work_done: 0,
             dust_topology_cache: Arc::new(propagate::DustTopologyCache::default()),
             observer: None,
-            work_counts: detailed_work_counts(),
         };
 
         if let Some((position, name)) = find_unsupported_component(&simulator.world) {
@@ -341,12 +302,6 @@ impl Simulator {
 
     pub fn work_done(&self) -> u64 {
         self.work_done
-    }
-
-    /// TEMPORARY (Task 1 attribution): the counters accumulated so far, or
-    /// `None` when the detailed gate is off.
-    pub(crate) fn work_counts(&self) -> Option<SimulatorWorkCounts> {
-        self.work_counts
     }
 
     /// Attach a dynamic-timing-analysis observer watching exactly these
@@ -501,10 +456,6 @@ impl Simulator {
     /// 有別的排程「順便」觸發重算才會被看見；佇列若一直是空的，粉的
     /// 強度就會一直停留在過期的值，而呼叫端永遠不會被告知。
     fn settle_from_current_state(&mut self) {
-        // TEMPORARY (Task 1 attribution).
-        if let Some(counts) = self.work_counts.as_mut() {
-            counts.settle_iterations = counts.settle_iterations.saturating_add(1);
-        }
         self.recompute_dust_strengths();
         self.schedule_mismatched_torches();
         self.schedule_mismatched_repeaters();
@@ -513,12 +464,7 @@ impl Simulator {
     }
 
     fn recompute_dust_strengths(&mut self) -> Vec<Position> {
-        propagate::recompute_dust_strengths_cached(
-            &mut self.world,
-            &mut self.dust_topology_cache,
-            // TEMPORARY (Task 1 attribution).
-            self.work_counts.as_mut(),
-        )
+        propagate::recompute_dust_strengths_cached(&mut self.world, &mut self.dust_topology_cache)
     }
 
     /// 找出目前狀態與「應該是什麼狀態」不一致的火把，把它們排入佇列。
@@ -529,12 +475,7 @@ impl Simulator {
     /// 排回佇列，直到 burnout 解除為止。這正是振盪電路不會被 burnout
     /// 假裝收斂掉的原因：佇列不會真的清空。
     fn schedule_mismatched_torches(&mut self) {
-        // TEMPORARY (Task 1 attribution): one span and one already-computed
-        // length per scan -- never a counter inside the loop.
-        let started = self.work_counts.is_some().then(std::time::Instant::now);
-        let positions = torch_positions(&self.world);
-        let examined = u64::try_from(positions.len()).unwrap_or(u64::MAX);
-        for position in positions {
+        for position in torch_positions(&self.world) {
             let currently_lit = self.world.get(position.x, position.y, position.z).lit;
             if currently_lit != component::torch_should_be_lit(&self.world, position) {
                 self.queue.schedule(
@@ -543,12 +484,6 @@ impl Simulator {
                     TickPriority::Normal,
                 );
             }
-        }
-        if let (Some(started), Some(counts)) = (started, self.work_counts.as_mut()) {
-            counts.torch_predicates = counts.torch_predicates.saturating_add(examined);
-            counts.torch_scan_worker_ns = counts
-                .torch_scan_worker_ns
-                .saturating_add(started.elapsed().as_nanos());
         }
     }
 
@@ -560,15 +495,6 @@ impl Simulator {
         let due = self.queue.advance();
         let now = self.queue.current_tick();
         let mut changed = 0usize;
-
-        // TEMPORARY (Task 1 attribution): `due_events` mirrors the existing
-        // `work_done` delta; both count exactly the events processed below.
-        if let Some(counts) = self.work_counts.as_mut() {
-            counts.game_ticks = counts.game_ticks.saturating_add(1);
-            counts.due_events = counts
-                .due_events
-                .saturating_add(u64::try_from(due.len()).unwrap_or(u64::MAX));
-        }
 
         for tick in &due {
             self.work_done += 1;
@@ -592,15 +518,6 @@ impl Simulator {
         let mut changed = 0usize;
         let allowed = usize::try_from(max_events).unwrap_or(usize::MAX);
         let exhausted = due.len() > allowed;
-
-        // TEMPORARY (Task 1 attribution): only the events actually applied
-        // below are counted, so a refused bucket does not inflate the delta.
-        if let Some(counts) = self.work_counts.as_mut() {
-            counts.game_ticks = counts.game_ticks.saturating_add(1);
-            counts.due_events = counts
-                .due_events
-                .saturating_add(u64::try_from(due.len().min(allowed)).unwrap_or(u64::MAX));
-        }
 
         for tick in due.iter().take(allowed) {
             self.work_done += 1;
@@ -642,11 +559,7 @@ impl Simulator {
     /// redstone tick (`LAMP_TURN_OFF_DELAY_GAME_TICKS` = 4), matching real
     /// Minecraft -- see both constants' doc comments in `component.rs`.
     fn schedule_mismatched_lamps(&mut self) {
-        // TEMPORARY (Task 1 attribution).
-        let started = self.work_counts.is_some().then(std::time::Instant::now);
-        let positions = lamp_positions(&self.world);
-        let examined = u64::try_from(positions.len()).unwrap_or(u64::MAX);
-        for position in positions {
+        for position in lamp_positions(&self.world) {
             let currently_lit = self.world.get(position.x, position.y, position.z).lit;
             let desired_lit = component::lamp_should_be_lit(&self.world, position);
             if currently_lit != desired_lit {
@@ -657,12 +570,6 @@ impl Simulator {
                 };
                 self.queue.schedule(position, delay, TickPriority::Normal);
             }
-        }
-        if let (Some(started), Some(counts)) = (started, self.work_counts.as_mut()) {
-            counts.lamp_predicates = counts.lamp_predicates.saturating_add(examined);
-            counts.lamp_scan_worker_ns = counts
-                .lamp_scan_worker_ns
-                .saturating_add(started.elapsed().as_nanos());
         }
     }
 
@@ -690,11 +597,7 @@ impl Simulator {
     /// 被鎖住的中繼器就算輸入不一致也絕對不排程，因為鎖存本身是立即生效、
     /// 不經過排程的。
     fn schedule_mismatched_repeaters(&mut self) {
-        // TEMPORARY (Task 1 attribution).
-        let started = self.work_counts.is_some().then(std::time::Instant::now);
-        let positions = repeater_positions(&self.world);
-        let examined = u64::try_from(positions.len()).unwrap_or(u64::MAX);
-        for position in positions {
+        for position in repeater_positions(&self.world) {
             if self.queue.is_scheduled(position) {
                 continue;
             }
@@ -713,12 +616,6 @@ impl Simulator {
             let delay = component::repeater_delay_game_ticks(state);
             let priority = component::repeater_priority(&self.world, position, turning_off);
             self.queue.schedule(position, delay, priority);
-        }
-        if let (Some(started), Some(counts)) = (started, self.work_counts.as_mut()) {
-            counts.repeater_predicates = counts.repeater_predicates.saturating_add(examined);
-            counts.repeater_scan_worker_ns = counts
-                .repeater_scan_worker_ns
-                .saturating_add(started.elapsed().as_nanos());
         }
     }
 
@@ -754,11 +651,7 @@ impl Simulator {
     /// 跟中繼器一樣同時處理外部修改與漣漪效應；比較器沒有鎖存，所以少了
     /// 中繼器那個「被鎖住就跳過」的檢查。
     fn schedule_mismatched_comparators(&mut self) {
-        // TEMPORARY (Task 1 attribution).
-        let started = self.work_counts.is_some().then(std::time::Instant::now);
-        let positions = comparator_positions(&self.world);
-        let examined = u64::try_from(positions.len()).unwrap_or(u64::MAX);
-        for position in positions {
+        for position in comparator_positions(&self.world) {
             if self.queue.is_scheduled(position) {
                 continue;
             }
@@ -772,12 +665,6 @@ impl Simulator {
             let priority = component::comparator_priority(&self.world, position);
             self.queue
                 .schedule(position, component::COMPARATOR_DELAY_GAME_TICKS, priority);
-        }
-        if let (Some(started), Some(counts)) = (started, self.work_counts.as_mut()) {
-            counts.comparator_predicates = counts.comparator_predicates.saturating_add(examined);
-            counts.comparator_scan_worker_ns = counts
-                .comparator_scan_worker_ns
-                .saturating_add(started.elapsed().as_nanos());
         }
     }
 

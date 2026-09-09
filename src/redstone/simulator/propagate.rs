@@ -17,7 +17,6 @@ use crate::redstone::simulator::connectivity::{
     dust_connections, dust_powers_block_toward, Connections,
 };
 use crate::redstone::simulator::position::{Position, ALL_SIX, HORIZONTAL};
-use crate::redstone::simulator::SimulatorWorkCounts;
 use crate::redstone::world::block::BlockKind;
 use crate::redstone::world::block::Facing;
 use crate::redstone::world::storage::World;
@@ -161,65 +160,33 @@ fn recompute_directed_dust_component(world: &mut World) -> Vec<Position> {
     }
 
     let active_dust = active_dust_networks(world, &dirty);
-    recompute_active_dust(world, &active_dust, None, None)
+    recompute_active_dust(world, &active_dust, None)
 }
 
 pub(crate) fn recompute_dust_strengths_cached(
     world: &mut World,
     cache: &mut Arc<DustTopologyCache>,
-    // TEMPORARY (Task 1 attribution): `Some` only under the detailed gate.
-    mut counts: Option<&mut SimulatorWorkCounts>,
 ) -> Vec<Position> {
     if cache.identity.as_ptr() != Arc::as_ptr(world.dust_topology_identity())
         || cache.epoch != world.dust_topology_epoch()
     {
-        let started = counts.is_some().then(std::time::Instant::now);
         *cache = Arc::new(DustTopologyCache::build(world));
-        if let (Some(started), Some(counts)) = (started, counts.as_deref_mut()) {
-            counts.topology_rebuilds = counts.topology_rebuilds.saturating_add(1);
-            counts.topology_rebuild_worker_ns = counts
-                .topology_rebuild_worker_ns
-                .saturating_add(started.elapsed().as_nanos());
-        }
     }
 
     let dirty = world.take_dirty();
     if dirty.is_empty() {
         return Vec::new();
     }
-    if let Some(counts) = counts.as_deref_mut() {
-        counts.dirty_origins = counts
-            .dirty_origins
-            .saturating_add(u64::try_from(dirty.len()).unwrap_or(u64::MAX));
-    }
 
     let active_dust = cache.active_positions(world, &dirty);
-    if let Some(counts) = counts.as_deref_mut() {
-        counts.active_dust = counts
-            .active_dust
-            .saturating_add(u64::try_from(active_dust.len()).unwrap_or(u64::MAX));
-    }
-    let changed = recompute_active_dust(world, &active_dust, Some(cache), counts.as_deref_mut());
-    if let Some(counts) = counts {
-        counts.changed_dust = counts
-            .changed_dust
-            .saturating_add(u64::try_from(changed.len()).unwrap_or(u64::MAX));
-    }
-    changed
+    recompute_active_dust(world, &active_dust, Some(cache))
 }
 
 fn recompute_active_dust(
     world: &mut World,
     active_dust: &[Position],
     cache: Option<&DustTopologyCache>,
-    // TEMPORARY (Task 1 attribution): `Some` only under the detailed gate.
-    mut counts: Option<&mut SimulatorWorkCounts>,
 ) -> Vec<Position> {
-    if let Some(counts) = counts.as_deref_mut() {
-        counts.topology_cells = counts
-            .topology_cells
-            .saturating_add(u64::try_from(active_dust.len()).unwrap_or(u64::MAX));
-    }
     let mut queue: VecDeque<(Position, u8)> = VecDeque::new();
     let mut target: HashMap<Position, u8> = HashMap::with_capacity(active_dust.len());
 
@@ -274,13 +241,6 @@ fn recompute_active_dust(
                 Some(cache) => cache.connections(pos, direction_index),
                 None => dust_connections(world, pos, facing),
             };
-            // TEMPORARY (Task 1 attribution): counted once per direction,
-            // never once per connection inside the loop below.
-            if let Some(counts) = counts.as_deref_mut() {
-                counts.topology_probes = counts
-                    .topology_probes
-                    .saturating_add(u64::try_from(connections.iter().count()).unwrap_or(u64::MAX));
-            }
             for neighbour in connections.iter() {
                 let current = target.get(&neighbour).copied().unwrap_or(0);
                 if next_strength > current {
