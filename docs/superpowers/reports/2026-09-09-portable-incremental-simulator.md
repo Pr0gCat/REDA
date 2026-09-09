@@ -8,7 +8,8 @@ Sections 1-10 record the Task 1 / Layer 0 attribution. The temporary
 instrumentation that produced it was removed in the same commit that adds this
 file; no counter, gate or disabled branch survives in the simulator hot path.
 Section 11 records Task 2 / Layer 1A, which is **KEEP** on its clean wall-time
-gate.
+gate. Section 12 records the Step 7 post-retention re-attribution and the second
+removal of the temporary instrumentation.
 
 ## 1. What was measured, and in which units
 
@@ -458,10 +459,10 @@ The mandatory ignored release full-resettle suite (spec section 5.2) **passes**:
 5 passed, 0 failed, exit 0. Every semantic precondition the spec sets for
 retention is therefore met, not just the narrow ones.
 
-Step 7's post-retention re-attribution is **the one remaining open item**: no `VectorWork` or
-`SimulatorWorkCounts` evidence has been gathered on the retained revision, so the
-question the spec puts to it — whether component scans are still material enough
-to justify Task 3 — is unanswered. Task 3 has not been started.
+Step 7's post-retention re-attribution is complete in section 12. The retained
+revision still spends 36.2590% of top-sweep vector worker time in the four
+component scans, so the plan's measured precondition for attempting Task 3 is
+met. Task 3 has not been started here and still owes its own wall-time gate.
 
 ### 11.2 The change
 
@@ -714,12 +715,212 @@ Caveats that travel with this result:
    in that oracle, so it contributed no stale-cell count there. The
    six-condition harness covers `segment_a` and reports it clean, but the
    negotiated-plan path itself is unexercised for that circuit.
-3. **Step 7 post-retention attribution is the one open item.** No fresh clone/drive/settle/
-   check, dust/topology or per-kind component worker-ns shares exist for the
-   retained revision. Spec section 5.5 requires that evidence to still name
-   component scans as material before Task 3 is attempted, so Task 3's
-   eligibility is currently undetermined — not granted and not refused.
+3. **Step 7 supports attempting Task 3, not retaining it.** Section 12 records
+   fresh clone/drive/settle/check, dust/topology and per-kind component shares;
+   scans are 36.2590% of vector worker time. Task 3 therefore has measured
+   justification to run, but must still pass its independent 10% wall-time and
+   semantic gates before any code is kept.
 4. **Task 1's open concern 1 is now partly settled by measurement.** The 84.96%
    unsubdivided settle remainder did contain the dominant removable work: 61.87%
    of top-exhaustive wall time was the redundant re-solve caused by the derived
    dirty entries. What remains inside that span is still unsubdivided.
+
+## 12. Step 7 phase B: post-retention re-attribution on the retained Layer 1A
+
+Spec section 5.5 requires fresh attribution on the retained revision before the
+next layer is chosen. The Task 1 instrumentation was reapplied over the retained
+`6ccb7a7` (temporary commit `8b7fe10`), `multiplier4` was run once with both
+diagnostic environment variables, and all temporary code was then removed.
+
+### 12.1 Run status and the wrapper caveat
+
+The libtest run **passed**:
+
+```
+test compile::fragment_synth::seed::tests::extra_circuits::every_hierarchical_circuit_certifies_through_module_floorplan ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1014 filtered out; finished in 72.01s
+```
+
+with the quality key unchanged:
+
+```
+CIRCUIT multiplier4 (hierarchical): OK gates=337 blocks_compiled=3 ticks=1039 blocks=124948 in 72.0029272s
+```
+
+337 gates, 3 compiled blocks, 1,039 ticks and 124,948 blocks are the same values
+recorded in section 11.7 for every Layer 1A benchmark sample and in spec section
+1 for the original baseline.
+
+**Wrapper caveat.** The controller's PowerShell wrapper returned exit code 1.
+This is **not** a REDA failure: PowerShell promoted the native stderr warning
+records emitted after the successful test into terminating error records. The
+authoritative result is the libtest line above — 1 passed, 0 failed. No test
+failed, no assertion fired, and the circuit certified.
+
+Raw log: `%TEMP%\reda-multiplier4-layer1a-reattribution.txt`.
+
+### 12.2 Raw keyed lines — top sweep
+
+Selected as in section 3: the final keyed sweep before the `CIRCUIT` line, cross
+checked by `WORK exhaustive_vectors 256`.
+
+```
+SIM_WORK baseline states 256 world 3771x6x267 baseline_build_wall_ns 274814900
+SIM_WORK sweep states 256 world 3771x6x267 vectors 256
+SIM_WORK sweep states 256 world 3771x6x267 clone_worker_ns sum 1732661900 max 14889500 count 256
+SIM_WORK sweep states 256 world 3771x6x267 drive_worker_ns sum 2128300 max 20500 count 256
+SIM_WORK sweep states 256 world 3771x6x267 settle_worker_ns sum 498619097100 max 2240959400 count 256
+SIM_WORK sweep states 256 world 3771x6x267 check_worker_ns sum 94780200 max 3401500 count 256
+SIM_WORK sweep states 256 world 3771x6x267 vector_total_worker_ns 500448667500
+SIM_WORK sweep states 256 world 3771x6x267 counts settle_iterations 244809 game_ticks 244553 due_events 18755499
+SIM_WORK sweep states 256 world 3771x6x267 counts dirty_origins 18736509 active_dust 373307440 changed_dust 156674210
+SIM_WORK sweep states 256 world 3771x6x267 counts topology_rebuilds 0 topology_rebuild_worker_ns 0
+SIM_WORK sweep states 256 world 3771x6x267 counts topology_cells 373307440 topology_probes 328279678
+SIM_WORK sweep states 256 world 3771x6x267 counts torch_predicates 82500633 repeater_predicates 1475463843
+SIM_WORK sweep states 256 world 3771x6x267 counts comparator_predicates 0 lamp_predicates 1958472
+SIM_WORK sweep states 256 world 3771x6x267 scan_worker_ns torch 15385414900 repeater 165464345400 comparator 33381500 lamp 574651400
+PHASE exhaustive 48009
+WORK exhaustive_vectors 256
+```
+
+Gated wall context, **not** retention evidence: `PHASE certify 55960`,
+`PHASE manifest 5976`, `CIRCUIT ... in 72.0029272s`.
+
+The four spans sum to the total exactly:
+1,732,661,900 + 2,128,300 + 498,619,097,100 + 94,780,200 = **500,448,667,500**.
+
+### 12.3 Same-unit shares on the retained revision
+
+Denominator is `vector_total_worker_ns` = 500,448,667,500 over 256 vectors.
+
+| Rank | Span | Sum (ns) | Share |
+|---:|---|---:|---:|
+| 1 | settle remainder (dust recompute + due-event application + queue) | 317,161,303,900 | **63.3754%** |
+| 2 | repeater mismatch scan | 165,464,345,400 | **33.0632%** |
+| 3 | torch mismatch scan | 15,385,414,900 | 3.0743% |
+| 4 | clone | 1,732,661,900 | 0.3462% |
+| 5 | lamp mismatch scan | 574,651,400 | 0.1148% |
+| 6 | check | 94,780,200 | 0.0189% |
+| 7 | comparator mismatch scan | 33,381,500 | 0.0067% |
+| 8 | drive | 2,128,300 | 0.0004% |
+| 9 | dust topology rebuild | 0 | 0.0000% |
+
+Rows 2, 3, 5, 7 and 9 are nested inside `settle`, which is 99.6344% overall. The
+four component scans together are **181,457,793,200 ns = 36.2590%** of vector CPU
+and 36.3921% of settle.
+
+### 12.4 Change against Task 1's unretained baseline
+
+| Quantity | Task 1 (`225d3e2`) | Retained Layer 1A | Change |
+|---|---:|---:|---:|
+| vector CPU (worker-ns) | 1,505,590,764,800 | 500,448,667,500 | **−66.7606%** |
+| `dirty_origins` | 189,745,183 | 18,736,509 | **−90.1254%** |
+| `active_dust` / `topology_cells` | 920,978,899 | 373,307,440 | **−59.4662%** |
+| `topology_probes` | 842,804,206 | 328,279,678 | **−61.0491%** |
+| settle worker-ns | 1,503,420,849,000 | 498,619,097,100 | −66.8344% |
+| component scan worker-ns | 224,275,328,100 | 181,457,793,200 | −19.0915% |
+| component scan **share** | 14.8962% | **36.2590%** | +21.36 pp |
+
+The −66.76% CPU reduction is the same order as, and directionally consistent
+with, the −61.87% top-exhaustive **wall** reduction measured under the clean gate
+in section 11.6. Per spec section 5.1, only the wall figure is retention
+evidence; the CPU figure ranks remaining costs.
+
+### 12.5 The logical work is bit-identical
+
+Every count that measures *logical* simulation work is unchanged from Task 1:
+
+| Counter | Task 1 | Retained Layer 1A | Identical |
+|---|---:|---:|---|
+| `settle_iterations` | 244,809 | 244,809 | yes |
+| `game_ticks` | 244,553 | 244,553 | yes |
+| `due_events` | 18,755,499 | 18,755,499 | yes |
+| `changed_dust` | 156,674,210 | 156,674,210 | yes |
+| `torch_predicates` | 82,500,633 | 82,500,633 | yes |
+| `repeater_predicates` | 1,475,463,843 | 1,475,463,843 | yes |
+| `comparator_predicates` | 0 | 0 | yes |
+| `lamp_predicates` | 1,958,472 | 1,958,472 | yes |
+| `topology_rebuilds` | 0 | 0 | yes |
+
+This is the strongest semantic evidence produced for Layer 1A so far. The
+simulator ran the same number of settle iterations and game ticks, processed the
+same scheduled events, changed the same number of dust cells and examined the
+same number of component predicates. Only the *redundant re-selection* vanished:
+`dirty_origins`, `active_dust` and `topology_probes` collapsed while
+`changed_dust` did not move by a single cell.
+
+It also means the −19.09% drop in absolute scan worker-ns is **not** fewer scans.
+The scans examined exactly the same predicates; the wall cost per predicate fell,
+most plausibly from reduced memory pressure now that whole components are no
+longer re-solved between scans. That mechanism is an inference, not a
+measurement, and nothing in this report depends on it.
+
+### 12.6 Task 1's open concern 2 is resolved
+
+Task 1 could not explain a residual: `dirty_origins` − `changed_dust` =
+33,070,973 exceeded `due_events` 18,755,499 — the upper bound on component
+writes — by 14,315,474, so the assumption that the leftover dirt was exactly the
+derived write-back could not be confirmed from aggregates.
+
+On the retained revision `dirty_origins` is **18,736,509**, which is now *below*
+`due_events` 18,755,499 by 18,990. With the derived write-back discarded, the
+remaining dirty origins fit inside the component-write bound exactly as the
+theory predicted. Concern 2 is closed by measurement, in addition to the
+structural argument and the TDD oracle already recorded in section 11.2.
+
+### 12.7 Spec section 5.5 outcome
+
+Component scans are **36.2590%** of vector CPU, far above the 10% materiality
+bar, and their absolute cost of 181,457,793,200 worker-ns is now the largest
+single identified span after the unsubdivided settle remainder. **Task 3 is
+eligible.**
+
+Two constraints travel with that eligibility:
+
+1. **Layer 1B's own premise is still unconfirmed.** `due_events` / `game_ticks`
+   is 76.6930 events per tick, unchanged from Task 1, so ticks are not empty on
+   average. The aggregate cannot resolve the per-tick distribution, and Layer 1B
+   removes work only on ticks that process zero events. Task 1's open concern 3
+   stands and Layer 1B must earn its own 10% wall gate.
+2. **The 63.3754% settle remainder is still one unsubdivided span.** No timer
+   separates the remaining dust recompute from due-event application and queue
+   work. It is now smaller than before in absolute terms but still the largest
+   single row; if Layer 1B misses its gate, that span must be split before
+   another candidate is chosen.
+
+`dust topology rebuild` remains 0.0000%, so spec section 1's hypothesis 2 is
+still refuted. `clone` at 0.3462% and `check` at 0.0189% remain three and four
+orders of magnitude below the bar, so no per-worker reset, undo-journal or
+snapshot design is warranted.
+
+### 12.8 Instrumentation removal, verified
+
+The three instrumented files were restored to the retained `6ccb7a7` with
+`git checkout 6ccb7a7 -- <three paths>`, which preserves the Layer 1A production
+change and its oracle because instrumentation was the only difference.
+
+```
+git diff 6ccb7a7 -- src              -> empty (byte-identical)
+
+grep -rnE "REDA_SIM_WORK_COUNTS|VectorWork|SimulatorWorkCounts|worker_ns|SIM_WORK|baseline_build_wall_ns" src
+SEARCH_EXIT=1                        (no output, no matches)
+
+cargo test --lib compile::fragment_synth::certification::tests -- --nocapture
+test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 988 filtered out; finished in 0.12s
+EXIT=0
+
+git diff --check          -> exit 0, no output
+git diff --cached --check -> exit 0, no output
+```
+
+26 rather than 27 tests, because the temporary `VectorWork` arithmetic test was
+removed with the type it covered. Because `git diff 6ccb7a7 -- src` is empty, all
+of `6ccb7a7`'s test results — the Layer 1A oracle, the narrow differential
+commands and the mandatory ignored release suite — carry over unchanged without
+being rerun.
+
+The temporary instrumentation now exists only in local history, at `e797853` and
+`8b7fe10`. Both are removed by the branch cleanup/squash named in the ledger's
+Task 1 split ruling; no counter, gate or disabled branch is in the working
+source.
