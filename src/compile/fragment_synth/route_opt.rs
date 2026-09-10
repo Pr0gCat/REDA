@@ -23,10 +23,6 @@ use crate::compile::geometry::Anchor;
 use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
 use crate::redstone::world::block::BlockKind;
 
-// ponytail: this deterministic cap affects compiled output; replace it with the
-// exact interval solver if retained wins justify the extra code.
-const MAX_RELOCATION_PROBE_WORK: usize = 2_000_000;
-
 /// One Parent Route Repack choice: prune this parent route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub(crate) struct ParentRouteChoice {
@@ -79,9 +75,11 @@ pub(crate) fn prune_route(tree: &mut RealisedRouteTree) -> bool {
 /// further downstream: turn an upstream `U` and a downstream `D` into dust
 /// and put `U`'s own repeater back on one dust cell strictly between them.
 /// Greedy and downstream first over a candidate vector frozen before the
-/// first mutation, so a retained step never re-enumerates. Search stops at a
-/// deterministic abstract-work cap and keeps any earlier wins. Returns
-/// whether anything changed.
+/// first mutation, so a retained step never re-enumerates. Every pair is
+/// enumerated: what keeps that affordable is the route's own structure and
+/// not a work cap, since a pair whose window can be read exactly offers only
+/// the cells that break its one over-long run of dust. Returns whether
+/// anything changed.
 ///
 /// This is the pair `prune_route` has to refuse: neither refresh carries its
 /// branches once it is dust, so neither can simply go, yet one repeater in
@@ -117,20 +115,23 @@ pub(crate) fn relocate_refresh(tree: &mut RealisedRouteTree) -> bool {
             .filter(|cell| cell.state.kind == BlockKind::Repeater)
             .count()
     };
-    let trial_work = tree.cells.len().saturating_add(
-        tree.branches
-            .iter()
-            .map(|branch| branch.path.len())
-            .sum(),
-    );
-    let mut probe_work = 0usize;
+    // Reading a window off intervals needs every anchor to name one cell: a
+    // repeated cell anchor makes the map below disagree with the position
+    // lookups a trial uses, and a repeated path anchor puts one cell at two
+    // indices, so an interval derived from either can exclude the other.
+    // Neither happens on a realised route; where one does, every cell of
+    // every window is tried, which is what this pass has always done.
+    let named_once = {
+        let mut cells = BTreeSet::new();
+        tree.cells.iter().all(|cell| cells.insert(cell.at))
+            && tree.branches.iter().all(|branch| {
+                let mut path = BTreeSet::new();
+                branch.path.iter().all(|at| path.insert(*at))
+            })
+    };
 
     let mut changed = false;
     'pairs: for (position, &(_, down)) in candidates.iter().enumerate() {
-        probe_work = probe_work.saturating_add(trial_work);
-        if probe_work > MAX_RELOCATION_PROBE_WORK {
-            return changed;
-        }
         // Frozen candidates go stale as steps are retained: `D` has to be a
         // repeater on the tree as it stands now.
         let Some(sunk) = tree.cells.iter().position(|cell| cell.at == down) else {
@@ -148,11 +149,17 @@ pub(crate) fn relocate_refresh(tree: &mut RealisedRouteTree) -> bool {
         if prunable {
             continue;
         }
+        // The tree as it stands for this `D`, which is the tree every window
+        // below is read from: the check above put `D` back, a failed trial
+        // restores exactly what it touched, and the trial that does not fail
+        // leaves for the next `D`. So this is live, including after an
+        // earlier pair was retained.
+        let kinds: BTreeMap<Anchor, BlockKind> = if named_once {
+            tree.cells.iter().map(|cell| (cell.at, cell.state.kind)).collect()
+        } else {
+            BTreeMap::new()
+        };
         for &(_, up) in &candidates[position + 1..] {
-            probe_work = probe_work.saturating_add(trial_work);
-            if probe_work > MAX_RELOCATION_PROBE_WORK {
-                return changed;
-            }
             let Some(source) = tree.cells.iter().position(|cell| cell.at == up) else {
                 continue;
             };
@@ -198,10 +205,24 @@ pub(crate) fn relocate_refresh(tree: &mut RealisedRouteTree) -> bool {
             }
             // Owned so the edits below can mutate the tree in place.
             let window: Vec<Anchor> = shared[1..shared.len() - 1].to_vec();
-            for &at in window.iter().rev() {
-                probe_work = probe_work.saturating_add(trial_work);
-                if probe_work > MAX_RELOCATION_PROBE_WORK {
-                    return changed;
+            // Which offsets could carry this pair at all, where the tree is
+            // regular enough to say. This decides no relocation -- every
+            // cell it keeps is still proven by the trial below -- it only
+            // spares the trials that provably cannot carry.
+            let offsets = if named_once {
+                let Some(offsets) = relocation_offsets(tree, &kinds, up, down) else {
+                    continue;
+                };
+                Some(offsets)
+            } else {
+                None
+            };
+            for (offset, &at) in window.iter().enumerate().rev() {
+                // `window[i]` is `shared[i + 1]`.
+                if let Some((lowest, highest)) = offsets {
+                    if !(lowest..=highest).contains(&(offset + 1)) {
+                        continue;
+                    }
                 }
                 let Some(target) = tree.cells.iter().position(|cell| cell.at == at) else {
                     continue;
@@ -233,6 +254,97 @@ pub(crate) fn relocate_refresh(tree: &mut RealisedRouteTree) -> bool {
         }
     }
     changed
+}
+
+/// The offsets into the shared `U..=D` slice -- counted from `U`, the way
+/// the slice itself counts -- at which a relocated refresh could still carry
+/// every branch through `U`, or `None` when no cell can. Sound in the one
+/// direction that matters: an offset left out provably fails
+/// `branches_carry_through`, so dropping it cannot cost a relocation, while
+/// an offset kept is still proven by the walk itself.
+///
+/// Each affected branch is read exactly as that walk will read it -- from
+/// its own earlier route-owned refresh, `terminal.state` standing in for a
+/// terminal cell the tree does not own -- with `U` and `D` already dust and
+/// `N` not yet placed. A cell the walk cannot conduct sinks the whole pair,
+/// since `N` only ever replaces one dust cell of the window and nothing else
+/// out here ever becomes a conductor. Otherwise only a run of more than
+/// `MAX_SIGNAL_STRENGTH - 1` dust in a row has to be broken: one repeater
+/// breaks one run, so a second such run is fatal, and leaving neither half
+/// of `[a, b]` over that length puts `N` in `[b - longest, a + longest]`.
+///
+/// Every range is read back to slice offsets before it meets another one.
+/// Branches that reach `U` through feeders of different lengths name the
+/// same cell at different path indices, and raw indices from two of them
+/// intersect to nonsense.
+fn relocation_offsets(
+    tree: &RealisedRouteTree,
+    kinds: &BTreeMap<Anchor, BlockKind>,
+    up: Anchor,
+    down: Anchor,
+) -> Option<(usize, usize)> {
+    let longest = usize::from(MAX_SIGNAL_STRENGTH) - 1;
+    let (mut lowest, mut highest) = (0usize, usize::MAX);
+    for branch in &tree.branches {
+        let Some(from) = branch.path.iter().position(|at| *at == up) else {
+            continue;
+        };
+        let refresh = branch.path[..from]
+            .iter()
+            .rposition(|at| kinds.get(at) == Some(&BlockKind::Repeater))?;
+        if branch.path.last() != Some(&branch.terminal.at) {
+            return None;
+        }
+        // The suffix the walk will cross, one entry per cell: `dust[i]` is
+        // path index `refresh + 1 + i`.
+        let mut dust = Vec::with_capacity(branch.path.len() - refresh);
+        for at in &branch.path[refresh + 1..] {
+            let kind = if *at == up || *at == down {
+                Some(BlockKind::RedstoneWire)
+            } else {
+                kinds.get(at).copied().or_else(|| {
+                    (*at == branch.terminal.at).then_some(branch.terminal.state.kind)
+                })
+            };
+            match kind {
+                Some(BlockKind::RedstoneWire) => dust.push(true),
+                Some(BlockKind::Repeater) => dust.push(false),
+                _ => return None,
+            }
+        }
+        let mut over_long: Option<(usize, usize)> = None;
+        let mut index = 0;
+        while index < dust.len() {
+            if !dust[index] {
+                index += 1;
+                continue;
+            }
+            let start = index;
+            while index < dust.len() && dust[index] {
+                index += 1;
+            }
+            if index - start > longest {
+                if over_long.is_some() {
+                    return None;
+                }
+                over_long = Some((refresh + 1 + start, refresh + index));
+            }
+        }
+        // Every run of this branch survives as it stands: it asks nothing of
+        // `N`, wherever the other branches put it.
+        let Some((first, last)) = over_long else {
+            continue;
+        };
+        // One repeater cannot break a run longer than two survivable halves,
+        // and a break that would have to land upstream of `U` is not this
+        // pair's to make: `N` is strictly inside the window.
+        if last - longest > first + longest || first + longest < from {
+            return None;
+        }
+        lowest = lowest.max((last - longest).saturating_sub(from));
+        highest = highest.min(first + longest - from);
+    }
+    Some((lowest, highest))
 }
 
 /// Every branch through `at` still reaches its terminal: it has an earlier
@@ -859,13 +971,119 @@ mod tests {
         }
     }
 
+    /// `linear_relocation_route(26)` joined by a second branch that comes
+    /// down -z through fourteen cells of its own, refreshed at (9, -9),
+    /// runs the trunk from x9 to x18 and then leaves it for its own
+    /// terminal at (18, 12). Both branches carry the identical x9..x18
+    /// slice, so (x18, x9) is a legal pair -- but they name that slice at
+    /// different indices: x9 is index 9 on the trunk and index 14 on the
+    /// feeder.
+    fn converging_relocation_route() -> RealisedRouteTree {
+        let mut tree = linear_relocation_route(26);
+        let mut feeder = tree.branches[0].clone();
+        feeder.sink.ordinal = 1;
+        feeder.path = (1..=14)
+            .rev()
+            .map(|z| Anchor { x: 9, y: 0, z: -z })
+            .chain((9..=18).map(|x| Anchor { x, y: 0, z: 0 }))
+            .chain((1..=12).map(|z| Anchor { x: 18, y: 0, z }))
+            .collect();
+        feeder.root = feeder.path[0];
+        feeder.terminal.sink = feeder.sink;
+        feeder.terminal.at = *feeder.path.last().expect("the feeder has a path");
+        feeder.terminal.state = crate::compile::repeater(Facing::South);
+        let refresh = Anchor { x: 9, y: 0, z: -9 };
+        for &at in feeder.path.iter().filter(|at| at.z != 0) {
+            let state = if at == refresh || at == feeder.terminal.at {
+                crate::compile::repeater(Facing::South)
+            } else {
+                crate::compile::dust()
+            };
+            tree.cells.push(PlacedBlock { at, state });
+        }
+        tree.branches.push(feeder);
+        tree
+    }
+
+    /// Two branches through one pair name its window at different indices,
+    /// so what each of them allows has to be read back to the shared slice
+    /// before the two are put together. Here the trunk allows path indices
+    /// 12..=15 and the feeder allows exactly path index 20: as raw indices
+    /// those meet nowhere, and as offsets into the x9..x18 slice they meet
+    /// on exactly one cell -- offset 6, x15.
+    #[test]
+    fn refresh_relocation_intersects_converging_branches_on_the_shared_slice() {
+        let tree = converging_relocation_route();
+
+        // Neither refresh is removable on its own, on either branch.
+        let mut pruned = tree.clone();
+        assert!(!prune_route(&mut pruned), "direct pruning takes neither x9 nor x18");
+        assert_eq!(pruned, tree);
+
+        // x16 and x17 starve the trunk and x14 starves the feeder's own
+        // tail, so x15 is the only cell of the window that carries both --
+        // and it is also the deepest one the trunk alone would allow.
+        for (n, carries) in [(17, false), (16, false), (15, true), (14, false)] {
+            let mut trial = tree.clone();
+            set(&mut trial, 9, 0, crate::compile::dust());
+            set(&mut trial, 18, 0, crate::compile::dust());
+            set(&mut trial, n, 0, crate::compile::repeater(Facing::East));
+            assert_eq!(
+                branches_carry_through(&trial, Anchor { x: 9, y: 0, z: 0 }),
+                carries,
+                "manual trial at N = {n}"
+            );
+        }
+
+        let mut relocated = tree.clone();
+        assert!(relocate_refresh(&mut relocated), "x15 carries both branches");
+        let mut expected = tree.clone();
+        set(&mut expected, 9, 0, crate::compile::dust());
+        set(&mut expected, 18, 0, crate::compile::dust());
+        set(&mut expected, 15, 0, crate::compile::repeater(Facing::East));
+        assert_eq!(relocated, expected, "the one cell both branches allow, and only it");
+
+        let settled = relocated.clone();
+        assert!(!relocate_refresh(&mut relocated), "no second pair");
+        assert_eq!(relocated, settled);
+    }
+
+    /// The terminal cell may belong to what the route delivers into rather
+    /// than to the tree, and then `terminal.state` stands in for it -- for
+    /// the strength walk, and equally for whatever decides which cells that
+    /// walk is worth asking about. A 29-dust tail leaves exactly one
+    /// feasible cell, x15, and it is feasible only because the recorded
+    /// repeater terminal ends the run of dust: read as a non-conductor
+    /// instead, the pair would look impossible and the saving would be lost.
+    #[test]
+    fn refresh_relocation_reads_the_terminal_state_when_the_tree_does_not_own_the_cell() {
+        let mut tree = linear_relocation_route(29);
+        let terminal = tree.branches[0].terminal.at;
+        assert_eq!(terminal, Anchor { x: 30, y: 0, z: 0 });
+        assert_eq!(tree.branches[0].terminal.state.kind, BlockKind::Repeater);
+        tree.cells.retain(|cell| cell.at != terminal);
+
+        let mut relocated = tree.clone();
+        assert!(relocate_refresh(&mut relocated), "the recorded terminal is a repeater");
+        assert_eq!(
+            repeater_anchors(&relocated, |at| at.x),
+            vec![0, 15],
+            "the same x15 the owned control takes, with the terminal off the cell list"
+        );
+        let mut expected = tree.clone();
+        set(&mut expected, 9, 0, crate::compile::dust());
+        set(&mut expected, 18, 0, crate::compile::dust());
+        set(&mut expected, 15, 0, crate::compile::repeater(Facing::East));
+        assert_eq!(relocated, expected, "one repeater saved, nothing else touched");
+    }
+
     /// `linear_relocation_route` with `decoys` further East refreshes every
     /// 15 cells from x30, and everything from x28 on folded into a
     /// horizontal staircase. The (x18, x9) pair keeps the exact straight
     /// shape that relocates to x15, and it is the most upstream pair, so the
     /// greedy walk reaches it last. Every pair among the decoys -- and every
     /// pair reaching across them -- is refused by the straight-run test, so
-    /// all `decoys` decides is how much probe work stands between the pass
+    /// all `decoys` decides is how many refused pairs stand between the pass
     /// and the one pair it can take.
     fn staircase_decoy_route(decoys: usize) -> RealisedRouteTree {
         let last = 30 + 15 * (decoys as i32 - 1);
@@ -889,27 +1107,34 @@ mod tests {
         tree
     }
 
-    /// The probe cap is a return, not a rollback. Both fixtures hold the one
-    /// relocatable pair; 3 decoys leave budget to reach it, 60 do not, so
-    /// the cap is what decides the second answer. When it trips the pass has
-    /// to hand back exactly what it had retained -- here nothing, so the
-    /// tree it was given, with no trial's dust left standing in it -- and it
-    /// has to trip in the same place on every run of the same input.
+    /// Nothing about a route's size may change what this pass takes from
+    /// it. Both fixtures hold the same one relocatable pair, the most
+    /// upstream on the tree, and `decoys` only decides how many refused
+    /// pairs the greedy walk enumerates before reaching it: 60 of them make
+    /// that walk long, not doubtful. What bounds the search on the long
+    /// fixture is the tree's own structure -- from x0 the (x18, x9) window
+    /// holds exactly one cell that both reaches and carries -- so the answer
+    /// is the same relocation, to the same x15, as on the short one.
     #[test]
-    fn refresh_relocation_stops_at_the_probe_cap_without_a_partial_mutation() {
-        let mut under_cap = staircase_decoy_route(3);
-        assert!(relocate_refresh(&mut under_cap), "the budget reaches the (x18, x9) pair");
-        assert_eq!(kind_at(&under_cap, 15, 0), BlockKind::Repeater, "one repeater saved at x15");
-        assert_eq!(kind_at(&under_cap, 9, 0), BlockKind::RedstoneWire);
-        assert_eq!(kind_at(&under_cap, 18, 0), BlockKind::RedstoneWire);
+    fn refresh_relocation_takes_the_one_relocatable_pair_however_large_the_route() {
+        for decoys in [3, 60] {
+            let tree = staircase_decoy_route(decoys);
+            let mut relocated = tree.clone();
+            assert!(relocate_refresh(&mut relocated), "{decoys} decoys: the (x18, x9) pair is reached");
+            assert_eq!(kind_at(&relocated, 15, 0), BlockKind::Repeater, "{decoys} decoys: saved at x15");
+            assert_eq!(kind_at(&relocated, 9, 0), BlockKind::RedstoneWire);
+            assert_eq!(kind_at(&relocated, 18, 0), BlockKind::RedstoneWire);
+            let mut expected = tree.clone();
+            set(&mut expected, 9, 0, crate::compile::dust());
+            set(&mut expected, 18, 0, crate::compile::dust());
+            set(&mut expected, 15, 0, crate::compile::repeater(Facing::East));
+            assert_eq!(relocated, expected, "{decoys} decoys: exactly one pair moved, nothing else");
 
-        let capped = staircase_decoy_route(60);
-        let mut first = capped.clone();
-        assert!(!relocate_refresh(&mut first), "the budget runs out short of that pair");
-        assert_eq!(first, capped, "an early return leaves no partial mutation");
-
-        let mut again = capped.clone();
-        assert!(!relocate_refresh(&mut again), "same input, same answer");
-        assert_eq!(again, first, "same input, same stopping point");
+            // Deterministic and idempotent: the only pair left is (x0, x15),
+            // whose `U` has no earlier route-owned refresh.
+            let settled = relocated.clone();
+            assert!(!relocate_refresh(&mut relocated), "{decoys} decoys: no second pair");
+            assert_eq!(relocated, settled, "{decoys} decoys: a refusal leaves no partial mutation");
+        }
     }
 }
