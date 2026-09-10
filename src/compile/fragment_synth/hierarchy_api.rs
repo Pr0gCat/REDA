@@ -1126,11 +1126,10 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                 )
             } else {
                 // Pass 5, reached only once every earlier stage is spent.
-                // A relocation that lowers settle while leaving blocks,
-                // volume and static delay alone is an improvement the
-                // lexicographic order would refuse, so this stage alone
-                // asks for joint quality. The union refuses a refresh whose
-                // route is gone or has no relocatable pair left.
+                // A relocation is accepted only when settle falls without
+                // worsening blocks, volume or static delay, so this stage
+                // alone asks for joint quality. The union refuses a refresh
+                // whose route is gone or has no relocatable pair left.
                 let refresh = self.refresh(index, || refresh_descriptors(incumbent))?;
                 let mut refreshes = incumbent.refreshes.clone();
                 refreshes.push(refresh);
@@ -3175,6 +3174,40 @@ mod tests {
             "the fixture must reach Pass 5 with work to do"
         );
         let start = stream.edges.len() + pull_x.len() + stream.seams.len() + prunes.len();
+
+        let new_bounded_stream = || {
+            HierarchicalProposalStream::new(
+                fixture.edges.clone(),
+                fixture.source_outputs.clone(),
+                fixture.sink_inputs.clone(),
+                fixture.seams.clone(),
+                Box::new(|_, _, _, _, _| {
+                    Err(SeedError::Incomplete("the budget walk never compiles"))
+                }),
+            )
+        };
+        let mut bounded = new_bounded_stream();
+        let zero = run_budgeted_proposals(
+            fixture.compile(services, &[], &[]),
+            SynthesisBudget::Evaluations(0),
+            &SystemMonotonicClock::start(),
+            &mut bounded,
+        );
+        assert!(
+            bounded.refreshes.is_none(),
+            "budget zero never probes Pass 5"
+        );
+        let _ = run_budgeted_proposals(
+            zero.best,
+            SynthesisBudget::Evaluations(start as u64),
+            &SystemMonotonicClock::start(),
+            &mut bounded,
+        );
+        assert!(
+            bounded.refreshes.is_none(),
+            "a budget ending at the last Pass 4 proposal never probes Pass 5"
+        );
+
         assert_eq!(
             acceptance.len(),
             start + refreshes.len(),
