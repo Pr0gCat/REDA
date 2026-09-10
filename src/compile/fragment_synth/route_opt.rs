@@ -165,13 +165,13 @@ pub(crate) fn relocate_refresh(tree: &mut RealisedRouteTree) -> bool {
             let Some(shared) = shared.filter(|_| agrees) else {
                 continue;
             };
-            let step = shared[1].x - shared[0].x;
-            let straight = step.abs() == 1
-                && shared.windows(2).all(|pair| {
-                    pair[1].x - pair[0].x == step
-                        && pair[1].y == pair[0].y
-                        && pair[1].z == pair[0].z
-                });
+            // One constant horizontal step, on whichever axis the trunk runs:
+            // no y in it, one cell of travel, and the same delta throughout.
+            let delta = |from: Anchor, to: Anchor| (to.x - from.x, to.y - from.y, to.z - from.z);
+            let step = delta(shared[0], shared[1]);
+            let straight = step.1 == 0
+                && step.0.abs() + step.2.abs() == 1
+                && shared.windows(2).all(|p| delta(p[0], p[1]) == step);
             if !straight {
                 continue;
             }
@@ -353,13 +353,47 @@ mod tests {
         }
     }
 
-    /// Every route-owned repeater of a straight `z = 0` fixture, by `x`.
-    fn repeater_anchors(tree: &RealisedRouteTree) -> Vec<i32> {
+    /// Swap x and z on every anchor a tree owns -- cells, floors, each
+    /// branch's root, path and terminal -- and quarter-turn every horizontal
+    /// facing with them, so a fixture that ran along +x runs along +z and
+    /// still faces the way it travels.
+    fn onto_z_axis(tree: &mut RealisedRouteTree) {
+        let turn = |at: Anchor| Anchor {
+            x: at.z,
+            y: at.y,
+            z: at.x,
+        };
+        let face = |facing: Option<Facing>| {
+            facing.map(|facing| match facing {
+                Facing::East => Facing::South,
+                Facing::South => Facing::East,
+                Facing::West => Facing::North,
+                Facing::North => Facing::West,
+                other => other,
+            })
+        };
+        for cell in tree.cells.iter_mut().chain(tree.floors.iter_mut()) {
+            cell.at = turn(cell.at);
+            cell.state.facing = face(cell.state.facing);
+        }
+        for branch in &mut tree.branches {
+            branch.root = turn(branch.root);
+            for at in &mut branch.path {
+                *at = turn(*at);
+            }
+            branch.terminal.at = turn(branch.terminal.at);
+            branch.terminal.state.facing = face(branch.terminal.state.facing);
+        }
+    }
+
+    /// Every route-owned repeater of a single-run fixture, by its coordinate
+    /// `along` the run.
+    fn repeater_anchors(tree: &RealisedRouteTree, along: impl Fn(Anchor) -> i32) -> Vec<i32> {
         let mut anchors: Vec<i32> = tree
             .cells
             .iter()
             .filter(|cell| cell.state.kind == BlockKind::Repeater)
-            .map(|cell| cell.at.x)
+            .map(|cell| along(cell.at))
             .collect();
         anchors.sort();
         anchors
@@ -540,7 +574,7 @@ mod tests {
     #[test]
     fn refresh_relocation_merges_a_redundant_pair_into_one_downstream_repeater() {
         let tree = linear_relocation_route(26);
-        assert_eq!(repeater_anchors(&tree), vec![0, 9, 18, 27]);
+        assert_eq!(repeater_anchors(&tree, |at| at.x), vec![0, 9, 18, 27]);
 
         // Neither refresh is directly removable: without x18 the suffix from
         // x9 runs 17 dust, and without x9 the suffix from x0 runs 17 dust.
@@ -569,7 +603,7 @@ mod tests {
         // feasible cell, x15, though x13 also carries.
         let mut relocated = tree.clone();
         assert!(relocate_refresh(&mut relocated));
-        assert_eq!(repeater_anchors(&relocated), vec![0, 15, 27]);
+        assert_eq!(repeater_anchors(&relocated, |at| at.x), vec![0, 15, 27]);
         let mut expected = tree.clone();
         set(&mut expected, 9, 0, crate::compile::dust());
         set(&mut expected, 18, 0, crate::compile::dust());
@@ -587,6 +621,50 @@ mod tests {
             !relocate_refresh(&mut relocated),
             "the saved tree has no second pair"
         );
+        assert_eq!(relocated, settled);
+    }
+
+    /// The same saving on the same shape laid along z instead of x. A parent
+    /// trunk runs whichever way the floorplan puts it, so "straight
+    /// horizontal" has to mean one constant step with no y in it -- not one
+    /// constant step in x -- or half of every real parent route is refused
+    /// for the axis it happens to sit on.
+    #[test]
+    fn refresh_relocation_saves_a_repeater_on_a_z_axis_route() {
+        let mut tree = linear_relocation_route(26);
+        onto_z_axis(&mut tree);
+        assert_eq!(repeater_anchors(&tree, |at| at.z), vec![0, 9, 18, 27]);
+        assert!(
+            tree.cells.iter().all(|c| c.at.x == 0 && c.at.y == 0),
+            "the whole route now runs along z"
+        );
+
+        // Nothing else moved: direct pruning still takes neither refresh.
+        let mut pruned = tree.clone();
+        assert!(
+            !prune_route(&mut pruned),
+            "direct pruning takes neither z9 nor z18"
+        );
+        assert_eq!(pruned, tree);
+
+        let mut relocated = tree.clone();
+        assert!(
+            relocate_refresh(&mut relocated),
+            "a z run is as straight as an x run"
+        );
+        assert_eq!(repeater_anchors(&relocated, |at| at.z), vec![0, 15, 27]);
+        let mut expected = tree.clone();
+        let along_z = crate::compile::repeater(Facing::South);
+        set(&mut expected, 0, 9, crate::compile::dust());
+        set(&mut expected, 0, 18, crate::compile::dust());
+        set(&mut expected, 0, 15, along_z);
+        assert_eq!(
+            relocated, expected,
+            "z15 carries z9's own state, which faces along z"
+        );
+
+        let settled = relocated.clone();
+        assert!(!relocate_refresh(&mut relocated), "still no second pair");
         assert_eq!(relocated, settled);
     }
 
