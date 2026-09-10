@@ -619,35 +619,10 @@ fn expected_handover_repeater(toward: Facing) -> BlockState {
 /// that a run which silently stopped accepting cannot pass by looking like a
 /// run that had nothing to accept.
 ///
-/// and4 is the fixture because it is the smallest circuit needing more than
-/// one NOR cell, and its pin geometry is the one
-/// `a_pinned_and4_round_trips_through_the_flags` already drives through the
-/// command line: input `a` south of the layout and output `y` north of it,
-/// both `toward` North.
-///
-/// Ignored because it does not pass yet, and the reason is the feature, not
-/// the fixture: `compile_hierarchical` refuses *any* pin on the top of a
-/// design that contains a `ModuleInstance`, including a pin placed at the
-/// exact cell the same unpinned compile chose for that port. Measured at
-/// this revision, all at budget zero and again at `u64::MAX`:
-///
-/// - unpinned, this design certifies with `a` at `(16, 1, 20)` and `y` at
-///   `(127, 1, 20)`;
-/// - pinning `a` alone at its own `(16, 1, 20)` refuses with `top: seed
-///   topology is internally incomplete: seed placement plan`;
-/// - pinning `y` alone at its own `(127, 1, 20)` refuses with `top: the
-///   parent placing block InstanceId(1) did not settle on the direct east
-///   frame`;
-/// - pinning `a` at `(21, 1, 62)` refuses with `top: typed route
-///   construction failed ... NoLocalRoute`.
-///
-/// A top that owns a gate as well as an instance refuses identically, so a
-/// gate-free top is not the trigger. The assertions below are left exactly
-/// as specified: they are the target this fixture exists to state, and
-/// deleting this `#[ignore]` is what should turn green when pins survive a
-/// module boundary.
+/// and4 is the smallest circuit that still proves pins survive a child-module
+/// compile and splice. Both pins use the parent's direct east frame; the older
+/// north-facing coordinates belong to the separate grown-layout engine.
 #[test]
-#[ignore = "pins across a module boundary are not honoured yet: compile_hierarchical refuses any top pin on a design with an instance"]
 fn hierarchy_with_a_child_preserves_requested_pins_through_exhaustion() {
     let (netlist, output_signal) = build_and4_netlist();
 
@@ -688,12 +663,16 @@ fn hierarchy_with_a_child_preserves_requested_pins_through_exhaustion() {
     };
 
     let input_pin = PortPin {
-        at: Anchor { x: 21, y: 1, z: 62 },
-        toward: Facing::North,
+        at: Anchor { x: 50, y: 1, z: 20 },
+        toward: Facing::East,
     };
     let output_pin = PortPin {
-        at: Anchor { x: 53, y: 1, z: 10 },
-        toward: Facing::North,
+        at: Anchor {
+            x: 200,
+            y: 1,
+            z: 20,
+        },
+        toward: Facing::East,
     };
     let mut pins = PortPlacements::default();
     pins.pin("a", input_pin.at, input_pin.toward);
@@ -708,8 +687,8 @@ fn hierarchy_with_a_child_preserves_requested_pins_through_exhaustion() {
             (
                 input_pin,
                 PortRole::Input,
-                Anchor { x: 21, y: 1, z: 61 },
-                Anchor { x: 21, y: 1, z: 60 },
+                Anchor { x: 51, y: 1, z: 20 },
+                Anchor { x: 52, y: 1, z: 20 },
             ),
         ),
         (
@@ -717,8 +696,16 @@ fn hierarchy_with_a_child_preserves_requested_pins_through_exhaustion() {
             (
                 output_pin,
                 PortRole::Output,
-                Anchor { x: 53, y: 1, z: 11 },
-                Anchor { x: 53, y: 1, z: 12 },
+                Anchor {
+                    x: 199,
+                    y: 1,
+                    z: 20,
+                },
+                Anchor {
+                    x: 198,
+                    y: 1,
+                    z: 20,
+                },
             ),
         ),
     ]
@@ -747,12 +734,12 @@ fn hierarchy_with_a_child_preserves_requested_pins_through_exhaustion() {
 
         assert_eq!(
             result.compiled.input_positions.get("a"),
-            Some(&(21, 1, 62)),
+            Some(&(50, 1, 20)),
             "budget={budget}: `a` reports the caller's own cell, not a lever REDA chose"
         );
         assert_eq!(
             result.compiled.output_positions.get("y"),
-            Some(&(53, 1, 10)),
+            Some(&(200, 1, 20)),
             "budget={budget}: `y` reports the caller's own cell, not a lamp REDA chose"
         );
         assert_eq!(

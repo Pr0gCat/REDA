@@ -80,10 +80,12 @@ fn print_retention_record(name: &str, budget: u64, result: &SynthesisResult, ela
   output. The gate-free top declares inputs `a,b,c,d`, output `y`, and has one
   `ModuleInstance` binding the four child inputs to the same-named parent signals
   plus `output_signal -> y`, all with `PortBinding::Signal`. Pin
-  input `a` at `(21,1,62)` facing North (handover `(21,1,61)`, net
-  `(21,1,60)`) and output `y` at `(53,1,10)` facing North (handover
-  `(53,1,11)`, net `(53,1,12)`). Compile at budgets `0` and `u64::MAX`; assert
-  exact requested position maps, air at each caller-owned pin, exact South-facing
+  input `a` at `(50,1,20)` facing East (handover `(51,1,20)`, net
+  `(52,1,20)`) and output `y` at `(200,1,20)` facing East (handover
+  `(199,1,20)`, net `(198,1,20)`). These coordinates use the topology-aware
+  seed's direct parent frame; the older north-facing and4 coordinates belong to
+  the separate grown-layout engine. Compile at budgets `0` and `u64::MAX`; assert
+  exact requested position maps, air at each caller-owned pin, exact West-facing
   handover repeater state, route conductor at each net cell, equal case
   fingerprints, and candidate equality iff no trace entry was accepted.
 

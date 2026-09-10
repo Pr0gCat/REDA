@@ -457,9 +457,12 @@ A small pinned hierarchical fixture reuses
 gates and declares inputs `a,b,c,d` plus `output_signal`; a gate-free top declares
 inputs `a,b,c,d`, output `y`, and binds each child input to the same-named parent
 signal plus `output_signal -> y`, all with `PortBinding::Signal`. Input
-`a` is pinned at `(21,1,62)` facing North (handover `(21,1,61)`, net cell
-`(21,1,60)`), and output `y` at `(53,1,10)` facing North (handover `(53,1,11)`,
-net cell `(53,1,12)`). It is compiled at budget zero and `u64::MAX` (stream
+`a` is pinned at `(50,1,20)` facing East (handover `(51,1,20)`, net cell
+`(52,1,20)`), and output `y` at `(200,1,20)` facing East (handover
+`(199,1,20)`, net cell `(198,1,20)`). These coordinates use the
+topology-aware seed's direct parent frame; the older north-facing and4
+coordinates belong to the separate grown-layout engine. It is compiled at
+budget zero and `u64::MAX` (stream
 exhaustion, hence Pass 5 is reached even when it has no descriptor). It asserts
 exact pin
 coordinates and contract semantics on both runs, through what the public
