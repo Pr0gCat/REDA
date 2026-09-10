@@ -18,7 +18,7 @@ use crate::compile::fragment_synth::instance_graph::{
 };
 use crate::compile::fragment_synth::manifest::Transition;
 use crate::compile::fragment_synth::search::{
-    CapWorkCounters, ProposalEvaluation, ProposalStream, ProposalTerminal,
+    Acceptance, CapWorkCounters, ProposalEvaluation, ProposalStream, ProposalTerminal,
 };
 use crate::compile::fragment_synth::seed::{
     compile_sparse_seed_variant_with_services, InstancePlacementOverride, SeedError, SeedInput,
@@ -172,6 +172,7 @@ impl ProposalStream<CertifiedCandidate> for FragmentProposalStream<'_> {
                         terminal: ProposalTerminal::BacktrackCapExhausted,
                         cap_work,
                         certified: None,
+                        acceptance: Acceptance::Lexicographic,
                     });
                 }
                 variant
@@ -197,6 +198,7 @@ impl ProposalStream<CertifiedCandidate> for FragmentProposalStream<'_> {
                     terminal: ProposalTerminal::NoImprovement,
                     cap_work,
                     certified: Some(certified),
+                    acceptance: Acceptance::Lexicographic,
                 })
             }
             Err(error) => {
@@ -207,6 +209,7 @@ impl ProposalStream<CertifiedCandidate> for FragmentProposalStream<'_> {
                     terminal,
                     cap_work,
                     certified: None,
+                    acceptance: Acceptance::Lexicographic,
                 })
             }
         }

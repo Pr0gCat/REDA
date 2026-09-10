@@ -99,12 +99,31 @@ pub(crate) trait MonotonicClock {
     fn elapsed(&self) -> Duration;
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Acceptance {
+    Lexicographic,
+    JointQuality,
+}
+
+fn accepts(policy: Acceptance, candidate: QualityKey, incumbent: QualityKey) -> bool {
+    match policy {
+        Acceptance::Lexicographic => candidate < incumbent,
+        Acceptance::JointQuality => {
+            candidate.observed_settle < incumbent.observed_settle
+                && candidate.non_air_blocks <= incumbent.non_air_blocks
+                && candidate.occupied_volume <= incumbent.occupied_volume
+                && candidate.static_routed_delay <= incumbent.static_routed_delay
+        }
+    }
+}
+
 pub(crate) struct ProposalEvaluation<T> {
     pub fragment_fingerprint: Fingerprint,
     pub choice_fingerprint: Fingerprint,
     pub terminal: ProposalTerminal,
     pub cap_work: CapWorkCounters,
     pub certified: Option<T>,
+    pub acceptance: Acceptance,
 }
 
 impl<T: SearchCandidate> ProposalEvaluation<T> {
@@ -130,6 +149,7 @@ impl<T: SearchCandidate> ProposalEvaluation<T> {
             terminal: ProposalTerminal::NoImprovement,
             cap_work: CapWorkCounters::default(),
             certified: Some(candidate),
+            acceptance: Acceptance::Lexicographic,
         }
     }
 }
@@ -200,6 +220,7 @@ impl<T: SearchCandidate> ProposalStream<T> for DeterministicNoOpProposalStream {
             terminal: ProposalTerminal::Refused,
             cap_work: CapWorkCounters::default(),
             certified: None,
+            acceptance: Acceptance::Lexicographic,
         })
     }
 }
@@ -232,10 +253,9 @@ pub(crate) fn run_budgeted_proposals<T: SearchCandidate>(
         evaluations_used = evaluations_used.saturating_add(1);
 
         let certified_quality = evaluation.certified.as_ref().map(SearchCandidate::quality);
-        let accepted = evaluation
-            .certified
-            .as_ref()
-            .is_some_and(|candidate| candidate.quality() < best.quality());
+        let accepted = evaluation.certified.as_ref().is_some_and(|candidate| {
+            accepts(evaluation.acceptance, candidate.quality(), best.quality())
+        });
         if let Some(candidate) = evaluation.certified.take() {
             if accepted {
                 best = candidate;
@@ -313,9 +333,9 @@ mod tests {
     use std::time::Duration;
 
     use super::{
-        run_budgeted_proposals, CapWorkCounters, DeterministicNoOpProposalStream, MonotonicClock,
-        ProposalEvaluation, ProposalTerminal, ScriptedProposalStream, SearchSeed, StopReason,
-        SynthesisBudget,
+        accepts, run_budgeted_proposals, Acceptance, CapWorkCounters,
+        DeterministicNoOpProposalStream, MonotonicClock, ProposalEvaluation, ProposalTerminal,
+        ScriptedProposalStream, SearchSeed, StopReason, SynthesisBudget,
     };
     use crate::compile::fragment_synth::certification::QualityKey;
     use crate::compile::fragment_synth::timing_graph::ExactDelay;
@@ -348,6 +368,7 @@ mod tests {
                     ..CapWorkCounters::default()
                 },
                 certified: None,
+                acceptance: Acceptance::Lexicographic,
             })
             .collect()
     }
@@ -425,6 +446,7 @@ mod tests {
                 terminal: *terminal,
                 cap_work: CapWorkCounters::default(),
                 certified: None,
+                acceptance: Acceptance::Lexicographic,
             })
             .collect();
         let result = run_budgeted_proposals(
@@ -511,5 +533,114 @@ mod tests {
                 .collect::<Vec<_>>(),
             [false, true]
         );
+    }
+
+    fn full_quality(settle: u64, blocks: u64, volume: u64, static_delay: u64) -> QualityKey {
+        QualityKey {
+            observed_settle: settle,
+            non_air_blocks: blocks,
+            occupied_volume: volume,
+            static_routed_delay: ExactDelay(static_delay),
+        }
+    }
+
+    #[test]
+    fn joint_quality_rejects_lower_settle_with_higher_static_delay() {
+        let incumbent = full_quality(8, 80, 800, 8);
+        let candidate = full_quality(7, 80, 800, 9);
+
+        assert!(!accepts(Acceptance::JointQuality, candidate, incumbent));
+    }
+
+    #[test]
+    fn joint_quality_rejects_lower_settle_with_more_blocks_or_volume() {
+        let incumbent = full_quality(8, 80, 800, 8);
+
+        assert!(!accepts(
+            Acceptance::JointQuality,
+            full_quality(7, 81, 800, 8),
+            incumbent
+        ));
+        assert!(!accepts(
+            Acceptance::JointQuality,
+            full_quality(7, 80, 801, 8),
+            incumbent
+        ));
+    }
+
+    #[test]
+    fn joint_quality_rejects_static_delay_only_and_all_equal_candidates() {
+        let incumbent = full_quality(8, 80, 800, 8);
+
+        assert!(!accepts(
+            Acceptance::JointQuality,
+            full_quality(8, 80, 800, 7),
+            incumbent
+        ));
+        assert!(!accepts(Acceptance::JointQuality, incumbent, incumbent));
+    }
+
+    #[test]
+    fn joint_quality_accepts_lower_settle_only_when_nothing_else_worsens() {
+        let incumbent = full_quality(8, 80, 800, 8);
+
+        assert!(accepts(
+            Acceptance::JointQuality,
+            full_quality(7, 80, 800, 8),
+            incumbent
+        ));
+        assert!(accepts(
+            Acceptance::JointQuality,
+            full_quality(7, 79, 799, 7),
+            incumbent
+        ));
+    }
+
+    #[test]
+    fn joint_quality_does_not_change_lexicographic_acceptance() {
+        let incumbent = full_quality(8, 80, 800, 8);
+        let lower_settle_higher_static = full_quality(7, 80, 800, 9);
+
+        assert!(accepts(
+            Acceptance::Lexicographic,
+            lower_settle_higher_static,
+            incumbent
+        ));
+        assert!(!accepts(
+            Acceptance::Lexicographic,
+            full_quality(9, 80, 800, 7),
+            incumbent
+        ));
+        assert!(!accepts(Acceptance::Lexicographic, incumbent, incumbent));
+    }
+
+    #[test]
+    fn joint_quality_rejection_keeps_the_incumbent_and_records_no_improvement() {
+        let rejected = SearchSeed {
+            candidate_fingerprint: canonical_fingerprint(b"lower-settle-higher-static"),
+            quality: full_quality(7, 80, 800, 9),
+        };
+        let scripted = vec![ProposalEvaluation {
+            fragment_fingerprint: canonical_fingerprint(b"joint-fragment"),
+            choice_fingerprint: canonical_fingerprint(b"joint-choice"),
+            terminal: ProposalTerminal::NoImprovement,
+            cap_work: CapWorkCounters::default(),
+            certified: Some(rejected.clone()),
+            acceptance: Acceptance::JointQuality,
+        }];
+        let result = run_budgeted_proposals(
+            seed(),
+            SynthesisBudget::Evaluations(1),
+            &FakeClock {
+                now_nanos: Rc::new(Cell::new(0)),
+            },
+            &mut ScriptedProposalStream::new(scripted),
+        );
+
+        assert_eq!(result.best, seed());
+        assert_eq!(result.trace.len(), 1);
+        assert_eq!(result.trace[0].certified_quality, Some(rejected.quality));
+        assert_eq!(result.trace[0].terminal, ProposalTerminal::NoImprovement);
+        assert!(!result.trace[0].accepted);
     }
 }

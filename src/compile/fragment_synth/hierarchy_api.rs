@@ -73,8 +73,8 @@ use crate::compile::fragment_synth::route_opt::{
     prune_descriptors, prune_route, ParentRouteChoice,
 };
 use crate::compile::fragment_synth::search::{
-    run_budgeted_proposals, CapWorkCounters, ProposalEvaluation, ProposalStream, ProposalTerminal,
-    SearchCandidate, SynthesisBudget, SystemMonotonicClock,
+    run_budgeted_proposals, Acceptance, CapWorkCounters, ProposalEvaluation, ProposalStream,
+    ProposalTerminal, SearchCandidate, SynthesisBudget, SystemMonotonicClock,
 };
 use crate::compile::fragment_synth::seed::{
     certify_planned, plan_parent_with_services, BlockPlacementOffset, ParentBlocks, PlannedParent,
@@ -1019,6 +1019,7 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                 terminal: ProposalTerminal::Refused,
                 cap_work,
                 certified: None,
+                acceptance: Acceptance::Lexicographic,
             });
         };
         match (self.compile)(incumbent, &block_placements, &seams, &prunes) {
@@ -1028,6 +1029,7 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                 terminal: ProposalTerminal::NoImprovement,
                 cap_work,
                 certified: Some(candidate),
+                acceptance: Acceptance::Lexicographic,
             }),
             Err(error) => {
                 let terminal = terminal_for_seed_error(&error, &mut cap_work);
@@ -1037,6 +1039,7 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                     terminal,
                     cap_work,
                     certified: None,
+                    acceptance: Acceptance::Lexicographic,
                 })
             }
         }
