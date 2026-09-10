@@ -3022,35 +3022,6 @@ mod tests {
         }
     }
 
-    const MAX_REFRESH_PROPOSALS: u64 = 16;
-
-    struct BoundedRefreshStream<'a> {
-        inner: HierarchicalProposalStream<'a>,
-        winner_seen: std::rc::Rc<std::cell::Cell<bool>>,
-    }
-
-    impl ProposalStream<HierarchicalCandidate> for BoundedRefreshStream<'_> {
-        fn next(
-            &mut self,
-            proposal_index: u64,
-            incumbent: &HierarchicalCandidate,
-        ) -> Option<ProposalEvaluation<HierarchicalCandidate>> {
-            if self.winner_seen.get() {
-                return None;
-            }
-            if self.inner.refreshes.is_some() {
-                let start = self.inner.edges.len()
-                    + self.inner.pull_x_edges.as_ref().map_or(0, Vec::len)
-                    + self.inner.seams.len()
-                    + self.inner.prunes.as_ref().map_or(0, Vec::len);
-                if proposal_index.saturating_sub(start as u64) >= MAX_REFRESH_PROPOSALS {
-                    return None;
-                }
-            }
-            self.inner.next(proposal_index, incumbent)
-        }
-    }
-
     /// The refresh stage is frozen from the post-Pass-4 incumbent: it probes
     /// the full pre-retain parent-route map, replays that incumbent's own
     /// accepted prunes onto each planned tree before probing it, and keeps
@@ -3283,11 +3254,10 @@ mod tests {
         }
     }
 
-    /// Task 5's bounded real-circuit retention gate. Passes 1-4 run unchanged;
-    /// Pass 5 then certifies at most sixteen descriptors and stops at the first
-    /// retained win.
+    /// Task 5's real-circuit retention gate. Passes 1-4 run unchanged, then
+    /// every Pass-5 descriptor is evaluated and every retained step is checked.
     #[test]
-    #[ignore = "release-only: runs ripple_adder8 through up to sixteen relocations"]
+    #[ignore = "release-only: exhausts ripple_adder8 through refresh relocation"]
     fn refresh_relocation_improves_an_acceptance_circuit() {
         use crate::circuits::hierarchical_builder::circuits as h;
 
@@ -3299,15 +3269,13 @@ mod tests {
             let fixture = RelocationFixture::build(&h::ripple_adder(8), &library);
             let seed = fixture.compile(services, &[], &[]);
             let seed_quality = seed.quality();
-            let winner_seen = std::rc::Rc::new(std::cell::Cell::new(false));
-            let winner_for_compile = std::rc::Rc::clone(&winner_seen);
-            let inner = HierarchicalProposalStream::new(
+            let mut stream = HierarchicalProposalStream::new(
                 fixture.edges.clone(),
                 fixture.source_outputs.clone(),
                 fixture.sink_inputs.clone(),
                 fixture.seams.clone(),
                 Box::new(|incumbent, placements, seams, prunes, refreshes| {
-                    let compiled = compile_proposal(
+                    compile_proposal(
                         &fixture.lowered,
                         &fixture.ordered,
                         None,
@@ -3317,70 +3285,161 @@ mod tests {
                         seams,
                         prunes,
                         refreshes,
-                    );
-                    if let Ok(candidate) = &compiled {
-                        let quality = candidate.quality();
-                        let incumbent_quality = incumbent.quality();
-                        winner_for_compile.set(
-                            refreshes.len() > incumbent.refreshes.len()
-                                && quality.observed_settle < incumbent_quality.observed_settle
-                                && quality.non_air_blocks <= incumbent_quality.non_air_blocks
-                                && quality.occupied_volume <= incumbent_quality.occupied_volume
-                                && quality.static_routed_delay
-                                    <= incumbent_quality.static_routed_delay,
-                        );
-                    }
-                    compiled
+                    )
                 }),
             );
-            let mut stream = BoundedRefreshStream { inner, winner_seen };
             let summary = run_budgeted_proposals(
                 seed,
                 SynthesisBudget::Evaluations(u64::MAX),
                 &SystemMonotonicClock::start(),
                 &mut stream,
             );
-            let start = stream.inner.edges.len()
-                + stream.inner.pull_x_edges.as_ref().map_or(0, Vec::len)
-                + stream.inner.seams.len()
-                + stream.inner.prunes.as_ref().map_or(0, Vec::len);
+            let start = stream.edges.len()
+                + stream.pull_x_edges.as_ref().map_or(0, Vec::len)
+                + stream.seams.len()
+                + stream.prunes.as_ref().map_or(0, Vec::len);
             let pass5 = &summary.trace[start..];
-            assert!(
-                !pass5.is_empty() && pass5.len() <= MAX_REFRESH_PROPOSALS as usize,
-                "the bounded gate must offer one to sixteen Pass 5 proposals: {pass5:?}"
-            );
-            let pass5_incumbent = summary.trace[..start]
+            let mut incumbent = summary.trace[..start]
                 .iter()
                 .filter(|entry| entry.accepted)
                 .filter_map(|entry| entry.certified_quality)
                 .last()
                 .unwrap_or(seed_quality);
-            let entry = pass5
-                .iter()
-                .find(|entry| entry.accepted)
-                .unwrap_or_else(|| {
-                    panic!("none of the first sixteen relocations lowers settle: {pass5:?}")
-                });
-            assert_eq!(entry.terminal, ProposalTerminal::Accepted, "{entry:?}");
-            let quality = summary.best.quality();
-            assert!(quality.observed_settle < pass5_incumbent.observed_settle);
-            assert_eq!(quality.non_air_blocks, pass5_incumbent.non_air_blocks);
-            assert_eq!(quality.occupied_volume, pass5_incumbent.occupied_volume);
-            assert!(quality.static_routed_delay <= pass5_incumbent.static_routed_delay);
-            assert_eq!(summary.best.refreshes.len(), 1);
+            let pass5_incumbent = incumbent;
+            let mut accepted = 0;
+            for entry in pass5.iter().filter(|entry| entry.accepted) {
+                assert_eq!(entry.terminal, ProposalTerminal::Accepted, "{entry:?}");
+                let quality = entry
+                    .certified_quality
+                    .expect("an accepted entry certifies");
+                assert!(
+                    quality.observed_settle < incumbent.observed_settle,
+                    "{entry:?}"
+                );
+                assert_eq!(
+                    quality.non_air_blocks, incumbent.non_air_blocks,
+                    "{entry:?}"
+                );
+                assert_eq!(
+                    quality.occupied_volume, incumbent.occupied_volume,
+                    "{entry:?}"
+                );
+                assert!(
+                    quality.static_routed_delay <= incumbent.static_routed_delay,
+                    "{entry:?}"
+                );
+                incumbent = quality;
+                accepted += 1;
+            }
+            assert!(
+                accepted > 0,
+                "no refresh relocation was retained: {pass5:?}"
+            );
+            assert_eq!(summary.stop_reason, StopReason::ProposalStreamExhausted);
+            assert_eq!(summary.best.quality(), incumbent);
+            assert_eq!(summary.best.refreshes.len(), accepted);
             assert_eq!(
                 summary.best.certified.measurements().len(),
                 summary.best.certified.metrics().transition_count as usize,
                 "the retained candidate completed the unchanged full certification sweep"
             );
             eprintln!(
-                "RELOCATION winner_index={} seed={seed_quality:?} incumbent={pass5_incumbent:?} \
-                 winner={quality:?} \
-                 candidate={} workers={threads}",
-                entry.proposal_index,
+                "RELOCATION accepted={accepted} seed={seed_quality:?} incumbent={pass5_incumbent:?} \
+                 winner={incumbent:?} candidate={} workers={threads}",
                 summary.best.candidate_fingerprint().as_str()
             );
         });
+    }
+
+    /// Task 5's Pass-5 worker-determinism gate: `ripple_adder8` exhausted at
+    /// worker budgets 1, 2 and 4 must give one certified result that still
+    /// carries a retained Pass-5 tick win. Only the one-worker leg overlaps:
+    /// it never opens the process-wide certification sweep lock, which the
+    /// two- and four-worker legs share. Every leg does the full work.
+    #[test]
+    #[ignore = "release-only: exhausts ripple_adder8 at three worker budgets"]
+    fn refresh_relocation_is_worker_deterministic() {
+        // Task 1's pre-feature exhaustion incumbent for ripple_adder8.
+        const PRE_FEATURE_SETTLE: u64 = 560;
+
+        let design = crate::circuits::hierarchical_builder::circuits::ripple_adder(8);
+        let run = |workers: usize| {
+            compile_hierarchical_with_threads(
+                &design,
+                SynthesisBudget::Evaluations(u64::MAX),
+                None,
+                workers,
+            )
+            .unwrap_or_else(|error| panic!("{workers} workers must certify: {error}"))
+        };
+        let (one, four, two) = std::thread::scope(|scope| {
+            let one = scope.spawn(|| run(1));
+            let four = run(4);
+            let two = run(2);
+            (one.join().expect("the one-worker leg"), four, two)
+        });
+
+        for (workers, leg) in [(2usize, &two), (4, &four)] {
+            // `QualityKey` is exactly settle, blocks, volume and static delay.
+            assert_eq!(
+                (
+                    &leg.candidate_fingerprint,
+                    leg.metrics.quality,
+                    leg.stop_reason,
+                    leg.evaluations_used,
+                    &leg.trace,
+                ),
+                (
+                    &one.candidate_fingerprint,
+                    one.metrics.quality,
+                    one.stop_reason,
+                    one.evaluations_used,
+                    &one.trace,
+                ),
+                "{workers} workers disagree with one worker"
+            );
+        }
+        assert_eq!(one.stop_reason, StopReason::ProposalStreamExhausted);
+
+        let incumbent_at = one
+            .trace
+            .iter()
+            .rposition(|entry| {
+                entry.accepted
+                    && entry
+                        .certified_quality
+                        .is_some_and(|q| q.observed_settle >= PRE_FEATURE_SETTLE)
+            })
+            .expect("Passes 1-4 must accept down to the pre-feature incumbent");
+        let incumbent = one.trace[incumbent_at]
+            .certified_quality
+            .expect("an accepted entry certifies");
+        assert_eq!(incumbent.observed_settle, PRE_FEATURE_SETTLE);
+        let win = one.trace[incumbent_at + 1..]
+            .iter()
+            .find(|entry| entry.accepted)
+            .expect("nothing after the pre-feature incumbent was retained");
+        let quality = win.certified_quality.expect("an accepted entry certifies");
+        assert!(
+            quality.observed_settle < incumbent.observed_settle
+                && quality.non_air_blocks == incumbent.non_air_blocks
+                && quality.occupied_volume == incumbent.occupied_volume
+                && quality.static_routed_delay <= incumbent.static_routed_delay,
+            "the post-Pass-4 win must buy ticks alone: {quality:?} vs {incumbent:?}"
+        );
+        let final_quality = one.metrics.quality;
+        assert!(
+            final_quality.observed_settle < PRE_FEATURE_SETTLE,
+            "the win must be retained: {final_quality:?}"
+        );
+
+        eprintln!(
+            "RELOCATION-WORKERS workers=1,2,4 incumbent={incumbent:?} win_index={} \
+             win={quality:?} final={final_quality:?} evaluations={} candidate={}",
+            win.proposal_index,
+            one.evaluations_used,
+            one.candidate_fingerprint.as_str()
+        );
     }
 
     /// Parent Route Repack chooses the lowest-slack prunable parent route in
