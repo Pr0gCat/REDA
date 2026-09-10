@@ -16,7 +16,7 @@ use reda::compile::fragment_synth::benchmark::legacy_benchmark_evaluator;
 use reda::compile::planner::{Anchor, PinRefusal, PortPin, PortPlacements, PortRole};
 use reda::compile::{
     compile_fragment_synth, compile_grown, compile_hierarchical, CompileError, HierarchicalNetlist,
-    Module, SynthesisBudget, SynthesisInput,
+    Module, ModuleInstance, PortBinding, SynthesisBudget, SynthesisInput,
 };
 use reda::redstone::world::block::{BlockKind, BlockState, Facing};
 
@@ -594,6 +594,225 @@ fn expected_handover_repeater(toward: Facing) -> BlockState {
     state.delay = 1;
     state.lit = true;
     state
+}
+
+/// A pinned *hierarchy with a child* -- not a one-module wrapper -- keeps
+/// every caller-owned cell it was given, at the seed and again after the
+/// proposal stream has run out.
+///
+/// `compile_hierarchical_preserves_the_checked_seven_segment_pin_contract`
+/// already states the one-module case, where the hierarchical door is the
+/// flat door and pins never cross a module boundary. This is the case that
+/// door cannot state: `y` is the *parent's* output, bound to the child's own
+/// output signal by a `ModuleInstance`, so the pin has to survive lowering,
+/// the child's compile, and the splice back into one flat candidate before it
+/// can be honoured -- and `a` has to survive the same trip as an input the
+/// parent forwards to the child under the same name.
+///
+/// Both budget points are asserted because the two claims differ. At budget
+/// zero nothing has been proposed, so the pins holding is a statement about
+/// placement alone; at `u64::MAX` the finite block-edge proposal stream runs
+/// to exhaustion, so the pins holding is the statement that search cannot
+/// spend a caller-owned cell. Budget is not part of the synthesis case, so
+/// both runs must share a case fingerprint, and the candidate may differ from
+/// the seed's exactly when a proposal was accepted -- asserted as an iff, so
+/// that a run which silently stopped accepting cannot pass by looking like a
+/// run that had nothing to accept.
+///
+/// and4 is the fixture because it is the smallest circuit needing more than
+/// one NOR cell, and its pin geometry is the one
+/// `a_pinned_and4_round_trips_through_the_flags` already drives through the
+/// command line: input `a` south of the layout and output `y` north of it,
+/// both `toward` North.
+///
+/// Ignored because it does not pass yet, and the reason is the feature, not
+/// the fixture: `compile_hierarchical` refuses *any* pin on the top of a
+/// design that contains a `ModuleInstance`, including a pin placed at the
+/// exact cell the same unpinned compile chose for that port. Measured at
+/// this revision, all at budget zero and again at `u64::MAX`:
+///
+/// - unpinned, this design certifies with `a` at `(16, 1, 20)` and `y` at
+///   `(127, 1, 20)`;
+/// - pinning `a` alone at its own `(16, 1, 20)` refuses with `top: seed
+///   topology is internally incomplete: seed placement plan`;
+/// - pinning `y` alone at its own `(127, 1, 20)` refuses with `top: the
+///   parent placing block InstanceId(1) did not settle on the direct east
+///   frame`;
+/// - pinning `a` at `(21, 1, 62)` refuses with `top: typed route
+///   construction failed ... NoLocalRoute`.
+///
+/// A top that owns a gate as well as an instance refuses identically, so a
+/// gate-free top is not the trigger. The assertions below are left exactly
+/// as specified: they are the target this fixture exists to state, and
+/// deleting this `#[ignore]` is what should turn green when pins survive a
+/// module boundary.
+#[test]
+#[ignore = "pins across a module boundary are not honoured yet: compile_hierarchical refuses any top pin on a design with an instance"]
+fn hierarchy_with_a_child_preserves_requested_pins_through_exhaustion() {
+    let (netlist, output_signal) = build_and4_netlist();
+
+    // The child owns every gate; the top owns none and exists only to
+    // instance it, so nothing here can be honoured by a flat compile that
+    // never looked at the hierarchy.
+    let mut modules = BTreeMap::new();
+    modules.insert(
+        "and4".to_string(),
+        Module {
+            inputs: netlist.inputs.clone(),
+            outputs: vec![output_signal.clone()],
+            gates: netlist.gates.clone(),
+            instances: vec![],
+        },
+    );
+    let mut ports = BTreeMap::new();
+    for input in &netlist.inputs {
+        ports.insert(input.clone(), PortBinding::Signal(input.clone()));
+    }
+    ports.insert(output_signal.clone(), PortBinding::Signal("y".to_string()));
+    modules.insert(
+        "top".to_string(),
+        Module {
+            inputs: netlist.inputs.clone(),
+            outputs: vec!["y".to_string()],
+            gates: vec![],
+            instances: vec![ModuleInstance {
+                name: "and4_0".to_string(),
+                module: "and4".to_string(),
+                ports,
+            }],
+        },
+    );
+    let design = HierarchicalNetlist {
+        top: "top".to_string(),
+        modules,
+    };
+
+    let input_pin = PortPin {
+        at: Anchor { x: 21, y: 1, z: 62 },
+        toward: Facing::North,
+    };
+    let output_pin = PortPin {
+        at: Anchor { x: 53, y: 1, z: 10 },
+        toward: Facing::North,
+    };
+    let mut pins = PortPlacements::default();
+    pins.pin("a", input_pin.at, input_pin.toward);
+    pins.pin("y", output_pin.at, output_pin.toward);
+
+    // Spelled out rather than derived, so a change to how a handover or a
+    // net cell is resolved has to be re-agreed here in literal coordinates
+    // instead of following the code that changed.
+    let expected: BTreeMap<String, CheckedPin> = [
+        (
+            "a".to_string(),
+            (
+                input_pin,
+                PortRole::Input,
+                Anchor { x: 21, y: 1, z: 61 },
+                Anchor { x: 21, y: 1, z: 60 },
+            ),
+        ),
+        (
+            "y".to_string(),
+            (
+                output_pin,
+                PortRole::Output,
+                Anchor { x: 53, y: 1, z: 11 },
+                Anchor { x: 53, y: 1, z: 12 },
+            ),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    for (name, (pin, role, handover, net_cell)) in &expected {
+        assert_eq!(
+            pin.handover(*role),
+            *handover,
+            "{name}'s handover is the one neighbour its `toward` names"
+        );
+        assert_eq!(
+            pin.net_cell(*role),
+            *net_cell,
+            "{name}'s net cell is one step past its handover"
+        );
+    }
+
+    let mut results = Vec::new();
+    for budget in [0, u64::MAX] {
+        let result =
+            compile_hierarchical(&design, SynthesisBudget::Evaluations(budget), Some(&pins))
+                .unwrap_or_else(|error| {
+                    panic!("budget={budget}: the pinned hierarchy must certify: {error}")
+                });
+
+        assert_eq!(
+            result.compiled.input_positions.get("a"),
+            Some(&(21, 1, 62)),
+            "budget={budget}: `a` reports the caller's own cell, not a lever REDA chose"
+        );
+        assert_eq!(
+            result.compiled.output_positions.get("y"),
+            Some(&(53, 1, 10)),
+            "budget={budget}: `y` reports the caller's own cell, not a lamp REDA chose"
+        );
+        assert_eq!(
+            result.compiled.output_positions.len(),
+            1,
+            "budget={budget}: the top declares exactly one output, and the child's \
+             internal signal name is not one of them"
+        );
+        for name in &netlist.inputs {
+            assert!(
+                result.compiled.input_positions.contains_key(name),
+                "budget={budget}: the parent forwards every declared input, {name} included"
+            );
+        }
+
+        for (name, (pin, _, handover, net_cell)) in &expected {
+            assert_eq!(
+                result.compiled.world.get(pin.at.x, pin.at.y, pin.at.z),
+                &BlockState::air(),
+                "budget={budget}: {name}'s caller-owned pin cell must remain exactly air"
+            );
+            assert_eq!(
+                result
+                    .compiled
+                    .world
+                    .get(handover.x, handover.y, handover.z),
+                &expected_handover_repeater(pin.toward),
+                "budget={budget}: {name}'s handover repeater changed state"
+            );
+            let net_state = result
+                .compiled
+                .world
+                .get(net_cell.x, net_cell.y, net_cell.z);
+            assert!(
+                matches!(
+                    net_state.kind,
+                    BlockKind::RedstoneWire | BlockKind::Repeater
+                ),
+                "budget={budget}: {name}'s exact net cell {net_cell:?} must be a route \
+                 conductor, got {net_state:?}"
+            );
+        }
+
+        results.push(result);
+    }
+
+    let exhausted = results.pop().expect("the exhausted point ran");
+    let seeded = results.pop().expect("the seeded point ran");
+    assert_eq!(
+        exhausted.case_fingerprint, seeded.case_fingerprint,
+        "budget is not part of the synthesis case, so both runs compile the same case"
+    );
+    let accepted_any = exhausted.trace.iter().any(|entry| entry.accepted);
+    assert_eq!(
+        exhausted.candidate_fingerprint == seeded.candidate_fingerprint,
+        !accepted_any,
+        "the exhausted run's candidate may differ from the seed's exactly when it \
+         accepted a proposal: accepted_any={accepted_any}, trace={:?}",
+        exhausted.trace
+    );
 }
 
 #[test]

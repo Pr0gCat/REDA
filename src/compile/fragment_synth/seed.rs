@@ -4802,6 +4802,53 @@ pub(crate) mod tests {
             );
         }
 
+        /// The second characterization point's budget: `REDA_RETENTION_BUDGET`
+        /// when set, otherwise `u64::MAX` -- proposal-stream exhaustion, the
+        /// only point a retention-policy change can move. Setting it to `0`
+        /// collapses both points onto today's budget-zero numbers. A value
+        /// that does not parse is a typo in the run, so it panics by name
+        /// rather than silently exhausting.
+        fn retention_budget() -> u64 {
+            match std::env::var("REDA_RETENTION_BUDGET") {
+                Ok(raw) => raw.trim().parse::<u64>().unwrap_or_else(|error| {
+                    panic!("REDA_RETENTION_BUDGET={raw:?} is not a u64: {error}")
+                }),
+                Err(_) => u64::MAX,
+            }
+        }
+
+        /// The one place a retention record is formatted, so a pre-feature
+        /// transcript and a post-feature one cannot diverge in shape. All four
+        /// `QualityKey` fields are printed rather than the two the `CIRCUIT`
+        /// line carries, because the acceptance rule this baseline exists to
+        /// characterize is defined over all four; `evaluations_used` and
+        /// `stop_reason` say whether the proposal stream truly exhausted or
+        /// merely hit its cap, the fingerprints say which case was compiled
+        /// and which candidate won, and each `ProposalTrace` follows on its
+        /// own line.
+        fn print_retention_record(
+            name: &str,
+            budget: u64,
+            result: &SynthesisResult,
+            elapsed_ms: u128,
+        ) {
+            let q = result.metrics.quality;
+            println!(
+                "RETENTION name={name} budget={budget} settle={} blocks={} volume={} static={} evals={} stop={:?} wall_ms={elapsed_ms} case={} candidate={}",
+                q.observed_settle,
+                q.non_air_blocks,
+                q.occupied_volume,
+                q.static_routed_delay.0,
+                result.evaluations_used,
+                result.stop_reason,
+                result.case_fingerprint.as_str(),
+                result.candidate_fingerprint.as_str(),
+            );
+            for entry in &result.trace {
+                println!("TRACE name={name} entry={entry:?}");
+            }
+        }
+
         /// [`run_cases`]'s hierarchical counterpart: same `REDA_EXTRA_CIRCUITS`
         /// filter and the same "assert no failures" shape, but driving
         /// `compile_hierarchical` on a [`crate::compile::HierarchicalNetlist`]
@@ -4814,7 +4861,17 @@ pub(crate) mod tests {
         /// metrics, and wall time -- and, on failure, the error
         /// `compile_hierarchical` returned, so a refusal names itself instead
         /// of only tripping the final assertion.
-        fn run_hierarchical_cases(cases: Vec<(String, crate::compile::HierarchicalNetlist)>) {
+        ///
+        /// Each case is compiled once per entry in `points`, in the order
+        /// given, and every compile prints its `CIRCUIT` line -- unchanged in
+        /// shape -- followed by its own [`print_retention_record`], which is
+        /// the line that names the budget. A failure is reported under the
+        /// point's label, so a case that certifies at one budget and refuses
+        /// at another says which.
+        fn run_hierarchical_cases(
+            cases: Vec<(String, crate::compile::HierarchicalNetlist)>,
+            points: &[(&str, SynthesisBudget)],
+        ) {
             use crate::compile::compile_hierarchical;
 
             let mut failures = Vec::new();
@@ -4834,23 +4891,36 @@ pub(crate) mod tests {
                 let blocks_compiled_str = blocks_compiled
                     .map(|count| count.to_string())
                     .unwrap_or_else(|| "?".to_string());
-                let started = std::time::Instant::now();
-                match compile_hierarchical(&design, SynthesisBudget::Evaluations(0), None) {
-                    Ok(result) => eprintln!(
-                        "CIRCUIT {name} (hierarchical): OK gates={gates_str} \
-                         blocks_compiled={blocks_compiled_str} \
-                         ticks={} blocks={} in {:?}",
-                        result.metrics.quality.observed_settle,
-                        result.metrics.quality.non_air_blocks,
-                        started.elapsed()
-                    ),
-                    Err(error) => {
-                        eprintln!(
-                            "CIRCUIT {name} (hierarchical): ERR gates={gates_str} \
-                             blocks_compiled={blocks_compiled_str} {error} in {:?}",
-                            started.elapsed()
-                        );
-                        failures.push(name);
+                for (label, budget) in points {
+                    let SynthesisBudget::Evaluations(evaluations) = *budget else {
+                        panic!("{name} {label}: retention points are evaluation budgets");
+                    };
+                    let started = std::time::Instant::now();
+                    match compile_hierarchical(&design, *budget, None) {
+                        Ok(result) => {
+                            let elapsed = started.elapsed();
+                            eprintln!(
+                                "CIRCUIT {name} (hierarchical): OK gates={gates_str} \
+                                 blocks_compiled={blocks_compiled_str} \
+                                 ticks={} blocks={} in {elapsed:?}",
+                                result.metrics.quality.observed_settle,
+                                result.metrics.quality.non_air_blocks,
+                            );
+                            print_retention_record(
+                                &name,
+                                evaluations,
+                                &result,
+                                elapsed.as_millis(),
+                            );
+                        }
+                        Err(error) => {
+                            eprintln!(
+                                "CIRCUIT {name} (hierarchical): ERR gates={gates_str} \
+                                 blocks_compiled={blocks_compiled_str} {error} in {:?}",
+                                started.elapsed()
+                            );
+                            failures.push(format!("{name} {label}"));
+                        }
                     }
                 }
             }
@@ -4892,10 +4962,26 @@ pub(crate) mod tests {
         /// `REDA_EXTRA_CIRCUITS=ripple_adder8,alu4_full,multiplier4` to skip
         /// it, since `hierarchy_api`'s own test already certifies `alu8` on
         /// its own.
+        ///
+        /// Each case is certified at two budget points. Budget zero is the
+        /// acceptance statement this test has always made -- the seed alone
+        /// certifies -- and is still every case's first `CIRCUIT` line. The
+        /// second is [`retention_budget`], the point at which a proposal can
+        /// actually be accepted. Recording both through
+        /// [`print_retention_record`] makes this a re-runnable
+        /// characterization as well as an acceptance run; the cost is that
+        /// every case compiles twice, which `REDA_RETENTION_BUDGET=0` avoids.
         #[test]
         #[ignore = "release-only: run with `cargo test --release --lib every_hierarchical_circuit -- --ignored --nocapture`"]
         fn every_hierarchical_circuit_certifies_through_module_floorplan() {
-            run_hierarchical_cases(hierarchical_circuit_cases());
+            let points = [
+                ("budget=0", SynthesisBudget::Evaluations(0)),
+                (
+                    "budget=retention",
+                    SynthesisBudget::Evaluations(retention_budget()),
+                ),
+            ];
+            run_hierarchical_cases(hierarchical_circuit_cases(), &points);
         }
 
         /// Task 4's target oracle: does `ripple_adder8`'s hierarchical
