@@ -23,6 +23,10 @@ use crate::compile::geometry::Anchor;
 use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
 use crate::redstone::world::block::BlockKind;
 
+// ponytail: this deterministic cap affects compiled output; replace it with the
+// exact interval solver if retained wins justify the extra code.
+const MAX_RELOCATION_PROBE_WORK: usize = 2_000_000;
+
 /// One Parent Route Repack choice: prune this parent route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
 pub(crate) struct ParentRouteChoice {
@@ -75,8 +79,9 @@ pub(crate) fn prune_route(tree: &mut RealisedRouteTree) -> bool {
 /// further downstream: turn an upstream `U` and a downstream `D` into dust
 /// and put `U`'s own repeater back on one dust cell strictly between them.
 /// Greedy and downstream first over a candidate vector frozen before the
-/// first mutation, so a retained step never re-enumerates. Returns whether
-/// anything changed.
+/// first mutation, so a retained step never re-enumerates. Search stops at a
+/// deterministic abstract-work cap and keeps any earlier wins. Returns
+/// whether anything changed.
 ///
 /// This is the pair `prune_route` has to refuse: neither refresh carries its
 /// branches once it is dust, so neither can simply go, yet one repeater in
@@ -112,9 +117,20 @@ pub(crate) fn relocate_refresh(tree: &mut RealisedRouteTree) -> bool {
             .filter(|cell| cell.state.kind == BlockKind::Repeater)
             .count()
     };
+    let trial_work = tree.cells.len().saturating_add(
+        tree.branches
+            .iter()
+            .map(|branch| branch.path.len())
+            .sum(),
+    );
+    let mut probe_work = 0usize;
 
     let mut changed = false;
     'pairs: for (position, &(_, down)) in candidates.iter().enumerate() {
+        probe_work = probe_work.saturating_add(trial_work);
+        if probe_work > MAX_RELOCATION_PROBE_WORK {
+            return changed;
+        }
         // Frozen candidates go stale as steps are retained: `D` has to be a
         // repeater on the tree as it stands now.
         let Some(sunk) = tree.cells.iter().position(|cell| cell.at == down) else {
@@ -126,12 +142,17 @@ pub(crate) fn relocate_refresh(tree: &mut RealisedRouteTree) -> bool {
         // A refresh `prune_route` deletes outright is its business, not this
         // pass's: relocating it would spend a repeater to keep what costs
         // nothing to drop.
-        let mut probe = tree.clone();
-        probe.cells[sunk].state = crate::compile::dust();
-        if branches_carry_through(&probe, down) {
+        let sunk_state = std::mem::replace(&mut tree.cells[sunk].state, crate::compile::dust());
+        let prunable = branches_carry_through(tree, down);
+        tree.cells[sunk].state = sunk_state;
+        if prunable {
             continue;
         }
         for &(_, up) in &candidates[position + 1..] {
+            probe_work = probe_work.saturating_add(trial_work);
+            if probe_work > MAX_RELOCATION_PROBE_WORK {
+                return changed;
+            }
             let Some(source) = tree.cells.iter().position(|cell| cell.at == up) else {
                 continue;
             };
@@ -175,9 +196,13 @@ pub(crate) fn relocate_refresh(tree: &mut RealisedRouteTree) -> bool {
             if !straight {
                 continue;
             }
-            // Owned so the retained step below can take the tree.
+            // Owned so the edits below can mutate the tree in place.
             let window: Vec<Anchor> = shared[1..shared.len() - 1].to_vec();
             for &at in window.iter().rev() {
+                probe_work = probe_work.saturating_add(trial_work);
+                if probe_work > MAX_RELOCATION_PROBE_WORK {
+                    return changed;
+                }
                 let Some(target) = tree.cells.iter().position(|cell| cell.at == at) else {
                     continue;
                 };
@@ -186,23 +211,24 @@ pub(crate) fn relocate_refresh(tree: &mut RealisedRouteTree) -> bool {
                 {
                     continue;
                 }
-                let mut trial = tree.clone();
-                trial.cells[target].state = tree.cells[source].state.clone();
-                trial.cells[source].state = crate::compile::dust();
-                trial.cells[sunk].state = crate::compile::dust();
+                let moved = tree.cells[source].state.clone();
+                let standing = repeaters(tree);
+                let target_state = std::mem::replace(&mut tree.cells[target].state, moved);
+                let source_state =
+                    std::mem::replace(&mut tree.cells[source].state, crate::compile::dust());
+                let sunk_state =
+                    std::mem::replace(&mut tree.cells[sunk].state, crate::compile::dust());
                 // The point of the whole step: exactly one repeater fewer.
                 // The guards above already make that so, and this is what
                 // holds them to it -- an `N` that landed on a repeater, or
                 // on `U` or `D`, would save nothing or two.
-                if repeaters(&trial) + 1 != repeaters(tree) {
-                    continue;
+                if repeaters(tree) + 1 == standing && branches_carry_through(tree, up) {
+                    changed = true;
+                    continue 'pairs;
                 }
-                if !branches_carry_through(&trial, up) {
-                    continue;
-                }
-                *tree = trial;
-                changed = true;
-                continue 'pairs;
+                tree.cells[target].state = target_state;
+                tree.cells[source].state = source_state;
+                tree.cells[sunk].state = sunk_state;
             }
         }
     }
@@ -831,5 +857,59 @@ mod tests {
             assert!(!relocate_refresh(&mut refused), "{case}");
             assert_eq!(refused, tree, "{case}: a refusal must not touch the tree");
         }
+    }
+
+    /// `linear_relocation_route` with `decoys` further East refreshes every
+    /// 15 cells from x30, and everything from x28 on folded into a
+    /// horizontal staircase. The (x18, x9) pair keeps the exact straight
+    /// shape that relocates to x15, and it is the most upstream pair, so the
+    /// greedy walk reaches it last. Every pair among the decoys -- and every
+    /// pair reaching across them -- is refused by the straight-run test, so
+    /// all `decoys` decides is how much probe work stands between the pass
+    /// and the one pair it can take.
+    fn staircase_decoy_route(decoys: usize) -> RealisedRouteTree {
+        let last = 30 + 15 * (decoys as i32 - 1);
+        let mut tree = linear_relocation_route(last as usize + 14);
+        for j in 0..decoys as i32 {
+            set(&mut tree, 30 + 15 * j, 0, crate::compile::repeater(Facing::East));
+        }
+        // Alternating unit steps in x and z: no slice of three cells or more
+        // out here has one constant delta.
+        remap_anchors(&mut tree, |at| {
+            if at.x < 28 {
+                return at;
+            }
+            let along = at.x - 28;
+            Anchor {
+                x: 28 + (along + 1) / 2,
+                y: at.y,
+                z: along / 2,
+            }
+        });
+        tree
+    }
+
+    /// The probe cap is a return, not a rollback. Both fixtures hold the one
+    /// relocatable pair; 3 decoys leave budget to reach it, 60 do not, so
+    /// the cap is what decides the second answer. When it trips the pass has
+    /// to hand back exactly what it had retained -- here nothing, so the
+    /// tree it was given, with no trial's dust left standing in it -- and it
+    /// has to trip in the same place on every run of the same input.
+    #[test]
+    fn refresh_relocation_stops_at_the_probe_cap_without_a_partial_mutation() {
+        let mut under_cap = staircase_decoy_route(3);
+        assert!(relocate_refresh(&mut under_cap), "the budget reaches the (x18, x9) pair");
+        assert_eq!(kind_at(&under_cap, 15, 0), BlockKind::Repeater, "one repeater saved at x15");
+        assert_eq!(kind_at(&under_cap, 9, 0), BlockKind::RedstoneWire);
+        assert_eq!(kind_at(&under_cap, 18, 0), BlockKind::RedstoneWire);
+
+        let capped = staircase_decoy_route(60);
+        let mut first = capped.clone();
+        assert!(!relocate_refresh(&mut first), "the budget runs out short of that pair");
+        assert_eq!(first, capped, "an early return leaves no partial mutation");
+
+        let mut again = capped.clone();
+        assert!(!relocate_refresh(&mut again), "same input, same answer");
+        assert_eq!(again, first, "same input, same stopping point");
     }
 }
