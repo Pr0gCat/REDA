@@ -13,7 +13,7 @@ Hierarchy command:
 
 ```powershell
 $env:REDA_EXTRA_CIRCUITS = 'ripple_adder8,alu4_full,multiplier4,alu8'
-$env:REDA_RETENTION_BUDGET = 'u64::MAX'
+$env:REDA_RETENTION_BUDGET = [string][uint64]::MaxValue
 cargo test --release --lib every_hierarchical_circuit_certifies_through_module_floorplan -- --ignored --nocapture
 ```
 
@@ -66,6 +66,38 @@ cargo run --release --bin fragment_acceptance -- `
 
 All 30 failures are quality-gate misses across the six cases and five budgets; every measured case compiled and certified. This is an existing flat-path replacement miss, not a crash or a Pass 5 result. Task 5 must reuse the exact baseline file/hash and reproduce this control without introducing a new flat-path failure.
 
+Post-feature acceptance command used the same baseline and shuffle seed, writing to `C:\Users\LTY\AppData\Local\Temp\reda-refresh-relocation-after-07e32f00-9eb4-4614-aa40-a7194166a759`.
+
+- Exit: 0
+- Verdict: `replacement_gate_passed=false shipping_evaluations=None failures=30`
+- Acceptance JSON SHA-256: `90514909F8886A247A1E40C59D92ADB46E1256BCA7AB6EB77D299909AC5BBDD2`
+- Shipping source: absent, as in the pre-feature control.
+
+The post-feature acceptance JSON is byte-for-byte identical to the pre-feature JSON. Pass 5 therefore introduces no flat-path change or new failure.
+
 ## Post-feature retention
 
-Pending Tasks 2-5. Keep Pass 5 only if a real circuit has an accepted Pass 5 proposal with lower certified settle time, unchanged blocks and volume, and non-increased static routed delay. Otherwise remove the Pass 5 policy, mutation, plumbing, descriptors, and Pass-5-only tests.
+Provenance:
+
+- Exact structural solver commit: `a2bc712d1105e5a0869b29bb96524ea6d2e191fd`
+- Exhaustive real/worker gate commit: `cff3516b2eec64bfd66d71a34d02a9acd4aeb32a`
+- Hierarchy transcript: `C:\Users\LTY\AppData\Local\Temp\reda-refresh-relocation-post-feature.txt`
+- Hierarchy transcript SHA-256: `58BE2961F475AD562A33823C2EE7399F0BEA20D57366D04A11AAD26780CD0E32`
+- Harness exit/result: 0; 1 passed, 0 failed; 6156.74 s total.
+
+The exact implementation exhausts Pass 5 after the unchanged Passes 1-4. All budget-zero rows and all four case fingerprints match the pre-feature transcript.
+
+| Circuit | Settle before → after | Blocks before → after | Volume before → after | Static before → after | Evaluations before → after | Accepted Pass-5 indices | Post candidate fingerprint | Post wall ms |
+| --- | ---: | ---: | ---: | ---: | ---: | --- | --- | ---: |
+| ripple_adder8 | 560 → 550 | 71133 → 71133 | 1401988 → 1401988 | 670 → 670 | 54 → 67 | 57, 60 | `f1e6b3025d27cbccc72b4c5dfa124f16fcd750a7939295e4350736deba835e78` | 307570 |
+| alu4_full | 904 → 844 | 191966 → 191966 | 3767200 → 3767200 | 924 → 924 | 78 → 104 | 78, 82, 88 | `1515e091678654ffc01db34cee683d9e8d1826efdf25ec59c10c3a90b36e1a80` | 843501 |
+| multiplier4 | 1035 → 1033 | 124660 → 124660 | 3017412 → 3017412 | 1060 → 1060 | 58 → 81 | 61 | `fbb0e204b8516fb75de5154e10166b4875558cde635658c79080d0a40509ac3d` | 4096505 |
+| alu8 | 970 → 970 | 213821 → 213821 | 2902664 → 2902664 | 1200 → 1200 | 34 → 47 | none | `bafea79d119cae16ebd6bbda7bdd3de7e70f18f18bf1c6ca32aac0989da9e2ed` | 739971 |
+
+Every post-feature exhaustion stopped at `ProposalStreamExhausted`. Every retained Pass-5 entry completed the unchanged whole-world certification sweep, strictly reduced observed settle against its immediate incumbent, preserved blocks and volume, and did not increase static delay. Commit `a2bc712` replaces the rejected output-changing work cap with exact structural filtering; commit `cff3516` exhausts the real Pass-5 stream and checks every accepted entry.
+
+Worker determinism: PASS. Full `u64::MAX` runs at worker budgets 1, 2, and 4 produced the same complete trace, 67 evaluations, `ProposalStreamExhausted`, final quality `(550, 71133, 1401988, 670)`, and candidate fingerprint `f1e6b3025d27cbccc72b4c5dfa124f16fcd750a7939295e4350736deba835e78`. The first retained Pass-5 proposal was index 57 at settle 552; the final retained result settled at 550. The combined worker gate finished in 1243.07 s.
+
+Post-feature pinned IO: PASS. `hierarchy_with_a_child_preserves_requested_pins_through_exhaustion` passed at budget zero and exhaustion in 3.80 s with the exact requested input/output coordinates and handover/net cells unchanged.
+
+Retention decision: **KEEP Pass 5**. Three non-synthetic acceptance circuits retain fully certified lower-settle Pass-5 proposals with blocks and volume unchanged and static delay non-increased; worker determinism, pinned IO, hierarchical retention, and flat control all pass.
