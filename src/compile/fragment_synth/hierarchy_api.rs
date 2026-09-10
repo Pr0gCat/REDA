@@ -70,7 +70,7 @@ use crate::compile::fragment_synth::placement::{
 };
 use crate::compile::fragment_synth::relocate::Offset;
 use crate::compile::fragment_synth::route_opt::{
-    prune_descriptors, prune_route, ParentRouteChoice,
+    prune_descriptors, prune_route, relocate_refresh, ParentRouteChoice,
 };
 use crate::compile::fragment_synth::search::{
     run_budgeted_proposals, Acceptance, CapWorkCounters, ProposalEvaluation, ProposalStream,
@@ -181,6 +181,7 @@ fn compile_hierarchical_scoped(
         &BTreeMap::new(),
         &[],
         &[],
+        &[],
     )
     .map_err(|error| SynthesisError::Seed(format!("{}: {error}", lowered.top)))?;
     let (_, graph) = parent_planning_graph(
@@ -235,7 +236,8 @@ fn compile_hierarchical_scoped(
     let compile = |incumbent: &HierarchicalCandidate,
                    block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
                    seams: &[InputSeamChoice],
-                   prunes: &[ParentRouteChoice]| {
+                   prunes: &[ParentRouteChoice],
+                   refreshes: &[ParentRouteChoice]| {
         compile_proposal(
             &lowered,
             &ordered,
@@ -245,6 +247,7 @@ fn compile_hierarchical_scoped(
             block_placements,
             seams,
             prunes,
+            refreshes,
         )
     };
     let mut proposals = HierarchicalProposalStream::new(
@@ -297,6 +300,7 @@ fn compile_module_with_blocks(
     block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
     seams: &[InputSeamChoice],
     prunes: &[ParentRouteChoice],
+    refreshes: &[ParentRouteChoice],
 ) -> Result<HierarchicalCandidate, SeedError> {
     let parent_gates = u32::try_from(lowered.modules[module].gates.len())
         .map_err(|_| SeedError::IdentityOverflow)?;
@@ -344,6 +348,7 @@ fn compile_module_with_blocks(
         block_placements,
         seams,
         prunes,
+        refreshes,
     )
 }
 
@@ -364,6 +369,7 @@ fn compile_proposal(
     block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
     seams: &[InputSeamChoice],
     prunes: &[ParentRouteChoice],
+    refreshes: &[ParentRouteChoice],
 ) -> Result<HierarchicalCandidate, SeedError> {
     // The variant is always the default here, which is what makes
     // `compile_module_with_blocks`'s two variant guards vacuous on this
@@ -392,6 +398,7 @@ fn compile_proposal(
         block_placements,
         seams,
         prunes,
+        refreshes,
     )
 }
 
@@ -438,8 +445,8 @@ fn plan_parent(
 }
 
 /// Dissolve the planned parent's blocks into one flat candidate with
-/// `seams` and `prunes` applied, and certify it. The candidate keeps
-/// `planned`, so a later proposal at the same placements can reuse it.
+/// `seams`, `prunes` and `refreshes` applied, and certify it. The candidate
+/// keeps `planned`, so a later proposal at the same placements can reuse it.
 fn union_and_certify(
     lowered: &LoweredHierarchy,
     module: &str,
@@ -449,6 +456,7 @@ fn union_and_certify(
     block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
     seams: &[InputSeamChoice],
     prunes: &[ParentRouteChoice],
+    refreshes: &[ParentRouteChoice],
 ) -> Result<HierarchicalCandidate, SeedError> {
     let realised_block_offsets = planned.block_offsets.clone();
     let (flat, paths) = module_flattening(lowered, module)?;
@@ -465,11 +473,15 @@ fn union_and_certify(
         library: services.library,
         seams,
         prunes,
+        refreshes,
     })
     .map_err(|error| SeedError::Union(error.to_string()))?;
     if std::env::var_os("REDA_PHASE_TIMING").is_some() {
         eprintln!("PHASE union {}", union_started.elapsed().as_millis());
     }
+    // The refresh stage probes routes the prune stage never offers, so the
+    // whole map is kept beside the retained one rather than re-derived.
+    let all_parent_routes = parent_routes.clone();
     parent_routes.retain(|route, _| prunable.contains(route));
     let certified = certify_planned(union, &flat, services)?;
     Ok(HierarchicalCandidate {
@@ -479,7 +491,9 @@ fn union_and_certify(
         realised_block_offsets,
         seams: seams.to_vec(),
         parent_routes,
+        all_parent_routes,
         prunes: prunes.to_vec(),
+        refreshes: refreshes.to_vec(),
     })
 }
 
@@ -491,6 +505,36 @@ fn prunable_parent_routes(routes: &BTreeMap<RouteId, RealisedRouteTree>) -> BTre
         .iter()
         .filter_map(|(&route, tree)| prune_route(&mut tree.clone()).then_some(route))
         .collect()
+}
+
+/// The refresh stage's descriptors, frozen from `incumbent`: every parent
+/// route `relocate_refresh` can still change, in the prune stage's own
+/// slack-then-id order.
+///
+/// The probe mirrors what the union will do with the resulting proposal --
+/// the incumbent's accepted prunes replayed onto the planned tree first,
+/// then the relocation -- so a descriptor this offers is one the union
+/// accepts. Offering any other route costs a full proposal compile the
+/// union then refuses.
+fn refresh_descriptors(incumbent: &HierarchicalCandidate) -> Vec<ParentRouteChoice> {
+    let relocatable: BTreeMap<RouteId, RouteId> = incumbent
+        .all_parent_routes
+        .iter()
+        .filter(|(route, _)| {
+            let Some(tree) = incumbent.planned.candidate.routes.get(route) else {
+                return false;
+            };
+            let mut probe = tree.clone();
+            incumbent
+                .prunes
+                .iter()
+                .filter(|prune| prune.route == **route)
+                .all(|_| prune_route(&mut probe))
+                && relocate_refresh(&mut probe)
+        })
+        .map(|(&route, &realised)| (route, realised))
+        .collect();
+    prune_descriptors(incumbent.certified.timing_graph(), &relocatable)
 }
 
 fn parent_planning_graph(
@@ -601,6 +645,21 @@ struct PruneFingerprint {
 struct PruneChoiceFingerprint<'a> {
     schema: &'static str,
     prune: ParentRouteChoice,
+    incumbent_fingerprint: &'a str,
+}
+
+/// The refresh stage's descriptor is one parent route, exactly as the prune
+/// stage's is; only the schema tells the two proposals apart.
+#[derive(Serialize)]
+struct RefreshFingerprint {
+    schema: &'static str,
+    refresh: ParentRouteChoice,
+}
+
+#[derive(Serialize)]
+struct RefreshChoiceFingerprint<'a> {
+    schema: &'static str,
+    refresh: ParentRouteChoice,
     incumbent_fingerprint: &'a str,
 }
 
@@ -820,8 +879,14 @@ struct HierarchicalCandidate {
     /// block's output tree), for the prune stage's slack lookup. Routes
     /// `prune_route` cannot change are left out so they are never offered.
     parent_routes: BTreeMap<RouteId, RouteId>,
+    /// The same mapping before that filter: every pre-union parent route,
+    /// which is what the refresh stage probes. A route `prune_route` cannot
+    /// change can still carry a relocatable refresh pair.
+    all_parent_routes: BTreeMap<RouteId, RouteId>,
     /// Accepted prune choices, cumulative like `seams`.
     prunes: Vec<ParentRouteChoice>,
+    /// Accepted refresh choices, cumulative like `prunes`.
+    refreshes: Vec<ParentRouteChoice>,
 }
 
 impl SearchCandidate for HierarchicalCandidate {
@@ -839,6 +904,7 @@ type HierarchicalCompiler<'a> = dyn Fn(
         &BTreeMap<InstanceId, BlockPlacementOffset>,
         &[InputSeamChoice],
         &[ParentRouteChoice],
+        &[ParentRouteChoice],
     ) -> Result<HierarchicalCandidate, SeedError>
     + 'a;
 
@@ -854,6 +920,10 @@ struct HierarchicalProposalStream<'a> {
     /// Prune descriptors, frozen from the incumbent's timing graph when the
     /// seam stage is exhausted: parent routes by minimum slack then id.
     prunes: Option<Vec<ParentRouteChoice>>,
+    /// Refresh descriptors, frozen from the incumbent the same way when the
+    /// prune stage is exhausted. `None` until then, which is what says no
+    /// relocation was ever probed.
+    refreshes: Option<Vec<ParentRouteChoice>>,
     source_outputs: BTreeMap<(InstanceId, u16), BlockPort>,
     sink_inputs: BTreeMap<(InstanceId, u16), BlockPort>,
     compile: Box<HierarchicalCompiler<'a>>,
@@ -872,6 +942,7 @@ impl<'a> HierarchicalProposalStream<'a> {
             pull_x_edges: None,
             seams,
             prunes: None,
+            refreshes: None,
             source_outputs,
             sink_inputs,
             compile,
@@ -924,6 +995,25 @@ impl<'a> HierarchicalProposalStream<'a> {
         let index = index.checked_sub(self.edges.len() + pull_x + self.seams.len())?;
         self.prunes.get_or_insert_with(freeze).get(index).copied()
     }
+
+    /// The refresh descriptor at stream position `index`, past every
+    /// alignment, Pull-X, seam and prune descriptor. The stage is only ever
+    /// reached through `prune`, which freezes the prune vector before this
+    /// subtraction reads its length; `freeze` then reads the incumbent once,
+    /// the first time the stage is reached.
+    fn refresh(
+        &mut self,
+        index: usize,
+        freeze: impl FnOnce() -> Vec<ParentRouteChoice>,
+    ) -> Option<ParentRouteChoice> {
+        let pull_x = self.pull_x_edges.as_ref().map_or(0, Vec::len);
+        let prunes = self.prunes.as_ref().map_or(0, Vec::len);
+        let index = index.checked_sub(self.edges.len() + pull_x + self.seams.len() + prunes)?;
+        self.refreshes
+            .get_or_insert_with(freeze)
+            .get(index)
+            .copied()
+    }
 }
 
 impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
@@ -933,10 +1023,11 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
         incumbent: &HierarchicalCandidate,
     ) -> Option<ProposalEvaluation<HierarchicalCandidate>> {
         let index = usize::try_from(proposal_index).ok()?;
-        // Each stage yields its two fingerprints and, unless the descriptor
-        // is stale, the block placements and cumulative seams and prunes to
+        // Each stage yields its two fingerprints, the acceptance policy its
+        // proposals are judged under and, unless the descriptor is stale,
+        // the block placements and cumulative seams, prunes and refreshes to
         // compile.
-        let (fragment_fingerprint, choice_fingerprint, proposal) =
+        let (fragment_fingerprint, choice_fingerprint, proposal, acceptance) =
             if let Some(&edge) = self.edges.get(index) {
                 let placements = block_alignment_proposal(
                     &edge,
@@ -953,7 +1044,13 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                         incumbent,
                         &placements,
                     ),
-                    Some((placements, incumbent.seams.clone(), incumbent.prunes.clone())),
+                    Some((
+                        placements,
+                        incumbent.seams.clone(),
+                        incumbent.prunes.clone(),
+                        incumbent.refreshes.clone(),
+                    )),
+                    Acceptance::Lexicographic,
                 )
             } else if let Some(edge) = self.pull_x_edge(index - self.edges.len(), incumbent) {
                 // A descriptor whose ports now share an X is stale: refuse it
@@ -974,8 +1071,14 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                         placements.as_ref().unwrap_or(&incumbent.block_placements),
                     ),
                     placements.map(|placements| {
-                        (placements, incumbent.seams.clone(), incumbent.prunes.clone())
+                        (
+                            placements,
+                            incumbent.seams.clone(),
+                            incumbent.prunes.clone(),
+                            incumbent.refreshes.clone(),
+                        )
                     }),
+                    Acceptance::Lexicographic,
                 )
             } else if let Some(seam) = self.seam(index) {
                 // Block placements never change here; the union refuses a
@@ -988,14 +1091,19 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                         seam,
                     }),
                     seam_choice_fingerprint("hierarchical-input-seam-choice-v1", seam, incumbent),
-                    Some((incumbent.block_placements.clone(), seams, incumbent.prunes.clone())),
+                    Some((
+                        incumbent.block_placements.clone(),
+                        seams,
+                        incumbent.prunes.clone(),
+                        incumbent.refreshes.clone(),
+                    )),
+                    Acceptance::Lexicographic,
                 )
-            } else {
+            } else if let Some(prune) = self.prune(index, || {
+                prune_descriptors(incumbent.certified.timing_graph(), &incumbent.parent_routes)
+            }) {
                 // The union refuses a prune whose route is gone or already
                 // has nothing redundant left.
-                let prune = self.prune(index, || {
-                    prune_descriptors(incumbent.certified.timing_graph(), &incumbent.parent_routes)
-                })?;
                 let mut prunes = incumbent.prunes.clone();
                 prunes.push(prune);
                 (
@@ -1008,28 +1116,62 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                         prune,
                         incumbent_fingerprint: incumbent.candidate_fingerprint().as_str(),
                     }),
-                    Some((incumbent.block_placements.clone(), incumbent.seams.clone(), prunes)),
+                    Some((
+                        incumbent.block_placements.clone(),
+                        incumbent.seams.clone(),
+                        prunes,
+                        incumbent.refreshes.clone(),
+                    )),
+                    Acceptance::Lexicographic,
+                )
+            } else {
+                // Pass 5, reached only once every earlier stage is spent.
+                // A relocation that lowers settle while leaving blocks,
+                // volume and static delay alone is an improvement the
+                // lexicographic order would refuse, so this stage alone
+                // asks for joint quality. The union refuses a refresh whose
+                // route is gone or has no relocatable pair left.
+                let refresh = self.refresh(index, || refresh_descriptors(incumbent))?;
+                let mut refreshes = incumbent.refreshes.clone();
+                refreshes.push(refresh);
+                (
+                    serialized_fingerprint(&RefreshFingerprint {
+                        schema: "hierarchical-parent-refresh-fragment-v1",
+                        refresh,
+                    }),
+                    serialized_fingerprint(&RefreshChoiceFingerprint {
+                        schema: "hierarchical-parent-refresh-choice-v1",
+                        refresh,
+                        incumbent_fingerprint: incumbent.candidate_fingerprint().as_str(),
+                    }),
+                    Some((
+                        incumbent.block_placements.clone(),
+                        incumbent.seams.clone(),
+                        incumbent.prunes.clone(),
+                        refreshes,
+                    )),
+                    Acceptance::JointQuality,
                 )
             };
         let mut cap_work = CapWorkCounters::default();
-        let Some((block_placements, seams, prunes)) = proposal else {
+        let Some((block_placements, seams, prunes, refreshes)) = proposal else {
             return Some(ProposalEvaluation {
                 fragment_fingerprint,
                 choice_fingerprint,
                 terminal: ProposalTerminal::Refused,
                 cap_work,
                 certified: None,
-                acceptance: Acceptance::Lexicographic,
+                acceptance,
             });
         };
-        match (self.compile)(incumbent, &block_placements, &seams, &prunes) {
+        match (self.compile)(incumbent, &block_placements, &seams, &prunes, &refreshes) {
             Ok(candidate) => Some(ProposalEvaluation {
                 fragment_fingerprint,
                 choice_fingerprint,
                 terminal: ProposalTerminal::NoImprovement,
                 cap_work,
                 certified: Some(candidate),
-                acceptance: Acceptance::Lexicographic,
+                acceptance,
             }),
             Err(error) => {
                 let terminal = terminal_for_seed_error(&error, &mut cap_work);
@@ -1039,7 +1181,7 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                     terminal,
                     cap_work,
                     certified: None,
-                    acceptance: Acceptance::Lexicographic,
+                    acceptance,
                 })
             }
         }
@@ -1210,6 +1352,7 @@ fn compile_blocks(
             services,
             &SeedVariant::default(),
             &BTreeMap::new(),
+            &[],
             &[],
             &[],
         )
@@ -2607,6 +2750,7 @@ mod tests {
                 |_: &HierarchicalCandidate,
                  _: &BTreeMap<InstanceId, BlockPlacementOffset>,
                  _: &[InputSeamChoice],
+                 _: &[ParentRouteChoice],
                  _: &[ParentRouteChoice]| {
                     unreachable!("the descriptor lookup never compiles")
                 },
@@ -2640,6 +2784,7 @@ mod tests {
                 |_: &HierarchicalCandidate,
                  _: &BTreeMap<InstanceId, BlockPlacementOffset>,
                  _: &[InputSeamChoice],
+                 _: &[ParentRouteChoice],
                  _: &[ParentRouteChoice]| {
                     unreachable!("the descriptor lookup never compiles")
                 },
@@ -2695,6 +2840,385 @@ mod tests {
             BTreeSet::from([RouteId(5)]),
             "the unprunable route is dropped, the prunable one is kept"
         );
+    }
+
+    /// The refresh stage starts one past the last prune, counting the frozen
+    /// Pull-X and prune descriptors in between; it is frozen once and offers
+    /// each descriptor exactly once. Its fingerprints follow the prune
+    /// stage's shape under two schemas of its own, which the prune stage's
+    /// own bytes never collide with.
+    #[test]
+    fn refresh_stage_follows_prunes_and_freezes_once() {
+        let fixture = block_proposal_fixture();
+        let edges = explicit_block_edges(&fixture.graph, &fixture.structural_edges);
+        let seam = InputSeamChoice {
+            sink_block: fixture.sink,
+            input: 3,
+            at: Anchor { x: 3, y: 0, z: 0 },
+        };
+        let mut stream = HierarchicalProposalStream::new(
+            edges.clone(),
+            fixture.source_outputs.clone(),
+            fixture.sink_inputs.clone(),
+            vec![seam],
+            Box::new(
+                |_: &HierarchicalCandidate,
+                 _: &BTreeMap<InstanceId, BlockPlacementOffset>,
+                 _: &[InputSeamChoice],
+                 _: &[ParentRouteChoice],
+                 _: &[ParentRouteChoice]| {
+                    unreachable!("the descriptor lookup never compiles")
+                },
+            ),
+        );
+        // Pull-X and the prune vector frozen exactly as the stages before
+        // the refresh stage leave them.
+        stream.pull_x_edges = Some(vec![edges[0]]);
+        let last_prune = ParentRouteChoice { route: RouteId(5) };
+        stream.prunes = Some(vec![ParentRouteChoice { route: RouteId(7) }, last_prune]);
+        let first = ParentRouteChoice { route: RouteId(4) };
+        let second = ParentRouteChoice { route: RouteId(9) };
+        let start = edges.len() + 1 + 1 + 2;
+        assert_eq!(
+            stream.prune(start - 1, || unreachable!(
+                "the prune vector is frozen already"
+            )),
+            Some(last_prune),
+            "the prune stage owns the index before"
+        );
+        assert_eq!(
+            stream.refresh(start - 1, || unreachable!(
+                "no freeze before the stage is reached"
+            )),
+            None
+        );
+        assert_eq!(stream.refresh(start, || vec![first, second]), Some(first));
+        assert_eq!(
+            stream.refresh(start + 1, || unreachable!("frozen once")),
+            Some(second)
+        );
+        assert_eq!(
+            stream.refresh(start + 2, || unreachable!("frozen once")),
+            None,
+            "each descriptor is offered once"
+        );
+
+        let fragment = |refresh: ParentRouteChoice| {
+            serialized_fingerprint(&RefreshFingerprint {
+                schema: "hierarchical-parent-refresh-fragment-v1",
+                refresh,
+            })
+        };
+        let choice = |refresh: ParentRouteChoice, incumbent_fingerprint: &str| {
+            serialized_fingerprint(&RefreshChoiceFingerprint {
+                schema: "hierarchical-parent-refresh-choice-v1",
+                refresh,
+                incumbent_fingerprint,
+            })
+        };
+        assert_eq!(
+            fragment(first),
+            fragment(first),
+            "the fragment names only the route"
+        );
+        assert_ne!(fragment(first), fragment(second));
+        assert_ne!(
+            choice(first, "a"),
+            choice(first, "b"),
+            "the choice binds the incumbent"
+        );
+        assert_ne!(
+            choice(first, "a"),
+            fragment(first),
+            "the two schemas never collide"
+        );
+        assert_ne!(
+            fragment(first),
+            serialized_fingerprint(&PruneFingerprint {
+                schema: "hierarchical-parent-prune-fragment-v1",
+                prune: first,
+            }),
+            "pruning and refreshing the same route are different proposals"
+        );
+    }
+
+    /// A real two-level design compiled far enough to drive the private
+    /// stream: the compiled blocks the top stamps, one real incumbent per
+    /// choice, and the very descriptors `compile_hierarchical` would derive
+    /// for stages 1-3. Deriving them here rather than inventing them is what
+    /// keeps `block_alignment_proposal`'s "edge and ports share a validated
+    /// graph" precondition true.
+    struct RelocationFixture {
+        lowered: LoweredHierarchy,
+        ordered: Vec<CompiledBlock>,
+        edges: Vec<BlockEdge>,
+        source_outputs: BTreeMap<(InstanceId, u16), BlockPort>,
+        sink_inputs: BTreeMap<(InstanceId, u16), BlockPort>,
+        seams: Vec<InputSeamChoice>,
+    }
+
+    impl RelocationFixture {
+        fn build(design: &HierarchicalNetlist, library: &Library) -> Self {
+            let design = design
+                .specialise_constants()
+                .expect("the fixture specialises");
+            let lowered = lower_hierarchy(&design).expect("the fixture lowers");
+            let order = lowered
+                .as_hierarchical()
+                .module_order()
+                .expect("the fixture orders");
+            let blocks = compile_blocks(&lowered, &order, 1).expect("the blocks compile");
+            let ordered = ordered_blocks(&lowered, &lowered.top, &order, &blocks);
+            let (_, graph) = parent_planning_graph(
+                &lowered,
+                &lowered.top,
+                &ordered,
+                library,
+                &SeedVariant::default(),
+            )
+            .expect("the parent graph builds");
+            let block_delays = graph
+                .blocks
+                .iter()
+                .map(|block| (block.id, ordered[block.block as usize].delay.0))
+                .collect::<BTreeMap<_, _>>();
+            let analysis = analyse_instance_dag(&graph, &block_delays).expect("the dag analyses");
+            let edges = explicit_block_edges(&graph, &analysis.edges);
+            let (source_outputs, sink_inputs) =
+                compiled_port_lookup(&graph, &ordered).expect("compiled ports resolve");
+            let seams = seam_descriptors(&graph, |block, input| {
+                ordered
+                    .get(block as usize)
+                    .and_then(|compiled| input_route(&compiled.candidate, input))
+            });
+            Self {
+                lowered,
+                ordered,
+                edges,
+                source_outputs,
+                sink_inputs,
+                seams,
+            }
+        }
+
+        fn compile(
+            &self,
+            services: SeedServices<'_>,
+            prunes: &[ParentRouteChoice],
+            refreshes: &[ParentRouteChoice],
+        ) -> HierarchicalCandidate {
+            compile_module_with_blocks(
+                &self.lowered,
+                &self.lowered.top,
+                &self.ordered,
+                None,
+                services,
+                &SeedVariant::default(),
+                &BTreeMap::new(),
+                &[],
+                prunes,
+                refreshes,
+            )
+            .expect("the fixture certifies")
+        }
+    }
+
+    /// The refresh stage is frozen from the post-Pass-4 incumbent: it probes
+    /// the full pre-retain parent-route map, replays that incumbent's own
+    /// accepted prunes onto each planned tree before probing it, and keeps
+    /// only the routes `relocate_refresh` can still change -- ordered by
+    /// `prune_descriptors`, the one order this pass has.
+    #[test]
+    fn refresh_stage_freezes_relocatable_routes_from_the_incumbent() {
+        let library = Library::default_library();
+        let search_config = SearchConfig::checked_defaults();
+        let services = seed_services(&library, &search_config);
+        let design = crate::compile::fragment_synth::union::tests::gate_block_gate_chain();
+        let fixture = RelocationFixture::build(&design, &library);
+        let baseline = fixture.compile(services, &[], &[]);
+
+        // Both maps are kept, and the full one is strictly larger: a route
+        // the prune stage never offers can still carry a relocatable pair,
+        // so the refresh stage must not read the retained map.
+        assert_eq!(
+            baseline.all_parent_routes.len(),
+            baseline.planned.candidate.routes.len(),
+            "every planned parent route is mapped, before the prune retain"
+        );
+        assert!(
+            baseline.parent_routes.len() < baseline.all_parent_routes.len(),
+            "the fixture has parent routes the prune stage drops"
+        );
+        assert!(
+            baseline
+                .parent_routes
+                .iter()
+                .all(|(route, realised)| baseline.all_parent_routes.get(route) == Some(realised)),
+            "the retained map is the full one filtered, never re-derived"
+        );
+
+        let relocatable: BTreeMap<RouteId, RouteId> = baseline
+            .all_parent_routes
+            .iter()
+            .filter(|(route, _)| {
+                relocate_refresh(&mut baseline.planned.candidate.routes[route].clone())
+            })
+            .map(|(&route, &realised)| (route, realised))
+            .collect();
+        assert!(
+            !relocatable.is_empty(),
+            "the fixture has at least one relocatable parent route"
+        );
+        assert_eq!(
+            refresh_descriptors(&baseline),
+            prune_descriptors(baseline.certified.timing_graph(), &relocatable),
+            "the stage offers exactly the relocatable routes, in slack then id order"
+        );
+
+        // Frozen from an incumbent that has already accepted a prune, the
+        // probe runs on the PRUNED tree -- which is the tree the union will
+        // hold the resulting proposal to, since it prunes before it
+        // refreshes.
+        let prune = prune_descriptors(baseline.certified.timing_graph(), &baseline.parent_routes)
+            .into_iter()
+            .next()
+            .expect("a timed parent route is prunable");
+        let pruned = fixture.compile(services, &[prune], &[]);
+        assert_eq!(pruned.prunes, vec![prune], "accepted prunes are cumulative");
+        let refresh = refresh_descriptors(&pruned)
+            .into_iter()
+            .next()
+            .expect("a relocatable route survives the accepted prune");
+        let relocated = fixture.compile(services, &[prune], &[refresh]);
+        assert_eq!(
+            relocated.refreshes,
+            vec![refresh],
+            "accepted refreshes are cumulative, and the union accepted this one"
+        );
+    }
+
+    /// Passes 1-4 keep the lexicographic acceptance they have always had and
+    /// the refresh stage alone asks for joint quality. No stage before it
+    /// probes a relocation, so budget zero and a budget that stops at the
+    /// last prune both leave the refresh vector unfrozen. Every Pass 5
+    /// proposal replays the incumbent's own vectors and appends exactly one
+    /// refresh descriptor.
+    #[test]
+    fn refresh_stage_alone_is_joint_quality_and_is_never_probed_early() {
+        let library = Library::default_library();
+        let search_config = SearchConfig::checked_defaults();
+        let services = seed_services(&library, &search_config);
+        // Two stamped blocks, so the walk reaches every stage: a design with
+        // one block offers no block-to-block edge and would skip Passes 1-2.
+        let design = crate::circuits::hierarchical_builder::circuits::ripple_adder(2);
+        let fixture = RelocationFixture::build(&design, &library);
+        let incumbent = fixture.compile(services, &[], &[]);
+        assert!(
+            !fixture.edges.is_empty(),
+            "the walk must cover the alignment stage"
+        );
+        assert!(
+            !fixture.seams.is_empty(),
+            "the walk must cover the seam stage"
+        );
+
+        // Nothing is ever accepted, so the incumbent -- and every vector the
+        // stages freeze from it -- stands still for the whole walk while the
+        // compile hook records what each proposal was handed.
+        let replays = std::cell::RefCell::new(Vec::new());
+        let mut stream = HierarchicalProposalStream::new(
+            fixture.edges.clone(),
+            fixture.source_outputs.clone(),
+            fixture.sink_inputs.clone(),
+            fixture.seams.clone(),
+            Box::new(
+                |_: &HierarchicalCandidate,
+                 _: &BTreeMap<InstanceId, BlockPlacementOffset>,
+                 _: &[InputSeamChoice],
+                 prunes: &[ParentRouteChoice],
+                 refreshes: &[ParentRouteChoice]| {
+                    replays
+                        .borrow_mut()
+                        .push((prunes.to_vec(), refreshes.to_vec()));
+                    Err(SeedError::Incomplete("the policy walk never compiles"))
+                },
+            ),
+        );
+        assert!(
+            stream.refreshes.is_none(),
+            "budget zero never calls the stream, so nothing is ever probed"
+        );
+
+        let mut acceptance = Vec::new();
+        let mut frozen_after = Vec::new();
+        let mut index = 0u64;
+        while let Some(evaluation) = stream.next(index, &incumbent) {
+            acceptance.push(evaluation.acceptance);
+            frozen_after.push(stream.refreshes.is_some());
+            index += 1;
+        }
+
+        let pull_x = stream
+            .pull_x_edges
+            .as_ref()
+            .expect("Pull-X freezes when the alignment stage ends");
+        let prunes = stream
+            .prunes
+            .as_ref()
+            .expect("the prune vector freezes before its length is used");
+        let refreshes = stream
+            .refreshes
+            .as_ref()
+            .expect("the refresh vector freezes when Pass 5 is reached");
+        assert!(
+            !refreshes.is_empty(),
+            "the fixture must reach Pass 5 with work to do"
+        );
+        let start = stream.edges.len() + pull_x.len() + stream.seams.len() + prunes.len();
+        assert_eq!(
+            acceptance.len(),
+            start + refreshes.len(),
+            "the stream ends one past the last refresh descriptor"
+        );
+        for (index, policy) in acceptance.iter().enumerate() {
+            let expected = if index < start {
+                Acceptance::Lexicographic
+            } else {
+                Acceptance::JointQuality
+            };
+            assert_eq!(*policy, expected, "proposal {index}");
+            assert_eq!(
+                frozen_after[index],
+                index >= start,
+                "proposal {index} probes a relocation only from Pass 5 on"
+            );
+        }
+
+        let replays = replays.borrow();
+        assert_eq!(
+            replays.len(),
+            acceptance.len(),
+            "every offered proposal reached the compiler"
+        );
+        for (index, (prunes_seen, refreshes_seen)) in replays.iter().enumerate() {
+            if index < start {
+                assert_eq!(
+                    *refreshes_seen, incumbent.refreshes,
+                    "proposal {index} carries the incumbent's refreshes unchanged"
+                );
+                continue;
+            }
+            let mut expected = incumbent.refreshes.clone();
+            expected.push(refreshes[index - start]);
+            assert_eq!(
+                *refreshes_seen, expected,
+                "proposal {index} appends one refresh"
+            );
+            assert_eq!(
+                *prunes_seen, incumbent.prunes,
+                "proposal {index} changes no prune"
+            );
+        }
     }
 
     /// Parent Route Repack chooses the lowest-slack prunable parent route in
@@ -2768,6 +3292,7 @@ mod tests {
                 &BTreeMap::new(),
                 &[],
                 prunes,
+                &[],
             );
             println!(
                 "parent prune test: {} route(s) compiled in {:?}: {:?}",
@@ -2874,6 +3399,7 @@ mod tests {
                 services,
                 &variant,
                 placements,
+                &[],
                 &[],
                 &[],
             );
@@ -3031,6 +3557,7 @@ mod tests {
                 &BTreeMap::new(),
                 seams,
                 &[],
+                &[],
             );
             println!(
                 "seam test: {} seam(s) compiled in {:?}: {:?}",
@@ -3130,6 +3657,7 @@ mod tests {
                 services,
                 variant,
                 &BTreeMap::new(),
+                &[],
                 &[],
                 &[],
             )
@@ -3283,6 +3811,7 @@ mod tests {
                     placements,
                     &[],
                     &[],
+                    &[],
                 )
             };
 
@@ -3298,6 +3827,7 @@ mod tests {
             services,
             &SeedVariant::default(),
             &BTreeMap::new(),
+            &[],
             &[],
             &[],
         )

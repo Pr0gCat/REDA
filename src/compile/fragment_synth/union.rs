@@ -68,7 +68,7 @@ use crate::compile::fragment_synth::instance_graph::{
     BlockSpec, InstanceDriver, InstanceGraph, PhysicalDriver, PhysicalSink, SynthesisError,
 };
 use crate::compile::fragment_synth::relocate::{self, IdMap, Offset, RelocateError};
-use crate::compile::fragment_synth::route_opt::{prune_route, ParentRouteChoice};
+use crate::compile::fragment_synth::route_opt::{prune_route, relocate_refresh, ParentRouteChoice};
 use crate::compile::fragment_synth::seed::{refresh_exact_route_delays, PlannedParent};
 use crate::compile::geometry::Anchor;
 use crate::compile::hierarchy::{GatePath, LoweredHierarchy, PortBinding};
@@ -143,6 +143,10 @@ pub(crate) struct UnionInput<'a> {
     /// Accepted Parent Route Repack choices, applied to the parent's own
     /// routes after renumbering and before any block is stamped.
     pub prunes: &'a [ParentRouteChoice],
+    /// Accepted Refresh Relocation choices, applied to the parent's own
+    /// routes after every `prunes` entry and still before any block is
+    /// stamped, so both passes see the same parent-owned cells.
+    pub refreshes: &'a [ParentRouteChoice],
 }
 
 /// One Input Seam Absorption choice in the sink block's own coordinates:
@@ -519,6 +523,20 @@ pub(crate) fn union_candidate(
             .ok_or(UnionError::Incomplete("prune names no parent route"))?;
         if !prune_route(tree) {
             return Err(UnionError::Incomplete("prune leaves the parent route unchanged"));
+        }
+    }
+    // Every prune first, then every refresh: a relocation is proven against
+    // the cells the repack leaves behind, never the other way round, so the
+    // two passes cannot each claim the same redundant repeater.
+    for refresh in input.refreshes {
+        let tree = union
+            .routes
+            .get_mut(&refresh.route)
+            .ok_or(UnionError::Incomplete("refresh names no parent route"))?;
+        if !relocate_refresh(tree) {
+            return Err(UnionError::Incomplete(
+                "refresh leaves the parent route unchanged",
+            ));
         }
     }
 
@@ -1502,6 +1520,7 @@ pub(crate) mod tests {
             library,
             seams: &[],
             prunes: &[],
+            refreshes: &[],
         })
         .map(|(union, _)| union);
         (lowered, block, planned, union)
@@ -1751,13 +1770,9 @@ pub(crate) mod tests {
         );
     }
 
-    /// gate -> block -> gate, certified as one flat circuit.
-    #[test]
-    fn a_gate_block_gate_chain_unions_into_one_certified_flat_candidate() {
-        let (library, config) =
-            crate::compile::fragment_synth::seed::tests::default_services_parts();
-        let services = crate::compile::fragment_synth::seed::tests::services(&library, &config);
-        // top(x, b, c) : n = NOT x ; u0 = full_adder(n, b, c) ; z = NOR(sum) ; cout = u0.cout
+    /// `top(x, b, c) : n = NOT x ; u0 = full_adder(n, b, c) ; z = NOR(sum) ;
+    /// cout = u0.cout` -- one stamped block with parent glue on both sides.
+    pub(crate) fn gate_block_gate_chain() -> crate::compile::HierarchicalNetlist {
         let mut hb = crate::circuits::hierarchical_builder::HierarchicalNetlistBuilder::new();
         crate::circuits::hierarchical_builder::full_adder_module(&mut hb);
         hb.module("top", &["x", "b", "c"], &["z", "cout"], |m| {
@@ -1775,7 +1790,16 @@ pub(crate) mod tests {
             );
             m.gates.nor_named("z", "z", &["sum".to_string()]);
         });
-        let design = hb.finish("top");
+        hb.finish("top")
+    }
+
+    /// gate -> block -> gate, certified as one flat circuit.
+    #[test]
+    fn a_gate_block_gate_chain_unions_into_one_certified_flat_candidate() {
+        let (library, config) =
+            crate::compile::fragment_synth::seed::tests::default_services_parts();
+        let services = crate::compile::fragment_synth::seed::tests::services(&library, &config);
+        let design = gate_block_gate_chain();
         let lowered = crate::compile::hierarchy::lower_hierarchy(&design).unwrap();
         let fa = lowered.block_netlist("full_adder");
         let block =
@@ -1812,6 +1836,7 @@ pub(crate) mod tests {
             library: &library,
             seams: &[],
             prunes: &[],
+            refreshes: &[],
         })
         .expect("unions");
         union.validate_shape().expect("flat shape");
@@ -2057,5 +2082,176 @@ pub(crate) mod tests {
             &boundary(RouteTerminalKind::OutputTerminalRepeater),
         )
         .expect("any repeater terminal is a valid boundary");
+    }
+
+    /// The exact `Incomplete` reason a replay refused with, so a test can
+    /// hold the union to one deterministic message rather than "some error".
+    fn refusal(
+        result: Result<(ExpandedPhysicalCandidate, BTreeMap<RouteId, RouteId>), UnionError>,
+    ) -> &'static str {
+        match result {
+            Err(UnionError::Incomplete(reason)) => reason,
+            Err(other) => panic!("expected an Incomplete refusal, got {other}"),
+            Ok(_) => panic!("expected a refusal; the union accepted the descriptor"),
+        }
+    }
+
+    /// Every route-owned repeater of `tree` that stands on one of `own`'s
+    /// cells: the parent's own window, which is all Refresh Relocation may
+    /// touch once the block's trees have been spliced onto the same route.
+    fn refreshes_within(tree: &RealisedRouteTree, own: &BTreeSet<Anchor>) -> BTreeSet<Anchor> {
+        tree.cells
+            .iter()
+            .filter(|cell| cell.state.kind == BlockKind::Repeater && own.contains(&cell.at))
+            .map(|cell| cell.at)
+            .collect()
+    }
+
+    /// The union replays every Parent Route Repack choice before any Refresh
+    /// Relocation choice, on the renumbered parent clone and before a single
+    /// child cell is stamped.
+    ///
+    /// One parent route of the fixture tells the two orders apart: pruning it
+    /// first leaves its relocated refresh on different cells than relocating
+    /// it first would. The union's own answer has to be the prune-first one.
+    #[test]
+    fn refresh_relocation_replays_every_prune_before_any_refresh() {
+        let (library, config) =
+            crate::compile::fragment_synth::seed::tests::default_services_parts();
+        let services = crate::compile::fragment_synth::seed::tests::services(&library, &config);
+        let design = gate_block_gate_chain();
+        let (lowered, block, planned, unioned) =
+            union_one_block(&design, "full_adder", &library, services);
+        unioned.expect("the fixture unions with no choices at all");
+        let union = |prunes: &[ParentRouteChoice], refreshes: &[ParentRouteChoice]| {
+            union_candidate(UnionInput {
+                parent: &planned,
+                blocks: std::slice::from_ref(&block),
+                flat: &lowered.flat,
+                paths: &lowered.paths,
+                library: &library,
+                seams: &[],
+                prunes,
+                refreshes,
+            })
+        };
+
+        let (&route, tree) = planned
+            .candidate
+            .routes
+            .iter()
+            .find(|(_, tree)| {
+                let mut prune_first = (*tree).clone();
+                let mut refresh_first = (*tree).clone();
+                prune_route(&mut prune_first)
+                    && relocate_refresh(&mut prune_first)
+                    && relocate_refresh(&mut refresh_first)
+                    && prune_route(&mut refresh_first)
+                    && prune_first != refresh_first
+            })
+            .expect("the fixture has a parent route that tells the two orders apart");
+        let own: BTreeSet<Anchor> = tree.cells.iter().map(|cell| cell.at).collect();
+        let mut prune_first = tree.clone();
+        prune_route(&mut prune_first);
+        relocate_refresh(&mut prune_first);
+        let mut refresh_first = tree.clone();
+        relocate_refresh(&mut refresh_first);
+        prune_route(&mut refresh_first);
+        assert_ne!(
+            refreshes_within(&prune_first, &own),
+            refreshes_within(&refresh_first, &own),
+            "the fixture route must place its refreshes differently under each order"
+        );
+        assert!(
+            refreshes_within(&prune_first, &own).len() < refreshes_within(tree, &own).len(),
+            "the two replays together must retire at least one refresh"
+        );
+
+        // The control: with no descriptors the parent's own window is
+        // exactly what it was planned as, spliced child trees and all.
+        let (untouched, mapped) = union(&[], &[]).expect("no descriptors, no mutation");
+        assert_eq!(
+            refreshes_within(&untouched.routes[&mapped[&route]], &own),
+            refreshes_within(tree, &own),
+            "an empty replay leaves every planned refresh standing"
+        );
+
+        let choice = ParentRouteChoice { route };
+        let (both, mapped) = union(&[choice], &[choice]).expect("both replays apply to one route");
+        assert_eq!(
+            refreshes_within(&both.routes[&mapped[&route]], &own),
+            refreshes_within(&prune_first, &own),
+            "the union replays every prune before it replays any refresh"
+        );
+
+        // The block's own trees exist only after stamping and are numbered
+        // past every parent route, so naming one is a stale descriptor --
+        // which is what pins the replay ahead of the stamping.
+        let stamped = both
+            .routes
+            .keys()
+            .copied()
+            .find(|id| !planned.candidate.routes.contains_key(id))
+            .expect("the stamped block brings trees of its own");
+        assert_eq!(
+            refusal(union(&[], &[ParentRouteChoice { route: stamped }])),
+            "refresh names no parent route",
+            "a refresh is replayed before any child tree exists to name"
+        );
+    }
+
+    /// Every refusal the refresh replay owes its caller: one deterministic
+    /// `Incomplete` reason each, mirroring the prune replay it follows.
+    #[test]
+    fn refresh_relocation_refuses_a_stale_or_no_op_descriptor() {
+        let (library, config) =
+            crate::compile::fragment_synth::seed::tests::default_services_parts();
+        let services = crate::compile::fragment_synth::seed::tests::services(&library, &config);
+        let design = gate_block_gate_chain();
+        let (lowered, block, planned, unioned) =
+            union_one_block(&design, "full_adder", &library, services);
+        unioned.expect("the fixture unions with no choices at all");
+        let union = |prunes: &[ParentRouteChoice], refreshes: &[ParentRouteChoice]| {
+            union_candidate(UnionInput {
+                parent: &planned,
+                blocks: std::slice::from_ref(&block),
+                flat: &lowered.flat,
+                paths: &lowered.paths,
+                library: &library,
+                seams: &[],
+                prunes,
+                refreshes,
+            })
+        };
+
+        let missing = ParentRouteChoice {
+            route: RouteId(u32::MAX),
+        };
+        assert_eq!(
+            refusal(union(&[], &[missing])),
+            "refresh names no parent route"
+        );
+        assert_eq!(
+            refusal(union(&[missing], &[])),
+            "prune names no parent route"
+        );
+        assert_eq!(
+            refusal(union(&[missing], &[missing])),
+            "prune names no parent route",
+            "with both stages stale the prune refuses first, because it runs first"
+        );
+
+        // A route with no relocatable pair is a no-op, and a no-op is a
+        // stale descriptor rather than a silently accepted proposal.
+        let (&steady, _) = planned
+            .candidate
+            .routes
+            .iter()
+            .find(|(_, tree)| !relocate_refresh(&mut (*tree).clone()))
+            .expect("the fixture has a parent route no relocation can change");
+        assert_eq!(
+            refusal(union(&[], &[ParentRouteChoice { route: steady }])),
+            "refresh leaves the parent route unchanged"
+        );
     }
 }
