@@ -3022,6 +3022,35 @@ mod tests {
         }
     }
 
+    const MAX_REFRESH_PROPOSALS: u64 = 16;
+
+    struct BoundedRefreshStream<'a> {
+        inner: HierarchicalProposalStream<'a>,
+        winner_seen: std::rc::Rc<std::cell::Cell<bool>>,
+    }
+
+    impl ProposalStream<HierarchicalCandidate> for BoundedRefreshStream<'_> {
+        fn next(
+            &mut self,
+            proposal_index: u64,
+            incumbent: &HierarchicalCandidate,
+        ) -> Option<ProposalEvaluation<HierarchicalCandidate>> {
+            if self.winner_seen.get() {
+                return None;
+            }
+            if self.inner.refreshes.is_some() {
+                let start = self.inner.edges.len()
+                    + self.inner.pull_x_edges.as_ref().map_or(0, Vec::len)
+                    + self.inner.seams.len()
+                    + self.inner.prunes.as_ref().map_or(0, Vec::len);
+                if proposal_index.saturating_sub(start as u64) >= MAX_REFRESH_PROPOSALS {
+                    return None;
+                }
+            }
+            self.inner.next(proposal_index, incumbent)
+        }
+    }
+
     /// The refresh stage is frozen from the post-Pass-4 incumbent: it probes
     /// the full pre-retain parent-route map, replays that incumbent's own
     /// accepted prunes onto each planned tree before probing it, and keeps
@@ -3252,6 +3281,106 @@ mod tests {
                 "proposal {index} changes no prune"
             );
         }
+    }
+
+    /// Task 5's bounded real-circuit retention gate. Passes 1-4 run unchanged;
+    /// Pass 5 then certifies at most sixteen descriptors and stops at the first
+    /// retained win.
+    #[test]
+    #[ignore = "release-only: runs ripple_adder8 through up to sixteen relocations"]
+    fn refresh_relocation_improves_an_acceptance_circuit() {
+        use crate::circuits::hierarchical_builder::circuits as h;
+
+        let threads = std::thread::available_parallelism().map_or(1, |count| count.get());
+        with_certification_threads(threads, || {
+            let library = Library::default_library();
+            let search_config = SearchConfig::checked_defaults();
+            let services = seed_services(&library, &search_config);
+            let fixture = RelocationFixture::build(&h::ripple_adder(8), &library);
+            let seed = fixture.compile(services, &[], &[]);
+            let seed_quality = seed.quality();
+            let winner_seen = std::rc::Rc::new(std::cell::Cell::new(false));
+            let winner_for_compile = std::rc::Rc::clone(&winner_seen);
+            let inner = HierarchicalProposalStream::new(
+                fixture.edges.clone(),
+                fixture.source_outputs.clone(),
+                fixture.sink_inputs.clone(),
+                fixture.seams.clone(),
+                Box::new(|incumbent, placements, seams, prunes, refreshes| {
+                    let compiled = compile_proposal(
+                        &fixture.lowered,
+                        &fixture.ordered,
+                        None,
+                        services,
+                        incumbent,
+                        placements,
+                        seams,
+                        prunes,
+                        refreshes,
+                    );
+                    if let Ok(candidate) = &compiled {
+                        let quality = candidate.quality();
+                        let incumbent_quality = incumbent.quality();
+                        winner_for_compile.set(
+                            refreshes.len() > incumbent.refreshes.len()
+                                && quality.observed_settle < incumbent_quality.observed_settle
+                                && quality.non_air_blocks <= incumbent_quality.non_air_blocks
+                                && quality.occupied_volume <= incumbent_quality.occupied_volume
+                                && quality.static_routed_delay
+                                    <= incumbent_quality.static_routed_delay,
+                        );
+                    }
+                    compiled
+                }),
+            );
+            let mut stream = BoundedRefreshStream { inner, winner_seen };
+            let summary = run_budgeted_proposals(
+                seed,
+                SynthesisBudget::Evaluations(u64::MAX),
+                &SystemMonotonicClock::start(),
+                &mut stream,
+            );
+            let start = stream.inner.edges.len()
+                + stream.inner.pull_x_edges.as_ref().map_or(0, Vec::len)
+                + stream.inner.seams.len()
+                + stream.inner.prunes.as_ref().map_or(0, Vec::len);
+            let pass5 = &summary.trace[start..];
+            assert!(
+                !pass5.is_empty() && pass5.len() <= MAX_REFRESH_PROPOSALS as usize,
+                "the bounded gate must offer one to sixteen Pass 5 proposals: {pass5:?}"
+            );
+            let pass5_incumbent = summary.trace[..start]
+                .iter()
+                .filter(|entry| entry.accepted)
+                .filter_map(|entry| entry.certified_quality)
+                .last()
+                .unwrap_or(seed_quality);
+            let entry = pass5
+                .iter()
+                .find(|entry| entry.accepted)
+                .unwrap_or_else(|| {
+                    panic!("none of the first sixteen relocations lowers settle: {pass5:?}")
+                });
+            assert_eq!(entry.terminal, ProposalTerminal::Accepted, "{entry:?}");
+            let quality = summary.best.quality();
+            assert!(quality.observed_settle < pass5_incumbent.observed_settle);
+            assert_eq!(quality.non_air_blocks, pass5_incumbent.non_air_blocks);
+            assert_eq!(quality.occupied_volume, pass5_incumbent.occupied_volume);
+            assert!(quality.static_routed_delay <= pass5_incumbent.static_routed_delay);
+            assert_eq!(summary.best.refreshes.len(), 1);
+            assert_eq!(
+                summary.best.certified.measurements().len(),
+                summary.best.certified.metrics().transition_count as usize,
+                "the retained candidate completed the unchanged full certification sweep"
+            );
+            eprintln!(
+                "RELOCATION winner_index={} seed={seed_quality:?} incumbent={pass5_incumbent:?} \
+                 winner={quality:?} \
+                 candidate={} workers={threads}",
+                entry.proposal_index,
+                summary.best.candidate_fingerprint().as_str()
+            );
+        });
     }
 
     /// Parent Route Repack chooses the lowest-slack prunable parent route in
