@@ -304,6 +304,7 @@ pub(crate) fn prune_descriptors(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::compile::fragment_synth::candidate::PlacedBlock;
     use crate::compile::fragment_synth::identity::{
         InstanceId, PrimitiveId, RoutedSinkId, TimingArcId, TopologyNodeId,
     };
@@ -353,16 +354,25 @@ mod tests {
         }
     }
 
-    /// Swap x and z on every anchor a tree owns -- cells, floors, each
-    /// branch's root, path and terminal -- and quarter-turn every horizontal
-    /// facing with them, so a fixture that ran along +x runs along +z and
-    /// still faces the way it travels.
+    /// Rewrite every anchor a tree owns -- cells, floors, and each branch's
+    /// root, path and terminal -- through `moved`.
+    fn remap_anchors(tree: &mut RealisedRouteTree, moved: impl Fn(Anchor) -> Anchor) {
+        for cell in tree.cells.iter_mut().chain(tree.floors.iter_mut()) {
+            cell.at = moved(cell.at);
+        }
+        for branch in &mut tree.branches {
+            branch.root = moved(branch.root);
+            for at in &mut branch.path {
+                *at = moved(*at);
+            }
+            branch.terminal.at = moved(branch.terminal.at);
+        }
+    }
+
+    /// Swap x and z on every anchor a tree owns and quarter-turn every
+    /// horizontal facing with them, so a fixture that ran along +x runs along
+    /// +z and still faces the way it travels.
     fn onto_z_axis(tree: &mut RealisedRouteTree) {
-        let turn = |at: Anchor| Anchor {
-            x: at.z,
-            y: at.y,
-            z: at.x,
-        };
         let face = |facing: Option<Facing>| {
             facing.map(|facing| match facing {
                 Facing::East => Facing::South,
@@ -373,17 +383,28 @@ mod tests {
             })
         };
         for cell in tree.cells.iter_mut().chain(tree.floors.iter_mut()) {
-            cell.at = turn(cell.at);
             cell.state.facing = face(cell.state.facing);
         }
         for branch in &mut tree.branches {
-            branch.root = turn(branch.root);
-            for at in &mut branch.path {
-                *at = turn(*at);
-            }
-            branch.terminal.at = turn(branch.terminal.at);
             branch.terminal.state.facing = face(branch.terminal.state.facing);
         }
+        remap_anchors(tree, |at| Anchor {
+            x: at.z,
+            y: at.y,
+            z: at.x,
+        });
+    }
+
+    /// Re-lay a straight `y = 0`, `z = 0` fixture so consecutive cells step by
+    /// `step` instead of `(1, 0, 0)`: the anchor at x`k` moves to `k * step`.
+    /// Every step of the run stays identical, so the constant-delta test
+    /// cannot be what rejects it.
+    fn step_by(tree: &mut RealisedRouteTree, step: (i32, i32, i32)) {
+        remap_anchors(tree, |at| Anchor {
+            x: at.x * step.0,
+            y: at.x * step.1,
+            z: at.x * step.2,
+        });
     }
 
     /// Every route-owned repeater of a single-run fixture, by its coordinate
@@ -668,6 +689,46 @@ mod tests {
         assert_eq!(relocated, settled);
     }
 
+    /// `N` may not land on a cell another branch delivers into. A 29-dust
+    /// tail leaves exactly one cell in the (x18, x9) window that carries the
+    /// pair: x15, the last cell x0's strength reaches and the first that is
+    /// within 14 dust of the terminal. The control saves a repeater there;
+    /// with a second branch delivering onto that same cell the pass has to
+    /// come away with nothing instead of overwriting the delivery.
+    #[test]
+    fn refresh_relocation_will_not_overwrite_another_branch_delivery() {
+        let mut control = linear_relocation_route(29);
+        assert!(
+            relocate_refresh(&mut control),
+            "x15 is the one cell in the window that carries"
+        );
+        assert_eq!(repeater_anchors(&control, |at| at.x), vec![0, 15, 30]);
+
+        // The delivery arrives from the side, so it shares no cell with the
+        // trunk but its own landing: both refreshes still serve exactly the
+        // branches they did, and x15 is the same cell the control took.
+        let mut delivered = linear_relocation_route(29);
+        let mut delivery = delivered.branches[0].clone();
+        delivery.sink.ordinal = 1;
+        delivery.path = (0..=3).rev().map(|z| Anchor { x: 15, y: 0, z }).collect();
+        delivery.root = delivery.path[0];
+        delivery.terminal.sink = delivery.sink;
+        delivery.terminal.at = Anchor { x: 15, y: 0, z: 0 };
+        delivery.terminal.state = crate::compile::dust();
+        for &at in &delivery.path[..3] {
+            let state = crate::compile::dust();
+            delivered.cells.push(PlacedBlock { at, state });
+        }
+        delivered.branches.push(delivery);
+
+        let before = delivered.clone();
+        assert!(
+            !relocate_refresh(&mut delivered),
+            "x15 is a delivery terminal, and nothing else in the window carries"
+        );
+        assert_eq!(delivered, before, "a refusal must not touch the tree");
+    }
+
     /// Every guard in one table. Each fixture makes the (x18, x9) pair -- and
     /// every other pair on that tree -- unusable, so the call must be false
     /// and the tree must come back exactly as it went in.
@@ -684,8 +745,9 @@ mod tests {
             tree.branches.push(stub);
             tree
         };
-        // A jog in z, then in y: the shared slice is no longer one straight
-        // horizontal run, so x9's facing is not x`N`'s facing.
+        // A jog in z, then in y. `divert` moves one cell's anchor and
+        // nothing else, so the run's geometry is what breaks: two of its
+        // steps stop matching the rest and the slice is no longer one run.
         let bend = {
             let mut tree = linear_relocation_route(26);
             divert(&mut tree, 13, Anchor { x: 13, y: 0, z: 1 });
@@ -728,6 +790,28 @@ mod tests {
         // A 40-dust tail: every reachable cell is too far from the terminal
         // and every cell close enough is unreachable from x0.
         let no_feasible_window = linear_relocation_route(40);
+        // x18 turned to face back up the run. Everything else about the pair
+        // is exactly the shape that succeeds, so only the facings differ:
+        // two repeaters pointing different ways are not one refresh moved
+        // along one run, and there is no single state for `N` to inherit.
+        let facing_mismatch = {
+            let mut tree = linear_relocation_route(26);
+            set(&mut tree, 18, 0, crate::compile::repeater(Facing::West));
+            tree
+        };
+        // Uniform runs that no per-step comparison can fault: every step is
+        // identical, but one travels two cells at once and the other climbs.
+        // Only the "horizontal, one cell" test rejects these.
+        let uniform_diagonal = {
+            let mut tree = linear_relocation_route(26);
+            step_by(&mut tree, (1, 0, 1));
+            tree
+        };
+        let uniform_staircase = {
+            let mut tree = linear_relocation_route(26);
+            step_by(&mut tree, (1, 1, 0));
+            tree
+        };
 
         let cases = [
             ("unequal branch membership", unequal_membership),
@@ -738,6 +822,9 @@ mod tests {
             ("no owned cell in the window", unowned_window),
             ("non-conductor window", non_conductor_window),
             ("no strength-feasible N", no_feasible_window),
+            ("mismatched U and D facings", facing_mismatch),
+            ("uniformly diagonal run", uniform_diagonal),
+            ("uniformly climbing run", uniform_staircase),
         ];
         for (case, tree) in cases {
             let mut refused = tree.clone();
