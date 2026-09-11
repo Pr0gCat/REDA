@@ -462,3 +462,185 @@ command reached the 600 s cap.
 | 5: insert-then-prune fallback for Refresh Relocation | PENDING |
 
 **Wave verdict: retained 0 of 5 so far.**
+
+---
+
+## Task 2: Candidate 2 -- `prunable_parent_routes` diagnostics, then a conditional sidecar -- attempted, GO
+
+Task 2 start and revert target: `79e62b6`. Diagnostics commit: `cdd48bb`.
+
+Branch taken: the kill switch did **not** fire. The measured median relevant
+prunable cost on the plan-reuse fixture is **26 ms**, above the 5 ms threshold,
+so Step C was executed; the sidecar halves that cost to **13 ms** and is
+**retained**.
+
+### Step A -- diagnostics (not TDD)
+
+Two permanent `PHASE` lines were added inside `union_and_certify`, in the exact
+shape of the existing `PHASE union` and under its exact `REDA_PHASE_TIMING`
+guard: `PHASE flatten` around `module_flattening` and `PHASE prunable` around
+`prunable_parent_routes`.
+
+**These two lines carry no test, and no TDD claim is made for them.** They are
+diagnostics; the transcripts below are their evidence. They were committed on
+their own, as `cdd48bb`, so the kill-switch decision was made from a clean,
+committed revision.
+
+### Step A measurement -- the plan-reuse fixture
+
+Gate fixture: `unchanged_block_placements_reuse_the_incumbent_plan`, which is the
+one existing test that drives the plan-reuse branch. Ripple budget 0 is *not*
+this candidate's gate: it never reuses a plan.
+
+```powershell
+$reuse = @'
+$env:REDA_PHASE_TIMING='1'
+cargo test --lib unchanged_block_placements_reuse_the_incumbent_plan -- --nocapture --test-threads=1
+'@
+```
+
+Each command compiles the parent four times, so each transcript carries four
+`PHASE prunable` lines. The relevant prunable cost of one command is that
+command's aggregate.
+
+| Command | `PHASE prunable` lines | **AggregateMs** | `PHASE flatten` lines | Elapsed | Transcript |
+| --- | --- | --- | --- | --- | --- |
+| 1 | 6, 7, 6, 6 | **25** | 0, 0, 0, 0 | 27.8 s | `$env:TEMP\reda-wave-c2-diag1.txt` |
+| 2 | 6, 7, 7, 6 | **26** | 0, 0, 0, 0 | 21.0 s | `$env:TEMP\reda-wave-c2-diag2.txt` |
+| 3 | 7, 7, 6, 6 | **26** | 0, 0, 0, 0 | 21.0 s | `$env:TEMP\reda-wave-c2-diag3.txt` |
+| **Median** | | **26 ms** | | | |
+
+The fixture passed in all three commands (`1 passed; 0 failed`, ~20.6 s in-test).
+`PHASE flatten` is **0 ms every time** on this fixture -- `module_flattening` is
+not a cost here, which is exactly what a diagnostic is for and why no flattening
+hoist is proposed.
+
+### Step B -- the kill switch did not fire
+
+Median relevant prunable cost **26 ms > 5 ms**, so the sidecar was written.
+
+### Step C TDD evidence
+
+Two tests were written before any production change. Both assert on values the
+compile path returns -- `Arc` identity and the derived set -- and neither
+inspects source text.
+
+| Test | Status before production code |
+| --- | --- |
+| `an_unchanged_placement_reuses_the_routed_parent_and_its_prunable_routes` | RED (did not compile) |
+| `a_moved_block_builds_a_new_routed_parent_with_its_own_prunable_routes` | RED (did not compile) |
+
+**RED**, `cargo test --lib routed_parent -- --nocapture`, exit 101, 3.2 s:
+
+```text
+error[E0609]: no field `prunable_routes` on type `std::sync::Arc<seed::PlannedParent>`
+error[E0609]: no field `prunable_routes` on type `std::sync::Arc<seed::PlannedParent>`
+error[E0609]: no field `prunable_routes` on type `std::sync::Arc<seed::PlannedParent>`
+error[E0609]: no field `planned` on type `std::sync::Arc<seed::PlannedParent>`
+error: could not compile `reda` (lib test) due to 4 previous errors
+```
+
+That is the expected RED: `RoutedParent` does not exist.
+
+### The candidate as implemented
+
+One private struct beside `plan_parent`, and the sidecar is computed at the one
+place a plan is constructed:
+
+```rust
+struct RoutedParent {
+    planned: PlannedParent,
+    prunable_routes: BTreeSet<RouteId>,
+}
+```
+
+- `HierarchicalCandidate::planned` is now `Arc<RoutedParent>`.
+- Both `Arc::new(..)` plan sites became `Arc::new(RoutedParent::new(..))`; the
+  reuse branch keeps its `Arc::clone` and now carries the sidecar for free.
+- `union_and_certify` reads `&planned.prunable_routes` instead of calling
+  `prunable_parent_routes`, and passes `&planned.planned` to `UnionInput`.
+- Every field read was updated, found by symbol search rather than by the plan's
+  line list: `union_and_certify`'s `block_offsets` and `UnionInput::parent`,
+  `refresh_descriptors`, and the two existing test reads in
+  `refresh_stage_freezes_relocatable_routes_from_the_incumbent`. After the
+  change, a repository-wide search for the two old field paths matches nothing
+  outside `planned.planned.*`.
+- `prunable_parent_routes` keeps its signature and body; `union_and_certify`
+  keeps its call graph. No `ModuleCompileContext`, no flattening hoist, no
+  mutable cache, no pointer-key cache, no production counter.
+- **The `PHASE prunable` line moved with the computation**, into
+  `RoutedParent::new`, under the same guard and with the same name. A compile
+  that reuses a plan now emits no `PHASE prunable` line at all, because no
+  computation happens. That is the intended effect, and it is the measurement.
+
+### GREEN
+
+`cargo test --lib compile::fragment_synth::hierarchy_api -- --nocapture`:
+**25 passed; 1 failed; 6 ignored**, 55.6 s in-test, command elapsed 56.1 s. Both
+new tests pass, and the existing plan-reuse and refresh tests still pass.
+
+The one failure is `lowering_an_already_lowered_netlist_is_the_identity`, which
+is **pre-existing and environmental**, not caused by this change: it shells out
+to yosys and the local Python toolchain refuses to load it
+(`RuntimeError: unsupported architecture for wasmtime:`). This was verified, not
+assumed: the file was checked back out at the Step A commit `cdd48bb` and the
+single test re-run there, where it fails identically (`0 passed; 1 failed`,
+23.4 s, same yosys error). The worktree was then restored.
+
+### Retention gate: the three reuse-fixture commands, re-run
+
+| Command | `PHASE prunable` lines | **AggregateMs** | Elapsed | Transcript |
+| --- | --- | --- | --- | --- |
+| 1 | 6, 7 | **13** | 43.5 s | `$env:TEMP\reda-wave-c2-post1.txt` |
+| 2 | 6, 7 | **13** | 21.0 s | `$env:TEMP\reda-wave-c2-post2.txt` |
+| 3 | 6, 7 | **13** | 20.9 s | `$env:TEMP\reda-wave-c2-post3.txt` |
+| **Median** | | **13 ms** | | |
+
+| Gate | Before | After | Verdict |
+| --- | --- | --- | --- |
+| Median relevant prunable cost | 26 ms | 13 ms | measurable drop, **13 ms / 50% removed** -- **GO** |
+| Fixture assertions | `1 passed; 0 failed` | `1 passed; 0 failed` | pass |
+
+Four lines became two: of the fixture's four parent compiles, two really move a
+block and still compute their prunable routes, and the two that reuse the
+incumbent's plan now compute nothing and emit no line. The drop is the whole
+computation the reuse path used to repeat, and it is the upper bound Step A
+predicted. Per the wave's standing ruling, this is a direct measurement, not a
+call-count argument.
+
+### Wave command-time ledger (continued)
+
+| # | Command | Elapsed | Running total |
+| --- | --- | --- | --- |
+| 17 | Step A reuse-fixture diagnostic 1 | 27.8 s | 352.5 s |
+| 18 | Step A reuse-fixture diagnostic 2 | 21.0 s | 373.5 s |
+| 19 | Step A reuse-fixture diagnostic 3 | 21.0 s | 394.5 s |
+| 20 | RED: `cargo test --lib routed_parent` (expected compile failure) | 3.2 s | 397.7 s |
+| 21 | GREEN: `cargo test --lib compile::fragment_synth::hierarchy_api` | not captured, floor 55.9 s | 453.6 s |
+| 22 | pre-existing-failure check at `cdd48bb` | 23.4 s | 477.0 s |
+| 23 | post-change reuse-fixture 1 | 43.5 s | 520.5 s |
+| 24 | post-change reuse-fixture 2 | 21.0 s | 541.5 s |
+| 25 | post-change reuse-fixture 3 | 20.9 s | 562.4 s |
+| 26 | GREEN re-run (ledger repair, same suite and same result) | 56.1 s | 618.5 s |
+
+Command 21's wall time was **not captured**: the measuring script stopped at the
+runner's nonzero-exit throw before its stopwatch was read. Rather than invent a
+number, it is counted at its libtest in-test floor of 55.9 s, and command 26
+re-ran the identical suite to obtain a true elapsed (56.1 s, identical result).
+The wave total is therefore a slight **under**estimate, by the build time
+included in command 21 only.
+
+**Used after Task 2: 618.5 s = 10.3 min of the 60-minute wave budget.** No
+command reached the 600 s cap.
+
+### Candidates
+
+| Candidate | Status |
+| --- | --- |
+| 1: palette-indexed `BlockFlags` memo | **attempted, NO-GO** (1.18x vs 1.5x required) |
+| 2: `prunable_parent_routes` sidecar | **attempted, GO, RETAINED** (26 ms to 13 ms median) |
+| 3: hoisted merge consumer index | PENDING |
+| 4: filtered second bounded Pull-X round | PENDING |
+| 5: insert-then-prune fallback for Refresh Relocation | PENDING |
+
+**Wave verdict: retained 1 of 5 so far.**

@@ -344,7 +344,7 @@ fn compile_module_with_blocks(
         module,
         ordered,
         services,
-        Arc::new(planned),
+        Arc::new(RoutedParent::new(planned)),
         block_placements,
         seams,
         prunes,
@@ -379,7 +379,7 @@ fn compile_proposal(
     let planned = if moved_blocks(&incumbent.block_placements).eq(moved_blocks(block_placements)) {
         Arc::clone(&incumbent.planned)
     } else {
-        Arc::new(plan_parent(
+        Arc::new(RoutedParent::new(plan_parent(
             lowered,
             module,
             ordered,
@@ -387,7 +387,7 @@ fn compile_proposal(
             services,
             &SeedVariant::default(),
             block_placements,
-        )?)
+        )?))
     };
     union_and_certify(
         lowered,
@@ -444,6 +444,28 @@ fn plan_parent(
     )
 }
 
+/// A routed parent plus the facts derived from it that never change while
+/// it does not. Reusing the plan reuses these by construction, so there is
+/// no cache and nothing to invalidate.
+struct RoutedParent {
+    planned: PlannedParent,
+    prunable_routes: BTreeSet<RouteId>,
+}
+
+impl RoutedParent {
+    fn new(planned: PlannedParent) -> Self {
+        let prunable_started = std::time::Instant::now();
+        let prunable_routes = prunable_parent_routes(&planned.candidate.routes);
+        if std::env::var_os("REDA_PHASE_TIMING").is_some() {
+            eprintln!("PHASE prunable {}", prunable_started.elapsed().as_millis());
+        }
+        Self {
+            planned,
+            prunable_routes,
+        }
+    }
+}
+
 /// Dissolve the planned parent's blocks into one flat candidate with
 /// `seams`, `prunes` and `refreshes` applied, and certify it. The candidate
 /// keeps `planned`, so a later proposal at the same placements can reuse it.
@@ -452,29 +474,26 @@ fn union_and_certify(
     module: &str,
     ordered: &[CompiledBlock],
     services: SeedServices<'_>,
-    planned: Arc<PlannedParent>,
+    planned: Arc<RoutedParent>,
     block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>,
     seams: &[InputSeamChoice],
     prunes: &[ParentRouteChoice],
     refreshes: &[ParentRouteChoice],
 ) -> Result<HierarchicalCandidate, SeedError> {
-    let realised_block_offsets = planned.block_offsets.clone();
+    let realised_block_offsets = planned.planned.block_offsets.clone();
     let flatten_started = std::time::Instant::now();
     let (flat, paths) = module_flattening(lowered, module)?;
     if std::env::var_os("REDA_PHASE_TIMING").is_some() {
         eprintln!("PHASE flatten {}", flatten_started.elapsed().as_millis());
     }
-    // Decided on the pre-union trees, which are the ones the union prunes.
-    let prunable_started = std::time::Instant::now();
-    let prunable = prunable_parent_routes(&planned.candidate.routes);
-    if std::env::var_os("REDA_PHASE_TIMING").is_some() {
-        eprintln!("PHASE prunable {}", prunable_started.elapsed().as_millis());
-    }
+    // Decided on the pre-union trees, which are the ones the union prunes,
+    // and carried by the plan rather than re-derived here.
+    let prunable = &planned.prunable_routes;
     // Certification keeps the union's route ids, so `parent_routes` names
     // the trees in the certified candidate's timing graph.
     let union_started = std::time::Instant::now();
     let (union, mut parent_routes) = union_candidate(UnionInput {
-        parent: &planned,
+        parent: &planned.planned,
         blocks: ordered,
         flat: &flat,
         paths: &paths,
@@ -529,7 +548,7 @@ fn refresh_descriptors(incumbent: &HierarchicalCandidate) -> Vec<ParentRouteChoi
         .all_parent_routes
         .iter()
         .filter(|(route, _)| {
-            let Some(tree) = incumbent.planned.candidate.routes.get(route) else {
+            let Some(tree) = incumbent.planned.planned.candidate.routes.get(route) else {
                 return false;
             };
             let mut probe = tree.clone();
@@ -875,9 +894,10 @@ fn block_pull_x_proposal(
 
 struct HierarchicalCandidate {
     certified: CertifiedCandidate,
-    /// The routed parent this candidate was unioned from, for a proposal
-    /// that keeps `block_placements` and so needs no new plan.
-    planned: Arc<PlannedParent>,
+    /// The routed parent this candidate was unioned from, and the facts
+    /// derived from it, for a proposal that keeps `block_placements` and so
+    /// needs no new plan.
+    planned: Arc<RoutedParent>,
     block_placements: BTreeMap<InstanceId, BlockPlacementOffset>,
     realised_block_offsets: BTreeMap<InstanceId, Offset>,
     /// Accepted seam choices, cumulative like `block_placements`.
@@ -3088,7 +3108,7 @@ mod tests {
         // so the refresh stage must not read the retained map.
         assert_eq!(
             baseline.all_parent_routes.len(),
-            baseline.planned.candidate.routes.len(),
+            baseline.planned.planned.candidate.routes.len(),
             "every planned parent route is mapped, before the prune retain"
         );
         assert!(
@@ -3107,7 +3127,7 @@ mod tests {
             .all_parent_routes
             .iter()
             .filter(|(route, _)| {
-                relocate_refresh(&mut baseline.planned.candidate.routes[route].clone())
+                relocate_refresh(&mut baseline.planned.planned.candidate.routes[route].clone())
             })
             .map(|(&route, &realised)| (route, realised))
             .collect();
@@ -4159,6 +4179,119 @@ mod tests {
                 "the reused candidate carries the incumbent's own plan"
             );
         }
+    }
+
+    /// The routed parent a proposal reuses carries its prunable routes with
+    /// it, so reusing the plan reuses the derived set by construction --
+    /// there is no cache and nothing to invalidate.
+    #[test]
+    fn an_unchanged_placement_reuses_the_routed_parent_and_its_prunable_routes() {
+        let design = crate::circuits::hierarchical_builder::circuits::ripple_adder(2);
+        let design = design.specialise_constants().unwrap();
+        let lowered = lower_hierarchy(&design).unwrap();
+        let order = lowered.as_hierarchical().module_order().unwrap();
+        let library = Library::default_library();
+        let search_config = SearchConfig::checked_defaults();
+        let services = seed_services(&library, &search_config);
+        let blocks = compile_blocks(&lowered, &order, 1).expect("blocks compile");
+        let ordered = ordered_blocks(&lowered, &lowered.top, &order, &blocks);
+        let baseline = compile_module_with_blocks(
+            &lowered,
+            &lowered.top,
+            &ordered,
+            None,
+            services,
+            &SeedVariant::default(),
+            &BTreeMap::new(),
+            &[],
+            &[],
+            &[],
+        )
+        .expect("baseline certifies");
+        let reused = compile_proposal(
+            &lowered,
+            &ordered,
+            None,
+            services,
+            &baseline,
+            &BTreeMap::new(),
+            &[],
+            &[],
+            &[],
+        )
+        .expect("same placements certify");
+
+        assert!(
+            Arc::ptr_eq(&reused.planned, &baseline.planned),
+            "the reused candidate carries the incumbent's own routed parent"
+        );
+        assert_eq!(
+            reused.planned.prunable_routes, baseline.planned.prunable_routes,
+            "the same routed parent carries the same prunable routes"
+        );
+    }
+
+    /// A proposal that really moves a block builds its own routed parent,
+    /// whose prunable routes are the ones its own planned trees admit.
+    #[test]
+    fn a_moved_block_builds_a_new_routed_parent_with_its_own_prunable_routes() {
+        let design = crate::circuits::hierarchical_builder::circuits::ripple_adder(2);
+        let design = design.specialise_constants().unwrap();
+        let lowered = lower_hierarchy(&design).unwrap();
+        let order = lowered.as_hierarchical().module_order().unwrap();
+        let library = Library::default_library();
+        let search_config = SearchConfig::checked_defaults();
+        let services = seed_services(&library, &search_config);
+        let blocks = compile_blocks(&lowered, &order, 1).expect("blocks compile");
+        let ordered = ordered_blocks(&lowered, &lowered.top, &order, &blocks);
+        let baseline = compile_module_with_blocks(
+            &lowered,
+            &lowered.top,
+            &ordered,
+            None,
+            services,
+            &SeedVariant::default(),
+            &BTreeMap::new(),
+            &[],
+            &[],
+            &[],
+        )
+        .expect("baseline certifies");
+        let moved_block = *baseline
+            .realised_block_offsets
+            .keys()
+            .next()
+            .expect("the top stamps a block");
+        // Not every displacement of a block still routes; the contract is
+        // about the ones that do, so take the first that certifies.
+        let moved = [(0, 1), (0, 2), (1, 0), (0, -1)]
+            .into_iter()
+            .find_map(|(dx, dz)| {
+                let placements = BTreeMap::from([(moved_block, BlockPlacementOffset { dx, dz })]);
+                compile_proposal(
+                    &lowered,
+                    &ordered,
+                    None,
+                    services,
+                    &baseline,
+                    &placements,
+                    &[],
+                    &[],
+                    &[],
+                )
+                .ok()
+            })
+            .expect("some displacement of a block must still certify");
+
+        assert!(
+            !Arc::ptr_eq(&moved.planned, &baseline.planned),
+            "a moved proposal owns its own routed parent"
+        );
+        assert_eq!(
+            moved.planned.prunable_routes,
+            prunable_parent_routes(&moved.planned.planned.candidate.routes),
+            "the new routed parent carries the prunable routes of its own plan"
+        );
     }
 
     /// The hierarchy is part of the case, not just its flattening. Two
