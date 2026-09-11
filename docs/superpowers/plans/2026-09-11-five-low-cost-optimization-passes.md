@@ -132,11 +132,14 @@ function Read-RippleSample {
         if ($values.Count -eq 0) { $null } else { ($values | Measure-Object -Maximum).Maximum }
     }
     $retention = @($lines | Select-String -Pattern '^RETENTION ' | ForEach-Object { $_.Line })
+    $wall = @($retention | ForEach-Object {
+        [int][regex]::Match($_, 'wall_ms=(\d+)').Groups[1].Value })
     [pscustomobject]@{
         TopManifestMs = & $maxOf '^PHASE manifest (\d+)$'
         TopPrunableMs = & $maxOf '^PHASE prunable (\d+)$'
         TopFlattenMs  = & $maxOf '^PHASE flatten (\d+)$'
-        MaxWallMs     = & $maxOf 'wall_ms=(\d+)'
+        # Only the RETENTION lines carry a wall time; nothing else is read.
+        MaxWallMs     = if ($wall.Count -eq 0) { $null } else { ($wall | Measure-Object -Maximum).Maximum }
         Quality       = @($retention | ForEach-Object {
             [regex]::Match($_, 'settle=(\d+) blocks=(\d+) volume=(\d+) static=(\d+)').Value })
         Fingerprints  = @($retention | ForEach-Object {
@@ -164,7 +167,7 @@ median is over three. Record every sample, not just the median.
 - `src/redstone/simulator/connectivity.rs:17-40` -- `is_conductive`,
   `supports_dust_step`.
 - `src/redstone/simulator/propagate.rs:433-440` -- `block_signal_at`.
-- `src/compile/fragment_synth/hierarchy_api.rs:449-499,504-510,512-539,839-866,900-1013,1015-1120` --
+- `src/compile/fragment_synth/hierarchy_api.rs:450-501,503-510,519-538,839-866,900-1013,1015-1120` --
   `union_and_certify`, `prunable_parent_routes`, `refresh_descriptors`,
   `block_pull_x_proposal`, `HierarchicalProposalStream` and its stage selection.
 - `src/compile/fragment_synth/topology.rs:544-587` -- `merge_isolation_mask` and
@@ -232,7 +235,7 @@ stops the wave.
 ```powershell
 $want = @(
     'settle=608 blocks=70603 volume=1123332 static=678',
-    'b9ab139aa9726703f7d5f0d7ed30d50c6a8e0c8b1e2bb4156024a179844573',
+    'b9ab139aa9726703df3cd0b9f7ed30d50c6a8e0c8b1e2bb4156024a179844573',
     'a5e71ef0712baf6239bedd6781a75277c8d3b40170046750b01e1e3fdb8fb1b2'
 )
 2..3 | ForEach-Object {
@@ -442,7 +445,15 @@ the plan -- so there is no cache to invalidate.
 
 **Files:**
 
-- Modify: `src/compile/fragment_synth/hierarchy_api.rs:340-400,449-510,860-895`.
+- Modify: `src/compile/fragment_synth/hierarchy_api.rs`. Changing
+  `HierarchicalCandidate::planned` to `Arc<RoutedParent>` touches **every**
+  existing `planned.candidate` / `planned.block_offsets` read, not just
+  `union_and_certify`. At the source baseline those are `:347` and `:382`
+  (the two `Arc::new` plan sites), `:380` (the `Arc::clone` reuse branch),
+  `:461` and `:464` (`union_and_certify`), `:519-538` (`refresh_descriptors`,
+  reading at `:524`), the field declaration near `:872`, and the existing tests
+  at `:3060-3115` (reads at `:3083` and `:3102`). Update every one; a symbol
+  search for those two field paths is the authority, not this list.
 - Modify: `docs/superpowers/reports/2026-09-11-five-low-cost-optimization-passes.md`.
 
 ### Step A -- diagnostics, unconditionally
@@ -450,10 +461,11 @@ the plan -- so there is no cache to invalidate.
 - [ ] Add two `PHASE` lines beside the existing `PHASE union`
   (`hierarchy_api.rs:479-481`), in its exact shape and under its exact
   `REDA_PHASE_TIMING` guard: `PHASE flatten` around the `module_flattening` call
-  and `PHASE prunable` around the `prunable_parent_routes` call. These are
-  permanent and are the only instrumentation this wave may leave behind. They
-  carry no test: they are diagnostics, and the transcript below is their
-  evidence. Say that explicitly in the report rather than claiming TDD for them.
+  at `:462` and `PHASE prunable` around the `prunable_parent_routes` call at
+  `:464`. These are permanent and are the only instrumentation this wave may
+  leave behind. They carry no test: they are diagnostics, and the transcript
+  below is their evidence. Say that explicitly in the report rather than claiming
+  TDD for them.
 
 - [ ] Measure on the **plan-reuse fixture**, not on ripple budget 0. Budget-0
   ripple never reuses a plan, so its `PHASE prunable` lines cannot show what this
@@ -553,16 +565,26 @@ existing `planned.candidate` / `planned.block_offsets` read becomes
 moves: `prunable_parent_routes` keeps its signature and body, and
 `union_and_certify` keeps its call graph.
 
+**The `PHASE prunable` line moves with the computation.** Because the call leaves
+`union_and_certify` for `RoutedParent::new`, the timing must move there too --
+same `REDA_PHASE_TIMING` guard, same `PHASE prunable` name, so the diagnostic
+stays permanent and keeps measuring the thing it names. A compile that reuses a
+plan then emits **no** `PHASE prunable` line at all, because no computation
+happens. That is the intended effect, not a lost measurement.
+
 - [ ] Run GREEN and the hierarchy suite:
 
 ```powershell
 Invoke-Capped -Command 'cargo test --lib compile::fragment_synth::hierarchy_api -- --nocapture'
 ```
 
-- [ ] Re-run the three reuse-fixture commands from Step A. GO requires a
-  measurable drop in the median relevant prunable cost, with the fixture's own
-  assertions still passing. Otherwise NO-GO: `git checkout --` the file back to
-  the Step A commit and prove `git status --porcelain` shows only the report.
+- [ ] Re-run the three reuse-fixture commands from Step A. Post-change,
+  `AggregateMs` sums only the surviving new-plan computations; reused plans
+  contribute nothing because they emit no line. That drop **is** the measurement.
+  GO requires a measurable drop in the median relevant prunable cost, with the
+  fixture's own assertions still passing. Otherwise NO-GO: `git checkout --` the
+  file back to the Step A commit and prove `git status --porcelain` shows only
+  the report.
 
 - [ ] Commit.
 
@@ -601,7 +623,7 @@ git commit -m "perf: carry prunable routes with the routed parent"
 
 ```powershell
 1..3 | ForEach-Object {
-    Invoke-Capped -Command 'cargo test --release --lib disposable_merge_consumer_index_probe -- --ignored --exact --nocapture'
+    Invoke-Capped -Command 'cargo test --release --lib compile::fragment_synth::instance_graph::tests::disposable_merge_consumer_index_probe -- --ignored --exact --nocapture'
 }
 ```
 
@@ -788,7 +810,7 @@ Invoke-Capped -Command 'cargo test --lib compile::fragment_synth::search -- --no
   predict a win and the report must say so.
 
 ```powershell
-Invoke-Capped -Command 'cargo test --release --lib pull_x_round_two_offers_descriptors_on_ripple_adder8 -- --ignored --exact --nocapture'
+Invoke-Capped -Command 'cargo test --release --lib compile::fragment_synth::hierarchy_api::tests::pull_x_round_two_offers_descriptors_on_ripple_adder8 -- --ignored --exact --nocapture'
 ```
 
 If the frozen length is **0**, the candidate is NO-GO immediately: revert and do
@@ -802,7 +824,7 @@ not spend the certified run.
   budget; Task 6 does not repeat it and never extends it to the other circuits.
 
 ```powershell
-Invoke-Capped -Command 'cargo test --release --lib pull_x_round_two_improves_ripple_adder8 -- --ignored --exact --nocapture'
+Invoke-Capped -Command 'cargo test --release --lib compile::fragment_synth::hierarchy_api::tests::pull_x_round_two_improves_ripple_adder8 -- --ignored --exact --nocapture'
 ```
 
 A capped run is a failed measurement and therefore NO-GO. Do not re-run it with
@@ -920,7 +942,7 @@ the fallback fit.
   the unchanged `JointQuality` guard. Task 6 does not repeat it.
 
 ```powershell
-Invoke-Capped -Command 'cargo test --release --lib refresh_relocation_improves_an_acceptance_circuit -- --ignored --exact --nocapture'
+Invoke-Capped -Command 'cargo test --release --lib compile::fragment_synth::hierarchy_api::tests::refresh_relocation_improves_an_acceptance_circuit -- --ignored --exact --nocapture'
 ```
 
 - [ ] On NO-GO -- no accepted fallback-attributed entry on any acceptance
@@ -997,7 +1019,7 @@ Invoke-Capped -Command 'cargo test --test build_circuit_pins -- --nocapture'
 foreach ($case in 'ripple_adder8','alu4_full') {
     $cmd = @"
 `$env:REDA_EXTRA_CIRCUITS='$case'
-cargo test --release --lib every_hierarchical_circuit_agrees_across_certification_thread_counts -- --ignored --exact --nocapture --test-threads=1
+cargo test --release --lib compile::fragment_synth::seed::tests::every_hierarchical_circuit_agrees_across_certification_thread_counts -- --ignored --exact --nocapture --test-threads=1
 "@
     Invoke-Capped -Command $cmd -Log (Join-Path $env:TEMP "reda-wave-threads-$case.txt")
 }

@@ -115,7 +115,7 @@ The two recorded fingerprints, which every retained candidate must reproduce
 byte-for-byte:
 
 ```text
-case      = b9ab139aa9726703f7d5f0d7ed30d50c6a8e0c8b1e2bb4156024a179844573
+case      = b9ab139aa9726703df3cd0b9f7ed30d50c6a8e0c8b1e2bb4156024a179844573
 candidate = a5e71ef0712baf6239bedd6781a75277c8d3b40170046750b01e1e3fdb8fb1b2
 ```
 
@@ -172,10 +172,10 @@ fingerprints. Anything less is NO-GO and the whole candidate is reverted.
 
 ## Candidate 2: `prunable_parent_routes` sidecar
 
-`union_and_certify` (`hierarchy_api.rs:449-499`) calls `prunable_parent_routes`
-(`hierarchy_api.rs:504`) on every compile, cloning and probing every planned
-parent route. The result depends only on `planned.candidate.routes`, which is
-owned by the `Arc<PlannedParent>` a reused plan hands back unchanged.
+`union_and_certify` (`hierarchy_api.rs:450-501`) calls `prunable_parent_routes`
+(called at `:464`, defined at `:503`) on every compile, cloning and probing every
+planned parent route. The result depends only on `planned.candidate.routes`,
+which is owned by the `Arc<PlannedParent>` a reused plan hands back unchanged.
 
 This is a re-proposal of the reverted `14aead2` ("perf: reuse hierarchical
 compile invariants", reverted by `95b6b9d`). That revert's scope is prohibited:
@@ -187,8 +187,8 @@ Contract, and it is conditional:
 
 - **Diagnostics first.** Add two permanent `PHASE` lines beside the existing
   `PHASE union`: `PHASE flatten` around `module_flattening`
-  (`hierarchy_api.rs:452`) and `PHASE prunable` around `prunable_parent_routes`
-  (`hierarchy_api.rs:454`), both under the existing `REDA_PHASE_TIMING` guard
+  (`hierarchy_api.rs:462`) and `PHASE prunable` around `prunable_parent_routes`
+  (`hierarchy_api.rs:464`), both under the existing `REDA_PHASE_TIMING` guard
   and in the existing `eprintln!` `PHASE name millis` shape. These are the one
   sanctioned permanent survivor, justified by the existing diagnostics they
   join.
@@ -208,6 +208,11 @@ Contract, and it is conditional:
   `prunable_routes` is computed at the one `RoutedParent` construction site, so
   the existing `Arc::clone` reuse branch carries it for free and there is nothing
   to invalidate. `prunable_parent_routes` keeps its signature and body.
+- The `PHASE prunable` line **moves with the computation** into
+  `RoutedParent::new`, under the same guard and the same name, so it stays a
+  permanent diagnostic of the thing it names. A compile that reuses a plan then
+  emits no `PHASE prunable` line at all; that absence is the win, not a lost
+  measurement.
 
 Retention gate: the median relevant prunable cost must exceed 5 ms to start, and
 the sidecar must then produce a measurable drop in it, with the fixture's own
