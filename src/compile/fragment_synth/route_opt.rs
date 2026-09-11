@@ -20,8 +20,9 @@ use crate::compile::fragment_synth::candidate::RealisedRouteTree;
 use crate::compile::fragment_synth::identity::RouteId;
 use crate::compile::fragment_synth::timing_graph::{RealisedTimingGraph, TimingArcKind};
 use crate::compile::geometry::Anchor;
+use crate::compile::routing::route_step_is_legal;
 use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
-use crate::redstone::world::block::BlockKind;
+use crate::redstone::world::block::{BlockKind, BlockState};
 
 /// One Parent Route Repack choice: prune this parent route.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, serde::Serialize)]
@@ -92,8 +93,32 @@ pub(crate) fn prune_route(tree: &mut RealisedRouteTree) -> bool {
 /// have an earlier route-owned refresh standing, which is also what keeps
 /// this pass off the route's source repeater.
 ///
+/// A window that is not one straight run gets exactly one trial, and only
+/// once every straight pair for that `D` has failed: see
+/// [`first_legal_bend_cell`] for what "legal" has to mean once the geometry
+/// stops saying it for free.
+///
 /// Delays are not refreshed here, exactly as in `prune_route`.
 pub(crate) fn relocate_refresh(tree: &mut RealisedRouteTree) -> bool {
+    relocate_refresh_outcome(tree).changed
+}
+
+/// What [`relocate_refresh`] did: whether it changed the tree at all, and
+/// whether any step it kept came from the one bend trial a downstream
+/// refresh is allowed.
+///
+/// The bend bit is proof material -- the focused tests and the single
+/// real-circuit attribution run read it -- and reaches no trace, fingerprint
+/// or counter. Production callers see the boolean they always saw.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RefreshRelocationOutcome {
+    pub(crate) changed: bool,
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) used_bend_fallback: bool,
+}
+
+/// [`relocate_refresh`] itself, with the bend bit kept.
+pub(crate) fn relocate_refresh_outcome(tree: &mut RealisedRouteTree) -> RefreshRelocationOutcome {
     let terminals: BTreeSet<Anchor> = tree.branches.iter().map(|b| b.terminal.at).collect();
     let mut depth = BTreeMap::<Anchor, usize>::new();
     for branch in &tree.branches {
@@ -109,12 +134,6 @@ pub(crate) fn relocate_refresh(tree: &mut RealisedRouteTree) -> bool {
         .filter_map(|cell| depth.get(&cell.at).map(|&d| (Reverse(d), cell.at)))
         .collect();
     candidates.sort();
-    let repeaters = |tree: &RealisedRouteTree| {
-        tree.cells
-            .iter()
-            .filter(|cell| cell.state.kind == BlockKind::Repeater)
-            .count()
-    };
     // Reading a window off intervals needs every anchor to name one cell: a
     // repeated cell anchor makes the map below disagree with the position
     // lookups a trial uses, and a repeated path anchor puts one cell at two
@@ -130,7 +149,7 @@ pub(crate) fn relocate_refresh(tree: &mut RealisedRouteTree) -> bool {
             })
     };
 
-    let mut changed = false;
+    let mut outcome = RefreshRelocationOutcome::default();
     'pairs: for (position, &(_, down)) in candidates.iter().enumerate() {
         // Frozen candidates go stale as steps are retained: `D` has to be a
         // repeater on the tree as it stands now.
@@ -162,13 +181,15 @@ pub(crate) fn relocate_refresh(tree: &mut RealisedRouteTree) -> bool {
         } else {
             BTreeMap::new()
         };
+        // The one bend cell this `D` may still try, remembered in exactly
+        // the `U` and reversed-window order the straight trials take, so
+        // which cell it is never depends on when those trials gave up.
+        let mut bend: Option<(Anchor, Anchor)> = None;
         for &(_, up) in &candidates[position + 1..] {
             let Some(source) = tree.cells.iter().position(|cell| cell.at == up) else {
                 continue;
             };
-            if tree.cells[source].state.kind != BlockKind::Repeater
-                || tree.cells[source].state.facing != tree.cells[sunk].state.facing
-            {
+            if tree.cells[source].state.kind != BlockKind::Repeater {
                 continue;
             }
             // Equal, non-empty branch membership over one identical straight
@@ -204,6 +225,22 @@ pub(crate) fn relocate_refresh(tree: &mut RealisedRouteTree) -> bool {
                 && step.0.abs() + step.2.abs() == 1
                 && shared.windows(2).all(|p| delta(p[0], p[1]) == step);
             if !straight {
+                // `D` is going, so it need not face the way `U` does: what
+                // has to hold instead is that `U`'s own unchanged state is a
+                // legal step at `N` on every branch that names it, which one
+                // straight run gave for free. Only the first legal cell is
+                // remembered, and only one is, so a bent window cannot turn
+                // into a search.
+                if named_once && bend.is_none() {
+                    bend = first_legal_bend_cell(tree, &kinds, &terminals, shared, up, down)
+                        .map(|at| (up, at));
+                }
+                continue;
+            }
+            // Equal facings are a straight-path condition: along one run `N`
+            // inherits `U`'s state unexamined, so `D` has to be the same
+            // refresh moved along and not a different one.
+            if tree.cells[source].state.facing != tree.cells[sunk].state.facing {
                 continue;
             }
             // Owned so the edits below can mutate the tree in place.
@@ -235,28 +272,144 @@ pub(crate) fn relocate_refresh(tree: &mut RealisedRouteTree) -> bool {
                 {
                     continue;
                 }
-                let moved = tree.cells[source].state.clone();
-                let standing = repeaters(tree);
-                let target_state = std::mem::replace(&mut tree.cells[target].state, moved);
-                let source_state =
-                    std::mem::replace(&mut tree.cells[source].state, crate::compile::dust());
-                let sunk_state =
-                    std::mem::replace(&mut tree.cells[sunk].state, crate::compile::dust());
-                // The point of the whole step: exactly one repeater fewer.
-                // The guards above already make that so, and this is what
-                // holds them to it -- an `N` that landed on a repeater, or
-                // on `U` or `D`, would save nothing or two.
-                if repeaters(tree) + 1 == standing && branches_carry_through(tree, up) {
-                    changed = true;
+                if relocation_trial(tree, source, sunk, target, up) {
+                    outcome.changed = true;
                     continue 'pairs;
                 }
-                tree.cells[target].state = target_state;
-                tree.cells[source].state = source_state;
-                tree.cells[sunk].state = sunk_state;
             }
         }
+        // Every straight trial for this `D` has failed. One bend cell may be
+        // tried now -- the same three replacements, proven by the same gate --
+        // and if it fails this pair is done: no second bend cell is ever
+        // mutated for this `D`.
+        let Some((up, at)) = bend else {
+            continue;
+        };
+        let (Some(source), Some(target)) = (
+            tree.cells.iter().position(|cell| cell.at == up),
+            tree.cells.iter().position(|cell| cell.at == at),
+        ) else {
+            continue;
+        };
+        if relocation_trial(tree, source, sunk, target, up) {
+            outcome.changed = true;
+            outcome.used_bend_fallback = true;
+        }
     }
-    changed
+    outcome
+}
+
+/// The pass's one trial, whatever offered the cell: copy `U`'s state onto
+/// `N`, dust `U` and `D`, and keep that only when the tree came away with
+/// exactly one repeater fewer and every branch through `U` still carries.
+/// Anything else restores the three exact prior states and refuses.
+///
+/// That count is the point of the whole step. The guards on the cell already
+/// make it so, and this is what holds them to it -- an `N` that landed on a
+/// repeater, or on `U` or `D` themselves, would save nothing or two.
+fn relocation_trial(
+    tree: &mut RealisedRouteTree,
+    source: usize,
+    sunk: usize,
+    target: usize,
+    up: Anchor,
+) -> bool {
+    let repeaters = |tree: &RealisedRouteTree| {
+        tree.cells
+            .iter()
+            .filter(|cell| cell.state.kind == BlockKind::Repeater)
+            .count()
+    };
+    let moved = tree.cells[source].state.clone();
+    let standing = repeaters(tree);
+    let target_state = std::mem::replace(&mut tree.cells[target].state, moved);
+    let source_state = std::mem::replace(&mut tree.cells[source].state, crate::compile::dust());
+    let sunk_state = std::mem::replace(&mut tree.cells[sunk].state, crate::compile::dust());
+    if repeaters(tree) + 1 == standing && branches_carry_through(tree, up) {
+        return true;
+    }
+    tree.cells[target].state = target_state;
+    tree.cells[source].state = source_state;
+    tree.cells[sunk].state = sunk_state;
+    false
+}
+
+/// The deepest cell of a shared `U..=D` window that is not one straight run
+/// at which `U`'s own refresh could stand, or `None` where the window offers
+/// none.
+///
+/// The offset bound and the route-owned, non-terminal dust conditions are
+/// the straight path's own, asked here in the same reversed order. What one
+/// straight run gave for free and this has to ask for is the step itself: a
+/// repeater reads from one side and drives the other, so `U`'s unchanged
+/// state has to be a legal step at `N` on every branch that names `N`, by
+/// `route_step_is_legal` -- the same authority the router lays cells by.
+///
+/// Legality filters the enumeration rather than deciding it: an illegal cell
+/// is passed over and the next one asked, so the answer is the deepest legal
+/// cell rather than the deepest cell when it happens to be legal.
+fn first_legal_bend_cell(
+    tree: &RealisedRouteTree,
+    kinds: &BTreeMap<Anchor, BlockKind>,
+    terminals: &BTreeSet<Anchor>,
+    shared: &[Anchor],
+    up: Anchor,
+    down: Anchor,
+) -> Option<Anchor> {
+    let (lowest, highest) = relocation_offsets(tree, kinds, up, down)?;
+    let source = tree.cells.iter().position(|cell| cell.at == up)?;
+    let moved = tree.cells[source].state.clone();
+    shared[1..shared.len() - 1]
+        .iter()
+        .enumerate()
+        .rev()
+        .find(|&(offset, &at)| {
+            // The window entry at `offset` is `shared[offset + 1]`, exactly
+            // as the straight trials count it.
+            (lowest..=highest).contains(&(offset + 1))
+                && kinds.get(&at) == Some(&BlockKind::RedstoneWire)
+                && !terminals.contains(&at)
+                && branches_accept_step(tree, at, &moved)
+        })
+        .map(|(_, &at)| at)
+}
+
+/// Every branch that names `at` names it exactly once, has a cell on each
+/// side of it there, and takes `state` at it as a legal step. A branch that
+/// does not name `at` is not asked; at least one has to.
+///
+/// A branch that names `at` twice is refused rather than read: which of the
+/// two occurrences the repeater would have to be legal at is not a question
+/// this pass answers. An end of a path is refused for the same reason --
+/// there is no cell on one side for the repeater to read from or drive.
+fn branches_accept_step(tree: &RealisedRouteTree, at: Anchor, state: &BlockState) -> bool {
+    let mut affected = false;
+    for branch in &tree.branches {
+        let mut named = branch
+            .path
+            .iter()
+            .enumerate()
+            .filter(|(_, cell)| **cell == at);
+        let Some((index, _)) = named.next() else {
+            continue;
+        };
+        if named.next().is_some() {
+            return false;
+        }
+        affected = true;
+        let (Some(&previous), Some(&next)) = (
+            index
+                .checked_sub(1)
+                .and_then(|before| branch.path.get(before)),
+            branch.path.get(index + 1),
+        ) else {
+            return false;
+        };
+        if !route_step_is_legal(previous, at, next, state) {
+            return false;
+        }
+    }
+    affected
 }
 
 /// The offsets into the shared `U..=D` slice -- counted from `U`, the way
@@ -454,9 +607,9 @@ pub(crate) fn prune_descriptors(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compile::fragment_synth::candidate::PlacedBlock;
+    use crate::compile::fragment_synth::candidate::{PlacedBlock, RouteTarget};
     use crate::compile::fragment_synth::identity::{
-        InstanceId, PrimitiveId, RoutedSinkId, TimingArcId, TopologyNodeId,
+        InstanceId, PortId, PrimitiveId, RoutedSinkId, TimingArcId, TopologyNodeId,
     };
     use crate::compile::fragment_synth::timing_graph::{ExactDelay, TimingArc, TimingNodeId};
     use crate::compile::fragment_synth::union::tests::seam_tree;
@@ -931,6 +1084,12 @@ mod tests {
     /// Every guard in one table. Each fixture makes the (x18, x9) pair -- and
     /// every other pair on that tree -- unusable, so the call must be false
     /// and the tree must come back exactly as it went in.
+    ///
+    /// Geometry alone is no longer one of those guards: a window that is not
+    /// one straight run is refused only where no cell of it can hold `U`'s
+    /// refresh legally, which is what the two uniform runs below stand for.
+    /// A window that does offer one is
+    /// `refresh_bend_relocation_moves_one_pair_across_a_valid_bend`.
     #[test]
     fn refresh_relocation_refuses_unsafe_pairs_and_leaves_the_tree_unchanged() {
         // A second branch that leaves the trunk at x12 carries x9 but not
@@ -942,19 +1101,6 @@ mod tests {
             stub.terminal.at = Anchor { x: 12, y: 0, z: 0 };
             stub.terminal.state = crate::compile::repeater(Facing::East);
             tree.branches.push(stub);
-            tree
-        };
-        // A jog in z, then in y. `divert` moves one cell's anchor and
-        // nothing else, so the run's geometry is what breaks: two of its
-        // steps stop matching the rest and the slice is no longer one run.
-        let bend = {
-            let mut tree = linear_relocation_route(26);
-            divert(&mut tree, 13, Anchor { x: 13, y: 0, z: 1 });
-            tree
-        };
-        let vertical = {
-            let mut tree = linear_relocation_route(26);
-            divert(&mut tree, 13, Anchor { x: 13, y: 1, z: 0 });
             tree
         };
         // Adjacent refreshes: there is no cell strictly between them.
@@ -1000,7 +1146,10 @@ mod tests {
         };
         // Uniform runs that no per-step comparison can fault: every step is
         // identical, but one travels two cells at once and the other climbs.
-        // Only the "horizontal, one cell" test rejects these.
+        // Only the "horizontal, one cell" test rejects these as straight --
+        // and the bend path, which is offered both of them, finds no cell
+        // where a repeater could read from one side and drive the other,
+        // since every step of either run has y or a second axis in it.
         let uniform_diagonal = {
             let mut tree = linear_relocation_route(26);
             step_by(&mut tree, (1, 0, 1));
@@ -1009,13 +1158,16 @@ mod tests {
         let uniform_staircase = {
             let mut tree = linear_relocation_route(26);
             step_by(&mut tree, (1, 1, 0));
+            // The one row here the bend path could physically be offered:
+            // a one-cell rise per step is a contiguous route, and it is
+            // refused for having no legal site rather than for its shape.
+            tree.validate()
+                .expect("a one-cell rise per step is a contiguous route");
             tree
         };
 
         let cases = [
             ("unequal branch membership", unequal_membership),
-            ("bend in the shared slice", bend),
-            ("vertical step in the shared slice", vertical),
             ("empty window", empty_window),
             ("directly prunable D", directly_prunable),
             ("no owned cell in the window", unowned_window),
@@ -1233,5 +1385,426 @@ mod tests {
                 "{decoys} decoys: a refusal leaves no partial mutation"
             );
         }
+    }
+
+    /// `linear_relocation_route(26)` with the cell at x`stair` lifted one
+    /// block. Every consecutive step of the trunk stays adjacent -- one cell
+    /// horizontally, at most one vertically -- so the route is still
+    /// contiguous and `validate` says so, but the shared x9..x18 window is no
+    /// longer one constant horizontal step and the old straight test refuses
+    /// the pair outright.
+    ///
+    /// `stair` is a parameter for the reason `tail` is one: where the rise
+    /// sits decides which window cells keep both of their neighbours on the
+    /// level, which is exactly what the first-legal-cell order is read from.
+    /// Nothing else about the fixture moves, so the horizontal axis is
+    /// unchanged and no repeater has to be re-laid.
+    fn bent_relocation_route(stair: i32) -> RealisedRouteTree {
+        let mut tree = linear_relocation_route(26);
+        divert(
+            &mut tree,
+            stair,
+            Anchor {
+                x: stair,
+                y: 1,
+                z: 0,
+            },
+        );
+        tree
+    }
+
+    /// Give `tree` one more branch running `path`, owning every cell of it
+    /// the tree does not already hold, and ending in `terminal`.
+    fn add_branch(
+        tree: &mut RealisedRouteTree,
+        path: &[Anchor],
+        terminal: crate::redstone::world::block::BlockState,
+    ) {
+        let ordinal = tree.branches.len() as u16;
+        let mut branch = tree.branches[0].clone();
+        branch.sink.ordinal = ordinal;
+        branch.target = RouteTarget::DeclaredOutput(PortId(u32::from(ordinal) + 1));
+        branch.root = path[0];
+        branch.path = path.to_vec();
+        branch.terminal.sink = branch.sink;
+        branch.terminal.at = *path.last().expect("a branch has a path");
+        branch.terminal.state = terminal.clone();
+        let owned: BTreeSet<Anchor> = tree.cells.iter().map(|cell| cell.at).collect();
+        for (index, &at) in path.iter().enumerate() {
+            if owned.contains(&at) {
+                continue;
+            }
+            let state = if index + 1 == path.len() {
+                terminal.clone()
+            } else {
+                crate::compile::dust()
+            };
+            tree.cells.push(PlacedBlock { at, state });
+        }
+        tree.branches.push(branch);
+    }
+
+    /// Which cells of the x10..x17 window could hold `U`'s own East repeater
+    /// at all, by the router's own step authority.
+    fn locally_legal_window_cells(tree: &RealisedRouteTree) -> Vec<i32> {
+        let moved = crate::compile::repeater(Facing::East);
+        let path = &tree.branches[0].path;
+        (10..=17)
+            .filter(|&x| {
+                let index = path
+                    .iter()
+                    .position(|at| at.x == x)
+                    .expect("every window cell is on the trunk");
+                route_step_is_legal(path[index - 1], path[index], path[index + 1], &moved)
+            })
+            .collect()
+    }
+
+    /// The same saving the straight pass makes, across a window that is not
+    /// one straight run. Nothing about the pair changes except the geometry:
+    /// `prune_route` still refuses both refreshes, the shared slice is no
+    /// longer one constant step -- which is the whole of what used to refuse
+    /// it -- and the deepest window cell whose neighbours are both on the
+    /// level takes `U`'s state and saves the repeater.
+    #[test]
+    fn refresh_bend_relocation_moves_one_pair_across_a_valid_bend() {
+        let tree = bent_relocation_route(13);
+        tree.validate()
+            .expect("the bent fixture is a contiguous route");
+        assert_eq!(repeater_anchors(&tree, |at| at.x), vec![0, 9, 18, 27]);
+
+        // The old straight eligibility, read off the fixture: the shared
+        // x9..x18 slice no longer has one constant delta.
+        let shared = &tree.branches[0].path[9..=18];
+        let delta = |from: Anchor, to: Anchor| (to.x - from.x, to.y - from.y, to.z - from.z);
+        let step = delta(shared[0], shared[1]);
+        assert!(
+            !shared
+                .windows(2)
+                .all(|pair| delta(pair[0], pair[1]) == step),
+            "the window is not one straight run, so the straight path refuses this pair"
+        );
+
+        // Nothing else moved: direct pruning still takes neither refresh.
+        let mut pruned = tree.clone();
+        assert!(
+            !prune_route(&mut pruned),
+            "direct pruning takes neither x9 nor x18"
+        );
+        assert_eq!(pruned, tree);
+
+        // The rise and both of its neighbours have y in a step, so no
+        // repeater can read from one side and drive the other there.
+        assert_eq!(
+            locally_legal_window_cells(&tree),
+            vec![10, 11, 15, 16, 17],
+            "x12, the rise itself and x14 lose a neighbour to the rise"
+        );
+
+        // Strength, proven from `U` exactly as the straight pass proves it:
+        // x16 and x17 are legal steps but out of x0's reach, and x15 is the
+        // deepest cell that is both legal and reachable.
+        for (n, carries) in [(17, false), (16, false), (15, true), (12, true)] {
+            let mut trial = tree.clone();
+            set(&mut trial, 9, 0, crate::compile::dust());
+            set(&mut trial, 18, 0, crate::compile::dust());
+            set(&mut trial, n, 0, crate::compile::repeater(Facing::East));
+            assert_eq!(
+                branches_carry_through(&trial, Anchor { x: 9, y: 0, z: 0 }),
+                carries,
+                "manual trial at N = {n}"
+            );
+        }
+
+        let mut relocated = tree.clone();
+        assert_eq!(
+            relocate_refresh_outcome(&mut relocated),
+            RefreshRelocationOutcome {
+                changed: true,
+                used_bend_fallback: true,
+            },
+            "the one retained step came from the bend fallback"
+        );
+        assert_eq!(
+            repeater_anchors(&relocated, |at| at.x),
+            vec![0, 15, 27],
+            "exactly one repeater fewer"
+        );
+        let mut expected = tree.clone();
+        set(&mut expected, 9, 0, crate::compile::dust());
+        set(&mut expected, 18, 0, crate::compile::dust());
+        set(&mut expected, 15, 0, crate::compile::repeater(Facing::East));
+        assert_eq!(
+            relocated, expected,
+            "one repeater saved, x15 carries x9's own state"
+        );
+        relocated
+            .validate()
+            .expect("the saved tree is still a contiguous route");
+
+        // Idempotent, exactly as the straight pass is: the only pair left is
+        // (x0, x15), whose `U` has no earlier route-owned refresh.
+        let settled = relocated.clone();
+        assert!(
+            !relocate_refresh(&mut relocated),
+            "the saved tree has no second pair"
+        );
+        assert_eq!(relocated, settled);
+    }
+
+    /// One bend cell per downstream refresh, and it is the first legal cell
+    /// the reversed window offers rather than the deepest cell the offsets
+    /// allow. With the rise at x15 the two deepest feasible cells each lose a
+    /// neighbour to it and are passed over without ever being mutated; x13 is
+    /// the first that survives, and x12 -- legal, feasible and left as dust --
+    /// proves the enumeration stopped there rather than ran out.
+    #[test]
+    fn refresh_bend_relocation_tries_only_the_first_legal_cell_per_downstream() {
+        let tree = bent_relocation_route(15);
+        tree.validate()
+            .expect("the bent fixture is a contiguous route");
+        let mut pruned = tree.clone();
+        assert!(
+            !prune_route(&mut pruned),
+            "direct pruning takes neither x9 nor x18"
+        );
+        assert_eq!(pruned, tree);
+
+        assert_eq!(
+            locally_legal_window_cells(&tree),
+            vec![10, 11, 12, 13, 17],
+            "x14, the rise itself and x16 lose a neighbour to the rise"
+        );
+        // Every one of x12, x13 and x14 carries the pair, so strength is not
+        // what picks between them.
+        for (n, carries) in [(16, false), (14, true), (13, true), (12, true)] {
+            let mut trial = tree.clone();
+            set(&mut trial, 9, 0, crate::compile::dust());
+            set(&mut trial, 18, 0, crate::compile::dust());
+            set(&mut trial, n, 0, crate::compile::repeater(Facing::East));
+            assert_eq!(
+                branches_carry_through(&trial, Anchor { x: 9, y: 0, z: 0 }),
+                carries,
+                "manual trial at N = {n}"
+            );
+        }
+
+        let mut relocated = tree.clone();
+        assert_eq!(
+            relocate_refresh_outcome(&mut relocated),
+            RefreshRelocationOutcome {
+                changed: true,
+                used_bend_fallback: true,
+            }
+        );
+        assert_eq!(
+            repeater_anchors(&relocated, |at| at.x),
+            vec![0, 13, 27],
+            "the first legal cell, not the deepest feasible one"
+        );
+        let mut expected = tree.clone();
+        set(&mut expected, 9, 0, crate::compile::dust());
+        set(&mut expected, 18, 0, crate::compile::dust());
+        set(&mut expected, 13, 0, crate::compile::repeater(Facing::East));
+        assert_eq!(
+            relocated, expected,
+            "exactly one window cell was written: x14 and the rise were filtered, \
+             and legal x12 behind x13 was never reached"
+        );
+        assert_eq!(kind_at(&relocated, 12, 0), BlockKind::RedstoneWire);
+        assert_eq!(kind_at(&relocated, 14, 0), BlockKind::RedstoneWire);
+    }
+
+    /// The bend cell is asked of every branch that names it, and of no
+    /// branch that does not. A second branch crossing `N` on the other axis,
+    /// a branch rooted on `N` with no cell behind it, and a branch that names
+    /// `N` twice each refuse the candidate before anything is mutated, while
+    /// a branch that never names `N` changes nothing.
+    #[test]
+    fn refresh_bend_relocation_checks_every_branch_and_repeated_occurrence() {
+        let at = |x: i32, z: i32| Anchor { x, y: 0, z };
+        let base = bent_relocation_route(13);
+        let mut control = base.clone();
+        assert!(
+            relocate_refresh(&mut control),
+            "x15 is the one legal, reachable cell of the bent window"
+        );
+        assert_eq!(kind_at(&control, 15, 0), BlockKind::Repeater);
+
+        // Crossing `N` along z: the repeater would have to read from the
+        // north and drive the east at the same time.
+        let crossing = {
+            let mut tree = base.clone();
+            add_branch(
+                &mut tree,
+                &[
+                    at(15, -3),
+                    at(15, -2),
+                    at(15, -1),
+                    at(15, 0),
+                    at(15, 1),
+                    at(15, 2),
+                ],
+                crate::compile::repeater(Facing::South),
+            );
+            tree
+        };
+        // Rooted on `N`: there is no cell for the repeater to read from.
+        let rooted = {
+            let mut tree = base.clone();
+            add_branch(
+                &mut tree,
+                &[at(15, 0), at(15, 1), at(15, 2)],
+                crate::compile::repeater(Facing::South),
+            );
+            tree
+        };
+        // `N` twice on one path: no interval read off that branch can be
+        // trusted, so the bend path is off for the whole tree.
+        let repeated = {
+            let mut tree = base.clone();
+            add_branch(
+                &mut tree,
+                &[
+                    at(15, 1),
+                    at(15, 0),
+                    at(15, -1),
+                    at(14, -1),
+                    at(14, 0),
+                    at(15, 0),
+                    at(16, 0),
+                    at(17, 0),
+                ],
+                crate::compile::dust(),
+            );
+            tree
+        };
+        for (case, tree) in [
+            ("branch crossing N on the other axis", crossing),
+            ("branch rooted on N", rooted),
+            ("branch naming N twice", repeated),
+        ] {
+            let mut refused = tree.clone();
+            assert!(!relocate_refresh(&mut refused), "{case}");
+            assert_eq!(refused, tree, "{case}: a refusal must not touch the tree");
+        }
+
+        // A branch that never names `N` is not asked about it.
+        let mut unrelated = base.clone();
+        add_branch(
+            &mut unrelated,
+            &[at(20, -3), at(20, -2), at(20, -1), at(20, 0)],
+            crate::compile::dust(),
+        );
+        unrelated
+            .validate()
+            .expect("the side branch is a contiguous route");
+        let mut expected = unrelated.clone();
+        set(&mut expected, 9, 0, crate::compile::dust());
+        set(&mut expected, 18, 0, crate::compile::dust());
+        set(&mut expected, 15, 0, crate::compile::repeater(Facing::East));
+        assert!(relocate_refresh(&mut unrelated), "the bend still carries");
+        assert_eq!(
+            unrelated, expected,
+            "an unaffected branch changes neither the cell taken nor anything else"
+        );
+    }
+
+    /// Nothing the pass decides may depend on the order its input happens to
+    /// be in, and the boolean the union reads is exactly the outcome's
+    /// `changed`. Order is compared canonically -- anchor to state, and the
+    /// set of anchors that moved -- because the vectors themselves keep the
+    /// order they came in: this pass sorts no production vector.
+    #[test]
+    fn refresh_bend_relocation_is_order_stable_and_preserves_the_bool_wrapper() {
+        let at = |x: i32, z: i32| Anchor { x, y: 0, z };
+        let mut tree = bent_relocation_route(13);
+        add_branch(
+            &mut tree,
+            &[at(20, -3), at(20, -2), at(20, -1), at(20, 0)],
+            crate::compile::dust(),
+        );
+        tree.validate().expect("the fixture is a contiguous route");
+
+        let canonical = |tree: &RealisedRouteTree| {
+            tree.cells
+                .iter()
+                .map(|cell| (cell.at, cell.state.clone()))
+                .collect::<BTreeMap<_, _>>()
+        };
+        let mutated = |before: &RealisedRouteTree, after: &RealisedRouteTree| {
+            let before = canonical(before);
+            canonical(after)
+                .into_iter()
+                .filter(|(at, state)| before.get(at) != Some(state))
+                .map(|(at, _)| at)
+                .collect::<BTreeSet<_>>()
+        };
+        let shuffle = |tree: &RealisedRouteTree| {
+            let mut shuffled = tree.clone();
+            shuffled.cells.reverse();
+            shuffled.branches.reverse();
+            shuffled
+        };
+
+        let mut ordered = tree.clone();
+        let outcome = relocate_refresh_outcome(&mut ordered);
+        assert_eq!(
+            outcome,
+            RefreshRelocationOutcome {
+                changed: true,
+                used_bend_fallback: true,
+            }
+        );
+
+        let shuffled_input = shuffle(&tree);
+        assert_ne!(
+            shuffled_input.cells, tree.cells,
+            "the shuffle really reorders the input"
+        );
+        let mut shuffled = shuffled_input.clone();
+        assert_eq!(relocate_refresh_outcome(&mut shuffled), outcome);
+        assert_eq!(
+            canonical(&shuffled),
+            canonical(&ordered),
+            "the same anchor-to-state map, whatever order the input came in"
+        );
+        assert_eq!(
+            mutated(&shuffled_input, &shuffled),
+            mutated(&tree, &ordered),
+            "and the same mutation set"
+        );
+        assert_eq!(
+            mutated(&tree, &ordered),
+            BTreeSet::from([at(9, 0), at(15, 0), at(18, 0)]),
+            "one cell written, two dusted"
+        );
+        assert_ne!(
+            shuffled.cells, ordered.cells,
+            "no production vector was sorted to get there"
+        );
+
+        // The union's own contract: the boolean is `changed` and nothing else.
+        let mut wrapped = tree.clone();
+        assert_eq!(relocate_refresh(&mut wrapped), outcome.changed);
+        assert_eq!(wrapped, ordered, "the wrapper runs the same pass");
+
+        // A straight retention and a refusal are each distinguished from a
+        // retained bend.
+        let mut straight = linear_relocation_route(26);
+        assert_eq!(
+            relocate_refresh_outcome(&mut straight),
+            RefreshRelocationOutcome {
+                changed: true,
+                used_bend_fallback: false,
+            },
+            "the straight pass never reports a bend"
+        );
+        let mut refused = linear_relocation_route(40);
+        assert_eq!(
+            relocate_refresh_outcome(&mut refused),
+            RefreshRelocationOutcome::default(),
+            "a refusal reports neither"
+        );
     }
 }

@@ -980,3 +980,57 @@ wave budget. No command reached the 600 s cap. Full evidence is in
 Commit: `fix: include pull-x2 in refresh test boundaries`.
 
 **Wave verdict: retained 2 of 5 so far.**
+
+---
+
+## Task 5: Candidate 5 -- one-shot bend-aware Refresh Relocation -- attempted, GO
+
+Branch taken: **GO, RETAINED**. The existing refresh relocation pass now gets
+one bounded fallback after all straight attempts for a downstream repeater
+fail: it remembers only the first legal route-owned bend cell, tries the same
+three-cell replacement once, and keeps it only when exactly one repeater is
+removed and every branch still carries through. The public boolean API,
+proposal ordering, acceptance policy, and fingerprints are unchanged.
+
+Independent implementation review found that the attribution-only replay
+discarded prior prune/refresh failures and directly indexed the route map. The
+minimum correction asserts exact replay success and uses a checked lookup.
+Fresh focused tests passed 15/15 route-opt, 12/12 union, 9/9 refresh
+compatibility with 2 release-only tests ignored, and 4/4 bend-specific tests.
+The bounded rereview returned **APPROVED** with no remaining Critical or
+Important finding.
+
+The precommitted real-circuit gate ran exactly once and passed:
+
+```text
+RELOCATION accepted=2 bend_attributed=1 bend_offered=1
+incumbent=QualityKey { observed_settle: 560, non_air_blocks: 71119, occupied_volume: 1401988, static_routed_delay: ExactDelay(670) }
+winner=QualityKey { observed_settle: 550, non_air_blocks: 71119, occupied_volume: 1401988, static_routed_delay: ExactDelay(670) }
+test result: ok. 1 passed; 0 failed; finished in 369.20s
+```
+
+The command took 453.828 s including release compilation. The accepted bend
+candidate improves observed settling by 10; block count, occupied volume, and
+static routed delay do not regress. No second attribution run was made.
+
+### Wave command-time ledger (continued)
+
+| # | Command | Elapsed | Running total |
+| --- | --- | --- | --- |
+| 48 | Task 5 implementation RED/GREEN and support checks (conservative total) | 115.000 s | 1694.505 s |
+| 49 | Post-review `route_opt` plus `git diff --check` | 17.374 s | 1711.879 s |
+| 50 | Post-review union and refresh focused gates | 8.580 s | 1720.459 s |
+| 51 | Sole release bend-attribution gate | 453.828 s | 2174.287 s |
+
+Used after Task 5: **2174.287 s = 36.2 min** of the 60-minute wave budget.
+No command reached the 600 s cap.
+
+| Candidate | Final task status |
+| --- | --- |
+| 1: palette-indexed `BlockFlags` memo | **attempted, NO-GO** (1.18x vs 1.5x required) |
+| 2: `prunable_parent_routes` sidecar | **attempted, GO, RETAINED** (26 ms to 13 ms median) |
+| 3: hoisted merge consumer index | **attempted, NO-GO before production** (0 merge gates, 5 ms total work) |
+| 4: filtered second bounded Pull-X round | **attempted, GO, RETAINED** (7/7 accepted; 14 fewer blocks) |
+| 5: one-shot bend-aware Refresh Relocation | **attempted, GO, RETAINED** (one attributed acceptance; settle 560 to 550) |
+
+**Wave verdict: retained 3 of 5.**

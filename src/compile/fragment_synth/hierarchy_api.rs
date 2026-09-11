@@ -1663,6 +1663,9 @@ mod tests {
     use crate::compile::fragment_synth::placement::{
         LayoutRepair, SeedPlacementError, SeedPlacementPlan, SeedPlacementRequest, SeedPlacer,
     };
+    // Only the attribution run reads the bend bit; production keeps the
+    // boolean `relocate_refresh` it always had.
+    use crate::compile::fragment_synth::route_opt::relocate_refresh_outcome;
     use crate::compile::fragment_synth::search::StopReason;
     use crate::compile::fragment_synth::seed::InstancePlacementOverride;
     use crate::compile::geometry::Anchor;
@@ -3832,7 +3835,25 @@ mod tests {
     }
 
     /// Task 5's real-circuit retention gate. Passes 1-4 run unchanged, then
-    /// every Pass-5 descriptor is evaluated and every retained step is checked.
+    /// every Pass-5 descriptor is evaluated and every retained step is
+    /// checked, and at least one of the steps the search kept has to be a
+    /// route rewrite that retained a bend.
+    ///
+    /// That last bit is read beside the compile rather than out of it: no
+    /// trace entry, schema or fingerprint changes to carry it. For each
+    /// Pass-5 proposal -- the only ones that append a refresh descriptor --
+    /// the closure rebuilds exactly the tree the union is about to rewrite
+    /// and runs the same relocation on it, keeping the bend bit under the
+    /// `hierarchical-parent-refresh-choice-v1` fingerprint the stream will
+    /// stamp on the entry. The rebuild is exact because Pass 5 keeps
+    /// `block_placements`, so the proposal reuses the incumbent's own plan,
+    /// and because a prune and a refresh each rewrite one named route:
+    /// replay the incumbent's own choices for that route, in descriptor
+    /// order, and the tree is the one the union will hand this descriptor.
+    ///
+    /// An accepted entry matching a recorded fingerprint proves a bend
+    /// rewrite was retained inside the route transformation that proposal
+    /// carried. It does not claim the whole quality delta came from it.
     #[test]
     #[ignore = "release-only: exhausts ripple_adder8 through refresh relocation"]
     fn refresh_relocation_improves_an_acceptance_circuit() {
@@ -3846,12 +3867,56 @@ mod tests {
             let fixture = RelocationFixture::build(&h::ripple_adder(8), &library);
             let seed = fixture.compile(services, &[], &[]);
             let seed_quality = seed.quality();
+            // Which Pass-5 choices retained a bend, by the choice
+            // fingerprint the stream stamps on their trace entry.
+            let bends = std::cell::RefCell::new(BTreeSet::new());
             let mut stream = HierarchicalProposalStream::new(
                 fixture.edges.clone(),
                 fixture.source_outputs.clone(),
                 fixture.sink_inputs.clone(),
                 fixture.seams.clone(),
                 Box::new(|incumbent, placements, seams, prunes, refreshes| {
+                    if refreshes.len() > incumbent.refreshes.len() {
+                        let refresh = *refreshes
+                            .last()
+                            .expect("a longer refresh vector has a last entry");
+                        if let Some(planned) = incumbent
+                            .planned
+                            .planned
+                            .candidate
+                            .routes
+                            .get(&refresh.route)
+                        {
+                            let mut route = planned.clone();
+                            assert!(
+                                incumbent
+                                    .prunes
+                                    .iter()
+                                    .filter(|choice| choice.route == refresh.route)
+                                    .all(|_| prune_route(&mut route)),
+                                "accepted prune replay diverged during bend attribution"
+                            );
+                            assert!(
+                                incumbent
+                                    .refreshes
+                                    .iter()
+                                    .filter(|choice| choice.route == refresh.route)
+                                    .all(|_| relocate_refresh(&mut route)),
+                                "accepted refresh replay diverged during bend attribution"
+                            );
+                            if relocate_refresh_outcome(&mut route).used_bend_fallback {
+                                bends.borrow_mut().insert(serialized_fingerprint(
+                                    &RefreshChoiceFingerprint {
+                                        schema: "hierarchical-parent-refresh-choice-v1",
+                                        refresh,
+                                        incumbent_fingerprint: incumbent
+                                            .candidate_fingerprint()
+                                            .as_str(),
+                                    },
+                                ));
+                            }
+                        }
+                    }
                     compile_proposal(
                         &fixture.lowered,
                         &fixture.ordered,
@@ -3913,6 +3978,17 @@ mod tests {
                 accepted > 0,
                 "no refresh relocation was retained: {pass5:?}"
             );
+            let bends = bends.borrow();
+            let attributed = pass5
+                .iter()
+                .filter(|entry| entry.accepted && bends.contains(&entry.choice_fingerprint))
+                .count();
+            assert!(
+                attributed > 0,
+                "no accepted refresh carried a retained bend: offered={} accepted={accepted} \
+                 trace={pass5:?}",
+                bends.len()
+            );
             assert_eq!(summary.stop_reason, StopReason::ProposalStreamExhausted);
             assert_eq!(summary.best.quality(), incumbent);
             assert_eq!(summary.best.refreshes.len(), accepted);
@@ -3922,8 +3998,10 @@ mod tests {
                 "the retained candidate completed the unchanged full certification sweep"
             );
             eprintln!(
-                "RELOCATION accepted={accepted} seed={seed_quality:?} incumbent={pass5_incumbent:?} \
-                 winner={incumbent:?} candidate={} workers={threads}",
+                "RELOCATION accepted={accepted} bend_attributed={attributed} bend_offered={} \
+                 seed={seed_quality:?} incumbent={pass5_incumbent:?} winner={incumbent:?} \
+                 candidate={} workers={threads}",
+                bends.len(),
                 summary.best.candidate_fingerprint().as_str()
             );
         });
