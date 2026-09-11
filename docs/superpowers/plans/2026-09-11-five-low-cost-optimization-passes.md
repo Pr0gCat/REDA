@@ -876,11 +876,12 @@ stage and never calls `prune_route` internally.
   `onto_z_axis` / `step_by` helpers, so the trunk turns once between the two
   standing refreshes. Do not add a second fixture builder and do not assign
   `BlockState::facing` directly; use `crate::compile::repeater(Facing::..)` as
-  the existing helpers do. Remap a complete suffix so every consecutive path
-  step remains adjacent. Re-lay every repeater on the remapped suffix with the
-  existing constructor so its facing follows the new axis. Require
-  `bent_relocation_route().validate()` as a contiguity gate and explicitly check
-  every repeater step with `route_step_is_legal` before any fallback assertion.
+  the existing helpers do. Keep every consecutive path step adjacent: the
+  one-cell y-stair already is, and `bent_relocation_route().validate()` is the
+  gate. Remap a complete suffix and re-lay its repeaters with the existing
+  constructor only if a fixture changes the trunk's horizontal axis. Explicitly
+  check every repeater step with `route_step_is_legal` before any fallback
+  assertion.
 
 - [ ] Write RED tests in `route_opt.rs`:
 
