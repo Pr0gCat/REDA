@@ -155,7 +155,10 @@ pub(crate) fn relocate_refresh(tree: &mut RealisedRouteTree) -> bool {
         // leaves for the next `D`. So this is live, including after an
         // earlier pair was retained.
         let kinds: BTreeMap<Anchor, BlockKind> = if named_once {
-            tree.cells.iter().map(|cell| (cell.at, cell.state.kind)).collect()
+            tree.cells
+                .iter()
+                .map(|cell| (cell.at, cell.state.kind))
+                .collect()
         } else {
             BTreeMap::new()
         };
@@ -302,9 +305,10 @@ fn relocation_offsets(
             let kind = if *at == up || *at == down {
                 Some(BlockKind::RedstoneWire)
             } else {
-                kinds.get(at).copied().or_else(|| {
-                    (*at == branch.terminal.at).then_some(branch.terminal.state.kind)
-                })
+                kinds
+                    .get(at)
+                    .copied()
+                    .or_else(|| (*at == branch.terminal.at).then_some(branch.terminal.state.kind))
             };
             match kind {
                 Some(BlockKind::RedstoneWire) => dust.push(true),
@@ -357,9 +361,16 @@ fn relocation_offsets(
 /// `terminal.state` then stands in for it. Only the terminal gets that
 /// fallback: the upstream refresh must be a route-owned cell.
 fn branches_carry_through(tree: &RealisedRouteTree, at: Anchor) -> bool {
-    let kinds: BTreeMap<Anchor, BlockKind> =
-        tree.cells.iter().map(|cell| (cell.at, cell.state.kind)).collect();
-    let mut affected = tree.branches.iter().filter(|branch| branch.path.contains(&at)).peekable();
+    let kinds: BTreeMap<Anchor, BlockKind> = tree
+        .cells
+        .iter()
+        .map(|cell| (cell.at, cell.state.kind))
+        .collect();
+    let mut affected = tree
+        .branches
+        .iter()
+        .filter(|branch| branch.path.contains(&at))
+        .peekable();
     if affected.peek().is_none() {
         return false;
     }
@@ -378,9 +389,10 @@ fn branches_carry_through(tree: &RealisedRouteTree, at: Anchor) -> bool {
         }
         let mut strength = MAX_SIGNAL_STRENGTH;
         for cell in &branch.path[refresh + 1..] {
-            let kind = kinds.get(cell).copied().or_else(|| {
-                (*cell == branch.terminal.at).then_some(branch.terminal.state.kind)
-            });
+            let kind = kinds
+                .get(cell)
+                .copied()
+                .or_else(|| (*cell == branch.terminal.at).then_some(branch.terminal.state.kind));
             match kind {
                 Some(BlockKind::Repeater) => strength = MAX_SIGNAL_STRENGTH,
                 Some(BlockKind::RedstoneWire) => {
@@ -450,14 +462,28 @@ mod tests {
     use crate::compile::fragment_synth::union::tests::seam_tree;
     use crate::redstone::world::block::Facing;
 
-    fn set(tree: &mut RealisedRouteTree, x: i32, z: i32, state: crate::redstone::world::block::BlockState) {
+    fn set(
+        tree: &mut RealisedRouteTree,
+        x: i32,
+        z: i32,
+        state: crate::redstone::world::block::BlockState,
+    ) {
         let at = Anchor { x, y: 0, z };
-        tree.cells.iter_mut().find(|cell| cell.at == at).expect("cell exists").state = state;
+        tree.cells
+            .iter_mut()
+            .find(|cell| cell.at == at)
+            .expect("cell exists")
+            .state = state;
     }
 
     fn kind_at(tree: &RealisedRouteTree, x: i32, z: i32) -> BlockKind {
         let at = Anchor { x, y: 0, z };
-        tree.cells.iter().find(|cell| cell.at == at).expect("cell exists").state.kind
+        tree.cells
+            .iter()
+            .find(|cell| cell.at == at)
+            .expect("cell exists")
+            .state
+            .kind
     }
 
     /// The straight parent trunk the relocation pass exists for:
@@ -572,10 +598,21 @@ mod tests {
         let before = safe.clone();
         assert!(prune_route(&mut safe), "the x5 refresh is removable");
         assert_eq!(kind_at(&safe, 5, 0), BlockKind::RedstoneWire);
-        assert_eq!(kind_at(&safe, 3, 0), BlockKind::Repeater, "no earlier repeater: refused");
-        assert_eq!(kind_at(&safe, 8, 0), BlockKind::Repeater, "terminals are never candidates");
+        assert_eq!(
+            kind_at(&safe, 3, 0),
+            BlockKind::Repeater,
+            "no earlier repeater: refused"
+        );
+        assert_eq!(
+            kind_at(&safe, 8, 0),
+            BlockKind::Repeater,
+            "terminals are never candidates"
+        );
         assert_eq!(kind_at(&safe, 8, 1), BlockKind::Repeater);
-        assert_eq!(safe.branches, before.branches, "paths and terminals are untouched");
+        assert_eq!(
+            safe.branches, before.branches,
+            "paths and terminals are untouched"
+        );
         assert_eq!(safe.floors, before.floors);
         assert_eq!(
             safe.cells.iter().map(|c| c.at).collect::<Vec<_>>(),
@@ -623,9 +660,20 @@ mod tests {
         assert!(prune_route(&mut tree));
         assert_eq!(kind_at(&tree, 8, 0), BlockKind::RedstoneWire);
         assert_eq!(kind_at(&tree, 8, 1), BlockKind::RedstoneWire);
-        assert_eq!(kind_at(&tree, 3, 0), BlockKind::Repeater, "x3 is refused once the x8s are dust");
-        assert_eq!(kind_at(&tree, 1, 0), BlockKind::Repeater, "no earlier repeater: refused");
-        assert_eq!(tree, expected, "exactly the two branch refreshes changed, nothing else");
+        assert_eq!(
+            kind_at(&tree, 3, 0),
+            BlockKind::Repeater,
+            "x3 is refused once the x8s are dust"
+        );
+        assert_eq!(
+            kind_at(&tree, 1, 0),
+            BlockKind::Repeater,
+            "no earlier repeater: refused"
+        );
+        assert_eq!(
+            tree, expected,
+            "exactly the two branch refreshes changed, nothing else"
+        );
     }
 
     /// A route's terminal cell may be owned by what it delivers into (a
@@ -642,9 +690,16 @@ mod tests {
         let mut lever = seam_tree(3, 4);
         set(&mut lever, 5, 0, crate::compile::repeater(Facing::East));
         disown_terminals(&mut lever);
-        assert!(prune_route(&mut lever), "a repeater terminal off the cell list is a conductor");
+        assert!(
+            prune_route(&mut lever),
+            "a repeater terminal off the cell list is a conductor"
+        );
         assert_eq!(kind_at(&lever, 5, 0), BlockKind::RedstoneWire);
-        assert_eq!(kind_at(&lever, 3, 0), BlockKind::Repeater, "the source is never assumed");
+        assert_eq!(
+            kind_at(&lever, 3, 0),
+            BlockKind::Repeater,
+            "the source is never assumed"
+        );
 
         // A dust terminal costs one like any dust: from x3, 14 dust leave
         // strength 1 and the dust terminal takes it to zero, where the same
@@ -653,7 +708,10 @@ mod tests {
         set(&mut long, 5, 0, crate::compile::repeater(Facing::East));
         disown_terminals(&mut long);
         let mut into_repeater = long.clone();
-        assert!(prune_route(&mut into_repeater), "14 dust into a repeater terminal keeps signal");
+        assert!(
+            prune_route(&mut into_repeater),
+            "14 dust into a repeater terminal keeps signal"
+        );
         for branch in &mut long.branches {
             branch.terminal.state = crate::compile::dust();
         }
@@ -688,7 +746,10 @@ mod tests {
                 node(to),
                 TimingArcKind::Route {
                     route: RouteId(route),
-                    sink: RoutedSinkId { route: RouteId(route), ordinal },
+                    sink: RoutedSinkId {
+                        route: RouteId(route),
+                        ordinal,
+                    },
                 },
                 ExactDelay(delay),
             )
@@ -1017,7 +1078,10 @@ mod tests {
 
         // Neither refresh is removable on its own, on either branch.
         let mut pruned = tree.clone();
-        assert!(!prune_route(&mut pruned), "direct pruning takes neither x9 nor x18");
+        assert!(
+            !prune_route(&mut pruned),
+            "direct pruning takes neither x9 nor x18"
+        );
         assert_eq!(pruned, tree);
 
         // x16 and x17 starve the trunk and x14 starves the feeder's own
@@ -1036,12 +1100,18 @@ mod tests {
         }
 
         let mut relocated = tree.clone();
-        assert!(relocate_refresh(&mut relocated), "x15 carries both branches");
+        assert!(
+            relocate_refresh(&mut relocated),
+            "x15 carries both branches"
+        );
         let mut expected = tree.clone();
         set(&mut expected, 9, 0, crate::compile::dust());
         set(&mut expected, 18, 0, crate::compile::dust());
         set(&mut expected, 15, 0, crate::compile::repeater(Facing::East));
-        assert_eq!(relocated, expected, "the one cell both branches allow, and only it");
+        assert_eq!(
+            relocated, expected,
+            "the one cell both branches allow, and only it"
+        );
 
         let settled = relocated.clone();
         assert!(!relocate_refresh(&mut relocated), "no second pair");
@@ -1064,7 +1134,10 @@ mod tests {
         tree.cells.retain(|cell| cell.at != terminal);
 
         let mut relocated = tree.clone();
-        assert!(relocate_refresh(&mut relocated), "the recorded terminal is a repeater");
+        assert!(
+            relocate_refresh(&mut relocated),
+            "the recorded terminal is a repeater"
+        );
         assert_eq!(
             repeater_anchors(&relocated, |at| at.x),
             vec![0, 15],
@@ -1074,7 +1147,10 @@ mod tests {
         set(&mut expected, 9, 0, crate::compile::dust());
         set(&mut expected, 18, 0, crate::compile::dust());
         set(&mut expected, 15, 0, crate::compile::repeater(Facing::East));
-        assert_eq!(relocated, expected, "one repeater saved, nothing else touched");
+        assert_eq!(
+            relocated, expected,
+            "one repeater saved, nothing else touched"
+        );
     }
 
     /// `linear_relocation_route` with `decoys` further East refreshes every
@@ -1089,7 +1165,12 @@ mod tests {
         let last = 30 + 15 * (decoys as i32 - 1);
         let mut tree = linear_relocation_route(last as usize + 14);
         for j in 0..decoys as i32 {
-            set(&mut tree, 30 + 15 * j, 0, crate::compile::repeater(Facing::East));
+            set(
+                &mut tree,
+                30 + 15 * j,
+                0,
+                crate::compile::repeater(Facing::East),
+            );
         }
         // Alternating unit steps in x and z: no slice of three cells or more
         // out here has one constant delta.
@@ -1120,21 +1201,37 @@ mod tests {
         for decoys in [3, 60] {
             let tree = staircase_decoy_route(decoys);
             let mut relocated = tree.clone();
-            assert!(relocate_refresh(&mut relocated), "{decoys} decoys: the (x18, x9) pair is reached");
-            assert_eq!(kind_at(&relocated, 15, 0), BlockKind::Repeater, "{decoys} decoys: saved at x15");
+            assert!(
+                relocate_refresh(&mut relocated),
+                "{decoys} decoys: the (x18, x9) pair is reached"
+            );
+            assert_eq!(
+                kind_at(&relocated, 15, 0),
+                BlockKind::Repeater,
+                "{decoys} decoys: saved at x15"
+            );
             assert_eq!(kind_at(&relocated, 9, 0), BlockKind::RedstoneWire);
             assert_eq!(kind_at(&relocated, 18, 0), BlockKind::RedstoneWire);
             let mut expected = tree.clone();
             set(&mut expected, 9, 0, crate::compile::dust());
             set(&mut expected, 18, 0, crate::compile::dust());
             set(&mut expected, 15, 0, crate::compile::repeater(Facing::East));
-            assert_eq!(relocated, expected, "{decoys} decoys: exactly one pair moved, nothing else");
+            assert_eq!(
+                relocated, expected,
+                "{decoys} decoys: exactly one pair moved, nothing else"
+            );
 
             // Deterministic and idempotent: the only pair left is (x0, x15),
             // whose `U` has no earlier route-owned refresh.
             let settled = relocated.clone();
-            assert!(!relocate_refresh(&mut relocated), "{decoys} decoys: no second pair");
-            assert_eq!(relocated, settled, "{decoys} decoys: a refusal leaves no partial mutation");
+            assert!(
+                !relocate_refresh(&mut relocated),
+                "{decoys} decoys: no second pair"
+            );
+            assert_eq!(
+                relocated, settled,
+                "{decoys} decoys: a refusal leaves no partial mutation"
+            );
         }
     }
 }

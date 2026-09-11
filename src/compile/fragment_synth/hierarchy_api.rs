@@ -1267,7 +1267,10 @@ where
             let Some(name) = next else { break };
             match compile_leaf(&name) {
                 Ok(value) => {
-                    compiled.lock().expect("compiled leaves").insert(name, value);
+                    compiled
+                        .lock()
+                        .expect("compiled leaves")
+                        .insert(name, value);
                 }
                 Err(reason) => {
                     let mut slot = failure.lock().expect("leaf failure");
@@ -1549,8 +1552,8 @@ fn hierarchy_descriptor_bytes(design: &HierarchicalNetlist) -> Vec<u8> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate;
     use crate::compile::fragment_synth::benchmark::canonical_world_fingerprint;
+    use crate::compile::fragment_synth::candidate::ExpandedPhysicalCandidate;
     use crate::compile::fragment_synth::certification::{
         certification_thread_budget, record_caller_certification_budgets,
         scoped_certification_threads, with_compile_worker_budget, CandidateCertificationError,
@@ -2218,7 +2221,10 @@ mod tests {
             canonical_world_fingerprint(&one.compiled.world)
         );
         assert_eq!(many.compiled.input_positions, one.compiled.input_positions);
-        assert_eq!(many.compiled.output_positions, one.compiled.output_positions);
+        assert_eq!(
+            many.compiled.output_positions,
+            one.compiled.output_positions
+        );
         assert_eq!(
             many.compiled.gate_output_positions,
             one.compiled.gate_output_positions
@@ -2390,7 +2396,8 @@ mod tests {
         // so a fast worker may take a second leaf and leave a planned thread
         // idle. The exact spawn count is pinned by `leaf_worker_plan` above.
 
-        let one_core = drain_ready_leaves(leaves.clone(), 1, &compile).expect("every leaf compiles");
+        let one_core =
+            drain_ready_leaves(leaves.clone(), 1, &compile).expect("every leaf compiles");
         assert_eq!(one_core.len(), leaves.len());
         let entries = take();
         assert!(
@@ -2409,7 +2416,10 @@ mod tests {
     fn every_queued_leaf_is_attempted_and_the_lowest_named_failure_is_reported() {
         let attempted = Mutex::new(BTreeSet::new());
         let compile = |name: &str| {
-            attempted.lock().expect("leaf probe").insert(name.to_string());
+            attempted
+                .lock()
+                .expect("leaf probe")
+                .insert(name.to_string());
             if name.ends_with("_bad") {
                 Err(format!("{name} refused"))
             } else {
@@ -2418,11 +2428,7 @@ mod tests {
         };
         // Queue order deliberately puts the higher-named failure first, so a
         // first-failure short circuit would report `z_bad`.
-        let leaves = vec![
-            "z_bad".to_string(),
-            "b_bad".to_string(),
-            "m_ok".to_string(),
-        ];
+        let leaves = vec!["z_bad".to_string(), "b_bad".to_string(), "m_ok".to_string()];
 
         for budget in [1, 2, 32] {
             attempted.lock().expect("leaf probe").clear();
@@ -2755,9 +2761,17 @@ mod tests {
                 },
             ),
         );
-        assert_eq!(stream.seam(edges.len() - 1), None, "alignment owns that index");
+        assert_eq!(
+            stream.seam(edges.len() - 1),
+            None,
+            "alignment owns that index"
+        );
         assert_eq!(stream.seam(edges.len()), Some(lever_fed));
-        assert_eq!(stream.seam(edges.len() + 1), None, "each descriptor is offered once");
+        assert_eq!(
+            stream.seam(edges.len() + 1),
+            None,
+            "each descriptor is offered once"
+        );
     }
 
     /// The prune stage starts one past the last seam, counting the frozen
@@ -2794,13 +2808,22 @@ mod tests {
         let first = ParentRouteChoice { route: RouteId(7) };
         let second = ParentRouteChoice { route: RouteId(5) };
         let start = edges.len() + 1 + 1;
-        assert_eq!(stream.seam(start - 1), Some(seam), "the seam stage owns the index before");
         assert_eq!(
-            stream.prune(start - 1, || unreachable!("no freeze before the stage is reached")),
+            stream.seam(start - 1),
+            Some(seam),
+            "the seam stage owns the index before"
+        );
+        assert_eq!(
+            stream.prune(start - 1, || unreachable!(
+                "no freeze before the stage is reached"
+            )),
             None
         );
         assert_eq!(stream.prune(start, || vec![first, second]), Some(first));
-        assert_eq!(stream.prune(start + 1, || unreachable!("frozen once")), Some(second));
+        assert_eq!(
+            stream.prune(start + 1, || unreachable!("frozen once")),
+            Some(second)
+        );
         assert_eq!(
             stream.prune(start + 2, || unreachable!("frozen once")),
             None,
@@ -2820,10 +2843,22 @@ mod tests {
                 incumbent_fingerprint,
             })
         };
-        assert_eq!(fragment(first), fragment(first), "the fragment names only the route");
+        assert_eq!(
+            fragment(first),
+            fragment(first),
+            "the fragment names only the route"
+        );
         assert_ne!(fragment(first), fragment(second));
-        assert_ne!(choice(first, "a"), choice(first, "b"), "the choice binds the incumbent");
-        assert_ne!(choice(first, "a"), fragment(first), "the two schemas never collide");
+        assert_ne!(
+            choice(first, "a"),
+            choice(first, "b"),
+            "the choice binds the incumbent"
+        );
+        assert_ne!(
+            choice(first, "a"),
+            fragment(first),
+            "the two schemas never collide"
+        );
 
         // Only routes `prune_route` can change reach the sidecar: route 5
         // carries a redundant x5 refresh behind its x3 trunk repeater,
@@ -2831,8 +2866,12 @@ mod tests {
         let seam_tree = crate::compile::fragment_synth::union::tests::seam_tree;
         let mut redundant = seam_tree(3, 4);
         let x5 = Anchor { x: 5, y: 0, z: 0 };
-        redundant.cells.iter_mut().find(|cell| cell.at == x5).unwrap().state =
-            crate::compile::repeater(Facing::East);
+        redundant
+            .cells
+            .iter_mut()
+            .find(|cell| cell.at == x5)
+            .unwrap()
+            .state = crate::compile::repeater(Facing::East);
         let routes = BTreeMap::from([(RouteId(5), redundant), (RouteId(7), seam_tree(3, 4))]);
         assert_eq!(
             prunable_parent_routes(&routes),
@@ -3460,14 +3499,8 @@ mod tests {
         let blocks = compile_blocks(&lowered, &order, threads).expect("blocks compile");
         let ordered = ordered_blocks(&lowered, &lowered.top, &order, &blocks);
         let variant = SeedVariant::default();
-        let (planning, graph) = parent_planning_graph(
-            &lowered,
-            &lowered.top,
-            &ordered,
-            &library,
-            &variant,
-        )
-        .unwrap();
+        let (planning, graph) =
+            parent_planning_graph(&lowered, &lowered.top, &ordered, &library, &variant).unwrap();
         let planned = plan_parent_with_services(
             SeedInput {
                 lowered: &planning,
@@ -3495,11 +3528,13 @@ mod tests {
             .iter()
             .filter_map(|(&route, tree)| {
                 let mut clone = tree.clone();
-                crate::compile::fragment_synth::route_opt::prune_route(&mut clone)
-                    .then_some(route)
+                crate::compile::fragment_synth::route_opt::prune_route(&mut clone).then_some(route)
             })
             .collect::<BTreeSet<_>>();
-        assert!(!prunable.is_empty(), "multiplier4 has prunable parent routes");
+        assert!(
+            !prunable.is_empty(),
+            "multiplier4 has prunable parent routes"
+        );
 
         let compile = |prunes: &[ParentRouteChoice]| {
             let started = std::time::Instant::now();
@@ -3519,20 +3554,22 @@ mod tests {
                 "parent prune test: {} route(s) compiled in {:?}: {:?}",
                 prunes.len(),
                 started.elapsed(),
-                result.as_ref().map(|candidate| candidate.certified.metrics().quality)
+                result
+                    .as_ref()
+                    .map(|candidate| candidate.certified.metrics().quality)
             );
             result
         };
         let baseline = compile(&[]).expect("baseline certifies");
-        let choice = prune_descriptors(
-            baseline.certified.timing_graph(),
-            &baseline.parent_routes,
-        )
-        .into_iter()
-        .next()
-        .expect("a timed parent route is prunable");
+        let choice = prune_descriptors(baseline.certified.timing_graph(), &baseline.parent_routes)
+            .into_iter()
+            .next()
+            .expect("a timed parent route is prunable");
         assert!(
-            baseline.parent_routes.keys().all(|route| prunable.contains(route)),
+            baseline
+                .parent_routes
+                .keys()
+                .all(|route| prunable.contains(route)),
             "the sidecar offers only prunable parent routes"
         );
         let mut expected = planned.candidate.routes[&choice.route].clone();
@@ -3591,14 +3628,8 @@ mod tests {
             .map(|block| block.candidate.routes.clone())
             .collect::<Vec<_>>();
         let variant = SeedVariant::default();
-        let (_, graph) = parent_planning_graph(
-            &lowered,
-            &lowered.top,
-            &ordered,
-            &library,
-            &variant,
-        )
-        .unwrap();
+        let (_, graph) =
+            parent_planning_graph(&lowered, &lowered.top, &ordered, &library, &variant).unwrap();
         let block_delays = graph
             .blocks
             .iter()
@@ -3606,7 +3637,10 @@ mod tests {
             .collect::<BTreeMap<_, _>>();
         let analysis = analyse_instance_dag(&graph, &block_delays).expect("dag analyses");
         let edges = explicit_block_edges(&graph, &analysis.edges);
-        assert!(!edges.is_empty(), "ripple_adder(8) has block-to-block edges");
+        assert!(
+            !edges.is_empty(),
+            "ripple_adder(8) has block-to-block edges"
+        );
         let (source_outputs, sink_inputs) =
             compiled_port_lookup(&graph, &ordered).expect("compiled ports resolve");
 
@@ -3628,7 +3662,9 @@ mod tests {
                 "pull-x test: {} placement(s) compiled in {:?}: {:?}",
                 placements.len(),
                 started.elapsed(),
-                result.as_ref().map(|candidate| candidate.certified.metrics().quality)
+                result
+                    .as_ref()
+                    .map(|candidate| candidate.certified.metrics().quality)
             );
             result
         };
@@ -3646,7 +3682,9 @@ mod tests {
                 .map(|proposal| (*edge, proposal))
             })
             .expect("ripple_adder(8) must have a block edge whose ports differ in X");
-        let source_x = source_outputs[&(edge.source_block, edge.source_port)].cell.x
+        let source_x = source_outputs[&(edge.source_block, edge.source_port)]
+            .cell
+            .x
             + baseline.realised_block_offsets[&edge.source_block].dx;
         let sink_x = sink_inputs[&(edge.sink_block, edge.sink_input)].cell.x
             + baseline.realised_block_offsets[&edge.sink_block].dx;
@@ -3746,7 +3784,10 @@ mod tests {
         let (sink_block, other_block) = (row("row2"), row("row1"));
         let compiled = &ordered[sink_block.block as usize];
         assert_eq!(compiled.module, "adder_row");
-        assert_eq!(other_block.block, sink_block.block, "both rows stamp one block");
+        assert_eq!(
+            other_block.block, sink_block.block,
+            "both rows stamp one block"
+        );
         let compiled_before = compiled.candidate.routes.clone();
         let input = u16::try_from(
             compiled
@@ -3818,7 +3859,9 @@ mod tests {
                 .routes
                 .values()
                 .flat_map(|route| &route.cells)
-                .filter(|cell| cell.state.kind == crate::redstone::world::block::BlockKind::Repeater)
+                .filter(|cell| {
+                    cell.state.kind == crate::redstone::world::block::BlockKind::Repeater
+                })
                 .count()
         };
         let shift = |block: InstanceId, at: Anchor| {

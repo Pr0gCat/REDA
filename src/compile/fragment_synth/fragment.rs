@@ -1342,13 +1342,13 @@ mod tests {
             _library: &Library,
             _config: &crate::compile::fragment_synth::config::CertificationConfig,
         ) -> Result<CertifiedCandidate, CandidateCertificationError> {
-            Err(PhysicalCertificationError::from(
-                ExpandedPhysicalError::ObservationMismatch {
+            Err(
+                PhysicalCertificationError::from(ExpandedPhysicalError::ObservationMismatch {
                     observation: ObservationId::PrimaryInput(PortId(0)),
                     at: Anchor { x: 0, y: 0, z: 0 },
-                },
+                })
+                .into(),
             )
-            .into())
         }
     }
 
@@ -1366,12 +1366,12 @@ mod tests {
             _library: &Library,
             _config: &crate::compile::fragment_synth::config::CertificationConfig,
         ) -> Result<CertifiedCandidate, CandidateCertificationError> {
-            Err(PhysicalCertificationError::from(
-                ExpandedAdapterError::NegativeWorldCoordinate {
+            Err(
+                PhysicalCertificationError::from(ExpandedAdapterError::NegativeWorldCoordinate {
                     at: Anchor { x: -1, y: 0, z: 0 },
-                },
+                })
+                .into(),
             )
-            .into())
         }
     }
 

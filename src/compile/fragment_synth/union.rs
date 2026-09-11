@@ -235,8 +235,11 @@ pub(crate) fn absorb_input_seam(
             "seam anchor is not a route-owned repeater",
         ))?;
     cell.state = crate::compile::dust();
-    let cells: BTreeMap<Anchor, BlockKind> =
-        tree.cells.iter().map(|cell| (cell.at, cell.state.kind)).collect();
+    let cells: BTreeMap<Anchor, BlockKind> = tree
+        .cells
+        .iter()
+        .map(|cell| (cell.at, cell.state.kind))
+        .collect();
     let mut affected = tree
         .branches
         .iter()
@@ -247,7 +250,9 @@ pub(crate) fn absorb_input_seam(
     }
     for branch in affected {
         if branch.path.last() != Some(&branch.terminal.at) {
-            return Err(UnionError::Incomplete("seam branch terminal is off its path"));
+            return Err(UnionError::Incomplete(
+                "seam branch terminal is off its path",
+            ));
         }
         // `root` is `path[0]` (the router records it that way), so the
         // path alone is the whole conductor sequence after the boundary
@@ -512,7 +517,9 @@ pub(crate) fn union_candidate(
     // The placeholder bodies go now: `validate_physical_ownership` refuses a
     // `delayed: None` placement holding repeaters, and the real per-primitive
     // placements arriving below are what owns those cells from here on.
-    union.placements.retain(|id, _| !ghosts.contains(&id.instance));
+    union
+        .placements
+        .retain(|id, _| !ghosts.contains(&id.instance));
     // Parent routes keep their ids (`route_offset: 0`) and no child cell
     // exists yet, so a prune here can only ever touch parent-owned cells. A
     // route that is gone or has nothing left to prune is a stale descriptor.
@@ -522,7 +529,9 @@ pub(crate) fn union_candidate(
             .get_mut(&prune.route)
             .ok_or(UnionError::Incomplete("prune names no parent route"))?;
         if !prune_route(tree) {
-            return Err(UnionError::Incomplete("prune leaves the parent route unchanged"));
+            return Err(UnionError::Incomplete(
+                "prune leaves the parent route unchanged",
+            ));
         }
     }
     // Every prune first, then every refresh: a relocation is proven against
@@ -559,7 +568,11 @@ pub(crate) fn union_candidate(
             .get(&block.id)
             .ok_or(UnionError::Incomplete("planned block offset"))?;
         let mut candidate = compiled.candidate.clone();
-        for seam in input.seams.iter().filter(|seam| seam.sink_block == block.id) {
+        for seam in input
+            .seams
+            .iter()
+            .filter(|seam| seam.sink_block == block.id)
+        {
             let tree = candidate
                 .routes
                 .values_mut()
@@ -572,7 +585,12 @@ pub(crate) fn union_candidate(
             absorb_input_seam(tree, seam.at, boundary)?;
         }
         relocate::translate(&mut candidate, offset);
-        let span = candidate.routes.keys().map(|id| id.0 + 1).max().unwrap_or(0);
+        let span = candidate
+            .routes
+            .keys()
+            .map(|id| id.0 + 1)
+            .max()
+            .unwrap_or(0);
         let route_offset = next_route;
         next_route = next_route
             .checked_add(span)
@@ -1482,19 +1500,19 @@ pub(crate) mod tests {
     ) {
         let lowered = crate::compile::hierarchy::lower_hierarchy(design).expect("lowers");
         let netlist = lowered.block_netlist(block_module);
-        let block = crate::compile::fragment_synth::blocks::compile_block(
-            block_module,
-            &netlist,
-            services,
-        )
-        .expect("the block compiles");
+        let block =
+            crate::compile::fragment_synth::blocks::compile_block(block_module, &netlist, services)
+                .expect("the block compiles");
         let ordered = vec![block.clone()];
         let top = lowered.top.clone();
         let (planning, owned) = planning_netlist(&lowered, &top, &ordered);
         let graph = InstanceGraph::with_blocks(
             &planning,
             library,
-            &owned.iter().map(BlockSpecOwned::as_spec).collect::<Vec<_>>(),
+            &owned
+                .iter()
+                .map(BlockSpecOwned::as_spec)
+                .collect::<Vec<_>>(),
         )
         .expect("the parent graph builds");
         let planned = crate::compile::fragment_synth::seed::plan_parent_with_services(
@@ -1590,8 +1608,11 @@ pub(crate) mod tests {
         let block_id = planned.candidate.instances.blocks[0].id;
         let offset = planned.block_offsets[&block_id];
         assert!(
-            !block.candidate.routes.values().any(|tree| tree.source
-                == PhysicalEndpointId::PrimaryInput(PortId(0))),
+            !block
+                .candidate
+                .routes
+                .values()
+                .any(|tree| tree.source == PhysicalEndpointId::PrimaryInput(PortId(0))),
             "the block must have no route out of the input nothing reads"
         );
         let delivery = planned
@@ -1639,12 +1660,9 @@ pub(crate) mod tests {
             union.boundaries.len(),
             lowered.flat.inputs.len() + lowered.flat.outputs.len()
         );
-        let certified = crate::compile::fragment_synth::seed::certify_planned(
-            union,
-            &lowered.flat,
-            services,
-        )
-        .expect("certifies");
+        let certified =
+            crate::compile::fragment_synth::seed::certify_planned(union, &lowered.flat, services)
+                .expect("certifies");
         assert!(certified.metrics().quality.observed_settle > 0);
     }
 
@@ -1731,12 +1749,9 @@ pub(crate) mod tests {
             union.boundaries.len(),
             lowered.flat.inputs.len() + lowered.flat.outputs.len()
         );
-        let certified = crate::compile::fragment_synth::seed::certify_planned(
-            union,
-            &lowered.flat,
-            services,
-        )
-        .expect("certifies");
+        let certified =
+            crate::compile::fragment_synth::seed::certify_planned(union, &lowered.flat, services)
+                .expect("certifies");
         assert!(certified.metrics().quality.observed_settle > 0);
     }
 
@@ -1810,7 +1825,10 @@ pub(crate) mod tests {
         let graph = InstanceGraph::with_blocks(
             &planning,
             &library,
-            &owned.iter().map(BlockSpecOwned::as_spec).collect::<Vec<_>>(),
+            &owned
+                .iter()
+                .map(BlockSpecOwned::as_spec)
+                .collect::<Vec<_>>(),
         )
         .unwrap();
         let planned = crate::compile::fragment_synth::seed::plan_parent_with_services(
@@ -1967,12 +1985,9 @@ pub(crate) mod tests {
                 "output `{port}` join"
             );
         }
-        let certified = crate::compile::fragment_synth::seed::certify_planned(
-            union,
-            &lowered.flat,
-            services,
-        )
-        .expect("certifies");
+        let certified =
+            crate::compile::fragment_synth::seed::certify_planned(union, &lowered.flat, services)
+                .expect("certifies");
         assert!(certified.metrics().quality.observed_settle > 0);
     }
 
@@ -1984,19 +1999,31 @@ pub(crate) mod tests {
             state,
         };
         let refresh = trunk as i32;
-        let mut cells = (0..refresh).map(|x| cell(x, 0, crate::compile::dust())).collect::<Vec<_>>();
+        let mut cells = (0..refresh)
+            .map(|x| cell(x, 0, crate::compile::dust()))
+            .collect::<Vec<_>>();
         cells.push(cell(refresh, 0, crate::compile::repeater(Facing::East)));
         let mut branches = Vec::new();
         for z in [0, 1] {
-            let mut path = (0..=refresh).map(|x| Anchor { x, y: 0, z: 0 }).collect::<Vec<_>>();
+            let mut path = (0..=refresh)
+                .map(|x| Anchor { x, y: 0, z: 0 })
+                .collect::<Vec<_>>();
             for x in refresh + 1..=refresh + tail as i32 {
                 cells.push(cell(x, z, crate::compile::dust()));
                 path.push(Anchor { x, y: 0, z });
             }
-            let end = Anchor { x: refresh + tail as i32 + 1, y: 0, z };
+            let end = Anchor {
+                x: refresh + tail as i32 + 1,
+                y: 0,
+                z,
+            };
             cells.push(cell(end.x, end.z, crate::compile::repeater(Facing::East)));
             path.push(end);
-            let mut branch = a_branch(RouteTarget::DeclaredOutput(PortId(z as u32)), path[0], &path);
+            let mut branch = a_branch(
+                RouteTarget::DeclaredOutput(PortId(z as u32)),
+                path[0],
+                &path,
+            );
             branch.terminal.state = crate::compile::repeater(Facing::East);
             branches.push(branch);
         }
@@ -2030,19 +2057,25 @@ pub(crate) mod tests {
         let repeater = boundary(RouteTerminalKind::RepeaterIntoSupport);
         let mut short = seam_tree(3, 4);
         let at = first_internal_repeater(&short).expect("the mid-route repeater is selectable");
-        assert_eq!(at, Anchor { x: 3, y: 0, z: 0 }, "terminal repeaters are never selected");
+        assert_eq!(
+            at,
+            Anchor { x: 3, y: 0, z: 0 },
+            "terminal repeaters are never selected"
+        );
         absorb_input_seam(&mut short, at, &repeater)
             .expect("3 + 4 dust from a strength-15 boundary keeps signal");
         let replaced = short.cells.iter().find(|cell| cell.at == at).unwrap();
         assert_eq!(replaced.state.kind, BlockKind::RedstoneWire);
 
         let mut long = seam_tree(3, 12);
-        let error = absorb_input_seam(&mut long, at, &repeater).expect_err("3 + 12 dust reaches zero");
+        let error =
+            absorb_input_seam(&mut long, at, &repeater).expect_err("3 + 12 dust reaches zero");
         assert!(matches!(error, UnionError::Incomplete(_)), "{error}");
 
         let mut terminal = seam_tree(3, 4);
         let end = terminal.branches[0].terminal.at;
-        absorb_input_seam(&mut terminal, end, &repeater).expect_err("a terminal repeater is refused");
+        absorb_input_seam(&mut terminal, end, &repeater)
+            .expect_err("a terminal repeater is refused");
         absorb_input_seam(&mut terminal, Anchor { x: 1, y: 0, z: 0 }, &repeater)
             .expect_err("a dust cell is not a repeater and is refused");
 
