@@ -219,3 +219,74 @@ commit, and every later candidate's revert target is the commit standing when
 that candidate starts. Its SHA cannot be written into its own commit; it is
 recorded in the Task 0 implementer report and in the controller ledger, and
 Task 1 copies it here as the first line of its section.
+
+## Task 0 correction: native stderr is captured by the runner itself
+
+Controller ruling on the runner finding above: the defect is real and
+load-bearing, so it is fixed centrally in the plan rather than by asking every
+caller to append `2>&1`. Wave start commit: `c737335494687abfbfb22f714a350bca609f60ea`.
+
+### The central fix
+
+`Invoke-Capped` in the plan now wraps the parsed command in a script block and
+redirects that block, inside the job:
+
+```powershell
+        Invoke-Expression "& {`n$c`n} 2>&1"
+```
+
+replaces `Invoke-Expression $c 2>&1`. Nothing else in the runner changed: the
+`REDA_CAPPED_EXIT` sentinel, the nonzero-exit throw, the 600 s `Wait-Job`
+timeout and its `Stop-Job` / `Remove-Job` cleanup are byte-identical. The
+`$ripple` and `$reuse` literals in the plan carry no `2>&1`; the runner owns
+the stderr contract, and the `$ripple` string shown earlier in this report with
+a trailing `2>&1` is superseded by the plan's literal for every later task.
+
+### Validation without Cargo
+
+The function text was extracted verbatim from the edited plan file
+(`awk` from `function Invoke-Capped` to its closing brace) and dot-sourced, then
+run against a multi-line native command that sets an environment variable,
+writes stdout, writes stderr and exits nonzero:
+
+```powershell
+$probe = @'
+$env:REDA_PROBE='1'
+rustc --version
+rustc --bogus-flag
+'@
+Invoke-Capped -Command $probe -Log $log
+```
+
+Result on PowerShell 7.1.3 and on Windows PowerShell 5.1.19041, identical:
+
+```text
+THREW: exit 1 : <the command text>
+LOG:
+  | rustc 1.97.1 (8bab26f4f 2026-07-14)
+  | error: Unrecognized option: 'bogus-flag'
+  | System.Management.Automation.RemoteException
+SUCCESS PATH RETURNED: rustc 1.97.1 (8bab26f4f 2026-07-14)
+REDA_PROBE in interactive shell: []
+```
+
+The stderr line is in the log, the nonzero exit throws through the sentinel,
+the zero-exit path (`rustc --version`) returns the body, and the environment
+variable set inside the command does not leak into the interactive shell. The
+single `System.Management.Automation.RemoteException` artifact line stands in
+for the blank line the child emits after its error and does not match any
+anchored `^PHASE …$`, `^WORK ` or `^RETENTION ` pattern. The 600 s timeout was
+not exercised (no 600 s sleep); its code is unchanged by inspection of the diff.
+
+### Why the already-captured baseline stands
+
+Samples 2 and 3 above were captured with `2>&1` on the cargo line inside the
+command string. Redirecting the native command's stderr at that line and
+redirecting the enclosing script block are behaviourally equivalent: both merge
+the same stream into the same job output, and the earlier transcripts show the
+same artifact line and the same parseable `PHASE` / `WORK` / `RETENTION`
+lines the central form produces. The `RETENTION` lines, quality fields,
+fingerprints and `WORK` sequence come from stdout in both forms. The three
+paired samples, their medians (3637 ms / 9642 ms) and the focused-gate results
+are therefore valid baseline evidence and are not recaptured. The budget ledger
+is unchanged at 138.0 s: this correction ran no Cargo command.

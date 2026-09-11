@@ -59,6 +59,11 @@ The child's exit status must reach the parent. `Invoke-Expression` swallows it
 unless it is emitted deliberately, so the job prints one unambiguous sentinel
 line as its last output and the parent throws on anything nonzero.
 
+The child's stderr must reach the transcript too: every `PHASE` and `WORK`
+line is `eprintln!`. Inside `Start-Job`, `Invoke-Expression $c 2>&1` merges
+nothing from a native child, so the runner wraps the command in a script block
+and redirects that block. Callers never append `2>&1`; the runner owns it.
+
 ```powershell
 function Invoke-Capped {
     param(
@@ -69,7 +74,10 @@ function Invoke-Capped {
         param($c, $d)
         Set-Location -LiteralPath $d
         $global:LASTEXITCODE = 0
-        Invoke-Expression $c 2>&1
+        # Native stderr (PHASE/WORK lines are eprintln!) is merged by the
+        # runner, not by the caller: a `2>&1` on Invoke-Expression itself does
+        # not reach a native child inside Start-Job.
+        Invoke-Expression "& {`n$c`n} 2>&1"
         $code = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
         "REDA_CAPPED_EXIT=$code"
     } -ArgumentList $Command, (Get-Location).Path
