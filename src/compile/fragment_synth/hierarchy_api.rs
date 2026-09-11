@@ -941,6 +941,10 @@ struct HierarchicalProposalStream<'a> {
     /// Pull-X descriptors, frozen from the incumbent when the alignment
     /// stage is exhausted. Edges whose ports already share an X are omitted.
     pull_x_edges: Option<Vec<BlockEdge>>,
+    /// Round-2 Pull-X descriptors, frozen from the incumbent when round 1 is
+    /// exhausted: edges whose sink has already moved and that still offer a
+    /// legal one-cell pull. `None` until the stage is first reached.
+    pull_x2_edges: Option<Vec<BlockEdge>>,
     /// Seam descriptors, offered once each after Pull-X is exhausted. They
     /// read only the compiled blocks, which never change, so they are fixed
     /// at construction rather than frozen from an incumbent.
@@ -968,6 +972,7 @@ impl<'a> HierarchicalProposalStream<'a> {
         Self {
             edges,
             pull_x_edges: None,
+            pull_x2_edges: None,
             seams,
             prunes: None,
             refreshes: None,
@@ -982,8 +987,9 @@ impl<'a> HierarchicalProposalStream<'a> {
     /// Pull-X has been frozen; before that the Pull-X stage owns the index.
     fn seam(&self, index: usize) -> Option<InputSeamChoice> {
         let pull_x = self.pull_x_edges.as_ref().map_or(0, Vec::len);
+        let pull_x2 = self.pull_x2_edges.as_ref().map_or(0, Vec::len);
         self.seams
-            .get(index.checked_sub(self.edges.len() + pull_x)?)
+            .get(index.checked_sub(self.edges.len() + pull_x + pull_x2)?)
             .copied()
     }
 
@@ -1011,6 +1017,36 @@ impl<'a> HierarchicalProposalStream<'a> {
         frozen.get(index).copied()
     }
 
+    fn pull_x2_edge(
+        &mut self,
+        index: usize,
+        incumbent: &HierarchicalCandidate,
+    ) -> Option<BlockEdge> {
+        let pull_x = self.pull_x_edges.as_ref().map_or(0, Vec::len);
+        let index = index.checked_sub(self.edges.len() + pull_x)?;
+        let frozen = self.pull_x2_edges.get_or_insert_with(|| {
+            self.edges
+                .iter()
+                .filter(|edge| {
+                    incumbent
+                        .block_placements
+                        .get(&edge.sink_block)
+                        .is_some_and(|placement| placement.dx != 0)
+                        && block_pull_x_proposal(
+                            edge,
+                            &self.source_outputs,
+                            &self.sink_inputs,
+                            &incumbent.realised_block_offsets,
+                            &incumbent.block_placements,
+                        )
+                        .is_some()
+                })
+                .copied()
+                .collect()
+        });
+        frozen.get(index).copied()
+    }
+
     /// The prune descriptor at stream position `index`, past every
     /// alignment, Pull-X and seam descriptor. `freeze` reads the incumbent's
     /// timing graph, so it runs once, the first time the stage is reached.
@@ -1020,7 +1056,8 @@ impl<'a> HierarchicalProposalStream<'a> {
         freeze: impl FnOnce() -> Vec<ParentRouteChoice>,
     ) -> Option<ParentRouteChoice> {
         let pull_x = self.pull_x_edges.as_ref().map_or(0, Vec::len);
-        let index = index.checked_sub(self.edges.len() + pull_x + self.seams.len())?;
+        let pull_x2 = self.pull_x2_edges.as_ref().map_or(0, Vec::len);
+        let index = index.checked_sub(self.edges.len() + pull_x + pull_x2 + self.seams.len())?;
         self.prunes.get_or_insert_with(freeze).get(index).copied()
     }
 
@@ -1035,8 +1072,10 @@ impl<'a> HierarchicalProposalStream<'a> {
         freeze: impl FnOnce() -> Vec<ParentRouteChoice>,
     ) -> Option<ParentRouteChoice> {
         let pull_x = self.pull_x_edges.as_ref().map_or(0, Vec::len);
+        let pull_x2 = self.pull_x2_edges.as_ref().map_or(0, Vec::len);
         let prunes = self.prunes.as_ref().map_or(0, Vec::len);
-        let index = index.checked_sub(self.edges.len() + pull_x + self.seams.len() + prunes)?;
+        let index =
+            index.checked_sub(self.edges.len() + pull_x + pull_x2 + self.seams.len() + prunes)?;
         self.refreshes
             .get_or_insert_with(freeze)
             .get(index)
@@ -1094,6 +1133,34 @@ impl ProposalStream<HierarchicalCandidate> for HierarchicalProposalStream<'_> {
                     block_edge_fingerprint("hierarchical-block-pull-x-fragment-v1", edge),
                     hierarchical_choice_fingerprint(
                         "hierarchical-block-pull-x-choice-v1",
+                        edge,
+                        incumbent,
+                        placements.as_ref().unwrap_or(&incumbent.block_placements),
+                    ),
+                    placements.map(|placements| {
+                        (
+                            placements,
+                            incumbent.seams.clone(),
+                            incumbent.prunes.clone(),
+                            incumbent.refreshes.clone(),
+                        )
+                    }),
+                    Acceptance::Lexicographic,
+                )
+            } else if let Some(edge) = self.pull_x2_edge(index, incumbent) {
+                // A descriptor whose ports now share an X is stale: refuse it
+                // rather than retarget.
+                let placements = block_pull_x_proposal(
+                    &edge,
+                    &self.source_outputs,
+                    &self.sink_inputs,
+                    &incumbent.realised_block_offsets,
+                    &incumbent.block_placements,
+                );
+                (
+                    block_edge_fingerprint("hierarchical-block-pull-x2-fragment-v1", edge),
+                    hierarchical_choice_fingerprint(
+                        "hierarchical-block-pull-x2-choice-v1",
                         edge,
                         incumbent,
                         placements.as_ref().unwrap_or(&incumbent.block_placements),
@@ -3087,6 +3154,423 @@ mod tests {
             )
             .expect("the fixture certifies")
         }
+    }
+
+    fn pull_x_round_two_fixture() -> (
+        HierarchicalCandidate,
+        Vec<BlockEdge>,
+        BTreeMap<(InstanceId, u16), BlockPort>,
+        BTreeMap<(InstanceId, u16), BlockPort>,
+    ) {
+        let library = Library::default_library();
+        let search_config = SearchConfig::checked_defaults();
+        let services = seed_services(&library, &search_config);
+        let design = crate::compile::fragment_synth::union::tests::gate_block_gate_chain();
+        let fixture = RelocationFixture::build(&design, &library);
+        let mut incumbent = fixture.compile(services, &[], &[]);
+
+        let source = InstanceId(100);
+        let unmoved = InstanceId(101);
+        let aligned = InstanceId(102);
+        let eligible = InstanceId(103);
+        let edges = vec![
+            BlockEdge {
+                source_block: source,
+                source_port: 0,
+                sink_block: unmoved,
+                sink_input: 0,
+                slack: 0,
+            },
+            BlockEdge {
+                source_block: source,
+                source_port: 1,
+                sink_block: aligned,
+                sink_input: 0,
+                slack: 1,
+            },
+            BlockEdge {
+                source_block: source,
+                source_port: 2,
+                sink_block: eligible,
+                sink_input: 0,
+                slack: 2,
+            },
+        ];
+        let source_outputs = (0..3)
+            .map(|port| {
+                (
+                    (source, port),
+                    BlockPort {
+                        cell: Anchor { x: 0, y: 0, z: 0 },
+                        toward: Facing::East,
+                    },
+                )
+            })
+            .collect();
+        let sink_inputs = BTreeMap::from([
+            (
+                (unmoved, 0),
+                BlockPort {
+                    cell: Anchor { x: 3, y: 0, z: 0 },
+                    toward: Facing::East,
+                },
+            ),
+            (
+                (aligned, 0),
+                BlockPort {
+                    cell: Anchor { x: 0, y: 0, z: 0 },
+                    toward: Facing::East,
+                },
+            ),
+            (
+                (eligible, 0),
+                BlockPort {
+                    cell: Anchor { x: 4, y: 0, z: 0 },
+                    toward: Facing::East,
+                },
+            ),
+        ]);
+        incumbent.realised_block_offsets = [source, unmoved, aligned, eligible]
+            .into_iter()
+            .map(|block| {
+                (
+                    block,
+                    Offset {
+                        dx: 0,
+                        dy: 0,
+                        dz: 0,
+                    },
+                )
+            })
+            .collect();
+        incumbent.block_placements = BTreeMap::from([
+            (unmoved, BlockPlacementOffset { dx: 0, dz: 0 }),
+            (aligned, BlockPlacementOffset { dx: 1, dz: 0 }),
+            (eligible, BlockPlacementOffset { dx: 1, dz: 0 }),
+        ]);
+        (incumbent, edges, source_outputs, sink_inputs)
+    }
+
+    #[test]
+    fn pull_x_round_two_offers_only_moved_sinks_that_still_pull() {
+        let (incumbent, edges, source_outputs, sink_inputs) = pull_x_round_two_fixture();
+        assert!(block_pull_x_proposal(
+            &edges[0],
+            &source_outputs,
+            &sink_inputs,
+            &incumbent.realised_block_offsets,
+            &incumbent.block_placements,
+        )
+        .is_some());
+        assert!(block_pull_x_proposal(
+            &edges[1],
+            &source_outputs,
+            &sink_inputs,
+            &incumbent.realised_block_offsets,
+            &incumbent.block_placements,
+        )
+        .is_none());
+        assert!(block_pull_x_proposal(
+            &edges[2],
+            &source_outputs,
+            &sink_inputs,
+            &incumbent.realised_block_offsets,
+            &incumbent.block_placements,
+        )
+        .is_some());
+
+        let mut stream = HierarchicalProposalStream::new(
+            edges.clone(),
+            source_outputs,
+            sink_inputs,
+            vec![],
+            Box::new(|_, _, _, _, _| unreachable!("descriptor lookup never compiles")),
+        );
+        stream.pull_x_edges = Some(vec![edges[0]]);
+        let start = edges.len() + 1;
+
+        assert_eq!(stream.pull_x2_edge(start, &incumbent), Some(edges[2]));
+        assert_eq!(stream.pull_x2_edge(start + 1, &incumbent), None);
+        assert_eq!(stream.pull_x2_edges, Some(vec![edges[2]]));
+    }
+
+    #[test]
+    fn pull_x_round_two_sits_between_round_one_and_the_seam_stage() {
+        let (incumbent, edges, source_outputs, sink_inputs) = pull_x_round_two_fixture();
+        let seams = vec![
+            InputSeamChoice {
+                sink_block: edges[0].sink_block,
+                input: 0,
+                at: Anchor { x: 1, y: 0, z: 0 },
+            },
+            InputSeamChoice {
+                sink_block: edges[1].sink_block,
+                input: 0,
+                at: Anchor { x: 2, y: 0, z: 0 },
+            },
+        ];
+        let mut stream = HierarchicalProposalStream::new(
+            edges.clone(),
+            source_outputs,
+            sink_inputs,
+            seams.clone(),
+            Box::new(|_, _, _, _, _| unreachable!("descriptor lookup never compiles")),
+        );
+        stream.pull_x_edges = Some(vec![edges[0], edges[1]]);
+        stream.pull_x2_edges = Some(vec![edges[2]]);
+        let prunes = vec![
+            ParentRouteChoice { route: RouteId(7) },
+            ParentRouteChoice { route: RouteId(9) },
+        ];
+        stream.prunes = Some(prunes.clone());
+
+        let alignment = 0..edges.len();
+        let round_one = alignment.end..alignment.end + 2;
+        let round_two = round_one.end..round_one.end + 1;
+        let seam = round_two.end..round_two.end + seams.len();
+        let prune = seam.end..seam.end + prunes.len();
+        let refresh = prune.end..prune.end + 1;
+
+        assert_eq!(stream.pull_x2_edge(round_two.start - 1, &incumbent), None);
+        assert_eq!(
+            stream.pull_x2_edge(round_two.start, &incumbent),
+            Some(edges[2])
+        );
+        assert_eq!(stream.pull_x2_edge(round_two.end, &incumbent), None);
+        assert_eq!(stream.seam(seam.start - 1), None);
+        assert_eq!(stream.seam(seam.start), Some(seams[0]));
+        assert_eq!(stream.seam(seam.end), None);
+        assert_eq!(
+            stream.prune(prune.start - 1, || unreachable!("prunes are frozen")),
+            None
+        );
+        assert_eq!(
+            stream.prune(prune.start, || unreachable!("prunes are frozen")),
+            Some(prunes[0])
+        );
+        assert_eq!(
+            stream.refresh(refresh.start - 1, || vec![ParentRouteChoice {
+                route: RouteId(11)
+            }]),
+            None
+        );
+        assert_eq!(
+            stream.refresh(refresh.start, || vec![ParentRouteChoice {
+                route: RouteId(11)
+            }]),
+            Some(ParentRouteChoice { route: RouteId(11) })
+        );
+    }
+
+    #[test]
+    fn pull_x_round_two_freezes_once_and_refuses_a_stale_descriptor() {
+        let (incumbent, edges, source_outputs, sink_inputs) = pull_x_round_two_fixture();
+        let edge = edges[2];
+        let mut stream = HierarchicalProposalStream::new(
+            vec![edge],
+            source_outputs,
+            sink_inputs,
+            vec![],
+            Box::new(|_, _, _, _, _| unreachable!("a stale descriptor is refused")),
+        );
+        stream.pull_x_edges = Some(vec![]);
+        let start = 1;
+        assert_eq!(stream.pull_x2_edge(start, &incumbent), Some(edge));
+
+        let mut stale = incumbent;
+        stale
+            .realised_block_offsets
+            .get_mut(&edge.sink_block)
+            .unwrap()
+            .dx = -4;
+        assert!(block_pull_x_proposal(
+            &edge,
+            &stream.source_outputs,
+            &stream.sink_inputs,
+            &stale.realised_block_offsets,
+            &stale.block_placements,
+        )
+        .is_none());
+        assert_eq!(
+            stream.pull_x2_edge(start, &stale),
+            Some(edge),
+            "the descriptor vector is frozen, not retargeted"
+        );
+        assert_eq!(
+            stream.next(start as u64, &stale).unwrap().terminal,
+            ProposalTerminal::Refused
+        );
+    }
+
+    #[test]
+    fn pull_x_round_two_carries_lexicographic_acceptance_and_its_own_schemas() {
+        let (incumbent, edges, source_outputs, sink_inputs) = pull_x_round_two_fixture();
+        let edge = edges[2];
+        let placements = block_pull_x_proposal(
+            &edge,
+            &source_outputs,
+            &sink_inputs,
+            &incumbent.realised_block_offsets,
+            &incumbent.block_placements,
+        )
+        .unwrap();
+        let mut stream = HierarchicalProposalStream::new(
+            vec![edge],
+            source_outputs,
+            sink_inputs,
+            vec![],
+            Box::new(|_, _, _, _, _| Err(SeedError::Incomplete("fingerprint-only test"))),
+        );
+        stream.pull_x_edges = Some(vec![edge]);
+        stream.pull_x2_edges = Some(vec![edge]);
+
+        let round_one = stream.next(1, &incumbent).unwrap();
+        assert_eq!(round_one.acceptance, Acceptance::Lexicographic);
+        assert_eq!(
+            round_one.fragment_fingerprint,
+            block_edge_fingerprint("hierarchical-block-pull-x-fragment-v1", edge)
+        );
+        assert_eq!(
+            round_one.choice_fingerprint,
+            hierarchical_choice_fingerprint(
+                "hierarchical-block-pull-x-choice-v1",
+                edge,
+                &incumbent,
+                &placements,
+            )
+        );
+
+        let round_two = stream.next(2, &incumbent).unwrap();
+        assert_eq!(round_two.acceptance, Acceptance::Lexicographic);
+        assert_eq!(
+            round_two.fragment_fingerprint,
+            block_edge_fingerprint("hierarchical-block-pull-x2-fragment-v1", edge)
+        );
+        assert_eq!(
+            round_two.choice_fingerprint,
+            hierarchical_choice_fingerprint(
+                "hierarchical-block-pull-x2-choice-v1",
+                edge,
+                &incumbent,
+                &placements,
+            )
+        );
+    }
+
+    #[test]
+    fn budget_zero_never_freezes_pull_x_round_two() {
+        let library = Library::default_library();
+        let search_config = SearchConfig::checked_defaults();
+        let services = seed_services(&library, &search_config);
+        let design = crate::circuits::hierarchical_builder::circuits::ripple_adder(2);
+        let fixture = RelocationFixture::build(&design, &library);
+        let seed = fixture.compile(services, &[], &[]);
+        let mut stream = HierarchicalProposalStream::new(
+            fixture.edges,
+            fixture.source_outputs,
+            fixture.sink_inputs,
+            fixture.seams,
+            Box::new(|_, _, _, _, _| unreachable!("budget zero never compiles")),
+        );
+
+        let summary = run_budgeted_proposals(
+            seed,
+            SynthesisBudget::Evaluations(0),
+            &SystemMonotonicClock::start(),
+            &mut stream,
+        );
+
+        assert_eq!(summary.evaluations_used, 0);
+        assert!(stream.pull_x_edges.is_none());
+        assert!(stream.pull_x2_edges.is_none());
+    }
+
+    #[test]
+    #[ignore = "release-only: attributes ripple_adder8 round-2 Pull-X improvements"]
+    fn pull_x_round_two_improves_ripple_adder8() {
+        let threads = std::thread::available_parallelism().map_or(1, |count| count.get());
+        with_certification_threads(threads, || {
+            let library = Library::default_library();
+            let search_config = SearchConfig::checked_defaults();
+            let services = seed_services(&library, &search_config);
+            let fixture = RelocationFixture::build(
+                &crate::circuits::hierarchical_builder::circuits::ripple_adder(8),
+                &library,
+            );
+            let seed = fixture.compile(services, &[], &[]);
+            let seed_quality = seed.quality();
+            let edge_count = fixture.edges.len();
+            let mut stream = HierarchicalProposalStream::new(
+                fixture.edges.clone(),
+                fixture.source_outputs.clone(),
+                fixture.sink_inputs.clone(),
+                fixture.seams.clone(),
+                Box::new(|incumbent, placements, seams, prunes, refreshes| {
+                    compile_proposal(
+                        &fixture.lowered,
+                        &fixture.ordered,
+                        None,
+                        services,
+                        incumbent,
+                        placements,
+                        seams,
+                        prunes,
+                        refreshes,
+                    )
+                }),
+            );
+            let summary = run_budgeted_proposals(
+                seed,
+                SynthesisBudget::Evaluations((edge_count * 3) as u64),
+                &SystemMonotonicClock::start(),
+                &mut stream,
+            );
+            let round_one = stream
+                .pull_x_edges
+                .as_ref()
+                .expect("round 1 freezes after alignment");
+            let round_two = stream
+                .pull_x2_edges
+                .as_ref()
+                .expect("round 2 freezes after round 1");
+            let start = edge_count + round_one.len();
+            let end = start + round_two.len();
+            assert!(summary.trace.len() >= end, "round 2 was not exhausted");
+
+            let mut incumbent = summary.trace[..start]
+                .iter()
+                .filter(|entry| entry.accepted)
+                .filter_map(|entry| entry.certified_quality)
+                .last()
+                .unwrap_or(seed_quality);
+            let round_two_incumbent = incumbent;
+            let mut accepted = 0;
+            for entry in summary.trace[start..end]
+                .iter()
+                .filter(|entry| entry.accepted)
+            {
+                let quality = entry
+                    .certified_quality
+                    .expect("an accepted entry certifies");
+                assert!(
+                    quality < incumbent,
+                    "accepted round-2 proposal did not improve its incumbent: {entry:?} incumbent={incumbent:?}"
+                );
+                incumbent = quality;
+                accepted += 1;
+            }
+            assert!(
+                accepted > 0,
+                "no round-2 Pull-X improvement was retained: {:?}",
+                &summary.trace[start..end]
+            );
+            eprintln!(
+                "PULL_X2_ATTRIBUTION range={start}..{end} descriptors={} accepted={accepted} incumbent={round_two_incumbent:?} winner={incumbent:?} evaluations={} candidate={} workers={threads}",
+                round_two.len(),
+                summary.evaluations_used,
+                summary.best.candidate_fingerprint().as_str(),
+            );
+        });
     }
 
     /// The refresh stage is frozen from the post-Pass-4 incumbent: it probes

@@ -734,3 +734,145 @@ controller-observed elapsed metadata.
 | 5: insert-then-prune fallback for Refresh Relocation | PENDING |
 
 **Wave verdict: retained 1 of 5 so far.**
+
+---
+
+## Task 4: Candidate 4 -- filtered second bounded Pull-X round -- attempted, GO
+
+Task 4 start commit: `fa3b614`.
+
+Branch taken: **GO, retained**. The one plan-only descriptor pre-gate found
+seven eligible round-2 descriptors on `ripple_adder8`, so the one permitted
+certified attribution run was spent. That run evaluated the exact round-2
+range `14..21`: all seven entries were accepted, and the incumbent improved
+from `QualityKey { observed_settle: 576, non_air_blocks: 71133,
+occupied_volume: 1401988, static_routed_delay: ExactDelay(678) }` to
+`QualityKey { observed_settle: 576, non_air_blocks: 71119, occupied_volume:
+1401988, static_routed_delay: ExactDelay(678) }`. The retained winner's
+candidate fingerprint is
+`da554e7386d5b6e0ce2babb36c5e37431f3864eca59447d9c1f4f94772cf588c`.
+
+### TDD evidence
+
+The five focused tests were written before production code. The required RED
+command was:
+
+```text
+cargo test --lib compile::fragment_synth::hierarchy_api::tests::pull_x_round_two -- --nocapture
+```
+
+It exited 101 after 3.858 s wrapper elapsed with eleven expected compiler
+errors: `E0599` for the absent `pull_x2_edge` method and `E0609` for the absent
+`pull_x2_edges` field. No production code existed at that point. Transcript:
+`$env:TEMP\reda-task4-red.log`, SHA-256
+`352ef78eec70c5b532ae9ac6a687fc85269b02d4902c5e87b6a21cb495248ad2`.
+
+The retained unit tests prove:
+
+- only an already-X-moved sink with a still-legal one-cell pull enters round 2;
+- exact alignment, round-1, round-2, seam, prune and refresh ranges;
+- one-time freezing and refusal, rather than retargeting, of a stale descriptor;
+- `Acceptance::Lexicographic`, distinct round-2 schemas, and unchanged round-1
+  schemas;
+- evaluation budget zero leaves both Pull-X vectors unfrozen.
+
+### Retained implementation
+
+`HierarchicalProposalStream` gained only one field, `pull_x2_edges:
+Option<Vec<BlockEdge>>`, one `pull_x2_edge` helper, and one `next` arm. The
+helper freezes after round 1 and filters with the reviewed conjunction:
+the incumbent sink placement has nonzero `dx` and `block_pull_x_proposal`
+still returns `Some`. The arm reuses the existing Pull-X proposal path and
+four-element compile tuple, keeps lexicographic acceptance, and uses
+`hierarchical-block-pull-x2-fragment-v1` /
+`hierarchical-block-pull-x2-choice-v1`. Seam, prune and refresh offsets each
+include the frozen round-2 length.
+
+Task 2 is structurally untouched: `HierarchicalCandidate::planned` remains
+`Arc<RoutedParent>`, the reuse branch remains `Arc::clone`, and the guarded
+`PHASE prunable`, `PHASE flatten` and `PHASE union` diagnostics remain in place.
+No dependency, flag, counter, timer, fixture-name production branch or new
+abstraction was added.
+
+### Focused GREEN gates
+
+All Cargo commands ran serially through the centrally corrected
+`Invoke-Capped`; callers did not append `2>&1`. The output/result columns and
+transcript hashes below are transcript-backed. Wrapper elapsed is
+controller-observed metadata outside the transcript files.
+
+| Command | Result | Libtest time | Wrapper elapsed | Transcript |
+| --- | --- | --- | --- | --- |
+| `cargo test --lib compile::fragment_synth::hierarchy_api -- --nocapture` | 31 passed; 0 failed; 6 ignored | 69.44 s | not captured; ledger floor 69.440 s | `$env:TEMP\reda-task4-green-hierarchy.log`, SHA-256 `b9f7b7f840267d2e17d04b4e6e0957d8f1522f314b5db82e39dae3f232378d3c` |
+| `cargo test --lib block_pull_x` | 2 passed; 0 failed; 1 ignored | 3.83 s | 4.510 s | `$env:TEMP\reda-task4-green-block-pull-x.log`, SHA-256 `3348ee0e6b1f0512d40d028eb10bfae28dcc84c7c90d25387a597b3c1190bf79` |
+| `cargo test --lib refresh_relocation` | 9 passed; 0 failed; 2 ignored | 3.05 s | 3.696 s | `$env:TEMP\reda-task4-green-refresh-relocation.log`, SHA-256 `5af0a7c6277e5a360f0f41b90030b256b94b1c635770544d547e92de595596fe` |
+| `cargo test --lib compile::fragment_synth::search -- --nocapture` | 11 passed; 0 failed | 0.00 s | 0.605 s | `$env:TEMP\reda-task4-green-search.log`, SHA-256 `341c6f4a777dd96f8a5be66b0bb5b15c11ea613c301307cbc1112686d6485791` |
+| final `cargo test --lib compile::fragment_synth::hierarchy_api -- --nocapture` after pre-gate removal and `rustfmt` | 31 passed; 0 failed; 7 ignored | 67.24 s | 80.717 s | `$env:TEMP\reda-task4-final-hierarchy.log`, SHA-256 `6ceb5fea61be5d95519b12a194176254a192afb7cd9e50177194c9c239a914cb` |
+
+The only warning is the pre-existing unused `BlockFacts::delay_ticks` field.
+The first hierarchy command's wrapper stopwatch output was lost when the
+controller detached after 30 seconds. Its transcript independently records a
+22.77 s debug rebuild and 69.44 s libtest time, but neither is the wrapper
+elapsed. As in Task 2's identical accounting repair, the ledger counts only
+the 69.440 s libtest floor and preserves the later exact-wrapper rerun; the
+wave total is therefore an underestimate by that first command's build and
+wrapper overhead.
+
+### Descriptor pre-gate and certified attribution
+
+The plan-only pre-gate ran exactly once:
+
+```text
+PULL_X2_DESCRIPTORS edges=7 round1=7 round2=7 evaluations=15 stop_reason=EvaluationBudget workers=12
+```
+
+It passed in 163.56 s libtest time, with a 1m17s release rebuild and 241.493 s
+wrapper elapsed. Transcript: `$env:TEMP\reda-task4-pregate.log`, SHA-256
+`2ce0d0e216705accc7116f1ef682f165621fe5372ae87305c048929f14508d61`.
+This gate reads the incumbent placements and proves only that descriptors are
+offered; it cannot predict a routed or certified win. It was removed after
+serving that purpose, and its symbol has zero source matches.
+
+Because the count was nonzero, the required certified attribution test then
+ran exactly once, with no alternate budget or rerun:
+
+```text
+PULL_X2_ATTRIBUTION range=14..21 descriptors=7 accepted=7 incumbent=QualityKey { observed_settle: 576, non_air_blocks: 71133, occupied_volume: 1401988, static_routed_delay: ExactDelay(678) } winner=QualityKey { observed_settle: 576, non_air_blocks: 71119, occupied_volume: 1401988, static_routed_delay: ExactDelay(678) } evaluations=21 candidate=da554e7386d5b6e0ce2babb36c5e37431f3864eca59447d9c1f4f94772cf588c workers=12
+```
+
+It passed in 229.17 s libtest time, with a 1m17s release rebuild and 307.210 s
+wrapper elapsed. Transcript: `$env:TEMP\reda-task4-attribution.log`, SHA-256
+`0389d61b8efa935fccbea5d1a1d9adf2130b856413b2f216da26220423877c7b`.
+Every accepted entry was compared with the incumbent immediately before it and
+was strictly lexicographically better. The retained ignored attribution test
+repeats this assertion; Task 6 must not rerun it.
+
+### Wave command-time ledger (continued)
+
+| # | Command | Elapsed | Running total |
+| --- | --- | --- | --- |
+| 32 | RED: round-2 focused filter, expected compile failure | 3.858 s | 697.244 s |
+| 33 | GREEN: hierarchy API | not captured, floor 69.440 s | 766.684 s |
+| 34 | GREEN: `block_pull_x` | 4.510 s | 771.194 s |
+| 35 | GREEN: `refresh_relocation` | 3.696 s | 774.890 s |
+| 36 | GREEN: search | 0.605 s | 775.495 s |
+| 37 | one plan-only descriptor pre-gate | 241.493 s | 1016.988 s |
+| 38 | one certified round-2 attribution run | 307.210 s | 1324.198 s |
+| 39 | final hierarchy API after pre-gate removal | 80.717 s | 1404.915 s |
+
+Task 4 adds **711.529 s** by the conservative floor accounting above. Used
+after Task 4: **1404.915 s = 23.4 min** of the 60-minute wave budget. No
+command reached the 600 s cap. The cap and wrapper elapsed observations are
+controller metadata, not embedded in the transcript files.
+
+### Candidates
+
+| Candidate | Status |
+| --- | --- |
+| 1: palette-indexed `BlockFlags` memo | **attempted, NO-GO** (1.18x vs 1.5x required) |
+| 2: `prunable_parent_routes` sidecar | **attempted, GO, RETAINED** (26 ms to 13 ms median) |
+| 3: hoisted merge consumer index | **attempted, NO-GO before production** (approved real probe had 0 merge gates and only 5 ms total work) |
+| 4: filtered second bounded Pull-X round | **attempted, GO, RETAINED** (7/7 accepted round-2 proposals; 14 fewer blocks) |
+| 5: insert-then-prune fallback for Refresh Relocation | PENDING |
+
+**Wave verdict: retained 2 of 5 so far.**
