@@ -865,9 +865,10 @@ stage and never calls `prune_route` internally.
 
 **Files:**
 
-- Modify: `src/compile/fragment_synth/route_opt.rs:96-281,465-590`.
-- Modify: `src/compile/fragment_synth/hierarchy_api.rs` test module near
-  `:3300-3400`.
+- Modify: `src/compile/fragment_synth/route_opt.rs`, `relocate_refresh` and its
+  existing test-fixture module.
+- Modify: `src/compile/fragment_synth/hierarchy_api.rs`, existing
+  `refresh_relocation_improves_an_acceptance_circuit` test.
 - Modify: `docs/superpowers/reports/2026-09-11-five-low-cost-optimization-passes.md`.
 
 - [ ] Build `bent_relocation_route()` in the existing test module from
@@ -883,24 +884,26 @@ stage and never calls `prune_route` internally.
 
 - [ ] Write RED tests in `route_opt.rs`:
 
-  - `refresh_bend_relocation_moves_one_pair_across_a_valid_bend` -- the fixture
+  - `refresh_bend_relocation_moves_one_pair_across_a_valid_bend` -- re-home the
+    current one-cell vertical-stair case from the refusal table. The fixture
     passes validation, pruning and the old straight eligibility both refuse,
     while the new outcome reports a retained bend and repeater anchors show
-    exactly one fewer repeater.
+    exactly one fewer repeater. Remove the current discontinuous z-jog case;
+    keep the validated uniform staircase as the no-legal-site refusal.
   - `refresh_bend_relocation_tries_only_the_first_legal_cell_per_downstream` --
-    an illegal deeper cell is filtered without mutation; the first legal cell is
-    tried, fails the carry proof, and an earlier legal cell that would succeed is
-    not tried for the same outer `D`.
+    illegal deeper cells are filtered without mutation, multiple legal cells
+    remain, and the retained anchor is the first legal cell in the specified
+    reversed-window order. Production holds only one remembered candidate, so
+    no second cell can be mutated for that outer `D`.
   - `refresh_bend_relocation_checks_every_branch_and_repeated_occurrence` -- a
     second affected branch with the wrong local axis, or a branch naming `N`
-    twice, refuses the bend candidate; branches not containing `N` are ignored.
-  - `refresh_bend_relocation_restores_three_states_and_is_order_stable` -- a
-    refused trial restores `U`, `D` and `N` exactly; shuffled cell/branch input
-    order yields the same canonical `BTreeMap<Anchor, BlockState>` and mutation
-    set without sorting production vectors.
-  - `refresh_relocation_bool_wrapper_preserves_the_existing_contract` -- the
-    wrapper's boolean remains identical to `outcome.changed`, while focused
-    fixtures distinguish `used_bend_fallback`.
+    twice, refuses the bend candidate before mutation; branches not containing
+    `N` are ignored.
+  - `refresh_bend_relocation_is_order_stable_and_preserves_the_bool_wrapper` --
+    shuffled cell/branch input order yields the same canonical
+    `BTreeMap<Anchor, BlockState>` and mutation set without sorting production
+    vectors; the wrapper's boolean remains identical to `outcome.changed`, while
+    focused fixtures distinguish `used_bend_fallback`.
 
 - [ ] Run RED:
 
@@ -919,11 +922,12 @@ the valid bent fixture unchanged. Record the exact failure text.
   1. run the current same-facing straight pairs and all their trials unchanged;
   2. for non-straight shared `U..=D` windows, do not require `U` and `D` to have
      equal facing: `D` is removed, while `U`'s unchanged state must be legal at
-     `N`. In the same `U`, reversed-window and offset order, remember only the
-     first cell that passes the
-     existing offset bound, is route-owned dust, is outside the global terminal
-     set, appears exactly once with both neighbours in every affected branch,
-     and accepts `U`'s exact state via `route_step_is_legal` on every occurrence;
+     `N`. Consider bends only when `named_once` is true. In the same `U`,
+     reversed-window and offset order, remember only the first cell that passes
+     the existing offset bound, is route-owned dust, is outside the global
+     terminal set, appears exactly once with both neighbours in every affected
+     branch, and accepts `U`'s exact state via `route_step_is_legal` on every
+     occurrence;
   3. only if no straight trial retained for this `D`, mutate that one remembered
      bend candidate: copy `U` to `N`, dust `U` and `D`, and reuse the current
      `repeaters(tree) + 1 == standing && branches_carry_through(tree, up)` gate;
@@ -952,9 +956,13 @@ Invoke-Capped -Command 'cargo test --lib refresh_bend_relocation'
 ```
 
 `cargo test --lib refresh_relocation` must still report **9 passed / 2 ignored**;
-the separate `refresh_bend_relocation` filter owns the new tests. In particular,
-`refresh_relocation_replays_every_prune_before_any_refresh` must remain green;
-no existing refusal test may be weakened to make the bend fit.
+the separate `refresh_bend_relocation` filter owns every new test. Only the two
+straight-only geometry rows currently at `route_opt.rs:1017-1018` change: the
+legal y-stair becomes an accepted focused fixture and the invalid z-jog is
+removed in favor of the already-present validated uniform-staircase refusal.
+In particular, `refresh_relocation_replays_every_prune_before_any_refresh` and
+every non-geometry refusal must remain green. The union regression's adaptive
+`no_relocation` fixture must still find at least one genuinely unchanged route.
 
 - [ ] Retention on a real circuit: **one** targeted attribution run, the whole
   budget for this candidate. Extend the existing ignored
@@ -974,9 +982,11 @@ no existing refusal test may be weakened to make the bend fit.
   `hierarchical-parent-refresh-choice-v1` fingerprint. After the run, an
   accepted trace entry must match a recorded bend fingerprint. This proves a
   bend rewrite was retained during the route transformation, not that it was the
-  accepted proposal's only source of gain. Production
-  trace schemas and ordering remain byte-for-byte unchanged. Task 6 does not
-  repeat this run.
+  accepted proposal's only source of gain. Cloning the route from the incumbent
+  plan is exact here because Pass 5 preserves `incumbent.block_placements`, so
+  the proposal reuses that plan and route rewrites remain route-local.
+  Production trace schemas and ordering remain byte-for-byte unchanged. Task 6
+  does not repeat this run.
 
 ```powershell
 Invoke-Capped -Command 'cargo test --release --lib compile::fragment_synth::hierarchy_api::tests::refresh_relocation_improves_an_acceptance_circuit -- --ignored --exact --nocapture'

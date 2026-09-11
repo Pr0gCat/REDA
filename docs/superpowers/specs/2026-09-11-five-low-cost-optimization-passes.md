@@ -296,7 +296,7 @@ NO-GO and removed.
 
 ## Candidate 5: one-shot bend-aware Refresh Relocation
 
-`relocate_refresh` (`route_opt.rs:96-281`) already performs the useful rewrite:
+`relocate_refresh` in `route_opt.rs` already performs the useful rewrite:
 it copies upstream refresh `U`'s exact state onto one dust cell `N` inside the
 shared `U..=D` window, turns `U` and downstream refresh `D` into dust, and keeps
 the trial only when the route has exactly one fewer repeater and every affected
@@ -320,9 +320,10 @@ Contract:
   found. At most one remembered bend trial is mutated per outer `D`; if it fails,
   the algorithm advances to the next `D` and never tries a second bend cell.
 - A bend candidate stays inside the existing identical shared `U..=D` branch
-  slice and offset bounds. `N` must be route-owned dust and not in the global
-  terminal set. Every affected branch must contain `N` exactly once, provide
-  both neighbours, and accept `U`'s unchanged `BlockState` through the existing
+  slice and offset bounds, and bend fallback is disabled unless `named_once`
+  holds. `N` must be route-owned dust and not in the global terminal set. Every
+  affected branch must contain `N` exactly once, provide both neighbours, and
+  accept `U`'s unchanged `BlockState` through the existing
   `route_step_is_legal(previous, N, next, state)` authority.
 - The mutation and proof reuse the existing three-cell trial exactly: copy
   `U`'s state to `N`, dust `U` and `D`, require
@@ -343,6 +344,13 @@ at least one accepted refresh-stage entry whose exact choice fingerprint maps to
 a retained bend outcome. That bit proves a bend rewrite participated in the
 route transformation; it does not claim the accepted proposal's entire quality
 delta came only from that rewrite. Otherwise the candidate is NO-GO and removed.
+
+This candidate intentionally supersedes the two geometry-only rows currently
+named `bend in the shared slice` and `vertical step in the shared slice` in the
+existing refusal table. The one-cell vertical stair becomes the focused success
+fixture. The discontinuous z-jog is removed; the existing physically coherent
+uniform staircase remains the refusal coverage for a bent path with no legal
+repeater site. All non-geometry refusal cases keep their verdict.
 
 ## Retention, revert and NO-GO policy
 
