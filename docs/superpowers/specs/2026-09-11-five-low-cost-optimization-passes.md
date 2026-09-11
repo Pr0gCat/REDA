@@ -309,11 +309,13 @@ Contract:
   nothing for a standing refresh, inside `relocate_refresh`, on the same
   renumbered parent clone, before any child is stamped.
 - It inserts exactly one repeater by converting **one route-owned dust cell**
-  into a repeater carrying the standing refresh's own state with the proven
-  successor facing, then runs the existing `prune_route` on the mutated tree.
-- Legality is validated **for every branch containing the inserted cell**, using
-  the existing `branches_carry_through` walk. A branch that does not contain the
-  cell is unaffected by construction and is not re-proven.
+  into a repeater carrying the standing refresh's exact `BlockState`, then runs
+  the existing `prune_route` on the mutated tree. No facing is reconstructed.
+- Legality is validated **for every branch containing the inserted cell** in two
+  layers: the existing `route_step_is_legal(previous, at, next, state)` must
+  accept the same inserted state on every affected branch, then the existing
+  `branches_carry_through` walk must prove signal strength. A branch that does
+  not contain the cell is unaffected by construction and is not re-proven.
 - Enumeration is deterministic: `Reverse(maximum path depth)` then `Anchor`, the
   same total order `prune_route` and `relocate_refresh` already use. `Anchor`'s
   derived `Ord` is the only tiebreak, and nothing reads map iteration order,
@@ -333,10 +335,13 @@ Contract:
   from the 2026-09-10 spec continues to be the only acceptance rule for this
   stage.
 
-Retention gate: a focused fixture that pruning and straight relocation both
+Retention gate: a focused, contiguous bent fixture that first passes
+`RealisedRouteTree::validate` and that pruning and straight relocation both
 provably refuse, plus at least one accepted refresh-stage proposal on a real
-acceptance circuit whose gain comes from the fallback. Otherwise NO-GO and
-removed.
+acceptance circuit whose gain is explicitly attributed to the fallback. The
+attribution uses an internal relocation outcome and the existing choice
+fingerprint; it does not add a trace field, schema change, counter or feature
+flag. Otherwise the candidate is NO-GO and removed.
 
 ## Retention, revert and NO-GO policy
 

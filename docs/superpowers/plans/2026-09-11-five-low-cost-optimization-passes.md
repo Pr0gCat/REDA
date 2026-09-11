@@ -875,7 +875,9 @@ rewrite and get no stage of their own.
   `onto_z_axis` / `step_by` helpers, so the trunk turns once between the two
   standing refreshes. Do not add a second fixture builder and do not assign
   `BlockState::facing` directly; use `crate::compile::repeater(Facing::..)` as
-  the existing helpers do.
+  the existing helpers do. Remap a complete suffix so every consecutive path
+  step remains adjacent, and require `bent_relocation_route().validate()` to
+  succeed before the fixture is used by any fallback assertion.
 
 - [ ] Write RED tests in `route_opt.rs`:
 
@@ -897,8 +899,10 @@ rewrite and get no stage of their own.
     refused fallback the tree is byte-equal to its input, including every state
     the interleaved `prune_route` changed.
   - `refresh_insert_fallback_is_order_stable_under_shuffled_cells` -- shuffling
-    `tree.cells` and `tree.branches` input order yields the identical result,
-    proving nothing reads map or vector iteration order.
+    `tree.cells` and `tree.branches` input order yields the same canonical
+    `BTreeMap<Anchor, BlockState>` and mutation set, proving nothing reads map
+    or vector iteration order without forcing production code to sort its
+    order-bearing vectors.
 
 - [ ] Run RED:
 
@@ -918,16 +922,27 @@ fixture unchanged. Record the exact failure text.
   2. take the **furthest-downstream** cell, the first in that order, and only
      that one;
   3. snapshot the full cell state of the whole tree (`tree.cells.clone()`);
-  4. write the standing refresh's own state, with the proven successor facing,
-     onto that cell;
-  5. require `branches_carry_through` to hold for **every branch containing the
-     inserted cell**;
+  4. write the standing refresh's exact state onto that cell; do not reconstruct
+     or overwrite its facing;
+  5. for **every branch containing the inserted cell**, require both neighbours
+     to exist and reuse
+     `crate::compile::routing::route_step_is_legal(previous, at, next, state)`.
+     This single authority rejects a bend-axis mismatch and also proves all
+     affected branches accept the same standing state. Then require the existing
+     `branches_carry_through` strength walk;
   6. run the existing `prune_route` on the mutated tree;
   7. retain only if the route's repeater count **strictly falls**; otherwise
      restore the snapshot exactly and continue to the **next standing refresh**.
      Never try a second cell for the same refresh.
 
   No new module, no relocation framework, no second search, no work cap knob.
+
+- [ ] Preserve the public-in-crate boolean contract with the smallest explicit
+  outcome beneath it. `relocate_refresh(tree) -> bool` remains the function used
+  by production callers. Its inner implementation returns a small
+  `RefreshRelocationOutcome { changed, used_insert_fallback }`; the wrapper reads
+  `changed`, and focused/attribution tests may read `used_insert_fallback`.
+  This is not a counter or trace field and does not change fingerprints.
 
 - [ ] Run GREEN plus every existing route and union regression:
 
@@ -947,7 +962,15 @@ the fallback fit.
   real-circuit runner: assert at least one accepted refresh-stage trace entry
   whose gain comes from the fallback, with `observed_settle` strictly lower and
   `non_air_blocks`, `occupied_volume` and `static_routed_delay` each no worse --
-  the unchanged `JointQuality` guard. Task 6 does not repeat it.
+  the unchanged `JointQuality` guard. To attribute without changing
+  `ProposalTrace`, the test's existing compile closure replays that proposal's
+  incumbent prunes and prior refreshes on the named planned parent route, calls
+  the outcome-returning inner relocation once for the appended descriptor, and
+  records `used_insert_fallback` by the already-defined
+  `hierarchical-parent-refresh-choice-v1` fingerprint. After the run, an
+  accepted trace entry must match a recorded fallback fingerprint. Production
+  trace schemas and ordering remain byte-for-byte unchanged. Task 6 does not
+  repeat this run.
 
 ```powershell
 Invoke-Capped -Command 'cargo test --release --lib compile::fragment_synth::hierarchy_api::tests::refresh_relocation_improves_an_acceptance_circuit -- --ignored --exact --nocapture'
