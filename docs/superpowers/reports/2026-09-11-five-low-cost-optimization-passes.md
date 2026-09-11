@@ -290,3 +290,175 @@ fingerprints and `WORK` sequence come from stdout in both forms. The three
 paired samples, their medians (3637 ms / 9642 ms) and the focused-gate results
 are therefore valid baseline evidence and are not recaptured. The budget ledger
 is unchanged at 138.0 s: this correction ran no Cargo command.
+
+## Task 1: Candidate 1 -- palette-indexed `BlockFlags` memo -- attempted, NO-GO
+
+Wave start commit: `c737335494687abfbfb22f714a350bca609f60ea`. Task 1 start and
+revert target: `1b1c0ac7dfe1c8b0d7ba1ff92714052b7954893f`.
+
+Branch taken: **NO-GO**. The memo is correct and semantically exact, but the
+measured top `PHASE manifest` speedup is **1.18x**, short of the required 1.5x.
+Every source change was removed before this section was committed.
+
+### TDD evidence
+
+Six behavioural tests were written first; every assertion compares values the
+public API returns, and none inspects source text or field layout.
+
+| Test | Module | Status before production code |
+| --- | --- | --- |
+| `flags_are_interned_alongside_every_state` | `palette.rs` | RED (did not compile) |
+| `flags_of_an_unknown_index_is_none` | `palette.rs` | RED (did not compile) |
+| `flags_at_agrees_with_flags_of_on_every_placed_cell` | `storage.rs` | RED (did not compile) |
+| `flags_at_out_of_bounds_equals_the_in_bounds_air_cell` | `storage.rs` | RED (did not compile) |
+| `flags_at_sees_a_palette_entry_interned_after_construction` | `storage.rs` | RED (did not compile) |
+| `from_parts_answers_flags_at_for_a_palette_that_had_no_air` | `storage.rs` | RED (did not compile) |
+
+**RED**, `cargo test --lib redstone::world -- --nocapture`, exit 101, 5.3 s.
+Exact failure text (first and last of the nine errors, plus the summary):
+
+```text
+error[E0599]: no method named `flags` found for struct `palette::Palette` in the current scope
+   --> src\redstone\world\palette.rs:106:19
+    |
+ 12 | pub struct Palette {
+    | ------------------ method `flags` not found for this struct
+...
+106 |                 p.flags(index),
+
+error[E0599]: no method named `flags_at` found for struct `storage::World` in the current scope
+   --> src\redstone\world\storage.rs:497:19
+    |
+ 32 | pub struct World {
+    | ---------------- method `flags_at` not found for this struct
+...
+497 |                 w.flags_at(*x, *y, *z),
+
+For more information about this error, try `rustc --explain E0599`.
+error: could not compile `reda` (lib test) due to 9 previous errors
+```
+
+**GREEN**, after the production change:
+
+| Command | Result | Elapsed |
+| --- | --- | --- |
+| `cargo test --lib redstone::world -- --nocapture` | 24 passed; 0 failed | 25.2 s |
+| `cargo test --lib redstone::simulator -- --nocapture` | 120 passed; 0 failed | 0.8 s |
+
+All six new tests are named individually in the world transcript as `ok`.
+`dust_topology_epoch_ignores_dynamic_state_and_tracks_connectivity_flags` is
+**characterization**: it was green before this change and stayed green
+(`test redstone::world::storage::tests::dust_topology_epoch_ignores_dynamic_state_and_tracks_connectivity_flags ... ok`).
+
+### The candidate as implemented (now removed)
+
+`Palette` owned the memo, exactly as planned: `flags: Vec<BlockFlags>` pushed in
+the same `intern` branch that pushes `entries`, plus
+`Palette::flags(&self, index: u32) -> Option<BlockFlags>`. `World` gained only
+`flags_at`, delegating to the palette with the cell's index in bounds and
+`air_index` out of bounds; it held no second copy and no second invariant. No
+`debug_assert_eq!` was added -- the four `storage.rs` tests already pin the
+equivalence and a per-neighbour assert would have changed what the debug build
+measures. `dust_topology_key` and `dust_topology_changed` were untouched.
+
+Exactly three call sites switched, as specified: `connectivity.rs`'s
+`is_conductive` and `supports_dust_step`, and the `block_signal_at` conductivity
+guard in `propagate.rs`. Every other `flags_of` call site was left alone; the two
+`flags_of` imports that this left unused were dropped from their `use` lines.
+
+```text
+ src/redstone/simulator/connectivity.rs |  6 +--
+ src/redstone/simulator/propagate.rs    |  5 +--
+ src/redstone/world/palette.rs          | 51 +++++++++++++++++++++
+ src/redstone/world/storage.rs          | 82 +++++++++++++++++++++++++++++++++-
+ 4 files changed, 137 insertions(+), 7 deletions(-)
+```
+
+Of those 137 lines, 97 are the six new tests; the production surface is three
+changed call sites, one new field, and two new accessors.
+
+### Retention gate: three ripple budget-0 paired samples
+
+One capped command is one paired sample, read as the maximum top
+`PHASE manifest` and the maximum `RETENTION` `wall_ms` within that command. The
+`$ripple` literal was the plan's, unmodified; the corrected `Invoke-Capped`
+captured native stderr, so every `PHASE` and `WORK` line parsed.
+
+| Paired sample | Top `PHASE manifest` (the pair) | Max `wall_ms` (the pair) | Elapsed | Transcript |
+| --- | --- | --- | --- | --- |
+| 1 | 3072 (3072, 2916) | 9172 (9172, 9045) | 92.5 s | `$env:TEMP\reda-wave-c1-sample1.txt` |
+| 2 | 3034 (3034, 2849) | 9014 (9014, 8946) | 18.6 s | `$env:TEMP\reda-wave-c1-sample2.txt` |
+| 3 | 3125 (3125, 2912) | 9162 (9162, 9065) | 18.9 s | `$env:TEMP\reda-wave-c1-sample3.txt` |
+| **Candidate median** | **3072 ms** | **9162 ms** | | |
+
+Sample 1 is slower as a command only because it included the release rebuild;
+the measured quantities are the harness's own phase and wall numbers, not the
+command elapsed time. Each transcript also carries the child block compile's
+smaller `PHASE manifest` (25 / 23, 25 / 23, 28 / 26 ms); the maximum is the
+top-level one.
+
+### Computed ratios against the baseline
+
+| Gate | Baseline median | Candidate median | Computed | Threshold | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| Top `PHASE manifest` | 3637 ms | 3072 ms | 3637 / 3072 = **1.18x** | at least 1.5x, i.e. at most 2424 ms | **FAIL** |
+| `RETENTION` `wall_ms` | 9642 ms | 9162 ms | 9162 / 9642 = 0.950, i.e. 5.0% **faster** | at most 1.05x, i.e. at most 10124 ms | pass |
+
+### Exact semantic and determinism comparison
+
+Identical to the baseline in every checked respect, across all three samples:
+
+| Artifact | Result |
+| --- | --- |
+| Quality, all six `RETENTION` lines | `settle=608 blocks=70603 volume=1123332 static=678` |
+| Case fingerprint | `b9ab139aa9726703df3cd0b9f7ed30d50c6a8e0c8b1e2bb4156024a179844573` |
+| Candidate fingerprint | `a5e71ef0712baf6239bedd6781a75277c8d3b40170046750b01e1e3fdb8fb1b2` |
+| Ordered `WORK` sequence | 14 lines per sample, byte-identical to the baseline sequence, compared with `diff` as an ordered sequence |
+| `evals` / `stop` | `evals=0 stop=EvaluationBudget`, as at baseline |
+
+The candidate is therefore *correct*; it simply is not fast enough. Per the
+wave's standing ruling, the measured phase number decides -- a call-count or
+asymptotic argument does not substitute for it, and none is offered here.
+
+### Removal proof
+
+```powershell
+git checkout -- src/redstone/world/palette.rs src/redstone/world/storage.rs src/redstone/simulator/connectivity.rs src/redstone/simulator/propagate.rs
+git status --porcelain
+```
+
+`git status --porcelain` was **empty** immediately after the checkout (this
+report section had not yet been written), and
+`git diff --exit-code 1b1c0ac7dfe1c8b0d7ba1ff92714052b7954893f -- src` was empty:
+`src` is byte-identical to the Task 1 start commit. The focused world suite was
+then re-run on the restored tree: **18 passed; 0 failed**, 25.4 s -- the
+pre-candidate count, since the six new tests exercised an API that no longer
+exists and were removed with it. The only working-tree change at commit time is
+this report.
+
+### Wave command-time ledger (continued)
+
+| # | Command | Elapsed | Running total |
+| --- | --- | --- | --- |
+| 10 | RED: `cargo test --lib redstone::world` (expected compile failure) | 5.3 s | 143.3 s |
+| 11 | GREEN: `cargo test --lib redstone::world` | 25.2 s | 168.5 s |
+| 12 | GREEN: `cargo test --lib redstone::simulator` | 0.8 s | 169.3 s |
+| 13 | ripple paired sample 1 | 92.5 s | 261.8 s |
+| 14 | ripple paired sample 2 | 18.6 s | 280.4 s |
+| 15 | ripple paired sample 3 | 18.9 s | 299.3 s |
+| 16 | removal proof: `cargo test --lib redstone::world` | 25.4 s | 324.7 s |
+
+**Used after Task 1: 324.7 s = 5.4 min of the 60-minute wave budget.** No
+command reached the 600 s cap.
+
+### Candidates
+
+| Candidate | Status |
+| --- | --- |
+| 1: palette-indexed `BlockFlags` memo | **attempted, NO-GO** (1.18x vs 1.5x required) |
+| 2: `prunable_parent_routes` sidecar | PENDING |
+| 3: hoisted merge consumer index | PENDING |
+| 4: filtered second bounded Pull-X round | PENDING |
+| 5: insert-then-prune fallback for Refresh Relocation | PENDING |
+
+**Wave verdict: retained 0 of 5 so far.**
