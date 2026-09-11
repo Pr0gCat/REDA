@@ -644,3 +644,93 @@ command reached the 600 s cap.
 | 5: insert-then-prune fallback for Refresh Relocation | PENDING |
 
 **Wave verdict: retained 1 of 5 so far.**
+
+---
+
+## Task 3: Candidate 3 -- hoisted merge consumer index -- attempted, NO-GO before production
+
+Task 3 start and revert target: `0a6b138`.
+
+Branch taken: **NO-GO before production**. The approved disposable probe's
+representative premise is false: the real seven-segment netlist has **84 gates
+and 0 merge gates**, so neither measured batch calls `merge_isolation_mask` at
+all. All three baseline runs measured only **4 ms** for 20
+`InstanceGraph::with_variants` repeats and **1 ms** for 20
+`primitive_graph::expand` repeats. A target with no merge calls and 5 ms total
+work cannot demonstrate the required absolute saving of at least 100 ms.
+
+Controller ruling after those three measurements: apply Ponytail/YAGNI,
+immediately reject the candidate, write no production helper and no TDD test,
+remove the probe, and preserve only the report. Therefore no RED/GREEN claim is
+made for Task 3.
+
+### Disposable baseline probe
+
+The probe used the required real
+`crate::circuits::seven_segment::build_seven_segment_netlist()` and
+`Library::default_library()`. Each command ran the two batches 20 times through
+the current serial `Invoke-Capped` runner.
+
+The `PROBE` and `test result` outputs below are transcript-backed. The
+`Invoke-Capped` elapsed values **0.655 / 0.584 / 0.588 / 72.422 / 0.637 s** and
+the derived **74.886 / 693.386 s** aggregates are controller-observed metadata
+that was not embedded in the transcript files. The transcript hashes therefore
+do not independently substantiate those elapsed values or the cap result.
+
+| Baseline run | Netlist | `InstanceGraph::with_variants`, 20 repeats | `primitive_graph::expand`, 20 repeats | Command elapsed | Cap observation | Transcript |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | 84 gates, 0 merges | 4 ms | 1 ms | 0.655 s | controller observed under 600 s | `$env:TEMP\reda-wave-c3-baseline1.txt`, SHA-256 `610e8ed43b56520f350fde3f6f893c7bbb5fee60917cdc6888141b3e7c1eb94b` |
+| 2 | 84 gates, 0 merges | 4 ms | 1 ms | 0.584 s | controller observed under 600 s | `$env:TEMP\reda-wave-c3-baseline2.txt`, SHA-256 `f1641d7226c959dd599e970706ce3f773058f7311611100a1ab75da6076d25d1` |
+| 3 | 84 gates, 0 merges | 4 ms | 1 ms | 0.588 s | controller observed under 600 s | `$env:TEMP\reda-wave-c3-baseline3.txt`, SHA-256 `f1641d7226c959dd599e970706ce3f773058f7311611100a1ab75da6076d25d1` |
+
+The median is therefore 4 ms plus 1 ms. No post-change samples exist because
+there was intentionally no production change.
+
+### Removal and correctness proof
+
+The disposable probe was removed with `apply_patch`. Afterwards:
+
+```text
+git diff --exit-code 0a6b138 -- src        -> exit 0
+rg disposable/helper Task 3 symbols src   -> 0 matches
+```
+
+Thus `src` is byte-identical to the Task 3 start commit, including the retained
+Task 2 implementation already present at `0a6b138`.
+
+Only the two required existing merge correctness commands were run, in order,
+through `Invoke-Capped`:
+
+| Command | Result | Command elapsed | Cap observation |
+| --- | --- | --- | --- |
+| `cargo test --release --lib merge_isolation -- --nocapture --test-threads=1` | 1 passed; 0 failed | 72.422 s, including release rebuild after probe removal | controller observed under 600 s |
+| `cargo test --release --lib compile::fragment_synth::instance_graph::tests -- --nocapture --test-threads=1` | 17 passed; 0 failed | 0.637 s | controller observed under 600 s |
+
+The exact correctness gate totals **18 passed, 0 failed**.
+
+### Wave command-time ledger (continued)
+
+| # | Command | Elapsed | Running total |
+| --- | --- | --- | --- |
+| 27 | Candidate 3 disposable baseline 1 | 0.655 s | 619.155 s |
+| 28 | Candidate 3 disposable baseline 2 | 0.584 s | 619.739 s |
+| 29 | Candidate 3 disposable baseline 3 | 0.588 s | 620.327 s |
+| 30 | merge correctness 1 of 2, release rebuild | 72.422 s | 692.749 s |
+| 31 | merge correctness 2 of 2 | 0.637 s | 693.386 s |
+
+**Used after Task 3: 693.386 s = 11.6 min of the 60-minute wave budget.**
+The controller observed no command reach the 600 s cap; that observation is not
+preserved inside the transcript files. Task 3 used 74.886 s total by the same
+controller-observed elapsed metadata.
+
+### Candidates
+
+| Candidate | Status |
+| --- | --- |
+| 1: palette-indexed `BlockFlags` memo | **attempted, NO-GO** (1.18x vs 1.5x required) |
+| 2: `prunable_parent_routes` sidecar | **attempted, GO, RETAINED** (26 ms to 13 ms median) |
+| 3: hoisted merge consumer index | **attempted, NO-GO before production** (approved real probe had 0 merge gates and only 5 ms total work) |
+| 4: filtered second bounded Pull-X round | PENDING |
+| 5: insert-then-prune fallback for Refresh Relocation | PENDING |
+
+**Wave verdict: retained 1 of 5 so far.**
