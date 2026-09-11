@@ -1034,3 +1034,92 @@ No command reached the 600 s cap.
 | 5: one-shot bend-aware Refresh Relocation | **attempted, GO, RETAINED** (one attributed acceptance; settle 560 to 550) |
 
 **Wave verdict: retained 3 of 5.**
+
+---
+
+## Task 6: bounded final validation over the retained set -- PASS
+
+Validated revision: `97a7a84231353da9d16ba1b572c024567346a0a1`.
+The tree was clean before validation. Cargo commands ran serially and no
+command reached the 600 s cap.
+
+### Budget-zero semantic and identity gate
+
+Each case ran twice inside its existing self-check. Both rows for every case
+had `evals=0`, `stop=EvaluationBudget`, no trace entries, and identical metrics
+and fingerprints:
+
+| Case | Settle | Blocks | Volume | Static | Case fingerprint | Candidate fingerprint |
+| --- | ---: | ---: | ---: | ---: | --- | --- |
+| `ripple_adder8` | 608 | 70603 | 1123332 | 678 | `b9ab139aa9726703df3cd0b9f7ed30d50c6a8e0c8b1e2bb4156024a179844573` | `a5e71ef0712baf6239bedd6781a75277c8d3b40170046750b01e1e3fdb8fb1b2` |
+| `alu4_full` | 925 | 191062 | 3332000 | 940 | `a61d69e6372bee8a9fc1ff328dd84bec4b75e198f1dc8f4c445da3e59ce54e03` | `0060a3dc718981b35509a100b65f88dce3eff779c7423fefe0d56878781b5afc` |
+| `multiplier4` | 1039 | 124948 | 3017412 | 1070 | `4a0a25fc8beb26ac272b67ca139f7a6dffa8af0b755256bfb71f2c326db82048` | `5cc4f911455c7e5d4a1057e4123bc74c2ffe0c4229203bf7502b07ceee62732b` |
+| `alu8` | 972 | 213833 | 2902664 | 1204 | `856636a25601cb533299b0daf1b8e43034d6959a8593e4af91518153a1235c02` | `19ea67df99e616c8b8789fc8e1119868c0ae588c2a8653d798bfa9b2e6f054ee` |
+
+The ripple row is byte-identical to this wave's Task 0 baseline. The other
+three rows also match the prior budget-zero retention report exactly; this
+wave's runs are the authoritative current evidence.
+
+The plan's literal command omitted `REDA_PHASE_TIMING`, so the first complete
+semantic runs did not emit the required `WORK` diagnostics. The same four
+budget-zero gates were therefore rerun once with that flag, and the plan was
+corrected. Per run, the ordered sequences were:
+
+- `ripple_adder8`: `(exhaustive_workers 1, exhaustive_vectors 8,
+  manifest_workers 8, manifest_transitions 56)`, then parent
+  `(exhaustive_vectors 0, manifest_workers 12, manifest_transitions 68)`.
+- `alu4_full`: two leaf blocks each emitted `(exhaustive_vectors 0,
+  manifest_workers 1)` with transition counts 48 and 52; parent emitted
+  `(exhaustive_vectors 0, manifest_workers 11, manifest_transitions 44)`.
+- `multiplier4`: `(1, 8, 8, 56)`, `(12, 256, 12, 32)`, then parent
+  `(11, 256, 11, 32)` in the same field order as the ripple row.
+- `alu8`: `(12, 128, 12, 28)`, then `(exhaustive_vectors 0,
+  manifest_workers 12, manifest_transitions 44)`, then parent
+  `(exhaustive_vectors 0, manifest_workers 10, manifest_transitions 76)`.
+
+Those sequences repeated exactly except that `alu4_full`'s two independent
+leaf threads emitted their 48/52 transition lines in opposite global stderr
+order. Independent review traced this to the pre-existing concurrent leaf
+dispatcher in `hierarchy_api.rs` and unsynchronised diagnostic writes in
+`certification.rs`. The child multiset, each child-local sequence, parent
+sequence, all semantic fields, and all fingerprints were identical. This is a
+disclosed diagnostic-interleaving artifact, not a proposal-order or first-error
+change, and no retained candidate touches that dispatcher or emitter.
+
+### Pinned IO, worker determinism, and flat control
+
+- Pinned IO: `build_circuit_pins` passed **8/8**, including both checked
+  seven-segment front doors and the hierarchical exhaustion fingerprint check.
+- Worker determinism: the plan's original `--exact` path omitted the
+  `extra_circuits` module and matched 0 tests. That is not counted as evidence.
+  With the corrected full path, `ripple_adder8` passed workers 1/2/4 with
+  `ticks=590 blocks=70659 evaluations=1 trace=1`; `alu4_full` passed all three
+  with `ticks=922 blocks=192006 evaluations=1 trace=1`. The tests compare the
+  complete results, including trace and fingerprints, against workers=1.
+- Bounded flat control: `fragment` passed **9/9** and `search` passed
+  **11/11**. The roughly 40-minute full flat corpus was not run. Its stated
+  residual risk is absent here because Candidate 1 was removed completely and
+  the three retained candidates are hierarchical-only; the plan required the
+  out-of-band full run only if Candidate 1 survived.
+
+### Wave command-time ledger (continued)
+
+| # | Command | Elapsed | Running total |
+| --- | --- | --- | --- |
+| 52 | budget-0 `ripple_adder8` | 21.345 s | 2195.632 s |
+| 53 | budget-0 `alu4_full` | 74.447 s | 2270.079 s |
+| 54 | budget-0 `multiplier4` | 177.086 s | 2447.165 s |
+| 55 | budget-0 `alu8` | 82.939 s | 2530.104 s |
+| 56 | pinned IO | 200.686 s | 2730.790 s |
+| 57 | worker command with wrong exact path (0 tests; no evidence) | 0.916 s | 2731.706 s |
+| 58 | workers 1/2/4 `ripple_adder8` | 119.949 s | 2851.655 s |
+| 59 | workers 1/2/4 `alu4_full` | 311.337 s | 3162.992 s |
+| 60 | bounded flat `fragment` | 2.699 s | 3165.691 s |
+| 61 | bounded flat `search` | 0.319 s | 3166.010 s |
+| 62 | WORK rerun `ripple_adder8` | 21.766 s | 3187.776 s |
+| 63 | WORK rerun `alu4_full` | 74.913 s | 3262.689 s |
+| 64 | WORK rerun `multiplier4` | 166.770 s | 3429.459 s |
+| 65 | WORK rerun `alu8` | 89.353 s | 3518.812 s |
+
+Task 6 used **1344.525 s**. Wave total: **3518.812 s = 58.65 min**
+of the 60-minute budget, leaving 81.188 s for the final cheap close only.

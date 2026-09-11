@@ -1047,6 +1047,7 @@ foreach ($case in 'ripple_adder8','alu4_full','multiplier4','alu8') {
     $cmd = @"
 `$env:REDA_EXTRA_CIRCUITS='$case'
 `$env:REDA_RETENTION_BUDGET='0'
+`$env:REDA_PHASE_TIMING='1'
 cargo test --release --lib every_hierarchical_circuit_certifies_through_module_floorplan -- --ignored --nocapture
 "@
     Invoke-Capped -Command $cmd -Log $log
@@ -1068,7 +1069,7 @@ Invoke-Capped -Command 'cargo test --test build_circuit_pins -- --nocapture'
 foreach ($case in 'ripple_adder8','alu4_full') {
     $cmd = @"
 `$env:REDA_EXTRA_CIRCUITS='$case'
-cargo test --release --lib compile::fragment_synth::seed::tests::every_hierarchical_circuit_agrees_across_certification_thread_counts -- --ignored --exact --nocapture --test-threads=1
+cargo test --release --lib compile::fragment_synth::seed::tests::extra_circuits::every_hierarchical_circuit_agrees_across_certification_thread_counts -- --ignored --exact --nocapture --test-threads=1
 "@
     Invoke-Capped -Command $cmd -Log (Join-Path $env:TEMP "reda-wave-threads-$case.txt")
 }
