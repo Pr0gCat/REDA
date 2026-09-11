@@ -20,9 +20,10 @@ binding except for exactly two claims, which this document **supersedes**:
 1. "There is no sixth stage." Superseded. A sixth stream stage (Pull-X round 2)
    may exist if and only if it earns retention under this document's gates.
 2. "Relocation is straight-only", i.e. the rule that a refresh mutation may only
-   rewrite an identical straight horizontal `P -> U -> D` segment and may never
-   insert a cell. Superseded for the Refresh Relocation stage only, by the
-   insert-then-prune fallback below.
+   rewrite an identical straight horizontal `P -> U -> D` segment. Superseded
+   for the Refresh Relocation stage only by the bounded bend-aware extension
+   below; the existing insert-one/delete-two mutation and strict one-repeater
+   reduction remain unchanged.
 
 Everything else in that document stays in force verbatim: the `JointQuality`
 acceptance policy and its density non-regression guard, Passes 1-4 keeping
@@ -30,8 +31,8 @@ acceptance policy and its density non-regression guard, Passes 1-4 keeping
 offered descriptor, deterministic trace prefixes, at-most-once stage freezing,
 the refusal catalogue, the rebuild order, and every deferred item. In
 particular, **bend-aware relocation and sibling merge are not separate passes**:
-they are one route rewrite, and this document implements that rewrite as the
-Refresh Relocation fallback rather than as new stages.
+the existing straight sibling-merge rewrite gains one bounded bend-aware
+fallback rather than a new stage.
 
 ## Goals
 
@@ -293,55 +294,55 @@ one** capped certified ripple run decides retention: retention requires at least
 one accepted round-2 proposal that strictly improves `QualityKey`. Otherwise
 NO-GO and removed.
 
-## Candidate 5: insert-then-prune fallback for Refresh Relocation
+## Candidate 5: one-shot bend-aware Refresh Relocation
 
-`relocate_refresh` (`route_opt.rs:96-281`) today only rewrites an identical,
-straight, horizontal `U..=D` window: `straight` (`route_opt.rs:203-208`) refuses
-any bend or vertical step, and every trial only ever **moves** `U`'s repeater
-into the window. A route whose refreshes sit across a bend, and a sibling pair
-that a single new repeater would let pruning collapse, are both refused today.
-Extending this one function subsumes both "bend-aware relocation" and "sibling
-merge"; they are one route rewrite and get no stages of their own.
+`relocate_refresh` (`route_opt.rs:96-281`) already performs the useful rewrite:
+it copies upstream refresh `U`'s exact state onto one dust cell `N` inside the
+shared `U..=D` window, turns `U` and downstream refresh `D` into dust, and keeps
+the trial only when the route has exactly one fewer repeater and every affected
+branch still carries. It currently refuses the whole pair when that shared
+window is not one straight horizontal slice. The candidate adds only the missing
+bend legality; it does not call `prune_route` or invent a second rewrite.
 
 Contract:
 
-- The fallback runs **only** when the existing straight relocation retained
-  nothing for a standing refresh, inside `relocate_refresh`, on the same
-  renumbered parent clone, before any child is stamped.
-- It inserts exactly one repeater by converting **one route-owned dust cell**
-  into a repeater carrying the standing refresh's exact `BlockState`, then runs
-  the existing `prune_route` on the mutated tree. No facing is reconstructed.
-- Legality is validated **for every branch containing the inserted cell** in two
-  layers: the existing `route_step_is_legal(previous, at, next, state)` must
-  accept the same inserted state on every affected branch, then the existing
-  `branches_carry_through` walk must prove signal strength. A branch that does
-  not contain the cell is unaffected by construction and is not re-proven.
-- Enumeration is deterministic: `Reverse(maximum path depth)` then `Anchor`, the
-  same total order `prune_route` and `relocate_refresh` already use. `Anchor`'s
-  derived `Ord` is the only tiebreak, and nothing reads map iteration order,
-  worker count or wall clock.
-- **Exactly one candidate cell is tried per standing refresh: the
-  furthest-downstream legal one.** When that sole attempt fails, the tree is
-  restored and the pass moves to the **next standing refresh** -- never to a
-  second cell for the same refresh. The fallback is a bounded escape hatch, not a
-  second search.
-- On no gain, **full cell state is snapshotted and restored**: the inserted
-  cell's prior state and every state `prune_route` changed. The tree must be
-  byte-equal to its input after a refused fallback.
-- A step is retained only when the route's repeater count **strictly falls**.
-  Inserting one and pruning one is no gain and is undone.
-- `non_air_blocks` and `occupied_volume` stay invariant: dust and repeater both
-  occupy one cell, and no cell is added or removed. The `JointQuality` guard
-  from the 2026-09-10 spec continues to be the only acceptance rule for this
-  stage.
+- The current straight behavior, including all of its candidate trials and
+  order, remains unchanged. Its existing `U`/`D` facing-equality check remains
+  a straight-path condition; a bend pair may have different `U`/`D` facings and
+  is instead governed by `U`'s state being legal at `N`. Bend fallback is
+  considered only at the
+  fall-through of the outer `D` iteration, after no straight pair retained a
+  change for that `D`; stale and directly-prunable `D` values still continue
+  immediately and never reach fallback.
+- While the same inner `U` and reversed-window order is examined, it may
+  remember the first bend cell that is locally legal. Legality
+  filters enumeration: an illegal cell is skipped until the first legal cell is
+  found. At most one remembered bend trial is mutated per outer `D`; if it fails,
+  the algorithm advances to the next `D` and never tries a second bend cell.
+- A bend candidate stays inside the existing identical shared `U..=D` branch
+  slice and offset bounds. `N` must be route-owned dust and not in the global
+  terminal set. Every affected branch must contain `N` exactly once, provide
+  both neighbours, and accept `U`'s unchanged `BlockState` through the existing
+  `route_step_is_legal(previous, N, next, state)` authority.
+- The mutation and proof reuse the existing three-cell trial exactly: copy
+  `U`'s state to `N`, dust `U` and `D`, require
+  `repeaters(tree) + 1 == standing` and `branches_carry_through(tree, U)`, and
+  restore those exact three prior states on refusal. No whole-tree clone,
+  `prune_route`, new search, knob, counter or fixture-specific production path.
+- An internal relocation outcome may additionally report whether a bend trial
+  was retained. Production callers continue to receive the same boolean
+  `relocate_refresh` result; `ProposalTrace`, schemas, fingerprints and stream
+  order do not change.
+- `non_air_blocks` and `occupied_volume` stay invariant, and the existing
+  `JointQuality` policy remains the only search-level acceptance rule.
 
-Retention gate: a focused, contiguous bent fixture that first passes
-`RealisedRouteTree::validate` and that pruning and straight relocation both
-provably refuse, plus at least one accepted refresh-stage proposal on a real
-acceptance circuit whose gain is explicitly attributed to the fallback. The
-attribution uses an internal relocation outcome and the existing choice
-fingerprint; it does not add a trace field, schema change, counter or feature
-flag. Otherwise the candidate is NO-GO and removed.
+Retention gate: a contiguous, physically coherent bent fixture must first pass
+`RealisedRouteTree::validate`, prove the old straight eligibility refuses, and
+then retain exactly one bend rewrite. The single real-circuit run must contain
+at least one accepted refresh-stage entry whose exact choice fingerprint maps to
+a retained bend outcome. That bit proves a bend rewrite participated in the
+route transformation; it does not claim the accepted proposal's entire quality
+delta came only from that rewrite. Otherwise the candidate is NO-GO and removed.
 
 ## Retention, revert and NO-GO policy
 

@@ -207,7 +207,7 @@ time. No command reached the 600 s cap.
 | 2: `prunable_parent_routes` sidecar | PENDING |
 | 3: hoisted merge consumer index | PENDING |
 | 4: filtered second bounded Pull-X round | PENDING |
-| 5: insert-then-prune fallback for Refresh Relocation | PENDING |
+| 5: one-shot bend-aware Refresh Relocation | PENDING |
 
 **Wave verdict: retained 0 of 5 so far.**
 
@@ -459,7 +459,7 @@ command reached the 600 s cap.
 | 2: `prunable_parent_routes` sidecar | PENDING |
 | 3: hoisted merge consumer index | PENDING |
 | 4: filtered second bounded Pull-X round | PENDING |
-| 5: insert-then-prune fallback for Refresh Relocation | PENDING |
+| 5: one-shot bend-aware Refresh Relocation | PENDING |
 
 **Wave verdict: retained 0 of 5 so far.**
 
@@ -641,7 +641,7 @@ command reached the 600 s cap.
 | 2: `prunable_parent_routes` sidecar | **attempted, GO, RETAINED** (26 ms to 13 ms median) |
 | 3: hoisted merge consumer index | PENDING |
 | 4: filtered second bounded Pull-X round | PENDING |
-| 5: insert-then-prune fallback for Refresh Relocation | PENDING |
+| 5: one-shot bend-aware Refresh Relocation | PENDING |
 
 **Wave verdict: retained 1 of 5 so far.**
 
@@ -731,7 +731,7 @@ controller-observed elapsed metadata.
 | 2: `prunable_parent_routes` sidecar | **attempted, GO, RETAINED** (26 ms to 13 ms median) |
 | 3: hoisted merge consumer index | **attempted, NO-GO before production** (approved real probe had 0 merge gates and only 5 ms total work) |
 | 4: filtered second bounded Pull-X round | PENDING |
-| 5: insert-then-prune fallback for Refresh Relocation | PENDING |
+| 5: one-shot bend-aware Refresh Relocation | PENDING |
 
 **Wave verdict: retained 1 of 5 so far.**
 
@@ -873,7 +873,7 @@ controller metadata, not embedded in the transcript files.
 | 2: `prunable_parent_routes` sidecar | **attempted, GO, RETAINED** (26 ms to 13 ms median) |
 | 3: hoisted merge consumer index | **attempted, NO-GO before production** (approved real probe had 0 merge gates and only 5 ms total work) |
 | 4: filtered second bounded Pull-X round | **attempted, GO, RETAINED** (7/7 accepted round-2 proposals; 14 fewer blocks) |
-| 5: insert-then-prune fallback for Refresh Relocation | PENDING |
+| 5: one-shot bend-aware Refresh Relocation | PENDING |
 
 ## Task 4 test-boundary repair (post-hoc)
 

@@ -4,7 +4,7 @@
 
 **Goal:** Evaluate exactly five low-cost optimization candidates in one wave, each against its own cheap gate, and retain only the measured winners. A candidate that misses its opportunity signal or its threshold is fully removed before the next candidate starts. Zero retained candidates is a legitimate outcome.
 
-**Architecture:** Nothing new is built. Candidate 1 memoizes `BlockFlags` inside the existing `Palette`, which already owns every interned state. Candidate 2 adds two permanent `PHASE` lines beside the existing ones and, only if they justify it, one structurally coupled `RoutedParent` sidecar carried by the `Arc` the reused plan already hands back. Candidate 3 hoists the consumer index `merge_isolation_mask` already builds. Candidate 4 adds one more stage to the existing finite `HierarchicalProposalStream`, in the same shape the existing stages use. Candidate 5 extends the existing `relocate_refresh` with a bounded fallback, reusing `branches_carry_through` and `prune_route`.
+**Architecture:** Nothing new is built. Candidate 1 memoizes `BlockFlags` inside the existing `Palette`, which already owns every interned state. Candidate 2 adds two permanent `PHASE` lines beside the existing ones and, only if they justify it, one structurally coupled `RoutedParent` sidecar carried by the `Arc` the reused plan already hands back. Candidate 3 hoists the consumer index `merge_isolation_mask` already builds. Candidate 4 adds one more stage to the existing finite `HierarchicalProposalStream`, in the same shape the existing stages use. Candidate 5 reuses `relocate_refresh`'s existing insert-one/delete-two trial and adds one bounded, locally legal bend attempt.
 
 **Tech Stack:** Rust standard library, existing REDA world/simulator/hierarchy/route/timing types, existing certification path, serial Cargo on PowerShell.
 
@@ -858,10 +858,10 @@ git commit -m "feat: offer a second bounded pull-x round"
 
 ---
 
-## Task 5: Candidate 5 -- insert-then-prune fallback for Refresh Relocation
+## Task 5: Candidate 5 -- one-shot bend-aware Refresh Relocation
 
-This subsumes bend-aware relocation and sibling merge. They are one route
-rewrite and get no stage of their own.
+This extends the existing sibling-merge rewrite across a bend. It gets no new
+stage and never calls `prune_route` internally.
 
 **Files:**
 
@@ -876,73 +876,71 @@ rewrite and get no stage of their own.
   standing refreshes. Do not add a second fixture builder and do not assign
   `BlockState::facing` directly; use `crate::compile::repeater(Facing::..)` as
   the existing helpers do. Remap a complete suffix so every consecutive path
-  step remains adjacent, and require `bent_relocation_route().validate()` to
-  succeed before the fixture is used by any fallback assertion.
+  step remains adjacent. Re-lay every repeater on the remapped suffix with the
+  existing constructor so its facing follows the new axis. Require
+  `bent_relocation_route().validate()` as a contiguity gate and explicitly check
+  every repeater step with `route_step_is_legal` before any fallback assertion.
 
 - [ ] Write RED tests in `route_opt.rs`:
 
-  - `refresh_insert_fallback_breaks_a_bend_that_prune_and_relocation_both_refuse`
-    -- on `bent_relocation_route()`, `prune_route` alone changes nothing and the
-    straight relocation alone changes nothing, but `relocate_refresh` now
-    retains a step whose repeater anchors show exactly one fewer repeater.
-  - `refresh_insert_fallback_tries_only_the_furthest_downstream_cell` -- a
-    fixture with several legal insertion cells, where the furthest-downstream one
-    fails and an earlier one would have succeeded, proves the pass tries only the
-    furthest-downstream cell, restores, and moves on to the **next standing
-    refresh** rather than to a second cell.
-  - `refresh_insert_fallback_validates_every_branch_through_the_inserted_cell`
-    -- a branch that passes through the inserted cell and dies after it refuses
-    the whole fallback; a branch that does not contain the cell is unaffected.
-  - `refresh_insert_fallback_requires_a_strict_repeater_reduction` -- inserting
-    one and pruning exactly one is no gain and is undone.
-  - `refresh_insert_fallback_restores_every_touched_cell_on_no_gain` -- after a
-    refused fallback the tree is byte-equal to its input, including every state
-    the interleaved `prune_route` changed.
-  - `refresh_insert_fallback_is_order_stable_under_shuffled_cells` -- shuffling
-    `tree.cells` and `tree.branches` input order yields the same canonical
-    `BTreeMap<Anchor, BlockState>` and mutation set, proving nothing reads map
-    or vector iteration order without forcing production code to sort its
-    order-bearing vectors.
+  - `refresh_bend_relocation_moves_one_pair_across_a_valid_bend` -- the fixture
+    passes validation, pruning and the old straight eligibility both refuse,
+    while the new outcome reports a retained bend and repeater anchors show
+    exactly one fewer repeater.
+  - `refresh_bend_relocation_tries_only_the_first_legal_cell_per_downstream` --
+    an illegal deeper cell is filtered without mutation; the first legal cell is
+    tried, fails the carry proof, and an earlier legal cell that would succeed is
+    not tried for the same outer `D`.
+  - `refresh_bend_relocation_checks_every_branch_and_repeated_occurrence` -- a
+    second affected branch with the wrong local axis, or a branch naming `N`
+    twice, refuses the bend candidate; branches not containing `N` are ignored.
+  - `refresh_bend_relocation_restores_three_states_and_is_order_stable` -- a
+    refused trial restores `U`, `D` and `N` exactly; shuffled cell/branch input
+    order yields the same canonical `BTreeMap<Anchor, BlockState>` and mutation
+    set without sorting production vectors.
+  - `refresh_relocation_bool_wrapper_preserves_the_existing_contract` -- the
+    wrapper's boolean remains identical to `outcome.changed`, while focused
+    fixtures distinguish `used_bend_fallback`.
 
 - [ ] Run RED:
 
 ```powershell
-Invoke-Capped -Command 'cargo test --lib compile::fragment_synth::route_opt::tests::refresh_insert_fallback -- --nocapture'
+Invoke-Capped -Command 'cargo test --lib compile::fragment_synth::route_opt::tests::refresh_bend_relocation -- --nocapture'
 ```
 
-Expected RED: the fallback does not exist; `relocate_refresh` leaves the bent
-fixture unchanged. Record the exact failure text.
+Expected RED: the outcome and bend path do not exist; `relocate_refresh` leaves
+the valid bent fixture unchanged. Record the exact failure text.
 
-- [ ] Implement inside `relocate_refresh`, reusing what is there. Keep the
-  existing straight path exactly as it is and reach the fallback **only** when
-  that path retained nothing for the standing refresh. Per standing refresh:
+- [ ] Implement inside `relocate_refresh`, reusing the current loops and exact
+  three-cell mutation. The outer `'pairs` candidate `down` is `D`; `up` is `U`;
+  `tree.cells[source].state` is the only inserted state. Stale and directly
+  prunable `D` values keep their current early `continue`s. For each live `D`:
 
-  1. enumerate route-owned dust cells downstream of the refresh in
-     `Reverse(maximum path depth)` then `Anchor` order, skipping terminals;
-  2. take the **furthest-downstream** cell, the first in that order, and only
-     that one;
-  3. snapshot the full cell state of the whole tree (`tree.cells.clone()`);
-  4. write the standing refresh's exact state onto that cell; do not reconstruct
-     or overwrite its facing;
-  5. for **every branch containing the inserted cell**, require both neighbours
-     to exist and reuse
-     `crate::compile::routing::route_step_is_legal(previous, at, next, state)`.
-     This single authority rejects a bend-axis mismatch and also proves all
-     affected branches accept the same standing state. Then require the existing
-     `branches_carry_through` strength walk;
-  6. run the existing `prune_route` on the mutated tree;
-  7. retain only if the route's repeater count **strictly falls**; otherwise
-     restore the snapshot exactly and continue to the **next standing refresh**.
-     Never try a second cell for the same refresh.
+  1. run the current same-facing straight pairs and all their trials unchanged;
+  2. for non-straight shared `U..=D` windows, do not require `U` and `D` to have
+     equal facing: `D` is removed, while `U`'s unchanged state must be legal at
+     `N`. In the same `U`, reversed-window and offset order, remember only the
+     first cell that passes the
+     existing offset bound, is route-owned dust, is outside the global terminal
+     set, appears exactly once with both neighbours in every affected branch,
+     and accepts `U`'s exact state via `route_step_is_legal` on every occurrence;
+  3. only if no straight trial retained for this `D`, mutate that one remembered
+     bend candidate: copy `U` to `N`, dust `U` and `D`, and reuse the current
+     `repeaters(tree) + 1 == standing && branches_carry_through(tree, up)` gate;
+  4. on refusal restore exactly the three replaced states and continue directly
+     to the next outer `D`. Never mutate a second bend cell for that `D`.
 
-  No new module, no relocation framework, no second search, no work cap knob.
+  `relocation_offsets` stays unchanged. No full-tree snapshot, internal
+  `prune_route`, new module/framework/search, or work-cap knob.
 
 - [ ] Preserve the public-in-crate boolean contract with the smallest explicit
   outcome beneath it. `relocate_refresh(tree) -> bool` remains the function used
   by production callers. Its inner implementation returns a small
-  `RefreshRelocationOutcome { changed, used_insert_fallback }`; the wrapper reads
-  `changed`, and focused/attribution tests may read `used_insert_fallback`.
-  This is not a counter or trace field and does not change fingerprints.
+  `RefreshRelocationOutcome { changed, used_bend_fallback }`; the wrapper reads
+  `changed`, and focused/attribution tests may read `used_bend_fallback`.
+  This is not a counter or trace field and does not change fingerprints. Make
+  the inner type/function only as visible as the sibling-module test needs;
+  suppress the non-test dead-field warning locally rather than globally.
 
 - [ ] Run GREEN plus every existing route and union regression:
 
@@ -950,25 +948,33 @@ fixture unchanged. Record the exact failure text.
 Invoke-Capped -Command 'cargo test --lib compile::fragment_synth::route_opt -- --nocapture'
 Invoke-Capped -Command 'cargo test --lib compile::fragment_synth::union -- --nocapture'
 Invoke-Capped -Command 'cargo test --lib refresh_relocation'
+Invoke-Capped -Command 'cargo test --lib refresh_bend_relocation'
 ```
 
-`cargo test --lib refresh_relocation` must still report **9 passed / 2 ignored**
-plus the new tests; no previously passing refusal test may be weakened to make
-the fallback fit.
+`cargo test --lib refresh_relocation` must still report **9 passed / 2 ignored**;
+the separate `refresh_bend_relocation` filter owns the new tests. In particular,
+`refresh_relocation_replays_every_prune_before_any_refresh` must remain green;
+no existing refusal test may be weakened to make the bend fit.
 
 - [ ] Retention on a real circuit: **one** targeted attribution run, the whole
   budget for this candidate. Extend the existing ignored
   `refresh_relocation_improves_an_acceptance_circuit` rather than adding a second
   real-circuit runner: assert at least one accepted refresh-stage trace entry
-  whose gain comes from the fallback, with `observed_settle` strictly lower and
-  `non_air_blocks`, `occupied_volume` and `static_routed_delay` each no worse --
-  the unchanged `JointQuality` guard. To attribute without changing
-  `ProposalTrace`, the test's existing compile closure replays that proposal's
-  incumbent prunes and prior refreshes on the named planned parent route, calls
-  the outcome-returning inner relocation once for the appended descriptor, and
-  records `used_insert_fallback` by the already-defined
+  whose route transformation retained a bend fallback, with `observed_settle`
+  strictly lower and `non_air_blocks`, `occupied_volume` and
+  `static_routed_delay` each no worse --
+  the unchanged `JointQuality` guard. Detect Pass 5 only when
+  `refreshes.len() > incumbent.refreshes.len()`. To attribute without changing
+  `ProposalTrace`, the test's existing compile closure takes the appended final
+  descriptor, clones its named route from the incumbent plan, replays every
+  incumbent prune for that route once in descriptor order, then every prior
+  incumbent refresh for that route once in descriptor order, calls the
+  outcome-returning inner relocation once, and records `used_bend_fallback` by
+  the already-defined
   `hierarchical-parent-refresh-choice-v1` fingerprint. After the run, an
-  accepted trace entry must match a recorded fallback fingerprint. Production
+  accepted trace entry must match a recorded bend fingerprint. This proves a
+  bend rewrite was retained during the route transformation, not that it was the
+  accepted proposal's only source of gain. Production
   trace schemas and ordering remain byte-for-byte unchanged. Task 6 does not
   repeat this run.
 
@@ -976,8 +982,9 @@ the fallback fit.
 Invoke-Capped -Command 'cargo test --release --lib compile::fragment_synth::hierarchy_api::tests::refresh_relocation_improves_an_acceptance_circuit -- --ignored --exact --nocapture'
 ```
 
-- [ ] On NO-GO -- no accepted fallback-attributed entry on any acceptance
-  circuit -- remove the fallback, the fixture and every new test:
+- [ ] On NO-GO -- no accepted bend-attributed entry on the acceptance circuit --
+  remove the bend path, outcome, fixture and every new test while preserving the
+  reviewed Task 4 boundary repair:
 
 ```powershell
 git checkout -- src/compile/fragment_synth/route_opt.rs src/compile/fragment_synth/hierarchy_api.rs
@@ -991,7 +998,7 @@ Invoke-Capped -Command 'cargo test --lib refresh_relocation'
 rustfmt src/compile/fragment_synth/route_opt.rs src/compile/fragment_synth/hierarchy_api.rs
 git add -- src/compile/fragment_synth/route_opt.rs src/compile/fragment_synth/hierarchy_api.rs docs/superpowers/reports/2026-09-11-five-low-cost-optimization-passes.md
 git diff --cached --check
-git commit -m "feat: insert one legal repeater when relocation is refused"
+git commit -m "feat: relocate one refresh across a bend"
 ```
 
 ---
