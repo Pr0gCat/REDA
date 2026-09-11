@@ -1,10 +1,10 @@
 # Five Low-Cost Optimization Passes Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to execute this plan task-by-task, and superpowers:test-driven-development for Tasks 1-5. This plan's own rule overrides the sub-skill's dispatch step: **do not dispatch subagents.** The task implementer executes the task itself, writes the full report to the SDD report file, and commits its own task.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development to execute this plan task-by-task, and superpowers:test-driven-development for Tasks 1-5. The controller dispatches a fresh implementer and a fresh reviewer per task, exactly as the sub-skill specifies. An individual implementer or reviewer must not spawn nested agents of its own; it executes its task, writes the full report to the SDD report file, and commits that task.
 
 **Goal:** Evaluate exactly five low-cost optimization candidates in one wave, each against its own cheap gate, and retain only the measured winners. A candidate that misses its opportunity signal or its threshold is fully removed before the next candidate starts. Zero retained candidates is a legitimate outcome.
 
-**Architecture:** Nothing new is built. Candidate 1 memoizes `BlockFlags` per palette index inside the existing `World`. Candidate 2 adds two permanent `PHASE` lines beside the existing ones and, only if they justify it, one `Arc`-identity sidecar beside `prunable_parent_routes`. Candidate 3 hoists the consumer index `merge_isolation_mask` already builds. Candidate 4 adds one more stage to the existing finite `HierarchicalProposalStream`, in the same shape the existing stages use. Candidate 5 extends the existing `relocate_refresh` with a bounded fallback, reusing `branches_carry_through` and `prune_route`.
+**Architecture:** Nothing new is built. Candidate 1 memoizes `BlockFlags` inside the existing `Palette`, which already owns every interned state. Candidate 2 adds two permanent `PHASE` lines beside the existing ones and, only if they justify it, one structurally coupled `RoutedParent` sidecar carried by the `Arc` the reused plan already hands back. Candidate 3 hoists the consumer index `merge_isolation_mask` already builds. Candidate 4 adds one more stage to the existing finite `HierarchicalProposalStream`, in the same shape the existing stages use. Candidate 5 extends the existing `relocate_refresh` with a bounded fallback, reusing `branches_carry_through` and `prune_route`.
 
 **Tech Stack:** Rust standard library, existing REDA world/simulator/hierarchy/route/timing types, existing certification path, serial Cargo on PowerShell.
 
@@ -22,10 +22,17 @@
   always through `Invoke-Capped` below.
 - **Every command is hard-capped at 10 minutes.** A capped command is a failed
   measurement, never a passing gate.
+- **The whole execution wave is budgeted at 60 minutes of measured command
+  time.** Sum every `Invoke-Capped` elapsed time in the report as you go. Many
+  sub-10-minute commands must not accumulate into another multi-hour run. At the
+  budget, stop, record what is measured, and mark the rest as not attempted.
 - Each candidate has its own cheap gate. A missed opportunity signal or a missed
   threshold means **full revert/removal before the next candidate starts**.
-- The expensive validation -- four-circuit harness, pinned IO, worker 1/2/4 and
-  the flat control -- runs **once, in Task 6**, over the retained set only.
+- The final validation -- four-circuit semantic check, pinned IO and worker
+  1/2/4 -- runs **once, in Task 6**, over the retained set only, and stays inside
+  the same caps. **Exhaustion (`u64::MAX`) is never run for `multiplier4` or for
+  all four circuits**: `multiplier4` exhaustion is measured at over 68 minutes
+  and cannot fit a 600 s cap.
 - Preserve semantics, first-error order, ordered proposal stream, fingerprints,
   traces, exact certification and manifests, pinned IO, and worker determinism.
 - No temporary counter, timer, feature flag or disabled branch survives the
@@ -35,9 +42,9 @@
 - **TDD evidence must capture a real expected RED before production code.** A
   test that was green before the production change is characterization and must
   be labelled as such in the report.
-- The task implementer writes the full report to
+- Each task's implementer writes the full report to
   `docs/superpowers/reports/2026-09-11-five-low-cost-optimization-passes.md` and
-  commits its own task. No subagents.
+  commits its own task. Implementers and reviewers do not spawn nested agents.
 - Ponytail full: smallest diff, reuse existing helpers, no speculative
   abstraction.
 - Format only touched Rust files with `rustfmt`; never repository-wide
@@ -48,6 +55,10 @@
 Define this once per shell session. Every Cargo command and every measurement in
 this plan goes through it, one at a time.
 
+The child's exit status must reach the parent. `Invoke-Expression` swallows it
+unless it is emitted deliberately, so the job prints one unambiguous sentinel
+line as its last output and the parent throws on anything nonzero.
+
 ```powershell
 function Invoke-Capped {
     param(
@@ -57,29 +68,45 @@ function Invoke-Capped {
     $job = Start-Job -ScriptBlock {
         param($c, $d)
         Set-Location -LiteralPath $d
+        $global:LASTEXITCODE = 0
         Invoke-Expression $c 2>&1
+        $code = if ($null -eq $LASTEXITCODE) { 0 } else { $LASTEXITCODE }
+        "REDA_CAPPED_EXIT=$code"
     } -ArgumentList $Command, (Get-Location).Path
+
     if (-not (Wait-Job -Job $job -Timeout 600)) {
         Stop-Job -Job $job
         Remove-Job -Job $job -Force
         throw "CAPPED at 600s, measurement failed: $Command"
     }
     $out = Receive-Job -Job $job
-    Remove-Job -Job $job
-    if ($Log) { $out | Set-Content -LiteralPath $Log }
-    $out
+    Remove-Job -Job $job -Force
+
+    $sentinel = @($out | Where-Object { "$_" -match '^REDA_CAPPED_EXIT=(\d+)$' })
+    if ($sentinel.Count -ne 1) { throw "no exit sentinel: $Command" }
+    $code = [int]([regex]::Match("$($sentinel[0])", '^REDA_CAPPED_EXIT=(\d+)$').Groups[1].Value)
+    $body = $out | Where-Object { "$_" -notmatch '^REDA_CAPPED_EXIT=\d+$' }
+    if ($Log) { $body | Set-Content -LiteralPath $Log }
+    if ($code -ne 0) { throw "exit $code : $Command" }
+    $body
 }
 ```
 
+`REDA_CAPPED_EXIT=` is reserved: no test, transcript or fixture may print it.
 `Start-Job` does not inherit environment variables, so every `REDA_*` variable is
 set **inside** the `-Command` string, and no `REDA_*` variable is ever left set
 in the interactive shell.
 
-## The two measurement commands
+## The ripple measurement command
 
-**Ripple budget-0 sample.** The single measurement both Candidate 1 and
-Candidate 2 are gated on, and the one Candidate 4 spends its single certified
-run on.
+**Ripple budget-0 paired sample.** The harness certifies each case at **two**
+budget points, so one command compiles `ripple_adder8` **twice**. One capped
+command is therefore **one paired sample**, read as the **maximum** top
+`PHASE manifest` and the **maximum** `RETENTION` `wall_ms` within that command.
+Never treat the two compiles inside one command as two independent samples.
+
+This is Candidate 1's gate and the source of Candidate 4's single certified run.
+It is **not** Candidate 2's gate: budget-0 ripple has zero plan-reuse hits.
 
 ```powershell
 $ripple = @'
@@ -90,25 +117,43 @@ cargo test --release --lib every_hierarchical_circuit_certifies_through_module_f
 '@
 ```
 
-**Reading one sample.** `$log` is the transcript of one ripple sample.
+**Reading one paired sample.** `$Log` is one capped command's transcript. Wall
+time comes from the `RETENTION` lines the harness prints, **not** from libtest's
+`test result:` duration, which includes compilation and harness overhead.
 
 ```powershell
 function Read-RippleSample {
     param([Parameter(Mandatory)][string]$Log)
     $lines = Get-Content -LiteralPath $Log
+    $maxOf = {
+        param($pattern)
+        $values = @($lines | Select-String -Pattern $pattern -AllMatches |
+            ForEach-Object { $_.Matches } | ForEach-Object { [int]$_.Groups[1].Value })
+        if ($values.Count -eq 0) { $null } else { ($values | Measure-Object -Maximum).Maximum }
+    }
+    $retention = @($lines | Select-String -Pattern '^RETENTION ' | ForEach-Object { $_.Line })
     [pscustomobject]@{
-        TopManifestMs = ($lines | Select-String -Pattern '^PHASE manifest (\d+)$' |
-            ForEach-Object { [int]$_.Matches[0].Groups[1].Value } | Measure-Object -Maximum).Maximum
-        TopPrunableMs = ($lines | Select-String -Pattern '^PHASE prunable (\d+)$' |
-            ForEach-Object { [int]$_.Matches[0].Groups[1].Value } | Measure-Object -Maximum).Maximum
-        Retention     = ($lines | Select-String -Pattern '^RETENTION ' | ForEach-Object { $_.Line })
-        Work          = ($lines | Select-String -Pattern '^WORK ' | ForEach-Object { $_.Line })
-        Wall          = ($lines | Select-String -Pattern 'test result:' | ForEach-Object { $_.Line })
+        TopManifestMs = & $maxOf '^PHASE manifest (\d+)$'
+        TopPrunableMs = & $maxOf '^PHASE prunable (\d+)$'
+        TopFlattenMs  = & $maxOf '^PHASE flatten (\d+)$'
+        MaxWallMs     = & $maxOf 'wall_ms=(\d+)'
+        Quality       = @($retention | ForEach-Object {
+            [regex]::Match($_, 'settle=(\d+) blocks=(\d+) volume=(\d+) static=(\d+)').Value })
+        Fingerprints  = @($retention | ForEach-Object {
+            [regex]::Match($_, 'case=(\S+) candidate=(\S+)').Value })
+        Work          = @($lines | Select-String -Pattern '^WORK ' | ForEach-Object { $_.Line })
+        Retention     = $retention
     }
 }
 ```
 
-Medians are over **three** samples. Record every sample, not just the median.
+`Work` is compared **as an ordered sequence**, not as a set: the same lines in a
+different order are a regression.
+
+Medians are over **three capped commands**, i.e. three paired samples. The
+already-recorded pair is **sample 1**: top `PHASE manifest` max `3749` ms,
+`RETENTION` max `wall_ms` `9789`. Task 0 captures **two more** commands so the
+median is over three. Record every sample, not just the median.
 
 ## Source map
 
@@ -152,52 +197,58 @@ Medians are over **three** samples. Record every sample, not just the median.
 
 - Create: `docs/superpowers/reports/2026-09-11-five-low-cost-optimization-passes.md`.
 
-- [ ] Confirm provenance before any measurement.
+- [ ] Confirm provenance before any measurement. `HEAD` is **not** required to be
+  the source baseline: docs commits land on top of it. What is required is that
+  the source baseline is an ancestor, the worktree is clean, and `src` is
+  byte-identical to the baseline.
 
 ```powershell
-git rev-parse HEAD
-git status --porcelain
+$baseSrc = '6c9f8b50cb00759a07c28f839c9180dac69696aa'
+git merge-base --is-ancestor $baseSrc HEAD; if ($LASTEXITCODE -ne 0) { throw 'baseline is not an ancestor of HEAD' }
+if ((git status --porcelain)) { throw 'worktree is not clean' }
+git diff --exit-code $baseSrc HEAD -- src; if ($LASTEXITCODE -ne 0) { throw 'src differs from the baseline' }
 git rev-parse --abbrev-ref HEAD
 ```
 
-Expected: `6c9f8b50cb00759a07c28f839c9180dac69696aa`, empty status,
-`claude/topology-aware-seed-v2-6f8f7e`. Anything else stops the wave.
+Expected: branch `claude/topology-aware-seed-v2-6f8f7e`, no throw. Anything else
+stops the wave.
 
-- [ ] Capture the **third** ripple budget-0 baseline sample, so every later
-  median is over three samples. The two recorded samples are 9.536 s / 9.790 s
-  wall and 3.609 s / 3.749 s top `PHASE manifest`.
+- [ ] Capture **two more** ripple budget-0 paired samples, so every later median
+  is over three capped commands. The already-recorded pair is sample 1: top
+  `PHASE manifest` max `3749` ms, `RETENTION` max `wall_ms` `9789`.
 
 ```powershell
-$base3 = Join-Path $env:TEMP 'reda-wave-baseline-sample3.txt'
-Invoke-Capped -Command $ripple -Log $base3
-Read-RippleSample -Log $base3
+2..3 | ForEach-Object {
+    $log = Join-Path $env:TEMP "reda-wave-baseline-sample$_.txt"
+    Invoke-Capped -Command $ripple -Log $log
+    Read-RippleSample -Log $log
+}
 ```
 
-- [ ] Assert the transcript reproduces the recorded baseline verbatim: quality
-  `settle 608`, `blocks 70603`, `volume 1123332`, `static 678`, and both
-  fingerprint strings from the spec's baseline block.
+- [ ] Assert each transcript reproduces the recorded baseline verbatim: quality
+  `settle=608 blocks=70603 volume=1123332 static=678`, and both fingerprint
+  strings from the spec's baseline block.
 
 ```powershell
 $want = @(
-    'settle=608','blocks=70603','volume=1123332','static=678',
+    'settle=608 blocks=70603 volume=1123332 static=678',
     'b9ab139aa9726703f7d5f0d7ed30d50c6a8e0c8b1e2bb4156024a179844573',
     'a5e71ef0712baf6239bedd6781a75277c8d3b40170046750b01e1e3fdb8fb1b2'
 )
-$text = (Get-Content -LiteralPath $base3) -join "`n"
-$want | ForEach-Object { if ($text -notmatch [regex]::Escape($_)) { Write-Warning "MISSING: $_" } }
+2..3 | ForEach-Object {
+    $text = (Get-Content -LiteralPath (Join-Path $env:TEMP "reda-wave-baseline-sample$_.txt")) -join "`n"
+    $want | ForEach-Object { if ($text -notmatch [regex]::Escape($_)) { throw "MISSING: $_" } }
+}
 ```
 
-If a fingerprint string is missing, **the transcript wins**: record the
-transcript's exact `case=` and `candidate=` values in the report as the
-authoritative baseline, note the correction explicitly, and use the corrected
-values in every later gate. Do not proceed with an unverified fingerprint.
-
 - [ ] Capture the three cheap focused gates once, so a later regression has a
-  clean comparison. Recorded values: merge 18 tests / 0.277 s, Pull-X 2 passed +
-  1 ignored / 0.672 s, refresh 9 passed + 2 ignored / 0.728 s.
+  clean comparison. Recorded values: merge correctness 18 tests total across its
+  two commands / 0.277 s, Pull-X 2 passed + 1 ignored / 0.672 s, refresh 9
+  passed + 2 ignored / 0.728 s.
 
 ```powershell
-Invoke-Capped -Command 'cargo test --lib bare'
+Invoke-Capped -Command 'cargo test --release --lib merge_isolation -- --nocapture --test-threads=1'
+Invoke-Capped -Command 'cargo test --release --lib compile::fragment_synth::instance_graph::tests -- --nocapture --test-threads=1'
 Invoke-Capped -Command 'cargo test --lib block_pull_x'
 Invoke-Capped -Command 'cargo test --lib refresh_relocation'
 ```
@@ -229,47 +280,71 @@ candidate's revert target is the commit standing when that candidate starts.
 
 **Files:**
 
-- Modify: `src/redstone/world/storage.rs:10-16,31-76,143-185,234-285`.
+- Modify: `src/redstone/world/palette.rs:11-52`.
+- Modify: `src/redstone/world/storage.rs:117-131,143-185`.
 - Modify: `src/redstone/simulator/connectivity.rs:17-40`.
 - Modify: `src/redstone/simulator/propagate.rs:433-440`.
 - Modify: `docs/superpowers/reports/2026-09-11-five-low-cost-optimization-passes.md`.
 
-- [ ] Write failing unit tests in `storage.rs`'s existing test module:
+- [ ] Write failing unit tests. Every assertion is behavioural -- compare values
+  the public API returns. No test may grep source or assert on field layout.
+
+  In `palette.rs`'s test module:
+
+  - `flags_are_interned_alongside_every_state` -- `intern` dust, a repeater,
+    stone and air; `Palette::flags(index)` equals `flags_of` of the state `get`
+    returns at that index, for every index.
+  - `flags_of_an_unknown_index_is_none` -- `Palette::flags(len)` is `None`, the
+    same shape `get` already uses.
+
+  In `storage.rs`'s test module:
 
   - `flags_at_agrees_with_flags_of_on_every_placed_cell` -- place dust, a
     repeater, stone, glass and a hopper; every `flags_at` equals
     `flags_of(world.get(..))`.
-  - `flags_at_out_of_bounds_returns_the_memoized_air_flags` -- asserts the value
-    is read from the memo at `air_index` and equals `flags_of(&BlockState::air())`,
-    and explicitly asserts it is **not** `BlockFlags::NONE` by comparing against
-    the in-bounds air cell's own `flags_at`.
+  - `flags_at_out_of_bounds_equals_the_in_bounds_air_cell` -- an out-of-bounds
+    read equals both `world.flags_at` of an untouched in-bounds cell and
+    `flags_of(&BlockState::air())`. Air's flags legitimately are
+    `BlockFlags::NONE`; do not assert the result differs from `NONE`.
   - `flags_at_sees_a_palette_entry_interned_after_construction` -- `set` a state
     whose palette index is new, then read it back through `flags_at`.
-  - `from_parts_memoizes_every_palette_entry_including_appended_air` -- build via
-    `from_parts` with a palette that has no air, then assert both an in-bounds
-    stone cell and an out-of-bounds read.
+  - `from_parts_answers_flags_at_for_a_palette_that_had_no_air` -- build via
+    `from_parts` with a palette lacking air, then assert both an in-bounds stone
+    cell and an out-of-bounds read.
 
 - [ ] Run RED:
 
 ```powershell
-Invoke-Capped -Command 'cargo test --lib redstone::world::storage::tests::flags_at -- --nocapture'
+Invoke-Capped -Command 'cargo test --lib redstone::world -- --nocapture'
 ```
 
-Expected RED: compilation fails, `no method named flags_at found for struct World`.
-Record the exact failure text in the report.
+Expected RED: compilation fails, `no method named flags` on `Palette` and
+`no method named flags_at` on `World`. Record the exact failure text in the
+report.
 
-- [ ] Implement the minimum. Add one private field to `World`:
+- [ ] Implement the minimum. **`Palette` owns the memo**, because `intern` is its
+  only mutator and the parallel-vector invariant then has exactly one place it
+  can be violated. `World` holds no second copy and no second invariant.
 
 ```rust
-/// `flags_of` per palette index, extended exactly where the palette is.
-/// Air's entry is what an out-of-bounds read returns, so the memo and
-/// `get`'s own air fallback cannot diverge.
-flags_by_index: Vec<BlockFlags>,
+// palette.rs
+entries: Vec<BlockState>,
+flags: Vec<BlockFlags>,   // flags[i] == flags_of(&entries[i]), by construction
+lookup: HashMap<BlockState, u32>,
 ```
 
-Maintain it in `new` (one air entry), in `set` (push when `intern` returns an
-index at the current length), and in `from_parts` (map `palette.entries()` after
-air is interned). Add:
+`intern` pushes `flags_of(&state)` in the same branch that pushes `entries`.
+Nothing else mutates either vector. Add:
+
+```rust
+#[inline]
+pub fn flags(&self, index: u32) -> Option<BlockFlags> {
+    self.flags.get(index as usize).copied()
+}
+```
+
+`World::flags_at` delegates, using the cell's palette index in bounds and
+`air_index` out of bounds -- the same fallback `get` already uses:
 
 ```rust
 #[inline]
@@ -278,9 +353,14 @@ pub fn flags_at(&self, x: i32, y: i32, z: i32) -> BlockFlags {
         Some(flat) => self.cells[flat],
         None => self.air_index,
     };
-    self.flags_by_index[index as usize]
+    self.palette
+        .flags(index)
+        .expect("palette index out of range")
 }
 ```
+
+A `debug_assert_eq!` against `flags_of(self.get(..))` inside `flags_at` is
+optional; add it only if it earns its place, and nowhere else.
 
 Leave `dust_topology_key` and `dust_topology_changed` exactly as they are,
 including the kind/half/name fast path: they compare two `BlockState`s, not two
@@ -300,7 +380,8 @@ Invoke-Capped -Command 'cargo test --lib redstone::simulator -- --nocapture'
 `dust_topology_epoch_ignores_dynamic_state_and_tracks_connectivity_flags` is
 characterization here: it was green before this change and must stay green.
 
-- [ ] Run the retention gate: three ripple budget-0 samples.
+- [ ] Run the retention gate: three ripple budget-0 paired samples, one per
+  capped command.
 
 ```powershell
 1..3 | ForEach-Object {
@@ -312,18 +393,18 @@ characterization here: it was green before this change and must stay green.
 
 - [ ] Decide, and say which branch was taken in the report.
 
-  - **GO** requires all of: median top `PHASE manifest` at least **1.5x** faster
-    than the baseline median (baseline median / candidate median >= 1.5); median
-    end-to-end wall no more than **5%** slower than the baseline median; all four
-    quality fields, both `WORK` lines and both fingerprints identical to the
-    baseline.
+  - **GO** requires all of: median `TopManifestMs` at least **1.5x** faster than
+    the baseline median (baseline median / candidate median >= 1.5); median
+    `MaxWallMs` no more than **5%** slower than the baseline median; all four
+    quality fields, the ordered `WORK` sequence and both fingerprints identical
+    to the baseline.
   - **Anything else is NO-GO.** Call-count reasoning, a faster micro-benchmark,
     or "it must be faster asymptotically" do not substitute for the phase number.
 
 - [ ] On NO-GO, remove the candidate completely and prove it:
 
 ```powershell
-git checkout -- src/redstone/world/storage.rs src/redstone/simulator/connectivity.rs src/redstone/simulator/propagate.rs
+git checkout -- src/redstone/world/palette.rs src/redstone/world/storage.rs src/redstone/simulator/connectivity.rs src/redstone/simulator/propagate.rs
 git status --porcelain
 Invoke-Capped -Command 'cargo test --lib redstone::world -- --nocapture'
 ```
@@ -335,8 +416,8 @@ Invoke-Capped -Command 'cargo test --lib redstone::world -- --nocapture'
   report section together.
 
 ```powershell
-rustfmt src/redstone/world/storage.rs src/redstone/simulator/connectivity.rs src/redstone/simulator/propagate.rs
-git add -- src/redstone/world/storage.rs src/redstone/simulator/connectivity.rs src/redstone/simulator/propagate.rs docs/superpowers/reports/2026-09-11-five-low-cost-optimization-passes.md
+rustfmt src/redstone/world/palette.rs src/redstone/world/storage.rs src/redstone/simulator/connectivity.rs src/redstone/simulator/propagate.rs
+git add -- src/redstone/world/palette.rs src/redstone/world/storage.rs src/redstone/simulator/connectivity.rs src/redstone/simulator/propagate.rs docs/superpowers/reports/2026-09-11-five-low-cost-optimization-passes.md
 git diff --cached --check
 git commit -m "perf: memoize block flags by palette index"
 ```
@@ -354,11 +435,14 @@ git commit -m "docs: record block flags memo as no-go"
 
 This candidate is a re-proposal of the reverted `14aead2` / `95b6b9d`. The
 revert's scope stays prohibited: **no `ModuleCompileContext`, no flattening
-hoist, no restructuring of `union_and_certify`'s call graph.** Sidecar only.
+hoist, no restructuring of `union_and_certify`'s call graph.** Also prohibited:
+a mutable one-entry cache, an `Arc::ptr_eq` or `Arc::as_ptr` cache key, and any
+production probe counter. The coupling is structural -- the value travels with
+the plan -- so there is no cache to invalidate.
 
 **Files:**
 
-- Modify: `src/compile/fragment_synth/hierarchy_api.rs:449-510`.
+- Modify: `src/compile/fragment_synth/hierarchy_api.rs:340-400,449-510,860-895`.
 - Modify: `docs/superpowers/reports/2026-09-11-five-low-cost-optimization-passes.md`.
 
 ### Step A -- diagnostics, unconditionally
@@ -371,15 +455,29 @@ hoist, no restructuring of `union_and_certify`'s call graph.** Sidecar only.
   carry no test: they are diagnostics, and the transcript below is their
   evidence. Say that explicitly in the report rather than claiming TDD for them.
 
-- [ ] Run three ripple budget-0 samples and read `PHASE prunable`.
+- [ ] Measure on the **plan-reuse fixture**, not on ripple budget 0. Budget-0
+  ripple never reuses a plan, so its `PHASE prunable` lines cannot show what this
+  candidate removes. `unchanged_block_placements_reuse_the_incumbent_plan`
+  (`hierarchy_api.rs:4047`) is the one existing test that drives the reuse
+  branch. Run three capped commands.
 
 ```powershell
+$reuse = @'
+$env:REDA_PHASE_TIMING='1'
+cargo test --lib unchanged_block_placements_reuse_the_incumbent_plan -- --nocapture --test-threads=1
+'@
 1..3 | ForEach-Object {
     $log = Join-Path $env:TEMP "reda-wave-c2-diag$_.txt"
-    Invoke-Capped -Command $ripple -Log $log
-    Read-RippleSample -Log $log
+    Invoke-Capped -Command $reuse -Log $log
+    $values = @((Get-Content -LiteralPath $log) | Select-String -Pattern '^PHASE prunable (\d+)$' |
+        ForEach-Object { [int]$_.Matches[0].Groups[1].Value })
+    [pscustomobject]@{ Lines = $values; AggregateMs = ($values | Measure-Object -Sum).Sum }
 }
 ```
+
+The **relevant prunable cost** of one command is that command's `AggregateMs`:
+the total `prunable` time across the fixture's compiles, which is the upper
+bound on what the sidecar can remove. Record the individual lines too.
 
 - [ ] Commit the diagnostics on their own, so the decision below is made from a
   clean, committed revision.
@@ -393,41 +491,67 @@ git commit -m "feat: report flatten and prunable phase timings"
 
 ### Step B -- the kill switch
 
-- [ ] If the median top `PHASE prunable` is **<= 5 ms**, the cache is **NO-GO**.
-  Do not write it. The two `PHASE` lines stay, record the three measured values
-  and the verdict in the report, commit the report, and go to Task 3.
+- [ ] If the median relevant prunable cost is **<= 5 ms**, the sidecar is
+  **NO-GO**, immediately. Do not write it. The two `PHASE` lines stay, record the
+  three measured aggregates and the verdict in the report, commit the report, and
+  go to Task 3.
 
 ```powershell
 git add -- docs/superpowers/reports/2026-09-11-five-low-cost-optimization-passes.md
-git commit -m "docs: record prunable cache as no-go under five milliseconds"
+git commit -m "docs: record prunable sidecar as no-go under five milliseconds"
 ```
 
-### Step C -- the sidecar, only if median `PHASE prunable > 5 ms`
+### Step C -- the sidecar, only if the median relevant prunable cost is > 5 ms
 
 - [ ] Write the failing test in `hierarchy_api.rs`'s test module:
 
-  - `prunable_parent_routes_are_reused_for_the_same_planned_parent` -- call the
-    sidecar twice with the same `Arc<PlannedParent>` and assert the second call
-    does not re-probe (assert on an identical returned set **and** on a
-    test-local probe counter that lives in the test, not in production code).
-  - `prunable_parent_routes_are_recomputed_for_a_different_planned_parent` --
-    two distinct `Arc`s over equal route maps must both be computed; equality of
-    contents must not be mistaken for identity.
+  - `an_unchanged_placement_reuses_the_routed_parent_and_its_prunable_routes` --
+    drive the existing reuse path and assert `Arc::ptr_eq` between the
+    incumbent's and the proposal's `Arc<RoutedParent>`, **and** that the two
+    carry the same `prunable_routes`. Identity of the `Arc` is the whole claim;
+    there is no counter to assert on.
+  - `a_moved_block_builds_a_new_routed_parent_with_its_own_prunable_routes` --
+    a proposal that really moves a block gets a different `Arc`, and its
+    `prunable_routes` equals what `prunable_parent_routes` computes for its own
+    planned routes.
 
 - [ ] Run RED:
 
 ```powershell
-Invoke-Capped -Command 'cargo test --lib compile::fragment_synth::hierarchy_api::tests::prunable_parent_routes -- --nocapture'
+Invoke-Capped -Command 'cargo test --lib routed_parent -- --nocapture'
 ```
 
-Expected RED: the sidecar entry point does not exist.
+Expected RED: `RoutedParent` does not exist.
 
-- [ ] Implement roughly 15 lines beside `prunable_parent_routes`: a one-entry
-  cache holding `(Arc<PlannedParent>, BTreeSet<RouteId>)`, consulted **only**
-  when `Arc::ptr_eq` holds against the stored `Arc`. Keying on `Arc::as_ptr`
-  alone is prohibited: a freed allocation can be recycled at the same address,
-  and holding the `Arc` plus `ptr_eq` is what makes the tie structural.
-  `prunable_parent_routes` itself keeps its current signature and body.
+- [ ] Implement the structural coupling. One small private struct, and the
+  sidecar is computed at the one place a plan is constructed:
+
+```rust
+/// A routed parent plus the facts derived from it that never change while
+/// it does not. Reusing the plan reuses these by construction, so there is
+/// no cache and nothing to invalidate.
+struct RoutedParent {
+    planned: PlannedParent,
+    prunable_routes: BTreeSet<RouteId>,
+}
+
+impl RoutedParent {
+    fn new(planned: PlannedParent) -> Self {
+        let prunable_routes = prunable_parent_routes(&planned.candidate.routes);
+        Self { planned, prunable_routes }
+    }
+}
+```
+
+`HierarchicalCandidate::planned` becomes `Arc<RoutedParent>`. Both existing
+`Arc::new(..)` plan sites (`hierarchy_api.rs:347` and `:382`) become
+`Arc::new(RoutedParent::new(..))`; the reuse branch at `:380` keeps its
+`Arc::clone` and now carries the sidecar for free. `union_and_certify` reads
+`planned.prunable_routes` instead of calling `prunable_parent_routes`, and every
+existing `planned.candidate` / `planned.block_offsets` read becomes
+`planned.planned.candidate` / `planned.planned.block_offsets`. Nothing else
+moves: `prunable_parent_routes` keeps its signature and body, and
+`union_and_certify` keeps its call graph.
 
 - [ ] Run GREEN and the hierarchy suite:
 
@@ -435,10 +559,10 @@ Expected RED: the sidecar entry point does not exist.
 Invoke-Capped -Command 'cargo test --lib compile::fragment_synth::hierarchy_api -- --nocapture'
 ```
 
-- [ ] Re-run three ripple samples. GO requires a measurable drop in median
-  `PHASE prunable` with all four quality fields, both `WORK` lines and both
-  fingerprints unchanged. Otherwise NO-GO: `git checkout --` the file back to the
-  Step A commit and prove `git status --porcelain` shows only the report.
+- [ ] Re-run the three reuse-fixture commands from Step A. GO requires a
+  measurable drop in the median relevant prunable cost, with the fixture's own
+  assertions still passing. Otherwise NO-GO: `git checkout --` the file back to
+  the Step A commit and prove `git status --porcelain` shows only the report.
 
 - [ ] Commit.
 
@@ -446,7 +570,7 @@ Invoke-Capped -Command 'cargo test --lib compile::fragment_synth::hierarchy_api 
 rustfmt src/compile/fragment_synth/hierarchy_api.rs
 git add -- src/compile/fragment_synth/hierarchy_api.rs docs/superpowers/reports/2026-09-11-five-low-cost-optimization-passes.md
 git diff --cached --check
-git commit -m "perf: reuse prunable parent routes per planned parent"
+git commit -m "perf: carry prunable routes with the routed parent"
 ```
 
 ---
@@ -466,7 +590,8 @@ git commit -m "perf: reuse prunable parent routes per planned parent"
 
   - `disposable_merge_consumer_index_probe` -- builds the real flat netlist from
     `crate::circuits::seven_segment::build_seven_segment_netlist()` and
-    `Library::default_library()`, then times **20 repeats** of
+    `Library::default_library()` (both confirmed present at the source
+    baseline), then times **20 repeats** of
     `InstanceGraph::with_variants(&netlist, &library, &BTreeMap::new(), &[])`
     and 20 repeats of `crate::compile::primitive_graph::expand(&netlist, &library)`,
     printing one `PROBE batch=... repeats=20 total_ms=...` line for each. No
@@ -482,7 +607,7 @@ git commit -m "perf: reuse prunable parent routes per planned parent"
 
 - [ ] Write failing unit tests for the hoist:
 
-  - In `topology.rs`: `merge_isolation_mask_with_a_shared_index_matches_the_public_function`
+  - In `topology.rs`: `merge_isolation_mask_with_index_matches_the_public_function`
     -- for every merge gate of the seven-segment netlist, the indexed helper and
     the public function return equal masks.
   - In `topology.rs`: `merge_isolation_mask_keeps_unknown_then_not_merge_then_too_many_inputs`
@@ -497,48 +622,49 @@ git commit -m "perf: reuse prunable parent routes per planned parent"
 - [ ] Run RED:
 
 ```powershell
-Invoke-Capped -Command 'cargo test --lib compile::fragment_synth::topology::tests::merge_isolation_mask -- --nocapture'
+Invoke-Capped -Command 'cargo test --release --lib merge_isolation -- --nocapture --test-threads=1'
 ```
 
 Expected RED: the indexed helper does not exist.
 
-- [ ] Implement the minimum:
+- [ ] Implement the minimum. No new struct: a free function returning the map
+  `merge_isolation_mask` already builds, plus one indexed variant.
 
 ```rust
-pub(crate) struct MergeConsumers<'a> {
-    consumers: HashMap<&'a str, Vec<usize>>,
+pub(crate) fn build_consumer_index(lowered: &Netlist) -> HashMap<&str, Vec<usize>> {
+    /* today's loop, verbatim, once */
 }
 
-impl<'a> MergeConsumers<'a> {
-    pub(crate) fn of(lowered: &'a Netlist) -> Self { /* today's loop, once */ }
-}
-
-pub(crate) fn merge_isolation_mask_with(
+pub(crate) fn merge_isolation_mask_with_index(
     lowered: &Netlist,
     gate_index: GateIndex,
-    consumers: &MergeConsumers<'_>,
-) -> Result<InputMask, MergeMaskError> { /* today's body below the index build */ }
+    consumers: &HashMap<&str, Vec<usize>>,
+) -> Result<InputMask, MergeMaskError> {
+    /* today's body below the index build, verbatim */
+}
 ```
 
 `merge_isolation_mask` keeps its exact public signature and becomes
-`MergeConsumers::of(lowered)` followed by `merge_isolation_mask_with`, so the two
-paths cannot drift. The three validation steps -- unknown gate, not a merge, too
-many inputs -- stay at the top of `merge_isolation_mask_with`, in that order,
-before the index is read. `instantiate_gates`, `expand_with_selection` and
-`shared_merge_branches` each build one `MergeConsumers` before their gate loop
-and pass it in; none of them changes its visit order or its first-error return.
+`build_consumer_index(lowered)` followed by `merge_isolation_mask_with_index`, so
+the two paths cannot drift. The three validation steps -- unknown gate, not a
+merge, too many inputs -- stay at the top of `merge_isolation_mask_with_index`,
+in that order, before the index is read. `instantiate_gates`,
+`expand_with_selection` and `shared_merge_branches` each call
+`build_consumer_index` once before their gate loop and pass the borrow in; none
+of them changes its visit order or its first-error return.
 
-- [ ] Run GREEN, including the whole merge correctness gate:
+- [ ] Run GREEN. The merge correctness gate is **exactly these two commands**,
+  18 tests in total at the measured baseline. Do not substitute a looser filter.
 
 ```powershell
-Invoke-Capped -Command 'cargo test --lib bare'
+Invoke-Capped -Command 'cargo test --release --lib merge_isolation -- --nocapture --test-threads=1'
+Invoke-Capped -Command 'cargo test --release --lib compile::fragment_synth::instance_graph::tests -- --nocapture --test-threads=1'
 Invoke-Capped -Command 'cargo test --lib compile::fragment_synth::topology -- --nocapture'
-Invoke-Capped -Command 'cargo test --lib compile::fragment_synth::instance_graph -- --nocapture'
 Invoke-Capped -Command 'cargo test --lib compile::primitive_graph -- --nocapture'
 ```
 
-`cargo test --lib bare` must still report **18 passed** and stay in the same
-order of magnitude as its recorded 0.277 s.
+The two gate commands must still total **18 passed** and stay in the same order
+of magnitude as the recorded 0.277 s.
 
 - [ ] Run three post-change probe runs with the same command as above.
 
@@ -668,11 +794,12 @@ Invoke-Capped -Command 'cargo test --release --lib pull_x_round_two_offers_descr
 If the frozen length is **0**, the candidate is NO-GO immediately: revert and do
 not spend the certified run.
 
-- [ ] Retention: **at most one** capped certified ripple run. Add one ignored
-  test `pull_x_round_two_improves_ripple_adder8` that runs the stream to
-  exhaustion through `run_budgeted_proposals` and asserts at least one accepted
-  trace entry lies inside the round-2 stage range with a strictly better
-  `QualityKey` than the entry before it.
+- [ ] Retention: **at most one** capped certified run, on `ripple_adder8` only.
+  Add one ignored test `pull_x_round_two_improves_ripple_adder8` that runs that
+  one circuit's stream through `run_budgeted_proposals` and asserts at least one
+  accepted trace entry lies inside the round-2 stage range with a strictly better
+  `QualityKey` than the entry before it. This is Candidate 4's whole attribution
+  budget; Task 6 does not repeat it and never extends it to the other circuits.
 
 ```powershell
 Invoke-Capped -Command 'cargo test --release --lib pull_x_round_two_improves_ripple_adder8 -- --ignored --exact --nocapture'
@@ -726,10 +853,11 @@ rewrite and get no stage of their own.
     -- on `bent_relocation_route()`, `prune_route` alone changes nothing and the
     straight relocation alone changes nothing, but `relocate_refresh` now
     retains a step whose repeater anchors show exactly one fewer repeater.
-  - `refresh_insert_fallback_tries_at_most_one_cell_per_standing_refresh` -- a
-    fixture with several legal insertion cells proves exactly one is tried, in
-    `Reverse(max depth)` then `Anchor` order, and the pass does not continue to
-    the next cell after the first is rejected.
+  - `refresh_insert_fallback_tries_only_the_furthest_downstream_cell` -- a
+    fixture with several legal insertion cells, where the furthest-downstream one
+    fails and an earlier one would have succeeded, proves the pass tries only the
+    furthest-downstream cell, restores, and moves on to the **next standing
+    refresh** rather than to a second cell.
   - `refresh_insert_fallback_validates_every_branch_through_the_inserted_cell`
     -- a branch that passes through the inserted cell and dies after it refuses
     the whole fallback; a branch that does not contain the cell is unaffected.
@@ -757,7 +885,8 @@ fixture unchanged. Record the exact failure text.
 
   1. enumerate route-owned dust cells downstream of the refresh in
      `Reverse(maximum path depth)` then `Anchor` order, skipping terminals;
-  2. take **one** candidate cell, the first in that order;
+  2. take the **furthest-downstream** cell, the first in that order, and only
+     that one;
   3. snapshot the full cell state of the whole tree (`tree.cells.clone()`);
   4. write the standing refresh's own state, with the proven successor facing,
      onto that cell;
@@ -765,7 +894,8 @@ fixture unchanged. Record the exact failure text.
      inserted cell**;
   6. run the existing `prune_route` on the mutated tree;
   7. retain only if the route's repeater count **strictly falls**; otherwise
-     restore the snapshot exactly and move on.
+     restore the snapshot exactly and continue to the **next standing refresh**.
+     Never try a second cell for the same refresh.
 
   No new module, no relocation framework, no second search, no work cap knob.
 
@@ -781,12 +911,13 @@ Invoke-Capped -Command 'cargo test --lib refresh_relocation'
 plus the new tests; no previously passing refusal test may be weakened to make
 the fallback fit.
 
-- [ ] Retention on a real circuit. Extend the existing ignored
-  `refresh_relocation_improves_an_acceptance_circuit` rather than adding a
-  second real-circuit runner: assert at least one accepted refresh-stage trace
-  entry whose gain comes from the fallback, with `observed_settle` strictly
-  lower and `non_air_blocks`, `occupied_volume` and `static_routed_delay` each
-  no worse -- the unchanged `JointQuality` guard.
+- [ ] Retention on a real circuit: **one** targeted attribution run, the whole
+  budget for this candidate. Extend the existing ignored
+  `refresh_relocation_improves_an_acceptance_circuit` rather than adding a second
+  real-circuit runner: assert at least one accepted refresh-stage trace entry
+  whose gain comes from the fallback, with `observed_settle` strictly lower and
+  `non_air_blocks`, `occupied_volume` and `static_routed_delay` each no worse --
+  the unchanged `JointQuality` guard. Task 6 does not repeat it.
 
 ```powershell
 Invoke-Capped -Command 'cargo test --release --lib refresh_relocation_improves_an_acceptance_circuit -- --ignored --exact --nocapture'
@@ -812,12 +943,17 @@ git commit -m "feat: insert one legal repeater when relocation is refused"
 
 ---
 
-## Task 6: One expensive validation, over the retained set only
+## Task 6: One bounded final validation, over the retained set only
 
 Run this **once**, after Tasks 1-5 have each been retained or removed. If zero
 candidates were retained, skip to Task 7 and say so: there is nothing to
-validate, and running it anyway would spend hours proving `HEAD` equals the
-baseline.
+validate.
+
+This task stays low-cost by construction. **Exhaustion is never run here.**
+`multiplier4` at `u64::MAX` is measured at over 68 minutes, and a four-circuit
+exhaustion run is how the previous cycle turned sub-10-minute commands into a
+multi-hour one. Candidates 4 and 5 already spent their one targeted certified
+attribution run each in Tasks 4 and 5; those are not repeated.
 
 **Files:**
 
@@ -830,59 +966,72 @@ git status --porcelain
 git rev-parse HEAD
 ```
 
-- [ ] Four-circuit harness, **one circuit per capped command** so no single
-  command approaches the 10-minute cap. `alu8` is the long one; if it caps, the
-  measurement failed and the wave's verdict must say so rather than omit it.
+- [ ] Four-circuit semantic check at **budget 0**, one case per capped command.
+  This proves the seed still certifies identically on every acceptance circuit;
+  it is not an optimization run and must not be given a nonzero budget.
 
 ```powershell
 foreach ($case in 'ripple_adder8','alu4_full','multiplier4','alu8') {
     $log = Join-Path $env:TEMP "reda-wave-validate-$case.txt"
     $cmd = @"
 `$env:REDA_EXTRA_CIRCUITS='$case'
-`$env:REDA_RETENTION_BUDGET=[string][uint64]::MaxValue
+`$env:REDA_RETENTION_BUDGET='0'
 cargo test --release --lib every_hierarchical_circuit_certifies_through_module_floorplan -- --ignored --nocapture
 "@
     Invoke-Capped -Command $cmd -Log $log
 }
 ```
 
-- [ ] Pinned IO.
+- [ ] Pinned IO, once.
 
 ```powershell
 Invoke-Capped -Command 'cargo test --test build_circuit_pins -- --nocapture'
 ```
 
-- [ ] Worker 1/2/4 determinism.
+- [ ] Worker 1/2/4 determinism. The existing matrix already compiles at
+  `SynthesisBudget::Evaluations(1)`; keep it there. Run **one selected real
+  circuit per capped command**. Run all four in one command only if a measured
+  run shows it finishes inside the cap, and record that measurement.
 
 ```powershell
-Invoke-Capped -Command 'cargo test --release --lib every_hierarchical_circuit_agrees_across_certification_thread_counts -- --ignored --exact --nocapture --test-threads=1'
+foreach ($case in 'ripple_adder8','alu4_full') {
+    $cmd = @"
+`$env:REDA_EXTRA_CIRCUITS='$case'
+cargo test --release --lib every_hierarchical_circuit_agrees_across_certification_thread_counts -- --ignored --exact --nocapture --test-threads=1
+"@
+    Invoke-Capped -Command $cmd -Log (Join-Path $env:TEMP "reda-wave-threads-$case.txt")
+}
 ```
 
-- [ ] Flat control, against a baseline captured from the **wave start commit**,
-  not from `HEAD`. Check out the wave start commit into a scratch worktree,
-  capture the baseline there, return, then run acceptance against it.
+- [ ] **Flat control: deferred, on the record.** `fragment_baseline` +
+  `fragment_acceptance` is measured at roughly 40 minutes and does not fit a
+  600 s cap; wrapping it in `Invoke-Capped` would only guarantee a capped, failed
+  measurement. Do not pretend otherwise and do not raise the cap for it. Either:
+
+  - run an **existing bounded flat control** instead -- the `--lib`
+    `compile::fragment_synth::fragment` and `compile::fragment_synth::search`
+    suites, which cover the flat search path the retained candidates touch --
+    and say that is what was run; or
+  - record it as **deferred** with the reason and the residual risk.
 
 ```powershell
-$waveStart = (git log --format='%H' -1 --grep='^docs: record five-candidate wave baseline').Trim()
-if (-not $waveStart) { throw 'wave start commit not found' }
-$scratch = Join-Path $env:TEMP ("reda-wave-flat-" + [guid]::NewGuid())
-git worktree add --detach $scratch $waveStart
-$flatBaseline = Join-Path $env:TEMP 'reda-wave-flat-baseline.json'
-Invoke-Capped -Command "Set-Location -LiteralPath '$scratch'; cargo run --release --bin fragment_baseline -- --output '$flatBaseline' --replace"
-$afterDir = Join-Path $env:TEMP ("reda-wave-after-" + [guid]::NewGuid())
-New-Item -ItemType Directory -Path $afterDir | Out-Null
-Invoke-Capped -Command "cargo run --release --bin fragment_acceptance -- --baseline '$flatBaseline' --output '$(Join-Path $afterDir 'acceptance.json')' --shipping-source '$(Join-Path $afterDir 'shipping_config.rs')' --shuffle-seed 0x5245444120260831"
-(Get-FileHash -LiteralPath $flatBaseline -Algorithm SHA256).Hash
-(Get-FileHash -LiteralPath (Join-Path $afterDir 'acceptance.json') -Algorithm SHA256).Hash
-git worktree remove $scratch
+Invoke-Capped -Command 'cargo test --lib compile::fragment_synth::fragment -- --nocapture'
+Invoke-Capped -Command 'cargo test --lib compile::fragment_synth::search -- --nocapture'
 ```
+
+  The residual risk to write down: no retained candidate was proven against the
+  full flat acceptance corpus in this wave. Candidate 1 is the only one that can
+  reach the flat path at all, and only through the shared simulator; Candidates
+  2-5 are hierarchical-only. Schedule the full flat control as its own
+  out-of-band run if Candidate 1 is retained.
 
 - [ ] Record, per retained candidate and for the retained set as a whole: all
   four `QualityKey` fields, `evaluations_used`, `stop_reason`, every trace entry,
-  both fingerprints, both `WORK` lines, the pinned-IO verdict, the worker matrix
-  verdict, the flat-control verdict, and both file hashes. Any disagreement with
-  the baseline is a **stop**: revert the candidate responsible, re-run this task
-  for the remaining set, and record both attempts.
+  both fingerprints, the ordered `WORK` sequence, the pinned-IO verdict, the
+  worker matrix verdict, the flat-control ruling, and the running total against
+  the 60-minute wave budget. Any disagreement with the baseline is a **stop**:
+  revert the candidate responsible, re-run this task for the remaining set, and
+  record both attempts.
 
 - [ ] Commit the validation section alone.
 
@@ -905,6 +1054,8 @@ git commit -m "docs: validate the retained low-cost candidates"
   of it.
 
 ```powershell
+$waveStart = (git log --format='%H' -1 --grep='^docs: record five-candidate wave baseline').Trim()
+if (-not $waveStart) { throw 'wave start commit not found' }
 git diff --stat $waveStart..HEAD
 Invoke-Capped -Command 'cargo test --lib disposable_merge_consumer_index_probe'
 ```
@@ -928,10 +1079,11 @@ Any new match is a survivor and must be removed before this task commits.
   a promise of five passes.
 
 - [ ] Run the full cheap gate set one last time and record it beside the Task 0
-  baseline.
+  baseline, together with the final wave-budget total.
 
 ```powershell
-Invoke-Capped -Command 'cargo test --lib bare'
+Invoke-Capped -Command 'cargo test --release --lib merge_isolation -- --nocapture --test-threads=1'
+Invoke-Capped -Command 'cargo test --release --lib compile::fragment_synth::instance_graph::tests -- --nocapture --test-threads=1'
 Invoke-Capped -Command 'cargo test --lib block_pull_x'
 Invoke-Capped -Command 'cargo test --lib refresh_relocation'
 Invoke-Capped -Command 'cargo test --lib unchanged_block_placements_reuse_the_incumbent_plan'

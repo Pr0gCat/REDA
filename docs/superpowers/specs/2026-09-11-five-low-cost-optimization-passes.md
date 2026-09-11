@@ -64,26 +64,36 @@ Refresh Relocation fallback rather than as new stages.
 
 These hold for every task in the implementation plan.
 
-- Baseline HEAD is `6c9f8b50cb00759a07c28f839c9180dac69696aa`.
+- The source baseline is `6c9f8b50cb00759a07c28f839c9180dac69696aa`. `HEAD` may
+  be a later docs commit; what is required is that the baseline is an ancestor,
+  the worktree is clean, and `git diff --exit-code 6c9f8b5 HEAD -- src` is empty.
 - No dependency, GPU, machine-specific tuning, or fixture-specific production
   branch.
 - Cargo is **strictly serialized**: exactly one Cargo command runs at a time.
 - Every command is **hard-capped at 10 minutes**. A command that hits the cap is
   a failed measurement, never a passing gate.
+- The whole execution wave is budgeted at **60 minutes** of measured command
+  time, so many sub-10-minute commands cannot accumulate into another multi-hour
+  run.
 - Each candidate gets its own cheap gate. A missed opportunity signal or a
   missed threshold means **full revert/removal before the next candidate
   starts**.
-- The expensive validation -- four-circuit harness, pinned IO, worker 1/2/4 and
-  the flat control -- runs **once, after all retained candidates**, never per
-  candidate.
+- The final validation -- four-circuit semantic check at budget 0, pinned IO and
+  worker 1/2/4 at one evaluation -- runs **once, after all retained candidates**,
+  never per candidate, and stays inside the same caps. Exhaustion (`u64::MAX`) is
+  never run for `multiplier4` or for all four circuits; `multiplier4` exhaustion
+  is measured at over 68 minutes. The ~40-minute flat acceptance harness does not
+  fit a 600 s cap and is explicitly deferred or replaced by an existing bounded
+  flat control, with the ruling and residual risk written down.
 - Preserve semantics, first-error order, the ordered proposal stream, its
   fingerprints and traces, exact certification and manifests, pinned IO, and
   worker determinism.
 - TDD evidence must capture a real expected RED before production
   implementation. A test that was green before the production change is
   characterization, and must be labelled as such.
-- The task implementer writes the full report to the SDD report file and commits
-  its task. No subagents.
+- Each task's implementer writes the full report to the SDD report file and
+  commits its task. The controller dispatches a fresh implementer and reviewer
+  per task; those agents do not spawn nested agents.
 - Ponytail full: smallest diff, reuse existing helpers, no speculative
   abstraction.
 
@@ -93,11 +103,11 @@ These hold for every task in the implementation plan.
 | --- | --- |
 | Worktree / branch | clean, `claude/topology-aware-seed-v2-6f8f7e` |
 | Reuse fixture runtime | 1.98 s warm; 75.197 s cold command |
-| Merge correctness gate | 18 tests, 0.277 s |
+| Merge correctness gate | 18 tests total across its two commands, 0.277 s |
 | Pull-X focused gate | 2 passed / 1 ignored, 0.672 s |
 | Refresh focused gate | 9 passed / 2 ignored, 0.728 s |
-| Ripple budget-0 wall | 9.536 s and 9.790 s |
-| Ripple budget-0 top `PHASE manifest` | 3.609 s and 3.749 s |
+| Ripple budget-0 paired sample 1 | max `wall_ms` 9789; the pair was 9.536 s and 9.790 s |
+| Ripple budget-0 sample 1 top `PHASE manifest` | max 3749 ms; the pair was 3.609 s and 3.749 s |
 | Ripple budget-0 quality | settle 608, blocks 70603, volume 1123332, static 678 |
 | Ripple budget-0 fingerprints | the two strings below |
 
@@ -109,17 +119,16 @@ case      = b9ab139aa9726703f7d5f0d7ed30d50c6a8e0c8b1e2bb4156024a179844573
 candidate = a5e71ef0712baf6239bedd6781a75277c8d3b40170046750b01e1e3fdb8fb1b2
 ```
 
-These two strings are transcribed from the prior measurement, not re-derived
-here. The plan's first task re-captures the same budget-0 transcript and asserts
-both strings appear in it verbatim. If the transcript disagrees, the transcript
-wins: the implementer records the transcript's values as the authoritative
-baseline, notes the correction in the report, and every later gate compares
-against the corrected values. No candidate may be measured against an unverified
-fingerprint.
+Both strings are valid and are preserved exactly; the plan's first task asserts
+both appear verbatim in a freshly captured transcript before any candidate is
+measured.
 
-The two ripple samples above are the first two of the three-sample median the
-retention gates use; the plan captures a third baseline sample before any
-production change so every median is over three samples.
+The budget-0 harness certifies each case at two budget points, so one capped
+command compiles the case **twice**. One command is therefore one **paired
+sample**, read as the maximum top `PHASE manifest` and the maximum `RETENTION`
+`wall_ms` within it -- never as two independent samples. The recorded pair above
+is sample 1; the plan captures two more commands so every median is over three
+paired samples.
 
 ## Candidate 1: palette-indexed `BlockFlags` memo
 
@@ -133,12 +142,19 @@ the derivation is memoizable per palette index.
 
 Contract:
 
-- `World` gains one private `Vec<BlockFlags>` parallel to the palette entries,
-  extended exactly where the palette is extended (`set`'s `intern`,
-  `from_parts`), and one accessor `World::flags_at(x, y, z) -> BlockFlags`.
-- `flags_at` out of bounds returns the **memoized air flags**, read from the
-  memo at `air_index`. It must never return a hardcoded `BlockFlags::NONE`;
-  `get` already returns air out of bounds and the two must not diverge.
+- **`Palette` owns the memo**, as one private `Vec<BlockFlags>` parallel to its
+  `entries`, pushed in `Palette::intern` -- the only mutator -- and exposed as
+  `Palette::flags(index) -> Option<BlockFlags>`, the same shape `get` uses. The
+  parallel-vector invariant then has exactly one place it can be violated.
+- `World::flags_at(x, y, z) -> BlockFlags` **delegates**: the cell's palette
+  index in bounds, `air_index` out of bounds -- the same fallback `get` already
+  uses. `World` holds no second vector and restates no invariant. An optional
+  `debug_assert_eq!` against `flags_of(self.get(..))` is allowed only if it earns
+  its place.
+- Out of bounds therefore returns the interned air entry's flags, which is what
+  the in-bounds air cell returns. Air's flags legitimately **are**
+  `BlockFlags::NONE`; the contract is agreement with `get`, not inequality with
+  `NONE`, and no test may assert the latter.
 - `dust_topology_changed` (`storage.rs:24`) keeps its existing kind/half/name
   fast path and its `flags_of` call on `BlockState`. It compares two
   `BlockState`s, not two world cells, and the memo does not apply to it.
@@ -148,11 +164,11 @@ Contract:
   `flags_of`.
 
 Retention gate. **Direct measured phase improvement, not call count.** Using the
-same budget-0 ripple command as the baseline: median top `PHASE manifest` must
-be at least **1.5x faster** than the baseline median, and median end-to-end wall
-must not regress by more than **5%**, with exact agreement on all four quality
-fields, both `WORK` lines, and both fingerprints. Anything less is NO-GO and the
-whole candidate is reverted.
+same budget-0 ripple command as the baseline, over three paired samples: median
+top `PHASE manifest` must be at least **1.5x faster** than the baseline median,
+and median `RETENTION` `wall_ms` must not regress by more than **5%**, with exact
+agreement on all four quality fields, the ordered `WORK` sequence, and both
+fingerprints. Anything less is NO-GO and the whole candidate is reverted.
 
 ## Candidate 2: `prunable_parent_routes` sidecar
 
@@ -164,7 +180,8 @@ owned by the `Arc<PlannedParent>` a reused plan hands back unchanged.
 This is a re-proposal of the reverted `14aead2` ("perf: reuse hierarchical
 compile invariants", reverted by `95b6b9d`). That revert's scope is prohibited:
 no `ModuleCompileContext`, no flattening hoist, no restructuring of
-`union_and_certify`'s call graph.
+`union_and_certify`'s call graph. Also prohibited: a mutable one-entry cache, an
+`Arc::ptr_eq` or `Arc::as_ptr` cache key, and any production probe counter.
 
 Contract, and it is conditional:
 
@@ -175,19 +192,27 @@ Contract, and it is conditional:
   and in the existing `eprintln!` `PHASE name millis` shape. These are the one
   sanctioned permanent survivor, justified by the existing diagnostics they
   join.
-- **Kill switch.** If the median `PHASE prunable` over the measured runs is
-  `<= 5 ms`, the cache is NO-GO: it is not implemented at all, the two `PHASE`
-  lines stay (they are the evidence), and the wave moves on.
-- If and only if median `PHASE prunable > 5 ms`, add a **sidecar** memo tied
-  structurally to the exact `Arc<PlannedParent>`: a one-entry cache validated by
-  `Arc::ptr_eq` against the stored `Arc`, so a recycled allocation cannot alias.
-  It is roughly 15 lines, lives beside `prunable_parent_routes`, holds the `Arc`
-  itself plus the `BTreeSet<RouteId>`, and is consulted only when `Arc::ptr_eq`
-  holds. It changes no signature that is not private to `hierarchy_api.rs`.
+- **Measured on the plan-reuse path, not on ripple.** Budget-0 ripple has zero
+  plan-reuse hits, so its `PHASE prunable` lines cannot show what this candidate
+  removes. The gate is the existing
+  `unchanged_block_placements_reuse_the_incumbent_plan` fixture
+  (`hierarchy_api.rs:4047`), and the measured quantity is that command's
+  aggregate `PHASE prunable` cost.
+- **Kill switch.** If the median relevant prunable cost is `<= 5 ms`, the sidecar
+  is NO-GO immediately: it is not implemented at all, the two `PHASE` lines stay
+  (they are the evidence), and the wave moves on.
+- If and only if that median is `> 5 ms`, couple the value **structurally** to
+  the plan rather than caching it: a small private
+  `RoutedParent { planned: PlannedParent, prunable_routes: BTreeSet<RouteId> }`,
+  with `HierarchicalCandidate::planned` becoming `Arc<RoutedParent>`.
+  `prunable_routes` is computed at the one `RoutedParent` construction site, so
+  the existing `Arc::clone` reuse branch carries it for free and there is nothing
+  to invalidate. `prunable_parent_routes` keeps its signature and body.
 
-Retention gate: the `PHASE prunable` median must exceed 5 ms to start, and the
-sidecar must then produce a measurable drop in that same line with exact quality
-and fingerprint agreement. Otherwise NO-GO and removed.
+Retention gate: the median relevant prunable cost must exceed 5 ms to start, and
+the sidecar must then produce a measurable drop in it, with the fixture's own
+assertions still passing. The TDD claim is `Arc<RoutedParent>` identity across a
+reuse, and equal `prunable_routes`. Otherwise NO-GO and removed.
 
 ## Candidate 3: hoisted merge consumer index
 
@@ -204,16 +229,25 @@ Contract:
   variants and **error precedence** are unchanged: unknown gate, then not a
   merge, then too many inputs, evaluated in exactly that order, before any index
   is consulted.
-- A crate-visible consumer index is built once per batch and threaded into a new
-  private helper that `merge_isolation_mask` also calls, so the two cannot
-  drift. The public function keeps building its own index when called alone.
+- No new type. `build_consumer_index(&Netlist) -> HashMap<&str, Vec<usize>>` is
+  today's loop lifted verbatim, and
+  `merge_isolation_mask_with_index(&Netlist, GateIndex, &HashMap<..>)` is today's
+  body below it. The public `merge_isolation_mask` builds the index and delegates,
+  so the two paths cannot drift. Batch callers build it once before their loop.
 - **First-error order is preserved.** Each batch caller still visits gates in
   ascending gate index and returns the first error it meets, with the same error
   value it returns today. Building the index earlier must not surface an error
   that today's first failing gate would have pre-empted.
+- The correctness gate is exactly these two commands, 18 tests in total at the
+  measured baseline, and no looser filter may be substituted:
+  `cargo test --release --lib merge_isolation -- --nocapture --test-threads=1`
+  and
+  `cargo test --release --lib compile::fragment_synth::instance_graph::tests -- --nocapture --test-threads=1`.
 
 Retention gate: a **disposable** repeated probe over a real `InstanceGraph`
 /`expand` batch (not a synthetic netlist), removed before the candidate commit.
+`build_seven_segment_netlist` and `Library::default_library()` are both present
+at the source baseline, so the probe uses the real seven-segment netlist.
 Retention requires **both** at least **1.5x** faster median targeted batch time
 **and** a nontrivial absolute saving of at least **100 ms** across the probe's
 20 repeats. Correctness alone does not qualify. Asymptotic argument alone does
@@ -279,8 +313,11 @@ Contract:
   same total order `prune_route` and `relocate_refresh` already use. `Anchor`'s
   derived `Ord` is the only tiebreak, and nothing reads map iteration order,
   worker count or wall clock.
-- **At most one candidate cell is tried per standing refresh.** The fallback is
-  a bounded escape hatch, not a second search.
+- **Exactly one candidate cell is tried per standing refresh: the
+  furthest-downstream legal one.** When that sole attempt fails, the tree is
+  restored and the pass moves to the **next standing refresh** -- never to a
+  second cell for the same refresh. The fallback is a bounded escape hatch, not a
+  second search.
 - On no gain, **full cell state is snapshotted and restored**: the inserted
   cell's prior state and every state `prune_route` changed. The tree must be
   byte-equal to its input after a refused fallback.
@@ -307,8 +344,8 @@ removed.
   Candidate 2's two sanctioned `PHASE` lines.
 - Retained candidates must each independently preserve: all four `QualityKey`
   fields, `evaluations_used`, `stop_reason`, every trace entry, both
-  fingerprints, both `WORK` lines, pinned IO placements and contracts, and
-  worker determinism at 1/2/4.
+  fingerprints, the ordered `WORK` sequence, pinned IO placements and contracts,
+  and worker determinism at 1/2/4 (measured at one evaluation, not exhaustion).
 - The wave's outcome is "N of 5 retained" for whatever N the measurements give.
 
 ## Evidence rules
@@ -316,7 +353,10 @@ removed.
 - Every gate number in the report is a measured value with its command, its
   sample count and its cap outcome. No projected, extrapolated or
   asymptotically-argued number is a gate.
-- Every median is over three samples unless the value is a pass/fail count.
+- Every median is over three capped commands unless the value is a pass/fail
+  count. Two compiles inside one command are one paired sample, not two.
+- The running total of measured command time is recorded against the 60-minute
+  wave budget as the wave proceeds.
 - A disposable probe is named as disposable in the report and is proven removed
   by the candidate's own commit.
 - The SDD report file for this wave is
