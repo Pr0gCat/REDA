@@ -1123,3 +1123,60 @@ change, and no retained candidate touches that dispatcher or emitter.
 
 Task 6 used **1344.525 s**. Wave total: **3518.812 s = 58.65 min**
 of the 60-minute budget, leaving 81.188 s for the final cheap close only.
+
+---
+
+## Task 7: wave close
+
+This wave evaluated five candidates; it did not promise that five passes would
+survive. Final verdict: **retained 3 of 5**.
+
+| Candidate | Verdict | Evidence | Commit |
+| --- | --- | --- | --- |
+| 1: palette-indexed `BlockFlags` memo | **ATTEMPTED, NO-GO, REMOVED** | manifest 1.1839x, below required 1.5x | `79e62b6` |
+| 2: `prunable_parent_routes` sidecar | **RETAINED** | prunable median 26 ms to 13 ms | `0a6b138` |
+| 3: hoisted merge consumer index | **ATTEMPTED, NO-GO BEFORE PRODUCTION** | real probe: 84 gates, 0 merges, 5 ms total work | `fa3b614` |
+| 4: filtered second bounded Pull-X round | **RETAINED** | 7/7 accepted, 14 fewer blocks | `39e3b1a` |
+| 5: one-shot bend-aware Refresh Relocation | **RETAINED** | one attributed accepted bend; observed settle 560 to 550 with no other QualityKey regression | `97a7a84` |
+
+### Removal and survivor proof
+
+From wave start `c737335494687abfbfb22f714a350bca609f60ea` through the
+validated implementation `97a7a84`, the source diff contains only
+`hierarchy_api.rs` and `route_opt.rs`, the retained hierarchical candidates'
+files. Candidate 1's world/simulator files and Candidate 3's
+`instance_graph.rs`/`primitive_graph.rs` are absent from the source diff.
+
+`cargo test --lib disposable_merge_consumer_index_probe` ran **0 tests**.
+Source searches found no `disposable`, `probe_counter`, `TODO`, `FIXME`, or
+Candidate 1/3 symbols. The broad REDA-variable search found existing operator
+and older experiment controls; a wave-start-to-HEAD added-line search found
+**no new unexpected variable**. The only new permanent diagnostics are the
+approved `REDA_PHASE_TIMING`-guarded `PHASE flatten` and `PHASE prunable` lines.
+
+### Final cheap gates and lint
+
+| Gate | Result | Elapsed |
+| --- | --- | ---: |
+| release `merge_isolation` | 1 passed | 0.229 s |
+| release `instance_graph::tests` | 17 passed | 0.145 s |
+| `block_pull_x` | 2 passed, 1 ignored | 4.152 s |
+| `refresh_relocation` | 9 passed, 2 ignored | 3.526 s |
+| incumbent plan reuse | 1 passed | 23.776 s |
+| strict clippy (`-D warnings`) | failed on 27 pre-existing repo warnings | 8.288 s |
+| standard `cargo clippy --lib` | exit 0, same 27 warnings | 6.173 s |
+| removed disposable probe | 0 tests, as required | 0.212 s |
+
+The strict clippy failure is not attributed to this wave: its diagnostics are
+the repository's existing dead-code, large-error, argument-count, complexity,
+and style debts. No warning names the retained Task 5 symbols. They were not
+silenced or refactored because that would be unrelated cleanup; standard
+clippy completes successfully.
+
+Task 7 measured command time: **46.501 s**. By the wave's recorded
+floor/wrapper accounting, the final total is **3565.313 s = 59.42 min**,
+**34.687 s under** the hard 60-minute limit. Task 4 command 33 has only a
+69.440 s libtest floor because wrapper elapsed was not captured; a comparable
+command suggests roughly 13 s of omitted build overhead. Even including that
+known estimate, the wave remains about 21 s under, but the exact final margin
+is unavailable. No individual command reached 600 s.
