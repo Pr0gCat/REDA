@@ -3672,6 +3672,26 @@ mod tests {
             "the walk must cover the seam stage"
         );
 
+        // Forced from the existing fixture edges rather than a new fixture:
+        // any edge that already satisfies the Pull-X legality check is a
+        // legal round-2 descriptor too, so the walk below genuinely visits a
+        // non-empty Pull-X round-2 stage instead of the naturally empty one
+        // this design would otherwise freeze.
+        let pull_x2_candidate = *fixture
+            .edges
+            .iter()
+            .find(|edge| {
+                block_pull_x_proposal(
+                    edge,
+                    &fixture.source_outputs,
+                    &fixture.sink_inputs,
+                    &incumbent.realised_block_offsets,
+                    &incumbent.block_placements,
+                )
+                .is_some()
+            })
+            .expect("the fixture offers at least one legal Pull-X descriptor");
+
         // Nothing is ever accepted, so the incumbent -- and every vector the
         // stages freeze from it -- stands still for the whole walk while the
         // compile hook records what each proposal was handed.
@@ -3694,6 +3714,7 @@ mod tests {
                 },
             ),
         );
+        stream.pull_x2_edges = Some(vec![pull_x2_candidate]);
         assert!(
             stream.refreshes.is_none(),
             "budget zero never calls the stream, so nothing is ever probed"
@@ -3724,7 +3745,11 @@ mod tests {
             !refreshes.is_empty(),
             "the fixture must reach Pass 5 with work to do"
         );
-        let start = stream.edges.len() + pull_x.len() + stream.seams.len() + prunes.len();
+        let start = stream.edges.len()
+            + pull_x.len()
+            + stream.pull_x2_edges.as_ref().map_or(0, Vec::len)
+            + stream.seams.len()
+            + prunes.len();
 
         let new_bounded_stream = || {
             HierarchicalProposalStream::new(
@@ -3738,6 +3763,7 @@ mod tests {
             )
         };
         let mut bounded = new_bounded_stream();
+        bounded.pull_x2_edges = Some(vec![pull_x2_candidate]);
         let zero = run_budgeted_proposals(
             fixture.compile(services, &[], &[]),
             SynthesisBudget::Evaluations(0),
@@ -3847,6 +3873,7 @@ mod tests {
             );
             let start = stream.edges.len()
                 + stream.pull_x_edges.as_ref().map_or(0, Vec::len)
+                + stream.pull_x2_edges.as_ref().map_or(0, Vec::len)
                 + stream.seams.len()
                 + stream.prunes.as_ref().map_or(0, Vec::len);
             let pass5 = &summary.trace[start..];

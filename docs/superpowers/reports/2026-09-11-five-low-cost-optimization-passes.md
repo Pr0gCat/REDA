@@ -875,4 +875,108 @@ controller metadata, not embedded in the transcript files.
 | 4: filtered second bounded Pull-X round | **attempted, GO, RETAINED** (7/7 accepted round-2 proposals; 14 fewer blocks) |
 | 5: insert-then-prune fallback for Refresh Relocation | PENDING |
 
+## Task 4 test-boundary repair (post-hoc)
+
+Retained Task 4 only; no Task 5 production work. Both refresh-stage `start`
+test calculations in `hierarchy_api.rs` omitted `stream.pull_x2_edges`
+length, unlike production's `seam`/`prune`/`refresh` boundary helpers, which
+already summed it. The omission was latent because the driving fixtures
+happened to freeze an empty round-2 vector.
+
+`refresh_stage_alone_is_joint_quality_and_is_never_probed_early` was changed
+to force a genuine, non-empty round-2 stage without inventing a new fixture:
+it reuses `block_pull_x_proposal` (the same predicate the production freeze
+closure uses) against the existing fixture's own edges to pick one that is
+already round-2-legal, then sets the existing stream's `pull_x2_edges`
+directly to `Some(vec![that edge])` before the walk runs.
+
+RED, old `start`, transcript-backed (exit 101):
+
+```text
+assertion `left == right` failed: the stream ends one past the last refresh descriptor
+  left: 12
+ right: 11
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1041 filtered out; finished in 13.01s
+```
+
+Both `start` calculations were then fixed by adding the exact existing
+`stream.pull_x2_edges.as_ref().map_or(0, Vec::len)` term. A second, interim
+RED surfaced one level deeper: the same test's separate `bounded`
+budget-cap stream is an independently constructed stream whose own
+`pull_x2_edges` still froze empty (its own incumbent has no `dx != 0`
+placements), so capping its budget at the now-larger `start` overran its true
+Pass-4 boundary by one and reached Pass 5:
+
+```text
+a budget ending at the last Pass 4 proposal never probes Pass 5
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 1041 filtered out; finished in 13.31s
+```
+
+Fixed by forcing that `bounded` stream's `pull_x2_edges` to the same forced
+vector right after its own construction, reusing the same candidate edge --
+no new fixture or helper. GREEN (exit 0):
+
+```text
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 1041 filtered out; finished in 13.17s
+```
+
+The second `start` (in the `#[ignore]`d, release-only
+`refresh_relocation_improves_an_acceptance_circuit`) received the identical
+one-line fix by inspection and symmetry with production; per this repair's
+"no release real-circuit run" constraint it was not executed in this
+session.
+
+### Focused and suite gates
+
+Commands ran serially, each hard-capped at 600 s via POSIX `timeout 600`
+(this session's shell tool is Git Bash, not PowerShell, so it is the
+equivalent of `Invoke-Capped` rather than the plan's literal PowerShell
+function). No command approached the cap. Transcript results (libtest's own
+reported time and pass/fail counts) are distinguished from controller-observed
+wrapper elapsed (Bash `SECONDS`, or "not captured" where the wrapper timing
+itself failed to record).
+
+| Command | Result | Transcript libtest time | Wrapper elapsed |
+| --- | --- | --- | --- |
+| `cargo test --lib block_pull_x` | 2 passed; 0 failed; 1 ignored | 3.73 s | 4 s |
+| `cargo test --lib refresh_relocation` | 9 passed; 0 failed; 2 ignored | 3.00 s | 3 s |
+| `cargo test --lib compile::fragment_synth::hierarchy_api -- --nocapture` | 30 passed; 1 failed; 7 ignored | 62.97 s | 63 s |
+| `cargo test --lib compile::fragment_synth::hierarchy_api -- --nocapture --skip lowering_an_already_lowered_netlist_is_the_identity` | 30 passed; 0 failed; 7 ignored | 64.53 s | 65 s |
+
+The one `hierarchy_api` failure, `lowering_an_already_lowered_netlist_is_the_identity`,
+is a pre-existing environment defect unrelated to this repair -- it panics on
+a Yosys/`yowasp-yosys` call with `RuntimeError: unsupported architecture for
+wasmtime` from this machine's `wasmtime` install, and fails identically in
+isolation with or without this repair's changes. The `--skip` run confirms
+every other hierarchy_api test, including both tests named in this repair, is
+green: 30 passed, 0 failed, 7 ignored, matching the retained Task 4 baseline
+of 31 minus that one machine-local defect.
+
+`rustfmt --edition 2021 src/compile/fragment_synth/hierarchy_api.rs` made no
+changes (already formatted); `git diff --check` is clean; the diff touches
+only `src/compile/fragment_synth/hierarchy_api.rs`, inside the `tests`
+module, across the two named tests -- 1 file changed, 28 insertions(+), 1
+deletion(-). `route_opt.rs` is untouched, and Task 2's `Arc<RoutedParent>`
+reuse path and its three guarded `PHASE` diagnostics are byte-identical.
+
+### Wave command-time ledger (continued)
+
+| # | Command | Elapsed | Running total |
+| --- | --- | --- | --- |
+| 40 | RED: forced pull_x2, old `start` | 13.01 s (transcript floor) | 1417.925 s |
+| 41 | interim RED: `start` fixed, `bounded` not yet | 13.31 s (transcript floor) | 1431.235 s |
+| 42 | GREEN: both fixes applied | 13.17 s (transcript floor) | 1444.405 s |
+| 43 | GREEN: `block_pull_x` | 4 s | 1448.405 s |
+| 44 | GREEN: `refresh_relocation` | 3 s | 1451.405 s |
+| 45 | hierarchy_api suite (hit pre-existing Yosys failure) | 63 s | 1514.405 s |
+| 46 | diagnostic isolation of the pre-existing failure | 0.10 s (transcript floor) | 1514.505 s |
+| 47 | hierarchy_api suite, `--skip` the known-broken test | 65 s | 1579.505 s |
+
+This repair adds **174.59 s** by the conservative floor/wrapper accounting
+above. Used after this repair: **1579.505 s = 26.3 min** of the 60-minute
+wave budget. No command reached the 600 s cap. Full evidence is in
+`.superpowers/sdd/2026-09-11-five-low-cost-optimization-passes/task-4-boundary-repair-report.md`.
+
+Commit: `fix: include pull-x2 in refresh test boundaries`.
+
 **Wave verdict: retained 2 of 5 so far.**
