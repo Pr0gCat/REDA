@@ -459,9 +459,17 @@ fn union_and_certify(
     refreshes: &[ParentRouteChoice],
 ) -> Result<HierarchicalCandidate, SeedError> {
     let realised_block_offsets = planned.block_offsets.clone();
+    let flatten_started = std::time::Instant::now();
     let (flat, paths) = module_flattening(lowered, module)?;
+    if std::env::var_os("REDA_PHASE_TIMING").is_some() {
+        eprintln!("PHASE flatten {}", flatten_started.elapsed().as_millis());
+    }
     // Decided on the pre-union trees, which are the ones the union prunes.
+    let prunable_started = std::time::Instant::now();
     let prunable = prunable_parent_routes(&planned.candidate.routes);
+    if std::env::var_os("REDA_PHASE_TIMING").is_some() {
+        eprintln!("PHASE prunable {}", prunable_started.elapsed().as_millis());
+    }
     // Certification keeps the union's route ids, so `parent_routes` names
     // the trees in the certified candidate's timing graph.
     let union_started = std::time::Instant::now();
