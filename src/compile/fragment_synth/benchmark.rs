@@ -1348,7 +1348,7 @@ fn atomic_publish(source: &Path, destination: &Path, replace: bool) -> std::io::
     }
 }
 
-#[cfg(unix)]
+#[cfg(not(windows))]
 fn atomic_publish(source: &Path, destination: &Path, replace: bool) -> std::io::Result<()> {
     if replace {
         std::fs::rename(source, destination)
