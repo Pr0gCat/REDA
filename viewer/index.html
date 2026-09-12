@@ -487,6 +487,7 @@ let legendMap = new Map(); // id -> { name, rgba: [r,g,b,a] }
 let leverState = new Map(); // name -> bool
 let currentBytes = null; // Uint8Array for the currently displayed slice
 let currentAxisName = 'Y';
+let currentIndex = 0; // slice index along currentAxisName, as currentBytes was fetched
 let currentGeom = null; // data-space layout of currentBytes, from axisGeometry()
 let currentOuterLen = 0;
 let currentInnerLen = 0;
@@ -509,8 +510,9 @@ function parseColour(hex) {
   return [r, g, b, a];
 }
 
-/** Redstone dust: scale brightness by strength (0-15) so a live wire reads
- * dark red when unpowered and full bright red at strength 15. */
+/** Redstone dust and lamps: scale brightness by strength (0-15) so a live
+ * wire reads dark red when unpowered and full bright red at strength 15, and
+ * an unlit lamp reads dark next to a lit one. */
 function tintDust(rgba, strength) {
   const factor = 0.18 + 0.82 * (strength / 15);
   return [
@@ -522,11 +524,15 @@ function tintDust(rgba, strength) {
 }
 
 const REDSTONE_WIRE_ID = 4; // BlockKind::RedstoneWire, see viewer/src/lib.rs ALL_BLOCK_KINDS
+const LAMP_ID = 11; // BlockKind::Lamp, same list
 
 function colourForCell(kindId, strength) {
   const entry = legendMap.get(kindId);
   if (!entry) return [255, 0, 255, 255]; // unknown id -- should never happen if legend() is complete
-  if (kindId === REDSTONE_WIRE_ID) return tintDust(entry.rgba, strength);
+  // The two kinds whose colour carries live state: an output lamp is the
+  // thing a reader looks at, so it must not render at one fixed colour
+  // whether lit or not. Both views call this, so they cannot disagree.
+  if (kindId === REDSTONE_WIRE_ID || kindId === LAMP_ID) return tintDust(entry.rgba, strength);
   return entry.rgba;
 }
 
@@ -572,6 +578,17 @@ function worldCoord(axisName, index, outer, inner) {
     case 'X': return [index, outer, inner];
     case 'Y': return [outer, index, inner];
     case 'Z': return [outer, inner, index];
+  }
+}
+
+/** Inverse of `worldCoord`: which slice index a world cell falls on for a
+ * given axis, and the (outer, inner) data cell it is within that slice --
+ * how a pin's world coordinate finds its place in the slice being drawn. */
+function sliceCoord(axisName, x, y, z) {
+  switch (axisName) {
+    case 'X': return { index: x, outer: y, inner: z };
+    case 'Y': return { index: y, outer: x, inner: z };
+    case 'Z': return { index: z, outer: x, inner: y };
   }
 }
 
@@ -691,6 +708,7 @@ async function loadCircuit(name) {
   syncAxisRange(true);
   refreshOutputs();
   build3DGeometry(true);
+  build3DPinMarkers();
   buildTopology();
 }
 
@@ -1206,6 +1224,24 @@ const SHAPE_TEMPLATES = {
 // why there are no lights in the scene.
 const sharedMaterial3d = new THREE.MeshBasicMaterial({ vertexColors: true });
 
+// Pin markers: a translucent purple box drawn slightly larger than the cell
+// it marks, so the block inside still shows through in its own colour and
+// the marker's faces never z-fight with it. Its own material, not
+// `sharedMaterial3d` -- that one is opaque, vertex-coloured and edge-faded,
+// none of which a marker wants; `depthWrite: false` keeps a marker from
+// hiding whatever is behind it. Geometry and material live here, at module
+// level, because they are reusable across circuits -- only the mesh is
+// rebuilt when the pinout changes.
+const PIN_MARKER_SIZE = 1.12;
+const PIN_MARKER_COLOUR = '#be78ff';
+const pinMarkerGeometry3d = new THREE.BoxGeometry(PIN_MARKER_SIZE, PIN_MARKER_SIZE, PIN_MARKER_SIZE);
+const pinMarkerMaterial3d = new THREE.MeshBasicMaterial({
+  color: PIN_MARKER_COLOUR,
+  transparent: true,
+  opacity: 0.3,
+  depthWrite: false,
+});
+
 // ---------------------------------------------------------------------
 // Block edges -- see the "Block edges" section of
 // docs/superpowers/plans/2026-08-07-3d-view.md. Flush blocks (the previous
@@ -1296,6 +1332,13 @@ let controls3d = null;
 //   rotationY: Float32Array -- instance i's fixed Y rotation (radians), from facing }
 let instancedMeshes = [];
 let meshEntryByObject = new Map(); // THREE.InstancedMesh -> its instancedMeshes entry, for hover
+// The pin markers' own InstancedMesh, deliberately *not* one of
+// `instancedMeshes`: it is built from the pinout rather than from
+// `geometry()`, so `build3DGeometry`'s rebuild (which a pinned input flip
+// triggers) must leave it standing in the scene, and hover raycasts -- which
+// walk `instancedMeshes` -- must never hit a marker instead of its block.
+let pinMarkerMesh3d = null;
+let pinMarkerCoords3d = null; // Float32Array, 3 per pin: world x, y, z (cell corner, as cellCoords3d)
 let cellCount3d = 0;
 let cellCoords3d = null; // Float32Array, 3 per cell: world x, y, z (cell corner, not centre)
 let cellKind3d = null;   // Uint8Array, 1 per cell, same index as cellCoords3d
@@ -1510,6 +1553,36 @@ function update3DStrengths() {
   }
 }
 
+/** Build the one `InstancedMesh` marking every input and output pin, from
+ * the pinout alone. Called once per circuit load, right after
+ * `build3DGeometry` and never from it: the pins a circuit has do not move
+ * when a pinned input swaps Air and RedstoneBlock, so that rebuild leaves
+ * these markers standing. Instances are laid out by `applyClip`, like every
+ * other instance in the scene. */
+function build3DPinMarkers() {
+  ensureThreeInitialized();
+
+  if (pinMarkerMesh3d) {
+    // Geometry and material are shared across circuits -- drop the mesh only.
+    scene3d.remove(pinMarkerMesh3d);
+    pinMarkerMesh3d = null;
+  }
+
+  const pins = [...pinout.inputs, ...pinout.outputs];
+  if (pins.length === 0) return; // a circuit with no pins gets no marker mesh at all
+  pinMarkerCoords3d = new Float32Array(pins.length * 3);
+  for (let i = 0; i < pins.length; i++) {
+    pinMarkerCoords3d[i * 3] = pins[i].x;
+    pinMarkerCoords3d[i * 3 + 1] = pins[i].y;
+    pinMarkerCoords3d[i * 3 + 2] = pins[i].z;
+  }
+
+  pinMarkerMesh3d = new THREE.InstancedMesh(pinMarkerGeometry3d, pinMarkerMaterial3d, pins.length);
+  pinMarkerMesh3d.count = pins.length;
+  scene3d.add(pinMarkerMesh3d);
+  applyClip(); // place the new instances (and hide any already outside the clip box)
+}
+
 /** Reset every clip slider to the current circuit's full world extent --
  * called on load/reset since world size can differ between circuits. */
 function setupClipRanges() {
@@ -1557,7 +1630,9 @@ function readClipInputs() {
  * what the 2D slice view shows at that Y index: both read the very same
  * world coordinates, coloured by the very same `colourForCell`, with no
  * extra transform in between (rotation does not change *which* cells are
- * shown, only how each one is drawn). */
+ * shown, only how each one is drawn). The pin markers ride along under the
+ * same rules -- same cell-centre translation, same zero-scale hide -- so a
+ * clipped-away pin never leaves a floating marker behind. */
 function applyClip() {
   const { xMin, xMax, yMin, yMax, zMin, zMax } = clipRange;
   for (const { mesh, globalIndex, rotationY } of instancedMeshes) {
@@ -1574,6 +1649,19 @@ function applyClip() {
     }
     mesh.instanceMatrix.needsUpdate = true;
   }
+
+  if (!pinMarkerMesh3d) return;
+  for (let i = 0; i < pinMarkerMesh3d.count; i++) {
+    const x = pinMarkerCoords3d[i * 3], y = pinMarkerCoords3d[i * 3 + 1], z = pinMarkerCoords3d[i * 3 + 2];
+    const visible = x >= xMin && x <= xMax && y >= yMin && y <= yMax && z >= zMin && z <= zMax;
+    scratchPosition.set(x + 0.5, y + 0.5, z + 0.5);
+    scratchQuaternion.identity(); // markers are axis-aligned; no facing to follow
+    const s = visible ? 1 : 0;
+    scratchScale.set(s, s, s);
+    scratchMatrix.compose(scratchPosition, scratchQuaternion, scratchScale);
+    pinMarkerMesh3d.setMatrixAt(i, scratchMatrix);
+  }
+  pinMarkerMesh3d.instanceMatrix.needsUpdate = true;
 }
 
 const throttledClipInput = rafThrottle(() => {
@@ -3418,6 +3506,7 @@ function refreshSlice() {
   }
   currentBytes = bytes;
   currentAxisName = axisName;
+  currentIndex = index;
   currentGeom = geom;
   currentOuterLen = geom.outerLen;
   currentInnerLen = geom.innerLen;
@@ -3470,6 +3559,32 @@ function drawBase() {
   ctx.drawImage(offscreen, 0, 0, w, h, 0, 0, canvas.width, canvas.height);
 }
 
+/** Outline every input and output pin that lies on the slice on screen. A
+ * pin cell is frequently Air (a lever's or a lamp's control cell) or looks
+ * exactly like its neighbours, so without an outline the only way to find
+ * one is to read its coordinates off the side panel and count cells. Drawn
+ * from the pin's world coordinate through `sliceCoord` and the same
+ * `toScreen` mapping `drawBase` placed the cell with, so a marker cannot
+ * drift from the cell it names, and drawn before `drawOverlay`'s zoom-based
+ * early returns so pins stay findable even zoomed all the way out. */
+function draw2DPinMarkers(cellSize) {
+  ctx.strokeStyle = PIN_MARKER_COLOUR;
+  ctx.lineWidth = cellSize >= 6 ? 2 : 1;
+  const inset = ctx.lineWidth / 2;
+  const markerSize = Math.max(1, cellSize - ctx.lineWidth);
+  for (const pin of [...pinout.inputs, ...pinout.outputs]) {
+    const { index, outer, inner } = sliceCoord(currentAxisName, pin.x, pin.y, pin.z);
+    if (index !== currentIndex) continue;
+    const { col, row } = toScreen(currentAxisName, outer, inner, currentGeom);
+    ctx.strokeRect(
+      col * cellSize + inset,
+      row * cellSize + inset,
+      markerSize,
+      markerSize,
+    );
+  }
+}
+
 /** Grid lines and per-cell numbers, drawn only over the currently scrolled
  * viewport so cost stays proportional to what's on screen, not to the
  * circuit's total size (seven_segment's Y slice is 232x298 = 69k cells).
@@ -3478,6 +3593,7 @@ function drawBase() {
 function drawOverlay() {
   if (!currentBytes) return;
   const cellSize = Number(zoomSlider.value);
+  draw2DPinMarkers(cellSize);
   if (cellSize < 6) return; // too small for grid lines or numbers to help
 
   const scrollLeft = canvasWrap.scrollLeft;
