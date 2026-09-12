@@ -750,6 +750,10 @@ impl SparseSeedBuilder {
         )?;
         refresh_primitive_targets(&candidate, &sockets, &mut targets)?;
         let mut reservations = reservations_for_components(&candidate)?;
+        // Every macro is standing by now and no route has started, so this is
+        // the one moment a terminal's tunnel can be both checked against what
+        // was placed and closed against what is about to be routed.
+        reserve_terminal_tunnels(&candidate, input.lowered, &mut reservations)?;
         reserve_route_endpoints(&mut reservations, &candidate, &sources, &targets);
         let route_started = std::time::Instant::now();
         let route_result = route_all(
@@ -810,6 +814,130 @@ impl SparseSeedBuilder {
         phase("certify", &mut phase_started);
         certified
     }
+}
+
+/// Holds every complete pin's terminal tunnel against the board that was just
+/// placed, then closes what is left of it before anything is routed.
+///
+/// The tunnel is the promise a complete pin set makes: two cells deep along
+/// the signal, one cell of halo around both, and nothing REDA owns inside it
+/// but the terminal's own hardware. `place_boundaries`, `place_blocks` and
+/// `place_instances` have all run, so a macro that took one of those cells is
+/// visible here and is refused under the port's own name -- the same
+/// [`PinRefusal::ClearanceConflict`](crate::compile::planner::PinRefusal) the
+/// planner's door raises when two pins want one cell, because it is the same
+/// promise being broken, only by a body instead of by another pin.
+///
+/// The exemptions are exactly the hardware the terminal *is*: the handover
+/// and the cell it stands on. An input's boundary has already built both; an
+/// output's route still has to, so they are left unreserved rather than
+/// merely unchecked. The caller's own cell is not exempt -- it ships as air --
+/// and the first internal net cell is a step further in, outside the tunnel,
+/// so the net can still leave.
+///
+/// A partial or unpinned set draws no board at all
+/// ([`IoFootprint::from_complete`]), so this is a no-op for it and its
+/// terminals keep the older five-neighbour, signal-only clearance exactly.
+fn reserve_terminal_tunnels(
+    candidate: &ExpandedPhysicalCandidate,
+    netlist: &Netlist,
+    reservations: &mut PhysicalReservations,
+) -> Result<(), SeedError> {
+    let Some(footprint) = IoFootprint::from_complete(
+        netlist.inputs.len() + netlist.outputs.len(),
+        candidate.pin_contracts.values().map(|pin| pin.at),
+    ) else {
+        return Ok(());
+    };
+
+    // The same three collections `reservations_for_components` reserves from:
+    // everything REDA has put on the board so far. Routes have not started,
+    // so there is nothing else to ask about.
+    let bodies = candidate
+        .placements
+        .values()
+        .flat_map(|placement| &placement.blocks)
+        .chain(
+            candidate
+                .boundaries
+                .values()
+                .flat_map(|boundary| &boundary.blocks),
+        )
+        .chain(
+            candidate
+                .junctions
+                .values()
+                .flat_map(|junction| &junction.cells),
+        )
+        .map(|block| block.at)
+        .collect::<BTreeSet<_>>();
+
+    for (&endpoint, pin) in &candidate.pin_contracts {
+        let role = match endpoint {
+            PhysicalEndpointId::PrimaryInput(_) => PortRole::Input,
+            PhysicalEndpointId::DeclaredOutput(_) => PortRole::Output,
+            // `bind_pin_contracts` writes no other key and
+            // `validate_pin_contracts` refuses one that appeared anyway; say
+            // so here rather than guess a role for it.
+            _ => return Err(SeedError::Incomplete("pinned terminal role")),
+        };
+        let handover = pin.handover(role);
+        let required = [
+            handover,
+            Anchor {
+                y: handover.y - 1,
+                ..handover
+            },
+        ];
+        // Clipped, not raw: what lies off the board or under the world is the
+        // caller's, and the planner's door compared the same cells.
+        let tunnel = crate::compile::planner::effective_tunnel(*pin, role, footprint);
+        for &cell in &tunnel {
+            if required.contains(&cell) {
+                continue;
+            }
+            if bodies.contains(&cell) {
+                let port = candidate
+                    .pin_name_bindings
+                    .iter()
+                    .find(|(_, bound)| **bound == endpoint)
+                    .map(|(name, _)| name.clone())
+                    .ok_or(SeedError::Incomplete("pinned port name"))?;
+                return Err(SeedError::InvalidPins(
+                    crate::compile::planner::PlannerError::InvalidPortPin {
+                        port,
+                        at: pin.at,
+                        refusal: crate::compile::planner::PinRefusal::ClearanceConflict {
+                            other_port_cell: cell,
+                        },
+                    },
+                ));
+            }
+            // Keep-out stops a route standing *in* the cell, and that is
+            // enough wherever the cell above is kept out too. Where it is
+            // not -- the roof of the tunnel, whose upper neighbour is
+            // ordinary space -- a conductor up there would read this cell as
+            // its floor, fail to claim one, and leave dust on nothing. Air
+            // says the cell is empty, which refuses that conductor outright.
+            let sealed_above = match cell.y.checked_add(1) {
+                None => true,
+                Some(y) => {
+                    let above = Anchor { y, ..cell };
+                    tunnel.contains(&above) && !required.contains(&above)
+                }
+            };
+            reservations.reserve(
+                cell,
+                PhysicalReservationOwner::Endpoint(endpoint),
+                if sealed_above {
+                    PhysicalReservationKind::KeepOut
+                } else {
+                    PhysicalReservationKind::MandatoryAir
+                },
+            );
+        }
+    }
+    Ok(())
 }
 
 fn reserve_route_endpoints(
@@ -3192,7 +3320,10 @@ pub(crate) mod tests {
         SeedPlacer, TopologyAwareSeedPlacer,
     };
     use crate::compile::metrics::canonical_fingerprint;
-    use crate::compile::routing::{GuardedPhysicalRouter, RealisedRouteTree, RouteRequest};
+    use crate::compile::planner::{PinRefusal, PortPin};
+    use crate::compile::routing::{
+        GuardedPhysicalRouter, PhysicalReservation, RealisedRouteTree, RouteRequest,
+    };
     use crate::compile::topology::GateKind;
     use crate::compile::Gate;
 
@@ -4295,6 +4426,193 @@ pub(crate) mod tests {
         assert!(matches!(error, SeedError::InvalidPins(_)));
         assert_eq!(router.calls.get(), 0);
         assert_eq!(certifier.calls.get(), 0);
+    }
+
+    /// A complete pin set gives every terminal one exact tunnel, and the only
+    /// hardware allowed inside it is that terminal's own: the handover and
+    /// the cell it stands on.  Anything else REDA placed there is refused by
+    /// port name before a single route runs, and every remaining cell is
+    /// reserved -- as mandatory air wherever a route could otherwise stand on
+    /// it, so no route floor can appear inside the tunnel either.
+    ///
+    /// A partial pin set draws no board, so none of this happens to it: its
+    /// terminals keep the older five-neighbour, signal-only promise and the
+    /// same geometry reserves nothing.
+    #[test]
+    fn a_complete_pin_tunnel_rejects_macro_and_route_floor_cells() {
+        let netlist = not_netlist();
+        let library = Library::default_library();
+        let graph =
+            InstanceGraph::with_variants(&netlist, &library, &BTreeMap::new(), &[]).unwrap();
+        let input = PortPin {
+            at: Anchor { x: 10, y: 1, z: 10 },
+            toward: Facing::East,
+        };
+        let output = PortPin {
+            at: Anchor { x: 30, y: 1, z: 20 },
+            toward: Facing::East,
+        };
+        // The board these two draw is x 10..=30 by z 10..=20, so the input's
+        // own tunnel already reaches one cell past its southern edge.
+        let mut complete = PortPlacements::default();
+        complete.pin("a", input.at, input.toward);
+        complete.pin("y", output.at, output.toward);
+        let mut partial = PortPlacements::default();
+        partial.pin("a", input.at, input.toward);
+
+        let in_handover = input.handover(PortRole::Input);
+        let out_handover = output.handover(PortRole::Output);
+        let primitive = PrimitiveId {
+            instance: InstanceId(0),
+            node: TopologyNodeId(0),
+        };
+        let build = |pins: &PortPlacements, intruder: Option<Anchor>| {
+            let mut candidate = ExpandedPhysicalCandidate::empty(graph.clone(), pins.clone());
+            candidate
+                .bind_pin_contracts(&netlist)
+                .expect("both pins name declared ports");
+            // Exactly the hardware `place_boundaries` builds for a pinned
+            // input: the handover repeater and the support under it.
+            let endpoint = PhysicalEndpointId::PrimaryInput(PortId(0));
+            candidate.boundaries.insert(
+                endpoint,
+                BoundaryPlacement {
+                    endpoint,
+                    delayed: None,
+                    blocks: vec![
+                        PlacedBlock {
+                            at: Anchor {
+                                y: in_handover.y - 1,
+                                ..in_handover
+                            },
+                            state: compile::stone(),
+                        },
+                        PlacedBlock {
+                            at: in_handover,
+                            state: compile::repeater(input.toward),
+                        },
+                    ],
+                },
+            );
+            if let Some(at) = intruder {
+                candidate.placements.insert(
+                    primitive,
+                    PrimitivePlacement {
+                        id: primitive,
+                        variant: 0,
+                        facing: CellFacing::EAST,
+                        anchor: at,
+                        delayed: None,
+                        blocks: vec![PlacedBlock {
+                            at,
+                            state: compile::stone(),
+                        }],
+                    },
+                );
+            }
+            candidate
+        };
+        let reserve = |candidate: &ExpandedPhysicalCandidate| {
+            let mut reservations = reservations_for_components(candidate)?;
+            reserve_terminal_tunnels(candidate, &netlist, &mut reservations)?;
+            Ok::<_, SeedError>(reservations)
+        };
+
+        // The terminal's own hardware is not an encroachment, and the tunnel
+        // around it is reserved.
+        let mut reservations = reserve(&build(&complete, None)).expect("a clear tunnel reserves");
+        let claim = |at: Anchor| reservations.get(&at).cloned();
+        // Caller cell and the rest of the middle of the tunnel: keep-out, so
+        // no route conductor may enter.
+        assert_eq!(
+            claim(input.at),
+            Some(PhysicalReservation {
+                owner: PhysicalReservationOwner::Endpoint(PhysicalEndpointId::PrimaryInput(
+                    PortId(0)
+                )),
+                kind: PhysicalReservationKind::KeepOut,
+            })
+        );
+        // The roof of the tunnel is mandatory air: a route one cell higher
+        // would otherwise stand on it as if it were floor.
+        for at in [Anchor { x: 10, y: 2, z: 10 }, Anchor { x: 30, y: 2, z: 20 }] {
+            assert_eq!(
+                claim(at).map(|reservation| reservation.kind),
+                Some(PhysicalReservationKind::MandatoryAir),
+                "the cell above {at:?} must be mandatory air",
+            );
+        }
+        // The handover and its support are the terminal's required hardware:
+        // the input's stay the boundary's own claims, and the output's -- which
+        // its route still has to build -- stay free.
+        assert!(matches!(
+            claim(in_handover),
+            Some(PhysicalReservation {
+                owner: PhysicalReservationOwner::KeepOut(_),
+                ..
+            })
+        ));
+        assert_eq!(claim(out_handover), None);
+        assert_eq!(
+            claim(Anchor {
+                y: out_handover.y - 1,
+                ..out_handover
+            }),
+            None
+        );
+        // One cell south of the input's caller cell is off the board, so the
+        // tunnel never reached it and REDA reserves nothing there.
+        assert_eq!(claim(Anchor { x: 10, y: 1, z: 9 }), None);
+
+        // A route floor cannot land on a reserved tunnel cell, whichever kind
+        // holds it.
+        for at in [Anchor { x: 10, y: 2, z: 10 }, input.at] {
+            let held = reservations
+                .get(&at)
+                .cloned()
+                .expect("the tunnel holds this cell");
+            reservations.reserve(
+                at,
+                PhysicalReservationOwner::Route(RouteId(0)),
+                PhysicalReservationKind::Floor(compile::stone()),
+            );
+            assert_eq!(reservations.get(&at), Some(&held));
+        }
+
+        // A macro body in a non-exempt tunnel cell is refused by port name,
+        // carrying the cell it took.
+        let intruder = Anchor { x: 10, y: 1, z: 11 };
+        let error = reserve(&build(&complete, Some(intruder))).unwrap_err();
+        let SeedError::InvalidPins(crate::compile::planner::PlannerError::InvalidPortPin {
+            port,
+            at,
+            refusal,
+        }) = error
+        else {
+            panic!("a macro in a terminal tunnel is an invalid pin: {error:?}");
+        };
+        assert_eq!(port, "a");
+        assert_eq!(at, input.at);
+        assert_eq!(
+            refusal,
+            PinRefusal::ClearanceConflict {
+                other_port_cell: intruder,
+            }
+        );
+
+        // The same geometry with one port unpinned draws no board: the body
+        // stands, and nothing around the terminal is reserved beyond what the
+        // components themselves already claimed.
+        let legacy = reserve(&build(&partial, Some(intruder))).expect("a partial pin set stands");
+        assert!(matches!(
+            legacy.get(&intruder),
+            Some(PhysicalReservation {
+                owner: PhysicalReservationOwner::KeepOut(_),
+                ..
+            })
+        ));
+        assert_eq!(legacy.get(&input.at), None);
+        assert_eq!(legacy.get(&Anchor { x: 10, y: 2, z: 10 }), None);
     }
 
     #[test]
