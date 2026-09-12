@@ -68,6 +68,10 @@ support immediately below `H` are occupied by the required terminal shape and
 are exempt from keep-out; `C` remains caller-owned air. `N` is on the open
 internal face, outside the tunnel, so the net can continue inward. No unrelated
 REDA-owned body, support, route, or floor may occupy the remaining tunnel.
+Pin-only tunnel intersections are refused during port validation. Macro
+encroachment is checked after primitive and block placement, before routing;
+the remaining cells are then inserted into the existing typed reservation map
+so routes and floors cannot claim them.
 
 This deliberately strengthens the old rule, which excluded only
 signal-carrying cells from five face-neighbours. The stronger promise applies
@@ -96,15 +100,15 @@ is introduced.
 
 ### 3.1 IO footprint
 
-The placer derives a private `IoFootprint` containing inclusive world X/Z
+Bounded mode derives a private `IoFootprint` containing inclusive world X/Z
 bounds. It provides only checked projection and containment operations; it
-does not own placement policy.
+does not own placement policy or become a new public parameter.
 
 When a `PlacementFrame` turns, the same world-space rectangle is projected
-into forward/lateral limits. A private placement-region dispatcher selects
-exactly one policy: the IO footprint for a complete pin set, or today's
-`LateralWindow`/forward checks for an incomplete pin set. The two policies are
-never combined in one placement.
+into forward/lateral limits. Those limits feed today's `lateral_window`,
+`forward_limit`, `confine_laterals`, and fold checks. No parallel region
+dispatcher is added: complete pins supply both sides of the existing checks;
+partial and unpinned layouts continue to supply today's open-ended limits.
 
 ### 3.2 Macro envelope
 
@@ -123,22 +127,24 @@ translates the already-certified block through the existing 3D `Offset` and
 
 ### 3.3 Decks
 
-A deck is a horizontal placement region inside the IO footprint. It has a
-typed reservation envelope containing its macro bodies and supports, mandatory
-air, channel reservations, and the planned horizontal route and vertical-trunk
-connection cells. The next deck does not use a fixed height constant. Its
-ground is the first higher integer Y translation for which its complete typed
-reservation envelope does not conflict with the union of lower decks and the
-private vertical-trunk band. This reuses the existing connectivity and keep-out rules;
-it neither assumes that `ground + 3` is always enough nor adds a second spacing
-model.
+A deck is a horizontal placement region inside the IO footprint. Its local
+vertical reservation interval is derived once from facts known before routing:
+the full primitive/block body and support bounds, their mandatory-air cells,
+the existing channel slab, and each local route's existing
+`max(source.y, sink.y) + 3` search ceiling. The next deck ground is the first
+integer translation whose interval begins above the previous deck's interval.
+This is height-aware and deterministic; it does not rerun channel planning for
+candidate Y values and it does not assume that `ground + 3` covers a tall
+macro.
 
-Decks are assigned from bottom to top. Each deck's local channel/route plan is
-translated as a unit while testing candidate ground heights, so its reservation
-envelope is known before the following deck is placed. Full primitive and
-block Y bounds keep macro collision repair horizontal within its assigned
-deck. The existing router caps still bound one generation attempt, but the IO
-contract introduces no user-visible maximum height.
+Decks are assigned from bottom to top. Deck zero keeps today's
+`frame.origin.y`; later decks receive the derived translation once. Full
+primitive and block Y bounds keep macro collision repair horizontal within its
+assigned deck. Materialized typed reservations and final verification check
+the derived separation. A conflict is `NoDeckLayoutFits`, never an implicit
+retry with a larger magic gap. The existing router caps still bound one
+generation attempt, but the IO contract introduces no user-visible maximum
+height.
 
 Pins are not assigned to decks. Their absolute coordinates remain fixed and
 the router connects them to the chosen macro decks.
@@ -154,12 +160,14 @@ the same information is already available:
 - endpoint margins come from the terminal shapes present in that channel;
 - turnaround allowance comes from the final channel's actual lane count.
 
-The placer and channel layout derive turnaround from the same value; the
-shipping `TURNAROUND_ALLOWANCE` and `TURNAROUND_CHANNEL` constants are not
-allowed to diverge. The row grid remains because routing and deterministic
+The placer and channel layout derive turnaround from one helper in
+`channel_plan`: the channel span comes from its planned lane count and the
+placement allowance adds the existing forward margin. The current independent
+`TURNAROUND_ALLOWANCE` and `TURNAROUND_CHANNEL` literals are not copied into
+the bounded path. The row grid remains because routing and deterministic
 tie-breaking depend on it. No continuous solver or new global-search
-dependency is added. Legacy unbounded and partial-pin layouts do not enter
-this code path and remain byte-identical.
+dependency is added. Legacy unbounded and partial-pin layouts keep today's
+literal geometry and remain byte-identical.
 
 ### 4.2 Deterministic shelf packing
 
@@ -206,11 +214,15 @@ terminates without a search over alternative layouts. Reserving the band
 before lateral legalization prevents a later vertical trunk from crossing a
 macro.
 
-Every post-plan horizontal movement obeys the same footprint dispatcher.
-`InstancePlacementOverride`, `BlockPlacementOffset`, and each candidate from
-primitive collision repair are clipped while candidates are enumerated. If no
-candidate remains, the existing `SeedError::PlacementExhausted` path is used;
-the final candidate footprint check is only an invariant backstop.
+Every post-plan horizontal movement obeys the same footprint predicate.
+`InstancePlacementOverride`, `BlockPlacementOffset`, each candidate from
+primitive collision repair, and the existing `move_owner`/`require_move_owner`
+repair path are clipped while candidates are enumerated. The check uses the
+oriented macro bounds already calculated by the placer, not a second envelope
+calculation. If no collision-repair candidate remains, the existing
+`SeedError::PlacementExhausted` path is used; an immovable layout repair keeps
+the existing `ImmovableRepairOwner` path. The final candidate footprint check
+is only an invariant backstop.
 
 ## 5. Routing
 
@@ -218,9 +230,9 @@ Each deck retains the existing horizontal channel layout at that deck's
 derived ground Y. Nets whose endpoints share a deck use the current path
 unchanged.
 
-Cross-deck nets receive deterministic vertical-trunk lanes inside the footprint. Their
-band is fixed by the placement loop before any final per-deck channel layout
-is materialized:
+Cross-deck nets receive deterministic vertical-trunk lanes inside the
+footprint. Their band is fixed by the placement loop before any final per-deck
+channel layout is materialized:
 
 1. Vertical-trunk demand is ordered by physical source identity and sink identity.
 2. Each cross-deck net gets one lane on the existing row grid. Lane reuse is
@@ -241,6 +253,14 @@ The existing local `riser` closure in `channel_layout.rs` keeps its current
 meaning: it reserves closed floor support beneath one deck's staircase. This
 design calls the open cross-deck path a *vertical trunk* so the two opposite
 reservation roles cannot be confused.
+
+Per-deck channel widening is keyed by `(deck, level)` so equal local levels on
+different decks cannot alias. Existing `LayoutRepair::WidenChannel` remains
+unchanged for legacy fingerprints; bounded mode uses a separate
+`WidenDeckChannel`. Merging deck layouts unions `closed`, `private`, `floors`,
+and `departures`; the report-only `lanes` field is keyed by `(deck, channel)`
+rather than concatenated positionally. Existing channel margins are clamped
+inward to the IO footprint.
 
 The footprint does not require a new `PhysicalReservations` API. After the
 deck plan determines the existing router's finite Y search range, bounded mode
@@ -302,7 +322,11 @@ Failures are typed at the layer that can act on them:
   or first net cell lies outside the derived footprint;
 - preplanning returns `PinRefusal::ClearanceConflict` when two terminal tunnels
   conflict;
-- `SeedPlacementError::MacroExceedsIoFootprint` when one macro is too large;
+- placement after materialization returns the same named
+  `PinRefusal::ClearanceConflict` through `SeedError::InvalidPins` when a macro
+  enters a terminal tunnel;
+- the existing `SeedPlacementError::LateralWindowTooNarrow` names a macro that
+  is too large for the bounded usable span;
 - `SeedPlacementError::NoDeckLayoutFits` when no deck/vertical-trunk layout fits;
 - `CandidateError::IoFootprintViolation` when final candidate ownership
   escapes the footprint;
@@ -327,8 +351,10 @@ caps, or silently returns to the unbounded layout.
   coordinates; the final footprint check uses that same walk.
 - Union and certification are never skipped because a module was previously
   certified.
-- The seed placement revision is bumped. IO pins and policy remain input to
-  the case descriptor; deck assignments remain derived geometry and enter the
+- The global seed placement revision is not bumped because that would change
+  unpinned and partial-pin case fingerprints. Instead, the bounded-policy
+  revision marker enters the case descriptor only when a complete IO footprint
+  activates bounded mode. Deck assignments remain derived geometry and enter
   existing plan/candidate fingerprints through their Y poses.
 
 ## 10. Trial and acceptance
@@ -376,7 +402,9 @@ after the contracts are executable.
 ### Stage 3: block deck folding and vertical trunks
 
 - add block height and `dy` placement;
-- certify a small hierarchical fixture forced into at least two decks;
+- certify a small hierarchical fixture forced into at least two decks; its
+  pins keep the placement frame facing East so the existing fixed-orientation
+  block contract is tested rather than rejected first as `BlockFrameTurned`;
 - preserve compile-once/stamp-many and flat-union semantics.
 
 ### Stage 4: bounded seven-segment trial
