@@ -16,7 +16,7 @@ use crate::compile::fragment_synth::seed::{
 };
 use crate::compile::geometry::Anchor;
 use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
-use crate::compile::planner::{PortPin, PortPlacements};
+use crate::compile::planner::{IoFootprint, PortPin, PortPlacements};
 use crate::compile::revisions::{
     cell_library_revision, expanded_physical_verifier_revision, simulator_revision,
 };
@@ -208,6 +208,12 @@ struct CaseDescriptor<'a> {
     pins: Vec<PinDescriptor<'a>>,
     library_revision: Fingerprint,
     placement_revision: Fingerprint,
+    /// Written only for a case whose every declared port is pinned, and left
+    /// out of the descriptor entirely otherwise: an unpinned or partly
+    /// pinned case must serialize to the very bytes it did before bounded
+    /// boards existed, so its fingerprint -- and its cache entries -- stand.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    io_bounded_revision: Option<Fingerprint>,
     search_config: &'a SearchConfig,
     certification_config: &'a CertificationConfig,
     simulator_revision: Fingerprint,
@@ -256,12 +262,51 @@ fn topology_aware_seed_placement_revision() -> Fingerprint {
     canonical_fingerprint(b"topology-aware-seed-v2")
 }
 
+/// What a completely pinned case is marked with.
+///
+/// Deliberately not folded into the placement revision: the placer is the
+/// same one, and only cases that actually draw a board rectangle are decided
+/// differently by it.  Bumping the revision instead would invalidate every
+/// unpinned case's cache entry for a decision none of them takes.
+fn io_bounded_case_revision() -> Fingerprint {
+    canonical_fingerprint(b"io-bounded-3d-v1")
+}
+
+/// The marker for this case: `Some` exactly when the pins draw the footprint
+/// the placer bounds itself by -- every declared port pinned -- and `None`
+/// for every partial or unpinned set.
+fn io_bounded_case_marker(input: &SynthesisInput<'_>) -> Option<Fingerprint> {
+    let declared = input.lowered.inputs.len() + input.lowered.outputs.len();
+    let pins = input.pins?;
+    IoFootprint::from_complete(declared, pins.iter().map(|(_, pin)| pin.at))
+        .map(|_| io_bounded_case_revision())
+}
+
 fn synthesis_case_fingerprint_with_placement_revision(
     input: &SynthesisInput<'_>,
     search_config: &SearchConfig,
     certification_config: &CertificationConfig,
     library: &Library,
     placement_revision: Fingerprint,
+) -> SynthesisCaseFingerprint {
+    let io_bounded_revision = io_bounded_case_marker(input);
+    synthesis_case_fingerprint_with_marker(
+        input,
+        search_config,
+        certification_config,
+        library,
+        placement_revision,
+        io_bounded_revision,
+    )
+}
+
+fn synthesis_case_fingerprint_with_marker(
+    input: &SynthesisInput<'_>,
+    search_config: &SearchConfig,
+    certification_config: &CertificationConfig,
+    library: &Library,
+    placement_revision: Fingerprint,
+    io_bounded_revision: Option<Fingerprint>,
 ) -> SynthesisCaseFingerprint {
     let gates = input
         .lowered
@@ -295,6 +340,7 @@ fn synthesis_case_fingerprint_with_placement_revision(
         pins,
         library_revision: cell_library_revision(library),
         placement_revision,
+        io_bounded_revision,
         search_config,
         certification_config,
         simulator_revision: simulator_revision(),
@@ -547,5 +593,65 @@ mod tests {
         .unwrap();
         assert_ne!(old.case_fingerprint, new.case_fingerprint);
         assert_eq!(old.candidate_fingerprint, new.candidate_fingerprint);
+    }
+
+    #[test]
+    fn the_io_bounded_marker_moves_only_a_completely_pinned_case() {
+        use super::{
+            io_bounded_case_revision, synthesis_case_fingerprint_with_marker,
+            topology_aware_seed_placement_revision,
+        };
+        use crate::compile::geometry::Anchor;
+        use crate::compile::planner::PortPlacements;
+        use crate::redstone::world::block::Facing;
+
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["y".into()],
+            gates: vec![Gate::nor("y", &["a"])],
+        };
+        let library = Library::default_library();
+        let config = SearchConfig::checked_defaults();
+        let certification = CertificationConfig::from_search(&config);
+        let mut partial = PortPlacements::default();
+        partial.pin("a", Anchor { x: 10, y: 1, z: 20 }, Facing::East);
+        let mut complete = partial.clone();
+        complete.pin("y", Anchor { x: 50, y: 1, z: 60 }, Facing::East);
+
+        fn case_input<'a>(
+            lowered: &'a Netlist,
+            pins: Option<&'a PortPlacements>,
+        ) -> SynthesisInput<'a> {
+            SynthesisInput {
+                lowered,
+                source_provenance: None,
+                pins,
+            }
+        }
+        let input = |pins| case_input(&netlist, pins);
+        let entry =
+            |pins| synthesis_case_fingerprint(&input(pins), &config, &certification, &library);
+        let toggled = |pins, marker| {
+            synthesis_case_fingerprint_with_marker(
+                &input(pins),
+                &config,
+                &certification,
+                &library,
+                topology_aware_seed_placement_revision(),
+                marker,
+            )
+        };
+        let marker = Some(io_bounded_case_revision());
+
+        // Nobody pinned anything, or not everybody: no rectangle, and so the
+        // descriptor this crate writes is the one it wrote before boards had
+        // boundaries.
+        assert_eq!(entry(None), toggled(None, None));
+        assert_eq!(entry(Some(&partial)), toggled(Some(&partial), None));
+
+        // Every port pinned: the case is a bounded one and says so, which is
+        // exactly the difference the marker makes.
+        assert_eq!(entry(Some(&complete)), toggled(Some(&complete), marker));
+        assert_ne!(entry(Some(&complete)), toggled(Some(&complete), None));
     }
 }

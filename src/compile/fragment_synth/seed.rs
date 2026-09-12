@@ -3390,6 +3390,7 @@ pub(crate) mod tests {
                 frame: crate::compile::fragment_synth::placement::derive_frame(_request.pins),
                 analysis: _request.analysis.clone(),
                 window: LateralWindow::default(),
+                io_footprint: None,
                 instances: BTreeMap::from([(
                     InstanceId(0),
                     PreferredInstancePose {

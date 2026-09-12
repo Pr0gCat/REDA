@@ -6,7 +6,7 @@ use serde::Serialize;
 use thiserror::Error;
 
 use crate::compile::fragment_synth::channel_plan::{
-    channel_width, lane_count, legacy_turnaround_allowance,
+    bounded_turnaround_allowance, channel_width, lane_count, legacy_turnaround_allowance,
 };
 use crate::compile::fragment_synth::identity::{ConnectionId, InstanceId, PrimitiveId};
 use crate::compile::fragment_synth::identity::{PhysicalEndpointId, PortId};
@@ -19,7 +19,7 @@ use crate::compile::fragment_synth::topology::{
 use crate::compile::geometry::{Anchor, CellFacing};
 use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
 use crate::compile::physical::PortKind;
-use crate::compile::planner::{PortPin, PortRole};
+use crate::compile::planner::{IoFootprint, PortPin, PortRole};
 use crate::compile::topology::Primitive;
 use crate::compile::topology::{EmbeddingHint, TemplateNode};
 use crate::compile::{geometry, physical};
@@ -82,6 +82,12 @@ pub(crate) enum SeedPlacementError {
     ImmovableRepairOwner { owner: LayoutOwner },
     #[error("layout repair cannot separate the same owner {owner:?}")]
     SameRepairOwner { owner: LayoutOwner },
+    /// A complete pin set whose cells all share one X, or all share one Z,
+    /// draws a rectangle with no interior.  That is not a zero-width window
+    /// to squeeze a layout into -- it is a board the caller cannot have
+    /// meant, and the placer says so rather than refusing every cell of it.
+    #[error("the complete IO pin set draws a footprint with no interior: {footprint:?}")]
+    DegenerateIoFootprint { footprint: IoFootprint },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -162,6 +168,11 @@ pub(crate) struct SeedPlacementPlan {
     pub analysis: SeedPlacementAnalysis,
     /// Lateral bounds every block must respect.
     pub window: LateralWindow,
+    /// The rectangle a complete pin set draws, and `None` for every partial
+    /// or unpinned set.  `Some` is what closed `window` on both sides and
+    /// bounded the forward extent; `None` leaves both exactly as they were
+    /// before the caller's board had a boundary.
+    pub io_footprint: Option<IoFootprint>,
 }
 
 /// Lateral bounds, in frame coordinates, that every block of the layout
@@ -319,6 +330,16 @@ impl TopologyAwareSeedPlacer {
         // groups form one pin column at the start, and every level is folded
         // to the lateral room the pins' inward half-space leaves.  The
         // levels are never placed behind a pinned input.
+        //
+        // A complete pin set draws the board's own rectangle first: it is the
+        // same in every candidate frame, so it is measured -- and refused
+        // when it has no interior -- once, before any frame is tried.
+        let footprint = io_footprint(request);
+        if let Some(footprint) = footprint {
+            if footprint.min_x == footprint.max_x || footprint.min_z == footprint.max_z {
+                return Err(SeedPlacementError::DegenerateIoFootprint { footprint });
+            }
+        }
         let direct = derive_frame(request.pins);
         let turned = |forward: Facing| PlacementFrame {
             forward,
@@ -331,7 +352,7 @@ impl TopologyAwareSeedPlacer {
             turned(clockwise(clockwise(clockwise(direct.forward)))),
         ];
         for (index, frame) in candidates.into_iter().enumerate() {
-            let plan = self.plan_in_frame(request, minimum_widths, frame, index == 0)?;
+            let plan = self.plan_in_frame(request, minimum_widths, frame, index == 0, footprint)?;
             if let Some(plan) = plan {
                 return Ok(plan);
             }
@@ -350,6 +371,7 @@ impl TopologyAwareSeedPlacer {
         minimum_widths: &BTreeMap<i64, i32>,
         frame: PlacementFrame,
         direct: bool,
+        footprint: Option<IoFootprint>,
     ) -> Result<Option<SeedPlacementPlan>, SeedPlacementError> {
         let analysis = request.analysis;
         let intervals = net_intervals(request.graph, analysis);
@@ -465,7 +487,7 @@ impl TopologyAwareSeedPlacer {
         // in lateral order, into groups that do; each group becomes its own
         // column and the levels after it move up.  Every group is moved to
         // the window's first free lateral, on the row grid.
-        let window = lateral_window(frame, request.pins);
+        let window = lateral_window(frame, request.pins, footprint);
         let budget = window
             .width()
             .map(|width| width - 2 * WINDOW_MARGIN - ROW_GRID);
@@ -606,7 +628,7 @@ impl TopologyAwareSeedPlacer {
             rebase + confine_laterals(window, &bounds, &port_laterals, &mut laterals)?
         };
 
-        let mut channels =
+        let (mut channels, last_lanes) =
             derive_channel_widths(request, analysis, &level_bounds, &laterals, &track_laterals);
         for (&level, &width) in minimum_widths {
             channels
@@ -656,8 +678,17 @@ impl TopologyAwareSeedPlacer {
                 }
             }
         }
-        if let Some(limit) = forward_limit(frame, request.pins) {
-            if cursor + total + TURNAROUND_ALLOWANCE > limit {
+        // Beyond the last column the channel plan still turns every net
+        // around.  Without a board boundary that reservation stays the fixed
+        // legacy one; a bounded board pays for the lanes the last channel's
+        // own crossing intervals actually need, which is the only reason a
+        // closed forward limit is reachable at all.
+        let turnaround = match footprint {
+            Some(_) => bounded_turnaround_allowance(last_lanes),
+            None => TURNAROUND_ALLOWANCE,
+        };
+        if let Some(limit) = forward_limit(frame, request.pins, footprint) {
+            if cursor + total + turnaround > limit {
                 return Ok(None);
             }
         }
@@ -799,6 +830,7 @@ impl TopologyAwareSeedPlacer {
             frame,
             analysis: folded,
             window,
+            io_footprint: footprint,
         }))
     }
 }
@@ -983,7 +1015,8 @@ fn checked_step_many(
 }
 
 /// Free forward cells after every level (keyed by that level; the input
-/// channel is keyed by `min_level - 1`).
+/// channel is keyed by `min_level - 1`), beside the lane count of the last
+/// channel.
 ///
 /// A channel needs one lane per trunk that crosses it at the same lateral
 /// range, so the width comes from the left-edge lane count over the lateral
@@ -991,17 +1024,23 @@ fn checked_step_many(
 /// outputs are pinned the columns must still fit between the pin lines, so
 /// the widths are scaled down proportionally when their sum does not fit;
 /// the seed reports a typed refusal if a channel then cannot hold its lanes.
+///
+/// The last channel's lane count is returned rather than read back out of
+/// its width: the turnaround beyond the last column carries those same
+/// trunks, and a width is a rounded-up cell budget no lane count can be
+/// recovered from.
 fn derive_channel_widths(
     request: SeedPlacementRequest<'_>,
     analysis: &SeedPlacementAnalysis,
     level_bounds: &BTreeMap<u64, MacroBounds>,
     laterals: &BTreeMap<InstanceId, i32>,
     track_laterals: &BTreeMap<LogicalSignalId, i32>,
-) -> BTreeMap<i64, i32> {
+) -> (BTreeMap<i64, i32>, usize) {
     let intervals = net_intervals(request.graph, analysis);
     let min_level = level_bounds.keys().next().copied().unwrap_or(0) as i64;
     let max_level = level_bounds.keys().last().copied().unwrap_or(0) as i64;
     let mut widths = BTreeMap::new();
+    let mut last_lanes = 0;
     for channel_level in (min_level - 1)..=max_level {
         let mut crossing = Vec::new();
         for interval in &intervals {
@@ -1065,21 +1104,49 @@ fn derive_channel_widths(
         }
         // The source anchor on one side and the sink terminal on the other
         // each take one more cell than the macro envelope.
+        let lanes = lane_count(&crossing);
+        last_lanes = lanes;
         widths.insert(
             channel_level,
-            channel_width(lane_count(&crossing)) + ENDPOINT_CELLS_PER_CHANNEL,
+            channel_width(lanes) + ENDPOINT_CELLS_PER_CHANNEL,
         );
     }
 
-    widths
+    (widths, last_lanes)
 }
 
-/// Lateral bounds from the world edge and from every pinned input whose
-/// signal enters along the lateral axis (the circuit lies on the side its
-/// signal heads to).
+/// The rectangle a complete pin set draws, or `None` for a partial one.
+///
+/// Complete means every port the graph declares: the same question the
+/// planner asks of the same cells when it refuses a pin outside the board.
+/// A partial set is deliberately no rectangle at all -- a handful of fixed
+/// ports says nothing about where the board ends -- and leaves the placer on
+/// the branches it took before boards had boundaries.
+fn io_footprint(request: SeedPlacementRequest<'_>) -> Option<IoFootprint> {
+    let declared = request.graph.primary_inputs.len() + request.graph.declared_outputs.len();
+    IoFootprint::from_complete(
+        declared,
+        request
+            .pins
+            .iter()
+            .filter(|(endpoint, _)| {
+                matches!(
+                    endpoint,
+                    PhysicalEndpointId::PrimaryInput(_) | PhysicalEndpointId::DeclaredOutput(_)
+                )
+            })
+            .map(|(_, pin)| pin.at),
+    )
+}
+
+/// Lateral bounds from the world edge, from every pinned input whose signal
+/// enters along the lateral axis (the circuit lies on the side its signal
+/// heads to), and -- for a complete pin set -- from the board's own
+/// rectangle, which closes whichever side the pins left open.
 fn lateral_window(
     frame: PlacementFrame,
     pins: &BTreeMap<PhysicalEndpointId, PortPin>,
+    footprint: Option<IoFootprint>,
 ) -> LateralWindow {
     let (lx, lz) = horizontal_unit(frame.lateral);
     let (sign, origin) = if lx != 0 {
@@ -1110,15 +1177,28 @@ fn lateral_window(
             window.max = Some(window.max.map_or(lateral - 1, |max| max.min(lateral - 1)));
         }
     }
+    // The board's walls are the caller's own cells, so the layout may stand
+    // on them: the rectangle bounds inclusively, unlike the half-space a pin
+    // opens one cell past itself.  All four corners are projected because
+    // the frame may have turned the rectangle.
+    if let Some(footprint) = footprint {
+        let origin_lateral = project_horizontal(frame.origin.x, frame.origin.z, frame.lateral);
+        let (_, _, lateral_min, lateral_max) = footprint.projected(frame.forward, frame.lateral);
+        let (min, max) = (lateral_min - origin_lateral, lateral_max - origin_lateral);
+        window.min = Some(window.min.map_or(min, |known| known.max(min)));
+        window.max = Some(window.max.map_or(max, |known| known.min(max)));
+    }
     window
 }
 
 /// Largest forward coordinate the layout may reach: the world edge when the
-/// forward axis runs toward it, and one cell before any pinned input whose
-/// signal enters against the forward axis.
+/// forward axis runs toward it, one cell before any pinned input whose
+/// signal enters against the forward axis, and -- for a complete pin set --
+/// the far wall of the board's own rectangle.
 fn forward_limit(
     frame: PlacementFrame,
     pins: &BTreeMap<PhysicalEndpointId, PortPin>,
+    footprint: Option<IoFootprint>,
 ) -> Option<i32> {
     let (fx, fz) = horizontal_unit(frame.forward);
     let (sign, origin) = if fx != 0 {
@@ -1135,6 +1215,11 @@ fn forward_limit(
             continue;
         }
         let forward = project_horizontal(pin.at.x, pin.at.z, frame.forward) - origin_forward - 1;
+        limit = Some(limit.map_or(forward, |known| known.min(forward)));
+    }
+    if let Some(footprint) = footprint {
+        let (_, forward_max, _, _) = footprint.projected(frame.forward, frame.lateral);
+        let forward = forward_max - origin_forward;
         limit = Some(limit.map_or(forward, |known| known.min(forward)));
     }
     limit
@@ -2294,7 +2379,7 @@ mod tests {
             lateral: Facing::West,
             origin: Anchor { x: 21, y: 1, z: 62 },
         };
-        let window = lateral_window(frame, &BTreeMap::new());
+        let window = lateral_window(frame, &BTreeMap::new(), None);
         assert_eq!(
             window,
             LateralWindow {
@@ -2329,7 +2414,7 @@ mod tests {
             lateral: Facing::East,
             ..frame
         };
-        let window = lateral_window(frame, &BTreeMap::new());
+        let window = lateral_window(frame, &BTreeMap::new(), None);
         assert_eq!(
             window,
             LateralWindow {
@@ -2372,7 +2457,7 @@ mod tests {
             },
         )]);
         assert_eq!(
-            lateral_window(frame, &pins),
+            lateral_window(frame, &pins, None),
             LateralWindow {
                 min: Some(-118),
                 max: Some(1)
@@ -2384,13 +2469,143 @@ mod tests {
             lateral: Facing::West,
             ..frame
         };
-        assert_eq!(forward_limit(frame, &pins), Some(1));
+        assert_eq!(forward_limit(frame, &pins, None), Some(1));
         let frame = PlacementFrame {
             forward: Facing::North,
             lateral: Facing::East,
             ..frame
         };
-        assert_eq!(forward_limit(frame, &pins), Some(118));
+        assert_eq!(forward_limit(frame, &pins, None), Some(118));
+    }
+
+    #[test]
+    fn complete_pins_close_both_placement_axes() {
+        use super::*;
+        // Every declared port pinned draws one 41 x 41 rectangle, and that
+        // rectangle -- not only the world edge -- is what the layout must
+        // stay inside, on the lateral axis and ahead of the last column
+        // alike.  A wire-through board has no level to fit between the pin
+        // lines, so it is the bounds themselves this measures.
+        let netlist = Netlist {
+            inputs: vec!["a".into(), "b".into()],
+            outputs: vec!["a".into()],
+            gates: vec![],
+        };
+        let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
+        let analysis = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
+        let facts = BTreeMap::new();
+        let board = |output_x: i32| {
+            BTreeMap::from([
+                (
+                    PhysicalEndpointId::PrimaryInput(PortId(0)),
+                    pin(Anchor { x: 10, y: 1, z: 20 }, Facing::East),
+                ),
+                (
+                    PhysicalEndpointId::PrimaryInput(PortId(1)),
+                    pin(Anchor { x: 10, y: 1, z: 60 }, Facing::East),
+                ),
+                (
+                    PhysicalEndpointId::DeclaredOutput(PortId(0)),
+                    pin(
+                        Anchor {
+                            x: output_x,
+                            y: 1,
+                            z: 40,
+                        },
+                        Facing::East,
+                    ),
+                ),
+            ])
+        };
+        let complete = board(50);
+        let plan = TopologyAwareSeedPlacer
+            .plan(SeedPlacementRequest {
+                graph: &graph,
+                analysis: &analysis,
+                pins: &complete,
+                block_facts: &facts,
+            })
+            .expect("a complete board with no levels plans");
+
+        assert_eq!(
+            plan.io_footprint,
+            Some(IoFootprint {
+                min_x: 10,
+                max_x: 50,
+                min_z: 20,
+                max_z: 60
+            })
+        );
+        assert_eq!(plan.window.width(), Some(41));
+
+        // Both pin lines on one X: the rectangle has no interior to place
+        // in, which is a refusal rather than a zero-width window.
+        let degenerate = board(10);
+        assert!(matches!(
+            TopologyAwareSeedPlacer.plan(SeedPlacementRequest {
+                graph: &graph,
+                analysis: &analysis,
+                pins: &degenerate,
+                block_facts: &facts,
+            }),
+            Err(SeedPlacementError::DegenerateIoFootprint { .. })
+        ));
+
+        // The same rectangle is too short for two levels and their channels:
+        // the forward axis is closed now, where before only the world edge
+        // and a pinned input facing back could close it.
+        let levels = two_stage_graph();
+        let level_analysis = analyse_instance_dag(&levels, &BTreeMap::new()).unwrap();
+        let corners = BTreeMap::from([
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(0)),
+                pin(Anchor { x: 10, y: 1, z: 20 }, Facing::East),
+            ),
+            (
+                PhysicalEndpointId::DeclaredOutput(PortId(0)),
+                pin(Anchor { x: 50, y: 1, z: 60 }, Facing::East),
+            ),
+        ]);
+        assert_eq!(
+            TopologyAwareSeedPlacer.plan(SeedPlacementRequest {
+                graph: &levels,
+                analysis: &level_analysis,
+                pins: &corners,
+                block_facts: &facts,
+            }),
+            Err(SeedPlacementError::NoFrameFits)
+        );
+
+        // A partial set draws no rectangle: one pin of two ports bounds
+        // nothing, and no pin at all leaves the pre-bounded plan literally
+        // unchanged.
+        let partial = BTreeMap::from([(
+            PhysicalEndpointId::PrimaryInput(PortId(0)),
+            pin(Anchor { x: 20, y: 1, z: 40 }, Facing::North),
+        )]);
+        let partial_plan = TopologyAwareSeedPlacer
+            .plan(SeedPlacementRequest {
+                graph: &levels,
+                analysis: &level_analysis,
+                pins: &partial,
+                block_facts: &facts,
+            })
+            .expect("a partially pinned board still plans");
+        assert_eq!(partial_plan.io_footprint, None);
+
+        let unpinned = TopologyAwareSeedPlacer
+            .plan(SeedPlacementRequest {
+                graph: &levels,
+                analysis: &level_analysis,
+                pins: &BTreeMap::new(),
+                block_facts: &facts,
+            })
+            .expect("an unpinned board still plans");
+        assert_eq!(unpinned.io_footprint, None);
+        assert_eq!(
+            unpinned.fingerprint.as_str(),
+            "24ef3d8e581982f52eeb7a40a6763ae2e8ad2493553aa4851fe309e55000bc93"
+        );
     }
 
     use std::collections::{BTreeMap, BTreeSet};
