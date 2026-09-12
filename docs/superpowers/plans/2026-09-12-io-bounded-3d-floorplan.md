@@ -1044,6 +1044,10 @@ git commit -m "feat(synthesis): plan independent channels per deck"
 
 #### Task 9a: place the band and lanes
 
+`SeedPlacementPlan` literals in `seed.rs`'s test module gain only an empty
+`vertical_trunks` field so the new plan field compiles; this is constructor
+maintenance, not Task 9b routing behavior.
+
 - [ ] **Step 1: Add exact failing placement tests**
 
 Reuse the existing `folded_two_deck_plan` fixture exactly: NOR chain
@@ -1131,7 +1135,7 @@ cargo test --lib complete_pins_never_settle_on_a_turned_frame
 cargo test --lib complete_pins_close_both_placement_axes
 cargo test --lib bounded_columns_fold_onto_ordered_decks
 cargo test --lib no_blocks_fingerprint_matches_the_pre_task_9_placer_exactly
-git add src/compile/fragment_synth/placement.rs
+git add src/compile/fragment_synth/placement.rs src/compile/fragment_synth/seed.rs
 git commit -m "feat(synthesis): allocate deterministic vertical trunk lanes"
 ```
 
