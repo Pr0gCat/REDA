@@ -811,7 +811,7 @@ git commit -m "feat(synthesis): materialize macro decks in three dimensions"
 
 **Files:**
 - Modify: `src/compile/fragment_synth/channel_layout.rs:42-101,189-360,1050-1485`
-- Modify: `src/compile/fragment_synth/placement.rs:109-140`
+- Modify: `src/compile/fragment_synth/placement.rs:177-196`
 - Modify: `src/compile/fragment_synth/seed.rs:392-465,2293-2665`
 - Test: `src/compile/fragment_synth/channel_layout.rs` test module
 
@@ -837,6 +837,7 @@ git commit -m "feat(synthesis): materialize macro decks in three dimensions"
 
   pub(crate) fn plan_deck_channel_layout(
       candidate: &ExpandedPhysicalCandidate,
+      analysis: &SeedPlacementAnalysis,
       deck: DeckId,
       ground: i32,
       members: &BTreeSet<InstanceId>,
@@ -852,6 +853,10 @@ git commit -m "feat(synthesis): materialize macro decks in three dimensions"
   `BTreeMap<(DeckId, usize), BTreeMap<PhysicalEndpointId, i32>>`.
 - `LayoutRepair` gains bounded-only
   `WidenDeckChannel { deck: DeckId, level: i64, width: i32 }`.
+- `ChannelLayoutError` appends bounded-only
+  `DeckChannelTooNarrow { deck: DeckId, channel: usize, level: i64,
+  available: i32, lanes: usize, needed: i32 }`; the existing
+  `ChannelTooNarrow` variant and its legacy construction stay unchanged.
 - The existing `plan_channel_layout` remains a legacy wrapper that passes one
   synthetic deck plus `None` and returns byte-identical cells. Bounded callers
   pass `Some(footprint)`; no `i32::MIN/MAX` sentinel is introduced.
@@ -870,10 +875,18 @@ assert!(lower.lanes.contains_key(&(DeckId(0), 0)));
 assert!(upper.lanes.contains_key(&(DeckId(1), 0)));
 ```
 
+Add `bounded_channel_widening_is_keyed_by_deck_and_level`: make the bounded
+kernel return a too-narrow result and assert the retry records and monotonically
+grows `WidenDeckChannel` for that exact `(deck, level)`, while the equivalent
+legacy call still records `WidenChannel`. Then report the same stable global
+level from a different deck and assert there is still one canonical repair: its
+deck changes to the current deck while its width keeps growing.
+
 - [ ] **Step 2: Verify RED**
 
 ```powershell
 cargo test --lib equal_levels_on_two_decks_never_alias_channel_state
+cargo test --lib bounded_channel_widening_is_keyed_by_deck_and_level
 ```
 
 - [ ] **Step 3: Refactor the existing planner into one deck-local kernel**
@@ -882,10 +895,12 @@ Replace endpoint-to-level inference with the explicit levels in
 `DeckNetGeometry`. Preserve every real sink's `PhysicalEndpointId` for current
 diagnostics and route construction; synthetic trunk endpoints carry the net
 owner plus their explicit boolean and never enter the final real-sink request.
-Filter candidate primitives/junctions/blocks to `members`.
-Include physical boundaries only for deck zero. Only under `Some(footprint)`,
-clamp the closed slab's forward/lateral loops to the projected footprint. Keep
-the old wrapper's inputs and exact output for unbounded/partial cases.
+Keep `analysis` as the source of each member instance's forward level when
+building columns, and filter candidate primitives/junctions/blocks to
+`members`. Include both physical-boundary reads (column occupancy and escape
+corridor exclusion) only for deck zero. Only under `Some(footprint)`, clamp the
+closed slab's forward/lateral loops to the projected footprint. Keep the old
+wrapper's inputs and exact output for unbounded/partial cases.
 
 - [ ] **Step 4: Add deterministic layout union**
 
@@ -904,25 +919,38 @@ impl ChannelLayout {
         for (owner, cells) in other.departures {
             self.departures.entry(owner).or_default().extend(cells);
         }
-        self.lanes.extend(other.lanes);
+        for (key, lanes) in other.lanes {
+            assert!(self.lanes.insert(key, lanes).is_none(), "duplicate deck channel");
+        }
     }
 }
 ```
 
-Reject duplicate lane keys in debug/test builds rather than silently
-overwriting them.
+The lane insertion assertion rejects duplicate `(deck, channel)` keys instead
+of silently overwriting them.
 
 - [ ] **Step 5: Key bounded widening by deck and level**
 
-Route `ChannelTooNarrow` from a bounded deck into
-`WidenDeckChannel`; preserve the legacy `WidenChannel` branch exactly. The
-repair loop grows one `(deck, level)` width monotonically and keeps current
-attempt/error precedence.
+Emit `DeckChannelTooNarrow` only when the kernel receives `Some(footprint)` and
+route it into `WidenDeckChannel`; preserve the legacy `ChannelTooNarrow` to
+`WidenChannel` branch exactly. Append both new enum variants after existing
+variants so legacy ordering remains unchanged.
+
+Keep `plan_with_widths` level-keyed: the analysis global forward level is stable
+and each level produces exactly one packed column. For a bounded error, find the
+prior `WidenDeckChannel` by global `level`, grow from that width, remove that one
+entry, and insert the current `(deck, level, width)`. Thus repacking may update
+the diagnostic deck without resetting progress. The placer consumes both
+repair variants into the same stable level-keyed minimum-width map; bounded
+repairs are never created for `None` footprints. On the bounded retry cap,
+preserve the last real `DeckChannelTooNarrow` as the refusal. The legacy cap
+branch and its exact synthetic `ChannelTooNarrow` remain untouched.
 
 - [ ] **Step 6: Verify GREEN**
 
 ```powershell
 cargo test --lib equal_levels_on_two_decks_never_alias_channel_state
+cargo test --lib bounded_channel_widening_is_keyed_by_deck_and_level
 cargo test --lib compile::fragment_synth::channel_layout::tests
 cargo test --lib no_blocks_fingerprint_matches_the_pre_task_9_placer_exactly
 ```
@@ -1021,6 +1049,9 @@ full usable forward interval, and every Y between first/last deck slabs in the
 owner's `ChannelLayout.private` set. Build each deck's `DeckNetGeometry` with
 the physical endpoints on that deck and a synthetic trunk source/sink at the
 lane; the final `route_all` request still contains only real sinks.
+
+Call the deck-local kernels and merge their layouts in ascending `DeckId`, so
+the lowest deck's first existing error remains authoritative.
 
 Build one-cell `KeepOut` perimeter cells just outside min/max X/Z from the
 lowest route bound through the maximum of all route

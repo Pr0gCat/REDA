@@ -262,6 +262,15 @@ and `departures`; the report-only `lanes` field is keyed by `(deck, channel)`
 rather than concatenated positionally. Existing channel margins are clamped
 inward to the IO footprint.
 
+`deck` identifies the channel in the current packed attempt; it is not a stable
+placement key because widening may repack that level onto another deck. Retry
+width therefore accumulates monotonically by the unchanged global forward
+level. If that level moves, the canonical `WidenDeckChannel` entry is replaced
+with its new deck while retaining the larger width. One global forward level
+produces one packed column, so this does not widen an unrelated deck. Deck
+layouts are attempted in ascending `DeckId`, preserving a deterministic first
+error.
+
 The footprint does not require a new `PhysicalReservations` API. After the
 deck plan determines the existing router's finite Y search range, bounded mode
 adds a one-cell-thick closed perimeter immediately outside the four X/Z sides
