@@ -272,13 +272,25 @@ one-deck layout exceeds the IO footprint, the minimum legal multi-deck layout
 is accepted even when its required vertical trunks add delay. Bounds and correctness
 are hard requirements.
 
-The trial succeeds only if the bounded seven-segment's fill ratio,
-`non_air_blocks / occupied_volume`, strictly increases over the current
-committed result. Tick and static-delay regressions are permitted for required
-deck folding, but are reported rather than hidden. A large regression does not
-invalidate the hard-bounds experiment, but the bounded path is not shipped as
-the default until the user reviews that report. No numeric tick cap and no
-existing search acceptance mode are added in this trial.
+The committed pinned seven-segment baseline does not certify, so it has no
+physical `non_air_blocks / occupied_volume` result to compare. The executable
+density gate is therefore plan-only and uses the same macro envelopes on both
+sides:
+
+```text
+planned_macro_fill = sum(macro envelope volumes)
+                     / volume(union bounding box of those envelopes)
+```
+
+The bounded plan must strictly improve this ratio over today's legacy 2D plan,
+and the bounded candidate must newly route and certify. Its final physical
+`non_air_blocks / occupied_volume` is reported and becomes the baseline for
+later density passes; it is not compared to a nonexistent old physical result.
+Tick and static-delay regressions are permitted for required deck folding, but
+are reported rather than hidden. A large regression does not invalidate the
+hard-bounds experiment, but the bounded path is not shipped as the default
+until the user reviews that report. No numeric tick cap and no existing search
+acceptance mode are added in this trial.
 
 ## 8. Errors
 
@@ -326,7 +338,10 @@ after the contracts are executable.
 
 ### Stage 0: bounded-layout preflight
 
-- record the current pinned seven-segment metrics and fingerprint;
+- record that the committed pinned seven-segment is an uncertified routing
+  refusal and preserve its exact terminal error as the legacy baseline;
+- run today's legacy placer only through plan construction and record its
+  `planned_macro_fill` from the literal macro envelopes;
 - run the new bounded placer through plan-only mode, including dynamic spacing,
   lateral legalization, the monotonic vertical-trunk-band loop, and deck assignment;
 - report usable forward/lateral spans, order-preserving deck count, cross-deck
@@ -382,7 +397,9 @@ For the pinned seven-segment fixture:
   non-terminal macro-owned cell at `y >= base_ground + 4`, without changing the
   seven-segment pins merely to force height;
 - generation terminates under the existing route/search caps;
-- fill ratio strictly improves over the current committed result;
+- the bounded plan's `planned_macro_fill` strictly improves over Stage 0's
+  legacy 2D plan and the final physical fill ratio is recorded as a new
+  baseline;
 - the report records blocks, observed settle, static delay, occupied volume,
   fill ratio, used height, deck count, and wall time against that result.
 
