@@ -1307,12 +1307,15 @@ fn place_blocks(
                 .saturating_add(block_offset.map_or(0, |offset| offset.dz)),
             ..pose.preferred_origin
         });
-        // The placer's origin is the block's own minimum corner, and the
-        // parent's ground row sits one above the floor row every unpinned
-        // layout (a block's included) puts its supports on.
+        // The placer's origin is the block's own minimum corner, and its
+        // deck's ground row sits one above the floor row every unpinned
+        // layout (a block's included) puts its supports on.  The pose
+        // carries that ground, so a block folded onto an upper deck is
+        // translated there by the same 3D offset that already moved it
+        // horizontally.
         let offset = Offset {
             dx: origin.x - compiled.bounds.min.x,
-            dy: (plan.frame.origin.y - 1) - compiled.bounds.min.y,
+            dy: (pose.preferred_origin.y - 1) - compiled.bounds.min.y,
             dz: origin.z - compiled.bounds.min.z,
         };
         offsets.insert(block, offset);
@@ -3318,8 +3321,9 @@ pub(crate) mod tests {
     use crate::compile::fragment_synth::certification::CompleteCandidateCertifier;
     use crate::compile::fragment_synth::legacy_adapter::{LegacyCandidateAdapter, LegacyOracle};
     use crate::compile::fragment_synth::placement::{
-        DeckId, DeckPlan, FloorplanMetrics, PreferredInstancePose, SeedPlacementError,
-        SeedPlacementPlan, SeedPlacementRequest, SeedPlacer, TopologyAwareSeedPlacer,
+        deck_grounds, DeckId, DeckPlan, FloorplanMetrics, PreferredInstancePose,
+        SeedPlacementError, SeedPlacementPlan, SeedPlacementRequest, SeedPlacer,
+        TopologyAwareSeedPlacer,
     };
     use crate::compile::metrics::canonical_fingerprint;
     use crate::compile::planner::{PinRefusal, PortPin};
@@ -3760,6 +3764,331 @@ pub(crate) mod tests {
             ResolvedBlocks::resolve(&graph, ParentBlocks { compiled: &blocks }),
             Err(SeedError::BlockTooWide { block }) if block == block_id
         ));
+    }
+
+    /// A block is stamped at its own deck's ground, not at the one frame
+    /// origin every deck used to share.  The pose carries that ground and
+    /// the offset that moves the already-certified body keeps the block's
+    /// included floor row exactly one below it -- the same contract a
+    /// single-deck parent has always had.
+    ///
+    /// Both poses sit at the same X/Z on purpose: deck 1 restarts at the
+    /// projected forward start, so the derived ground is the only thing
+    /// keeping the two bodies apart, and a plan that ignored it would not
+    /// even claim its own cells.
+    #[test]
+    fn block_placement_uses_its_planned_deck_y() {
+        let (library, config) = default_services_parts();
+        let lowered = crate::compile::lowering::lower_optimised(&not_netlist()).unwrap();
+        let compiled = crate::compile::fragment_synth::blocks::compile_block(
+            "not",
+            &lowered,
+            services(&library, &config),
+        )
+        .expect("the not gate compiles as a block");
+        let blocks = [compiled.clone(), compiled.clone()];
+        let lower_inputs = vec!["a0".to_string()];
+        let upper_inputs = vec!["a1".to_string()];
+        let lower_outputs = vec!["y0".to_string()];
+        let upper_outputs = vec!["y1".to_string()];
+        let planning = Netlist {
+            inputs: vec![lower_inputs[0].clone(), upper_inputs[0].clone()],
+            outputs: vec![lower_outputs[0].clone(), upper_outputs[0].clone()],
+            gates: vec![
+                Gate {
+                    name: "lower.0".into(),
+                    inputs: lower_inputs.clone(),
+                    output: lower_outputs[0].clone(),
+                    kind: GateKind::Buf,
+                },
+                Gate {
+                    name: "upper.0".into(),
+                    inputs: upper_inputs.clone(),
+                    output: upper_outputs[0].clone(),
+                    kind: GateKind::Buf,
+                },
+            ],
+        };
+        let specs = [
+            crate::compile::fragment_synth::instance_graph::BlockSpec {
+                name: "lower",
+                block: 0,
+                inputs: &lower_inputs,
+                outputs: &lower_outputs,
+            },
+            crate::compile::fragment_synth::instance_graph::BlockSpec {
+                name: "upper",
+                block: 1,
+                inputs: &upper_inputs,
+                outputs: &upper_outputs,
+            },
+        ];
+        let graph = InstanceGraph::with_blocks(&planning, &library, &specs).expect("parent graph");
+        let (lower, upper) = (graph.blocks[0].id, graph.blocks[1].id);
+
+        // A block stands with its floor row one below the deck ground, so
+        // relative to that ground its own cells span `-1 ..= height - 2`,
+        // and the deck reserves the router's three rows above them.
+        let height = compiled.bounds.max.y - compiled.bounds.min.y + 1;
+        let local = (-1, (height - 2 + 3).max(3));
+        let grounds = deck_grounds(1, &[local, local]).expect("two block decks fit");
+        let origin = Anchor {
+            x: 20,
+            y: grounds[0].ground,
+            z: 20,
+        };
+
+        let candidate = ExpandedPhysicalCandidate::empty(graph.clone(), PortPlacements::default());
+        let resolved =
+            ResolvedBlocks::resolve(&candidate.instances, ParentBlocks { compiled: &blocks })
+                .expect("both blocks resolve");
+        let analysis =
+            analyse_instance_dag(&candidate.instances, &resolved.delays).expect("analysis");
+        let mut plan = bounded_plan(
+            &analysis,
+            BTreeMap::from([
+                (
+                    lower,
+                    PreferredInstancePose {
+                        preferred_origin: origin,
+                        facing: CellFacing::EAST,
+                    },
+                ),
+                (
+                    upper,
+                    PreferredInstancePose {
+                        preferred_origin: Anchor {
+                            y: grounds[1].ground,
+                            ..origin
+                        },
+                        facing: CellFacing::EAST,
+                    },
+                ),
+            ]),
+            None,
+        );
+        plan.decks = grounds
+            .iter()
+            .enumerate()
+            .map(|(index, &deck)| (DeckId(index as u32), deck))
+            .collect();
+        plan.floorplan.deck_count = 2;
+
+        let place = |block_placements: &BTreeMap<InstanceId, BlockPlacementOffset>| {
+            let mut candidate =
+                ExpandedPhysicalCandidate::empty(graph.clone(), PortPlacements::default());
+            let resolved =
+                ResolvedBlocks::resolve(&candidate.instances, ParentBlocks { compiled: &blocks })
+                    .expect("both blocks resolve");
+            let mut occupied = BTreeSet::new();
+            let mut sources = BTreeMap::new();
+            let mut targets = BTreeMap::new();
+            place_blocks(
+                &mut candidate,
+                &resolved,
+                &plan,
+                PlanTranslation::default(),
+                block_placements,
+                &mut occupied,
+                &mut sources,
+                &mut targets,
+            )
+            .expect("two blocks on two decks both stand")
+        };
+
+        let offsets = place(&BTreeMap::new());
+        let (lower_pose, upper_pose) = (plan.instances[&lower], plan.instances[&upper]);
+        let (lower_offset, upper_offset) = (offsets[&lower], offsets[&upper]);
+        assert_eq!(
+            upper_offset.dy,
+            (upper_pose.preferred_origin.y - 1) - compiled.bounds.min.y
+        );
+        assert_eq!(
+            lower_offset.dy,
+            (lower_pose.preferred_origin.y - 1) - compiled.bounds.min.y
+        );
+        assert!(upper_offset.dy > lower_offset.dy);
+
+        // A `BlockPlacementOffset` is a horizontal optimisation control: it
+        // moves the body across its deck, never onto another one.
+        let (dx, dz) = (4, -3);
+        let moved = place(&BTreeMap::from([(upper, BlockPlacementOffset { dx, dz })]));
+        assert_eq!(
+            moved[&upper],
+            Offset {
+                dx: upper_offset.dx + dx,
+                dy: upper_offset.dy,
+                dz: upper_offset.dz + dz,
+            }
+        );
+        assert_eq!(moved[&lower], lower_offset);
+    }
+
+    /// The physical half of the deck derivation, with no planner in the
+    /// way: two literal component reservation sets, the upper one moved by
+    /// nothing but the difference between the two derived grounds, claim
+    /// disjoint cells -- mandatory-air roofs included -- while the
+    /// staircase a trunk corridor is reserved for still carries a signal
+    /// from one deck to the next, and the unrelated macro stacked directly
+    /// above the driven one never sees it.
+    #[test]
+    fn derived_deck_spacing_separates_unrelated_cells_but_keeps_the_trunk() {
+        use crate::redstone::simulator::Simulator;
+        use crate::redstone::world::storage::World;
+
+        let netlist = not_netlist();
+        let library = Library::default_library();
+        let graph =
+            InstanceGraph::with_variants(&netlist, &library, &BTreeMap::new(), &[]).unwrap();
+
+        // One macro row standing on its own ground, one support row below
+        // it and the channel slab three above: the same local pair
+        // `bounded_columns_fold_onto_ordered_decks` derives its grounds
+        // from, so deck 1 lands five rows up.
+        let decks = deck_grounds(1, &[(-1, 3), (-1, 3)]).expect("two decks fit");
+        assert_eq!((decks[0].ground, decks[1].ground), (1, 6));
+        let lift = Offset {
+            dx: 0,
+            dy: decks[1].ground - decks[0].ground,
+            dz: 0,
+        };
+
+        // A macro reduced to what every macro has: a cell, and the support
+        // it stands on.
+        let body = |at: Anchor| {
+            vec![
+                PlacedBlock {
+                    at: Anchor { y: at.y - 1, ..at },
+                    state: compile::stone(),
+                },
+                PlacedBlock {
+                    at,
+                    state: compile::dust(),
+                },
+            ]
+        };
+        let reserve = |at: Anchor| {
+            let mut candidate =
+                ExpandedPhysicalCandidate::empty(graph.clone(), PortPlacements::default());
+            let id = PrimitiveId {
+                instance: InstanceId(0),
+                node: TopologyNodeId(0),
+            };
+            candidate.placements.insert(
+                id,
+                PrimitivePlacement {
+                    id,
+                    variant: 0,
+                    facing: CellFacing::EAST,
+                    anchor: at,
+                    delayed: None,
+                    blocks: body(at),
+                },
+            );
+            reservations_for_components(&candidate).expect("a literal body reserves")
+        };
+        // Every cell one deck's set owns: the body itself, plus the
+        // mandatory-air roof `reservations_for_components` puts over it.
+        let claimed = |at: Anchor| {
+            let mut cells = body(at)
+                .into_iter()
+                .map(|block| block.at)
+                .collect::<Vec<_>>();
+            cells.push(Anchor { y: at.y + 1, ..at });
+            cells
+        };
+
+        let lower_at = Anchor {
+            x: 4,
+            y: decks[0].ground,
+            z: 4,
+        };
+        let upper_at = shift(lower_at, lift);
+        let lower = reserve(lower_at);
+        let upper = reserve(upper_at);
+        for (mine, theirs, at) in [(&lower, &upper, lower_at), (&upper, &lower, upper_at)] {
+            for cell in claimed(at) {
+                assert!(mine.get(&cell).is_some(), "a deck must claim {cell:?}");
+                assert_eq!(theirs.get(&cell), None, "the other deck reaches {cell:?}");
+            }
+        }
+        // The roofs are where the two decks come closest, and they are air
+        // rather than keep-out, so the kind is named rather than assumed.
+        for (set, at) in [(&lower, lower_at), (&upper, upper_at)] {
+            assert_eq!(
+                set.get(&Anchor { y: at.y + 1, ..at })
+                    .map(|reservation| reservation.kind.clone()),
+                Some(PhysicalReservationKind::MandatoryAir),
+            );
+        }
+
+        // The same two bodies on a board, plus the one staircase a trunk
+        // corridor exists for: it leaves the lower macro's own cell and
+        // climbs a row per step until it stands on deck 1's ground.
+        let mut world = World::new(16, 12, 8);
+        let set = |world: &mut World, at: Anchor, state: BlockState| {
+            world.set(at.x, at.y, at.z, state);
+        };
+        let switch = Anchor {
+            x: lower_at.x - 1,
+            ..lower_at
+        };
+        set(
+            &mut world,
+            Anchor {
+                y: switch.y - 1,
+                ..switch
+            },
+            compile::stone(),
+        );
+        set(&mut world, switch, compile::lever(true));
+        for at in [lower_at, upper_at] {
+            for block in body(at) {
+                set(&mut world, block.at, block.state);
+            }
+        }
+        let mut trunk = lower_at;
+        for step in 1..=lift.dy {
+            trunk = Anchor {
+                x: lower_at.x + step,
+                y: lower_at.y + step,
+                z: lower_at.z,
+            };
+            set(
+                &mut world,
+                Anchor {
+                    y: trunk.y - 1,
+                    ..trunk
+                },
+                compile::stone(),
+            );
+            set(&mut world, trunk, compile::dust());
+        }
+        assert_eq!(trunk.y, decks[1].ground);
+
+        let read = |world: &World, at: Anchor| world.get(at.x, at.y, at.z).power;
+        let mut simulator = Simulator::new(world);
+        simulator.run_until_stable(200).expect("the two decks settle");
+        // The lever's own 15, one step of dust per row climbed.
+        assert_eq!(
+            read(simulator.world(), trunk),
+            MAX_SIGNAL_STRENGTH - u8::try_from(lift.dy).expect("the lift is a few rows"),
+            "the intended trunk does not reach deck 1",
+        );
+        assert_eq!(
+            read(simulator.world(), upper_at),
+            0,
+            "deck 1's macro reads the deck below it through the derived gap",
+        );
+
+        // And the reading came from the driver, not from the state the
+        // world happened to be built in.
+        simulator
+            .world_mut()
+            .set(switch.x, switch.y, switch.z, compile::lever(false));
+        simulator.run_until_stable(200).expect("the trunk settles low");
+        assert_eq!(read(simulator.world(), trunk), 0);
+        assert_eq!(read(simulator.world(), upper_at), 0);
     }
 
     fn not_netlist() -> Netlist {

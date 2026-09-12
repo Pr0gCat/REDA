@@ -513,9 +513,9 @@ impl TopologyAwareSeedPlacer {
             })
             .max()
             .unwrap_or(1);
-            let origin = frame_to_world(frame, 0, lateral);
-            let source = frame_to_world(frame, -channel, lateral);
-            let target = frame_to_world(frame, max_span + channel, lateral);
+            let origin = frame_to_world(frame, 0, lateral, frame.origin.y);
+            let source = frame_to_world(frame, -channel, lateral, frame.origin.y);
+            let target = frame_to_world(frame, max_span + channel, lateral, frame.origin.y);
             facings.insert(
                 instance.id,
                 choose_instance_facing(instance, origin, source, target, frame.forward)?,
@@ -908,7 +908,11 @@ impl TopologyAwareSeedPlacer {
 
         let mut instances = BTreeMap::new();
         for (&id, &(forward, lateral)) in &frame_origins {
-            let origin = frame_to_world(frame, forward, lateral);
+            // The pose is the only place a deck becomes a coordinate: the
+            // primitive search, the instance overrides and the block
+            // offsets are all horizontal and carry this row through.
+            let ground = decks[&instance_decks[&id]].ground;
+            let origin = frame_to_world(frame, forward, lateral, ground);
             instances.insert(
                 id,
                 PreferredInstancePose {
@@ -968,7 +972,7 @@ impl TopologyAwareSeedPlacer {
                         .ok_or(SeedPlacementError::CoordinateOverflow)?,
                 };
                 let lateral = settle_row(wanted);
-                Ok((port, frame_to_world(frame, input_forward, lateral)))
+                Ok((port, frame_to_world(frame, input_forward, lateral, frame.origin.y)))
             })
             .collect::<Result<BTreeMap<_, _>, SeedPlacementError>>()?;
         let mut taken_rows = Vec::<i32>::new();
@@ -1006,7 +1010,7 @@ impl TopologyAwareSeedPlacer {
                         .ok_or(SeedPlacementError::CoordinateOverflow)?,
                 };
                 let lateral = settle_row(wanted);
-                Ok((port, frame_to_world(frame, output_forward, lateral)))
+                Ok((port, frame_to_world(frame, output_forward, lateral, frame.origin.y)))
             })
             .collect::<Result<BTreeMap<_, _>, SeedPlacementError>>()?;
 
@@ -1295,7 +1299,10 @@ fn pack_decks(columns: &[DeckColumn], capacity: i32) -> Result<Vec<DeckId>, Seed
 /// ceiling reach above it.  A deck's ground is the first integer that lifts
 /// its whole interval past the deck below -- the height-aware separation,
 /// not a fixed gap.
-fn deck_grounds(base: i32, locals: &[(i32, i32)]) -> Result<Vec<DeckPlan>, SeedPlacementError> {
+pub(crate) fn deck_grounds(
+    base: i32,
+    locals: &[(i32, i32)],
+) -> Result<Vec<DeckPlan>, SeedPlacementError> {
     let overflow = || SeedPlacementError::CoordinateOverflow;
     let mut plans = Vec::with_capacity(locals.len());
     let mut previous: Option<(i32, i32)> = None;
@@ -1774,12 +1781,16 @@ const fn clockwise(direction: Facing) -> Facing {
     }
 }
 
-fn frame_to_world(frame: PlacementFrame, forward: i32, lateral: i32) -> Anchor {
+/// The frame is horizontal, so `ground` is the whole of the third
+/// dimension: a macro passes the deck it was packed onto, and everything
+/// that is not on a deck -- the pins and the automatic ports the router
+/// connects to them -- passes the frame origin's own row.
+fn frame_to_world(frame: PlacementFrame, forward: i32, lateral: i32, ground: i32) -> Anchor {
     let (fx, fz) = horizontal_unit(frame.forward);
     let (lx, lz) = horizontal_unit(frame.lateral);
     Anchor {
         x: frame.origin.x + fx * forward + lx * lateral,
-        y: frame.origin.y,
+        y: ground,
         z: frame.origin.z + fz * forward + lz * lateral,
     }
 }
@@ -4262,16 +4273,16 @@ mod tests {
     /// that fit stay on the base deck and the one that does not opens the
     /// deck above, at a ground derived from the macros' own height.
     ///
-    /// Every literal below is hand-derived: the pins put the origin on the
-    /// input's net cell `(12, 1, 20)` facing east over a `10..=72` by
-    /// `20..=60` board, one lane crosses every channel (`9 + 2 = 11`
-    /// cells), so the first column starts at `0 + 1 + 11 = 12` with a
-    /// capacity of `60 - 12 = 48`.  An east-facing torch column costs
-    /// `2 + 11 = 13` and a deck's turnaround `9 + 8 = 17`: `13 + 13 + 17`
-    /// fits, `13 * 3 + 17` does not, and the third column opens deck 1
-    /// paying its preceding channel as lead (`11 + 13 + 17 = 41`).
-    #[test]
-    fn bounded_columns_fold_onto_ordered_decks() {
+    /// Every literal the two tests below assert is hand-derived from this
+    /// fixture: the pins put the origin on the input's net cell
+    /// `(12, 1, 20)` facing east over a `10..=72` by `20..=60` board, one
+    /// lane crosses every channel (`9 + 2 = 11` cells), so the first column
+    /// starts at `0 + 1 + 11 = 12` with a capacity of `60 - 12 = 48`.  An
+    /// east-facing torch column costs `2 + 11 = 13` and a deck's turnaround
+    /// `9 + 8 = 17`: `13 + 13 + 17` fits, `13 * 3 + 17` does not, and the
+    /// third column opens deck 1 paying its preceding channel as lead
+    /// (`11 + 13 + 17 = 41`).
+    fn folded_two_deck_plan() -> super::SeedPlacementPlan {
         use super::*;
         let graph = InstanceGraph::one_to_one(
             &Netlist {
@@ -4294,14 +4305,22 @@ mod tests {
                 pin(Anchor { x: 72, y: 1, z: 60 }, Facing::East),
             ),
         ]);
-        let plan = TopologyAwareSeedPlacer
+        TopologyAwareSeedPlacer
             .plan(SeedPlacementRequest {
                 graph: &graph,
                 analysis: &analysis,
                 pins: &pins,
                 block_facts: &facts,
             })
-            .expect("a bounded board folds its columns onto decks");
+            .expect("a bounded board folds its columns onto decks")
+    }
+
+    /// The fold itself: which deck each column landed on, where those decks
+    /// sit, where the columns stand, and what volume the plan asks for.
+    #[test]
+    fn bounded_columns_fold_onto_ordered_decks() {
+        use super::*;
+        let plan = folded_two_deck_plan();
 
         assert_eq!(plan.frame.forward, Facing::East);
         assert_eq!(plan.frame.origin, Anchor { x: 12, y: 1, z: 20 });
@@ -4340,7 +4359,7 @@ mod tests {
         );
 
         // Deck 0 steps `12 -> 24` by macro extent plus channel; deck 1
-        // starts over at the same projected forward start.
+        // starts over at the same projected forward start, one deck up.
         assert_eq!(
             plan.instances[&InstanceId(0)].preferred_origin,
             Anchor { x: 24, y: 1, z: 28 }
@@ -4351,7 +4370,7 @@ mod tests {
         );
         assert_eq!(
             plan.instances[&InstanceId(2)].preferred_origin,
-            Anchor { x: 24, y: 1, z: 28 }
+            Anchor { x: 24, y: 6, z: 28 }
         );
 
         // Three 1x2x1 torch envelopes; their union spans forward 12..=25,
@@ -4366,6 +4385,33 @@ mod tests {
                 vertical_trunk_lanes: 0,
             }
         );
+    }
+
+    /// A deck is only a plan until the poses say so: every macro's
+    /// `preferred_origin.y` is its own deck's derived ground, which is what
+    /// carries a primitive up without any second Y field to override.
+    ///
+    /// The upper column stands at exactly the same X/Z as the lowest one --
+    /// deck 1 restarts at the projected forward start -- so Y is the only
+    /// thing keeping the two apart, and the assertion below is the whole
+    /// separation.
+    #[test]
+    fn block_placement_uses_its_planned_deck_y_for_primitives_too() {
+        use super::*;
+        let plan = folded_two_deck_plan();
+
+        for (&id, pose) in &plan.instances {
+            let deck = plan.analysis.nodes[&id].deck;
+            assert_eq!(
+                pose.preferred_origin.y, plan.decks[&deck].ground,
+                "{id:?} stands off its own deck",
+            );
+        }
+
+        let lower = plan.instances[&InstanceId(0)].preferred_origin;
+        let upper = plan.instances[&InstanceId(2)].preferred_origin;
+        assert_eq!((lower.x, lower.z), (upper.x, upper.z));
+        assert!(upper.y > lower.y);
     }
 
     fn actual_block_footprint(
