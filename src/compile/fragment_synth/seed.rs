@@ -45,7 +45,7 @@ use crate::compile::fragment_synth::topology::{
 use crate::compile::geometry::{self, Anchor, CellFacing};
 use crate::compile::metrics::Fingerprint;
 use crate::compile::physical::{self, PortKind};
-use crate::compile::planner::{PortPlacements, PortRole};
+use crate::compile::planner::{IoFootprint, PortPlacements, PortRole};
 use crate::compile::routing::{
     DelayedComponent, DelayedOwner, NonEmptyRouteSinks, PhysicalReservationKind,
     PhysicalReservationOwner, PhysicalReservations, PhysicalRouter, ReservationStore,
@@ -116,6 +116,12 @@ pub(crate) enum SeedError {
     },
     #[error("physical placement at {at:?} overlaps another seed component")]
     PlacementCollision { at: Anchor },
+    /// A post-plan move walked a body off the board a complete pin set
+    /// drew.  Only a site with no search of its own reports this: where
+    /// shells exist, an off-board anchor is skipped like an occupied one
+    /// and the existing [`SeedError::PlacementExhausted`] ends the search.
+    #[error("physical placement at {at:?} stands off the pinned IO footprint")]
+    PlacementOutsideIoFootprint { at: Anchor },
     #[error(
         "seed placement exhausted at instance {instance:?}, primitive {primitive:?}, radius {radius}"
     )]
@@ -788,6 +794,13 @@ impl SparseSeedBuilder {
         };
         candidate.validate_shape()?;
         candidate.validate_physical_ownership()?;
+        // The board, once, after the candidate is known to be well shaped
+        // and singly owned and before anything is emitted from it.  Every
+        // design passes here -- a flat compile through `build_attempt` and
+        // a hierarchical one through `certify_planned`, once its blocks
+        // have been dissolved in -- so there is exactly one place a cell
+        // standing off a completely pinned board is caught.
+        candidate.validate_io_footprint(input.lowered)?;
 
         let certification = CertificationConfig::from_search(services.search_config);
         let certified = services
@@ -1234,6 +1247,12 @@ fn place_blocks(
             .into_iter()
             .map(|(at, state)| PlacedBlock { at, state })
             .collect::<Vec<_>>();
+        // The offset is a horizontal optimisation control over a body that
+        // is already built: the exact cells above are what must stand on
+        // the board, and a block has no shell search to move it.
+        if let Some(at) = escaped_cell(&blocks, plan.io_footprint) {
+            return Err(SeedError::PlacementOutsideIoFootprint { at });
+        }
         claim_blocks(occupied, &blocks)?;
         let id = PrimitiveId {
             instance: block,
@@ -1428,6 +1447,7 @@ fn place_instances(
                     occupied,
                     sources,
                     targets,
+                    plan.io_footprint,
                 )?;
             }
             OutputSpec::Primitive(output) => {
@@ -1454,6 +1474,7 @@ fn place_instances(
                         &mut placement_search,
                         occupied,
                         sources,
+                        plan.io_footprint,
                     )?;
                 }
                 assign_primitive_targets(candidate, &instance, targets)?;
@@ -1540,6 +1561,7 @@ fn place_junction_instance(
     occupied: &mut BTreeSet<Anchor>,
     sources: &mut BTreeMap<PhysicalEndpointId, SourceGeometry>,
     targets: &mut BTreeMap<PhysicalSink, TargetGeometry>,
+    footprint: Option<IoFootprint>,
 ) -> Result<(), SeedError> {
     let cells = vec![
         PlacedBlock {
@@ -1551,6 +1573,11 @@ fn place_junction_instance(
             state: compile::dust(),
         },
     ];
+    // A junction stands where the plan (and any override) put it, with no
+    // search to move it: off the board is a refusal.
+    if let Some(at) = escaped_cell(&cells, footprint) {
+        return Err(SeedError::PlacementOutsideIoFootprint { at });
+    }
     claim_blocks(occupied, &cells)?;
     candidate.junctions.insert(
         instance.id,
@@ -1622,6 +1649,7 @@ fn place_junction_instance(
                     Some(instance.id),
                     occupied,
                     sources,
+                    footprint,
                 )?;
                 let input_index = instance
                     .expanded
@@ -1659,8 +1687,15 @@ fn place_primitive(
     logical_owner: Option<InstanceId>,
     occupied: &mut BTreeSet<Anchor>,
     sources: &mut BTreeMap<PhysicalEndpointId, SourceGeometry>,
+    footprint: Option<IoFootprint>,
 ) -> Result<(), SeedError> {
     let blocks = primitive_blocks(primitive, facing, anchor)?;
+    // A junction's own hardware has no shell search behind it: its anchor
+    // is fixed by the junction cell it hangs off, so an off-board body is
+    // refused here rather than moved.
+    if let Some(at) = escaped_cell(&blocks, footprint) {
+        return Err(SeedError::PlacementOutsideIoFootprint { at });
+    }
     commit_primitive(
         candidate,
         id,
@@ -1686,9 +1721,11 @@ fn place_primitive_searched(
     search: &mut PlacementSearch,
     occupied: &mut BTreeSet<Anchor>,
     sources: &mut BTreeMap<PhysicalEndpointId, SourceGeometry>,
+    footprint: Option<IoFootprint>,
 ) -> Result<(), SeedError> {
-    let (anchor, blocks) =
-        find_primitive_placement(primitive, facing, preferred, instance, id, search, occupied)?;
+    let (anchor, blocks) = find_primitive_placement(
+        primitive, facing, preferred, instance, id, search, occupied, footprint,
+    )?;
     commit_primitive(
         candidate,
         id,
@@ -1711,10 +1748,16 @@ fn find_primitive_placement(
     id: PrimitiveId,
     search: &mut PlacementSearch,
     occupied: &BTreeSet<Anchor>,
+    footprint: Option<IoFootprint>,
 ) -> Result<(Anchor, Vec<PlacedBlock>), SeedError> {
     for anchor in horizontal_manhattan_shells(preferred, search.max_radius) {
         let blocks = primitive_blocks(primitive, facing, anchor)?;
-        if blocks.iter().all(|block| !occupied.contains(&block.at)) {
+        // A shell candidate standing off the board is refused exactly like
+        // an occupied one: the search moves on, and only a search with no
+        // candidate left at all reports `PlacementExhausted`.
+        if blocks_fit_footprint(&blocks, footprint)
+            && blocks.iter().all(|block| !occupied.contains(&block.at))
+        {
             return Ok((anchor, blocks));
         }
         search.reject_choice(instance, id)?;
@@ -3009,6 +3052,28 @@ fn connection_input_index(connection: ConnectionId) -> u16 {
     }
 }
 
+/// The first cell of `blocks` standing off the board a complete pin set
+/// drew, in the list's own fixed order -- so two runs name the same cell.
+///
+/// `None` for the footprint is a partial or unpinned set: it draws no
+/// board, nothing can leave one, and every post-plan move stays exactly
+/// what it was before the caller's cells bounded anything.
+fn escaped_cell(blocks: &[PlacedBlock], footprint: Option<IoFootprint>) -> Option<Anchor> {
+    let footprint = footprint?;
+    blocks
+        .iter()
+        .map(|block| block.at)
+        .find(|at| !footprint.contains_xz(*at))
+}
+
+/// Whether every cell of `blocks` stands on that board.  The one
+/// containment question every post-plan movement site asks, over the exact
+/// `PlacedBlock` list that site already built -- no envelope is rebuilt and
+/// no second walk exists.
+fn blocks_fit_footprint(blocks: &[PlacedBlock], footprint: Option<IoFootprint>) -> bool {
+    escaped_cell(blocks, footprint).is_none()
+}
+
 fn claim_blocks(occupied: &mut BTreeSet<Anchor>, blocks: &[PlacedBlock]) -> Result<(), SeedError> {
     for block in blocks {
         if occupied.contains(&block.at) {
@@ -3167,6 +3232,7 @@ pub(crate) mod tests {
             },
             &mut search,
             &occupied,
+            None,
         )
         .unwrap();
 
@@ -3201,6 +3267,7 @@ pub(crate) mod tests {
             primitive,
             &mut search,
             &occupied,
+            None,
         )
         .unwrap_err();
 
@@ -3212,6 +3279,286 @@ pub(crate) mod tests {
                 radius: 4,
             } if actual == primitive
         ));
+    }
+
+    /// A plan literal carrying exactly the board and poses a test wants,
+    /// so the post-plan movement sites can be driven on their own -- the
+    /// placer's own bounding is `placement.rs`'s business, not theirs.
+    fn bounded_plan(
+        analysis: &SeedPlacementAnalysis,
+        instances: BTreeMap<InstanceId, PreferredInstancePose>,
+        footprint: Option<IoFootprint>,
+    ) -> SeedPlacementPlan {
+        SeedPlacementPlan {
+            frame: crate::compile::fragment_synth::placement::derive_frame(&BTreeMap::new()),
+            analysis: analysis.clone(),
+            window: LateralWindow::default(),
+            io_footprint: footprint,
+            instances,
+            automatic_inputs: BTreeMap::new(),
+            automatic_outputs: BTreeMap::new(),
+            fingerprint: canonical_fingerprint(b"bounded-movement-plan"),
+        }
+    }
+
+    /// The board a complete pin set drew bounds the shell search itself: an
+    /// anchor whose body would stand off it is skipped exactly like an
+    /// occupied one, and when no shell is on it the search ends in the
+    /// existing `PlacementExhausted`.
+    #[test]
+    fn bounded_post_plan_moves_never_cross_the_io_footprint_at_a_shell_candidate() {
+        let preferred = Anchor { x: 8, y: 4, z: 9 };
+        let instance = InstanceId(3);
+        let primitive = PrimitiveId {
+            instance,
+            node: crate::compile::fragment_synth::identity::TopologyNodeId(2),
+        };
+        let search = || PlacementSearch {
+            max_radius: 4,
+            max_backtracks: 100,
+            backtracks_used: 0,
+        };
+        let place = |footprint, search: &mut PlacementSearch| {
+            find_primitive_placement(
+                Primitive::Torch,
+                CellFacing::EAST,
+                preferred,
+                instance,
+                primitive,
+                search,
+                &BTreeSet::new(),
+                footprint,
+            )
+        };
+
+        // One cell of the torch's body at `preferred` stands past `max_x`,
+        // and nothing at all is occupied: only the board can move it.
+        let body = primitive_blocks(Primitive::Torch, CellFacing::EAST, preferred).unwrap();
+        let east_most = body.iter().map(|block| block.at.x).max().unwrap();
+        let board = IoFootprint {
+            min_x: east_most - 64,
+            max_x: east_most - 1,
+            min_z: preferred.z - 64,
+            max_z: preferred.z + 64,
+        };
+        let (anchor, blocks) = place(Some(board), &mut search()).unwrap();
+        assert_ne!(anchor, preferred);
+        assert!(blocks_fit_footprint(&blocks, Some(board)));
+
+        // The same anchor with no board -- a partial or unpinned pin set --
+        // is still the legacy first answer.
+        assert_eq!(place(None, &mut search()).unwrap().0, preferred);
+
+        // A board no shell reaches is the existing exhaustion refusal, not
+        // a new one.
+        let far = IoFootprint {
+            min_x: 1_000,
+            max_x: 1_040,
+            min_z: 1_000,
+            max_z: 1_040,
+        };
+        assert!(matches!(
+            place(Some(far), &mut search()).unwrap_err(),
+            SeedError::PlacementExhausted {
+                instance: InstanceId(3),
+                primitive: actual,
+                radius: 4,
+            } if actual == primitive
+        ));
+    }
+
+    /// An `InstancePlacementOverride` is a horizontal optimisation control,
+    /// and the board bounds it like every other post-plan move: an override
+    /// that parks the instance further off the board than any shell reaches
+    /// back ends in `PlacementExhausted`, while the same override with no
+    /// board is honoured to the cell.
+    #[test]
+    fn bounded_post_plan_moves_never_cross_the_io_footprint_at_an_instance_override() {
+        let netlist = not_netlist();
+        let library = Library::default_library();
+        let config = SearchConfig::checked_defaults();
+        let graph =
+            InstanceGraph::with_variants(&netlist, &library, &BTreeMap::new(), &[]).unwrap();
+        let analysis = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
+        let origin = Anchor { x: 20, y: 1, z: 20 };
+        let board = IoFootprint {
+            min_x: 0,
+            max_x: 40,
+            min_z: 0,
+            max_z: 40,
+        };
+        let place = |footprint, dx| {
+            let plan = bounded_plan(
+                &analysis,
+                BTreeMap::from([(
+                    InstanceId(0),
+                    PreferredInstancePose {
+                        preferred_origin: origin,
+                        facing: CellFacing::EAST,
+                    },
+                )]),
+                footprint,
+            );
+            let mut candidate =
+                ExpandedPhysicalCandidate::empty(graph.clone(), PortPlacements::default());
+            let mut occupied = BTreeSet::new();
+            let mut sources = BTreeMap::new();
+            let mut targets = BTreeMap::new();
+            place_instances(
+                &mut candidate,
+                &netlist,
+                &config,
+                &plan,
+                PlanTranslation::default(),
+                &BTreeMap::from([(
+                    InstanceId(0),
+                    InstancePlacementOverride {
+                        facing: CellFacing::EAST,
+                        dx,
+                        dz: 0,
+                    },
+                )]),
+                &mut occupied,
+                &mut sources,
+                &mut targets,
+            )
+            .map(|()| candidate)
+        };
+        let anchor = |candidate: &ExpandedPhysicalCandidate| {
+            candidate
+                .placements
+                .values()
+                .next()
+                .expect("the one instance is placed")
+                .anchor
+        };
+
+        assert!(matches!(
+            place(Some(board), 200).unwrap_err(),
+            SeedError::PlacementExhausted {
+                instance: InstanceId(0),
+                ..
+            }
+        ));
+        // A partial pin set draws no board at all, and the legacy move
+        // stands exactly where it asked to.
+        assert_eq!(
+            anchor(&place(IoFootprint::from_complete(2, [origin]), 200).unwrap()),
+            Anchor { x: 220, ..origin }
+        );
+        // Inside the board the override is honoured, not clamped.
+        assert_eq!(
+            anchor(&place(Some(board), 10).unwrap()),
+            Anchor { x: 30, ..origin }
+        );
+    }
+
+    /// A `BlockPlacementOffset` moves a whole stamped body, and the board
+    /// bounds that body cell by cell: there is no search to fall back on
+    /// here, so an offset that walks it off the board is the bounded
+    /// placement refusal, naming the first cell that left.
+    #[test]
+    fn bounded_post_plan_moves_never_cross_the_io_footprint_at_a_block_offset() {
+        let (library, config) = default_services_parts();
+        let lowered = crate::compile::lowering::lower_optimised(&not_netlist()).unwrap();
+        let compiled = crate::compile::fragment_synth::blocks::compile_block(
+            "not",
+            &lowered,
+            services(&library, &config),
+        )
+        .expect("the not gate compiles as a block");
+        let blocks = [compiled];
+        let inputs = vec!["a".to_string()];
+        let outputs = vec!["y".to_string()];
+        let planning = Netlist {
+            inputs: inputs.clone(),
+            outputs: outputs.clone(),
+            gates: vec![Gate {
+                name: "u0.0".into(),
+                inputs: inputs.clone(),
+                output: outputs[0].clone(),
+                kind: GateKind::Buf,
+            }],
+        };
+        let specs = [crate::compile::fragment_synth::instance_graph::BlockSpec {
+            name: "u0",
+            block: 0,
+            inputs: &inputs,
+            outputs: &outputs,
+        }];
+        let graph = InstanceGraph::with_blocks(&planning, &library, &specs).expect("parent graph");
+        let block_id = graph.blocks[0].id;
+        let origin = Anchor { x: 20, y: 1, z: 20 };
+        let board = IoFootprint {
+            min_x: 0,
+            max_x: 60,
+            min_z: 0,
+            max_z: 60,
+        };
+        let place = |footprint, dx| {
+            let mut candidate =
+                ExpandedPhysicalCandidate::empty(graph.clone(), PortPlacements::default());
+            let resolved =
+                ResolvedBlocks::resolve(&candidate.instances, ParentBlocks { compiled: &blocks })
+                    .expect("the block resolves");
+            let analysis =
+                analyse_instance_dag(&candidate.instances, &resolved.delays).expect("analysis");
+            let plan = bounded_plan(
+                &analysis,
+                BTreeMap::from([(
+                    block_id,
+                    PreferredInstancePose {
+                        preferred_origin: origin,
+                        facing: CellFacing::EAST,
+                    },
+                )]),
+                footprint,
+            );
+            let mut occupied = BTreeSet::new();
+            let mut sources = BTreeMap::new();
+            let mut targets = BTreeMap::new();
+            place_blocks(
+                &mut candidate,
+                &resolved,
+                &plan,
+                PlanTranslation::default(),
+                &BTreeMap::from([(block_id, BlockPlacementOffset { dx, dz: 0 })]),
+                &mut occupied,
+                &mut sources,
+                &mut targets,
+            )
+            .map(|_| candidate)
+        };
+        let body = |candidate: &ExpandedPhysicalCandidate| {
+            candidate.placements[&PrimitiveId {
+                instance: block_id,
+                node: TopologyNodeId(0),
+            }]
+                .blocks
+                .clone()
+        };
+
+        // On the board, the body stands where the offset put it.
+        let inside = place(Some(board), 0).expect("a body on the board stands");
+        assert!(blocks_fit_footprint(&body(&inside), Some(board)));
+
+        // A hundred cells east of a 61-cell board, every one of its cells
+        // has left, and the refusal names the first of them in the body's
+        // own fixed order.
+        let first = body(&inside)[0].at;
+        assert!(matches!(
+            place(Some(board), 100).unwrap_err(),
+            SeedError::PlacementOutsideIoFootprint { at } if at == Anchor { x: first.x + 100, ..first }
+        ));
+        // With no board that same offset is the legacy move.
+        let legacy = place(None, 100).expect("an unbounded body moves as it always did");
+        assert_eq!(
+            body(&legacy)[0].at,
+            Anchor {
+                x: first.x + 100,
+                ..first
+            }
+        );
     }
 
     fn not_netlist() -> Netlist {

@@ -259,6 +259,7 @@ pub(crate) fn terminal_for_seed_error(
         | SeedError::Candidate(_)
         | SeedError::InvalidPins(_)
         | SeedError::PlacementCollision { .. }
+        | SeedError::PlacementOutsideIoFootprint { .. }
         | SeedError::EmptyRoute
         | SeedError::Adapter(_)
         | SeedError::Emission(_)

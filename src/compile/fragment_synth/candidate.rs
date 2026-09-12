@@ -12,10 +12,11 @@ use crate::compile::fragment_synth::identity::{
 use crate::compile::fragment_synth::instance_graph::{
     InstanceDriver, InstanceGraph, InstanceRole, PhysicalDriver, PhysicalSink,
 };
+use crate::compile::fragment_synth::relocate;
 use crate::compile::fragment_synth::topology::{ConnectionSource, OutputSpec};
 use crate::compile::geometry::{Anchor, CellFacing};
 use crate::compile::metrics::{canonical_fingerprint, Fingerprint};
-use crate::compile::planner::{PortPin, PortPlacements, PortRole, RouteTerminalKind};
+use crate::compile::planner::{IoFootprint, PortPin, PortPlacements, PortRole, RouteTerminalKind};
 pub use crate::compile::routing::{
     DelayedComponent, DelayedOwner, PlacedBlock, RealisedRouteBranch, RealisedRouteTree,
     RouteTarget, TerminalRecord,
@@ -282,6 +283,8 @@ pub enum CandidateError {
     RouteSourceMismatch { route: RouteId, sink: RoutedSinkId },
     #[error("route {route:?} sink {sink:?} timing metadata does not match its owned path")]
     RouteTimingMismatch { route: RouteId, sink: RoutedSinkId },
+    #[error("candidate anchor {at:?} stands off the board a complete pin set draws")]
+    IoFootprintViolation { at: Anchor },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1012,6 +1015,39 @@ impl ExpandedPhysicalCandidate {
         }
         self.pin_contracts = resolved;
         self.pin_name_bindings = names;
+        Ok(())
+    }
+
+    /// Refuses the first coordinate this candidate owns that stands off the
+    /// board its caller's own cells drew.
+    ///
+    /// The board exists only when *every* declared port is pinned
+    /// ([`IoFootprint::from_complete`]): a partial or unpinned set makes no
+    /// statement about where the design may stand, so this is `Ok(())` for
+    /// it, and the design is exactly what it was before the type existed.
+    ///
+    /// Completeness is read off `pin_contracts` -- the name-free contracts
+    /// bound once at the netlist boundary -- against the netlist's own port
+    /// counts, so a candidate that reached here through a union (whose
+    /// `pins` are the parent's own clone) is asked the same question as a
+    /// flat one.
+    ///
+    /// The walk is [`relocate::anchors_of`], called once: the same
+    /// exhaustive field list `translate` moves. There is deliberately no
+    /// second anchor walker to drift from it, and no bounding box -- every
+    /// anchor is asked directly, and the first one off the board is named.
+    pub(crate) fn validate_io_footprint(&self, netlist: &Netlist) -> Result<(), CandidateError> {
+        let Some(footprint) = IoFootprint::from_complete(
+            netlist.inputs.len() + netlist.outputs.len(),
+            self.pin_contracts.values().map(|pin| pin.at),
+        ) else {
+            return Ok(());
+        };
+        for at in relocate::anchors_of(self) {
+            if !footprint.contains_xz(at) {
+                return Err(CandidateError::IoFootprintViolation { at });
+            }
+        }
         Ok(())
     }
 
@@ -1795,6 +1831,97 @@ mod tests {
         assert_eq!(
             candidate.validate_pin_contracts(),
             Err(CandidateError::PinContractMismatch { endpoint })
+        );
+    }
+
+    /// The last word on the board: with every declared port pinned, the
+    /// rectangle those caller cells draw is what the finished candidate
+    /// must stand on, and the walk `translate` already uses is what proves
+    /// it -- one escaped anchor is named, and a partial pin set draws no
+    /// board to escape from.
+    #[test]
+    fn final_complete_pin_footprint_walk_rejects_one_escaped_anchor() {
+        use crate::compile::fragment_synth::relocate::{self, Offset};
+        use crate::redstone::world::block::Facing;
+
+        let netlist = two_gate_netlist();
+        // A 21 x 21 board: `a`/`b` on its west edge, `x`/`y` on its east.
+        let board = |candidate: &mut ExpandedPhysicalCandidate| {
+            candidate
+                .pins
+                .pin("a", Anchor { x: 10, y: 1, z: 10 }, Facing::East)
+                .pin("b", Anchor { x: 10, y: 1, z: 30 }, Facing::East)
+                .pin("x", Anchor { x: 30, y: 1, z: 10 }, Facing::East)
+                .pin("y", Anchor { x: 30, y: 1, z: 30 }, Facing::East);
+            candidate.bind_pin_contracts(&netlist).unwrap();
+        };
+        let owned = |index: usize| {
+            two_gate_candidate().instances.instances[index]
+                .expanded
+                .topology
+                .primitives[0]
+                .id
+        };
+        let (first, second) = (owned(0), owned(1));
+        let escaped_at = Anchor { x: 31, y: 1, z: 20 };
+
+        let mut inside = two_gate_candidate();
+        board(&mut inside);
+        inside
+            .placements
+            .insert(first, placement(first, Anchor { x: 20, y: 1, z: 20 }));
+        assert_eq!(inside.validate_io_footprint(&netlist), Ok(()));
+
+        // One owned placement, one cell east of `max_x`.
+        let mut escaped = two_gate_candidate();
+        board(&mut escaped);
+        escaped
+            .placements
+            .insert(first, placement(first, escaped_at));
+        assert_eq!(
+            escaped.validate_io_footprint(&netlist),
+            Err(CandidateError::IoFootprintViolation { at: escaped_at })
+        );
+
+        // The same placement under a partial pin set: no board, no refusal.
+        let mut partial = two_gate_candidate();
+        partial
+            .pins
+            .pin("a", Anchor { x: 10, y: 1, z: 10 }, Facing::East);
+        partial.bind_pin_contracts(&netlist).unwrap();
+        partial
+            .placements
+            .insert(first, placement(first, escaped_at));
+        assert_eq!(partial.validate_io_footprint(&netlist), Ok(()));
+
+        // Hierarchy: a block's body reaches the parent's space through
+        // `relocate::translate`, and the union is the parent's own clone --
+        // the parent's `pins` and `pin_contracts` survive it and the
+        // block's are dropped (`union.rs:515`, `union.rs:680`).  The final
+        // walk therefore reads the parent's board and sees the stamped
+        // cells at their translated addresses.
+        let mut block = two_gate_candidate();
+        block
+            .placements
+            .insert(second, placement(second, Anchor { x: 0, y: 1, z: 0 }));
+        relocate::translate(
+            &mut block,
+            Offset {
+                dx: escaped_at.x,
+                dy: 0,
+                dz: escaped_at.z,
+            },
+        );
+        let mut union = inside.clone();
+        union.placements.extend(block.placements);
+        assert_eq!(
+            union.pins.iter().collect::<Vec<_>>(),
+            inside.pins.iter().collect::<Vec<_>>()
+        );
+        assert_eq!(union.pin_contracts, inside.pin_contracts);
+        assert_eq!(
+            union.validate_io_footprint(&netlist),
+            Err(CandidateError::IoFootprintViolation { at: escaped_at })
         );
     }
 

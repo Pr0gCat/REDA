@@ -968,6 +968,7 @@ fn move_owner(
     lateral: Facing,
     distance: i32,
 ) -> Result<bool, SeedPlacementError> {
+    let footprint = plan.io_footprint;
     let anchor = match owner {
         LayoutOwner::Instance(instance) => plan
             .instances
@@ -985,7 +986,17 @@ fn move_owner(
     let Some(anchor) = anchor else {
         return Ok(false);
     };
-    *anchor = checked_step_many(*anchor, lateral, distance)?;
+    let moved = checked_step_many(*anchor, lateral, distance)?;
+    // The board a complete pin set drew bounds a repair exactly as it
+    // bounded the plan: an owner whose track step would land off it is
+    // immovable, the same answer an already pinned boundary gives, so the
+    // caller's existing fallback -- and `ImmovableRepairOwner` when there
+    // is none -- carries the refusal unchanged.  The pose stays where it
+    // stood: a refused move leaves nothing half-applied.
+    if footprint.is_some_and(|footprint| !footprint.contains_xz(moved)) {
+        return Ok(false);
+    }
+    *anchor = moved;
     Ok(true)
 }
 
@@ -2774,6 +2785,84 @@ mod tests {
         assert_eq!(
             separated.instances[&InstanceId(0)],
             baseline.instances[&InstanceId(0)]
+        );
+    }
+
+    /// A repair move is a post-plan movement like any other: the board a
+    /// complete pin set drew bounds it too.  An owner whose track step
+    /// would leave the board is immovable -- the same answer an already
+    /// pinned boundary gives -- so the existing fallback and
+    /// `ImmovableRepairOwner` paths carry the refusal unchanged, and the
+    /// pose it refused is left exactly where it stood.
+    #[test]
+    fn bounded_post_plan_moves_never_cross_the_io_footprint_at_a_repair_move() {
+        use super::*;
+        let graph = two_stage_graph();
+        let analysis = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
+        let pins = BTreeMap::new();
+        let facts = BTreeMap::new();
+        let legacy = TopologyAwareSeedPlacer
+            .plan(SeedPlacementRequest {
+                graph: &graph,
+                analysis: &analysis,
+                pins: &pins,
+                block_facts: &facts,
+            })
+            .unwrap();
+        let owner = LayoutOwner::Instance(InstanceId(0));
+        let origin = legacy.instances[&InstanceId(0)].preferred_origin;
+        // A board that ends one cell short of where a two-track repair
+        // would put this instance, and a plan that carries it.
+        let board = IoFootprint {
+            min_x: origin.x - 64,
+            max_x: origin.x + 64,
+            min_z: origin.z - 64,
+            max_z: origin.z + 2 * TRACK_PITCH - 1,
+        };
+        let bounded = || SeedPlacementPlan {
+            io_footprint: Some(board),
+            ..legacy.clone()
+        };
+
+        let mut plan = bounded();
+        assert_eq!(
+            move_owner(&mut plan, owner, &pins, Facing::South, 2 * TRACK_PITCH),
+            Ok(false)
+        );
+        assert_eq!(
+            plan.instances[&InstanceId(0)].preferred_origin,
+            origin,
+            "a refused move leaves the pose untouched"
+        );
+
+        let mut plan = bounded();
+        assert_eq!(
+            require_move_owner(&mut plan, owner, &pins, Facing::South, 2 * TRACK_PITCH),
+            Err(SeedPlacementError::ImmovableRepairOwner { owner })
+        );
+
+        // One track still lands on the board, and still moves.
+        let mut plan = bounded();
+        require_move_owner(&mut plan, owner, &pins, Facing::South, TRACK_PITCH).unwrap();
+        assert_eq!(
+            plan.instances[&InstanceId(0)].preferred_origin,
+            Anchor {
+                z: origin.z + TRACK_PITCH,
+                ..origin
+            }
+        );
+
+        // A partial or unpinned set draws no board, and the same two-track
+        // move is the legacy one.
+        let mut plan = legacy.clone();
+        assert_eq!(plan.io_footprint, None);
+        require_move_owner(&mut plan, owner, &pins, Facing::South, 2 * TRACK_PITCH).unwrap();
+        assert_eq!(
+            plan.instances[&InstanceId(0)].preferred_origin,
+            Anchor {
+                z: origin.z + 2 * TRACK_PITCH,
+                ..origin
+            }
         );
     }
 
