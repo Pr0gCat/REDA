@@ -3027,6 +3027,28 @@ pub(crate) fn terminal_tunnel(pin: PortPin, role: PortRole) -> BTreeSet<Anchor> 
     cells
 }
 
+/// The part of a terminal's tunnel the board is actually held to: the raw
+/// tunnel, minus every cell outside the complete pin set's footprint and every
+/// cell below `y = 0`.
+///
+/// A tunnel is enumerated from the pin alone, so it reaches one cell past each
+/// edge of the board and one cell under the floor. Neither is REDA's to
+/// reserve: what lies beyond the footprint is the caller's own world, and
+/// `y = -1` is below every growable world. Clipping is therefore what makes the
+/// tunnel a claim rather than a wish, and it is done in one place because the
+/// cells this returns are exactly the ones that get reserved later --
+/// [`terminal_tunnel`] stays the raw eighteen.
+pub(crate) fn effective_tunnel(
+    pin: PortPin,
+    role: PortRole,
+    footprint: IoFootprint,
+) -> BTreeSet<Anchor> {
+    terminal_tunnel(pin, role)
+        .into_iter()
+        .filter(|cell| cell.y >= 0 && footprint.contains_xz(*cell))
+        .collect()
+}
+
 /// The ports somebody has decided about, each declared as a **terminal**: the
 /// caller's own cell, plus the one neighbour `toward` names where REDA's
 /// handover hardware stands.
@@ -3970,9 +3992,11 @@ pub(crate) fn validate_port_placements(
     // Two terminals may share none of their clearance. The collision rule
     // above compares the three cells a pin owns; this compares the tunnels
     // around them, which two pins a lawful distance apart can still share.
+    // Effective, not raw: a cell neither terminal may claim in the first place
+    // is not a conflict between them.
     let tunnels: Vec<BTreeSet<Anchor>> = roles
         .iter()
-        .map(|(_, pin, role)| terminal_tunnel(*pin, *role))
+        .map(|(_, pin, role)| effective_tunnel(*pin, *role, footprint))
         .collect();
     for (index, (port, pin, _)) in roles.iter().enumerate() {
         for other in &tunnels[index + 1..] {
@@ -12478,6 +12502,51 @@ mod tests {
         assert!(!input_cells.contains(&Anchor { x: 12, y: 2, z: 10 }));
         assert!(output_cells.contains(&Anchor { x: 19, y: 1, z: 9 }));
         assert!(!output_cells.contains(&Anchor { x: 18, y: 2, z: 10 }));
+    }
+
+    /// The tunnel a terminal is actually held to is the raw one clipped twice:
+    /// to the board the complete pin set drew, and to `y >= 0`. The raw
+    /// eighteen reach one cell past both, and neither is REDA's to claim --
+    /// beyond the footprint is the caller's own world, and `y = -1` is below
+    /// every growable world.
+    ///
+    /// Hand-derived: the pin sits on the board's south-west corner, so its
+    /// halo leaves the board at `z = 9` and leaves the world at `y = -1`. Of
+    /// the eighteen, the eight with `x` in 10..=11, `y` in 0..=1 and `z` in
+    /// 10..=11 survive.
+    #[test]
+    fn an_effective_tunnel_is_clipped_to_the_footprint_and_the_floor() {
+        let footprint = IoFootprint {
+            min_x: 10,
+            max_x: 20,
+            min_z: 10,
+            max_z: 20,
+        };
+        let pin = PortPin {
+            at: Anchor { x: 10, y: 0, z: 10 },
+            toward: Facing::East,
+        };
+
+        assert_eq!(
+            terminal_tunnel(pin, PortRole::Input).len(),
+            18,
+            "the raw tunnel stays raw -- clipping is the effective one's job"
+        );
+
+        let effective = effective_tunnel(pin, PortRole::Input, footprint);
+        assert_eq!(effective.len(), 8);
+        assert!(
+            effective.iter().all(|cell| cell.y >= 0),
+            "a tunnel cell under the floor was kept: {effective:?}"
+        );
+        assert!(
+            effective.iter().all(|cell| footprint.contains_xz(*cell)),
+            "a tunnel cell off the board was kept: {effective:?}"
+        );
+        // The two cells that name each clip, and one that survives both.
+        assert!(!effective.contains(&Anchor { x: 10, y: -1, z: 10 }));
+        assert!(!effective.contains(&Anchor { x: 10, y: 0, z: 9 }));
+        assert!(effective.contains(&Anchor { x: 11, y: 1, z: 11 }));
     }
 
     /// A pin that can never become a terminal is refused by name at the door,
