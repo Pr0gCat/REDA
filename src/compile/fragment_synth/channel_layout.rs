@@ -260,9 +260,53 @@ pub(crate) enum EscapeError {
     NoCorridor { endpoint: PhysicalEndpointId },
 }
 
-/// The lowest and highest forward level a member macro stands on, exactly
-/// as the kernel's own column pass derives them: the same filters, the same
-/// skip of a placement or junction that contributes no cell.
+/// The forward level a deck member stands on: `None` when the instance is
+/// not this deck's, or when the analysis has no facts for it.
+///
+/// The single definition of the membership filter, so no caller can drift
+/// from the columns the deck actually plans.
+fn member_level(
+    analysis: &SeedPlacementAnalysis,
+    members: &BTreeSet<InstanceId>,
+    instance: InstanceId,
+) -> Option<i64> {
+    members
+        .contains(&instance)
+        .then(|| analysis.nodes.get(&instance))
+        .flatten()
+        .map(|facts| facts.forward_level as i64)
+}
+
+/// Every cell this deck's members own, each with the forward level of the
+/// column it belongs to, in the order the columns are built from.
+///
+/// The single definition of the walk itself: an instance the analysis does
+/// not know, or one that owns no cell, is absent from both the columns and
+/// anything derived from them because it is absent here.
+fn for_each_member_cell(
+    candidate: &ExpandedPhysicalCandidate,
+    analysis: &SeedPlacementAnalysis,
+    members: &BTreeSet<InstanceId>,
+    mut visit: impl FnMut(i64, Anchor),
+) {
+    for (primitive, placement) in &candidate.placements {
+        if let Some(level) = member_level(analysis, members, primitive.instance) {
+            for block in &placement.blocks {
+                visit(level, block.at);
+            }
+        }
+    }
+    for junction in candidate.junctions.values() {
+        if let Some(level) = member_level(analysis, members, junction.id) {
+            for cell in &junction.cells {
+                visit(level, cell.at);
+            }
+        }
+    }
+}
+
+/// The lowest and highest forward level a member macro stands on, folded
+/// over the same walk the kernel builds its columns from.
 ///
 /// The legacy wrapper needs these before the kernel runs, because a boundary
 /// endpoint's level is defined relative to them.
@@ -271,36 +315,13 @@ fn member_levels(
     analysis: &SeedPlacementAnalysis,
     members: &BTreeSet<InstanceId>,
 ) -> Option<(i64, i64)> {
-    let level_of_instance = |instance: InstanceId| -> Option<i64> {
-        members
-            .contains(&instance)
-            .then(|| analysis.nodes.get(&instance))
-            .flatten()
-            .map(|facts| facts.forward_level as i64)
-    };
     let mut bounds: Option<(i64, i64)> = None;
-    let mut seen = |level: i64| {
+    for_each_member_cell(candidate, analysis, members, |level, _| {
         bounds = Some(match bounds {
             None => (level, level),
             Some((min, max)) => (min.min(level), max.max(level)),
         });
-    };
-    for (primitive, placement) in &candidate.placements {
-        if placement.blocks.is_empty() {
-            continue;
-        }
-        if let Some(level) = level_of_instance(primitive.instance) {
-            seen(level);
-        }
-    }
-    for junction in candidate.junctions.values() {
-        if junction.cells.is_empty() {
-            continue;
-        }
-        if let Some(level) = level_of_instance(junction.id) {
-            seen(level);
-        }
-    }
+    });
     bounds
 }
 
@@ -342,13 +363,7 @@ pub(crate) fn plan_channel_layout(
     // once here so the kernel is told them.  A level the analysis does not
     // know still refuses the endpoint by name, in the same net-then-sink
     // order the line pass used to reach it in.
-    let level_of_instance = |instance: InstanceId| -> Option<i64> {
-        members
-            .contains(&instance)
-            .then(|| analysis.nodes.get(&instance))
-            .flatten()
-            .map(|facts| facts.forward_level as i64)
-    };
+    let level_of_instance = |instance: InstanceId| member_level(analysis, &members, instance);
     let raw_level = |endpoint: PhysicalEndpointId| -> Option<i64> {
         match endpoint {
             PhysicalEndpointId::PrimaryInput(_) => Some(min_level - 1),
@@ -438,13 +453,7 @@ pub(crate) fn plan_deck_channel_layout(
     };
 
     // ---- columns -------------------------------------------------------
-    let level_of_instance = |instance: InstanceId| -> Option<i64> {
-        members
-            .contains(&instance)
-            .then(|| analysis.nodes.get(&instance))
-            .flatten()
-            .map(|facts| facts.forward_level as i64)
-    };
+    let level_of_instance = |instance: InstanceId| member_level(analysis, members, instance);
     let mut by_level = BTreeMap::<i64, Column>::new();
     let mut lateral_extent: Option<(i32, i32)> = None;
     let mut occupy = |by_level: &mut BTreeMap<i64, Column>, level: i64, at: Anchor| {
@@ -460,20 +469,9 @@ pub(crate) fn plan_deck_channel_layout(
             Some((min, max)) => (min.min(lateral), max.max(lateral)),
         });
     };
-    for (primitive, placement) in &candidate.placements {
-        if let Some(level) = level_of_instance(primitive.instance) {
-            for block in &placement.blocks {
-                occupy(&mut by_level, level, block.at);
-            }
-        }
-    }
-    for junction in candidate.junctions.values() {
-        if let Some(level) = level_of_instance(junction.id) {
-            for cell in &junction.cells {
-                occupy(&mut by_level, level, cell.at);
-            }
-        }
-    }
+    for_each_member_cell(candidate, analysis, members, |level, at| {
+        occupy(&mut by_level, level, at);
+    });
     let (min_level, max_level) = match (by_level.keys().next(), by_level.keys().last()) {
         (Some(&min), Some(&max)) => (min, max),
         _ => return Ok(ChannelLayout::default()),
