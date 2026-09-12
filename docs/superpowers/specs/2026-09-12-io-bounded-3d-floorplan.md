@@ -125,11 +125,11 @@ translates the already-certified block through the existing 3D `Offset` and
 
 A deck is a horizontal placement region inside the IO footprint. It has a
 typed reservation envelope containing its macro bodies and supports, mandatory
-air, channel reservations, and the planned horizontal route and riser
+air, channel reservations, and the planned horizontal route and vertical-trunk
 connection cells. The next deck does not use a fixed height constant. Its
 ground is the first higher integer Y translation for which its complete typed
 reservation envelope does not conflict with the union of lower decks and the
-private riser band. This reuses the existing connectivity and keep-out rules;
+private vertical-trunk band. This reuses the existing connectivity and keep-out rules;
 it neither assumes that `ground + 3` is always enough nor adds a second spacing
 model.
 
@@ -169,7 +169,7 @@ The existing topology analysis first produces macros in this stable order:
 (forward level, legalized lateral position, InstanceId)
 ```
 
-The usable lateral span excludes a reserved riser band. Existing lateral
+The usable lateral span excludes a reserved vertical-trunk band. Existing lateral
 folding converts an over-wide level into consecutive columns. Columns are then
 packed into decks in order:
 
@@ -190,9 +190,9 @@ When bounded mode fits in one deck, every macro stays on the base deck, but
 its X/Z position may improve through bounded dynamic spacing. Deck folding
 activates only when the complete IO footprint requires it.
 
-Riser demand and macro placement are resolved by one monotonic bounded loop:
+Vertical-trunk demand and macro placement are resolved by one monotonic bounded loop:
 
-1. Start with a zero-width riser band.
+1. Start with a zero-width vertical-trunk band.
 2. Run bounded lateral legalization and deck packing in the remaining span.
 3. Derive cross-deck nets in stable source/sink order. The initial trial gives
    each such net one stable lane; lanes are not reused.
@@ -203,7 +203,8 @@ Riser demand and macro placement are resolved by one monotonic bounded loop:
 
 Because the band width is monotonic and the footprint is finite, this loop
 terminates without a search over alternative layouts. Reserving the band
-before lateral legalization prevents a later riser from crossing a macro.
+before lateral legalization prevents a later vertical trunk from crossing a
+macro.
 
 Every post-plan horizontal movement obeys the same footprint dispatcher.
 `InstancePlacementOverride`, `BlockPlacementOffset`, and each candidate from
@@ -217,24 +218,29 @@ Each deck retains the existing horizontal channel layout at that deck's
 derived ground Y. Nets whose endpoints share a deck use the current path
 unchanged.
 
-Cross-deck nets receive deterministic riser lanes inside the footprint. Their
+Cross-deck nets receive deterministic vertical-trunk lanes inside the footprint. Their
 band is fixed by the placement loop before any final per-deck channel layout
 is materialized:
 
-1. Riser demand is ordered by physical source identity and sink identity.
+1. Vertical-trunk demand is ordered by physical source identity and sink identity.
 2. Each cross-deck net gets one lane on the existing row grid. Lane reuse is
    deferred until measurement shows that the simpler allocation is inadequate.
 3. The existing router builds the staircases and refreshes; a new 3D router is
    not introduced.
-4. Every riser cell is inserted under its net in the existing
+4. Every vertical-trunk cell is inserted under its net in the existing
    `ChannelLayout.private` map before that layout derives `closed`. The
    channel's existing `ground..=ground+3` closed slab remains a channel-local
-   routing rule, not a deck-height rule; riser cells are holes through that
+   routing rule, not a deck-height rule; vertical-trunk cells are holes through that
    slab. A deck's outer separation still uses the full dynamic union of macro,
-   mandatory-air, channel, horizontal-route, and riser-connection
+   mandatory-air, channel, horizontal-route, and vertical-trunk connection
    reservations from Section 3.3.
-5. Riser, terminal-tunnel, block keep-out, and channel reservations use the
+5. Vertical-trunk, terminal-tunnel, block keep-out, and channel reservations use the
    existing typed reservation path.
+
+The existing local `riser` closure in `channel_layout.rs` keeps its current
+meaning: it reserves closed floor support beneath one deck's staircase. This
+design calls the open cross-deck path a *vertical trunk* so the two opposite
+reservation roles cannot be confused.
 
 The footprint does not require a new `PhysicalReservations` API. After the
 deck plan determines the existing router's finite Y search range, bounded mode
@@ -263,7 +269,7 @@ this implementation.
 
 Hard-constrained deck folding is part of finding a legal placement. If a
 one-deck layout exceeds the IO footprint, the minimum legal multi-deck layout
-is accepted even when its required risers add delay. Bounds and correctness
+is accepted even when its required vertical trunks add delay. Bounds and correctness
 are hard requirements.
 
 The trial succeeds only if the bounded seven-segment's fill ratio,
@@ -285,11 +291,11 @@ Failures are typed at the layer that can act on them:
 - preplanning returns `PinRefusal::ClearanceConflict` when two terminal tunnels
   conflict;
 - `SeedPlacementError::MacroExceedsIoFootprint` when one macro is too large;
-- `SeedPlacementError::NoDeckLayoutFits` when no deck/riser layout fits;
+- `SeedPlacementError::NoDeckLayoutFits` when no deck/vertical-trunk layout fits;
 - `CandidateError::IoFootprintViolation` when final candidate ownership
   escapes the footprint;
-- `SeedRoutingFailure::RiserUnroutable`, surfaced through the existing
-  `SeedError::Routing`, when a riser fails under existing router limits.
+- `SeedRoutingFailure::VerticalTrunkUnroutable`, surfaced through the existing
+  `SeedError::Routing`, when a vertical trunk fails under existing router limits.
 
 Physical pin overlap discovered only after materialization remains a
 `CandidateError`; macro packing failures remain `SeedPlacementError`s. Existing
@@ -322,14 +328,14 @@ after the contracts are executable.
 
 - record the current pinned seven-segment metrics and fingerprint;
 - run the new bounded placer through plan-only mode, including dynamic spacing,
-  lateral legalization, the monotonic riser-band loop, and deck assignment;
+  lateral legalization, the monotonic vertical-trunk-band loop, and deck assignment;
 - report usable forward/lateral spans, order-preserving deck count, cross-deck
-  net count, and riser-lane count without routing;
+  net count, and vertical-trunk-lane count without routing;
 - do not start the large routing trial if geometry alone cannot place every
-  macro and riser;
+  macro and vertical trunk;
 - add one minimal physical two-deck fixture proving that the first
   non-conflicting typed reservation translation prevents accidental vertical
-  conductivity and still leaves the intended riser connected.
+  conductivity and still leaves the intended vertical trunk connected.
 
 ### Stage 1: footprint and clearance
 
@@ -352,7 +358,7 @@ after the contracts are executable.
 - add a narrow two-pin fixture that still spans both axes and must use two
   decks.
 
-### Stage 3: block deck folding and risers
+### Stage 3: block deck folding and vertical trunks
 
 - add block height and `dy` placement;
 - certify a small hierarchical fixture forced into at least two decks;
