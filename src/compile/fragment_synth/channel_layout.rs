@@ -45,6 +45,14 @@ fn entry_depth(geometry: &TargetGeometry) -> i32 {
     }
 }
 
+pub(crate) fn target_approach(geometry: &TargetGeometry) -> Anchor {
+    step_many(
+        geometry.terminal,
+        geometry.allowed_entry,
+        entry_depth(geometry),
+    )
+}
+
 /// One net as the seed routes it: a source and its ordered sinks.
 #[derive(Debug, Clone)]
 pub(crate) struct NetGeometry {
@@ -85,6 +93,8 @@ pub(crate) struct DeckNetGeometry {
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub(crate) enum ChannelLayoutError {
+    #[error("bounded channel materialization requires {required} cells but the limit is {limit}")]
+    MaterializationLimitExceeded { required: u64, limit: u64 },
     #[error("channel {channel} plan failed: {error}")]
     Plan {
         channel: usize,
@@ -131,6 +141,17 @@ pub(crate) enum ChannelLayoutError {
     },
 }
 
+fn charge_materialization(used: &mut u64, limit: u64) -> Result<(), ChannelLayoutError> {
+    if *used >= limit {
+        return Err(ChannelLayoutError::MaterializationLimitExceeded {
+            required: used.saturating_add(1),
+            limit,
+        });
+    }
+    *used += 1;
+    Ok(())
+}
+
 /// The cells the plan hands to the router.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub(crate) struct ChannelLayout {
@@ -159,7 +180,6 @@ impl ChannelLayout {
     /// than one deck, and its route sees all of them.  The lane report is
     /// not -- one `(deck, channel)` is planned exactly once -- so a
     /// duplicate key is a planning bug rather than something to overwrite.
-    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn merge(&mut self, other: ChannelLayout) {
         self.closed.extend(other.closed);
         for (owner, cells) in other.private {
@@ -305,8 +325,8 @@ fn for_each_member_cell(
     }
 }
 
-/// The lowest and highest forward level a member macro stands on, folded
-/// over the same walk the kernel builds its columns from.
+/// The lowest and highest forward coordinates occupied by one member level,
+/// folded over the same walk the kernel builds its columns from.
 ///
 /// The legacy wrapper needs these before the kernel runs, because a boundary
 /// endpoint's level is defined relative to them.
@@ -323,6 +343,31 @@ fn member_levels(
         });
     });
     bounds
+}
+
+pub(crate) fn deck_column_edges(
+    candidate: &ExpandedPhysicalCandidate,
+    analysis: &SeedPlacementAnalysis,
+    placement_frame: PlacementFrame,
+    members: &BTreeSet<InstanceId>,
+    level: i64,
+) -> Option<(i32, i32)> {
+    let frame = Frame {
+        forward: placement_frame.forward,
+        lateral: placement_frame.lateral,
+    };
+    let mut edges: Option<(i32, i32)> = None;
+    for_each_member_cell(candidate, analysis, members, |member_level, at| {
+        if member_level != level {
+            return;
+        }
+        let forward = frame.forward_of(at);
+        edges = Some(match edges {
+            None => (forward, forward),
+            Some((min, max)) => (min.min(forward), max.max(forward)),
+        });
+    });
+    edges
 }
 
 /// The flat, unbounded planner: one synthetic deck covering every instance
@@ -403,6 +448,7 @@ pub(crate) fn plan_channel_layout(
             sinks,
         });
     }
+    let mut materialized = 0;
     plan_deck_channel_layout(
         candidate,
         analysis,
@@ -414,6 +460,8 @@ pub(crate) fn plan_channel_layout(
         true,
         None,
         &deck_nets,
+        &BTreeMap::new(),
+        &mut materialized,
         router,
         reservations,
         limits,
@@ -443,6 +491,8 @@ pub(crate) fn plan_deck_channel_layout(
     include_boundaries: bool,
     footprint: Option<IoFootprint>,
     nets: &[DeckNetGeometry],
+    owned: &BTreeMap<PhysicalEndpointId, BTreeSet<Anchor>>,
+    materialized: &mut u64,
     router: &dyn PhysicalRouter,
     reservations: &mut PhysicalReservations,
     limits: RouterLimits,
@@ -611,11 +661,7 @@ pub(crate) fn plan_deck_channel_layout(
         let level = endpoint_level(endpoint, sink.level);
         let column =
             column_index(level).ok_or(ChannelLayoutError::UnplacedEndpoint { endpoint })?;
-        let approach = step_many(
-            geometry.terminal,
-            geometry.allowed_entry,
-            entry_depth(geometry),
-        );
+        let approach = target_approach(geometry);
         let (channel, row) = if geometry.allowed_entry == frame.forward {
             (column, frame.lateral_of(geometry.terminal))
         } else if frame.along_forward(geometry.allowed_entry) {
@@ -1284,8 +1330,17 @@ pub(crate) fn plan_deck_channel_layout(
 
     // ---- lanes per channel ---------------------------------------------
     let mut layout = ChannelLayout::default();
-    let mut private = |id: PhysicalEndpointId, cell: Anchor| {
+    let mut private = |id: PhysicalEndpointId, cell: Anchor| -> Result<(), ChannelLayoutError> {
+        if owned.get(&id).is_some_and(|cells| cells.contains(&cell)) {
+            return Ok(());
+        }
+        if footprint.is_some()
+            && !layout.private.get(&id).is_some_and(|cells| cells.contains(&cell))
+        {
+            charge_materialization(materialized, limits.max_queue_entries)?;
+        }
         layout.private.entry(id).or_default().insert(cell);
+        Ok(())
     };
     // The cell under a lane cell at a climb or descent row is the riser of
     // that staircase: it is reserved as the net's floor, never opened, so
@@ -1342,7 +1397,7 @@ pub(crate) fn plan_deck_channel_layout(
                 // A net that enters and leaves this channel on one row is a
                 // straight ground line; it needs no lane.
                 for forward in start..=end {
-                    private(id, frame.cell(forward, interval.0, ground));
+                    private(id, frame.cell(forward, interval.0, ground))?;
                 }
                 straight_rows.push(interval.0);
                 continue;
@@ -1474,13 +1529,13 @@ pub(crate) fn plan_deck_channel_layout(
             for segment in segments {
                 let lane = segment_forward(segment);
                 for lateral in segment.interval.0..=segment.interval.1 {
-                    private(net.id, frame.cell(lane, lateral, ground + 2));
+                    private(net.id, frame.cell(lane, lateral, ground + 2))?;
                 }
             }
             for &row in &net.source_rows {
                 let lane = source_lane_at(row);
                 for forward in start..=(lane - 2) {
-                    private(net.id, frame.cell(forward, row, ground));
+                    private(net.id, frame.cell(forward, row, ground))?;
                 }
                 // A crossing row on the start edge is a departure from the
                 // lane like any sink row, so it gets the same three
@@ -1496,14 +1551,14 @@ pub(crate) fn plan_deck_channel_layout(
                         continue;
                     }
                     for cell in climb_from_below(lane, departure) {
-                        private(net.id, cell);
+                        private(net.id, cell)?;
                     }
                     riser(
                         &mut layout.floors,
                         net.id,
                         frame.cell(lane, departure, ground + 1),
                     );
-                    private(net.id, frame.cell(lane - 2, departure, ground));
+                    private(net.id, frame.cell(lane - 2, departure, ground))?;
                 }
             }
             // A descent may leave the lane on the row itself or one cell to
@@ -1520,7 +1575,7 @@ pub(crate) fn plan_deck_channel_layout(
                         .insert(frame.cell(lane, departure, ground + 2));
                 }
                 for forward in (lane + 2)..=end {
-                    private(net.id, frame.cell(forward, row, ground));
+                    private(net.id, frame.cell(forward, row, ground))?;
                 }
                 // A side departure is only offered when no other row sits
                 // within two cells on that side; otherwise its cells would
@@ -1535,14 +1590,14 @@ pub(crate) fn plan_deck_channel_layout(
                         continue;
                     }
                     for cell in descend_to_above(lane, departure) {
-                        private(net.id, cell);
+                        private(net.id, cell)?;
                     }
                     riser(
                         &mut layout.floors,
                         net.id,
                         frame.cell(lane, departure, ground + 1),
                     );
-                    private(net.id, frame.cell(lane + 2, departure, ground));
+                    private(net.id, frame.cell(lane + 2, departure, ground))?;
                 }
             }
             for pair in segments.windows(2) {
@@ -1561,39 +1616,39 @@ pub(crate) fn plan_deck_channel_layout(
                 if from < to {
                     for departure in [jog - 1, jog, jog + 1] {
                         for cell in descend_to_above(from, departure) {
-                            private(net.id, cell);
+                            private(net.id, cell)?;
                         }
                         riser(
                             &mut layout.floors,
                             net.id,
                             frame.cell(from, departure, ground + 1),
                         );
-                        private(net.id, frame.cell(from + 2, departure, ground));
+                        private(net.id, frame.cell(from + 2, departure, ground))?;
                     }
                     for forward in (from + 2)..=(to - 2) {
-                        private(net.id, frame.cell(forward, jog, ground));
+                        private(net.id, frame.cell(forward, jog, ground))?;
                     }
                     for cell in climb_from_below(to, jog) {
-                        private(net.id, cell);
+                        private(net.id, cell)?;
                     }
                     riser(&mut layout.floors, net.id, frame.cell(to, jog, ground + 1));
                 } else {
                     for departure in [jog - 1, jog, jog + 1] {
                         for cell in descend_to_below(from, departure) {
-                            private(net.id, cell);
+                            private(net.id, cell)?;
                         }
                         riser(
                             &mut layout.floors,
                             net.id,
                             frame.cell(from, departure, ground + 1),
                         );
-                        private(net.id, frame.cell(from - 2, departure, ground));
+                        private(net.id, frame.cell(from - 2, departure, ground))?;
                     }
                     for forward in (to + 2)..=(from - 2) {
-                        private(net.id, frame.cell(forward, jog, ground));
+                        private(net.id, frame.cell(forward, jog, ground))?;
                     }
                     for cell in climb_from_above(to, jog) {
-                        private(net.id, cell);
+                        private(net.id, cell)?;
                     }
                     riser(&mut layout.floors, net.id, frame.cell(to, jog, ground + 1));
                 }
@@ -1611,7 +1666,7 @@ pub(crate) fn plan_deck_channel_layout(
         let column = &columns[net_lines.source.column];
         if let Some(stub) = stubs.get(&(net.owner, None)) {
             for &cell in &stub.cells {
-                private(net.owner, cell);
+                private(net.owner, cell)?;
             }
             layout
                 .floors
@@ -1629,14 +1684,14 @@ pub(crate) fn plan_deck_channel_layout(
                 private(
                     net.owner,
                     frame.cell(forward, net_lines.source.row, ground),
-                );
+                )?;
             }
         } else {
             for distance in 1..=3 {
                 private(
                     net.owner,
                     step_many(source.route_anchor, source.allowed_exit, distance),
-                );
+                )?;
             }
             let approach = step_many(source.route_anchor, source.allowed_exit, 3);
             let (from, to) = if net_lines.source.channel >= net_lines.source.column {
@@ -1648,14 +1703,14 @@ pub(crate) fn plan_deck_channel_layout(
                 private(
                     net.owner,
                     frame.cell(forward, net_lines.source.row, ground),
-                );
+                )?;
             }
         }
         for (index, sink) in net.sinks.iter().enumerate() {
             let geometry = &sink.geometry;
             if let Some(stub) = stubs.get(&(net.owner, Some(index))) {
                 for &cell in &stub.cells {
-                    private(net.owner, cell);
+                    private(net.owner, cell)?;
                 }
                 layout
                     .floors
@@ -1669,20 +1724,20 @@ pub(crate) fn plan_deck_channel_layout(
                 private(
                     net.owner,
                     step_many(geometry.terminal, geometry.allowed_entry, distance),
-                );
+                )?;
             }
             // The corridor from the column edge and the run to the approach.
             if let Some(escape) = escapes.get(&(net.owner, index)) {
                 let (lo, hi) = (escape.edge.min(escape.depth), escape.edge.max(escape.depth));
                 for forward in lo..=hi {
-                    private(net.owner, frame.cell(forward, escape.corridor, ground));
+                    private(net.owner, frame.cell(forward, escape.corridor, ground))?;
                 }
                 let (lo, hi) = (
                     escape.corridor.min(escape.natural),
                     escape.corridor.max(escape.natural),
                 );
                 for lateral in lo..=hi {
-                    private(net.owner, frame.cell(escape.depth, lateral, ground));
+                    private(net.owner, frame.cell(escape.depth, lateral, ground))?;
                 }
             }
         }
@@ -1694,7 +1749,7 @@ pub(crate) fn plan_deck_channel_layout(
         {
             if let Some(&row) = crossings.get(&(net.owner, column)) {
                 for forward in geometry.min_forward..=geometry.max_forward {
-                    private(net.owner, frame.cell(forward, row, ground));
+                    private(net.owner, frame.cell(forward, row, ground))?;
                 }
             }
         }
@@ -1733,7 +1788,12 @@ pub(crate) fn plan_deck_channel_layout(
         for lateral in closed_lateral_min..=closed_lateral_max {
             for y in ground..=(ground + 3) {
                 let cell = frame.cell(forward, lateral, y);
-                if !all_private.contains(&cell) {
+                if !all_private.contains(&cell)
+                    && !owned.values().any(|cells| cells.contains(&cell))
+                {
+                    if footprint.is_some() && !layout.closed.contains(&cell) {
+                        charge_materialization(materialized, limits.max_queue_entries)?;
+                    }
                     layout.closed.insert(cell);
                 }
             }
@@ -1922,6 +1982,8 @@ mod tests {
             true,
             None,
             &[],
+            &BTreeMap::new(),
+            &mut 0,
             &GuardedPhysicalRouter,
             &mut reservations,
             limits(),
@@ -1938,6 +2000,8 @@ mod tests {
             false,
             None,
             &[],
+            &BTreeMap::new(),
+            &mut 0,
             &GuardedPhysicalRouter,
             &mut reservations,
             limits(),
@@ -1974,6 +2038,35 @@ mod tests {
         let members = BTreeSet::from([InstanceId(0)]);
         let mut reservations = PhysicalReservations::new();
 
+        let error = plan_deck_channel_layout(
+            &candidate,
+            &analysis,
+            frame(),
+            LateralWindow::default(),
+            DeckId(0),
+            LOWER_GROUND,
+            &members,
+            true,
+            Some(footprint),
+            &[],
+            &BTreeMap::new(),
+            &mut 0,
+            &GuardedPhysicalRouter,
+            &mut PhysicalReservations::new(),
+            RouterLimits {
+                max_queue_entries: 1,
+                ..limits()
+            },
+        )
+        .expect_err("bounded slab materialization obeys the existing queue cap");
+        assert_eq!(
+            error,
+            ChannelLayoutError::MaterializationLimitExceeded {
+                required: 2,
+                limit: 1,
+            }
+        );
+
         let bounded = plan_deck_channel_layout(
             &candidate,
             &analysis,
@@ -1985,6 +2078,8 @@ mod tests {
             true,
             Some(footprint),
             &[],
+            &BTreeMap::new(),
+            &mut 0,
             &GuardedPhysicalRouter,
             &mut reservations,
             limits(),
@@ -2012,6 +2107,8 @@ mod tests {
             true,
             None,
             &[],
+            &BTreeMap::new(),
+            &mut 0,
             &GuardedPhysicalRouter,
             &mut reservations,
             limits(),

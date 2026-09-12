@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Task 9 is the first production caller of this Task-8 seam.
-
 //! Independent deterministic sparse-seed construction.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -17,7 +15,8 @@ use crate::compile::fragment_synth::certification::{
     CandidateCertificationError, CertifiedCandidate, ExpandedCandidateCertifier,
 };
 use crate::compile::fragment_synth::channel_layout::{
-    plan_channel_layout, ChannelLayout, ChannelLayoutError, NetGeometry,
+    deck_column_edges, plan_channel_layout, plan_deck_channel_layout, target_approach,
+    ChannelLayout, ChannelLayoutError, DeckNetGeometry, DeckSinkGeometry, NetGeometry,
 };
 use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
 use crate::compile::fragment_synth::identity::{
@@ -28,10 +27,10 @@ use crate::compile::fragment_synth::instance_graph::{
     DuplicateRequest, InstanceGraph, PhysicalDriver, PhysicalSink, SynthesisError,
 };
 use crate::compile::fragment_synth::placement::{
-    analyse_instance_dag, BlockFacts, SeedPlacementAnalysis, SeedPlacementPlan,
-    SeedPlacementRequest, SeedPlacer,
+    analyse_instance_dag, horizontal_unit, BlockFacts, DeckId, SeedPlacementAnalysis,
+    SeedPlacementPlan, SeedPlacementRequest, SeedPlacer, VerticalTrunkLane,
 };
-use crate::compile::fragment_synth::placement::{LateralWindow, LayoutRepair, PlacementFrame};
+use crate::compile::fragment_synth::placement::{LayoutRepair, PlacementFrame};
 use crate::compile::fragment_synth::realise::{
     CertificationError as PhysicalCertificationError, ExpandedAdapterError,
 };
@@ -60,6 +59,7 @@ use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
 use crate::redstone::world::block::{BlockKind, BlockState, Facing};
 
 const ORIGIN_WORLD_MARGIN: i32 = 16;
+const PERIMETER_OWNER: u32 = u32::MAX - 1;
 
 #[derive(Clone, Copy)]
 pub(crate) struct SeedInput<'a> {
@@ -184,6 +184,12 @@ impl From<CandidateCertificationError> for SeedError {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SeedRoutingContext {
+    Ordinary,
+    VerticalTrunkUnroutable,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SeedRoutingFailure {
     pub scheduled_index: usize,
@@ -191,6 +197,7 @@ pub(crate) struct SeedRoutingFailure {
     pub source: PhysicalEndpointId,
     pub sink: RoutedSinkId,
     pub category: RouterRefusalCategory,
+    pub context: SeedRoutingContext,
     pub limit_kind: Option<RouterLimitKind>,
     pub limit: Option<u64>,
     pub work_used: Option<u64>,
@@ -211,7 +218,11 @@ impl std::fmt::Display for SeedRoutingFailure {
             self.sink,
             self.sink_at,
             self.category
-        )
+        )?;
+        if self.context == SeedRoutingContext::VerticalTrunkUnroutable {
+            write!(formatter, " (vertical trunk unroutable)")?;
+        }
+        Ok(())
     }
 }
 
@@ -263,6 +274,7 @@ pub(crate) struct PlannedParent {
     /// must apply to stamp it.
     pub block_offsets: BTreeMap<InstanceId, Offset>,
     /// The planning netlist the parent was planned from.
+    #[allow(dead_code)]
     pub lowered: Netlist,
 }
 
@@ -617,6 +629,13 @@ impl PendingTarget {
             Self::Connection(_, geometry) | Self::DeclaredOutput(_, geometry) => *geometry,
         }
     }
+
+    fn endpoint(&self) -> PhysicalEndpointId {
+        match self {
+            Self::Connection(connection, _) => PhysicalEndpointId::Landing(*connection),
+            Self::DeclaredOutput(port, _) => PhysicalEndpointId::DeclaredOutput(*port),
+        }
+    }
 }
 
 impl SparseSeedBuilder {
@@ -805,10 +824,7 @@ impl SparseSeedBuilder {
             &mut candidate,
             services.router,
             services.search_config,
-            &placement_analysis,
-            placement_plan.frame,
-            placement_plan.window,
-            &placement_plan.fingerprint,
+            &placement_plan,
             &sources,
             &targets,
             &sockets,
@@ -2509,19 +2525,441 @@ fn route_target_slack(
     }
 }
 
+fn source_deck(source: PhysicalEndpointId, analysis: &SeedPlacementAnalysis) -> DeckId {
+    route_source_instance(source)
+        .and_then(|instance| analysis.nodes.get(&instance))
+        .map(|facts| facts.deck)
+        .unwrap_or(DeckId(0))
+}
+
+fn target_deck(target: &PendingTarget, analysis: &SeedPlacementAnalysis) -> DeckId {
+    route_target_instance(target)
+        .and_then(|instance| analysis.nodes.get(&instance))
+        .map(|facts| facts.deck)
+        .unwrap_or(DeckId(0))
+}
+
+fn trunk_end_flags(
+    source_deck: DeckId,
+    deck: DeckId,
+    lane: &VerticalTrunkLane,
+) -> (bool, bool) {
+    let active = lane.first_deck < lane.last_deck
+        && lane.first_deck <= deck
+        && deck <= lane.last_deck;
+    (
+        active && source_deck != deck,
+        active
+            && (deck == source_deck || (lane.first_deck < deck && deck < lane.last_deck)),
+    )
+}
+
+fn real_leg_y_intervals(
+    schedule: &RouteSchedule<PendingTarget>,
+    sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
+) -> Result<Vec<(i32, i32)>, SeedError> {
+    let mut intervals = Vec::new();
+    for route in &schedule.routes {
+        let source = sources
+            .get(&route.source)
+            .ok_or(SeedError::Incomplete("route source geometry"))?;
+        for target in &route.targets {
+            let approach = target_approach(&target.geometry());
+            intervals.push((
+                source.route_anchor.y.min(approach.y),
+                source
+                    .route_anchor
+                    .y
+                    .max(approach.y)
+                    .checked_add(3)
+                    .ok_or(SeedError::Incomplete("footprint perimeter coordinate overflow"))?,
+            ));
+        }
+    }
+    intervals.sort_unstable();
+    let mut merged: Vec<(i32, i32)> = Vec::new();
+    for (lo, hi) in intervals {
+        if merged
+            .last()
+            .is_some_and(|last| i64::from(lo) <= i64::from(last.1) + 1)
+        {
+            let last = merged.last_mut().expect("the interval was just observed");
+            last.1 = last.1.max(hi);
+        } else {
+            merged.push((lo, hi));
+        }
+    }
+    Ok(merged)
+}
+
+fn bounded_materialization_cells(
+    plan: &SeedPlacementPlan,
+    schedule: &RouteSchedule<PendingTarget>,
+    sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
+) -> Result<u64, SeedError> {
+    let Some(footprint) = plan.io_footprint else {
+        return Ok(0);
+    };
+    let intervals = real_leg_y_intervals(schedule, sources)?;
+    let rows = intervals.iter().fold(0_u128, |rows, &(lo, hi)| {
+        rows.saturating_add((i64::from(hi) - i64::from(lo) + 1) as u128)
+    });
+    let span = |lo: i32, hi: i32| u128::try_from(i64::from(hi) - i64::from(lo) + 1).unwrap_or(0);
+    let perimeter = if rows == 0 {
+        0
+    } else {
+        let min_x = footprint.min_x.checked_sub(1).filter(|&x| x >= 0);
+        let min_z = footprint.min_z.checked_sub(1).filter(|&z| z >= 0);
+        let max_x = footprint
+            .max_x
+            .checked_add(1)
+            .ok_or(SeedError::Incomplete("footprint perimeter coordinate overflow"))?;
+        let max_z = footprint
+            .max_z
+            .checked_add(1)
+            .ok_or(SeedError::Incomplete("footprint perimeter coordinate overflow"))?;
+        rows.saturating_mul(
+            span(footprint.min_x.max(0), footprint.max_x)
+                .saturating_mul(u128::from(min_z.is_some()) + u128::from(max_z >= 0))
+                + span(footprint.min_z.max(0), footprint.max_z)
+                    .saturating_mul(u128::from(min_x.is_some()) + u128::from(max_x >= 0)),
+        )
+    };
+    let mut trunks = 0_u128;
+    for lane in plan.vertical_trunks.values() {
+        let first = plan
+            .decks
+            .get(&lane.first_deck)
+            .ok_or(SeedError::Incomplete("vertical trunk first deck"))?
+            .ground;
+        let last = plan
+            .decks
+            .get(&lane.last_deck)
+            .ok_or(SeedError::Incomplete("vertical trunk last deck"))?
+            .max_y;
+        trunks = trunks.saturating_add(
+            span(lane.min_forward, lane.max_forward)
+                .saturating_mul(3)
+                .saturating_mul(span(first, last)),
+        );
+    }
+    Ok(perimeter.saturating_add(trunks).min(u128::from(u64::MAX)) as u64)
+}
+
+fn bounded_materialization_start(
+    plan: &SeedPlacementPlan,
+    schedule: &RouteSchedule<PendingTarget>,
+    sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
+    limit: u64,
+) -> Result<u64, SeedError> {
+    let required = bounded_materialization_cells(plan, schedule, sources)?;
+    if required > limit {
+        return Err(ChannelLayoutError::MaterializationLimitExceeded { required, limit }.into());
+    }
+    Ok(required)
+}
+
+fn reserve_footprint_perimeter(
+    footprint: Option<IoFootprint>,
+    schedule: &RouteSchedule<PendingTarget>,
+    sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
+    reservations: &mut PhysicalReservations,
+) -> Result<(), SeedError> {
+    let Some(footprint) = footprint else {
+        return Ok(());
+    };
+    let intervals = real_leg_y_intervals(schedule, sources)?;
+    if intervals.is_empty() {
+        return Ok(());
+    }
+    let min_x = footprint.min_x.checked_sub(1).filter(|&x| x >= 0);
+    let min_z = footprint.min_z.checked_sub(1).filter(|&z| z >= 0);
+    let max_x = footprint
+        .max_x
+        .checked_add(1)
+        .ok_or(SeedError::Incomplete("footprint perimeter coordinate overflow"))?;
+    let max_z = footprint
+        .max_z
+        .checked_add(1)
+        .ok_or(SeedError::Incomplete("footprint perimeter coordinate overflow"))?;
+    let mut reserve = |cell| {
+        if reservations.get(&cell).is_none() {
+            reservations.reserve(
+                cell,
+                PhysicalReservationOwner::KeepOut(PERIMETER_OWNER),
+                PhysicalReservationKind::KeepOut,
+            );
+        }
+    };
+    for (lo, hi) in intervals {
+        for y in lo..=hi {
+            if let Some(z) = min_z {
+                for x in footprint.min_x.max(0)..=footprint.max_x {
+                    reserve(Anchor { x, y, z });
+                }
+            }
+            if max_z >= 0 {
+                for x in footprint.min_x.max(0)..=footprint.max_x {
+                    reserve(Anchor { x, y, z: max_z });
+                }
+            }
+            if let Some(x) = min_x {
+                for z in footprint.min_z.max(0)..=footprint.max_z {
+                    reserve(Anchor { x, y, z });
+                }
+            }
+            if max_x >= 0 {
+                for z in footprint.min_z.max(0)..=footprint.max_z {
+                    reserve(Anchor { x: max_x, y, z });
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn plan_deck_channels(
+    candidate: &ExpandedPhysicalCandidate,
+    plan: &SeedPlacementPlan,
+    schedule: &RouteSchedule<PendingTarget>,
+    sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
+    materialized: &mut u64,
+    router: &dyn PhysicalRouter,
+    reservations: &mut PhysicalReservations,
+    limits: crate::compile::routing::RouterLimits,
+) -> Result<(ChannelLayout, BTreeSet<RoutedSinkId>), SeedError> {
+    if plan.io_footprint.is_none() {
+        let real_nets = schedule
+            .routes
+            .iter()
+            .map(|route| {
+                Ok(NetGeometry {
+                    source: route.source,
+                    source_geometry: *sources
+                        .get(&route.source)
+                        .ok_or(SeedError::Incomplete("route source geometry"))?,
+                    sinks: route
+                        .targets
+                        .iter()
+                        .map(|target| (target.endpoint(), target.geometry()))
+                        .collect(),
+                })
+            })
+            .collect::<Result<Vec<_>, SeedError>>()?;
+        let layout = plan_channel_layout(
+            candidate,
+            &plan.analysis,
+            plan.frame,
+            plan.window,
+            &real_nets,
+            router,
+            reservations,
+            limits,
+        )?;
+        return Ok((layout, BTreeSet::new()));
+    }
+
+    let (fx, fz) = horizontal_unit(plan.frame.forward);
+    let (lx, lz) = horizontal_unit(plan.frame.lateral);
+    let origin_forward = crate::compile::fragment_synth::placement::project_horizontal(
+        plan.frame.origin.x,
+        plan.frame.origin.z,
+        plan.frame.forward,
+    );
+    let origin_lateral = crate::compile::fragment_synth::placement::project_horizontal(
+        plan.frame.origin.x,
+        plan.frame.origin.z,
+        plan.frame.lateral,
+    );
+    let cell = |forward: i32, lateral: i32, y: i32| Anchor {
+        x: fx * forward + lx * lateral,
+        y,
+        z: fz * forward + lz * lateral,
+    };
+    let mut owned = BTreeMap::<PhysicalEndpointId, BTreeSet<Anchor>>::new();
+    for lane in plan.vertical_trunks.values() {
+        let first = plan.decks[&lane.first_deck].ground;
+        let last = plan.decks[&lane.last_deck].max_y;
+        let lateral = origin_lateral + lane.lateral;
+        for forward in (origin_forward + lane.min_forward)..=(origin_forward + lane.max_forward) {
+            for lateral in (lateral - 1)..=(lateral + 1) {
+                for y in first..=last {
+                    owned.entry(lane.owner).or_default().insert(cell(forward, lateral, y));
+                }
+            }
+        }
+    }
+
+    let mut cross_deck_sinks = BTreeSet::new();
+    for (route_index, route) in schedule.routes.iter().enumerate() {
+        let route_id = RouteId(u32::try_from(route_index).map_err(|_| SeedError::IdentityOverflow)?);
+        let source_deck = source_deck(route.source, &plan.analysis);
+        for (ordinal, target) in route.targets.iter().enumerate() {
+            if target_deck(target, &plan.analysis) != source_deck {
+                cross_deck_sinks.insert(RoutedSinkId {
+                    route: route_id,
+                    ordinal: u16::try_from(ordinal).map_err(|_| SeedError::IdentityOverflow)?,
+                });
+            }
+        }
+    }
+
+    let mut merged = ChannelLayout::default();
+    for (&deck, deck_plan) in &plan.decks {
+        let members = plan
+            .analysis
+            .nodes
+            .iter()
+            .filter_map(|(&instance, facts)| (facts.deck == deck).then_some(instance))
+            .collect::<BTreeSet<_>>();
+        let Some(min_level) = members
+            .iter()
+            .filter_map(|id| plan.analysis.nodes.get(id))
+            .map(|facts| facts.forward_level as i64)
+            .min()
+        else {
+            continue;
+        };
+        let max_level = members
+            .iter()
+            .filter_map(|id| plan.analysis.nodes.get(id))
+            .map(|facts| facts.forward_level as i64)
+            .max()
+            .expect("a deck with a minimum member level has a maximum");
+        let (opening, _) = deck_column_edges(
+            candidate,
+            &plan.analysis,
+            plan.frame,
+            &members,
+            min_level,
+        )
+        .ok_or(SeedError::Incomplete("deck opening column edge"))?;
+        let (_, closing) = deck_column_edges(
+            candidate,
+            &plan.analysis,
+            plan.frame,
+            &members,
+            max_level,
+        )
+        .ok_or(SeedError::Incomplete("deck closing column edge"))?;
+        let mut deck_nets = Vec::new();
+        for route in &schedule.routes {
+            let source_deck = source_deck(route.source, &plan.analysis);
+            let lane = plan.vertical_trunks.get(&route.source);
+            let mut sinks = route
+                .targets
+                .iter()
+                .filter(|target| target_deck(target, &plan.analysis) == deck)
+                .map(|target| DeckSinkGeometry {
+                    endpoint: target.endpoint(),
+                    geometry: target.geometry(),
+                    level: route_target_instance(target)
+                        .and_then(|instance| plan.analysis.nodes.get(&instance))
+                        .map(|facts| facts.forward_level as i64)
+                        .unwrap_or(max_level + 1),
+                    synthetic_trunk: false,
+                })
+                .collect::<Vec<_>>();
+            let (source_is_synthetic_trunk, sink_is_synthetic_trunk) = lane
+                .map(|lane| trunk_end_flags(source_deck, deck, lane))
+                .unwrap_or((false, false));
+            if source_deck != deck
+                && sinks.is_empty()
+                && !source_is_synthetic_trunk
+                && !sink_is_synthetic_trunk
+            {
+                continue;
+            }
+            let (source, source_level) = if source_deck == deck {
+                (
+                    *sources
+                        .get(&route.source)
+                        .ok_or(SeedError::Incomplete("route source geometry"))?,
+                    route_source_instance(route.source)
+                        .and_then(|instance| plan.analysis.nodes.get(&instance))
+                        .map(|facts| facts.forward_level as i64)
+                        .unwrap_or(min_level - 1),
+                )
+            } else {
+                let lane = lane.ok_or(SeedError::Incomplete("vertical trunk lane"))?;
+                (
+                    SourceGeometry {
+                        route_anchor: cell(
+                            opening,
+                            origin_lateral + lane.lateral,
+                            deck_plan.ground,
+                        ),
+                        allowed_exit: plan.frame.forward.opposite(),
+                    },
+                    min_level,
+                )
+            };
+            if sink_is_synthetic_trunk {
+                let lane = lane.expect("an active trunk has a lane");
+                let terminal = cell(
+                    closing,
+                    origin_lateral + lane.lateral,
+                    deck_plan.ground,
+                );
+                sinks.push(DeckSinkGeometry {
+                    endpoint: route.source,
+                    geometry: TargetGeometry {
+                        terminal,
+                        allowed_entry: plan.frame.forward,
+                        support: Anchor { y: deck_plan.ground - 1, ..terminal },
+                        requirement: TerminalRequirement::DirectedDust,
+                    },
+                    level: max_level,
+                    synthetic_trunk: true,
+                });
+            }
+            if !sinks.is_empty() {
+                deck_nets.push(DeckNetGeometry {
+                    owner: route.source,
+                    source,
+                    source_level,
+                    source_is_synthetic_trunk,
+                    sinks,
+                });
+            }
+        }
+        merged.merge(plan_deck_channel_layout(
+            candidate,
+            &plan.analysis,
+            plan.frame,
+            plan.window,
+            deck,
+            deck_plan.ground,
+            &members,
+            deck == DeckId(0),
+            plan.io_footprint,
+            &deck_nets,
+            &owned,
+            materialized,
+            router,
+            reservations,
+            limits,
+        )?);
+    }
+    for (owner, mut cells) in owned {
+        merged.private.entry(owner).or_default().append(&mut cells);
+    }
+    Ok((merged, cross_deck_sinks))
+}
+
 fn route_all(
     candidate: &mut ExpandedPhysicalCandidate,
     router: &dyn PhysicalRouter,
     config: &SearchConfig,
-    analysis: &SeedPlacementAnalysis,
-    frame: PlacementFrame,
-    window: LateralWindow,
-    plan_fingerprint: &Fingerprint,
+    plan: &SeedPlacementPlan,
     sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
     targets: &BTreeMap<PhysicalSink, TargetGeometry>,
     sockets: &BTreeMap<ConnectionId, usize>,
     reservations: &mut PhysicalReservations,
 ) -> Result<(), SeedError> {
+    let analysis = &plan.analysis;
+    let frame = plan.frame;
     let mut grouped = BTreeMap::<PhysicalEndpointId, Vec<PendingTarget>>::new();
     for instance in &candidate.instances.instances {
         for connection in &instance.expanded.topology.connections {
@@ -2615,14 +3053,8 @@ fn route_all(
             .push(PendingTarget::DeclaredOutput(port, geometry));
     }
     for pending in grouped.values().flatten() {
-        let (endpoint, geometry) = match pending {
-            PendingTarget::Connection(connection, geometry) => {
-                (PhysicalEndpointId::Landing(*connection), *geometry)
-            }
-            PendingTarget::DeclaredOutput(port, geometry) => {
-                (PhysicalEndpointId::DeclaredOutput(*port), *geometry)
-            }
-        };
+        let endpoint = pending.endpoint();
+        let geometry = pending.geometry();
         if reservations.get(&geometry.terminal).is_none() {
             reservations.reserve(
                 geometry.terminal,
@@ -2714,49 +3146,27 @@ fn route_all(
 
     // The channel routing plan: every net gets its own lane, climb, descent,
     // and ground rows; everything else in the channels is closed.
-    let nets = schedule
-        .routes
-        .iter()
-        .map(|scheduled_route| {
-            let source_geometry = *sources
-                .get(&scheduled_route.source)
-                .ok_or(SeedError::Incomplete("route source geometry"))?;
-            let sinks = scheduled_route
-                .targets
-                .iter()
-                .map(|target| {
-                    let endpoint = match target {
-                        PendingTarget::Connection(connection, _) => {
-                            PhysicalEndpointId::Landing(*connection)
-                        }
-                        PendingTarget::DeclaredOutput(port, _) => {
-                            PhysicalEndpointId::DeclaredOutput(*port)
-                        }
-                    };
-                    (endpoint, target.geometry())
-                })
-                .collect();
-            Ok(NetGeometry {
-                source: scheduled_route.source,
-                source_geometry,
-                sinks,
-            })
-        })
-        .collect::<Result<Vec<_>, SeedError>>()?;
-    let layout = plan_channel_layout(
+    let mut materialized = bounded_materialization_start(
+        plan,
+        &schedule,
+        sources,
+        config.router_limits.max_queue_entries,
+    )?;
+    reserve_footprint_perimeter(plan.io_footprint, &schedule, sources, reservations)?;
+    let (layout, cross_deck_sinks) = plan_deck_channels(
         candidate,
-        analysis,
-        frame,
-        window,
-        &nets,
+        plan,
+        &schedule,
+        sources,
+        &mut materialized,
         router,
         reservations,
         config.router_limits,
     )?;
     // Box stub staircases belong to their routes before any route runs,
     // ahead of the closed layers.
-    for (route_index, net) in nets.iter().enumerate() {
-        let Some(floors) = layout.floors.get(&net.source) else {
+    for (route_index, scheduled) in schedule.routes.iter().enumerate() {
+        let Some(floors) = layout.floors.get(&scheduled.source) else {
             continue;
         };
         let route = RouteId(u32::try_from(route_index).map_err(|_| SeedError::IdentityOverflow)?);
@@ -2850,7 +3260,8 @@ fn route_all(
                     source.route_anchor,
                     &sinks,
                     &failure,
-                    plan_fingerprint,
+                    &plan.fingerprint,
+                    routing_context(&failure, &sinks, &cross_deck_sinks),
                 )));
             }
         };
@@ -2943,16 +3354,11 @@ fn reserve_source_refresh(
     Ok(())
 }
 
-fn seed_routing_failure(
-    scheduled_index: usize,
-    route: RouteId,
-    source: PhysicalEndpointId,
-    source_at: Anchor,
-    sinks: &NonEmptyRouteSinks,
+fn explicit_router_failure_sink(
     failure: &RouterFailure,
-    plan_fingerprint: &Fingerprint,
-) -> SeedRoutingFailure {
-    let explicit_sink = match failure {
+    sinks: &NonEmptyRouteSinks,
+) -> Option<RoutedSinkId> {
+    match failure {
         RouterFailure::RouterLimitExceeded { sink, .. }
         | RouterFailure::NoLocalRoute { sink, .. }
         | RouterFailure::RingClosure { sink, .. } => Some(*sink),
@@ -2967,9 +3373,35 @@ fn seed_routing_failure(
                     ))
             })
             .map(|sink| sink.id),
-    };
+    }
+}
+
+fn routing_context(
+    failure: &RouterFailure,
+    sinks: &NonEmptyRouteSinks,
+    cross_deck_sinks: &BTreeSet<RoutedSinkId>,
+) -> SeedRoutingContext {
+    if explicit_router_failure_sink(failure, sinks)
+        .is_some_and(|sink| cross_deck_sinks.contains(&sink))
+    {
+        SeedRoutingContext::VerticalTrunkUnroutable
+    } else {
+        SeedRoutingContext::Ordinary
+    }
+}
+
+fn seed_routing_failure(
+    scheduled_index: usize,
+    route: RouteId,
+    source: PhysicalEndpointId,
+    source_at: Anchor,
+    sinks: &NonEmptyRouteSinks,
+    failure: &RouterFailure,
+    plan_fingerprint: &Fingerprint,
+    context: SeedRoutingContext,
+) -> SeedRoutingFailure {
     let fallback = &sinks.as_slice()[0];
-    let sink = explicit_sink.unwrap_or(fallback.id);
+    let sink = explicit_router_failure_sink(failure, sinks).unwrap_or(fallback.id);
     let sink_at = sinks
         .as_slice()
         .iter()
@@ -2991,6 +3423,7 @@ fn seed_routing_failure(
         source,
         sink,
         category: failure.category(),
+        context,
         limit_kind,
         limit,
         work_used,
@@ -3364,9 +3797,9 @@ pub(crate) mod tests {
     use crate::compile::fragment_synth::certification::CompleteCandidateCertifier;
     use crate::compile::fragment_synth::legacy_adapter::{LegacyCandidateAdapter, LegacyOracle};
     use crate::compile::fragment_synth::placement::{
-        deck_grounds, DeckId, DeckPlan, FloorplanMetrics, PreferredInstancePose,
-        SeedPlacementError, SeedPlacementPlan, SeedPlacementRequest, SeedPlacer,
-        TopologyAwareSeedPlacer,
+        deck_grounds, DeckId, DeckPlan, FloorplanMetrics, LateralWindow, NodeFacts,
+        PreferredInstancePose, SeedPlacementError, SeedPlacementPlan, SeedPlacementRequest, SeedPlacer,
+        TopologyAwareSeedPlacer, VerticalTrunkLane,
     };
     use crate::compile::metrics::canonical_fingerprint;
     use crate::compile::planner::{PinRefusal, PortPin};
@@ -3494,6 +3927,65 @@ pub(crate) mod tests {
                 cross_deck_nets: 0,
                 vertical_trunk_lanes: 0,
             },
+        }
+    }
+
+    fn one_cell_candidate(cells: &[(InstanceId, Anchor)]) -> ExpandedPhysicalCandidate {
+        let mut candidate = ExpandedPhysicalCandidate::empty(
+            InstanceGraph {
+                instances: Vec::new(),
+                assignments: Vec::new(),
+                primary_inputs: Vec::new(),
+                declared_outputs: Vec::new(),
+                blocks: Vec::new(),
+            },
+            PortPlacements::default(),
+        );
+        for &(instance, at) in cells {
+            let id = PrimitiveId {
+                instance,
+                node: TopologyNodeId(0),
+            };
+            candidate.placements.insert(
+                id,
+                PrimitivePlacement {
+                    id,
+                    variant: 0,
+                    facing: CellFacing::EAST,
+                    anchor: at,
+                    delayed: None,
+                    blocks: vec![PlacedBlock {
+                        at,
+                        state: crate::compile::dust(),
+                    }],
+                },
+            );
+        }
+        candidate
+    }
+
+    fn deck_analysis(entries: &[(InstanceId, u64, DeckId)]) -> SeedPlacementAnalysis {
+        SeedPlacementAnalysis {
+            order: entries.iter().map(|&(id, _, _)| id).collect(),
+            nodes: entries
+                .iter()
+                .map(|&(id, level, deck)| {
+                    (
+                        id,
+                        NodeFacts {
+                            predecessors: Vec::new(),
+                            successors: Vec::new(),
+                            forward_level: level,
+                            reverse_level: 0,
+                            head_ticks: 0,
+                            tail_ticks: 0,
+                            deck,
+                        },
+                    )
+                })
+                .collect(),
+            edges: Vec::new(),
+            critical_delay_ticks: 0,
         }
     }
 
@@ -4340,6 +4832,7 @@ pub(crate) mod tests {
             &sinks,
             &failure,
             &plan_fingerprint,
+            SeedRoutingContext::Ordinary,
         );
 
         assert_eq!(evidence.scheduled_index, 7);
@@ -4359,6 +4852,591 @@ pub(crate) mod tests {
         assert_eq!(evidence.plan_fingerprint, plan_fingerprint);
         assert_eq!(evidence.source_at, source_at);
         assert_eq!(evidence.sink_at, Anchor { x: 9, y: 2, z: 7 });
+        assert_eq!(evidence.context, SeedRoutingContext::Ordinary);
+        assert_eq!(
+            evidence.to_string(),
+            "scheduled route 7 (RouteId(3)) from PrimaryInput(PortId(2)) at Anchor { x: 2, y: 2, z: 7 } failed at RoutedSinkId { route: RouteId(3), ordinal: 0 } at Anchor { x: 9, y: 2, z: 7 } as InvalidRequest"
+        );
+    }
+
+    #[test]
+    fn cross_deck_refusal_names_its_context() {
+        let route = RouteId(3);
+        let source = PhysicalEndpointId::PrimaryInput(PortId(2));
+        let source_at = Anchor { x: 2, y: 2, z: 7 };
+        let sinks = one_typed_sink(route);
+        let failure = RouterFailure::RouterLimitExceeded {
+            route,
+            source,
+            sink: RoutedSinkId { route, ordinal: 0 },
+            kind: RouterLimitKind::NodeExpansions,
+            limit: 0,
+            work_used: 1,
+        };
+        let cross_deck = BTreeSet::from([RoutedSinkId { route, ordinal: 0 }]);
+        let evidence = seed_routing_failure(
+            7,
+            route,
+            source,
+            source_at,
+            &sinks,
+            &failure,
+            &canonical_fingerprint(b"cross-deck-refusal"),
+            routing_context(&failure, &sinks, &cross_deck),
+        );
+
+        assert_eq!(evidence.context, SeedRoutingContext::VerticalTrunkUnroutable);
+        assert_eq!(evidence.category, RouterRefusalCategory::InvalidRequest);
+        assert_eq!(evidence.limit_kind, Some(RouterLimitKind::NodeExpansions));
+        assert_eq!(
+            evidence.to_string(),
+            "scheduled route 7 (RouteId(3)) from PrimaryInput(PortId(2)) at Anchor { x: 2, y: 2, z: 7 } failed at RoutedSinkId { route: RouteId(3), ordinal: 0 } at Anchor { x: 9, y: 2, z: 7 } as InvalidRequest (vertical trunk unroutable)"
+        );
+        assert_eq!(
+            routing_context(
+                &RouterFailure::InvalidRequest {
+                    route,
+                    source,
+                    sink: None,
+                },
+                &sinks,
+                &cross_deck,
+            ),
+            SeedRoutingContext::Ordinary,
+            "a source-level refusal must not inherit the display fallback sink",
+        );
+    }
+
+    #[test]
+    fn footprint_perimeter_closes_only_the_rows_a_route_can_reach() {
+        let source = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let high_source = PhysicalEndpointId::PrimaryInput(PortId(1));
+        let target = PendingTarget::DeclaredOutput(
+            PortId(0),
+            TargetGeometry {
+                terminal: Anchor { x: 2, y: 4, z: 2 },
+                allowed_entry: Facing::Up,
+                support: Anchor { x: 2, y: 3, z: 2 },
+                requirement: TerminalRequirement::DirectedDust,
+            },
+        );
+        let schedule = RouteSchedule {
+            routes: vec![
+                crate::compile::fragment_synth::route_schedule::ScheduledRoute {
+                    source,
+                    targets: vec![target],
+                },
+                crate::compile::fragment_synth::route_schedule::ScheduledRoute {
+                    source: high_source,
+                    targets: vec![PendingTarget::DeclaredOutput(
+                        PortId(1),
+                        TargetGeometry {
+                            terminal: Anchor { x: 2, y: 20, z: 2 },
+                            allowed_entry: Facing::Up,
+                            support: Anchor { x: 2, y: 19, z: 2 },
+                            requirement: TerminalRequirement::DirectedDust,
+                        },
+                    )],
+                },
+            ],
+        };
+        let sources = BTreeMap::from([
+            (
+                source,
+                SourceGeometry {
+                    route_anchor: Anchor { x: 1, y: 2, z: 2 },
+                    allowed_exit: Facing::East,
+                },
+            ),
+            (
+                high_source,
+                SourceGeometry {
+                    route_anchor: Anchor { x: 1, y: 20, z: 2 },
+                    allowed_exit: Facing::East,
+                },
+            ),
+        ]);
+        let footprint = IoFootprint {
+            min_x: 1,
+            max_x: 3,
+            min_z: 1,
+            max_z: 3,
+        };
+        let mut complete = PhysicalReservations::new();
+        reserve_footprint_perimeter(Some(footprint), &schedule, &sources, &mut complete)
+            .expect("bounded perimeter");
+
+        for y in 2..=9 {
+            for x in 1..=3 {
+                for z in [0, 4] {
+                    assert_eq!(
+                        complete
+                            .get(&Anchor { x, y, z })
+                            .expect("reachable perimeter is closed")
+                            .owner,
+                        PhysicalReservationOwner::KeepOut(PERIMETER_OWNER)
+                    );
+                }
+            }
+            for z in 1..=3 {
+                for x in [0, 4] {
+                    assert_eq!(
+                        complete
+                            .get(&Anchor { x, y, z })
+                            .expect("reachable perimeter is closed")
+                            .owner,
+                        PhysicalReservationOwner::KeepOut(PERIMETER_OWNER)
+                    );
+                }
+            }
+        }
+        assert!(complete.get(&Anchor { x: 1, y: 10, z: 0 }).is_none());
+        assert!(complete.get(&Anchor { x: 1, y: 19, z: 0 }).is_none());
+        for y in 20..=25 {
+            assert!(complete.get(&Anchor { x: 1, y, z: 0 }).is_some());
+        }
+
+        let edge = IoFootprint { min_x: 0, ..footprint };
+        let mut non_negative = PhysicalReservations::new();
+        reserve_footprint_perimeter(Some(edge), &schedule, &sources, &mut non_negative)
+            .expect("world-edge perimeter");
+        assert!(non_negative.get(&Anchor { x: -1, y: 2, z: 1 }).is_none());
+
+        let mut partial = PhysicalReservations::new();
+        reserve_footprint_perimeter(None, &schedule, &sources, &mut partial)
+            .expect("partial pins keep the perimeter open");
+        assert!(partial.get(&Anchor { x: 1, y: 2, z: 0 }).is_none());
+
+        let route = RouteId(0);
+        let route_source = SourceGeometry {
+            route_anchor: Anchor { x: 1, y: 1, z: 2 },
+            allowed_exit: Facing::East,
+        };
+        let route_target = TargetGeometry {
+            terminal: Anchor { x: 5, y: 1, z: 2 },
+            allowed_entry: Facing::West,
+            support: Anchor { x: 6, y: 1, z: 2 },
+            requirement: TerminalRequirement::Repeater,
+        };
+        let route_schedule = RouteSchedule {
+            routes: vec![crate::compile::fragment_synth::route_schedule::ScheduledRoute {
+                source,
+                targets: vec![PendingTarget::DeclaredOutput(PortId(0), route_target)],
+            }],
+        };
+        let route_sources = BTreeMap::from([(source, route_source)]);
+        let route_sinks = NonEmptyRouteSinks::new(vec![RouteSink {
+            id: RoutedSinkId { route, ordinal: 0 },
+            endpoint: PhysicalEndpointId::DeclaredOutput(PortId(0)),
+            anchor: route_target.terminal,
+            allowed_entry: route_target.allowed_entry,
+            terminal: TerminalContract::Sink {
+                target: crate::compile::routing::RouteTarget::DeclaredOutput(PortId(0)),
+                support: route_target.support,
+                requirement: route_target.requirement,
+            },
+        }])
+        .unwrap();
+        let mut wall = PhysicalReservations::new();
+        for y in 1..=4 {
+            for z in 1..=3 {
+                wall.reserve(
+                    Anchor { x: 3, y, z },
+                    PhysicalReservationOwner::KeepOut(7),
+                    PhysicalReservationKind::KeepOut,
+                );
+            }
+        }
+        let empty = PhysicalReservations::new();
+        let route_request = |reservations| RouteRequest {
+            id: route,
+            source: RouteEndpoint {
+                id: source,
+                anchor: route_source.route_anchor,
+                allowed_exit: route_source.allowed_exit,
+                terminal: TerminalContract::Source {
+                    signal_strength: MAX_SIGNAL_STRENGTH,
+                },
+            },
+            sinks: &route_sinks,
+            reservations,
+            limits: SearchConfig::checked_defaults().router_limits,
+            no_refresh: None,
+        };
+        GuardedPhysicalRouter
+            .route(route_request(&empty))
+            .expect("the probe routes in an empty world");
+        GuardedPhysicalRouter
+            .route(route_request(&wall))
+            .expect("partial mode keeps the legacy leave-and-re-enter route");
+        let mut boxed = wall.clone();
+        reserve_footprint_perimeter(
+            Some(IoFootprint {
+                min_x: 1,
+                max_x: 5,
+                min_z: 1,
+                max_z: 3,
+            }),
+            &route_schedule,
+            &route_sources,
+            &mut boxed,
+        )
+        .expect("complete mode closes the board");
+        assert!(matches!(
+            GuardedPhysicalRouter.route(route_request(&boxed)),
+            Err(RouterFailure::NoLocalRoute { .. })
+        ));
+
+        let overflow = IoFootprint {
+            max_x: i32::MAX,
+            ..footprint
+        };
+        assert!(matches!(
+            reserve_footprint_perimeter(
+                Some(overflow),
+                &schedule,
+                &sources,
+                &mut PhysicalReservations::new(),
+            ),
+            Err(SeedError::Incomplete(
+                "footprint perimeter coordinate overflow"
+            ))
+        ));
+    }
+
+    #[test]
+    fn vertical_trunk_is_the_only_open_cross_deck_corridor() {
+        let ids = [InstanceId(0), InstanceId(1), InstanceId(2)];
+        let analysis = deck_analysis(&[
+            (ids[0], 0, DeckId(0)),
+            (ids[1], 1, DeckId(1)),
+            (ids[2], 2, DeckId(2)),
+        ]);
+        let mut candidate = one_cell_candidate(&[
+            (ids[0], Anchor { x: 8, y: 1, z: 4 }),
+            (ids[1], Anchor { x: 8, y: 6, z: 4 }),
+            (ids[2], Anchor { x: 8, y: 11, z: 4 }),
+        ]);
+        let owner = PhysicalEndpointId::PrimaryInput(PortId(0));
+        candidate.pin_contracts.insert(
+            owner,
+            PortPin {
+                at: Anchor { x: 0, y: 1, z: 4 },
+                toward: Facing::East,
+            },
+        );
+        let connection = ConnectionId::External {
+            instance: ids[2],
+            input_index: 0,
+        };
+        let middle_connection = ConnectionId::External {
+            instance: ids[1],
+            input_index: 0,
+        };
+        let target = TargetGeometry {
+            terminal: Anchor { x: 8, y: 11, z: 4 },
+            allowed_entry: Facing::West,
+            support: Anchor { x: 9, y: 10, z: 4 },
+            requirement: TerminalRequirement::DirectedDust,
+        };
+        let schedule = RouteSchedule {
+            routes: vec![crate::compile::fragment_synth::route_schedule::ScheduledRoute {
+                source: owner,
+                targets: vec![
+                    PendingTarget::Connection(connection, target),
+                    PendingTarget::Connection(
+                        middle_connection,
+                        TargetGeometry {
+                            terminal: Anchor { x: 8, y: 6, z: 4 },
+                            allowed_entry: Facing::West,
+                            support: Anchor { x: 9, y: 5, z: 4 },
+                            requirement: TerminalRequirement::DirectedDust,
+                        },
+                    ),
+                ],
+            }],
+        };
+        let frame = PlacementFrame {
+            forward: Facing::East,
+            lateral: Facing::South,
+            origin: Anchor { x: 0, y: 1, z: 0 },
+        };
+        let footprint = IoFootprint {
+            min_x: 0,
+            max_x: 30,
+            min_z: 0,
+            max_z: 20,
+        };
+        let mut plan = bounded_plan(&analysis, BTreeMap::new(), Some(footprint));
+        plan.frame = frame;
+        plan.window = LateralWindow {
+            min: Some(0),
+            max: Some(8),
+        };
+        plan.decks = BTreeMap::from([
+            (DeckId(0), DeckPlan { ground: 1, min_y: 0, max_y: 4 }),
+            (DeckId(1), DeckPlan { ground: 6, min_y: 5, max_y: 9 }),
+            (DeckId(2), DeckPlan { ground: 11, min_y: 10, max_y: 14 }),
+        ]);
+        plan.vertical_trunks = BTreeMap::from([(
+            owner,
+            VerticalTrunkLane {
+                owner,
+                lateral: 12,
+                min_forward: 0,
+                max_forward: 30,
+                first_deck: DeckId(0),
+                last_deck: DeckId(2),
+            },
+        )]);
+        let lane = &plan.vertical_trunks[&owner];
+        assert_eq!(
+            trunk_end_flags(DeckId(0), DeckId(0), lane),
+            (false, true),
+            "the source deck has the real source and a synthetic sink"
+        );
+        assert_eq!(
+            trunk_end_flags(DeckId(0), DeckId(1), lane),
+            (true, true),
+            "a transit deck has both synthetic ends"
+        );
+        assert_eq!(
+            trunk_end_flags(DeckId(0), DeckId(2), lane),
+            (true, false),
+            "the final sink deck has only the synthetic source"
+        );
+        assert_eq!(trunk_end_flags(DeckId(2), DeckId(2), lane), (false, true));
+        assert_eq!(trunk_end_flags(DeckId(2), DeckId(1), lane), (true, true));
+        assert_eq!(trunk_end_flags(DeckId(2), DeckId(0), lane), (true, false));
+        let sources = BTreeMap::from([(
+            owner,
+            SourceGeometry {
+                route_anchor: Anchor { x: 0, y: 1, z: 4 },
+                allowed_exit: Facing::East,
+            },
+        )]);
+        let error = bounded_materialization_start(&plan, &schedule, &sources, 1)
+            .expect_err("the existing queue cap bounds pre-routing materialization");
+        assert!(matches!(
+            error,
+            SeedError::ChannelLayout(ChannelLayoutError::MaterializationLimitExceeded {
+                required,
+                limit,
+            }) if required > limit && limit == 1
+        ));
+        let mut reservations = PhysicalReservations::new();
+        let router = CountingRouter::default();
+        let limits = SearchConfig::checked_defaults().router_limits;
+        let mut materialized = bounded_materialization_start(
+            &plan,
+            &schedule,
+            &sources,
+            limits.max_queue_entries,
+        )
+        .expect("the fixture fits the materialization cap");
+        let (layout, cross_deck) = plan_deck_channels(
+            &candidate,
+            &plan,
+            &schedule,
+            &sources,
+            &mut materialized,
+            &router,
+            &mut reservations,
+            limits,
+        )
+        .expect("three deck channels plan");
+
+        assert_eq!(router.calls.get(), 0, "synthetic trunk ends are not pin stubs");
+        assert_eq!(schedule.routes.len(), 1);
+        assert_eq!(schedule.routes[0].targets.len(), 2);
+        assert_eq!(schedule.routes[0].targets[0].endpoint(), PhysicalEndpointId::Landing(connection));
+        assert_eq!(
+            schedule.routes[0].targets[1].endpoint(),
+            PhysicalEndpointId::Landing(middle_connection)
+        );
+        assert_eq!(
+            cross_deck,
+            BTreeSet::from([
+                RoutedSinkId { route: RouteId(0), ordinal: 0 },
+                RoutedSinkId { route: RouteId(0), ordinal: 1 },
+            ])
+        );
+        let real_sinks = NonEmptyRouteSinks::new(vec![RouteSink {
+            id: RoutedSinkId {
+                route: RouteId(0),
+                ordinal: 0,
+            },
+            endpoint: PhysicalEndpointId::Landing(connection),
+            anchor: target.terminal,
+            allowed_entry: target.allowed_entry,
+            terminal: TerminalContract::Sink {
+                target: crate::compile::routing::RouteTarget::Connection(connection),
+                support: target.support,
+                requirement: target.requirement,
+            },
+        }])
+        .unwrap();
+        let limits = SearchConfig::checked_defaults().router_limits;
+        let refusal = GuardedPhysicalRouter
+            .route(RouteRequest {
+                id: RouteId(0),
+                source: RouteEndpoint {
+                    id: owner,
+                    anchor: sources[&owner].route_anchor,
+                    allowed_exit: sources[&owner].allowed_exit,
+                    terminal: TerminalContract::Source {
+                        signal_strength: MAX_SIGNAL_STRENGTH,
+                    },
+                },
+                sinks: &real_sinks,
+                reservations: &PhysicalReservations::new(),
+                limits: crate::compile::routing::RouterLimits {
+                    max_node_expansions: 0,
+                    ..limits
+                },
+                no_refresh: None,
+            })
+            .unwrap_err();
+        assert!(matches!(
+            refusal,
+            RouterFailure::RouterLimitExceeded {
+                kind: RouterLimitKind::NodeExpansions,
+                limit: 0,
+                work_used: 1,
+                ..
+            }
+        ));
+        assert_eq!(
+            routing_context(&refusal, &real_sinks, &cross_deck),
+            SeedRoutingContext::VerticalTrunkUnroutable
+        );
+        let corridor = layout.private.get(&owner).expect("the owner has a private trunk");
+        for x in 0..=30 {
+            for z in 11..=13 {
+                for y in 1..=14 {
+                    assert!(corridor.contains(&Anchor { x, y, z }));
+                }
+            }
+        }
+        assert!(corridor.is_disjoint(&layout.closed));
+        assert!(layout.lanes.keys().any(|(deck, _)| *deck == DeckId(1)));
+        for ground in [1, 6, 11] {
+            assert!(layout
+                .closed
+                .iter()
+                .any(|at| at.y == ground && at.z == 10));
+        }
+        assert!(layout.closed.iter().all(|at| footprint.contains_xz(*at)));
+        assert!(layout.private.values().flatten().all(|at| footprint.contains_xz(*at)));
+        assert!(layout
+            .floors
+            .values()
+            .flatten()
+            .all(|block| footprint.contains_xz(block.at)));
+        assert!(layout
+            .departures
+            .values()
+            .flatten()
+            .all(|at| footprint.contains_xz(*at)));
+    }
+
+    #[test]
+    fn deck_layouts_are_planned_in_ascending_deck_order() {
+        let ids = [InstanceId(0), InstanceId(1), InstanceId(2), InstanceId(3)];
+        let analysis = deck_analysis(&[
+            (ids[0], 0, DeckId(0)),
+            (ids[1], 1, DeckId(0)),
+            (ids[2], 2, DeckId(1)),
+            (ids[3], 3, DeckId(1)),
+        ]);
+        let candidate = one_cell_candidate(&[
+            (ids[0], Anchor { x: 4, y: 1, z: 4 }),
+            (ids[1], Anchor { x: 8, y: 1, z: 12 }),
+            (ids[2], Anchor { x: 4, y: 6, z: 4 }),
+            (ids[3], Anchor { x: 9, y: 6, z: 16 }),
+        ]);
+        let source = |instance| PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance,
+            node: TopologyNodeId(0),
+        });
+        let target = |instance, at| {
+            PendingTarget::Connection(
+                ConnectionId::External { instance, input_index: 0 },
+                TargetGeometry {
+                    terminal: at,
+                    allowed_entry: Facing::West,
+                    support: Anchor { x: at.x + 1, y: at.y - 1, z: at.z },
+                    requirement: TerminalRequirement::DirectedDust,
+                },
+            )
+        };
+        let schedule = RouteSchedule {
+            routes: vec![
+                crate::compile::fragment_synth::route_schedule::ScheduledRoute {
+                    source: source(ids[0]),
+                    targets: vec![target(ids[1], Anchor { x: 8, y: 1, z: 12 })],
+                },
+                crate::compile::fragment_synth::route_schedule::ScheduledRoute {
+                    source: source(ids[2]),
+                    targets: vec![target(ids[3], Anchor { x: 9, y: 6, z: 16 })],
+                },
+            ],
+        };
+        let footprint = IoFootprint { min_x: 0, max_x: 20, min_z: 0, max_z: 20 };
+        let mut plan = bounded_plan(&analysis, BTreeMap::new(), Some(footprint));
+        plan.frame = PlacementFrame {
+            forward: Facing::East,
+            lateral: Facing::South,
+            origin: Anchor { x: 0, y: 1, z: 0 },
+        };
+        plan.decks = BTreeMap::from([
+            (DeckId(0), DeckPlan { ground: 1, min_y: 0, max_y: 4 }),
+            (DeckId(1), DeckPlan { ground: 6, min_y: 5, max_y: 9 }),
+        ]);
+        let sources = BTreeMap::from([
+            (source(ids[0]), SourceGeometry { route_anchor: Anchor { x: 4, y: 1, z: 4 }, allowed_exit: Facing::East }),
+            (source(ids[2]), SourceGeometry { route_anchor: Anchor { x: 4, y: 6, z: 4 }, allowed_exit: Facing::East }),
+        ]);
+        let mut upper_only = plan.clone();
+        upper_only.decks.retain(|deck, _| *deck == DeckId(1));
+        let upper_error = plan_deck_channels(
+            &candidate,
+            &upper_only,
+            &schedule,
+            &sources,
+            &mut 0,
+            &GuardedPhysicalRouter,
+            &mut PhysicalReservations::new(),
+            SearchConfig::checked_defaults().router_limits,
+        )
+        .unwrap_err();
+        assert!(matches!(
+            upper_error,
+            SeedError::ChannelLayout(ChannelLayoutError::DeckChannelTooNarrow {
+                deck: DeckId(1),
+                ..
+            })
+        ));
+
+        let error = plan_deck_channels(
+            &candidate,
+            &plan,
+            &schedule,
+            &sources,
+            &mut 0,
+            &GuardedPhysicalRouter,
+            &mut PhysicalReservations::new(),
+            SearchConfig::checked_defaults().router_limits,
+        )
+        .unwrap_err();
+
+        assert!(matches!(
+            error,
+            SeedError::ChannelLayout(ChannelLayoutError::DeckChannelTooNarrow {
+                deck: DeckId(0),
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -4384,6 +5462,7 @@ pub(crate) mod tests {
             &sinks,
             &failure,
             &plan_fingerprint,
+            SeedRoutingContext::Ordinary,
         );
 
         assert_eq!(
