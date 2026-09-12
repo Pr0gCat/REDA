@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 use thiserror::Error;
 
+use crate::compile::fragment_synth::candidate::endpoint_for_driver;
 use crate::compile::fragment_synth::channel_plan::{
     bounded_turnaround_allowance, channel_width, lane_count, legacy_turnaround_allowance,
 };
@@ -58,6 +59,18 @@ pub(crate) struct DeckPlan {
     pub ground: i32,
     pub min_y: i32,
     pub max_y: i32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct VerticalTrunkLane {
+    pub owner: PhysicalEndpointId,
+    /// Frame-relative row-grid centre of the three-row corridor.
+    pub lateral: i32,
+    /// Inclusive frame-relative footprint span the corridor may use.
+    pub min_forward: i32,
+    pub max_forward: i32,
+    pub first_deck: DeckId,
+    pub last_deck: DeckId,
 }
 
 /// What the plan says about the volume it asks for, before any route is
@@ -238,6 +251,8 @@ pub(crate) struct SeedPlacementPlan {
     /// `DeckId(0)`, so this is one entry and the plan is the flat one it
     /// always was.
     pub decks: BTreeMap<DeckId, DeckPlan>,
+    /// One deterministic, unreused vertical corridor per cross-deck source.
+    pub vertical_trunks: BTreeMap<PhysicalEndpointId, VerticalTrunkLane>,
     /// What the plan asks of the board before any route is paid for: the
     /// density gate's two exact volumes and the deck/trunk counts.
     pub floorplan: FloorplanMetrics,
@@ -298,6 +313,13 @@ pub(crate) trait SeedPlacer {
 
 #[derive(Debug, Clone, Copy, Default)]
 pub(crate) struct TopologyAwareSeedPlacer;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum FrameOutcome {
+    Placed(SeedPlacementPlan),
+    BandTooNarrow { required: i32 },
+    NoFit,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct NetInterval {
@@ -449,20 +471,32 @@ impl TopologyAwareSeedPlacer {
         // keeps refusing on its first frame exactly as it always has.
         let mut refusal = None;
         for (index, frame) in candidates.into_iter().enumerate() {
-            match self.plan_in_frame(request, minimum_widths, frame, index == 0, footprint) {
-                Ok(Some(plan)) => return Ok(plan),
-                Ok(None) => {}
-                Err(error)
-                    if footprint.is_some()
-                        && matches!(
-                            error,
-                            SeedPlacementError::NoDeckLayoutFits
-                                | SeedPlacementError::LateralWindowTooNarrow { .. }
-                        ) =>
-                {
-                    refusal.get_or_insert(error);
+            let mut band = 0;
+            loop {
+                match self.plan_in_frame(
+                    request,
+                    minimum_widths,
+                    frame,
+                    index == 0,
+                    footprint,
+                    band,
+                ) {
+                    Ok(FrameOutcome::Placed(plan)) => return Ok(plan),
+                    Ok(FrameOutcome::BandTooNarrow { required }) => band = required,
+                    Ok(FrameOutcome::NoFit) => break,
+                    Err(error)
+                        if footprint.is_some()
+                            && matches!(
+                                error,
+                                SeedPlacementError::NoDeckLayoutFits
+                                    | SeedPlacementError::LateralWindowTooNarrow { .. }
+                            ) =>
+                    {
+                        refusal.get_or_insert(error);
+                        break;
+                    }
+                    Err(error) => return Err(error),
                 }
-                Err(error) => return Err(error),
             }
         }
         Err(refusal.unwrap_or(SeedPlacementError::NoFrameFits))
@@ -480,7 +514,8 @@ impl TopologyAwareSeedPlacer {
         frame: PlacementFrame,
         direct: bool,
         footprint: Option<IoFootprint>,
-    ) -> Result<Option<SeedPlacementPlan>, SeedPlacementError> {
+        band: i32,
+    ) -> Result<FrameOutcome, SeedPlacementError> {
         let analysis = request.analysis;
         let intervals = net_intervals(request.graph, analysis);
         let tracks = colour_intervals(&intervals);
@@ -595,14 +630,28 @@ impl TopologyAwareSeedPlacer {
         // in lateral order, into groups that do; each group becomes its own
         // column and the levels after it move up.  Every group is moved to
         // the window's first free lateral, on the row grid.
-        let window = lateral_window(frame, request.pins, footprint);
+        let full_window = lateral_window(frame, request.pins, footprint);
+        let mut window = full_window;
+        if footprint.is_some() && band != 0 {
+            window.max = Some(
+                window
+                    .max
+                    .expect("a complete footprint closes both lateral sides")
+                    .checked_sub(band)
+                    .ok_or(SeedPlacementError::CoordinateOverflow)?,
+            );
+        }
         let budget = window
             .width()
             .map(|width| width - 2 * WINDOW_MARGIN - ROW_GRID);
         let mut folded = analysis.clone();
         if let Some(budget) = budget {
             if budget < 1 {
-                return Ok(None);
+                return if footprint.is_some() {
+                    Err(SeedPlacementError::NoDeckLayoutFits)
+                } else {
+                    Ok(FrameOutcome::NoFit)
+                };
             }
             let mut shift = 0u64;
             let original_levels = level_bounds.keys().copied().collect::<Vec<_>>();
@@ -786,7 +835,7 @@ impl TopologyAwareSeedPlacer {
         if direct {
             if let Some((output_min, _)) = pinned_output_forward_extent(request, frame) {
                 if output_min > cursor && cursor + total > output_min {
-                    return Ok(None);
+                    return Ok(FrameOutcome::NoFit);
                 }
             }
         }
@@ -840,7 +889,7 @@ impl TopologyAwareSeedPlacer {
             _ => {
                 if let Some(limit) = limit {
                     if cursor + total + turnaround > limit {
-                        return Ok(None);
+                        return Ok(FrameOutcome::NoFit);
                     }
                 }
                 vec![DeckId(0); ordered_levels.len()]
@@ -917,7 +966,169 @@ impl TopologyAwareSeedPlacer {
             .copied()
             .zip(deck_grounds(frame.origin.y, &locals)?)
             .collect::<BTreeMap<DeckId, DeckPlan>>();
-        let floorplan = floorplan_metrics(&bounds, &frame_origins, &instance_decks, &decks)?;
+
+        let mut trunk_decks = BTreeMap::<PhysicalEndpointId, (DeckId, DeckId)>::new();
+        if footprint.is_some() {
+            for assignment in &request.graph.assignments {
+                let Some(owner) = endpoint_for_driver(&assignment.driver) else {
+                    continue;
+                };
+                let source_deck = match &assignment.driver {
+                    PhysicalDriver::PrimaryInput(_) => DeckId(0),
+                    PhysicalDriver::Instance(driver) => {
+                        instance_decks[&instance_driver_owner(driver)]
+                    }
+                };
+                let sink_deck = match assignment.sink {
+                    PhysicalSink::InstanceInput { instance, .. } => instance_decks[&instance],
+                    PhysicalSink::DeclaredOutput(_) => DeckId(0),
+                };
+                if source_deck == sink_deck {
+                    continue;
+                }
+                trunk_decks
+                    .entry(owner)
+                    .and_modify(|(first, last)| {
+                        *first = (*first).min(source_deck).min(sink_deck);
+                        *last = (*last).max(source_deck).max(sink_deck);
+                    })
+                    .or_insert((source_deck.min(sink_deck), source_deck.max(sink_deck)));
+            }
+        }
+
+        let mut vertical_trunks = BTreeMap::new();
+        if !trunk_decks.is_empty() {
+            let demand = i32::try_from(trunk_decks.len())
+                .ok()
+                .and_then(|count| count.checked_mul(ROW_GRID))
+                .ok_or(SeedPlacementError::CoordinateOverflow)?;
+            if band < demand {
+                return Ok(FrameOutcome::BandTooNarrow {
+                    required: demand.max(
+                        band.checked_add(ROW_GRID)
+                            .ok_or(SeedPlacementError::CoordinateOverflow)?,
+                    ),
+                });
+            }
+
+            // Complete pins mean there are no automatic ports.  This is the
+            // same post-confinement macro extent the window just legalised.
+            let mut extent_max = None;
+            for (id, lateral) in &laterals {
+                let edge = lateral
+                    .checked_add(bounds[id].max_lateral)
+                    .ok_or(SeedPlacementError::CoordinateOverflow)?;
+                extent_max = Some(extent_max.map_or(edge, |known: i32| known.max(edge)));
+            }
+            let extent_max = extent_max.expect("cross-deck demand has a placed source");
+            let band_lo = extent_max
+                .checked_add(WINDOW_MARGIN)
+                .and_then(|value| value.checked_add(1))
+                .ok_or(SeedPlacementError::CoordinateOverflow)?;
+            let band_hi = band_lo
+                .checked_add(band)
+                .and_then(|value| value.checked_sub(1))
+                .ok_or(SeedPlacementError::CoordinateOverflow)?;
+            let full_max = full_window
+                .max
+                .expect("a complete footprint closes both lateral sides");
+            if band_hi > full_max {
+                return Err(SeedPlacementError::NoDeckLayoutFits);
+            }
+
+            let footprint = footprint.expect("trunks exist only for a complete footprint");
+            let origin_forward = project_horizontal(frame.origin.x, frame.origin.z, frame.forward);
+            let origin_lateral =
+                project_horizontal(frame.origin.x, frame.origin.z, frame.lateral);
+            let (absolute_min_forward, absolute_max_forward, _, _) =
+                footprint.projected(frame.forward, frame.lateral);
+            let min_forward = absolute_min_forward
+                .checked_sub(origin_forward)
+                .ok_or(SeedPlacementError::CoordinateOverflow)?;
+            let max_forward = absolute_max_forward
+                .checked_sub(origin_forward)
+                .ok_or(SeedPlacementError::CoordinateOverflow)?;
+            let tunnels = request
+                .pins
+                .iter()
+                .filter_map(|(endpoint, pin)| {
+                    let role = match endpoint {
+                        PhysicalEndpointId::PrimaryInput(_) => PortRole::Input,
+                        PhysicalEndpointId::DeclaredOutput(_) => PortRole::Output,
+                        _ => return None,
+                    };
+                    Some(crate::compile::planner::effective_tunnel(*pin, role, footprint))
+                })
+                .flatten()
+                .map(|cell| {
+                    Ok((
+                        project_horizontal(cell.x, cell.z, frame.forward)
+                            .checked_sub(origin_forward)
+                            .ok_or(SeedPlacementError::CoordinateOverflow)?,
+                        project_horizontal(cell.x, cell.z, frame.lateral)
+                            .checked_sub(origin_lateral)
+                            .ok_or(SeedPlacementError::CoordinateOverflow)?,
+                        cell.y,
+                    ))
+                })
+                .collect::<Result<Vec<_>, SeedPlacementError>>()?;
+            let mut used = BTreeSet::new();
+            for (owner, (first_deck, last_deck)) in trunk_decks {
+                let min_y = decks[&first_deck].ground;
+                let max_y = decks[&last_deck].max_y;
+                let lateral = (0..(band / ROW_GRID))
+                    .filter_map(|index| {
+                        band_lo
+                            .checked_add(1)?
+                            .checked_add(index.checked_mul(ROW_GRID)?)
+                    })
+                    .filter(|centre| centre.checked_add(1).is_some_and(|high| high <= band_hi))
+                    .find(|centre| {
+                        !used.contains(centre)
+                            && !tunnels.iter().any(|&(forward, lateral, y)| {
+                                (min_forward..=max_forward).contains(&forward)
+                                    && (centre - 1..=centre + 1).contains(&lateral)
+                                    && (min_y..=max_y).contains(&y)
+                            })
+                    });
+                let Some(lateral) = lateral else {
+                    return Ok(FrameOutcome::BandTooNarrow {
+                        required: demand.max(
+                            band.checked_add(ROW_GRID)
+                                .ok_or(SeedPlacementError::CoordinateOverflow)?,
+                        ),
+                    });
+                };
+                used.insert(lateral);
+                vertical_trunks.insert(
+                    owner,
+                    VerticalTrunkLane {
+                        owner,
+                        lateral,
+                        min_forward,
+                        max_forward,
+                        first_deck,
+                        last_deck,
+                    },
+                );
+            }
+            window.max = Some(
+                band_lo
+                    .checked_sub(1)
+                    .ok_or(SeedPlacementError::CoordinateOverflow)?,
+            );
+        }
+
+        let trunk_count = u32::try_from(vertical_trunks.len())
+            .map_err(|_| SeedPlacementError::CoordinateOverflow)?;
+        let floorplan = floorplan_metrics(
+            &bounds,
+            &frame_origins,
+            &instance_decks,
+            &decks,
+            trunk_count,
+            trunk_count,
+        )?;
 
         let mut instances = BTreeMap::new();
         for (&id, &(forward, lateral)) in &frame_origins {
@@ -1040,7 +1251,7 @@ impl TopologyAwareSeedPlacer {
         }
 
         let fingerprint = plan_fingerprint(&instances, &automatic_inputs, &automatic_outputs, &[]);
-        Ok(Some(SeedPlacementPlan {
+        Ok(FrameOutcome::Placed(SeedPlacementPlan {
             instances,
             automatic_inputs,
             automatic_outputs,
@@ -1050,6 +1261,7 @@ impl TopologyAwareSeedPlacer {
             window,
             io_footprint: footprint,
             decks,
+            vertical_trunks,
             floorplan,
         }))
     }
@@ -1361,6 +1573,8 @@ fn floorplan_metrics(
     frame_origins: &BTreeMap<InstanceId, (i32, i32)>,
     instance_decks: &BTreeMap<InstanceId, DeckId>,
     decks: &BTreeMap<DeckId, DeckPlan>,
+    cross_deck_nets: u32,
+    vertical_trunk_lanes: u32,
 ) -> Result<FloorplanMetrics, SeedPlacementError> {
     let overflow = || SeedPlacementError::CoordinateOverflow;
     let mut macro_volume = 0u64;
@@ -1432,8 +1646,8 @@ fn floorplan_metrics(
         union_volume,
         deck_count: u32::try_from(decks.len())
             .map_err(|_| SeedPlacementError::CoordinateOverflow)?,
-        cross_deck_nets: 0,
-        vertical_trunk_lanes: 0,
+        cross_deck_nets,
+        vertical_trunk_lanes,
     })
 }
 
@@ -1673,6 +1887,8 @@ fn pin_column_forward_max(
         .filter(|(endpoint, _)| matches!(endpoint, PhysicalEndpointId::DeclaredOutput(_)))
         .flat_map(|(_, pin)| cells(pin, PortRole::Output))
         .map(forward_of)
+        // With complete pins and at least one packed column, a turned frame
+        // includes the footprint's far-wall output here and has no capacity.
         .filter(|&forward| !direct || forward <= inputs_max)
         .max()
         .unwrap_or(inputs_max)
@@ -3087,7 +3303,7 @@ mod tests {
     /// later frames are asked and that the first refusal is the reported
     /// one.
     #[test]
-    fn bounded_deck_refusal_tries_every_frame_and_reports_the_first() {
+    fn complete_pins_never_settle_on_a_turned_frame() {
         use super::*;
         let graph = InstanceGraph::one_to_one(
             &Netlist {
@@ -3162,7 +3378,8 @@ mod tests {
                     &BTreeMap::new(),
                     frame,
                     false,
-                    footprint
+                    footprint,
+                    0,
                 ),
                 Err(SeedPlacementError::NoDeckLayoutFits),
                 "a turned frame starts beyond the pin on its own far wall"
@@ -3190,8 +3407,8 @@ mod tests {
     use super::{
         analyse_instance_dag, choose_instance_facing, colour_intervals, derive_frame, hint_penalty,
         legalize_laterals, BlockFacts, EdgeFacts, LayoutOwner, LayoutRepair, MacroBounds,
-        NetInterval, SeedPlacementError, SeedPlacementRequest, SeedPlacer, TopologyAwareSeedPlacer,
-        TRACK_PITCH,
+        NetInterval, SeedPlacementAnalysis, SeedPlacementError, SeedPlacementRequest, SeedPlacer,
+        TopologyAwareSeedPlacer, TRACK_PITCH,
     };
 
     fn nor(output: &str, inputs: &[&str]) -> Gate {
@@ -4304,11 +4521,23 @@ mod tests {
     /// `9 + 8 = 17`: `13 + 13 + 17` fits, `13 * 3 + 17` does not, and the
     /// third column opens deck 1 paying its preceding channel as lead
     /// (`11 + 13 + 17 = 41`).
-    fn folded_two_deck_plan() -> super::SeedPlacementPlan {
+    fn folded_two_deck_fixture(
+        output_z: i32,
+        block_first_lane: bool,
+    ) -> (
+        InstanceGraph,
+        SeedPlacementAnalysis,
+        BTreeMap<InstanceId, BlockFacts>,
+        BTreeMap<PhysicalEndpointId, PortPin>,
+    ) {
         use super::*;
         let graph = InstanceGraph::one_to_one(
             &Netlist {
-                inputs: vec!["a".into()],
+                inputs: if block_first_lane {
+                    vec!["a".into(), "b".into(), "c".into()]
+                } else {
+                    vec!["a".into()]
+                },
                 outputs: vec!["y".into()],
                 gates: vec![nor("m0", &["a"]), nor("m1", &["m0"]), nor("y", &["m1"])],
             },
@@ -4317,16 +4546,31 @@ mod tests {
         .unwrap();
         let analysis = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
         let facts = BTreeMap::new();
-        let pins = BTreeMap::from([
+        let mut pins = BTreeMap::from([
             (
                 PhysicalEndpointId::PrimaryInput(PortId(0)),
                 pin(Anchor { x: 10, y: 1, z: 20 }, Facing::East),
             ),
             (
                 PhysicalEndpointId::DeclaredOutput(PortId(0)),
-                pin(Anchor { x: 72, y: 1, z: 60 }, Facing::East),
+                pin(Anchor { x: 72, y: 1, z: output_z }, Facing::East),
             ),
         ]);
+        if block_first_lane {
+            pins.insert(
+                PhysicalEndpointId::PrimaryInput(PortId(1)),
+                pin(Anchor { x: 10, y: 1, z: 38 }, Facing::East),
+            );
+            pins.insert(
+                PhysicalEndpointId::PrimaryInput(PortId(2)),
+                pin(Anchor { x: 10, y: 1, z: 64 }, Facing::East),
+            );
+        }
+        (graph, analysis, facts, pins)
+    }
+
+    fn folded_two_deck_plan() -> super::SeedPlacementPlan {
+        let (graph, analysis, facts, pins) = folded_two_deck_fixture(60, false);
         TopologyAwareSeedPlacer
             .plan(SeedPlacementRequest {
                 graph: &graph,
@@ -4335,6 +4579,112 @@ mod tests {
                 block_facts: &facts,
             })
             .expect("a bounded board folds its columns onto decks")
+    }
+
+    #[test]
+    fn vertical_trunk_band_only_grows_and_terminates() {
+        use super::*;
+        let (graph, analysis, facts, pins) = folded_two_deck_fixture(60, false);
+        let request = SeedPlacementRequest {
+            graph: &graph,
+            analysis: &analysis,
+            pins: &pins,
+            block_facts: &facts,
+        };
+        let frame = derive_frame(&pins);
+        let footprint = io_footprint(request);
+        let mut bands = Vec::new();
+        let mut band = 0;
+        let plan = loop {
+            bands.push(band);
+            match TopologyAwareSeedPlacer
+                .plan_in_frame(request, &BTreeMap::new(), frame, true, footprint, band)
+                .expect("the direct frame is valid")
+            {
+                FrameOutcome::Placed(plan) => break plan,
+                FrameOutcome::BandTooNarrow { required } => band = required,
+                FrameOutcome::NoFit => panic!("the canonical direct frame fits"),
+            }
+        };
+
+        assert_eq!(bands, [0, 8]);
+        assert_eq!(
+            plan.vertical_trunks.keys().copied().collect::<Vec<_>>(),
+            [
+                PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+                    instance: InstanceId(1),
+                    node: TopologyNodeId(0),
+                }),
+                PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+                    instance: InstanceId(2),
+                    node: TopologyNodeId(0),
+                }),
+            ]
+        );
+        assert_eq!(
+            plan.vertical_trunks
+                .values()
+                .map(|lane| lane.lateral)
+                .collect::<Vec<_>>(),
+            [18, 22]
+        );
+        assert!(plan
+            .vertical_trunks
+            .values()
+            .all(|lane| lane.first_deck == DeckId(0) && lane.last_deck == DeckId(1)));
+        assert_eq!(plan.floorplan.cross_deck_nets, 2);
+        assert_eq!(plan.floorplan.vertical_trunk_lanes, 2);
+        assert_eq!(plan, TopologyAwareSeedPlacer.plan(request).unwrap());
+    }
+
+    #[test]
+    fn trunk_lanes_clear_terminal_tunnels() {
+        use super::*;
+        let (graph, analysis, facts, pins) = folded_two_deck_fixture(64, true);
+        let request = SeedPlacementRequest {
+            graph: &graph,
+            analysis: &analysis,
+            pins: &pins,
+            block_facts: &facts,
+        };
+        let frame = derive_frame(&pins);
+        let FrameOutcome::Placed(plan) = TopologyAwareSeedPlacer
+            .plan_in_frame(
+                request,
+                &BTreeMap::new(),
+                frame,
+                true,
+                io_footprint(request),
+                12,
+            )
+            .expect("the widened band fits")
+        else {
+            panic!("the widened band must place");
+        };
+
+        assert_eq!(
+            plan.vertical_trunks
+                .values()
+                .map(|lane| lane.lateral)
+                .collect::<Vec<_>>(),
+            [6, 10],
+            "the input tunnel at lateral 0 consumes candidate 2"
+        );
+    }
+
+    #[test]
+    fn band_starvation_refuses_no_deck_layout_fits() {
+        use super::*;
+        let (graph, analysis, facts, pins) = folded_two_deck_fixture(44, false);
+        assert_eq!(
+            TopologyAwareSeedPlacer.plan(SeedPlacementRequest {
+                graph: &graph,
+                analysis: &analysis,
+                pins: &pins,
+                block_facts: &facts,
+            }),
+            Err(SeedPlacementError::NoDeckLayoutFits)
+        );
     }
 
     /// The fold itself: which deck each column landed on, where those decks
@@ -4403,8 +4753,8 @@ mod tests {
                 macro_volume: 6,
                 union_volume: 84,
                 deck_count: 2,
-                cross_deck_nets: 0,
-                vertical_trunk_lanes: 0,
+                cross_deck_nets: 2,
+                vertical_trunk_lanes: 2,
             }
         );
     }

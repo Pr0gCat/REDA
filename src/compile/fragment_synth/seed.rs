@@ -3486,6 +3486,7 @@ pub(crate) mod tests {
                     max_y: 4,
                 },
             )]),
+            vertical_trunks: BTreeMap::new(),
             floorplan: FloorplanMetrics {
                 macro_volume: 0,
                 union_volume: 0,
@@ -4435,6 +4436,7 @@ pub(crate) mod tests {
                         max_y: 10,
                     },
                 )]),
+                vertical_trunks: BTreeMap::new(),
                 floorplan: FloorplanMetrics {
                     macro_volume: 0,
                     union_volume: 0,
