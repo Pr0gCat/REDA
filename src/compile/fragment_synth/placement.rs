@@ -37,6 +37,46 @@ pub(crate) struct NodeFacts {
     pub reverse_level: u64,
     pub head_ticks: u64,
     pub tail_ticks: u64,
+    /// The horizontal deck this macro stands on.  Analysis alone cannot
+    /// know it -- it falls out of the board's own forward capacity -- so
+    /// every node starts on the base deck and only the placer moves it.
+    /// `forward_level` is deliberately untouched by that move: a column
+    /// carried up a deck keeps the level it computes its channels from.
+    pub deck: DeckId,
+}
+
+/// Which horizontal deck a macro stands on, counted up from the base deck
+/// the frame origin sits in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub(crate) struct DeckId(pub u32);
+
+/// One deck's ground row and the absolute vertical interval it reserves:
+/// the macros' own cells, their supports below, and the channel slab and
+/// router ceiling above.  `min_y`/`max_y` are world rows, not offsets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct DeckPlan {
+    pub ground: i32,
+    pub min_y: i32,
+    pub max_y: i32,
+}
+
+/// What the plan says about the volume it asks for, before any route is
+/// paid for.  `macro_volume / union_volume` is the planned macro fill the
+/// density gate compares -- as an exact pair, never as a float.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+pub(crate) struct FloorplanMetrics {
+    /// Sum of the macro envelopes' own volumes.
+    pub macro_volume: u64,
+    /// Volume of the bounding box of those envelopes where the plan puts
+    /// them, in forward/lateral/Y.
+    pub union_volume: u64,
+    pub deck_count: u32,
+    /// Nets that leave the deck they are driven from.  Zero until the
+    /// vertical trunks that carry them are allocated.
+    pub cross_deck_nets: u32,
+    /// Vertical-trunk lanes reserved for those nets.  Zero until the trunk
+    /// band exists.
+    pub vertical_trunk_lanes: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -88,6 +128,10 @@ pub(crate) enum SeedPlacementError {
     /// meant, and the placer says so rather than refusing every cell of it.
     #[error("the complete IO pin set draws a footprint with no interior: {footprint:?}")]
     DegenerateIoFootprint { footprint: IoFootprint },
+    /// The board leaves no forward span to stand a deck in at all, so no
+    /// ordering of the columns over decks can be tried.
+    #[error("no ordered deck layout fits the IO footprint")]
+    NoDeckLayoutFits,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -117,6 +161,9 @@ pub(crate) struct BlockFacts {
     pub width: i32,
     /// `max.z - min.z + 1` of the block's certified layout.
     pub depth: i32,
+    /// `max.y - min.y + 1` of the block's certified layout: the deck a
+    /// block stands on has to leave room for its floors and its roof too.
+    pub height: i32,
     pub delay_ticks: u64,
 }
 
@@ -173,6 +220,14 @@ pub(crate) struct SeedPlacementPlan {
     /// bounded the forward extent; `None` leaves both exactly as they were
     /// before the caller's board had a boundary.
     pub io_footprint: Option<IoFootprint>,
+    /// Every deck the columns were packed onto, lowest first.  An
+    /// unbounded or partially pinned plan keeps all of its columns on
+    /// `DeckId(0)`, so this is one entry and the plan is the flat one it
+    /// always was.
+    pub decks: BTreeMap<DeckId, DeckPlan>,
+    /// What the plan asks of the board before any route is paid for: the
+    /// density gate's two exact volumes and the deck/trunk counts.
+    pub floorplan: FloorplanMetrics,
 }
 
 /// Lateral bounds, in frame coordinates, that every block of the layout
@@ -246,11 +301,24 @@ struct MacroBounds {
     max_forward: i32,
     min_lateral: i32,
     max_lateral: i32,
+    /// Local Y bounds, relative to the deck ground the macro stands on.  A
+    /// turn is about Y, so these are the envelope's own bounds whatever the
+    /// facing and whatever way the frame points.
+    min_y: i32,
+    max_y: i32,
 }
 
 impl MacroBounds {
     fn forward_span(self) -> i32 {
         self.max_forward - self.min_forward + 1
+    }
+
+    fn lateral_span(self) -> i32 {
+        self.max_lateral - self.min_lateral + 1
+    }
+
+    fn height(self) -> i32 {
+        self.max_y - self.min_y + 1
     }
 }
 
@@ -265,6 +333,11 @@ struct HorizontalBounds {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MacroEnvelope {
     by_facing: [HorizontalBounds; 4],
+    /// How far the macro reaches below and above its own ground row: a
+    /// repeater's support is one row down, a torch's support shares its
+    /// row.  A facing turns about Y, so one pair covers all four.
+    min_y: i32,
+    max_y: i32,
 }
 
 impl MacroEnvelope {
@@ -287,6 +360,8 @@ impl MacroEnvelope {
             max_forward: *forward.iter().max().expect("four corners"),
             min_lateral: *lateral.iter().min().expect("four corners"),
             max_lateral: *lateral.iter().max().expect("four corners"),
+            min_y: self.min_y,
+            max_y: self.max_y,
         }
     }
 }
@@ -628,8 +703,12 @@ impl TopologyAwareSeedPlacer {
             rebase + confine_laterals(window, &bounds, &port_laterals, &mut laterals)?
         };
 
-        let (mut channels, last_lanes) =
+        let (mut channels, channel_lanes) =
             derive_channel_widths(request, analysis, &level_bounds, &laterals, &track_laterals);
+        // The channel beyond the last column is the one whose trunks the
+        // turnaround carries; `channel_lanes` is keyed by channel level, so
+        // that is its last entry.
+        let last_lanes = channel_lanes.values().next_back().copied().unwrap_or(0);
         for (&level, &width) in minimum_widths {
             channels
                 .entry(level)
@@ -687,35 +766,124 @@ impl TopologyAwareSeedPlacer {
             Some(_) => bounded_turnaround_allowance(last_lanes),
             None => TURNAROUND_ALLOWANCE,
         };
-        if let Some(limit) = forward_limit(frame, request.pins, footprint) {
-            if cursor + total + turnaround > limit {
-                return Ok(None);
+        let limit = forward_limit(frame, request.pins, footprint);
+        // Ordered columns, one per level, exactly as the levels were folded
+        // laterally.  A board folds the ones that do not fit ahead of its
+        // far wall onto decks above -- every deck reusing the same
+        // projected start and capacity -- where an unbounded layout has
+        // only the one run of columns it always had.
+        let ordered_levels = level_bounds.keys().copied().collect::<Vec<_>>();
+        let column_width = |level: u64| {
+            channels
+                .get(&(level as i64))
+                .copied()
+                .unwrap_or_else(|| channel_width(1))
+        };
+        let column_decks = match (footprint, limit) {
+            (Some(_), Some(limit)) => {
+                let columns = ordered_levels
+                    .iter()
+                    .map(|&level| {
+                        let level_bounds = level_bounds[&level];
+                        // The macro too big to be folded anywhere is the
+                        // one that reaches furthest forward in its column.
+                        let owner = bounds
+                            .iter()
+                            .filter(|(id, _)| analysis.nodes[id].forward_level == level)
+                            .max_by_key(|(id, macro_bounds)| {
+                                (macro_bounds.forward_span(), std::cmp::Reverse(**id))
+                            })
+                            .map(|(&id, _)| id)
+                            .unwrap_or(InstanceId(0));
+                        DeckColumn {
+                            owner,
+                            lead: channels
+                                .get(&(level as i64 - 1))
+                                .copied()
+                                .unwrap_or_else(|| channel_width(1)),
+                            cost: level_bounds.forward_span() + column_width(level),
+                            close: bounded_turnaround_allowance(
+                                channel_lanes.get(&(level as i64)).copied().unwrap_or(0),
+                            ),
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                let capacity = limit
+                    .checked_sub(cursor)
+                    .ok_or(SeedPlacementError::CoordinateOverflow)?;
+                pack_decks(&columns, capacity)?
             }
-        }
+            _ => {
+                if let Some(limit) = limit {
+                    if cursor + total + turnaround > limit {
+                        return Ok(None);
+                    }
+                }
+                vec![DeckId(0); ordered_levels.len()]
+            }
+        };
+
+        // The pack's inclusive cost is what it weighed a column at; the
+        // origins themselves keep the step they have always taken, and a
+        // deck above the base one simply starts the cursor over.
+        let start = cursor;
         let mut columns = BTreeMap::new();
-        for (&level, level_bounds) in &level_bounds {
+        let mut level_decks = BTreeMap::<u64, DeckId>::new();
+        let mut open = DeckId(0);
+        for (index, &level) in ordered_levels.iter().enumerate() {
+            let level_bounds = level_bounds[&level];
+            let deck = column_decks.get(index).copied().unwrap_or(DeckId(0));
+            if deck != open {
+                cursor = start;
+                open = deck;
+            }
+            level_decks.insert(level, deck);
             let column = cursor
                 .checked_sub(level_bounds.min_forward)
                 .ok_or(SeedPlacementError::CoordinateOverflow)?;
             columns.insert(level, column);
-            let width = channels
-                .get(&(level as i64))
-                .copied()
-                .unwrap_or_else(|| channel_width(1));
             cursor = column
                 .checked_add(level_bounds.max_forward)
-                .and_then(|value| value.checked_add(width))
+                .and_then(|value| value.checked_add(column_width(level)))
                 .ok_or(SeedPlacementError::CoordinateOverflow)?;
         }
 
         let mut frame_origins = BTreeMap::<InstanceId, (i32, i32)>::new();
+        let mut instance_decks = BTreeMap::<InstanceId, DeckId>::new();
         for (&level, &column) in &columns {
             for (&id, &lateral) in &laterals {
                 if analysis.nodes[&id].forward_level == level {
                     frame_origins.insert(id, (column, lateral));
+                    instance_decks.insert(id, level_decks[&level]);
                 }
             }
         }
+
+        // Each deck reserves the rows its own macros need: one row below
+        // the lowest macro cell at the least, and the channel slab or the
+        // router's ceiling above the highest, whichever reaches further.
+        let mut deck_locals = BTreeMap::<DeckId, (i32, i32)>::new();
+        for (&id, &deck) in &instance_decks {
+            let macro_bounds = bounds[&id];
+            deck_locals
+                .entry(deck)
+                .and_modify(|(min, max)| {
+                    *min = (*min).min(macro_bounds.min_y);
+                    *max = (*max).max(macro_bounds.max_y + 3);
+                })
+                .or_insert((macro_bounds.min_y.min(-1), (macro_bounds.max_y + 3).max(3)));
+        }
+        if deck_locals.is_empty() {
+            // Nothing to stand on a deck still stands on the base one.
+            deck_locals.insert(DeckId(0), (-1, 3));
+        }
+        let locals = deck_locals.values().copied().collect::<Vec<_>>();
+        let decks = deck_locals
+            .keys()
+            .copied()
+            .zip(deck_grounds(frame.origin.y, &locals)?)
+            .collect::<BTreeMap<DeckId, DeckPlan>>();
+        let floorplan = floorplan_metrics(&bounds, &frame_origins, &instance_decks, &decks)?;
 
         let mut instances = BTreeMap::new();
         for (&id, &(forward, lateral)) in &frame_origins {
@@ -821,6 +989,18 @@ impl TopologyAwareSeedPlacer {
             })
             .collect::<Result<BTreeMap<_, _>, SeedPlacementError>>()?;
 
+        // The one fact the fold left to the packer: which deck each macro
+        // ended up on.  Nothing else in the analysis moves -- a column
+        // carried up a deck keeps the forward level its channels are
+        // derived from.
+        for (&id, &deck) in &instance_decks {
+            folded
+                .nodes
+                .get_mut(&id)
+                .expect("folded analysis covers every instance")
+                .deck = deck;
+        }
+
         let fingerprint = plan_fingerprint(&instances, &automatic_inputs, &automatic_outputs, &[]);
         Ok(Some(SeedPlacementPlan {
             instances,
@@ -831,6 +1011,8 @@ impl TopologyAwareSeedPlacer {
             analysis: folded,
             window,
             io_footprint: footprint,
+            decks,
+            floorplan,
         }))
     }
 }
@@ -1025,9 +1207,187 @@ fn checked_step_many(
     })
 }
 
+/// One ordered column offered to the shelf pack.
+///
+/// It carries only what the pack weighs: who to name when the column alone
+/// is too big, the channel an upper deck starts behind, the column's own
+/// forward cost, and the turnaround the deck pays if this column closes it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct DeckColumn {
+    owner: InstanceId,
+    lead: i32,
+    cost: i32,
+    close: i32,
+}
+
+/// One `DeckId` per ordered column: consecutive columns fill the deck they
+/// are offered until the next one would not fit, and then -- and only then
+/// -- the next deck opens.
+///
+/// This is a shelf pack, not a search: a column never moves back to a deck
+/// an earlier column left, no alternative packing is enumerated, and the
+/// same columns always produce the same decks.  Sums are `i64` because a
+/// board's capacity and a column's cost are both `i32` and their sum is
+/// not.
+fn pack_decks(columns: &[DeckColumn], capacity: i32) -> Result<Vec<DeckId>, SeedPlacementError> {
+    let mut assigned = Vec::with_capacity(columns.len());
+    if columns.is_empty() {
+        return Ok(assigned);
+    }
+    if capacity <= 0 {
+        return Err(SeedPlacementError::NoDeckLayoutFits);
+    }
+    let capacity = i64::from(capacity);
+    let mut deck = 0u32;
+    // Deck zero begins at the board's own forward start; every deck above
+    // it begins behind the channel its first column follows.
+    let mut lead = 0i64;
+    let mut used = 0i64;
+    let mut placed = 0usize;
+    for column in columns {
+        let cost = i64::from(column.cost);
+        let close = i64::from(column.close);
+        if placed > 0 && lead + used + cost + close > capacity {
+            deck = deck
+                .checked_add(1)
+                .ok_or(SeedPlacementError::NoDeckLayoutFits)?;
+            lead = i64::from(column.lead);
+            used = 0;
+            placed = 0;
+        }
+        if placed == 0 && lead + cost + close > capacity {
+            return Err(SeedPlacementError::LateralWindowTooNarrow {
+                instance: column.owner,
+            });
+        }
+        used += cost;
+        placed += 1;
+        assigned.push(DeckId(deck));
+    }
+    Ok(assigned)
+}
+
+/// The absolute interval every deck reserves, from `base` upward.
+///
+/// `locals` are each deck's own untranslated `(min, max)` rows: how far its
+/// macros reach below their ground and how far its channel slab and router
+/// ceiling reach above it.  A deck's ground is the first integer that lifts
+/// its whole interval past the deck below -- the height-aware separation,
+/// not a fixed gap.
+fn deck_grounds(base: i32, locals: &[(i32, i32)]) -> Result<Vec<DeckPlan>, SeedPlacementError> {
+    let overflow = || SeedPlacementError::CoordinateOverflow;
+    let mut plans = Vec::with_capacity(locals.len());
+    let mut previous: Option<(i32, i32)> = None;
+    for &(local_min, local_max) in locals {
+        let ground = match previous {
+            None => base,
+            Some((previous_ground, previous_max)) => previous_ground
+                .checked_add(previous_max)
+                .and_then(|top| top.checked_sub(local_min))
+                .and_then(|lifted| lifted.checked_add(1))
+                .ok_or_else(overflow)?,
+        };
+        plans.push(DeckPlan {
+            ground,
+            min_y: ground.checked_add(local_min).ok_or_else(overflow)?,
+            max_y: ground.checked_add(local_max).ok_or_else(overflow)?,
+        });
+        previous = Some((ground, local_max));
+    }
+    Ok(plans)
+}
+
+/// What the plan asks of the board: the macro envelopes' own volume, the
+/// volume of the box they occupy where the plan put them, and the deck
+/// count.
+///
+/// The two volumes are the exact pair the density gate divides; neither is
+/// ever turned into a float here.  A macro is measured at its own deck's
+/// ground, not over that deck's whole reservation interval: the interval
+/// also holds the channel slab and the router's ceiling, which are not
+/// macro fill.
+fn floorplan_metrics(
+    bounds: &BTreeMap<InstanceId, MacroBounds>,
+    frame_origins: &BTreeMap<InstanceId, (i32, i32)>,
+    instance_decks: &BTreeMap<InstanceId, DeckId>,
+    decks: &BTreeMap<DeckId, DeckPlan>,
+) -> Result<FloorplanMetrics, SeedPlacementError> {
+    let overflow = || SeedPlacementError::CoordinateOverflow;
+    let mut macro_volume = 0u64;
+    let mut union: Option<(i32, i32, i32, i32, i32, i32)> = None;
+    for (&id, &(forward, lateral)) in frame_origins {
+        let macro_bounds = bounds[&id];
+        let ground = instance_decks
+            .get(&id)
+            .and_then(|deck| decks.get(deck))
+            .map_or(0, |deck| deck.ground);
+        let volume = u64::try_from(macro_bounds.forward_span())
+            .ok()
+            .and_then(|span| span.checked_mul(u64::try_from(macro_bounds.lateral_span()).ok()?))
+            .and_then(|area| area.checked_mul(u64::try_from(macro_bounds.height()).ok()?))
+            .ok_or_else(overflow)?;
+        macro_volume = macro_volume.checked_add(volume).ok_or_else(overflow)?;
+        let min_forward = forward
+            .checked_add(macro_bounds.min_forward)
+            .ok_or_else(overflow)?;
+        let max_forward = forward
+            .checked_add(macro_bounds.max_forward)
+            .ok_or_else(overflow)?;
+        let min_lateral = lateral
+            .checked_add(macro_bounds.min_lateral)
+            .ok_or_else(overflow)?;
+        let max_lateral = lateral
+            .checked_add(macro_bounds.max_lateral)
+            .ok_or_else(overflow)?;
+        let min_y = ground.checked_add(macro_bounds.min_y).ok_or_else(overflow)?;
+        let max_y = ground.checked_add(macro_bounds.max_y).ok_or_else(overflow)?;
+        union = Some(match union {
+            None => (
+                min_forward,
+                max_forward,
+                min_lateral,
+                max_lateral,
+                min_y,
+                max_y,
+            ),
+            Some(known) => (
+                known.0.min(min_forward),
+                known.1.max(max_forward),
+                known.2.min(min_lateral),
+                known.3.max(max_lateral),
+                known.4.min(min_y),
+                known.5.max(max_y),
+            ),
+        });
+    }
+    let union_volume = match union {
+        None => 0,
+        Some((min_forward, max_forward, min_lateral, max_lateral, min_y, max_y)) => {
+            let span = |low: i32, high: i32| {
+                high.checked_sub(low)
+                    .and_then(|span| span.checked_add(1))
+                    .and_then(|span| u64::try_from(span).ok())
+                    .ok_or_else(overflow)
+            };
+            let height = span(min_y, max_y)?;
+            span(min_forward, max_forward)?
+                .checked_mul(span(min_lateral, max_lateral)?)
+                .and_then(|area| area.checked_mul(height))
+                .ok_or_else(overflow)?
+        }
+    };
+    Ok(FloorplanMetrics {
+        macro_volume,
+        union_volume,
+        deck_count: u32::try_from(decks.len()).map_err(|_| SeedPlacementError::NoDeckLayoutFits)?,
+        cross_deck_nets: 0,
+        vertical_trunk_lanes: 0,
+    })
+}
+
 /// Free forward cells after every level (keyed by that level; the input
-/// channel is keyed by `min_level - 1`), beside the lane count of the last
-/// channel.
+/// channel is keyed by `min_level - 1`), beside the lane count each of
+/// those channels was measured from.
 ///
 /// A channel needs one lane per trunk that crosses it at the same lateral
 /// range, so the width comes from the left-edge lane count over the lateral
@@ -1036,22 +1396,22 @@ fn checked_step_many(
 /// the widths are scaled down proportionally when their sum does not fit;
 /// the seed reports a typed refusal if a channel then cannot hold its lanes.
 ///
-/// The last channel's lane count is returned rather than read back out of
-/// its width: the turnaround beyond the last column carries those same
-/// trunks, and a width is a rounded-up cell budget no lane count can be
-/// recovered from.
+/// The lane counts are returned rather than read back out of the widths:
+/// the turnaround beyond a deck's last column carries those same trunks,
+/// and a width is a rounded-up cell budget no lane count can be recovered
+/// from.
 fn derive_channel_widths(
     request: SeedPlacementRequest<'_>,
     analysis: &SeedPlacementAnalysis,
     level_bounds: &BTreeMap<u64, MacroBounds>,
     laterals: &BTreeMap<InstanceId, i32>,
     track_laterals: &BTreeMap<LogicalSignalId, i32>,
-) -> (BTreeMap<i64, i32>, usize) {
+) -> (BTreeMap<i64, i32>, BTreeMap<i64, usize>) {
     let intervals = net_intervals(request.graph, analysis);
     let min_level = level_bounds.keys().next().copied().unwrap_or(0) as i64;
     let max_level = level_bounds.keys().last().copied().unwrap_or(0) as i64;
     let mut widths = BTreeMap::new();
-    let mut last_lanes = 0;
+    let mut lanes_by_channel = BTreeMap::new();
     for channel_level in (min_level - 1)..=max_level {
         let mut crossing = Vec::new();
         for interval in &intervals {
@@ -1116,14 +1476,14 @@ fn derive_channel_widths(
         // The source anchor on one side and the sink terminal on the other
         // each take one more cell than the macro envelope.
         let lanes = lane_count(&crossing);
-        last_lanes = lanes;
+        lanes_by_channel.insert(channel_level, lanes);
         widths.insert(
             channel_level,
             channel_width(lanes) + ENDPOINT_CELLS_PER_CHANNEL,
         );
     }
 
-    (widths, last_lanes)
+    (widths, lanes_by_channel)
 }
 
 /// The rectangle a complete pin set draws, or `None` for a partial one.
@@ -1767,6 +2127,7 @@ fn primitive_positions(instance: &Instance) -> BTreeMap<PrimitiveId, Position> {
 fn macro_envelope(instance: &Instance) -> Result<MacroEnvelope, SeedPlacementError> {
     let positions = primitive_positions(instance);
     let mut by_facing = [HorizontalBounds::default(); 4];
+    let mut vertical = None::<(i32, i32)>;
     for facing in [
         CellFacing::NORTH,
         CellFacing::EAST,
@@ -1782,7 +2143,7 @@ fn macro_envelope(instance: &Instance) -> Result<MacroEnvelope, SeedPlacementErr
                 });
             }
             let local = positions[&primitive.id];
-            let (base_x, _, base_z) = geometry::rotate((local.x, local.y, local.z), facing);
+            let (base_x, base_y, base_z) = geometry::rotate((local.x, local.y, local.z), facing);
             let variant = &variants[usize::from(facing.index())];
             for point in variant
                 .blocks
@@ -1792,6 +2153,11 @@ fn macro_envelope(instance: &Instance) -> Result<MacroEnvelope, SeedPlacementErr
             {
                 let x = base_x + point.x;
                 let z = base_z + point.z;
+                let y = base_y + point.y;
+                vertical = Some(match vertical {
+                    Some((min, max)) => (min.min(y), max.max(y)),
+                    None => (y, y),
+                });
                 bounds = Some(match bounds {
                     Some(bounds) => HorizontalBounds {
                         min_x: bounds.min_x.min(x),
@@ -1810,11 +2176,17 @@ fn macro_envelope(instance: &Instance) -> Result<MacroEnvelope, SeedPlacementErr
         }
         by_facing[usize::from(facing.index())] = bounds.unwrap_or_default();
     }
-    Ok(MacroEnvelope { by_facing })
+    let (min_y, max_y) = vertical.unwrap_or((0, 0));
+    Ok(MacroEnvelope {
+        by_facing,
+        min_y,
+        max_y,
+    })
 }
 
-/// A block's envelope: a plain `width`x`depth` box, identical for all four
-/// facings since a block always keeps its certified, east-facing layout.
+/// A block's envelope: a plain `width`x`depth`x`height` box, identical for
+/// all four facings since a block always keeps its certified, east-facing
+/// layout.
 fn block_envelope(facts: BlockFacts) -> MacroEnvelope {
     let bounds = HorizontalBounds {
         min_x: 0,
@@ -1824,6 +2196,8 @@ fn block_envelope(facts: BlockFacts) -> MacroEnvelope {
     };
     MacroEnvelope {
         by_facing: [bounds; 4],
+        min_y: 0,
+        max_y: facts.height - 1,
     }
 }
 
@@ -2259,6 +2633,9 @@ pub(crate) fn analyse_instance_dag(
                     reverse_level: reverse_levels[&id],
                     head_ticks: head_ticks[&id],
                     tail_ticks: tail_ticks[&id],
+                    // Topology says nothing about height; the placer is
+                    // the only thing that moves a macro off the base deck.
+                    deck: DeckId(0),
                 },
             )
         })
@@ -2403,6 +2780,8 @@ mod tests {
             max_forward: 3,
             min_lateral: -1,
             max_lateral: 3,
+            min_y: 0,
+            max_y: 0,
         };
         let ids = [InstanceId(0), InstanceId(1)];
         let bounds = ids
@@ -2562,9 +2941,19 @@ mod tests {
             Err(SeedPlacementError::DegenerateIoFootprint { .. })
         ));
 
-        // The same rectangle is too short for two levels and their channels:
-        // the forward axis is closed now, where before only the world edge
-        // and a pinned input facing back could close it.
+        // The same rectangle is too short for even one level and its
+        // channels: the forward axis is closed now, where before only the
+        // world edge and a pinned input facing back could close it.  The
+        // levels used to be refused as a frame that does not fit; now they
+        // are offered to the decks first, and the first column alone is
+        // what the board cannot hold.
+        //
+        // Forward runs south from the input's net cell at z = 20 to the
+        // board's far wall at z = 60, so the limit is 40 and the first
+        // column starts at `0 + 1 + 11 = 12`: a capacity of 28.  A
+        // south-facing torch spans two forward cells, its channel is
+        // `channel_width(1) + 2 = 11`, and the deck's turnaround is
+        // `9 + 8 = 17`: `2 + 11 + 17 = 30` does not fit on any deck.
         let levels = two_stage_graph();
         let level_analysis = analyse_instance_dag(&levels, &BTreeMap::new()).unwrap();
         let corners = BTreeMap::from([
@@ -2584,7 +2973,9 @@ mod tests {
                 pins: &corners,
                 block_facts: &facts,
             }),
-            Err(SeedPlacementError::NoFrameFits)
+            Err(SeedPlacementError::LateralWindowTooNarrow {
+                instance: InstanceId(0)
+            })
         );
 
         // A partial set draws no rectangle: one pin of two ports bounds
@@ -2680,6 +3071,7 @@ mod tests {
             BlockFacts {
                 width: 30,
                 depth: 20,
+                height: 5,
                 delay_ticks: 37,
             },
         )]);
@@ -3538,6 +3930,8 @@ mod tests {
                 max_forward: 0,
                 min_lateral: -1,
                 max_lateral: 0,
+                min_y: 0,
+                max_y: 0,
             }
         );
         assert_eq!(
@@ -3547,6 +3941,8 @@ mod tests {
                 max_forward: 0,
                 min_lateral: -8,
                 max_lateral: 0,
+                min_y: -1,
+                max_y: 0,
             }
         );
 
@@ -3571,6 +3967,285 @@ mod tests {
             origins[&InstanceId(1)],
         );
         assert!(torch_cells.is_disjoint(&repeater_cells));
+    }
+
+    /// A macro is a box, not a rectangle: the deck it stands on has to know
+    /// how tall it is.  Both heights here are read off the literal variants
+    /// -- a wall torch is its support and the torch beside it, all on the
+    /// ground row, while a repeater stands on a support one row below its
+    /// own cell -- and a block's box is its certified bounds' own span.
+    #[test]
+    fn macro_envelopes_keep_their_real_vertical_bounds() {
+        use super::*;
+        let library = Library::default_library();
+        let torch_graph = InstanceGraph::one_to_one(
+            &Netlist {
+                inputs: vec!["a".into()],
+                outputs: vec!["y".into()],
+                gates: vec![nor("y", &["a"])],
+            },
+            &library,
+        )
+        .unwrap();
+        let repeater_graph = InstanceGraph::with_variants(
+            &Netlist {
+                inputs: vec!["a".into(), "b".into(), "c".into()],
+                outputs: vec!["y".into()],
+                gates: vec![Gate::merge("y", &["a", "b", "c"])],
+            },
+            &library,
+            &BTreeMap::from([(
+                InstanceId(0),
+                ImplementationKey::Merge {
+                    isolation_mask: InputMask::new(0b111),
+                },
+            )]),
+            &[],
+        )
+        .unwrap();
+
+        // `TORCH_*_BLOCKS` and `TORCH_*_PORTS` put every cell on y = 0.
+        let torch = macro_envelope(&torch_graph.instances[0]).unwrap();
+        assert_eq!((torch.min_y, torch.max_y), (0, 0));
+        assert_eq!(
+            torch.oriented_bounds(CellFacing::NORTH, Facing::East),
+            MacroBounds {
+                min_forward: 0,
+                max_forward: 0,
+                min_lateral: -1,
+                max_lateral: 0,
+                min_y: 0,
+                max_y: 0,
+            }
+        );
+        assert_eq!(
+            torch
+                .oriented_bounds(CellFacing::NORTH, Facing::East)
+                .height(),
+            1
+        );
+
+        // `REPEATER_*_BLOCKS` carry their solid support at `DOWN`, so the
+        // macro reaches one row below the row its diode sits on.
+        let repeaters = macro_envelope(&repeater_graph.instances[0]).unwrap();
+        assert_eq!((repeaters.min_y, repeaters.max_y), (-1, 0));
+        let repeater_bounds = repeaters.oriented_bounds(CellFacing::SOUTH, Facing::East);
+        assert_eq!((repeater_bounds.min_y, repeater_bounds.max_y), (-1, 0));
+        assert_eq!(repeater_bounds.height(), 2);
+
+        // A block keeps its certified box: `height` cells up from its own
+        // floor, exactly as `width`/`depth` run from its own west/north.
+        let block = block_envelope(BlockFacts {
+            width: 30,
+            depth: 20,
+            height: 5,
+            delay_ticks: 37,
+        });
+        assert_eq!((block.min_y, block.max_y), (0, 4));
+        assert_eq!(
+            block
+                .oriented_bounds(CellFacing::EAST, Facing::East)
+                .height(),
+            5
+        );
+    }
+
+    /// The shelf pack on its own, against literal columns and a literal
+    /// forward capacity: consecutive columns fill one deck until the next
+    /// one plus that deck's turnaround would not fit, and then -- and only
+    /// then -- a deck opens above.
+    #[test]
+    fn ordered_shelf_pack_uses_the_minimum_stable_decks() {
+        use super::*;
+        let col = |owner, lead, cost| DeckColumn {
+            owner: InstanceId(owner),
+            lead,
+            cost,
+            close: 0,
+        };
+
+        // 6 + 6 = 12 is past a capacity of 10, so the second column opens
+        // deck 1; 6 + 4 = 10 is exactly the capacity, so the third joins it.
+        let columns = [col(0, 0, 6), col(1, 0, 6), col(2, 0, 4)];
+        assert_eq!(
+            pack_decks(&columns, 10).unwrap(),
+            vec![DeckId(0), DeckId(1), DeckId(1)]
+        );
+        assert_eq!(pack_decks(&columns, 10), pack_decks(&columns, 10));
+
+        // Deck 0 has four cells to spare and the last column costs two, but
+        // a column never moves back to a deck an earlier column left.
+        let trailing = [col(0, 0, 6), col(1, 0, 6), col(2, 0, 2)];
+        let packed = pack_decks(&trailing, 10).unwrap();
+        assert_eq!(packed, vec![DeckId(0), DeckId(1), DeckId(1)]);
+        assert!(packed.windows(2).all(|pair| pair[0] <= pair[1]));
+
+        // A deck pays its closing turnaround once (3 here) and every upper
+        // deck pays the channel it starts behind (2 here): 6 + 3 fills the
+        // capacity of 9 exactly, and 2 + 4 + 3 fills the next deck exactly.
+        let closing = [
+            DeckColumn {
+                close: 3,
+                ..col(0, 0, 6)
+            },
+            DeckColumn {
+                close: 3,
+                ..col(1, 2, 4)
+            },
+        ];
+        assert_eq!(pack_decks(&closing, 9).unwrap(), vec![DeckId(0), DeckId(1)]);
+
+        // One column wider than the whole board is not a folding problem:
+        // it is a macro the board cannot hold, and it is named.
+        assert_eq!(
+            pack_decks(&[col(7, 0, 11)], 10),
+            Err(SeedPlacementError::LateralWindowTooNarrow {
+                instance: InstanceId(7)
+            })
+        );
+        // No forward span at all leaves no deck layout to find, while no
+        // column at all needs none.
+        assert_eq!(
+            pack_decks(&columns, 0),
+            Err(SeedPlacementError::NoDeckLayoutFits)
+        );
+        assert_eq!(pack_decks(&[], 0), Ok(Vec::new()));
+
+        // Two decks whose macros reach one row below their ground and whose
+        // routers reach three above it: the second ground is the first
+        // integer that lifts its whole interval past `0..=4`.
+        assert_eq!(
+            deck_grounds(1, &[(-1, 3), (-1, 3)]).unwrap(),
+            vec![
+                DeckPlan {
+                    ground: 1,
+                    min_y: 0,
+                    max_y: 4,
+                },
+                DeckPlan {
+                    ground: 6,
+                    min_y: 5,
+                    max_y: 9,
+                },
+            ]
+        );
+    }
+
+    /// The real placer on a board too short for its own chain: the levels
+    /// that fit stay on the base deck and the one that does not opens the
+    /// deck above, at a ground derived from the macros' own height.
+    ///
+    /// Every literal below is hand-derived from this fixture:
+    ///
+    /// * pins `(10, 20)` in and `(72, 60)` out, both travelling east, put
+    ///   the frame's origin on the input's net cell `(12, 1, 20)`, forward
+    ///   east and lateral south;
+    /// * the board is `10..=72` by `20..=60`, so the forward limit is
+    ///   `72 - 12 = 60` and the lateral window is `0..=40`;
+    /// * one lane crosses every channel, so each is
+    ///   `channel_width(1) + 2 = 11` cells and the first column starts at
+    ///   `0 + 1 + 11 = 12`, leaving a capacity of `60 - 12 = 48`;
+    /// * an east-facing torch spans two forward cells, so a column costs
+    ///   `2 + 11 = 13` and a deck's turnaround costs `9 + 8 = 17`;
+    /// * `13 + 13 + 17 = 43` fits, `13 + 13 + 13 + 17 = 56` does not, and
+    ///   the third column pays its preceding channel as lead:
+    ///   `11 + 13 + 17 = 41`.
+    #[test]
+    fn bounded_columns_fold_onto_ordered_decks() {
+        use super::*;
+        let graph = InstanceGraph::one_to_one(
+            &Netlist {
+                inputs: vec!["a".into()],
+                outputs: vec!["y".into()],
+                gates: vec![nor("m0", &["a"]), nor("m1", &["m0"]), nor("y", &["m1"])],
+            },
+            &Library::default_library(),
+        )
+        .unwrap();
+        let analysis = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
+        let facts = BTreeMap::new();
+        let pins = BTreeMap::from([
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(0)),
+                pin(Anchor { x: 10, y: 1, z: 20 }, Facing::East),
+            ),
+            (
+                PhysicalEndpointId::DeclaredOutput(PortId(0)),
+                pin(Anchor { x: 72, y: 1, z: 60 }, Facing::East),
+            ),
+        ]);
+        let plan = TopologyAwareSeedPlacer
+            .plan(SeedPlacementRequest {
+                graph: &graph,
+                analysis: &analysis,
+                pins: &pins,
+                block_facts: &facts,
+            })
+            .expect("a bounded board folds its columns onto decks");
+
+        assert_eq!(plan.frame.forward, Facing::East);
+        assert_eq!(plan.frame.origin, Anchor { x: 12, y: 1, z: 20 });
+
+        // Two levels below, one above; the forward levels themselves are
+        // untouched by the fold.
+        let levels = [InstanceId(0), InstanceId(1), InstanceId(2)]
+            .map(|id| plan.analysis.nodes[&id].forward_level);
+        assert_eq!(levels, [0, 1, 2]);
+        let decks = [InstanceId(0), InstanceId(1), InstanceId(2)]
+            .map(|id| plan.analysis.nodes[&id].deck);
+        assert_eq!(decks, [DeckId(0), DeckId(0), DeckId(1)]);
+
+        // A torch stands on its own ground row, so every deck reserves one
+        // row below it and the three-cell channel slab above it.
+        assert_eq!(
+            plan.decks,
+            BTreeMap::from([
+                (
+                    DeckId(0),
+                    DeckPlan {
+                        ground: 1,
+                        min_y: 0,
+                        max_y: 4,
+                    }
+                ),
+                (
+                    DeckId(1),
+                    DeckPlan {
+                        ground: 6,
+                        min_y: 5,
+                        max_y: 9,
+                    }
+                ),
+            ])
+        );
+
+        // Deck 0 steps `12 -> 24` by macro extent plus channel; deck 1
+        // starts over at the same projected forward start.
+        assert_eq!(
+            plan.instances[&InstanceId(0)].preferred_origin,
+            Anchor { x: 24, y: 1, z: 28 }
+        );
+        assert_eq!(
+            plan.instances[&InstanceId(1)].preferred_origin,
+            Anchor { x: 36, y: 1, z: 28 }
+        );
+        assert_eq!(
+            plan.instances[&InstanceId(2)].preferred_origin,
+            Anchor { x: 24, y: 1, z: 28 }
+        );
+
+        // Three 1x2x1 torch envelopes; their union spans forward 12..=25,
+        // one lateral row, and grounds 1..=6: 14 * 1 * 6 = 84.
+        assert_eq!(
+            plan.floorplan,
+            FloorplanMetrics {
+                macro_volume: 6,
+                union_volume: 84,
+                deck_count: 2,
+                cross_deck_nets: 0,
+                vertical_trunk_lanes: 0,
+            }
+        );
     }
 
     fn actual_block_footprint(

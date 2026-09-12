@@ -300,9 +300,10 @@ impl<'a> ResolvedBlocks<'a> {
                     .and_then(|span| span.checked_add(1))
                     .filter(|span| *span > 0)
             };
-            let (Some(width), Some(depth)) = (
+            let (Some(width), Some(depth), Some(height)) = (
                 span(compiled.bounds.min.x, compiled.bounds.max.x),
                 span(compiled.bounds.min.z, compiled.bounds.max.z),
+                span(compiled.bounds.min.y, compiled.bounds.max.y),
             ) else {
                 return Err(SeedError::BlockTooWide { block: instance.id });
             };
@@ -311,6 +312,7 @@ impl<'a> ResolvedBlocks<'a> {
                 BlockFacts {
                     width,
                     depth,
+                    height,
                     delay_ticks: compiled.delay.0,
                 },
             );
@@ -3316,8 +3318,8 @@ pub(crate) mod tests {
     use crate::compile::fragment_synth::certification::CompleteCandidateCertifier;
     use crate::compile::fragment_synth::legacy_adapter::{LegacyCandidateAdapter, LegacyOracle};
     use crate::compile::fragment_synth::placement::{
-        PreferredInstancePose, SeedPlacementError, SeedPlacementPlan, SeedPlacementRequest,
-        SeedPlacer, TopologyAwareSeedPlacer,
+        DeckId, DeckPlan, FloorplanMetrics, PreferredInstancePose, SeedPlacementError,
+        SeedPlacementPlan, SeedPlacementRequest, SeedPlacer, TopologyAwareSeedPlacer,
     };
     use crate::compile::metrics::canonical_fingerprint;
     use crate::compile::planner::{PinRefusal, PortPin};
@@ -3429,6 +3431,21 @@ pub(crate) mod tests {
             automatic_inputs: BTreeMap::new(),
             automatic_outputs: BTreeMap::new(),
             fingerprint: canonical_fingerprint(b"bounded-movement-plan"),
+            decks: BTreeMap::from([(
+                DeckId(0),
+                DeckPlan {
+                    ground: 1,
+                    min_y: 0,
+                    max_y: 4,
+                },
+            )]),
+            floorplan: FloorplanMetrics {
+                macro_volume: 0,
+                union_volume: 0,
+                deck_count: 1,
+                cross_deck_nets: 0,
+                vertical_trunk_lanes: 0,
+            },
         }
     }
 
@@ -3692,6 +3709,59 @@ pub(crate) mod tests {
         );
     }
 
+    /// The block half of `macro_envelopes_keep_their_real_vertical_bounds`:
+    /// a block's height comes from the same certified bounds its width and
+    /// depth do, and an inverted Y span is refused exactly where an
+    /// inverted X or Z span already is.
+    #[test]
+    fn macro_envelopes_keep_their_real_vertical_bounds_for_resolved_blocks() {
+        let (library, config) = default_services_parts();
+        let lowered = crate::compile::lowering::lower_optimised(&not_netlist()).unwrap();
+        let compiled = crate::compile::fragment_synth::blocks::compile_block(
+            "not",
+            &lowered,
+            services(&library, &config),
+        )
+        .expect("the not gate compiles as a block");
+        let inputs = vec!["a".to_string()];
+        let outputs = vec!["y".to_string()];
+        let planning = Netlist {
+            inputs: inputs.clone(),
+            outputs: outputs.clone(),
+            gates: vec![Gate {
+                name: "u0.0".into(),
+                inputs: inputs.clone(),
+                output: outputs[0].clone(),
+                kind: GateKind::Buf,
+            }],
+        };
+        let specs = [crate::compile::fragment_synth::instance_graph::BlockSpec {
+            name: "u0",
+            block: 0,
+            inputs: &inputs,
+            outputs: &outputs,
+        }];
+        let graph = InstanceGraph::with_blocks(&planning, &library, &specs).expect("parent graph");
+        let block_id = graph.blocks[0].id;
+
+        let blocks = [compiled.clone()];
+        let resolved = ResolvedBlocks::resolve(&graph, ParentBlocks { compiled: &blocks })
+            .expect("the block resolves");
+        let facts = resolved.facts[&block_id];
+        assert_eq!(facts.height, compiled.bounds.max.y - compiled.bounds.min.y + 1);
+        assert_eq!(facts.width, compiled.bounds.max.x - compiled.bounds.min.x + 1);
+
+        // An inverted Y span is no box at all, and the existing
+        // block-resolution refusal is where that is said.
+        let mut inverted = compiled.clone();
+        inverted.bounds.max.y = inverted.bounds.min.y - 1;
+        let blocks = [inverted];
+        assert!(matches!(
+            ResolvedBlocks::resolve(&graph, ParentBlocks { compiled: &blocks }),
+            Err(SeedError::BlockTooWide { block }) if block == block_id
+        ));
+    }
+
     fn not_netlist() -> Netlist {
         Netlist {
             inputs: vec!["a".to_string()],
@@ -3736,6 +3806,7 @@ pub(crate) mod tests {
                     reverse_level: 0,
                     head_ticks: 4,
                     tail_ticks: 8,
+                    deck: DeckId(0),
                 },
             )]),
             edges: Vec::new(),
@@ -3886,6 +3957,21 @@ pub(crate) mod tests {
                     },
                 )]),
                 fingerprint: canonical_fingerprint(b"literal-seed-plan"),
+                decks: BTreeMap::from([(
+                    DeckId(0),
+                    DeckPlan {
+                        ground: 7,
+                        min_y: 6,
+                        max_y: 10,
+                    },
+                )]),
+                floorplan: FloorplanMetrics {
+                    macro_volume: 0,
+                    union_volume: 0,
+                    deck_count: 1,
+                    cross_deck_nets: 0,
+                    vertical_trunk_lanes: 0,
+                },
             })
         }
     }
