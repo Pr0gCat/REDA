@@ -502,6 +502,13 @@ pub enum PinRefusal {
     /// Two different nets' pinned cells sit close enough to become one net in
     /// the world: the caller left no gap between them.
     NoGapFrom { other_pinned_cell: Anchor },
+    /// Every declared port is pinned, so the caller's own cells are the
+    /// board's edges -- and this pin's hardware stands outside them.
+    OutsideIoFootprint { cell: Anchor },
+    /// Two terminals want the same cell of clearance: their tunnels -- the
+    /// caller's cell and the handover, each with the halo that keeps a
+    /// neighbouring net out -- overlap, however far apart the pins look.
+    ClearanceConflict { other_port_cell: Anchor },
     /// The one cell this pin's handover may occupy could not be reached. The
     /// caller over-constrained the board, and this pin is what did it.
     UnreachableHandover { cell: Anchor },
@@ -535,6 +542,18 @@ impl std::fmt::Display for PinRefusal {
                 "another net's pinned cell at {} is close enough to join this one -- a pinned \
                  cell needs an empty cell between it and its neighbour",
                 cell(other_pinned_cell)
+            ),
+            Self::OutsideIoFootprint { cell: c } => write!(
+                f,
+                "its cell {} lies outside the board the pinned ports draw -- every port is \
+                 pinned, so their own cells are its edges",
+                cell(c)
+            ),
+            Self::ClearanceConflict { other_port_cell } => write!(
+                f,
+                "another terminal needs {} as clearance -- a terminal owns the caller's \
+                 cell and its handover with a one-cell halo around both",
+                cell(other_port_cell)
             ),
             Self::UnreachableHandover { cell: c } => write!(
                 f,
@@ -2857,6 +2876,157 @@ impl PortPin {
     }
 }
 
+/// Inclusive X/Z board bounds derived only from a complete pin set.
+///
+/// Distinct from the test-only keep-out measurement named `Footprint` below:
+/// that one counts the cells a spacing rule refuses around a conductor, this
+/// one is the rectangle the caller's own cells draw around the whole board.
+///
+/// It exists only when *every* declared port is pinned, because only then is
+/// the rectangle a statement about the board rather than about the handful of
+/// ports somebody happened to fix. A partial set has no footprint at all --
+/// [`from_complete`](Self::from_complete) returns `None` -- and the pins in it
+/// are validated exactly as they were before this type existed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct IoFootprint {
+    pub min_x: i32,
+    pub max_x: i32,
+    pub min_z: i32,
+    pub max_z: i32,
+}
+
+impl IoFootprint {
+    /// The literal min/max X/Z of `caller_cells`, or `None` when they are not
+    /// every port the netlist declares.
+    ///
+    /// `expected_ports == 0` is `None` rather than an empty rectangle: a
+    /// netlist with no ports has no board to bound, and a zero-cell rectangle
+    /// would refuse every cell in it.
+    pub(crate) fn from_complete(
+        expected_ports: usize,
+        caller_cells: impl IntoIterator<Item = Anchor>,
+    ) -> Option<Self> {
+        if expected_ports == 0 {
+            return None;
+        }
+        let mut bounds: Option<Self> = None;
+        let mut seen = 0usize;
+        for cell in caller_cells {
+            seen += 1;
+            bounds = Some(match bounds {
+                None => Self {
+                    min_x: cell.x,
+                    max_x: cell.x,
+                    min_z: cell.z,
+                    max_z: cell.z,
+                },
+                Some(so_far) => Self {
+                    min_x: so_far.min_x.min(cell.x),
+                    max_x: so_far.max_x.max(cell.x),
+                    min_z: so_far.min_z.min(cell.z),
+                    max_z: so_far.max_z.max(cell.z),
+                },
+            });
+        }
+        if seen != expected_ports {
+            return None;
+        }
+        bounds
+    }
+
+    /// Whether `at` stands on the footprint's rectangle. Y is not asked
+    /// about: the board grows upward, and the rectangle is what the caller
+    /// drew on the ground.
+    pub(crate) fn contains_xz(self, at: Anchor) -> bool {
+        (self.min_x..=self.max_x).contains(&at.x) && (self.min_z..=self.max_z).contains(&at.z)
+    }
+
+    /// The same rectangle read along a turned frame's axes, as
+    /// `(forward_min, forward_max, lateral_min, lateral_max)`.
+    ///
+    /// All four corners are projected because a frame may turn the rectangle:
+    /// which corner is furthest forward depends on `forward`, so no two of
+    /// them are enough.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn projected(self, forward: Facing, lateral: Facing) -> (i32, i32, i32, i32) {
+        // The same four-facing match as `fragment_synth::placement::
+        // project_horizontal`, kept private here so the door the planner
+        // refuses pins at does not reach into the synthesiser's frame code.
+        const fn project(x: i32, z: i32, direction: Facing) -> i32 {
+            match direction {
+                Facing::North => -z,
+                Facing::South => z,
+                Facing::East => x,
+                Facing::West => -x,
+                Facing::Up | Facing::Down => unreachable!(),
+            }
+        }
+
+        let corners = [
+            (self.min_x, self.min_z),
+            (self.min_x, self.max_z),
+            (self.max_x, self.min_z),
+            (self.max_x, self.max_z),
+        ];
+        let mut forwards = corners.map(|(x, z)| project(x, z, forward));
+        let mut laterals = corners.map(|(x, z)| project(x, z, lateral));
+        forwards.sort_unstable();
+        laterals.sort_unstable();
+        (forwards[0], forwards[3], laterals[0], laterals[3])
+    }
+}
+
+/// Every cell one pinned terminal needs to itself: the caller's own cell and
+/// the one handover beside it, each with the halo that keeps a neighbouring
+/// net from joining it -- three tall, three wide, two deep.
+///
+/// It stops at the handover. The net cell one step further in is ordinary
+/// net, reachable from any side at any strength that still arrives, so
+/// reserving it would refuse boards that are perfectly buildable.
+///
+/// This enumerates; it removes nothing. Exemptions -- the caller's own cell,
+/// which ships empty, and whatever the caller builds in it -- are the caller's
+/// decision about which claims are required hardware, and this function is
+/// deliberately not where that decision is made.
+pub(crate) fn terminal_tunnel(pin: PortPin, role: PortRole) -> BTreeSet<Anchor> {
+    // The lateral axis is whichever horizontal axis the signal does not travel
+    // along. A vertical `toward` never reaches a tunnel -- validation refuses
+    // it before this runs -- and reading it as travelling along Z keeps this
+    // total rather than panicking on a pin somebody built by hand.
+    let lateral_is_z = matches!(pin.toward, Facing::East | Facing::West);
+
+    let mut cells = BTreeSet::new();
+    for a in 0..=1 {
+        let along = if a == 0 { pin.at } else { pin.handover(role) };
+        for b in -1..=1 {
+            for c in -1..=1 {
+                let lateral = if lateral_is_z { along.z } else { along.x };
+                // Checked, because a pin is data somebody wrote: a cell near
+                // the end of the axis has no halo on that side rather than an
+                // overflow.
+                let (Some(y), Some(lateral)) = (along.y.checked_add(b), lateral.checked_add(c))
+                else {
+                    continue;
+                };
+                cells.insert(if lateral_is_z {
+                    Anchor {
+                        x: along.x,
+                        y,
+                        z: lateral,
+                    }
+                } else {
+                    Anchor {
+                        x: lateral,
+                        y,
+                        z: along.z,
+                    }
+                });
+            }
+        }
+    }
+    cells
+}
+
 /// The ports somebody has decided about, each declared as a **terminal**: the
 /// caller's own cell, plus the one neighbour `toward` names where REDA's
 /// handover hardware stands.
@@ -3769,6 +3939,49 @@ pub(crate) fn validate_port_placements(
                     pin,
                     PinRefusal::CollidesWith {
                         other_port_cell: shared,
+                    },
+                ));
+            }
+        }
+    }
+
+    // Everything above is decidable from one pin, or from two of them, and is
+    // asked of every pin set. What follows needs the *whole* set: only when
+    // every declared port is pinned do the caller's own cells say where the
+    // board ends. A partial set draws no rectangle and leaves here, validated
+    // exactly as it was before footprints existed.
+    let declared = netlist.inputs.len() + netlist.outputs.len();
+    let Some(footprint) =
+        IoFootprint::from_complete(declared, roles.iter().map(|(_, pin, _)| pin.at))
+    else {
+        return Ok(());
+    };
+
+    // The caller's own cells are the edges by construction, so only the two
+    // cells REDA builds for the pin can leave the board.
+    for (port, pin, role) in &roles {
+        for cell in [pin.handover(*role), pin.net_cell(*role)] {
+            if !footprint.contains_xz(cell) {
+                return Err(invalid(port, pin, PinRefusal::OutsideIoFootprint { cell }));
+            }
+        }
+    }
+
+    // Two terminals may share none of their clearance. The collision rule
+    // above compares the three cells a pin owns; this compares the tunnels
+    // around them, which two pins a lawful distance apart can still share.
+    let tunnels: Vec<BTreeSet<Anchor>> = roles
+        .iter()
+        .map(|(_, pin, role)| terminal_tunnel(*pin, *role))
+        .collect();
+    for (index, (port, pin, _)) in roles.iter().enumerate() {
+        for other in &tunnels[index + 1..] {
+            if let Some(shared) = tunnels[index].intersection(other).next() {
+                return Err(invalid(
+                    port,
+                    pin,
+                    PinRefusal::ClearanceConflict {
+                        other_port_cell: *shared,
                     },
                 ));
             }
@@ -8107,9 +8320,9 @@ mod tests {
             placements.pin(
                 *name,
                 Anchor {
-                    x: base_x + 2 * index as i32,
+                    x: base_x + 3 * index as i32,
                     y: 1,
-                    z: max_z + 4,
+                    z: max_z + 4 + 2 * index as i32,
                 },
                 Facing::North,
             );
@@ -8118,9 +8331,9 @@ mod tests {
             placements.pin(
                 signal.as_str(),
                 Anchor {
-                    x: base_x + 2 * index as i32,
+                    x: base_x + 3 * index as i32,
                     y: 1,
-                    z: (min_z - 4).max(1),
+                    z: (min_z - 4 - 2 * index as i32).max(1),
                 },
                 Facing::North,
             );
@@ -12226,6 +12439,47 @@ mod tests {
         }
     }
 
+    /// The footprint is arithmetic, not a policy: a complete pin set gives the
+    /// literal min/max of the caller's own cells, an incomplete one gives
+    /// nothing at all, a set that shares an X gives a rectangle one cell wide
+    /// rather than an error, and the projection into a turned frame is the
+    /// same four corners read along the frame's axes.
+    #[test]
+    fn complete_partial_degenerate_and_turned_footprints_are_literal() {
+        let complete = IoFootprint::from_complete(
+            2,
+            [Anchor { x: 10, y: 1, z: 20 }, Anchor { x: 30, y: 8, z: 50 }],
+        )
+        .unwrap();
+        assert_eq!(complete, IoFootprint { min_x: 10, max_x: 30, min_z: 20, max_z: 50 });
+        assert!(IoFootprint::from_complete(3, [Anchor { x: 10, y: 1, z: 20 }]).is_none());
+        let degenerate = IoFootprint::from_complete(
+            2,
+            [Anchor { x: 10, y: 1, z: 20 }, Anchor { x: 10, y: 1, z: 50 }],
+        )
+        .unwrap();
+        assert_eq!(degenerate.min_x, degenerate.max_x);
+        assert_eq!(complete.projected(Facing::North, Facing::East), (-50, -20, 10, 30));
+    }
+
+    /// A terminal's tunnel is the caller's cell and the one handover beside
+    /// it, each with its own halo: three tall, three wide, two deep. It stops
+    /// at the handover -- the net cell one step further in is ordinary net,
+    /// reachable from any side, and reserving it would refuse boards that are
+    /// perfectly buildable.
+    #[test]
+    fn input_and_output_tunnels_are_three_by_three_by_two() {
+        let input = PortPin { at: Anchor { x: 10, y: 2, z: 10 }, toward: Facing::East };
+        let output = PortPin { at: Anchor { x: 20, y: 2, z: 10 }, toward: Facing::East };
+        let input_cells = terminal_tunnel(input, PortRole::Input);
+        let output_cells = terminal_tunnel(output, PortRole::Output);
+        assert_eq!(input_cells.len(), 18);
+        assert!(input_cells.contains(&Anchor { x: 11, y: 3, z: 11 }));
+        assert!(!input_cells.contains(&Anchor { x: 12, y: 2, z: 10 }));
+        assert!(output_cells.contains(&Anchor { x: 19, y: 1, z: 9 }));
+        assert!(!output_cells.contains(&Anchor { x: 18, y: 2, z: 10 }));
+    }
+
     /// A pin that can never become a terminal is refused by name at the door,
     /// before any planning happens -- not discovered as a routing failure
     /// three stages downstream.
@@ -12347,6 +12601,78 @@ mod tests {
         assert!(
             matches!(refusal, PinRefusal::CollidesWith { .. }),
             "refused, but not as a collision: {refusal}"
+        );
+    }
+
+    /// A **complete** pin set is a statement about the whole board: the cells
+    /// the caller fixed are its edges, so a terminal whose hardware stands
+    /// outside them is asking REDA to build beyond the board the caller drew.
+    /// It is refused at the door, by name, against the cell that left.
+    ///
+    /// The same pin in a **partial** set is not refused: half a pin set draws
+    /// no rectangle, and inventing one from the ports somebody happened to fix
+    /// would refuse layouts that were lawful before footprints existed.
+    #[test]
+    fn complete_pins_refuse_a_handover_outside_their_footprint() {
+        let netlist = two_input_netlist();
+        let mut complete = PortPlacements::default();
+        // The rectangle is x 10..=20, z 10..=20. `a` reads northwards out of
+        // its own north edge, so its handover lands at z = 9, off the board.
+        complete.pin("a", Anchor { x: 10, y: 1, z: 10 }, Facing::North);
+        complete.pin("b", Anchor { x: 10, y: 1, z: 20 }, Facing::North);
+        complete.pin("y", Anchor { x: 20, y: 1, z: 15 }, Facing::South);
+
+        let error = plan_from_netlist(&netlist, &complete)
+            .expect_err("a handover outside the pinned board cannot be built");
+        assert_eq!(
+            error,
+            PlannerError::InvalidPortPin {
+                port: "a".to_string(),
+                at: Anchor { x: 10, y: 1, z: 10 },
+                refusal: PinRefusal::OutsideIoFootprint {
+                    cell: Anchor { x: 10, y: 1, z: 9 },
+                },
+            },
+        );
+
+        // The same pin, alone: two of the three ports stay unpinned, so there
+        // is no footprint to be outside of and the door answers as it always
+        // did. `validate_port_placements` is asked directly -- the claim is
+        // about the door, not about what the planner does downstream of it.
+        let mut partial = PortPlacements::default();
+        partial.pin("a", Anchor { x: 10, y: 1, z: 10 }, Facing::North);
+        validate_port_placements(&netlist, &partial)
+            .expect("a partial pin set is validated exactly as it was before footprints");
+    }
+
+    /// Two terminals four cells apart pass the gap rule and share none of
+    /// their three claimed cells, and still cannot both be built: a terminal
+    /// needs the halo around its caller cell and its handover, and these two
+    /// haloes overlap. The refusal names the first cell they both want.
+    #[test]
+    fn two_complete_pins_whose_tunnels_overlap_are_refused() {
+        let netlist = two_input_netlist();
+        let mut complete = PortPlacements::default();
+        // Two inputs reading southwards side by side, two cells apart: the
+        // column at x = 11 is in both tunnels.
+        complete.pin("a", Anchor { x: 10, y: 1, z: 10 }, Facing::South);
+        complete.pin("b", Anchor { x: 12, y: 1, z: 10 }, Facing::South);
+        complete.pin("y", Anchor { x: 10, y: 1, z: 30 }, Facing::South);
+
+        let error = plan_from_netlist(&netlist, &complete)
+            .expect_err("two terminals cannot share a tunnel");
+        assert_eq!(
+            error,
+            PlannerError::InvalidPortPin {
+                port: "a".to_string(),
+                at: Anchor { x: 10, y: 1, z: 10 },
+                refusal: PinRefusal::ClearanceConflict {
+                    // The lowest cell of the shared column in `Anchor` order:
+                    // the floor under the caller's own cell is part of a
+                    // tunnel too, and it is the first one both pins claim.
+                    other_port_cell: Anchor { x: 11, y: 0, z: 10 },
+                },
+            },
         );
     }
 
@@ -12904,10 +13230,13 @@ mod tests {
     }
 
     /// The acceptance shape of the output-terminal stage: the same full
-    /// adder with **every** port pinned -- the three inputs in the southern
-    /// row the input stage proved out, and both outputs in a northern row of
-    /// their own, one-cell gaps respected, every `toward` carrying the signal
-    /// away from the circuit and into the caller's world. Compiles through
+    /// adder with **every** port pinned -- the three inputs south of the
+    /// circuit and both outputs north of it, every `toward` carrying the
+    /// signal away from the circuit and into the caller's world. Each row is
+    /// a staircase rather than a straight line: a terminal owns a tunnel
+    /// three wide and two deep, so pinned terminals stand three columns apart
+    /// and one step further out than the last, which is the clearance a
+    /// complete pin set is held to. Compiles through
     /// `compile_planned`; every pinned cell ships empty with its handover in
     /// the one neighbour the pin names and nothing that carries a signal in
     /// the other five; no lamp exists anywhere; and the truth table passes end
@@ -12936,9 +13265,9 @@ mod tests {
             placements.pin(
                 *name,
                 Anchor {
-                    x: base_x + 2 * index as i32,
+                    x: base_x + 3 * index as i32,
                     y: 1,
-                    z: max_z + 4,
+                    z: max_z + 4 + 2 * index as i32,
                 },
                 Facing::North,
             );
@@ -12948,9 +13277,9 @@ mod tests {
             placements.pin(
                 signal,
                 Anchor {
-                    x: base_x + 2 * index as i32,
+                    x: base_x + 3 * index as i32,
                     y: 1,
-                    z: (min_z - 4).max(1),
+                    z: (min_z - 4 - 2 * index as i32).max(1),
                 },
                 Facing::North,
             );
