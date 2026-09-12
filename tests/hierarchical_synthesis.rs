@@ -15,8 +15,16 @@
 //! release-only number of seconds, not something the fast default suite
 //! should pay for on every run.
 
-use reda::compile::{compile_hierarchical, HierarchicalNetlist, HierarchyError, SynthesisBudget};
+use std::collections::BTreeMap;
+
+use reda::compile::planner::{Anchor, PortPlacements};
+use reda::compile::topology::GateKind;
+use reda::compile::{
+    compile_hierarchical, Gate, HierarchicalNetlist, HierarchyError, Module, ModuleInstance,
+    PortBinding, SynthesisBudget,
+};
 use reda::frontend::synthesize_verilog_hierarchical;
+use reda::redstone::world::block::{BlockKind, Facing};
 
 /// Every distinct module reachable from `design.top` (`top` included),
 /// walking `ModuleInstance::module` transitively.
@@ -53,6 +61,64 @@ fn compiled_module_count(design: &HierarchicalNetlist) -> Result<usize, Hierarch
     design
         .specialise_constants()
         .map(|specialised| distinct_modules(&specialised))
+}
+
+#[test]
+fn bounded_parent_stamps_one_module_on_two_decks() {
+    let child = Module {
+        inputs: vec!["a".into()],
+        outputs: vec!["y".into()],
+        gates: vec![Gate {
+            name: "not".into(),
+            inputs: vec!["a".into()],
+            output: "y".into(),
+            kind: GateKind::Nor(1),
+        }],
+        instances: vec![],
+    };
+    let instance = |name: &str, input: &str, output: &str| ModuleInstance {
+        name: name.into(),
+        module: "child".into(),
+        ports: BTreeMap::from([
+            ("a".into(), PortBinding::Signal(input.into())),
+            ("y".into(), PortBinding::Signal(output.into())),
+        ]),
+    };
+    let top = Module {
+        inputs: vec!["a".into()],
+        outputs: vec!["y".into()],
+        gates: vec![],
+        instances: vec![instance("low", "a", "mid"), instance("high", "mid", "y")],
+    };
+    let design = HierarchicalNetlist {
+        top: "top".into(),
+        modules: BTreeMap::from([("child".into(), child), ("top".into(), top)]),
+    };
+    let mut pins = PortPlacements::default();
+    pins.pin("a", Anchor { x: 0, y: 1, z: 0 }, Facing::East)
+        .pin(
+            "y",
+            Anchor {
+                x: 100,
+                y: 1,
+                z: 30,
+            },
+            Facing::East,
+        );
+
+    assert_eq!(compiled_module_count(&design).unwrap(), 2);
+    assert_eq!(design.modules["top"].instances[0].module, "child");
+    assert_eq!(design.modules["top"].instances[1].module, "child");
+
+    let result = compile_hierarchical(&design, SynthesisBudget::Evaluations(0), Some(&pins))
+        .expect("the bounded parent certifies");
+    assert_eq!(result.compiled.input_positions["a"], (0, 1, 0));
+    assert_eq!(result.compiled.output_positions["y"], (100, 1, 30));
+    let (size_x, size_y, size_z) = result.compiled.world.size();
+    assert!((5..size_y).any(|y| {
+        (0..size_z)
+            .any(|z| (0..size_x).any(|x| result.compiled.world.get(x, y, z).kind != BlockKind::Air))
+    }));
 }
 
 #[test]

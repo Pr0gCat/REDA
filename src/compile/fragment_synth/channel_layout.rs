@@ -594,6 +594,37 @@ pub(crate) fn plan_deck_channel_layout(
         .into_iter()
         .map(|(_, column)| column)
         .collect::<Vec<_>>();
+    // A bounded upper deck may begin with a synthetic trunk source that
+    // leaves backward. Give that first real column the missing channel on
+    // its leading side; the legacy unbounded layout remains byte-for-byte
+    // unchanged.
+    let needs_leading_channel = footprint.is_some()
+        && levels.first().is_some_and(|&first_level| {
+            nets.iter().any(|net| {
+                (endpoint_level(net.owner, net.source_level) == first_level
+                    && net.source.allowed_exit == frame.forward.opposite())
+                    || net.sinks.iter().any(|sink| {
+                        endpoint_level(sink.endpoint, sink.level) == first_level
+                            && sink.geometry.allowed_entry == frame.forward.opposite()
+                    })
+            })
+        });
+    if needs_leading_channel {
+        let first = columns
+            .first()
+            .cloned()
+            .expect("a first level has a column");
+        let end = first.min_forward - 1;
+        levels.insert(0, levels[0] - 1);
+        columns.insert(
+            0,
+            Column {
+                min_forward: end - LEGACY_TURNAROUND_CHANNEL,
+                max_forward: end - LEGACY_TURNAROUND_CHANNEL,
+                blocked_laterals: BTreeSet::new(),
+            },
+        );
+    }
     // A virtual empty column beyond the last one gives the last level's
     // sources a channel to leave into; a net whose sinks all lie behind its
     // source climbs onto a lane there, runs to a free crossing row, and
@@ -1783,10 +1814,17 @@ pub(crate) fn plan_deck_channel_layout(
         closed_lateral_max = closed_lateral_max.min(max_lateral);
     }
     // The closed layers cover the whole margin, window or not: outside the
-    // window is the callers' side, and the router must never see it open.
+    // window is the callers' side, and the router must never see it open. A
+    // bounded deck also owns its support plane; leaving it open lets routes
+    // bypass the channel between decks.
+    let closed_y_min = if footprint.is_some() && deck != DeckId(0) {
+        ground.saturating_sub(1)
+    } else {
+        ground
+    };
     for forward in forward_min..=forward_max {
         for lateral in closed_lateral_min..=closed_lateral_max {
-            for y in ground..=(ground + 3) {
+            for y in closed_y_min..=(ground + 3) {
                 let cell = frame.cell(forward, lateral, y);
                 if !all_private.contains(&cell)
                     && !owned.values().any(|cells| cells.contains(&cell))
@@ -2118,6 +2156,85 @@ mod tests {
             .closed
             .iter()
             .any(|cell| !footprint.contains_xz(*cell)));
+    }
+
+    #[test]
+    fn bounded_first_column_backward_source_gets_a_leading_channel() {
+        let instance = InstanceId(0);
+        let owner = PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance,
+            node: TopologyNodeId(0),
+        });
+        let opening = Anchor {
+            x: 14,
+            y: UPPER_GROUND,
+            z: 8,
+        };
+        let candidate = one_cell_macros(&[(instance, opening)]);
+        let analysis = flat_analysis(&[instance]);
+        let nets = [DeckNetGeometry {
+            owner,
+            source: SourceGeometry {
+                route_anchor: Anchor { z: 18, ..opening },
+                allowed_exit: Facing::West,
+            },
+            source_level: 0,
+            source_is_synthetic_trunk: true,
+            sinks: vec![DeckSinkGeometry {
+                endpoint: owner,
+                geometry: TargetGeometry {
+                    terminal: opening,
+                    allowed_entry: Facing::East,
+                    support: Anchor {
+                        y: UPPER_GROUND - 1,
+                        ..opening
+                    },
+                    requirement: TerminalRequirement::DirectedDust,
+                },
+                level: 0,
+                synthetic_trunk: false,
+            }],
+        }];
+        let trunk_cell = Anchor {
+            x: 11,
+            y: UPPER_GROUND - 1,
+            z: 18,
+        };
+        let owned = BTreeMap::from([(owner, BTreeSet::from([trunk_cell]))]);
+
+        let layout = plan_deck_channel_layout(
+            &candidate,
+            &analysis,
+            frame(),
+            LateralWindow::default(),
+            DeckId(1),
+            UPPER_GROUND,
+            &BTreeSet::from([instance]),
+            false,
+            Some(IoFootprint {
+                min_x: 0,
+                max_x: 40,
+                min_z: 0,
+                max_z: 30,
+            }),
+            &nets,
+            &owned,
+            &mut 0,
+            &GuardedPhysicalRouter,
+            &mut PhysicalReservations::new(),
+            limits(),
+        )
+        .expect("the upper deck plans");
+
+        let lane = layout.lanes[&(DeckId(1), 0)][&owner];
+        assert!(lane < opening.x);
+        assert!((0..=40).contains(&lane));
+        assert!(layout.closed.contains(&Anchor {
+            x: 11,
+            y: UPPER_GROUND - 1,
+            z: 8,
+        }));
+        assert!(!layout.closed.contains(&trunk_cell));
     }
 
     #[test]

@@ -4419,7 +4419,7 @@ pub(crate) mod tests {
             let mut occupied = BTreeSet::new();
             let mut sources = BTreeMap::new();
             let mut targets = BTreeMap::new();
-            place_blocks(
+            let offsets = place_blocks(
                 &mut candidate,
                 &resolved,
                 &plan,
@@ -4429,10 +4429,11 @@ pub(crate) mod tests {
                 &mut sources,
                 &mut targets,
             )
-            .expect("two blocks on two decks both stand")
+            .expect("two blocks on two decks both stand");
+            (offsets, candidate, occupied)
         };
 
-        let offsets = place(&BTreeMap::new());
+        let (offsets, candidate, occupied) = place(&BTreeMap::new());
         let (lower_pose, upper_pose) = (plan.instances[&lower], plan.instances[&upper]);
         let (lower_offset, upper_offset) = (offsets[&lower], offsets[&upper]);
         assert_eq!(
@@ -4445,10 +4446,47 @@ pub(crate) mod tests {
         );
         assert!(upper_offset.dy > lower_offset.dy);
 
+        let upper_id = PrimitiveId {
+            instance: upper,
+            node: TopologyNodeId(0),
+        };
+        let upper_body = &candidate.placements[&upper_id].blocks;
+        assert!(upper_body.iter().all(|block| occupied.contains(&block.at)));
+        assert!(matches!(
+            claim_blocks(&mut occupied.clone(), upper_body),
+            Err(SeedError::PlacementCollision { .. })
+        ));
+        let upper_level = analysis.nodes[&upper].forward_level as i64;
+        let edges = deck_column_edges(
+            &candidate,
+            &plan.analysis,
+            plan.frame,
+            &BTreeSet::from([upper]),
+            upper_level,
+        )
+        .expect("the upper stamped block contributes a column");
+        let expected = upper_body
+            .iter()
+            .map(|block| {
+                crate::compile::fragment_synth::placement::project_horizontal(
+                    block.at.x,
+                    block.at.z,
+                    plan.frame.forward,
+                )
+            })
+            .fold(None::<(i32, i32)>, |bounds, forward| {
+                Some(match bounds {
+                    None => (forward, forward),
+                    Some((min, max)) => (min.min(forward), max.max(forward)),
+                })
+            })
+            .expect("the upper stamped body is non-empty");
+        assert_eq!(edges, expected);
+
         // A `BlockPlacementOffset` is a horizontal optimisation control: it
         // moves the body across its deck, never onto another one.
         let (dx, dz) = (4, -3);
-        let moved = place(&BTreeMap::from([(upper, BlockPlacementOffset { dx, dz })]));
+        let (moved, _, _) = place(&BTreeMap::from([(upper, BlockPlacementOffset { dx, dz })]));
         assert_eq!(
             moved[&upper],
             Offset {
@@ -5321,10 +5359,7 @@ pub(crate) mod tests {
         assert!(corridor.is_disjoint(&layout.closed));
         assert!(layout.lanes.keys().any(|(deck, _)| *deck == DeckId(1)));
         for ground in [1, 6, 11] {
-            assert!(layout
-                .closed
-                .iter()
-                .any(|at| at.y == ground && at.z == 10));
+            assert!(layout.closed.iter().any(|at| at.y == ground && at.z == 10));
         }
         assert!(layout.closed.iter().all(|at| footprint.contains_xz(*at)));
         assert!(layout.private.values().flatten().all(|at| footprint.contains_xz(*at)));
@@ -5631,6 +5666,97 @@ pub(crate) mod tests {
                 search_config: &config,
             },
         )
+    }
+
+    #[test]
+    fn a_complete_narrow_fixture_certifies_on_two_real_decks() {
+        #[derive(Default)]
+        struct RecordingPlacer(RefCell<Option<SeedPlacementPlan>>);
+
+        impl SeedPlacer for RecordingPlacer {
+            fn plan(
+                &self,
+                request: SeedPlacementRequest<'_>,
+            ) -> Result<SeedPlacementPlan, SeedPlacementError> {
+                self.plan_with_repairs(request, &[])
+            }
+
+            fn plan_with_repairs(
+                &self,
+                request: SeedPlacementRequest<'_>,
+                repairs: &[LayoutRepair],
+            ) -> Result<SeedPlacementPlan, SeedPlacementError> {
+                let result = TopologyAwareSeedPlacer.plan_with_repairs(request, repairs);
+                let plan = result?;
+                *self.0.borrow_mut() = Some(plan.clone());
+                Ok(plan)
+            }
+        }
+
+        let mut signal = "a".to_string();
+        let mut gates = Vec::new();
+        for index in 0..4 {
+            let output = format!("n{index}");
+            gates.push(Gate {
+                name: output.clone(),
+                inputs: vec![signal],
+                output: output.clone(),
+                kind: GateKind::Nor(1),
+            });
+            signal = output;
+        }
+        let netlist = Netlist {
+            inputs: vec!["a".to_string()],
+            outputs: vec![signal.clone()],
+            gates,
+        };
+        let build = |output_x| {
+            let mut pins = PortPlacements::default();
+            pins.pin("a", Anchor { x: 0, y: 1, z: 0 }, Facing::East)
+                .pin(
+                    signal.clone(),
+                    Anchor {
+                        x: output_x,
+                        y: 1,
+                        z: 60,
+                    },
+                    Facing::East,
+                );
+            let library = Library::default_library();
+            let config = SearchConfig::checked_defaults();
+            let placer = RecordingPlacer::default();
+            let certified = compile_sparse_seed_with_services(
+                SeedInput {
+                    lowered: &netlist,
+                    source_provenance: None,
+                    pins: Some(&pins),
+                },
+                SeedServices {
+                    library: &library,
+                    placer: &placer,
+                    router: &GuardedPhysicalRouter,
+                    certifier: &CompleteCandidateCertifier,
+                    search_config: &config,
+                },
+            )?;
+            Ok::<_, SeedError>((
+                certified,
+                placer.0.into_inner().expect("the placer recorded a plan"),
+            ))
+        };
+
+        let (narrow, narrow_plan) = build(75).expect("the narrow board certifies");
+        assert!(narrow_plan.floorplan.deck_count >= 2);
+        let base_ground = narrow_plan.decks[&DeckId(0)].ground;
+        assert!(narrow
+            .candidate()
+            .placements
+            .values()
+            .flat_map(|placement| &placement.blocks)
+            .any(|block| block.at.y >= base_ground + 4));
+
+        let (_wide, wide_plan) = build(200).expect("the widened board certifies");
+        assert_eq!(wide_plan.floorplan.deck_count, 1);
     }
 
     #[test]

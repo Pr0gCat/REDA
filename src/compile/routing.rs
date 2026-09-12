@@ -2025,8 +2025,15 @@ where
         y: start.y.max(goal.y).saturating_add(3),
         z: start.z.max(goal.z).saturating_add(margin),
     };
+    let heuristic = |at| {
+        if strict_local {
+            route_lower_bound(at, goal)
+        } else {
+            manhattan(at, goal)
+        }
+    };
     let mut frontier = BTreeSet::from([SearchState {
-        estimate: manhattan(start, goal),
+        estimate: heuristic(start),
         travelled: 0,
         at: start,
     }]);
@@ -2136,7 +2143,7 @@ where
             travelled.insert(next, next_travelled);
             previous.insert(next, state.at);
             frontier.insert(SearchState {
-                estimate: next_travelled.saturating_add(manhattan(next, goal)),
+                estimate: next_travelled.saturating_add(heuristic(next)),
                 travelled: next_travelled,
                 at: next,
             });
@@ -2236,6 +2243,13 @@ fn manhattan(from: Anchor, to: Anchor) -> u64 {
     u64::from(from.x.abs_diff(to.x))
         + u64::from(from.y.abs_diff(to.y))
         + u64::from(from.z.abs_diff(to.z))
+}
+
+/// A staircase step moves horizontally and vertically at once, so those
+/// distances overlap instead of adding. Flat searches retain Manhattan.
+fn route_lower_bound(from: Anchor, to: Anchor) -> u64 {
+    let horizontal = u64::from(from.x.abs_diff(to.x)) + u64::from(from.z.abs_diff(to.z));
+    horizontal.max(u64::from(from.y.abs_diff(to.y)))
 }
 
 fn step(at: Anchor, direction: Facing) -> Anchor {
@@ -3338,6 +3352,19 @@ mod tests {
             at(0, i32::MIN + 1, 0)
         ));
         assert!(!can_reorder_candidate_checks(at(0, i32::MAX, 0), ordinary));
+    }
+
+    #[test]
+    fn route_lower_bound_counts_a_stair_step_once() {
+        let start = at(0, 1, 0);
+        let raised = at(4, 5, 0);
+        let flat = at(4, 1, 0);
+
+        assert_eq!(route_lower_bound(start, raised), 4);
+        assert_eq!(route_lower_bound(start, flat), manhattan(start, flat));
+        assert!(neighbours(start)
+            .into_iter()
+            .all(|next| route_lower_bound(start, raised) <= 1 + route_lower_bound(next, raised)));
     }
 
     #[test]
