@@ -690,7 +690,7 @@ async function loadCircuit(name) {
   resetSettleDisplay();
   syncAxisRange(true);
   refreshOutputs();
-  build3DGeometry();
+  build3DGeometry(true);
   buildTopology();
 }
 
@@ -796,7 +796,7 @@ function toggleLever(name, btn) {
   refreshSlice();
   refreshOutputs();
   if (pin.pinned) {
-    build3DGeometry();
+    build3DGeometry(false);
   } else {
     update3DStrengths();
   }
@@ -1416,14 +1416,15 @@ function decodeGeometry(bytes) {
 }
 
 /** Rebuild the 3D scene's static geometry from scratch. Called on circuit
- * load/reset and when a pinned input swaps Air and RedstoneBlock. Unpinned
- * lever flips and simulation steps only change strengths.
+ * load/reset and when a pinned input swaps Air and RedstoneBlock. Only frame
+ * the camera when requested; input changes must preserve the user's viewpoint.
+ * Unpinned lever flips and simulation steps only change strengths.
  *
  * Groups cells into one `InstancedMesh` per shape family (`familyForCell`)
  * instead of one mesh for everything -- `seven_segment`'s 19,050 cells stay
  * split across at most a handful of meshes (cube/dust/repeater/etc), each
  * still cheap to raycast and render, rather than one mesh per block. */
-function build3DGeometry() {
+function build3DGeometry(frameView = true) {
   ensureThreeInitialized();
 
   for (const { mesh } of instancedMeshes) scene3d.remove(mesh);
@@ -1480,7 +1481,7 @@ function build3DGeometry() {
 
   setupClipRanges(); // also lays out every instance's matrix via applyClip()
   update3DStrengths();
-  frameCamera();
+  if (frameView) frameCamera();
   threeHint.classList.add('hidden');
 }
 
@@ -3638,7 +3639,7 @@ resetBtn.addEventListener('click', () => {
   // reset() restores the fixture-installed world, whose non-air cells can
   // differ from the currently driven pinned inputs. Rebuild geometry, not
   // just its colours.
-  build3DGeometry();
+  build3DGeometry(true);
 });
 
 // ---------------------------------------------------------------------
