@@ -603,6 +603,12 @@ git commit -m "feat(synthesis): reserve complete-pin terminal tunnels"
   `decks: BTreeMap<DeckId, DeckPlan>` and `floorplan: FloorplanMetrics`.
 - `SeedPlacementError` gains the minimal unit variant
   `NoDeckLayoutFits`; the error text is `no ordered deck layout fits the IO footprint`.
+- Private `DeckColumn { owner, lead, cost, close }` carries only the values
+  required by the shelf pack. `pack_decks(columns, capacity)` returns one
+  `DeckId` per ordered column; `deck_grounds(base, locals)` returns absolute
+  `DeckPlan` intervals.
+- `derive_channel_widths` returns the existing width map plus the lane-count
+  map from the same `lane_count` calls already made for each channel level.
 
 - [ ] **Step 1: Add failing height tests**
 
@@ -624,21 +630,25 @@ the bounds. In `ResolvedBlocks::resolve`, call the existing `span` closure for
 
 - [ ] **Step 4: Add failing pure deck-pack tests**
 
-Test a literal ordered column list against a literal forward capacity:
+Test literal ordered columns against a literal forward capacity:
 
 ```rust
-let columns = [
-    TestColumn { level: 0, width: 6, height: 2 },
-    TestColumn { level: 1, width: 6, height: 5 },
-    TestColumn { level: 2, width: 4, height: 2 },
+let col = |owner, lead, cost| DeckColumn {
+    owner: InstanceId(owner), lead, cost, close: 0,
+};
+let columns = [col(0, 0, 6), col(1, 0, 6), col(2, 0, 4)];
+assert_eq!(pack_decks(&columns, 10).unwrap(), vec![DeckId(0), DeckId(1), DeckId(1)]);
+let closing = [
+    DeckColumn { close: 3, ..col(0, 0, 6) },
+    DeckColumn { close: 3, ..col(1, 2, 4) },
 ];
-let packed = pack_decks(&columns, 10, 0).unwrap();
-assert_eq!(packed.iter().map(|p| p.deck.0).collect::<Vec<_>>(), vec![0, 1, 1]);
-assert_eq!(packed.iter().map(|p| p.level).collect::<Vec<_>>(), vec![0, 1, 2]);
+assert_eq!(pack_decks(&closing, 9).unwrap(), vec![DeckId(0), DeckId(1)]);
 ```
 
 Also assert one width-11 column returns `LateralWindowTooNarrow`, deck order
 never moves a later column backward, and the same inputs produce equal output.
+Add a pure `deck_grounds` check proving two local `(-1, 3)` reservation
+intervals at base ground 1 become absolute intervals `0..=4` and `5..=9`.
 
 - [ ] **Step 5: Verify RED**
 
@@ -646,10 +656,41 @@ never moves a later column backward, and the same inputs produce equal output.
 cargo test --lib ordered_shelf_pack_uses_the_minimum_stable_decks
 ```
 
-- [ ] **Step 6: Implement order-preserving shelf packing and deck grounds**
+- [ ] **Step 6: Add the failing real-plan and metric test**
+
+Add `bounded_columns_fold_onto_ordered_decks` using a three-level NOR chain
+with a complete non-degenerate footprint whose projected forward capacity is
+48 cells. Hand-derive one-lane channel widths and assert levels `0,1` on deck
+0 and level `2` on deck 1. Assert both absolute deck intervals, all three
+forward origins, `deck_count == 2`, `macro_volume == 6`, and
+`union_volume == 84`. Call the real placer, not `pack_decks` directly.
+
+- [ ] **Step 7: Verify real-plan RED**
+
+```powershell
+cargo test --lib bounded_columns_fold_onto_ordered_decks
+```
+
+- [ ] **Step 8: Implement order-preserving shelf packing and deck grounds**
 
 Pack consecutive columns greedily into the complete footprint's usable
-forward span. Preserve `forward_level`; write only `NodeFacts.deck`. For each
+forward span. In bounded mode every deck reuses the same projected
+`start = cursor` and `capacity = forward_limit - start`. A column's `cost` is
+its macro forward span plus its following channel. Deck 0 starts with
+`lead = 0`; the first column of every upper deck pays its preceding channel
+width as `lead`. Charge turnaround once per deck from that deck's closing
+level lane count. Append a column iff lead plus all costs plus the candidate
+closing turnaround fits; otherwise open the next deck. A singleton that does
+not fit returns `LateralWindowTooNarrow { instance }`; non-positive capacity
+returns `NoDeckLayoutFits`. Use `i64` for pack sums. Legacy `None` mode keeps
+its existing guards, turnaround, positions, error and fingerprint unchanged.
+The pack's inclusive `forward_span + channel` is only its conservative fit
+cost; actual origins keep the existing cursor step
+`max_forward - min_forward + channel`.
+
+Initialize `NodeFacts.deck` to deck zero in topology analysis, preserve
+`forward_level`, then mutate only `deck` once in `plan_in_frame` after column
+origins are known. For each
 deck derive the local reservation interval:
 
 ```rust
@@ -662,17 +703,29 @@ Here `next_local_min` is the untranslated lower bound of the deck being placed,
 not the previous deck's bound. `macro_max_y + 3` is the existing router ceiling
 above the highest local endpoint; `3` is the channel slab top. Use checked arithmetic. Compute
 `planned_macro_fill` as the exact rational pair `(macro_volume, union_volume)`;
-never compare floats.
+never compare floats. `macro_volume` is the sum of macro-envelope volumes;
+`union_volume` is the bounding-box volume of the deck-translated macro
+envelopes in `(forward, lateral, y)`. Use each macro's Y envelope at its deck
+ground, not the wider `DeckPlan` reservation interval. `DeckPlan.min_y/max_y`
+are absolute. Empty plans report zero volumes, one base deck, and zero
+cross-deck/trunk counts; their deck map contains `DeckId(0)` with ground
+`frame.origin.y` and absolute reservation interval `ground - 1..=ground + 3`.
 
-- [ ] **Step 7: Verify GREEN and legacy plan identity**
+Update `complete_pins_close_both_placement_axes` for the new bounded refusal
+that replaces its pre-deck `NoFrameFits`, with the arithmetic recorded in the
+test. Do not change legacy error text or unbounded frame selection.
+
+- [ ] **Step 9: Verify GREEN and legacy plan identity**
 
 ```powershell
 cargo test --lib macro_envelopes_keep_their_real_vertical_bounds
 cargo test --lib ordered_shelf_pack_uses_the_minimum_stable_decks
+cargo test --lib bounded_columns_fold_onto_ordered_decks
+cargo test --lib complete_pins_close_both_placement_axes
 cargo test --lib no_blocks_fingerprint_matches_the_pre_task_9_placer_exactly
 ```
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 10: Commit**
 
 ```powershell
 git add src/compile/fragment_synth/placement.rs src/compile/fragment_synth/seed.rs
