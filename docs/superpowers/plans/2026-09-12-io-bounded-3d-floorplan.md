@@ -752,8 +752,8 @@ Create one two-deck primitive fixture and one two-block parent fixture. Assert
 the upper primitive's anchor equals its planned Y. For the block fixture assert:
 
 ```rust
-assert_eq!(upper_offset.dy, upper_pose.preferred_origin.y - compiled.bounds.min.y);
-assert_eq!(lower_offset.dy, lower_pose.preferred_origin.y - compiled.bounds.min.y);
+assert_eq!(upper_offset.dy, (upper_pose.preferred_origin.y - 1) - compiled.bounds.min.y);
+assert_eq!(lower_offset.dy, (lower_pose.preferred_origin.y - 1) - compiled.bounds.min.y);
 assert!(upper_offset.dy > lower_offset.dy);
 ```
 
@@ -775,11 +775,13 @@ ground when constructing `PreferredInstancePose`. In `place_blocks`, replace
 the old frame-origin expression with:
 
 ```rust
-dy: pose.preferred_origin.y - compiled.bounds.min.y,
+dy: (pose.preferred_origin.y - 1) - compiled.bounds.min.y,
 ```
 
 Primitive placement already preserves `preferred_origin.y` through horizontal
-overrides and shell search; do not add another Y field.
+overrides and shell search; do not add another Y field. The `-1` preserves the
+existing contract that a block's included floor row sits one below the deck's
+body/channel ground.
 
 - [ ] **Step 4: Add the minimal physical deck-separation test**
 
