@@ -967,10 +967,26 @@ git commit -m "feat(synthesis): plan independent channels per deck"
 ### Task 9: Allocate vertical trunks and close the footprint perimeter
 
 **Files:**
-- Modify: `src/compile/fragment_synth/placement.rs:345-705`
-- Modify: `src/compile/fragment_synth/seed.rs:160-220,2293-2805`
-- Modify: `src/compile/fragment_synth/channel_layout.rs:89-101`
-- Test: `src/compile/fragment_synth/placement.rs` and `seed.rs` test modules
+- Modify: `src/compile/fragment_synth/placement.rs:177-240,393-1055,1279-1680,2930-3010,4300-4410`
+- Modify: `src/compile/fragment_synth/seed.rs:188-218,718-820,2512-3002`
+- Modify: `src/compile/fragment_synth/channel_layout.rs:155-180,286-421,435-449,1286,1703-1741`
+- Test: the existing test modules in those three files
+
+**Rulings:**
+- Complete bounded placement with at least one pinned input and one packed
+  column is direct-frame-only. `IoFootprint` is exactly the pins' bounding box,
+  so every turned frame's `pin_column_forward_max(false)` reaches or passes
+  `forward_limit` and leaves negative packing capacity. Keep the all-frame loop
+  because it preserves the direct frame's first refusal.
+- Trunk reachability is a routing-time property. Placement lacks the final
+  route anchors, and an envelope-derived conservative bound rejects lanes the
+  router accepts (`folded_two_deck_plan`: bound 9, required 19). Put the band as
+  close to the confined macros as the window permits. A lane still outside the
+  router's real per-sink box becomes `VerticalTrunkUnroutable`; no router API,
+  cap, or refusal category changes.
+- Block bodies reach the deck kernel as placeholder placements keyed by the
+  block's own `InstanceId`; `member_level` therefore already filters them by
+  deck. Task 9 adds no block-specific traversal.
 
 **Interfaces:**
 - Produces:
@@ -987,6 +1003,30 @@ git commit -m "feat(synthesis): plan independent channels per deck"
   ```
 - `SeedPlacementPlan` gains
   `vertical_trunks: BTreeMap<PhysicalEndpointId, VerticalTrunkLane>`.
+- Private placement helpers produce
+  `FrameOutcome::{Placed, BandTooNarrow { required }, NoFit}`;
+  `plan_in_frame` receives `band: i32`. `plan_with_widths` owns the monotonic
+  per-frame loop and invokes a fresh `plan_in_frame` for every band width.
+- `floorplan_metrics` receives the final cross-deck-net and lane counts instead
+  of leaving both metrics at zero.
+- `channel_layout.rs` exposes the following helper, folded over
+  `for_each_member_cell`, so synthetic ends and the kernel use the same
+  member-column extent:
+  ```rust
+  pub(crate) fn deck_column_edges(
+      candidate: &ExpandedPhysicalCandidate,
+      analysis: &SeedPlacementAnalysis,
+      placement_frame: PlacementFrame,
+      members: &BTreeSet<InstanceId>,
+      level: i64,
+  ) -> Option<(i32, i32)>;
+  ```
+- `plan_deck_channel_layout` gains
+  `owned: &BTreeMap<PhysicalEndpointId, BTreeSet<Anchor>>` immediately before
+  `nets`; the legacy wrapper passes an empty map. The kernel seeds these cells
+  into `ChannelLayout.private` before deriving `closed`.
+- `route_all` receives `&SeedPlacementPlan` instead of separately receiving its
+  analysis, frame, window and fingerprint fields.
 - Produces:
   ```rust
   #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1002,82 +1042,201 @@ git commit -m "feat(synthesis): plan independent channels per deck"
   `VerticalTrunkUnroutable` and names that context in `Display`.
   Outer `SeedError::Routing` stays unchanged.
 
-- [ ] **Step 1: Add failing monotonic-band tests**
+#### Task 9a: place the band and lanes
 
-Use a literal graph where the initial pack creates two cross-deck nets and the
-reserved band forces one more column onto the upper deck. Assert band widths
-observed by a test hook are monotonically `[0, 8, 12]`, final lane owners are
-sorted physical source IDs, and repeating the plan is identical. Add a case
-whose band consumes the usable lateral span and assert `NoDeckLayoutFits`.
+- [ ] **Step 1: Add exact failing placement tests**
+
+Reuse the existing `folded_two_deck_plan` fixture exactly: NOR chain
+`a -> m0 -> m1 -> y`, input pin `(10,1,20)`, output pin `(72,1,60)`, East frame,
+capacity 48, decks `[0,0,1]`. Drive the private per-frame seam and assert the
+band sequence is exactly `[0,8]`, there are two physical-source owners, both
+lanes span decks 0 through 1, lane centres are `18` and `22`, metrics become
+`(2,2)`, and two complete plans are equal. The second owner is the upper-deck
+primitive output feeding the deck-zero declared output; do not drop that
+boundary demand. Update `bounded_columns_fold_onto_ordered_decks` to expect
+`(2,2)`. Do not manufacture the old unprovable `[0,8,12]` fixture.
+
+Add `trunk_lanes_clear_terminal_tunnels`: use three literal row-grid centres in
+one band; the inner centre conflicts with an `effective_tunnel` and the next is
+legal.
+
+Add `band_starvation_refuses_no_deck_layout_fits` from the same chain with the
+output lateral changed from `z=60` to `z=44`: the initial bounded pass fits and
+observes band sequence `[0,8]`; the required eight-cell band leaves no fold
+budget, and the typed result is `NoDeckLayoutFits`. Add
+`complete_pins_never_settle_on_a_turned_frame` to pin the ruling and the direct
+frame's first refusal.
 
 - [ ] **Step 2: Verify RED**
 
 ```powershell
 cargo test --lib vertical_trunk_band_only_grows_and_terminates
+cargo test --lib trunk_lanes_clear_terminal_tunnels
+cargo test --lib band_starvation_refuses_no_deck_layout_fits
+cargo test --lib complete_pins_never_settle_on_a_turned_frame
 ```
 
-- [ ] **Step 3: Implement the bounded fixed-point loop**
+- [ ] **Step 3: Implement the bounded fixed point**
 
-Start band width at zero. Pack, derive unique physical source owners whose
-source/sink decks differ, and require one `ROW_GRID` lane per owner. If
-`owners.len() * ROW_GRID` exceeds the reserved band, grow and repack. Never
-shrink. Place lane centers from the projected lateral maximum inward in owner
-order. Stop when the current owners fit.
+For each existing frame candidate, start `band=0`. Each loop calls
+`plan_in_frame` from immutable request/pre-fold state. Under a complete
+footprint, narrow the full lateral window's maximum by `band` before folding,
+so `trial_width = full_width - band` and the existing fold budget becomes
+`trial_width - 2 * WINDOW_MARGIN - ROW_GRID`; partial/unpinned mode keeps its
+exact old window and never creates demand.
 
-- [ ] **Step 4: Add failing trunk/perimeter routing tests**
+After packing, derive cross-deck demand from graph assignments. Map boundaries
+to `DeckId(0)`; map instance endpoints through `analysis.nodes[id].deck`; use
+the same `endpoint_for_driver` identity that `route_all` groups by. A driver
+that current `route_all` cannot name is omitted here so its existing later
+first error is preserved.
 
-For a two-deck net, assert its three-cell-wide private corridor spans every Y
-between deck channel slabs, remains within the footprint, and is absent from
-`closed`. Add a router probe whose only apparent path exits one footprint side
-and re-enters; expect refusal. Add the same probe with partial pins and expect
-the legacy route result. Force a real cross-deck sink past a zero
-`NodeExpansions` limit and assert both
-`failure.context == SeedRoutingContext::VerticalTrunkUnroutable` and the
-underlying `failure.category`; repeat an ordinary route refusal and assert its
-context and formatted text remain byte-identical to the existing expectation.
+Demand requires one `ROW_GRID` pitch per sorted physical source. After
+`confine_laterals` applies its shift, derive the placed macros' post-confinement
+high lateral as `extent_max`; place the band and centres as follows:
 
-- [ ] **Step 5: Verify RED**
-
-```powershell
-cargo test --lib vertical_trunk_is_the_only_open_cross_deck_corridor
+```text
+band_lo = extent_max + WINDOW_MARGIN + 1
+band_hi = band_lo + band - 1
+centre(k) = band_lo + 1 + ROW_GRID * k
 ```
 
-- [ ] **Step 6: Materialize trunks before deck channel closure**
+Candidate centres are considered from the macro-facing edge outward. Their
+three-row corridors must stay inside the footprint and avoid every effective
+terminal tunnel. When at least one lane exists, cap `plan.window.max` at
+`band_lo - 1`; a demand-free plan keeps the old window byte-for-byte. Too few
+exposed legal centres returns `BandTooNarrow { required }`, where `required` is
+the row-grid-rounded maximum of the lane demand and `band + ROW_GRID`; a band
+that leaves the fold `budget < 1` returns `NoDeckLayoutFits`. Existing centres
+are recomputed from each fresh placement, and the band never shrinks.
 
-For each lane, reserve the three lateral rows centered on `lane.lateral`, the
-full usable forward interval, and every Y between first/last deck slabs in the
-owner's `ChannelLayout.private` set. Build each deck's `DeckNetGeometry` with
-the physical endpoints on that deck and a synthetic trunk source/sink at the
-lane; the final `route_all` request still contains only real sinks.
+The cap deliberately leaves only the existing `WINDOW_MARGIN` on the high side
+for crossing, escape, and box-stub rows. Keep
+`complete_pins_close_both_placement_axes` unchanged; `Crossing`, `Escape`, and
+`BoxStub` are the first suspects if Task 10 later exposes insufficient room.
 
-Call the deck-local kernels and merge their layouts in ascending `DeckId`, so
-the lowest deck's first existing error remains authoritative.
+Use the deck-independent usable forward interval for
+`VerticalTrunkLane.min_forward/max_forward`, store the final lanes and narrowed
+window, set both floorplan counters, and keep the existing first-frame refusal
+rule. Add the source-backed direct-frame-only comment beside
+`pin_column_forward_max`'s turned output filter.
 
-Build one-cell `KeepOut` perimeter cells just outside min/max X/Z from the
-lowest route bound through the maximum of all route
-`max(source.y, sink.y) + 3` bounds. Omit a side below world zero and use checked
-arithmetic. Insert perimeter and trunk reservations before any deck computes
-`closed`.
-
-Before `route_all`, derive a `BTreeSet<RoutedSinkId>` for real sinks whose
-source deck differs from their sink deck. When mapping a router failure, use
-membership in that set to select
-`SeedRoutingContext::VerticalTrunkUnroutable`; synthetic channel-layout
-endpoints never enter the final route request. Do not add a case to the shared
-`RouterRefusalCategory`.
-
-- [ ] **Step 7: Verify GREEN**
+- [ ] **Step 4: Verify GREEN and commit 9a**
 
 ```powershell
 cargo test --lib vertical_trunk_band_only_grows_and_terminates
-cargo test --lib vertical_trunk_is_the_only_open_cross_deck_corridor
-cargo test --lib derived_deck_spacing_separates_unrelated_cells_but_keeps_the_trunk
+cargo test --lib trunk_lanes_clear_terminal_tunnels
+cargo test --lib band_starvation_refuses_no_deck_layout_fits
+cargo test --lib complete_pins_never_settle_on_a_turned_frame
+cargo test --lib complete_pins_close_both_placement_axes
+cargo test --lib bounded_columns_fold_onto_ordered_decks
+cargo test --lib no_blocks_fingerprint_matches_the_pre_task_9_placer_exactly
+git add src/compile/fragment_synth/placement.rs
+git commit -m "feat(synthesis): allocate deterministic vertical trunk lanes"
 ```
 
-- [ ] **Step 8: Commit**
+#### Task 9b: open and route the trunks
+
+- [ ] **Step 5: Add failing routing tests**
+
+Use one three-deck fixture with a net whose source is on deck 0, real sink on
+deck 2, and no real endpoint of that net on deck 1. Deck 1 still contains an
+unrelated packed member, as every deck produced by `pack_decks` does. Assert
+source/sink/transit synthetic flags,
+one continuous three-row private corridor, no corridor cell in merged
+`closed`, neighbouring slab cells still closed, all cells within the footprint,
+the transit deck plans the lane rather than returning an empty layout, and no
+synthetic endpoint appears in final `RouteSink`s. This is the real production
+test for both Task 8 flags and `ChannelLayout::merge`.
+
+Add `deck_layouts_are_planned_in_ascending_deck_order`: make two deck kernels
+refuse differently and assert the lower `DeckId` error wins.
+
+Add one perimeter/router probe covering both modes: complete pins create a
+one-cell ring just outside all four sides and refuse the only leave/re-enter
+path; the same partial-pin request creates no ring and keeps the legacy route.
+Assert the ring's Y rows are the union of every real leg's exact
+`min(source.y, approach.y)..=max(source.y, approach.y)+3`, with no cell one row
+above and world-negative sides omitted.
+
+Before changing `Display`, extend the existing routing-failure fixture with its
+literal old string. Then force a real cross-deck sink past zero
+`NodeExpansions` and assert `VerticalTrunkUnroutable` plus the unchanged
+`RouterRefusalCategory`; ordinary failures use `Ordinary` and preserve the old
+string byte-for-byte.
+
+- [ ] **Step 6: Verify RED**
 
 ```powershell
-git add src/compile/fragment_synth/placement.rs src/compile/fragment_synth/seed.rs src/compile/fragment_synth/channel_layout.rs
+cargo test --lib vertical_trunk_is_the_only_open_cross_deck_corridor
+cargo test --lib deck_layouts_are_planned_in_ascending_deck_order
+cargo test --lib footprint_perimeter_closes_only_the_rows_a_route_can_reach
+cargo test --lib cross_deck_refusal_names_its_context
+```
+
+- [ ] **Step 7: Open the kernel seam**
+
+Seed `owned` into `ChannelLayout.private` immediately after creating the
+layout, before the existing closed pass builds `all_private`. The legacy wrapper
+passes an empty map. Remove `ChannelLayout::merge`'s temporary dead-code allow.
+
+- [ ] **Step 8: Orchestrate real deck views in `route_all`**
+
+Pass the whole placement plan to `route_all` and keep the one existing
+`RouteSchedule`; never reschedule per deck. Build the perimeter from each real
+scheduled leg using the same source anchor and sink approach the router sees,
+reserve it under a distinct `PERIMETER_OWNER`, and do not create it when the
+plan has no complete footprint.
+
+Build each lane's full three-row x usable-forward x first-ground-through-last-
+slab corridor as owner-private cells; reserve none of them directly. For each
+deck, members are exactly nodes whose `NodeFacts.deck` matches. Build one
+`DeckNetGeometry` view per real net:
+
+- source deck: real source plus a synthetic sink at the closing member level's
+  forward edge;
+- sink-only deck: synthetic source at the opening member level's forward edge
+  plus only the real sinks on that deck;
+- intermediate deck: both synthetic source and sink.
+
+Synthetic ends sit at that edge, `lane.lateral`, and deck ground; use
+`DirectedDust`, support at `ground-1`, an along-forward entry/exit, the physical
+source as owner, and the existing boolean flags. They may extend only the
+lateral band, never a member column's forward edge. Call kernels and merge in
+ascending `DeckId`; boundaries are included only on deck zero. The final router
+request continues to be built solely from the original real schedule/pending
+targets.
+
+Resolve each opening/closing forward edge through the shared
+`deck_column_edges` helper rather than repeating the member walk. The legacy
+wrapper passes an empty `owned` map.
+
+After `RouteSchedule::build`, derive the real cross-deck `RoutedSinkId` set
+inside `route_all` with boundaries as deck zero. Pass `Ordinary` or
+`VerticalTrunkUnroutable` to `seed_routing_failure`; add no
+`RouterRefusalCategory`. Keep the old `Display` call untouched for `Ordinary`
+and append context text only for the trunk case.
+
+- [ ] **Step 9: Verify GREEN**
+
+```powershell
+cargo test --lib vertical_trunk_is_the_only_open_cross_deck_corridor
+cargo test --lib deck_layouts_are_planned_in_ascending_deck_order
+cargo test --lib footprint_perimeter_closes_only_the_rows_a_route_can_reach
+cargo test --lib cross_deck_refusal_names_its_context
+cargo test --lib derived_deck_spacing_separates_unrelated_cells_but_keeps_the_trunk
+cargo test --lib compile::fragment_synth::channel_layout::tests
+cargo test --lib no_blocks_fingerprint_matches_the_pre_task_9_placer_exactly
+```
+
+- [ ] **Step 10: Record and commit 9b**
+
+Record the direct-frame and routing-time-reach rulings, observed band sequence,
+lane counts, and focused RED/GREEN evidence. Do not run release or acceptance
+harnesses in this task.
+
+```powershell
+git add src/compile/fragment_synth/seed.rs src/compile/fragment_synth/channel_layout.rs
 git commit -m "feat(synthesis): route deterministic vertical trunks"
 ```
 
@@ -1120,7 +1279,9 @@ allowed. Re-run the focused test after each minimal fix.
 In `tests/hierarchical_synthesis.rs`, create a complete-pin parent with two
 instances of one compiled child. Pins must derive an East-facing frame. Assert
 both stamps share one compiled module, occupy different decks, flatten into one
-candidate, and certify.
+candidate, and certify. Assert the upper deck's planned columns include the
+stamped block's forward extent and its cells participate in that deck's
+occupied-cell exclusion.
 
 - [ ] **Step 5: Verify RED then GREEN**
 

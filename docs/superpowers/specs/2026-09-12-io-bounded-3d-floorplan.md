@@ -198,14 +198,28 @@ When bounded mode fits in one deck, every macro stays on the base deck, but
 its X/Z position may improve through bounded dynamic spacing. Deck folding
 activates only when the complete IO footprint requires it.
 
+A complete footprint with at least one pinned input and one packed column is
+direct-frame-only in this experiment. The footprint is the pins' own bounding
+box, so a turned frame's rule that all levels start past the whole pin column
+has no forward capacity. The existing frame loop remains to preserve the direct
+frame's first refusal; this task does not invent a different turned-frame
+pin-column contract.
+
 Vertical-trunk demand and macro placement are resolved by one monotonic bounded loop:
 
 1. Start with a zero-width vertical-trunk band.
 2. Run bounded lateral legalization and deck packing in the remaining span.
-3. Derive cross-deck nets in stable source/sink order. The initial trial gives
-   each such net one stable lane; lanes are not reused.
-4. If the required band is wider than the reserved band, enlarge it and rerun
-   from step 2. The band never shrinks.
+3. Derive cross-deck nets in stable source/sink order. Boundary endpoints count
+   as deck zero. The initial trial gives each physical source one stable lane;
+   lanes are not reused.
+4. Lane centres are row-grid cells in a reserved band immediately outside the
+   confined macro extent, considered from the macro-facing edge outward. The
+   channel window ends immediately before that band whenever at least one lane
+   exists. A three-row corridor must avoid every effective terminal tunnel. If
+   the current band exposes too few legal centres, enlarge it to the smallest
+   strictly larger row-grid multiple that meets the current demand, or by one
+   further pitch when the width already suffices but a centre is blocked, then
+   rerun from a fresh pre-fold placement. The band never shrinks.
 5. Stop when the current placement's lanes fit, or refuse when the remaining
    macro span cannot fit.
 
@@ -213,6 +227,12 @@ Because the band width is monotonic and the footprint is finite, this loop
 terminates without a search over alternative layouts. Reserving the band
 before lateral legalization prevents a later vertical trunk from crossing a
 macro.
+
+Trunk reachability is a routing-time property. Placement has no final route
+anchors, and bounds reconstructed from macro envelopes reject lanes that the
+existing router accepts. A lane excluded by the router's real per-sink search
+box therefore surfaces as `SeedRoutingContext::VerticalTrunkUnroutable`; no
+router API, cap, or refusal category is added.
 
 Every post-plan horizontal movement obeys the same footprint predicate.
 `InstancePlacementOverride`, `BlockPlacementOffset`, each candidate from
@@ -239,8 +259,8 @@ channel layout is materialized:
    deferred until measurement shows that the simpler allocation is inadequate.
 3. The existing router builds the staircases and refreshes; a new 3D router is
    not introduced.
-4. Every vertical-trunk cell is inserted under its net in the existing
-   `ChannelLayout.private` map before that layout derives `closed`. The
+4. Every vertical-trunk cell is seeded under its net in the existing
+   `ChannelLayout.private` map before that deck layout derives `closed`. The
    channel's existing `ground..=ground+3` closed slab remains a channel-local
    routing rule, not a deck-height rule; vertical-trunk cells are holes through that
    slab. A deck's outer separation still uses the full dynamic union of macro,
@@ -253,6 +273,13 @@ The existing local `riser` closure in `channel_layout.rs` keeps its current
 meaning: it reserves closed floor support beneath one deck's staircase. This
 design calls the open cross-deck path a *vertical trunk* so the two opposite
 reservation roles cannot be confused.
+
+Deck zero owns physical input/output boundaries. On a source deck, a real
+source receives one synthetic trunk sink at that deck's closing column; on a
+sink-only deck, a synthetic trunk source at the opening column feeds the real
+sinks; an intermediate deck receives both. Synthetic ends reuse the physical
+source as owner, are marked by the existing flags, and are channel-planning
+data only: final router requests still contain only real sinks.
 
 Per-deck channel widening is keyed by `(deck, level)` so equal local levels on
 different decks cannot alias. Existing `LayoutRepair::WidenChannel` remains
@@ -271,15 +298,16 @@ produces one packed column, so this does not widen an unrelated deck. Deck
 layouts are attempted in ascending `DeckId`, preserving a deterministic first
 error.
 
-The footprint does not require a new `PhysicalReservations` API. After the
-deck plan determines the existing router's finite Y search range, bounded mode
+The footprint does not require a new `PhysicalReservations` API. Bounded mode
 adds a one-cell-thick closed perimeter immediately outside the four X/Z sides
-for that whole range. Existing `closed -> KeepOut` handling prevents a route
-from leaving and re-entering the footprint. The ground rule closes the bottom;
-each route's existing start/goal-derived search bound closes the top. A side
-that would lie below the growable world's zero boundary is omitted because the
-world already closes it; all other perimeter coordinates use checked
-arithmetic. The final exhaustive owned-coordinate check remains authoritative.
+for the union of every real source/sink leg's existing search interval:
+`min(source.y, approach.y)..=max(source.y, approach.y)+3`. Existing
+`closed -> KeepOut` handling prevents a route from leaving and re-entering the
+footprint. The ground rule closes the bottom; each leg's existing search bound
+closes the top. A side that would lie below the growable world's zero boundary
+is omitted because the world already closes it; all other perimeter
+coordinates use checked arithmetic. The final exhaustive owned-coordinate
+check remains authoritative.
 
 ## 6. Normalization and density
 
