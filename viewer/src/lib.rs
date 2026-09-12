@@ -245,14 +245,33 @@ fn baked_facing(name: &str) -> Option<Facing> {
     }
 }
 
+/// The inverse of [`baked_facing`]: the sidecar's own spelling of a facing,
+/// which is also what [`Session::pinout`] hands back to the page. Total over
+/// the facings a port can actually carry -- `baked_facing` refuses `up` and
+/// `down`, so a vertical one never reaches here.
+fn baked_facing_name(facing: Facing) -> &'static str {
+    match facing {
+        Facing::North => "north",
+        Facing::South => "south",
+        Facing::East => "east",
+        Facing::West => "west",
+        Facing::Up | Facing::Down => unreachable!(
+            "a port facing is horizontal by construction -- `baked_facing` accepts nothing else"
+        ),
+    }
+}
+
+/// The caller cell a port lives at, and which way it faces -- `None` for an
+/// unpinned port, which is not a caller cell at all but a lever or lamp this
+/// viewer owns, and so points nowhere.
 fn baked_port_position(
     world: &World,
     port: &str,
     baked: BakedPort,
     role: PortRole,
-) -> Result<([i32; 3], bool), String> {
+) -> Result<([i32; 3], Option<Facing>), String> {
     let (at, toward, handover) = match baked {
-        BakedPort::Unpinned(at) => return Ok((at, false)),
+        BakedPort::Unpinned(at) => return Ok((at, None)),
         BakedPort::Pinned { at, toward, handover } => (at, toward, handover),
     };
     let role_name = match role {
@@ -286,7 +305,7 @@ fn baked_port_position(
         PortRole::Output => output_terminal_handover(world, recorded),
     };
     match found {
-        Some(found) if [found.x, found.y, found.z] == handover => Ok((at, true)),
+        Some(found) if [found.x, found.y, found.z] == handover => Ok((at, Some(toward_facing))),
         Some(found) => Err(format!(
             "{role_name} port `{port}` at caller cell {at:?}: expected handover {handover:?}, but shipped world {role_name} terminal was found at {:?}",
             [found.x, found.y, found.z]
@@ -571,6 +590,12 @@ struct Pin {
     y: i32,
     z: i32,
     pinned: bool,
+    /// Which way this port's caller cell faces, spelled as the baked sidecar
+    /// spells it, or `null` for an unpinned port -- one this viewer drives
+    /// with a lever or reads with a lamp of its own, which faces nowhere.
+    /// Always present, so a page reads the field rather than the `pinned`
+    /// flag to decide whether there is a direction to draw.
+    toward: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -932,10 +957,21 @@ pub struct Session {
     /// double as the names `set_lever` takes.
     input_positions: BTreeMap<String, (i32, i32, i32)>,
     input_controls: BTreeMap<String, InputControl>,
+    /// Signal name -> which way that input's pinned caller cell faces, keyed
+    /// exactly as `input_positions` is. `None` for an unpinned port, and so
+    /// `None` for every port of a circuit this crate compiled itself: only a
+    /// pre-baked sidecar states a facing. This is the `toward` a pinned port
+    /// was validated against in `baked_port_position`, kept rather than
+    /// dropped -- see [`Pin::toward`].
+    input_toward: BTreeMap<String, Option<Facing>>,
     /// `(display_name, lamp coordinate)`, in each circuit's declared output
     /// order (not alphabetical -- `full_adder`'s `sum` before `cout`,
     /// `seven_segment`'s `a` before `b`, etc).
     output_positions: Vec<(String, (i32, i32, i32))>,
+    /// Display name -> port facing, the output half of `input_toward`. Keyed
+    /// by display name (what `output_positions` carries), not by the internal
+    /// signal name a sidecar may have used for the same port.
+    output_toward: BTreeMap<String, Option<Facing>>,
     pinned_outputs: Vec<(i32, i32, i32)>,
     /// The primitive-topology expansion of this circuit's own netlist --
     /// connectivity only, no positions (see this module's "Primitive
@@ -1049,7 +1085,9 @@ impl Session {
             world,
             input_positions,
             input_controls,
+            input_toward,
             output_positions_by_signal,
+            output_toward_by_signal,
             pinned_outputs,
         ) = match baked {
             // A pre-baked world skips compilation entirely: the litematic IS
@@ -1070,29 +1108,38 @@ impl Session {
                 )?;
                 let mut input_positions = BTreeMap::new();
                 let mut input_controls = BTreeMap::new();
+                let mut input_toward = BTreeMap::new();
                 for (name, port) in baked_inputs {
-                    let (at, pinned) = baked_port_position(&world, &name, port, PortRole::Input)?;
+                    let (at, toward) = baked_port_position(&world, &name, port, PortRole::Input)?;
                     input_positions.insert(name.clone(), (at[0], at[1], at[2]));
-                    let control =
-                        if pinned { InputControl::CallerCell } else { InputControl::Lever };
-                    input_controls.insert(name, control);
+                    let control = if toward.is_some() {
+                        InputControl::CallerCell
+                    } else {
+                        InputControl::Lever
+                    };
+                    input_controls.insert(name.clone(), control);
+                    input_toward.insert(name, toward);
                 }
 
                 let mut output_positions = BTreeMap::new();
+                let mut output_toward = BTreeMap::new();
                 let mut pinned_outputs = Vec::new();
                 for (name, port) in baked_outputs {
-                    let (at, pinned) = baked_port_position(&world, &name, port, PortRole::Output)?;
-                    output_positions.insert(name, (at[0], at[1], at[2]));
-                    if pinned {
+                    let (at, toward) = baked_port_position(&world, &name, port, PortRole::Output)?;
+                    output_positions.insert(name.clone(), (at[0], at[1], at[2]));
+                    if toward.is_some() {
                         pinned_outputs.push((at[0], at[1], at[2]));
                     }
+                    output_toward.insert(name, toward);
                 }
 
                 (
                     world,
                     input_positions,
                     input_controls,
+                    input_toward,
                     output_positions,
+                    output_toward,
                     pinned_outputs,
                 )
             }
@@ -1118,11 +1165,26 @@ impl Session {
                     .keys()
                     .map(|name| (name.clone(), InputControl::Lever))
                     .collect();
+                // Nothing this crate compiles is pinned, so no port faces
+                // anywhere: the levers and lamps below are the viewer's own,
+                // not a caller's cells.
+                let input_toward = compiled
+                    .input_positions
+                    .keys()
+                    .map(|name| (name.clone(), None))
+                    .collect();
+                let output_toward = compiled
+                    .output_positions
+                    .keys()
+                    .map(|name| (name.clone(), None))
+                    .collect();
                 (
                     compiled.world,
                     compiled.input_positions,
                     input_controls,
+                    input_toward,
                     compiled.output_positions,
+                    output_toward,
                     Vec::new(),
                 )
             }
@@ -1187,6 +1249,7 @@ impl Session {
                 .collect()
         };
 
+        let mut output_toward = BTreeMap::new();
         let output_positions = outputs
             .into_iter()
             .map(|(display_name, signal_name)| {
@@ -1201,6 +1264,14 @@ impl Session {
                     .ok_or_else(|| {
                         format!("circuit metadata is missing required output port `{display_name}`")
                     })?;
+                // Re-keyed to the display name by the same alias resolution,
+                // so a facing cannot land on a port the coordinate did not.
+                let toward = output_toward_by_signal
+                    .get(&signal_name)
+                    .or_else(|| output_toward_by_signal.get(&display_name))
+                    .copied()
+                    .flatten();
+                output_toward.insert(display_name.clone(), toward);
                 Ok((display_name, position))
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -1234,7 +1305,9 @@ impl Session {
             initial_world,
             input_positions,
             input_controls,
+            input_toward,
             output_positions,
+            output_toward,
             pinned_outputs,
             primitive_graph,
             gate_meta,
@@ -1384,11 +1457,24 @@ impl Session {
         vec![x, y, z]
     }
 
-    /// `{ inputs: [{name, x, y, z, pinned}], outputs: [{name, x, y, z, pinned}] }`.
+    /// `{ inputs: [{name, x, y, z, pinned, toward}], outputs: [{name, x, y,
+    /// z, pinned, toward}] }`, where `toward` is `null` or one of `"north"`,
+    /// `"south"`, `"east"`, `"west"`.
     ///
     /// Only meaningful when called from JS -- see the module doc comment on
-    /// why a native `cargo test` cannot call this.
+    /// why a native `cargo test` cannot call this. The value itself is built
+    /// by [`Session::pinout_view`], which native tests can call.
     pub fn pinout(&self) -> JsValue {
+        serde_wasm_bindgen::to_value(&self.pinout_view())
+            .expect("Pinout serializes without error -- it is plain strings and integers")
+    }
+
+    /// The plain Rust value behind [`Session::pinout`]. Split out for the
+    /// same reason [`Session::gate_level`] is: what a page draws a pin from
+    /// -- its coordinate, whether it is pinned, and which way it faces -- has
+    /// to be testable without a browser. See
+    /// `baked_pinout_format_tests::pinout_json_carries_every_ports_facing`.
+    fn pinout_view(&self) -> Pinout {
         let inputs = self
             .input_positions
             .iter()
@@ -1398,6 +1484,7 @@ impl Session {
                 y,
                 z,
                 pinned: self.input_controls[name] == InputControl::CallerCell,
+                toward: self.input_toward[name].map(baked_facing_name),
             })
             .collect();
         let outputs = self
@@ -1409,10 +1496,10 @@ impl Session {
                 y,
                 z,
                 pinned: self.pinned_outputs.contains(&(x, y, z)),
+                toward: self.output_toward[name].map(baked_facing_name),
             })
             .collect();
-        serde_wasm_bindgen::to_value(&Pinout { inputs, outputs })
-            .expect("Pinout serializes without error -- it is plain strings and integers")
+        Pinout { inputs, outputs }
     }
 
     /// `[{id, name, colour}]` for every block kind `reda` knows about, so a
@@ -2070,7 +2157,9 @@ mod repeater_delay_geometry_tests {
             initial_world,
             input_positions: BTreeMap::new(),
             input_controls: BTreeMap::new(),
+            input_toward: BTreeMap::new(),
             output_positions: Vec::new(),
+            output_toward: BTreeMap::new(),
             pinned_outputs: Vec::new(),
             primitive_graph,
             gate_meta: Vec::new(),
@@ -2256,6 +2345,56 @@ mod pinned_baked_session_tests {
         }
         session.run_until_stable().unwrap();
         assert!(session.simulator.world().get(53, 1, 10).lit);
+    }
+
+    /// A pinned port's `toward` is not a validation-time throwaway: it is the
+    /// direction the caller's own cell faces, and the one fact a page needs to
+    /// draw a pin as anything other than a bare coordinate. The session must
+    /// still be able to answer it after `build_inner` has finished checking it
+    /// against the shipped world.
+    #[test]
+    fn pinned_baked_session_keeps_each_ports_facing() {
+        let session = Session::build_inner("grown:and4", Some(pinned_and4_baked_parts()))
+            .expect("typed baked session builds");
+
+        assert_eq!(
+            session.input_toward.get("a"),
+            Some(&Some(Facing::North)),
+            "the pinned input keeps the facing its sidecar declared"
+        );
+        for unpinned in ["b", "c", "d"] {
+            assert_eq!(
+                session.input_toward.get(unpinned),
+                Some(&None),
+                "unpinned input `{unpinned}` faces nowhere -- it is a lever, not a caller cell"
+            );
+        }
+        assert_eq!(
+            session.output_toward.get(and4::OUTPUT_NAME),
+            Some(&Some(Facing::North)),
+            "the pinned output keeps the facing its sidecar declared"
+        );
+    }
+
+    /// Nothing is pinned in a circuit this crate compiles itself, so every
+    /// port faces nowhere -- `None` is the answer for the whole catalog, not
+    /// just for a port that happens to be missing from a sidecar.
+    #[test]
+    fn compiled_session_has_no_port_facings() {
+        let session = Session::build("and4").expect("and4 compiles");
+
+        for input in ["a", "b", "c", "d"] {
+            assert_eq!(
+                session.input_toward.get(input),
+                Some(&None),
+                "compiled input `{input}` must be present and face nowhere"
+            );
+        }
+        assert_eq!(
+            session.output_toward.get(and4::OUTPUT_NAME),
+            Some(&None),
+            "compiled output must be present and face nowhere"
+        );
     }
 
     #[test]
@@ -2445,6 +2584,46 @@ mod baked_pinout_format_tests {
             }
             other => panic!("output `y` must be the exact structured pinned port, got {other:?}"),
         }
+    }
+
+    /// The sidecar's own spelling of a facing is what goes back out to the
+    /// page: `null` for a port nobody pinned, and the same lowercase compass
+    /// name [`baked_facing`] accepts for one that was. `toward` is present on
+    /// every pin either way -- a page must be able to read the field without
+    /// first asking whether the port is pinned.
+    #[test]
+    fn pinout_json_carries_every_ports_facing() {
+        let session = Session::build_inner("grown:and4", Some(pinned_and4_baked_parts()))
+            .expect("typed baked session builds");
+
+        let pinout = serde_json::to_value(session.pinout_view())
+            .expect("the pinout view is plain strings, integers, booleans and nulls");
+        let pin = |side: &str, name: &str| {
+            pinout[side]
+                .as_array()
+                .expect("each side of the pinout is an array")
+                .iter()
+                .find(|pin| pin["name"] == name)
+                .unwrap_or_else(|| panic!("{side} must list port `{name}`"))
+                .clone()
+        };
+
+        assert_eq!(pin("inputs", "a")["toward"], serde_json::json!("north"));
+        for unpinned in ["b", "c", "d"] {
+            let entry = pin("inputs", unpinned);
+            assert!(
+                entry
+                    .as_object()
+                    .expect("a pin is a JSON object")
+                    .contains_key("toward"),
+                "unpinned input `{unpinned}` must still carry the `toward` key"
+            );
+            assert_eq!(entry["toward"], serde_json::Value::Null);
+        }
+        assert_eq!(
+            pin("outputs", and4::OUTPUT_NAME)["toward"],
+            serde_json::json!("north")
+        );
     }
 
     #[test]

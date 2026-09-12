@@ -757,6 +757,10 @@ function resetSettleDisplay() {
   settleWorstEl.textContent = '—';
 }
 
+function pinTowardLabel(pin) {
+  return pin.toward ? ` ${pin.toward.toUpperCase()}` : '';
+}
+
 // ---------------------------------------------------------------------
 // Inputs (levers)
 // ---------------------------------------------------------------------
@@ -773,7 +777,7 @@ function buildLeverUI() {
 
     const label = document.createElement('span');
     label.innerHTML = `<span class="pin-name">${pin.name}</span> `
-      + `<span class="pin-coord">(${pin.x}, ${pin.y}, ${pin.z})</span>`;
+      + `<span class="pin-coord">(${pin.x}, ${pin.y}, ${pin.z})${pinTowardLabel(pin)}</span>`;
 
     const btn = document.createElement('button');
     const on = leverState.get(pin.name);
@@ -837,7 +841,7 @@ function buildOutputUI() {
 
     const label = document.createElement('span');
     label.innerHTML = `<span class="pin-name">${pin.name}</span> `
-      + `<span class="pin-coord">(${pin.x}, ${pin.y}, ${pin.z})</span>`;
+      + `<span class="pin-coord">(${pin.x}, ${pin.y}, ${pin.z})${pinTowardLabel(pin)}</span>`;
 
     const badge = document.createElement('span');
     badge.className = 'output-badge';
@@ -1224,23 +1228,34 @@ const SHAPE_TEMPLATES = {
 // why there are no lights in the scene.
 const sharedMaterial3d = new THREE.MeshBasicMaterial({ vertexColors: true });
 
-// Pin markers: a translucent purple box drawn slightly larger than the cell
-// it marks, so the block inside still shows through in its own colour and
-// the marker's faces never z-fight with it. Its own material, not
-// `sharedMaterial3d` -- that one is opaque, vertex-coloured and edge-faded,
-// none of which a marker wants; `depthWrite: false` keeps a marker from
-// hiding whatever is behind it. Geometry and material live here, at module
-// level, because they are reusable across circuits -- only the mesh is
-// rebuilt when the pinout changes.
+// Pin markers are bright wireframes drawn over blocks, so they remain visible
+// in dense circuits without hiding the cell they identify.
 const PIN_MARKER_SIZE = 1.12;
-const PIN_MARKER_COLOUR = '#be78ff';
-const pinMarkerGeometry3d = new THREE.BoxGeometry(PIN_MARKER_SIZE, PIN_MARKER_SIZE, PIN_MARKER_SIZE);
-const pinMarkerMaterial3d = new THREE.MeshBasicMaterial({
-  color: PIN_MARKER_COLOUR,
-  transparent: true,
-  opacity: 0.3,
+const INPUT_PIN_COLOUR = '#be78ff';
+const OUTPUT_PIN_COLOUR = '#42d7ff';
+const pinMarkerGeometry3d = new THREE.EdgesGeometry(
+  new THREE.BoxGeometry(PIN_MARKER_SIZE, PIN_MARKER_SIZE, PIN_MARKER_SIZE),
+);
+const inputPinMarkerMaterial3d = new THREE.LineBasicMaterial({
+  color: INPUT_PIN_COLOUR,
+  depthTest: false,
   depthWrite: false,
 });
+const outputPinMarkerMaterial3d = new THREE.LineBasicMaterial({
+  color: OUTPUT_PIN_COLOUR,
+  depthTest: false,
+  depthWrite: false,
+});
+
+function pinDirectionWorld(toward) {
+  switch (toward) {
+    case 'north': return { x: 0, y: 0, z: -1 };
+    case 'east': return { x: 1, y: 0, z: 0 };
+    case 'south': return { x: 0, y: 0, z: 1 };
+    case 'west': return { x: -1, y: 0, z: 0 };
+    default: return null;
+  }
+}
 
 // ---------------------------------------------------------------------
 // Block edges -- see the "Block edges" section of
@@ -1332,12 +1347,12 @@ let controls3d = null;
 //   rotationY: Float32Array -- instance i's fixed Y rotation (radians), from facing }
 let instancedMeshes = [];
 let meshEntryByObject = new Map(); // THREE.InstancedMesh -> its instancedMeshes entry, for hover
-// The pin markers' own InstancedMesh, deliberately *not* one of
+// The pin markers' own group, deliberately *not* one of
 // `instancedMeshes`: it is built from the pinout rather than from
 // `geometry()`, so `build3DGeometry`'s rebuild (which a pinned input flip
 // triggers) must leave it standing in the scene, and hover raycasts -- which
 // walk `instancedMeshes` -- must never hit a marker instead of its block.
-let pinMarkerMesh3d = null;
+let pinMarkerGroup3d = null;
 let pinMarkerCoords3d = null; // Float32Array, 3 per pin: world x, y, z (cell corner, as cellCoords3d)
 let cellCount3d = 0;
 let cellCoords3d = null; // Float32Array, 3 per cell: world x, y, z (cell corner, not centre)
@@ -1553,23 +1568,22 @@ function update3DStrengths() {
   }
 }
 
-/** Build the one `InstancedMesh` marking every input and output pin, from
- * the pinout alone. Called once per circuit load, right after
+/** Build the edge frames marking every input and output pin from the pinout
+ * alone. Called once per circuit load, right after
  * `build3DGeometry` and never from it: the pins a circuit has do not move
  * when a pinned input swaps Air and RedstoneBlock, so that rebuild leaves
- * these markers standing. Instances are laid out by `applyClip`, like every
- * other instance in the scene. */
+ * these markers standing. */
 function build3DPinMarkers() {
   ensureThreeInitialized();
 
-  if (pinMarkerMesh3d) {
-    // Geometry and material are shared across circuits -- drop the mesh only.
-    scene3d.remove(pinMarkerMesh3d);
-    pinMarkerMesh3d = null;
+  if (pinMarkerGroup3d) {
+    // Geometry and material are shared across circuits -- drop the group only.
+    scene3d.remove(pinMarkerGroup3d);
+    pinMarkerGroup3d = null;
   }
 
   const pins = [...pinout.inputs, ...pinout.outputs];
-  if (pins.length === 0) return; // a circuit with no pins gets no marker mesh at all
+  if (pins.length === 0) return; // a circuit with no pins gets no marker group at all
   pinMarkerCoords3d = new Float32Array(pins.length * 3);
   for (let i = 0; i < pins.length; i++) {
     pinMarkerCoords3d[i * 3] = pins[i].x;
@@ -1577,10 +1591,31 @@ function build3DPinMarkers() {
     pinMarkerCoords3d[i * 3 + 2] = pins[i].z;
   }
 
-  pinMarkerMesh3d = new THREE.InstancedMesh(pinMarkerGeometry3d, pinMarkerMaterial3d, pins.length);
-  pinMarkerMesh3d.count = pins.length;
-  scene3d.add(pinMarkerMesh3d);
-  applyClip(); // place the new instances (and hide any already outside the clip box)
+  pinMarkerGroup3d = new THREE.Group();
+  for (let i = 0; i < pins.length; i++) {
+    const pin = pins[i];
+    // ponytail: one tiny line object per pin; merge only if high-I/O viewers
+    // measure this as a rendering bottleneck.
+    const material = i < pinout.inputs.length ? inputPinMarkerMaterial3d : outputPinMarkerMaterial3d;
+    const marker = new THREE.LineSegments(pinMarkerGeometry3d, material);
+    marker.position.set(pin.x + 0.5, pin.y + 0.5, pin.z + 0.5);
+    marker.renderOrder = 1;
+    const worldDirection = pinDirectionWorld(pin.toward);
+    if (worldDirection) {
+      const direction = new THREE.Vector3(worldDirection.x, worldDirection.y, worldDirection.z);
+      const origin = direction.clone().multiplyScalar(-0.8);
+      const arrow = new THREE.ArrowHelper(direction, origin, 1.6, material.color.getHex(), 0.35, 0.24);
+      for (const part of [arrow.line, arrow.cone]) {
+        part.material.depthTest = false;
+        part.material.depthWrite = false;
+        part.renderOrder = 2;
+      }
+      marker.add(arrow);
+    }
+    pinMarkerGroup3d.add(marker);
+  }
+  scene3d.add(pinMarkerGroup3d);
+  applyClip(); // hide any markers already outside the clip box
 }
 
 /** Reset every clip slider to the current circuit's full world extent --
@@ -1650,18 +1685,12 @@ function applyClip() {
     mesh.instanceMatrix.needsUpdate = true;
   }
 
-  if (!pinMarkerMesh3d) return;
-  for (let i = 0; i < pinMarkerMesh3d.count; i++) {
+  if (!pinMarkerGroup3d) return;
+  for (let i = 0; i < pinMarkerGroup3d.children.length; i++) {
     const x = pinMarkerCoords3d[i * 3], y = pinMarkerCoords3d[i * 3 + 1], z = pinMarkerCoords3d[i * 3 + 2];
-    const visible = x >= xMin && x <= xMax && y >= yMin && y <= yMax && z >= zMin && z <= zMax;
-    scratchPosition.set(x + 0.5, y + 0.5, z + 0.5);
-    scratchQuaternion.identity(); // markers are axis-aligned; no facing to follow
-    const s = visible ? 1 : 0;
-    scratchScale.set(s, s, s);
-    scratchMatrix.compose(scratchPosition, scratchQuaternion, scratchScale);
-    pinMarkerMesh3d.setMatrixAt(i, scratchMatrix);
+    pinMarkerGroup3d.children[i].visible =
+      x >= xMin && x <= xMax && y >= yMin && y <= yMax && z >= zMin && z <= zMax;
   }
-  pinMarkerMesh3d.instanceMatrix.needsUpdate = true;
 }
 
 const throttledClipInput = rafThrottle(() => {
@@ -3559,6 +3588,60 @@ function drawBase() {
   ctx.drawImage(offscreen, 0, 0, w, h, 0, 0, canvas.width, canvas.height);
 }
 
+function draw2DPinDirection(pin, cellSize) {
+  const direction = pinDirectionWorld(pin.toward);
+  if (!direction || cellSize < 6) return;
+
+  const here = sliceCoord(currentAxisName, pin.x, pin.y, pin.z);
+  const next = sliceCoord(
+    currentAxisName,
+    pin.x + direction.x,
+    pin.y + direction.y,
+    pin.z + direction.z,
+  );
+  const screen = toScreen(currentAxisName, here.outer, here.inner, currentGeom);
+  const cx = (screen.col + 0.5) * cellSize;
+  const cy = (screen.row + 0.5) * cellSize;
+  const radius = Math.max(2, cellSize * 0.18);
+  ctx.fillStyle = ctx.strokeStyle;
+
+  if (next.index !== here.index) {
+    // Dot = toward the viewer, cross = away. With the existing side-view
+    // screen axes, -X and +Z face the viewer.
+    const positive = next.index > here.index;
+    const towardViewer = currentAxisName === 'X' ? !positive : positive;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+    ctx.stroke();
+    if (towardViewer) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, Math.max(1, radius * 0.3), 0, Math.PI * 2);
+      ctx.fill();
+    } else {
+      const d = radius * 0.65;
+      ctx.beginPath();
+      ctx.moveTo(cx - d, cy - d); ctx.lineTo(cx + d, cy + d);
+      ctx.moveTo(cx + d, cy - d); ctx.lineTo(cx - d, cy + d);
+      ctx.stroke();
+    }
+    return;
+  }
+
+  const nextScreen = toScreen(currentAxisName, next.outer, next.inner, currentGeom);
+  const dx = Math.sign(nextScreen.col - screen.col);
+  const dy = Math.sign(nextScreen.row - screen.row);
+  const tipX = cx + dx * cellSize * 0.32;
+  const tipY = cy + dy * cellSize * 0.32;
+  const tailX = cx - dx * cellSize * 0.28;
+  const tailY = cy - dy * cellSize * 0.28;
+  const wing = cellSize * 0.14;
+  ctx.beginPath();
+  ctx.moveTo(tailX, tailY); ctx.lineTo(tipX, tipY);
+  ctx.moveTo(tipX, tipY); ctx.lineTo(tipX - dx * wing - dy * wing, tipY - dy * wing + dx * wing);
+  ctx.moveTo(tipX, tipY); ctx.lineTo(tipX - dx * wing + dy * wing, tipY - dy * wing - dx * wing);
+  ctx.stroke();
+}
+
 /** Outline every input and output pin that lies on the slice on screen. A
  * pin cell is frequently Air (a lever's or a lamp's control cell) or looks
  * exactly like its neighbours, so without an outline the only way to find
@@ -3568,20 +3651,26 @@ function drawBase() {
  * drift from the cell it names, and drawn before `drawOverlay`'s zoom-based
  * early returns so pins stay findable even zoomed all the way out. */
 function draw2DPinMarkers(cellSize) {
-  ctx.strokeStyle = PIN_MARKER_COLOUR;
   ctx.lineWidth = cellSize >= 6 ? 2 : 1;
   const inset = ctx.lineWidth / 2;
   const markerSize = Math.max(1, cellSize - ctx.lineWidth);
-  for (const pin of [...pinout.inputs, ...pinout.outputs]) {
-    const { index, outer, inner } = sliceCoord(currentAxisName, pin.x, pin.y, pin.z);
-    if (index !== currentIndex) continue;
-    const { col, row } = toScreen(currentAxisName, outer, inner, currentGeom);
-    ctx.strokeRect(
-      col * cellSize + inset,
-      row * cellSize + inset,
-      markerSize,
-      markerSize,
-    );
+  for (const [pins, colour] of [
+    [pinout.inputs, INPUT_PIN_COLOUR],
+    [pinout.outputs, OUTPUT_PIN_COLOUR],
+  ]) {
+    ctx.strokeStyle = colour;
+    for (const pin of pins) {
+      const { index, outer, inner } = sliceCoord(currentAxisName, pin.x, pin.y, pin.z);
+      if (index !== currentIndex) continue;
+      const { col, row } = toScreen(currentAxisName, outer, inner, currentGeom);
+      ctx.strokeRect(
+        col * cellSize + inset,
+        row * cellSize + inset,
+        markerSize,
+        markerSize,
+      );
+      draw2DPinDirection(pin, cellSize);
+    }
   }
 }
 
