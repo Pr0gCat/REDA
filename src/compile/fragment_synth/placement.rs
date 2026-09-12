@@ -193,6 +193,19 @@ pub(crate) enum LayoutRepair {
         level: i64,
         width: i32,
     },
+    /// The bounded form of [`LayoutRepair::WidenChannel`], appended after it
+    /// so the legacy variants keep their order, their serialised shape and
+    /// their `Ord` ranking.
+    ///
+    /// `level` is the analysis's stable global forward level and is what the
+    /// placer widens; `deck` is only which deck that level was packed onto
+    /// when the channel refused, because a later repack may carry the same
+    /// level somewhere else.
+    WidenDeckChannel {
+        deck: DeckId,
+        level: i64,
+        width: i32,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1055,14 +1068,21 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
         request: SeedPlacementRequest<'_>,
         repairs: &[LayoutRepair],
     ) -> Result<SeedPlacementPlan, SeedPlacementError> {
+        // Both widening repairs name the same stable global forward level,
+        // and one level is exactly one packed column, so they feed one
+        // level-keyed minimum: a bounded repair's deck is a diagnostic, not
+        // a second key the placer could widen independently.
         let mut minimum_widths = BTreeMap::<i64, i32>::new();
         for repair in repairs {
-            if let LayoutRepair::WidenChannel { level, width } = *repair {
-                minimum_widths
-                    .entry(level)
-                    .and_modify(|known| *known = (*known).max(width))
-                    .or_insert(width);
-            }
+            let (level, width) = match *repair {
+                LayoutRepair::WidenChannel { level, width }
+                | LayoutRepair::WidenDeckChannel { level, width, .. } => (level, width),
+                _ => continue,
+            };
+            minimum_widths
+                .entry(level)
+                .and_modify(|known| *known = (*known).max(width))
+                .or_insert(width);
         }
         let mut plan = self.plan_with_widths(request, &minimum_widths)?;
         let repairs = repairs.iter().copied().collect::<BTreeSet<_>>();
@@ -1100,7 +1120,9 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
                         )?;
                     }
                 }
-                LayoutRepair::WidenChannel { .. } => {}
+                // Both widening repairs were already consumed into
+                // `minimum_widths` above; neither moves an owner.
+                LayoutRepair::WidenChannel { .. } | LayoutRepair::WidenDeckChannel { .. } => {}
                 LayoutRepair::SeparateOwners {
                     source_owner,
                     sink_owner,

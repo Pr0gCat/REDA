@@ -17,13 +17,14 @@ use super::channel_plan::{
     FORWARD_MARGIN, LANE_MARGIN, LANE_PITCH, LEGACY_TURNAROUND_CHANNEL,
 };
 use super::identity::PhysicalEndpointId;
-use super::identity::{RouteId, RoutedSinkId};
+use super::identity::{InstanceId, RouteId, RoutedSinkId};
 use super::placement::{
-    horizontal_unit, project_horizontal, LateralWindow, PlacementFrame, SeedPlacementAnalysis,
-    ROW_GRID,
+    horizontal_unit, project_horizontal, DeckId, LateralWindow, PlacementFrame,
+    SeedPlacementAnalysis, ROW_GRID,
 };
 use super::seed::{reserve_route, step, step_many, SourceGeometry, TargetGeometry};
 use crate::compile::geometry::Anchor;
+use crate::compile::planner::IoFootprint;
 use crate::compile::routing::{
     NonEmptyRouteSinks, PhysicalReservationKind, PhysicalReservationOwner, PhysicalReservations,
     PhysicalRouter, PlacedBlock, RealisedRouteTree, ReservationStore, RouteEndpoint, RouteSink,
@@ -50,6 +51,36 @@ pub(crate) struct NetGeometry {
     pub source: PhysicalEndpointId,
     pub source_geometry: SourceGeometry,
     pub sinks: Vec<(PhysicalEndpointId, TargetGeometry)>,
+}
+
+/// One sink as one deck sees it.
+///
+/// `level` is stated rather than inferred from `endpoint`: a deck plans its
+/// own columns, and the forward level a landing belongs to is the caller's
+/// fact, not something the layout should re-derive from an endpoint kind.
+///
+/// `synthetic_trunk` marks an end that is not a real terminal at all -- the
+/// cell where a vertical trunk leaves or arrives on this deck. It carries the
+/// net's owner as its `endpoint` so diagnostics still name the net, and it is
+/// never offered a pinned-port stub, because no caller pinned it.
+#[derive(Debug, Clone)]
+pub(crate) struct DeckSinkGeometry {
+    pub endpoint: PhysicalEndpointId,
+    pub geometry: TargetGeometry,
+    pub level: i64,
+    pub synthetic_trunk: bool,
+}
+
+/// One net's presence on one deck: the source it is driven from there and
+/// the ordered ends it has to reach there.
+#[derive(Debug, Clone)]
+pub(crate) struct DeckNetGeometry {
+    /// The net's identity, unchanged across every deck it appears on.
+    pub owner: PhysicalEndpointId,
+    pub source: SourceGeometry,
+    pub source_level: i64,
+    pub source_is_synthetic_trunk: bool,
+    pub sinks: Vec<DeckSinkGeometry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
@@ -82,6 +113,22 @@ pub(crate) enum ChannelLayoutError {
     Escape(EscapeError),
     #[error("pinned output {endpoint:?} cannot be joined to its column edge")]
     BoxStub { endpoint: PhysicalEndpointId },
+    /// The bounded form of [`ChannelLayoutError::ChannelTooNarrow`],
+    /// appended after every legacy variant so their order is unchanged.
+    /// Only a deck planned under an IO footprint reports it.
+    #[error(
+        "deck {deck:?} channel {channel} after level {level} spans {available} forward cells but {lanes} lanes need {needed}"
+    )]
+    DeckChannelTooNarrow {
+        deck: DeckId,
+        channel: usize,
+        /// The analysis's stable global forward level before the channel;
+        /// the input boundary is one below the first level.
+        level: i64,
+        available: i32,
+        lanes: usize,
+        needed: i32,
+    },
 }
 
 /// The cells the plan hands to the router.
@@ -91,8 +138,11 @@ pub(crate) struct ChannelLayout {
     pub closed: BTreeSet<Anchor>,
     /// Cells one net owns; every other route sees them as keep-outs.
     pub private: BTreeMap<PhysicalEndpointId, BTreeSet<Anchor>>,
-    /// Lane forward coordinate per net and channel, for tests and reports.
-    pub lanes: Vec<BTreeMap<PhysicalEndpointId, i32>>,
+    /// Lane forward coordinate per net, keyed by the deck and channel it
+    /// belongs to, for tests and reports.  Equal channel indices on
+    /// different decks are different keys, so merging two decks cannot
+    /// silently concatenate them into one another's report.
+    pub lanes: BTreeMap<(DeckId, usize), BTreeMap<PhysicalEndpointId, i32>>,
     /// Staircase floors a net's box stub needs, reserved for the net's route
     /// before any route runs so no route conducts through them.
     pub floors: BTreeMap<PhysicalEndpointId, Vec<PlacedBlock>>,
@@ -100,6 +150,34 @@ pub(crate) struct ChannelLayout {
     /// cell at every descent and jog row and its two neighbours): the
     /// router places no refresh repeater on them.
     pub departures: BTreeMap<PhysicalEndpointId, BTreeSet<Anchor>>,
+}
+
+impl ChannelLayout {
+    /// Unions another deck's layout into this one.
+    ///
+    /// Every per-net collection is additive: one net may own cells on more
+    /// than one deck, and its route sees all of them.  The lane report is
+    /// not -- one `(deck, channel)` is planned exactly once -- so a
+    /// duplicate key is a planning bug rather than something to overwrite.
+    #[cfg_attr(not(test), allow(dead_code))]
+    pub(crate) fn merge(&mut self, other: ChannelLayout) {
+        self.closed.extend(other.closed);
+        for (owner, cells) in other.private {
+            self.private.entry(owner).or_default().extend(cells);
+        }
+        for (owner, floors) in other.floors {
+            self.floors.entry(owner).or_default().extend(floors);
+        }
+        for (owner, cells) in other.departures {
+            self.departures.entry(owner).or_default().extend(cells);
+        }
+        for (key, lanes) in other.lanes {
+            assert!(
+                self.lanes.insert(key, lanes).is_none(),
+                "duplicate deck channel",
+            );
+        }
+    }
 }
 
 /// How far beyond the placed macros the closed channel layers extend, inside
@@ -182,6 +260,54 @@ pub(crate) enum EscapeError {
     NoCorridor { endpoint: PhysicalEndpointId },
 }
 
+/// The lowest and highest forward level a member macro stands on, exactly
+/// as the kernel's own column pass derives them: the same filters, the same
+/// skip of a placement or junction that contributes no cell.
+///
+/// The legacy wrapper needs these before the kernel runs, because a boundary
+/// endpoint's level is defined relative to them.
+fn member_levels(
+    candidate: &ExpandedPhysicalCandidate,
+    analysis: &SeedPlacementAnalysis,
+    members: &BTreeSet<InstanceId>,
+) -> Option<(i64, i64)> {
+    let level_of_instance = |instance: InstanceId| -> Option<i64> {
+        members
+            .contains(&instance)
+            .then(|| analysis.nodes.get(&instance))
+            .flatten()
+            .map(|facts| facts.forward_level as i64)
+    };
+    let mut bounds: Option<(i64, i64)> = None;
+    let mut seen = |level: i64| {
+        bounds = Some(match bounds {
+            None => (level, level),
+            Some((min, max)) => (min.min(level), max.max(level)),
+        });
+    };
+    for (primitive, placement) in &candidate.placements {
+        if placement.blocks.is_empty() {
+            continue;
+        }
+        if let Some(level) = level_of_instance(primitive.instance) {
+            seen(level);
+        }
+    }
+    for junction in candidate.junctions.values() {
+        if junction.cells.is_empty() {
+            continue;
+        }
+        if let Some(level) = level_of_instance(junction.id) {
+            seen(level);
+        }
+    }
+    bounds
+}
+
+/// The flat, unbounded planner: one synthetic deck covering every instance
+/// the analysis knows, the physical boundaries included, and no IO
+/// footprint.  Its cells are exactly what this module produced before decks
+/// existed.
 pub(crate) fn plan_channel_layout(
     candidate: &ExpandedPhysicalCandidate,
     analysis: &SeedPlacementAnalysis,
@@ -192,21 +318,131 @@ pub(crate) fn plan_channel_layout(
     reservations: &mut PhysicalReservations,
     limits: RouterLimits,
 ) -> Result<ChannelLayout, ChannelLayoutError> {
-    let frame = Frame {
-        forward: placement_frame.forward,
-        lateral: placement_frame.lateral,
-    };
     let ground = nets
         .iter()
         .map(|net| net.source_geometry.route_anchor.y)
         .min()
         .unwrap_or(1);
+    // Every instance the kernel could be asked about: a flat design has one
+    // deck, so nothing is filtered out.
+    let members = analysis
+        .nodes
+        .keys()
+        .copied()
+        .chain(candidate.placements.keys().map(|id| id.instance))
+        .chain(candidate.junctions.keys().copied())
+        .collect::<BTreeSet<_>>();
+    let Some((min_level, max_level)) = member_levels(candidate, analysis, &members) else {
+        // The kernel returns the same empty layout, but it would do so only
+        // after this wrapper had already resolved levels the columns do not
+        // exist to hold.
+        return Ok(ChannelLayout::default());
+    };
+    // The levels this module used to infer from the endpoint kind, resolved
+    // once here so the kernel is told them.  A level the analysis does not
+    // know still refuses the endpoint by name, in the same net-then-sink
+    // order the line pass used to reach it in.
+    let level_of_instance = |instance: InstanceId| -> Option<i64> {
+        members
+            .contains(&instance)
+            .then(|| analysis.nodes.get(&instance))
+            .flatten()
+            .map(|facts| facts.forward_level as i64)
+    };
+    let raw_level = |endpoint: PhysicalEndpointId| -> Option<i64> {
+        match endpoint {
+            PhysicalEndpointId::PrimaryInput(_) => Some(min_level - 1),
+            PhysicalEndpointId::DeclaredOutput(_) => Some(max_level + 1),
+            PhysicalEndpointId::PrimitiveOutput(primitive) => level_of_instance(primitive.instance),
+            PhysicalEndpointId::Junction(instance) => level_of_instance(instance),
+            PhysicalEndpointId::Landing(connection) => match connection {
+                super::identity::ConnectionId::External { instance, .. }
+                | super::identity::ConnectionId::Internal { instance, .. } => {
+                    level_of_instance(instance)
+                }
+            },
+        }
+    };
+    let mut deck_nets = Vec::with_capacity(nets.len());
+    for net in nets {
+        let source_level =
+            raw_level(net.source).ok_or(ChannelLayoutError::UnplacedEndpoint {
+                endpoint: net.source,
+            })?;
+        let mut sinks = Vec::with_capacity(net.sinks.len());
+        for (endpoint, geometry) in &net.sinks {
+            sinks.push(DeckSinkGeometry {
+                endpoint: *endpoint,
+                geometry: *geometry,
+                level: raw_level(*endpoint).ok_or(ChannelLayoutError::UnplacedEndpoint {
+                    endpoint: *endpoint,
+                })?,
+                synthetic_trunk: false,
+            });
+        }
+        deck_nets.push(DeckNetGeometry {
+            owner: net.source,
+            source: net.source_geometry,
+            source_level,
+            source_is_synthetic_trunk: false,
+            sinks,
+        });
+    }
+    plan_deck_channel_layout(
+        candidate,
+        analysis,
+        placement_frame,
+        window,
+        DeckId(0),
+        ground,
+        &members,
+        true,
+        None,
+        &deck_nets,
+        router,
+        reservations,
+        limits,
+    )
+}
+
+/// One deck's channel layout: the columns its own macros form, the channels
+/// between them and the cells every net owns there.
+///
+/// `deck`/`ground` say which horizontal slab this is and at what row;
+/// `members` is the only source of macros, so two decks never see each
+/// other's columns even when their local levels are equal.
+/// `include_boundaries` is deck zero's privilege -- the caller's physical
+/// input and output boundaries stand at one absolute height, so only the
+/// deck they stand on plans around them.  `footprint` closes the slab to the
+/// caller's board when a complete pin set drew one; `None` is the legacy,
+/// open-ended layout.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn plan_deck_channel_layout(
+    candidate: &ExpandedPhysicalCandidate,
+    analysis: &SeedPlacementAnalysis,
+    placement_frame: PlacementFrame,
+    window: LateralWindow,
+    deck: DeckId,
+    ground: i32,
+    members: &BTreeSet<InstanceId>,
+    include_boundaries: bool,
+    footprint: Option<IoFootprint>,
+    nets: &[DeckNetGeometry],
+    router: &dyn PhysicalRouter,
+    reservations: &mut PhysicalReservations,
+    limits: RouterLimits,
+) -> Result<ChannelLayout, ChannelLayoutError> {
+    let frame = Frame {
+        forward: placement_frame.forward,
+        lateral: placement_frame.lateral,
+    };
 
     // ---- columns -------------------------------------------------------
-    let level_of_instance = |instance| {
-        analysis
-            .nodes
-            .get(&instance)
+    let level_of_instance = |instance: InstanceId| -> Option<i64> {
+        members
+            .contains(&instance)
+            .then(|| analysis.nodes.get(&instance))
+            .flatten()
             .map(|facts| facts.forward_level as i64)
     };
     let mut by_level = BTreeMap::<i64, Column>::new();
@@ -242,47 +478,33 @@ pub(crate) fn plan_channel_layout(
         (Some(&min), Some(&max)) => (min, max),
         _ => return Ok(ChannelLayout::default()),
     };
-    for (endpoint, boundary) in &candidate.boundaries {
-        let level = match endpoint {
-            PhysicalEndpointId::PrimaryInput(_) => min_level - 1,
-            PhysicalEndpointId::DeclaredOutput(_) => max_level + 1,
-            _ => continue,
-        };
-        for block in &boundary.blocks {
-            occupy(&mut by_level, level, block.at);
+    if include_boundaries {
+        for (endpoint, boundary) in &candidate.boundaries {
+            let level = match endpoint {
+                PhysicalEndpointId::PrimaryInput(_) => min_level - 1,
+                PhysicalEndpointId::DeclaredOutput(_) => max_level + 1,
+                _ => continue,
+            };
+            for block in &boundary.blocks {
+                occupy(&mut by_level, level, block.at);
+            }
         }
     }
-    let raw_level = |endpoint: PhysicalEndpointId| -> Option<i64> {
-        match endpoint {
-            PhysicalEndpointId::PrimaryInput(_) => Some(min_level - 1),
-            PhysicalEndpointId::DeclaredOutput(_) => Some(max_level + 1),
-            PhysicalEndpointId::PrimitiveOutput(primitive) => level_of_instance(primitive.instance),
-            PhysicalEndpointId::Junction(instance) => level_of_instance(instance),
-            PhysicalEndpointId::Landing(connection) => match connection {
-                super::identity::ConnectionId::External { instance, .. }
-                | super::identity::ConnectionId::Internal { instance, .. } => {
-                    level_of_instance(instance)
-                }
-            },
-        }
-    };
-    // Endpoint cells belong to their columns as well.
+    // Endpoint cells belong to their columns as well, at the level the
+    // caller stated for them.
     for net in nets {
-        if let Some(level) = raw_level(net.source) {
-            occupy(&mut by_level, level, net.source_geometry.route_anchor);
-        }
-        for (endpoint, geometry) in &net.sinks {
-            if let Some(level) = raw_level(*endpoint) {
-                occupy(&mut by_level, level, geometry.terminal);
-                occupy(&mut by_level, level, geometry.support);
-                if !frame.along_forward(geometry.allowed_entry) {
-                    for distance in 1..=(entry_depth(geometry) + 1) {
-                        occupy(
-                            &mut by_level,
-                            level,
-                            step_many(geometry.terminal, geometry.allowed_entry, distance),
-                        );
-                    }
+        occupy(&mut by_level, net.source_level, net.source.route_anchor);
+        for sink in &net.sinks {
+            let geometry = &sink.geometry;
+            occupy(&mut by_level, sink.level, geometry.terminal);
+            occupy(&mut by_level, sink.level, geometry.support);
+            if !frame.along_forward(geometry.allowed_entry) {
+                for distance in 1..=(entry_depth(geometry) + 1) {
+                    occupy(
+                        &mut by_level,
+                        sink.level,
+                        step_many(geometry.terminal, geometry.allowed_entry, distance),
+                    );
                 }
             }
         }
@@ -290,7 +512,7 @@ pub(crate) fn plan_channel_layout(
     // Pinned inputs and pinned outputs whose forward extents overlap form
     // one pin column: the levels march away from both, and the output nets
     // come back to it through every column in between.
-    let mut output_level = max_level + 1;
+    let mut merged_output_level = None;
     if let (Some(inputs), Some(outputs)) = (
         by_level.get(&(min_level - 1)).cloned(),
         by_level.get(&(max_level + 1)).cloned(),
@@ -303,14 +525,16 @@ pub(crate) fn plan_channel_layout(
             column.min_forward = column.min_forward.min(outputs.min_forward);
             column.max_forward = column.max_forward.max(outputs.max_forward);
             column.blocked_laterals.extend(outputs.blocked_laterals);
-            output_level = min_level - 1;
+            merged_output_level = Some(min_level - 1);
         }
     }
-    let endpoint_level = |endpoint: PhysicalEndpointId| -> Option<i64> {
-        if matches!(endpoint, PhysicalEndpointId::DeclaredOutput(_)) {
-            Some(output_level)
-        } else {
-            raw_level(endpoint)
+    // The caller's level, except for a declared output whose column was just
+    // folded into the pin column: that move is this deck's own geometry, so
+    // this deck is where it is applied.
+    let endpoint_level = |endpoint: PhysicalEndpointId, stated: i64| -> i64 {
+        match merged_output_level {
+            Some(level) if matches!(endpoint, PhysicalEndpointId::DeclaredOutput(_)) => level,
+            _ => stated,
         }
     };
     // Columns in forward order: a pinned output column may sit between the
@@ -354,14 +578,12 @@ pub(crate) fn plan_channel_layout(
     let channel_end = |channel: usize| columns[channel + 1].min_forward - 1;
 
     // ---- endpoint lines ------------------------------------------------
-    let source_line = |net: &NetGeometry| -> Result<Line, ChannelLayoutError> {
-        let level = endpoint_level(net.source).ok_or(ChannelLayoutError::UnplacedEndpoint {
-            endpoint: net.source,
-        })?;
+    let source_line = |net: &DeckNetGeometry| -> Result<Line, ChannelLayoutError> {
+        let level = endpoint_level(net.owner, net.source_level);
         let column = column_index(level).ok_or(ChannelLayoutError::UnplacedEndpoint {
-            endpoint: net.source,
+            endpoint: net.owner,
         })?;
-        let geometry = net.source_geometry;
+        let geometry = net.source;
         let (channel, row) = if geometry.allowed_exit == frame.forward.opposite() {
             (
                 column.saturating_sub(1),
@@ -383,12 +605,12 @@ pub(crate) fn plan_channel_layout(
             depth: frame.forward_of(geometry.route_anchor),
         })
     };
-    let sink_line = |endpoint: PhysicalEndpointId,
-                     geometry: &TargetGeometry,
+    let sink_line = |sink: &DeckSinkGeometry,
                      source_column: usize|
      -> Result<Line, ChannelLayoutError> {
-        let level =
-            endpoint_level(endpoint).ok_or(ChannelLayoutError::UnplacedEndpoint { endpoint })?;
+        let endpoint = sink.endpoint;
+        let geometry = &sink.geometry;
+        let level = endpoint_level(endpoint, sink.level);
         let column =
             column_index(level).ok_or(ChannelLayoutError::UnplacedEndpoint { endpoint })?;
         let approach = step_many(
@@ -430,8 +652,8 @@ pub(crate) fn plan_channel_layout(
     for net in nets {
         let source = source_line(net)?;
         let mut sinks = Vec::new();
-        for (endpoint, geometry) in &net.sinks {
-            sinks.push(sink_line(*endpoint, geometry, source.column)?);
+        for sink in &net.sinks {
+            sinks.push(sink_line(sink, source.column)?);
         }
         let first_channel = sinks
             .iter()
@@ -446,7 +668,7 @@ pub(crate) fn plan_channel_layout(
             .max()
             .unwrap_or(source.channel);
         lines.insert(
-            net.source,
+            net.owner,
             NetLines {
                 source,
                 sinks,
@@ -508,29 +730,36 @@ pub(crate) fn plan_channel_layout(
             }
         };
         let pinned = |endpoint: PhysicalEndpointId| candidate.pin_contracts.contains_key(&endpoint);
-        let mut members = Vec::new();
+        let mut stub_ports = Vec::new();
+        // A trunk end is a cell this deck's own plan invented, never a cell
+        // the caller pinned, so it is offered no stub even when the net it
+        // belongs to is a pinned port's.
         for net in nets {
-            let source = &net.source_geometry;
-            if matches!(net.source, PhysicalEndpointId::PrimaryInput(_))
-                && pinned(net.source)
+            let source = &net.source;
+            if matches!(net.owner, PhysicalEndpointId::PrimaryInput(_))
+                && !net.source_is_synthetic_trunk
+                && pinned(net.owner)
                 && source.allowed_exit != frame.forward
             {
-                members.push(StubPort {
-                    net: net.source,
+                stub_ports.push(StubPort {
+                    net: net.owner,
                     sink: None,
-                    endpoint: net.source,
+                    endpoint: net.owner,
                     anchor: source.route_anchor,
                     exit: source.allowed_exit,
                     support: step(source.route_anchor, source.allowed_exit.opposite()),
                     entry_depth: 3,
                 });
             }
-            for (index, (endpoint, geometry)) in net.sinks.iter().enumerate() {
-                if !matches!(endpoint, PhysicalEndpointId::DeclaredOutput(_)) || !pinned(*endpoint)
+            for (index, sink) in net.sinks.iter().enumerate() {
+                let geometry = &sink.geometry;
+                if sink.synthetic_trunk
+                    || !matches!(sink.endpoint, PhysicalEndpointId::DeclaredOutput(_))
+                    || !pinned(sink.endpoint)
                 {
                     continue;
                 }
-                let line = lines[&net.source].sinks[index];
+                let line = lines[&net.owner].sinks[index];
                 let entry = frame.forward_of(step(geometry.terminal, geometry.allowed_entry));
                 let inside = if line.channel == line.column {
                     entry <= edge_of(&line)
@@ -538,10 +767,10 @@ pub(crate) fn plan_channel_layout(
                     entry >= edge_of(&line)
                 };
                 if inside {
-                    members.push(StubPort {
-                        net: net.source,
+                    stub_ports.push(StubPort {
+                        net: net.owner,
                         sink: Some(index),
-                        endpoint: *endpoint,
+                        endpoint: sink.endpoint,
                         anchor: geometry.terminal,
                         exit: geometry.allowed_entry,
                         support: geometry.support,
@@ -550,7 +779,7 @@ pub(crate) fn plan_channel_layout(
                 }
             }
         }
-        members.sort_by_key(|port| {
+        stub_ports.sort_by_key(|port| {
             let line = line_of(&lines, port);
             let entry = frame.forward_of(step(port.anchor, port.exit));
             (
@@ -562,7 +791,7 @@ pub(crate) fn plan_channel_layout(
         });
         let mut committed = Vec::<RealisedRouteTree>::new();
         let mut used_rows = BTreeMap::<usize, Vec<i32>>::new();
-        for (stub_index, port) in members.iter().enumerate() {
+        for (stub_index, port) in stub_ports.iter().enumerate() {
             let line = line_of(&lines, port);
             let edge = edge_of(&line);
             let (entry_from, support_step) = if line.channel == line.column {
@@ -599,7 +828,7 @@ pub(crate) fn plan_channel_layout(
                 // Nothing may run next to another pinned port's anchor or
                 // support, and every other port's entry cells stay free with
                 // the same clearance a laid wire would get.
-                for other in &members {
+                for other in &stub_ports {
                     let own = other.net == port.net && other.sink == port.sink;
                     let mut protect = |cell: Anchor, kind: PhysicalReservationKind| {
                         if scratch.get(&cell).is_none() {
@@ -717,25 +946,30 @@ pub(crate) fn plan_channel_layout(
         }
     }
     for junction in candidate.junctions.values() {
+        if !members.contains(&junction.id) {
+            continue;
+        }
         for cell in &junction.cells {
             occupied_cells.insert((frame.forward_of(cell.at), frame.lateral_of(cell.at)));
         }
     }
-    for boundary in candidate.boundaries.values() {
-        for block in &boundary.blocks {
-            occupied_cells.insert((frame.forward_of(block.at), frame.lateral_of(block.at)));
+    if include_boundaries {
+        for boundary in candidate.boundaries.values() {
+            for block in &boundary.blocks {
+                occupied_cells.insert((frame.forward_of(block.at), frame.lateral_of(block.at)));
+            }
         }
     }
     for net in nets {
         occupied_cells.insert((
-            frame.forward_of(net.source_geometry.route_anchor),
-            frame.lateral_of(net.source_geometry.route_anchor),
+            frame.forward_of(net.source.route_anchor),
+            frame.lateral_of(net.source.route_anchor),
         ));
         // The source's own line from its anchor to the column edge is laid
         // exactly like the private cells below; a corridor or run touching
         // it would join the two nets.
-        if let Some(net_lines) = lines.get(&net.source) {
-            let source = &net.source_geometry;
+        if let Some(net_lines) = lines.get(&net.owner) {
+            let source = &net.source;
             let column = &columns[net_lines.source.column];
             let row = net_lines.source.row;
             let (from, to) = if frame.along_forward(source.allowed_exit) {
@@ -761,7 +995,8 @@ pub(crate) fn plan_channel_layout(
                 occupied_cells.insert((forward, row));
             }
         }
-        for (_, geometry) in &net.sinks {
+        for sink in &net.sinks {
+            let geometry = &sink.geometry;
             occupied_cells.insert((
                 frame.forward_of(geometry.terminal),
                 frame.lateral_of(geometry.terminal),
@@ -780,7 +1015,8 @@ pub(crate) fn plan_channel_layout(
     // may touch.
     let mut own_line_cells = BTreeMap::<(PhysicalEndpointId, usize), BTreeSet<(i32, i32)>>::new();
     for net in nets {
-        for (index, (_, geometry)) in net.sinks.iter().enumerate() {
+        for (index, sink) in net.sinks.iter().enumerate() {
+            let geometry = &sink.geometry;
             let mut own = BTreeSet::new();
             own.insert((
                 frame.forward_of(geometry.terminal),
@@ -794,7 +1030,7 @@ pub(crate) fn plan_channel_layout(
                 let cell = step_many(geometry.terminal, geometry.allowed_entry, distance);
                 own.insert((frame.forward_of(cell), frame.lateral_of(cell)));
             }
-            own_line_cells.insert((net.source, index), own);
+            own_line_cells.insert((net.owner, index), own);
         }
     }
     struct Escape {
@@ -949,9 +1185,9 @@ pub(crate) fn plan_channel_layout(
             if let Some(&(id, index)) = pending.first() {
                 let endpoint = nets
                     .iter()
-                    .find(|net| net.source == id)
+                    .find(|net| net.owner == id)
                     .and_then(|net| net.sinks.get(index))
-                    .map_or(id, |(endpoint, _)| *endpoint);
+                    .map_or(id, |sink| sink.endpoint);
                 return Err(ChannelLayoutError::Escape(EscapeError::NoCorridor {
                     endpoint,
                 }));
@@ -1153,12 +1389,24 @@ pub(crate) fn plan_channel_layout(
             + 2 * LANE_MARGIN
             - 2;
         if plan.lane_count > 0 && end - start + 1 < needed {
-            return Err(ChannelLayoutError::ChannelTooNarrow {
-                channel,
-                level,
-                available: end - start + 1,
-                lanes: plan.lane_count,
-                needed,
+            // Only a deck planned under a footprint can name a deck in its
+            // refusal; the legacy path keeps its own variant exactly.
+            return Err(match footprint {
+                Some(_) => ChannelLayoutError::DeckChannelTooNarrow {
+                    deck,
+                    channel,
+                    level,
+                    available: end - start + 1,
+                    lanes: plan.lane_count,
+                    needed,
+                },
+                None => ChannelLayoutError::ChannelTooNarrow {
+                    channel,
+                    level,
+                    available: end - start + 1,
+                    lanes: plan.lane_count,
+                    needed,
+                },
             });
         }
         // Stair cells the router checks when a path climbs from ground at
@@ -1353,23 +1601,23 @@ pub(crate) fn plan_channel_layout(
                 }
             }
         }
-        layout.lanes.push(lane_cells);
+        layout.lanes.insert((deck, channel), lane_cells);
     }
 
     // ---- lines inside columns and column crossings ---------------------
     for net in nets {
-        let Some(net_lines) = lines.get(&net.source) else {
+        let Some(net_lines) = lines.get(&net.owner) else {
             continue;
         };
-        let source = &net.source_geometry;
+        let source = &net.source;
         let column = &columns[net_lines.source.column];
-        if let Some(stub) = stubs.get(&(net.source, None)) {
+        if let Some(stub) = stubs.get(&(net.owner, None)) {
             for &cell in &stub.cells {
-                private(net.source, cell);
+                private(net.owner, cell);
             }
             layout
                 .floors
-                .entry(net.source)
+                .entry(net.owner)
                 .or_default()
                 .extend(stub.floors.iter().cloned());
         } else if frame.along_forward(source.allowed_exit) {
@@ -1381,14 +1629,14 @@ pub(crate) fn plan_channel_layout(
             };
             for forward in from..=to {
                 private(
-                    net.source,
+                    net.owner,
                     frame.cell(forward, net_lines.source.row, ground),
                 );
             }
         } else {
             for distance in 1..=3 {
                 private(
-                    net.source,
+                    net.owner,
                     step_many(source.route_anchor, source.allowed_exit, distance),
                 );
             }
@@ -1400,19 +1648,20 @@ pub(crate) fn plan_channel_layout(
             };
             for forward in from..=to {
                 private(
-                    net.source,
+                    net.owner,
                     frame.cell(forward, net_lines.source.row, ground),
                 );
             }
         }
-        for (index, (_, geometry)) in net.sinks.iter().enumerate() {
-            if let Some(stub) = stubs.get(&(net.source, Some(index))) {
+        for (index, sink) in net.sinks.iter().enumerate() {
+            let geometry = &sink.geometry;
+            if let Some(stub) = stubs.get(&(net.owner, Some(index))) {
                 for &cell in &stub.cells {
-                    private(net.source, cell);
+                    private(net.owner, cell);
                 }
                 layout
                     .floors
-                    .entry(net.source)
+                    .entry(net.owner)
                     .or_default()
                     .extend(stub.floors.iter().cloned());
                 continue;
@@ -1420,22 +1669,22 @@ pub(crate) fn plan_channel_layout(
             // The fixed entry line itself.
             for distance in 1..=entry_depth(geometry) {
                 private(
-                    net.source,
+                    net.owner,
                     step_many(geometry.terminal, geometry.allowed_entry, distance),
                 );
             }
             // The corridor from the column edge and the run to the approach.
-            if let Some(escape) = escapes.get(&(net.source, index)) {
+            if let Some(escape) = escapes.get(&(net.owner, index)) {
                 let (lo, hi) = (escape.edge.min(escape.depth), escape.edge.max(escape.depth));
                 for forward in lo..=hi {
-                    private(net.source, frame.cell(forward, escape.corridor, ground));
+                    private(net.owner, frame.cell(forward, escape.corridor, ground));
                 }
                 let (lo, hi) = (
                     escape.corridor.min(escape.natural),
                     escape.corridor.max(escape.natural),
                 );
                 for lateral in lo..=hi {
-                    private(net.source, frame.cell(escape.depth, lateral, ground));
+                    private(net.owner, frame.cell(escape.depth, lateral, ground));
                 }
             }
         }
@@ -1445,9 +1694,9 @@ pub(crate) fn plan_channel_layout(
             .take(columns.len().saturating_sub(1))
             .skip(1)
         {
-            if let Some(&row) = crossings.get(&(net.source, column)) {
+            if let Some(&row) = crossings.get(&(net.owner, column)) {
                 for forward in geometry.min_forward..=geometry.max_forward {
-                    private(net.source, frame.cell(forward, row, ground));
+                    private(net.owner, frame.cell(forward, row, ground));
                 }
             }
         }
@@ -1464,12 +1713,26 @@ pub(crate) fn plan_channel_layout(
         .values()
         .flat_map(|cells| cells.iter().copied())
         .collect::<BTreeSet<_>>();
-    let forward_min = columns.first().map_or(0, |column| column.min_forward) - FORWARD_MARGIN;
-    let forward_max = columns.last().map_or(0, |column| column.max_forward) + FORWARD_MARGIN;
+    let mut forward_min = columns.first().map_or(0, |column| column.min_forward) - FORWARD_MARGIN;
+    let mut forward_max = columns.last().map_or(0, |column| column.max_forward) + FORWARD_MARGIN;
+    let mut closed_lateral_min = lateral_min - LATERAL_MARGIN;
+    let mut closed_lateral_max = lateral_max + LATERAL_MARGIN;
+    // A complete pin set drew a board, and the cells beyond it are not this
+    // candidate's to close: the perimeter outside them is a separate
+    // reservation, and closing the caller's own ground here would claim
+    // rows nobody asked for.
+    if let Some(footprint) = footprint {
+        let (min_forward, max_forward, min_lateral, max_lateral) =
+            footprint.projected(frame.forward, frame.lateral);
+        forward_min = forward_min.max(min_forward);
+        forward_max = forward_max.min(max_forward);
+        closed_lateral_min = closed_lateral_min.max(min_lateral);
+        closed_lateral_max = closed_lateral_max.min(max_lateral);
+    }
     // The closed layers cover the whole margin, window or not: outside the
     // window is the callers' side, and the router must never see it open.
     for forward in forward_min..=forward_max {
-        for lateral in (lateral_min - LATERAL_MARGIN)..=(lateral_max + LATERAL_MARGIN) {
+        for lateral in closed_lateral_min..=closed_lateral_max {
             for y in ground..=(ground + 3) {
                 let cell = frame.cell(forward, lateral, y);
                 if !all_private.contains(&cell) {
@@ -1479,4 +1742,338 @@ pub(crate) fn plan_channel_layout(
         }
     }
     Ok(layout)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::compile::fragment_synth::candidate::PrimitivePlacement;
+    use crate::compile::fragment_synth::identity::{InstanceId, PortId, PrimitiveId, TopologyNodeId};
+    use crate::compile::fragment_synth::instance_graph::InstanceGraph;
+    use crate::compile::fragment_synth::placement::{DeckId, NodeFacts};
+    use crate::compile::geometry::CellFacing;
+    use crate::compile::planner::PortPlacements;
+    use crate::compile::routing::GuardedPhysicalRouter;
+
+    /// Deck zero's ground in these fixtures, and the ground deck_grounds
+    /// derives for deck one from two (-1, 3) local intervals: one one-cell
+    /// macro with its support below and the channel slab above.
+    const LOWER_GROUND: i32 = 1;
+    const UPPER_GROUND: i32 = 6;
+
+    fn frame() -> PlacementFrame {
+        PlacementFrame {
+            forward: Facing::East,
+            lateral: Facing::South,
+            origin: Anchor {
+                x: 0,
+                y: LOWER_GROUND,
+                z: 0,
+            },
+        }
+    }
+
+    fn limits() -> RouterLimits {
+        RouterLimits {
+            max_node_expansions: 262_144,
+            max_queue_entries: 262_144,
+        }
+    }
+
+    fn empty_graph() -> InstanceGraph {
+        InstanceGraph {
+            instances: Vec::new(),
+            assignments: Vec::new(),
+            primary_inputs: Vec::new(),
+            declared_outputs: Vec::new(),
+            blocks: Vec::new(),
+        }
+    }
+
+    /// A candidate reduced to what a column is made of: one dust cell per
+    /// instance, at the deck that instance stands on.
+    fn one_cell_macros(cells: &[(InstanceId, Anchor)]) -> ExpandedPhysicalCandidate {
+        let mut candidate =
+            ExpandedPhysicalCandidate::empty(empty_graph(), PortPlacements::default());
+        for &(instance, at) in cells {
+            let id = PrimitiveId {
+                instance,
+                node: TopologyNodeId(0),
+            };
+            candidate.placements.insert(
+                id,
+                PrimitivePlacement {
+                    id,
+                    variant: 0,
+                    facing: CellFacing::EAST,
+                    anchor: at,
+                    delayed: None,
+                    blocks: vec![PlacedBlock {
+                        at,
+                        state: crate::compile::dust(),
+                    }],
+                },
+            );
+        }
+        candidate
+    }
+
+    /// Every instance on the same forward level, so two decks' macros carry
+    /// equal local levels -- which is exactly the aliasing risk.
+    fn flat_analysis(instances: &[InstanceId]) -> SeedPlacementAnalysis {
+        SeedPlacementAnalysis {
+            order: instances.to_vec(),
+            nodes: instances
+                .iter()
+                .map(|&instance| {
+                    (
+                        instance,
+                        NodeFacts {
+                            predecessors: Vec::new(),
+                            successors: Vec::new(),
+                            forward_level: 0,
+                            reverse_level: 0,
+                            head_ticks: 0,
+                            tail_ticks: 0,
+                            deck: DeckId(0),
+                        },
+                    )
+                })
+                .collect(),
+            edges: Vec::new(),
+            critical_delay_ticks: 0,
+        }
+    }
+
+    /// The closed slab one lone macro draws, by hand: its own column at
+    /// forward at.x, the virtual turnaround column one cell beyond it plus
+    /// LEGACY_TURNAROUND_CHANNEL, FORWARD_MARGIN past both ends,
+    /// LATERAL_MARGIN beside the single occupied lateral, and the four rows
+    /// ground..=ground + 3.
+    fn expected_slab(ground: i32, at: Anchor) -> BTreeSet<Anchor> {
+        let forward_min = at.x - FORWARD_MARGIN;
+        let forward_max = at.x + 1 + LEGACY_TURNAROUND_CHANNEL + FORWARD_MARGIN;
+        let mut cells = BTreeSet::new();
+        for x in forward_min..=forward_max {
+            for z in (at.z - LATERAL_MARGIN)..=(at.z + LATERAL_MARGIN) {
+                for y in ground..=(ground + 3) {
+                    cells.insert(Anchor { x, y, z });
+                }
+            }
+        }
+        cells
+    }
+
+    #[test]
+    fn legacy_channel_layout_wrapper_keeps_the_existing_layout() {
+        let at = Anchor {
+            x: 4,
+            y: LOWER_GROUND,
+            z: 4,
+        };
+        let candidate = one_cell_macros(&[(InstanceId(0), at)]);
+        let analysis = flat_analysis(&[InstanceId(0)]);
+        let mut reservations = PhysicalReservations::new();
+
+        let layout = plan_channel_layout(
+            &candidate,
+            &analysis,
+            frame(),
+            LateralWindow::default(),
+            &[],
+            &GuardedPhysicalRouter,
+            &mut reservations,
+            limits(),
+        )
+        .expect("one macro and no nets plan");
+
+        assert_eq!(layout.closed, expected_slab(LOWER_GROUND, at));
+        assert!(layout.private.is_empty());
+        assert!(layout.floors.is_empty());
+        assert!(layout.departures.is_empty());
+        assert_eq!(
+            layout.lanes,
+            BTreeMap::from([((DeckId(0), 0), BTreeMap::new())]),
+        );
+    }
+
+    #[test]
+    fn equal_levels_on_two_decks_never_alias_channel_state() {
+        let lower_at = Anchor {
+            x: 4,
+            y: LOWER_GROUND,
+            z: 4,
+        };
+        let upper_at = Anchor {
+            x: 4,
+            y: UPPER_GROUND,
+            z: 4,
+        };
+        let candidate = one_cell_macros(&[(InstanceId(0), lower_at), (InstanceId(1), upper_at)]);
+        let analysis = flat_analysis(&[InstanceId(0), InstanceId(1)]);
+        let mut reservations = PhysicalReservations::new();
+
+        let lower = plan_deck_channel_layout(
+            &candidate,
+            &analysis,
+            frame(),
+            LateralWindow::default(),
+            DeckId(0),
+            LOWER_GROUND,
+            &BTreeSet::from([InstanceId(0)]),
+            true,
+            None,
+            &[],
+            &GuardedPhysicalRouter,
+            &mut reservations,
+            limits(),
+        )
+        .expect("deck zero plans");
+        let upper = plan_deck_channel_layout(
+            &candidate,
+            &analysis,
+            frame(),
+            LateralWindow::default(),
+            DeckId(1),
+            UPPER_GROUND,
+            &BTreeSet::from([InstanceId(1)]),
+            false,
+            None,
+            &[],
+            &GuardedPhysicalRouter,
+            &mut reservations,
+            limits(),
+        )
+        .expect("deck one plans");
+
+        assert!(lower.closed.iter().all(|at| at.y <= LOWER_GROUND + 3));
+        assert!(upper.closed.iter().all(|at| at.y >= UPPER_GROUND));
+        assert!(lower.closed.is_disjoint(&upper.closed));
+        assert!(lower.lanes.contains_key(&(DeckId(0), 0)));
+        assert!(upper.lanes.contains_key(&(DeckId(1), 0)));
+
+        // Each deck saw only its own member, so neither slab is the union
+        // of the two macros' columns.
+        assert_eq!(lower.closed, expected_slab(LOWER_GROUND, lower_at));
+        assert_eq!(upper.closed, expected_slab(UPPER_GROUND, upper_at));
+    }
+
+    #[test]
+    fn bounded_footprint_clamps_the_closed_slab() {
+        let at = Anchor {
+            x: 4,
+            y: LOWER_GROUND,
+            z: 4,
+        };
+        let candidate = one_cell_macros(&[(InstanceId(0), at)]);
+        let analysis = flat_analysis(&[InstanceId(0)]);
+        let footprint = IoFootprint {
+            min_x: 0,
+            max_x: 20,
+            min_z: 0,
+            max_z: 9,
+        };
+        let members = BTreeSet::from([InstanceId(0)]);
+        let mut reservations = PhysicalReservations::new();
+
+        let bounded = plan_deck_channel_layout(
+            &candidate,
+            &analysis,
+            frame(),
+            LateralWindow::default(),
+            DeckId(0),
+            LOWER_GROUND,
+            &members,
+            true,
+            Some(footprint),
+            &[],
+            &GuardedPhysicalRouter,
+            &mut reservations,
+            limits(),
+        )
+        .expect("the bounded deck plans");
+
+        let mut expected = BTreeSet::new();
+        for x in footprint.min_x..=footprint.max_x {
+            for z in footprint.min_z..=footprint.max_z {
+                for y in LOWER_GROUND..=(LOWER_GROUND + 3) {
+                    expected.insert(Anchor { x, y, z });
+                }
+            }
+        }
+        assert_eq!(bounded.closed, expected);
+
+        let unbounded = plan_deck_channel_layout(
+            &candidate,
+            &analysis,
+            frame(),
+            LateralWindow::default(),
+            DeckId(0),
+            LOWER_GROUND,
+            &members,
+            true,
+            None,
+            &[],
+            &GuardedPhysicalRouter,
+            &mut reservations,
+            limits(),
+        )
+        .expect("the unbounded deck plans");
+        assert!(unbounded
+            .closed
+            .iter()
+            .any(|cell| !footprint.contains_xz(*cell)));
+    }
+
+    #[test]
+    fn merging_deck_layouts_unions_every_owner_and_keys_lanes_by_deck() {
+        let net = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let cell = |y: i32| Anchor { x: 1, y, z: 2 };
+        let deck_layout = |deck: DeckId, y: i32| ChannelLayout {
+            closed: BTreeSet::from([cell(y)]),
+            private: BTreeMap::from([(net, BTreeSet::from([cell(y + 1)]))]),
+            lanes: BTreeMap::from([((deck, 0), BTreeMap::from([(net, y)]))]),
+            floors: BTreeMap::from([(
+                net,
+                vec![PlacedBlock {
+                    at: cell(y - 1),
+                    state: crate::compile::stone(),
+                }],
+            )]),
+            departures: BTreeMap::from([(net, BTreeSet::from([cell(y + 2)]))]),
+        };
+
+        let mut merged = deck_layout(DeckId(0), 1);
+        merged.merge(deck_layout(DeckId(1), 6));
+
+        assert_eq!(merged.closed, BTreeSet::from([cell(1), cell(6)]));
+        assert_eq!(
+            merged.private[&net],
+            BTreeSet::from([cell(2), cell(7)]),
+            "one net owns cells on both decks",
+        );
+        assert_eq!(merged.departures[&net], BTreeSet::from([cell(3), cell(8)]));
+        assert_eq!(
+            merged.floors[&net]
+                .iter()
+                .map(|block| block.at)
+                .collect::<Vec<_>>(),
+            vec![cell(0), cell(5)],
+        );
+        assert_eq!(
+            merged.lanes.keys().copied().collect::<Vec<_>>(),
+            vec![(DeckId(0), 0), (DeckId(1), 0)],
+        );
+    }
+
+    #[test]
+    #[should_panic(expected = "duplicate deck channel")]
+    fn merging_the_same_deck_channel_twice_is_a_planning_bug() {
+        let lanes = |deck: DeckId| ChannelLayout {
+            lanes: BTreeMap::from([((deck, 0), BTreeMap::new())]),
+            ..ChannelLayout::default()
+        };
+        let mut merged = lanes(DeckId(0));
+        merged.merge(lanes(DeckId(0)));
+    }
 }

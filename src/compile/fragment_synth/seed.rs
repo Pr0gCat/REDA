@@ -455,6 +455,49 @@ fn with_channel_widening<T>(
                 repairs.push(LayoutRepair::WidenChannel { level, width });
                 repairs.sort();
             }
+            Err(SeedError::ChannelLayout(
+                refusal @ ChannelLayoutError::DeckChannelTooNarrow {
+                    deck,
+                    level,
+                    needed,
+                    available,
+                    ..
+                },
+            )) => {
+                // The same monotone growth as the legacy branch, but keyed
+                // by the analysis's stable global forward level: repacking
+                // may carry that level to another deck, and the width it has
+                // already earned must survive the move.  One level is one
+                // packed column, so this never widens an unrelated deck.
+                let previous = repairs.iter().find_map(|repair| match repair {
+                    LayoutRepair::WidenDeckChannel {
+                        level: known,
+                        width,
+                        ..
+                    } if *known == level => Some(*width),
+                    _ => None,
+                });
+                let width = match previous {
+                    Some(previous) => previous + (needed - available).max(1),
+                    None => needed + CHANNEL_ENDPOINT_CELLS,
+                };
+                let already = previous.is_some_and(|previous| width <= previous);
+                widenings += 1;
+                if already || attempts >= cap || widenings > MAX_CHANNEL_WIDENINGS {
+                    // The bounded refusal is reported as it was measured, so
+                    // the deck, channel and lane count that ran out survive
+                    // into the caller's evidence.
+                    return Err(SeedError::SeedExhausted {
+                        attempts_used: attempts,
+                        refusal: Box::new(SeedError::ChannelLayout(refusal)),
+                    });
+                }
+                repairs.retain(|repair| {
+                    !matches!(repair, LayoutRepair::WidenDeckChannel { level: known, .. } if *known == level)
+                });
+                repairs.push(LayoutRepair::WidenDeckChannel { deck, level, width });
+                repairs.sort();
+            }
             Err(error) => return Err(error),
         }
     }
@@ -4119,6 +4162,104 @@ pub(crate) mod tests {
             },
         }])
         .unwrap()
+    }
+
+    /// The bounded repair is keyed by the deck it was seen on *and* the
+    /// stable global level, but only the level accumulates width: repacking
+    /// may report the same level from another deck, and that must update the
+    /// diagnostic deck without resetting the progress already made.
+    #[test]
+    fn bounded_channel_widening_is_keyed_by_deck_and_level() {
+        let config = SearchConfig::checked_defaults();
+        let bounded = |deck: DeckId, available: i32| {
+            SeedError::ChannelLayout(ChannelLayoutError::DeckChannelTooNarrow {
+                deck,
+                channel: 0,
+                level: 2,
+                available,
+                lanes: 3,
+                needed: 19,
+            })
+        };
+
+        let seen = RefCell::new(Vec::<Vec<LayoutRepair>>::new());
+        let round = Cell::new(0u32);
+        with_channel_widening(&config, |repairs| {
+            seen.borrow_mut().push(repairs.to_vec());
+            let attempt = round.get();
+            round.set(attempt + 1);
+            match attempt {
+                0 => Err(bounded(DeckId(1), 7)),
+                1 => Err(bounded(DeckId(1), 9)),
+                // The same stable global level, repacked onto deck zero.
+                2 => Err(bounded(DeckId(0), 11)),
+                _ => Ok(()),
+            }
+        })
+        .expect("the bounded loop ends");
+        let seen = seen.into_inner();
+
+        assert_eq!(seen.len(), 4);
+        assert!(seen[0].is_empty());
+        // needed + CHANNEL_ENDPOINT_CELLS, then + (needed - available).
+        assert_eq!(
+            seen[1],
+            vec![LayoutRepair::WidenDeckChannel {
+                deck: DeckId(1),
+                level: 2,
+                width: 19 + CHANNEL_ENDPOINT_CELLS,
+            }],
+        );
+        assert_eq!(
+            seen[2],
+            vec![LayoutRepair::WidenDeckChannel {
+                deck: DeckId(1),
+                level: 2,
+                width: 21 + 10,
+            }],
+        );
+        // One canonical repair for the level: the deck moved, the width grew.
+        assert_eq!(
+            seen[3],
+            vec![LayoutRepair::WidenDeckChannel {
+                deck: DeckId(0),
+                level: 2,
+                width: 31 + 8,
+            }],
+        );
+
+        // The legacy refusal still produces the legacy repair, unchanged.
+        let legacy_seen = RefCell::new(Vec::<Vec<LayoutRepair>>::new());
+        let legacy_round = Cell::new(0u32);
+        with_channel_widening(&config, |repairs| {
+            legacy_seen.borrow_mut().push(repairs.to_vec());
+            let attempt = legacy_round.get();
+            legacy_round.set(attempt + 1);
+            if attempt == 0 {
+                Err(SeedError::ChannelLayout(
+                    ChannelLayoutError::ChannelTooNarrow {
+                        channel: 0,
+                        level: 2,
+                        available: 7,
+                        lanes: 3,
+                        needed: 19,
+                    },
+                ))
+            } else {
+                Ok(())
+            }
+        })
+        .expect("the legacy loop ends");
+        let legacy_seen = legacy_seen.into_inner();
+
+        assert_eq!(legacy_seen.len(), 2);
+        assert_eq!(
+            legacy_seen[1],
+            vec![LayoutRepair::WidenChannel {
+                level: 2,
+                width: 19 + CHANNEL_ENDPOINT_CELLS,
+            }],
+        );
     }
 
     #[test]
