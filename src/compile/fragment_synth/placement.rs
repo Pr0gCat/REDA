@@ -426,13 +426,33 @@ impl TopologyAwareSeedPlacer {
             turned(clockwise(direct.forward)),
             turned(clockwise(clockwise(clockwise(direct.forward)))),
         ];
+        // A board that cannot fold its ordered columns onto one frame's
+        // decks may still hold them on another frame's, so a deck refusal
+        // ends that frame rather than the search.  The first such refusal
+        // is the one reported: it names what the frame the caller's pins
+        // actually asked for could not hold, which is the answer a caller
+        // can act on.  Every other refusal is about the request itself and
+        // is answered at once, and an unbounded or partially pinned layout
+        // keeps refusing on its first frame exactly as it always has.
+        let mut refusal = None;
         for (index, frame) in candidates.into_iter().enumerate() {
-            let plan = self.plan_in_frame(request, minimum_widths, frame, index == 0, footprint)?;
-            if let Some(plan) = plan {
-                return Ok(plan);
+            match self.plan_in_frame(request, minimum_widths, frame, index == 0, footprint) {
+                Ok(Some(plan)) => return Ok(plan),
+                Ok(None) => {}
+                Err(error)
+                    if footprint.is_some()
+                        && matches!(
+                            error,
+                            SeedPlacementError::NoDeckLayoutFits
+                                | SeedPlacementError::LateralWindowTooNarrow { .. }
+                        ) =>
+                {
+                    refusal.get_or_insert(error);
+                }
+                Err(error) => return Err(error),
             }
         }
-        Err(SeedPlacementError::NoFrameFits)
+        Err(refusal.unwrap_or(SeedPlacementError::NoFrameFits))
     }
 
     /// The plan in one frame, or `None` when the levels do not fit ahead of
@@ -715,11 +735,17 @@ impl TopologyAwareSeedPlacer {
                 .and_modify(|known| *known = (*known).max(width))
                 .or_insert(width);
         }
+        // Every free-cell question below asks the same one: how wide is the
+        // channel keyed by this channel level?  A level not in the map is a
+        // channel nothing crosses, which still needs its one lane.
+        let channel_at = |channel_level: i64| {
+            channels
+                .get(&channel_level)
+                .copied()
+                .unwrap_or_else(|| channel_width(1))
+        };
         let min_level = level_bounds.keys().next().copied().unwrap_or(0);
-        let input_channel = channels
-            .get(&(min_level as i64 - 1))
-            .copied()
-            .unwrap_or_else(|| channel_width(1));
+        let input_channel = channel_at(min_level as i64 - 1);
 
         // The first level starts one input channel beyond the pin column:
         // the pinned inputs' cells and every pinned output cell that does
@@ -739,13 +765,7 @@ impl TopologyAwareSeedPlacer {
         };
         let total = level_bounds
             .iter()
-            .map(|(&level, bounds)| {
-                bounds.forward_span()
-                    + channels
-                        .get(&(level as i64))
-                        .copied()
-                        .unwrap_or_else(|| channel_width(1))
-            })
+            .map(|(&level, bounds)| bounds.forward_span() + channel_at(level as i64))
             .sum::<i32>();
         // Pinned outputs ahead of the levels must leave room for every
         // column and channel, and the levels must end inside the world and
@@ -773,12 +793,6 @@ impl TopologyAwareSeedPlacer {
         // projected start and capacity -- where an unbounded layout has
         // only the one run of columns it always had.
         let ordered_levels = level_bounds.keys().copied().collect::<Vec<_>>();
-        let column_width = |level: u64| {
-            channels
-                .get(&(level as i64))
-                .copied()
-                .unwrap_or_else(|| channel_width(1))
-        };
         let column_decks = match (footprint, limit) {
             (Some(_), Some(limit)) => {
                 let columns = ordered_levels
@@ -794,14 +808,11 @@ impl TopologyAwareSeedPlacer {
                                 (macro_bounds.forward_span(), std::cmp::Reverse(**id))
                             })
                             .map(|(&id, _)| id)
-                            .unwrap_or(InstanceId(0));
+                            .expect("every level in level_bounds has at least one macro");
                         DeckColumn {
                             owner,
-                            lead: channels
-                                .get(&(level as i64 - 1))
-                                .copied()
-                                .unwrap_or_else(|| channel_width(1)),
-                            cost: level_bounds.forward_span() + column_width(level),
+                            lead: channel_at(level as i64 - 1),
+                            cost: level_bounds.forward_span() + channel_at(level as i64),
                             close: bounded_turnaround_allowance(
                                 channel_lanes.get(&(level as i64)).copied().unwrap_or(0),
                             ),
@@ -832,7 +843,10 @@ impl TopologyAwareSeedPlacer {
         let mut open = DeckId(0);
         for (index, &level) in ordered_levels.iter().enumerate() {
             let level_bounds = level_bounds[&level];
-            let deck = column_decks.get(index).copied().unwrap_or(DeckId(0));
+            let deck = column_decks
+                .get(index)
+                .copied()
+                .expect("the pack answers one deck per ordered column");
             if deck != open {
                 cursor = start;
                 open = deck;
@@ -844,7 +858,7 @@ impl TopologyAwareSeedPlacer {
             columns.insert(level, column);
             cursor = column
                 .checked_add(level_bounds.max_forward)
-                .and_then(|value| value.checked_add(column_width(level)))
+                .and_then(|value| value.checked_add(channel_at(level as i64)))
                 .ok_or(SeedPlacementError::CoordinateOverflow)?;
         }
 
@@ -865,13 +879,20 @@ impl TopologyAwareSeedPlacer {
         let mut deck_locals = BTreeMap::<DeckId, (i32, i32)>::new();
         for (&id, &deck) in &instance_decks {
             let macro_bounds = bounds[&id];
+            // A block's height is whatever its certified bounds measured,
+            // so the ceiling above it is checked like every other derived
+            // coordinate here.
+            let ceiling = macro_bounds
+                .max_y
+                .checked_add(3)
+                .ok_or(SeedPlacementError::CoordinateOverflow)?;
             deck_locals
                 .entry(deck)
                 .and_modify(|(min, max)| {
                     *min = (*min).min(macro_bounds.min_y);
-                    *max = (*max).max(macro_bounds.max_y + 3);
+                    *max = (*max).max(ceiling);
                 })
-                .or_insert((macro_bounds.min_y.min(-1), (macro_bounds.max_y + 3).max(3)));
+                .or_insert((macro_bounds.min_y.min(-1), ceiling.max(3)));
         }
         if deck_locals.is_empty() {
             // Nothing to stand on a deck still stands on the base one.
@@ -1250,7 +1271,7 @@ fn pack_decks(columns: &[DeckColumn], capacity: i32) -> Result<Vec<DeckId>, Seed
         if placed > 0 && lead + used + cost + close > capacity {
             deck = deck
                 .checked_add(1)
-                .ok_or(SeedPlacementError::NoDeckLayoutFits)?;
+                .ok_or(SeedPlacementError::CoordinateOverflow)?;
             lead = i64::from(column.lead);
             used = 0;
             placed = 0;
@@ -1320,7 +1341,8 @@ fn floorplan_metrics(
         let ground = instance_decks
             .get(&id)
             .and_then(|deck| decks.get(deck))
-            .map_or(0, |deck| deck.ground);
+            .expect("every placed macro was packed onto a planned deck")
+            .ground;
         let volume = u64::try_from(macro_bounds.forward_span())
             .ok()
             .and_then(|span| span.checked_mul(u64::try_from(macro_bounds.lateral_span()).ok()?))
@@ -1379,7 +1401,8 @@ fn floorplan_metrics(
     Ok(FloorplanMetrics {
         macro_volume,
         union_volume,
-        deck_count: u32::try_from(decks.len()).map_err(|_| SeedPlacementError::NoDeckLayoutFits)?,
+        deck_count: u32::try_from(decks.len())
+            .map_err(|_| SeedPlacementError::CoordinateOverflow)?,
         cross_deck_nets: 0,
         vertical_trunk_lanes: 0,
     })
@@ -3010,6 +3033,110 @@ mod tests {
         );
     }
 
+    /// A rectangular board whose direct frame cannot fold its columns onto
+    /// decks: that refusal ends the frame, not the search, and the answer
+    /// the caller gets is the first refusal rather than the last.
+    ///
+    /// Both inputs travel south, so neither caps the lateral window; the
+    /// board is 95 cells of X by 43 of Z, and the direct frame points
+    /// south from the median input net cell `(100, 22)`.  It leaves
+    /// `62 - 22 = 40` forward cells from a start at `0 + 1 + 11 = 12`: a
+    /// capacity of 28, where one south-facing torch column and its
+    /// turnaround need `2 + 11 + 17 = 30`.
+    ///
+    /// The board's 95-cell long axis is exactly what a turned frame would
+    /// march along, and both turned frames still refuse -- not for want of
+    /// room, but because a turned frame starts the layout beyond every
+    /// pinned port, and a complete pin set always has a pin standing on
+    /// the far wall of whichever axis the frame turned onto.  So the
+    /// recovery this loop keeps open is unreachable until that pin column
+    /// is measured differently; what the loop guarantees today is that the
+    /// later frames are asked and that the first refusal is the reported
+    /// one.
+    #[test]
+    fn bounded_deck_refusal_tries_every_frame_and_reports_the_first() {
+        use super::*;
+        let graph = InstanceGraph::one_to_one(
+            &Netlist {
+                inputs: vec!["a".into(), "b".into()],
+                outputs: vec!["y".into()],
+                gates: vec![nor("m", &["b"]), nor("y", &["m"])],
+            },
+            &Library::default_library(),
+        )
+        .unwrap();
+        let analysis = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
+        let facts = BTreeMap::new();
+        let pins = BTreeMap::from([
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(0)),
+                pin(Anchor { x: 10, y: 1, z: 20 }, Facing::South),
+            ),
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(1)),
+                pin(
+                    Anchor {
+                        x: 100,
+                        y: 1,
+                        z: 20,
+                    },
+                    Facing::South,
+                ),
+            ),
+            (
+                PhysicalEndpointId::DeclaredOutput(PortId(0)),
+                pin(
+                    Anchor {
+                        x: 104,
+                        y: 1,
+                        z: 62,
+                    },
+                    Facing::South,
+                ),
+            ),
+        ]);
+        let request = SeedPlacementRequest {
+            graph: &graph,
+            analysis: &analysis,
+            pins: &pins,
+            block_facts: &facts,
+        };
+
+        let direct = derive_frame(&pins);
+        assert_eq!(direct.forward, Facing::South);
+        assert_eq!(
+            TopologyAwareSeedPlacer.plan(request),
+            Err(SeedPlacementError::LateralWindowTooNarrow {
+                instance: InstanceId(0)
+            }),
+            "the frame the pins asked for names the macro it could not fold"
+        );
+
+        // Each turned frame is planned as well, and answers for itself.
+        let footprint = io_footprint(request);
+        for forward in [
+            clockwise(direct.forward),
+            clockwise(clockwise(clockwise(direct.forward))),
+        ] {
+            let frame = PlacementFrame {
+                forward,
+                lateral: clockwise(forward),
+                origin: direct.origin,
+            };
+            assert_eq!(
+                TopologyAwareSeedPlacer.plan_in_frame(
+                    request,
+                    &BTreeMap::new(),
+                    frame,
+                    false,
+                    footprint
+                ),
+                Err(SeedPlacementError::NoDeckLayoutFits),
+                "a turned frame starts beyond the pin on its own far wall"
+            );
+        }
+    }
+
     use std::collections::{BTreeMap, BTreeSet};
 
     use crate::compile::fragment_synth::identity::{
@@ -4135,21 +4262,14 @@ mod tests {
     /// that fit stay on the base deck and the one that does not opens the
     /// deck above, at a ground derived from the macros' own height.
     ///
-    /// Every literal below is hand-derived from this fixture:
-    ///
-    /// * pins `(10, 20)` in and `(72, 60)` out, both travelling east, put
-    ///   the frame's origin on the input's net cell `(12, 1, 20)`, forward
-    ///   east and lateral south;
-    /// * the board is `10..=72` by `20..=60`, so the forward limit is
-    ///   `72 - 12 = 60` and the lateral window is `0..=40`;
-    /// * one lane crosses every channel, so each is
-    ///   `channel_width(1) + 2 = 11` cells and the first column starts at
-    ///   `0 + 1 + 11 = 12`, leaving a capacity of `60 - 12 = 48`;
-    /// * an east-facing torch spans two forward cells, so a column costs
-    ///   `2 + 11 = 13` and a deck's turnaround costs `9 + 8 = 17`;
-    /// * `13 + 13 + 17 = 43` fits, `13 + 13 + 13 + 17 = 56` does not, and
-    ///   the third column pays its preceding channel as lead:
-    ///   `11 + 13 + 17 = 41`.
+    /// Every literal below is hand-derived: the pins put the origin on the
+    /// input's net cell `(12, 1, 20)` facing east over a `10..=72` by
+    /// `20..=60` board, one lane crosses every channel (`9 + 2 = 11`
+    /// cells), so the first column starts at `0 + 1 + 11 = 12` with a
+    /// capacity of `60 - 12 = 48`.  An east-facing torch column costs
+    /// `2 + 11 = 13` and a deck's turnaround `9 + 8 = 17`: `13 + 13 + 17`
+    /// fits, `13 * 3 + 17` does not, and the third column opens deck 1
+    /// paying its preceding channel as lead (`11 + 13 + 17 = 41`).
     #[test]
     fn bounded_columns_fold_onto_ordered_decks() {
         use super::*;
