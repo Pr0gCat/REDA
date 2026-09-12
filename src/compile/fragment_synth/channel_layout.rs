@@ -13,8 +13,8 @@ use thiserror::Error;
 
 use super::candidate::ExpandedPhysicalCandidate;
 use super::channel_plan::{
-    lane_forward, lane_forward_from_end, plan_channel, ChannelNet, ChannelPlanError, LANE_MARGIN,
-    LANE_PITCH,
+    lane_forward, lane_forward_from_end, plan_channel, ChannelNet, ChannelPlanError,
+    FORWARD_MARGIN, LANE_MARGIN, LANE_PITCH, LEGACY_TURNAROUND_CHANNEL,
 };
 use super::identity::PhysicalEndpointId;
 use super::identity::{RouteId, RoutedSinkId};
@@ -105,10 +105,6 @@ pub(crate) struct ChannelLayout {
 /// How far beyond the placed macros the closed channel layers extend, inside
 /// the lateral window.
 const LATERAL_MARGIN: i32 = 32;
-/// Free forward cells of the turnaround channel beyond the last column.
-const TURNAROUND_CHANNEL: i32 = 40;
-/// Closed forward cells before the first and after the last column.
-const FORWARD_MARGIN: i32 = 8;
 
 #[derive(Debug, Clone, Copy)]
 struct Frame {
@@ -334,8 +330,8 @@ pub(crate) fn plan_channel_layout(
         let start = last.max_forward + 1;
         levels.push(levels.last().copied().unwrap_or(0) + 1);
         columns.push(Column {
-            min_forward: start + TURNAROUND_CHANNEL,
-            max_forward: start + TURNAROUND_CHANNEL,
+            min_forward: start + LEGACY_TURNAROUND_CHANNEL,
+            max_forward: start + LEGACY_TURNAROUND_CHANNEL,
             blocked_laterals: BTreeSet::new(),
         });
     }

@@ -5,7 +5,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Serialize;
 use thiserror::Error;
 
-use crate::compile::fragment_synth::channel_plan::{channel_width, lane_count};
+use crate::compile::fragment_synth::channel_plan::{
+    channel_width, lane_count, legacy_turnaround_allowance,
+};
 use crate::compile::fragment_synth::identity::{ConnectionId, InstanceId, PrimitiveId};
 use crate::compile::fragment_synth::identity::{PhysicalEndpointId, PortId};
 use crate::compile::fragment_synth::instance_graph::{
@@ -194,7 +196,7 @@ impl LateralWindow {
 pub(crate) const WINDOW_MARGIN: i32 = 8;
 /// Forward cells the channel plan needs beyond the last column: the
 /// turnaround channel and the closed margin.
-const TURNAROUND_ALLOWANCE: i32 = 48;
+const TURNAROUND_ALLOWANCE: i32 = legacy_turnaround_allowance();
 
 pub(crate) trait SeedPlacer {
     fn plan(

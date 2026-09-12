@@ -21,6 +21,29 @@ use thiserror::Error;
 pub(crate) const LANE_MARGIN: i32 = 3;
 /// Forward cells between neighbouring lanes.
 pub(crate) const LANE_PITCH: i32 = 3;
+/// Closed forward cells a turnaround needs beyond its free channel, before
+/// the first column and after the last one.
+pub(crate) const FORWARD_MARGIN: i32 = 8;
+/// Free forward cells the pre-bounded turnaround channel always reserved
+/// beyond the last column, whatever the nets crossing it needed.
+pub(crate) const LEGACY_TURNAROUND_CHANNEL: i32 = 40;
+
+/// Forward cells the legacy turnaround takes: its fixed channel and the
+/// closed margin behind it.
+pub(crate) const fn legacy_turnaround_allowance() -> i32 {
+    LEGACY_TURNAROUND_CHANNEL + FORWARD_MARGIN
+}
+
+/// Free forward cells a turnaround channel needs for this many lanes.
+pub(crate) fn bounded_turnaround_channel(lanes: usize) -> i32 {
+    channel_width(lanes)
+}
+
+/// Forward cells a bounded turnaround takes: its channel and the closed
+/// margin behind it.
+pub(crate) fn bounded_turnaround_allowance(lanes: usize) -> i32 {
+    bounded_turnaround_channel(lanes) + FORWARD_MARGIN
+}
 
 /// One net's presence in one channel.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -673,4 +696,16 @@ mod tests {
         );
     }
 
+    #[test]
+    fn turnaround_allowance_is_channel_plus_closed_margin() {
+        assert_eq!(legacy_turnaround_allowance(), 48);
+        assert_eq!(
+            legacy_turnaround_allowance(),
+            LEGACY_TURNAROUND_CHANNEL + FORWARD_MARGIN
+        );
+        assert_eq!(
+            bounded_turnaround_allowance(3),
+            bounded_turnaround_channel(3) + FORWARD_MARGIN
+        );
+    }
 }
