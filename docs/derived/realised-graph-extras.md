@@ -21,11 +21,11 @@ The extractor is differenced against the `Simulator` on a sweep of three-cell ri
 
 ## Summary, computed from the runs below
 
-* **41 extra edge(s) across all of it**, 37 of them in a world `compile` ships today.
-* **41 of 41 are mechanism 3** -- component, strongly powered block, foreign dust. That is the mechanism both shipped bugs were, and here it is the *only* one that occurs.
-* **41 of 41 cross through a cell that is some gate's own support block**, and in **41** of those the two nets are two *declared inputs of that same gate*. So the shape is one thing, over and over: a NOR's support is strongly powered by one input route's terminal, and re-drives another input route's own terminal dust on a different face of the same block -- and from there back up that route until a repeater stops it. The netlist joins those two nets nowhere; they merely arrive at the same gate.
+* **40 extra edge(s) across all of it**, 36 of them in a world `compile` ships today.
+* **40 of 40 are mechanism 3** -- component, strongly powered block, foreign dust. That is the mechanism both shipped bugs were, and here it is the *only* one that occurs.
+* **40 of 40 cross through a cell that is some gate's own support block**, and in **40** of those the two nets are two *declared inputs of that same gate*. So the shape is one thing, over and over: a NOR's support is strongly powered by one input route's terminal, and re-drives another input route's own terminal dust on a different face of the same block -- and from there back up that route until a repeater stops it. The netlist joins those two nets nowhere; they merely arrive at the same gate.
 * **0 of 2 foreign reads land on a cell no route owns.** A support block is owned by no route, so this counts the case `TorchMergeFailure::ForeignNetReachesSupport` already refuses -- an independent confirmation that `verify_torch_merge` is doing its half. Every other foreign read is on a cell some *other net* owns, which means it is downstream of a crossing listed above rather than a new coupling; what it adds is that the contamination does not merely sit on a wire, it reaches a diode that forwards it.
-* `and4` and `verilog:and4` are clean on both paths. Every other circuit is not, on every path that can build it.
+* `and4` and `verilog:and4` are clean on both paths, and `full_adder` is now clean on the relaxation path. Its legacy path still has edges; every larger relaxation case in this sweep fails to build, while its legacy path still has edges.
 
 **NOT MEASURED here: whether any of this changes what a circuit computes.** Every one of these circuits passes its truth table today (`tests/reference_circuits.rs`, `tests/seven_segment.rs`, `tests/verilog_frontend.rs`). An extra edge is a fact about the realised graph; whether a given one is load-bearing depends on where the contaminated run's next repeater is and what branches off it before then, and that was not derived.
 
@@ -43,11 +43,9 @@ No edge the netlist did not ask for.
 
 ## `full_adder` / relaxation -- **SHIPS TODAY**
 
-1065 blocks, 25 domains, 541 cells reached, **1 extra edge(s)** contaminating 7 cell(s), 0 foreign read(s).
+1065 blocks, 25 domains, 534 cells reached, **0 extra edge(s)** contaminating 0 cell(s), 0 foreign read(s).
 
-```
-  EXTRA EDGE   g1 at (46, 1, 124) -> g3 at (46, 1, 122) across (46, 1, 123), mechanism 3 (component -> block -> dust)
-```
+No edge the netlist did not ask for.
 
 ## `full_adder` / legacy
 

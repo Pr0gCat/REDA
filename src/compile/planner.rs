@@ -224,6 +224,66 @@ pub fn terminal_style(approach: &TerminalApproach) -> TerminalStyle {
     }
 }
 
+/// Keep every ordinary gate support electrically one-way at all of its inputs.
+///
+/// Directed dust is safe only while the support is weakly powered. If any
+/// sibling terminal is a repeater, that repeater strongly powers the shared
+/// support and the support re-drives every dust terminal on its other faces.
+/// The dust then carries the sibling net backwards through its whole route.
+/// All-dust supports stay weak and are left alone; a mixed support is made
+/// all-repeater because a repeater's output cannot feed back through its rear.
+///
+/// This has to run after complete routes exist. [`lay_net`] decides one net at
+/// a time, so it cannot see the final material selected at a sibling input.
+fn cohere_gate_terminals(candidate: &mut PlanCandidate) {
+    let support_by_gate: BTreeMap<String, Anchor> = candidate
+        .primitive_nodes
+        .iter()
+        .filter_map(|node| {
+            matches!(node.realisation, NodeRealisation::Primitive(_))
+                .then(|| node.id.strip_prefix("gate:"))
+                .flatten()
+                .map(|gate| (gate.to_string(), node.anchor))
+        })
+        .collect();
+    let repeater_gates: BTreeSet<String> = candidate
+        .routes
+        .iter()
+        .flat_map(|route| &route.terminals)
+        .filter(|terminal| terminal.kind == RouteTerminalKind::RepeaterIntoSupport)
+        .map(|terminal| terminal.sink.gate.clone())
+        .collect();
+
+    for route in &mut candidate.routes {
+        for terminal_index in 0..route.terminals.len() {
+            let terminal = &route.terminals[terminal_index];
+            if terminal.kind != RouteTerminalKind::DirectedDustIntoSupport
+                || !repeater_gates.contains(&terminal.sink.gate)
+            {
+                continue;
+            }
+            let Some(&support) = support_by_gate.get(&terminal.sink.gate) else {
+                continue;
+            };
+            let socket = terminal.sink.anchor;
+            let Some(block_index) = route.anchors.iter().position(|anchor| *anchor == socket)
+            else {
+                continue;
+            };
+            let Some(block) = route.realisation.get_mut(block_index) else {
+                continue;
+            };
+            *block = compile::repeater(compile::direction_from(
+                Position::new(socket.x, socket.y, socket.z),
+                Position::new(support.x, support.y, support.z),
+            ));
+            let terminal = &mut route.terminals[terminal_index];
+            terminal.kind = RouteTerminalKind::RepeaterIntoSupport;
+            terminal.repeaters += 1;
+        }
+    }
+}
+
 impl Route {
     /// Construct immutable route metadata for a candidate or unit test.
     pub fn new(id: impl Into<String>, anchors: Vec<Anchor>) -> Self {
@@ -1033,6 +1093,7 @@ pub fn try_move(
         moved.routes[route_index] = rebuilt;
     }
 
+    cohere_gate_terminals(&mut moved);
     Ok(moved)
 }
 
@@ -1639,8 +1700,9 @@ fn entered_code(from: Anchor, to: Anchor) -> u8 {
 ///   can put a repeater on (not a bend, not a stair), so what this search
 ///   admits, realisation can build;
 /// - a cell of this branch's own already-laid trunk is ridden at the trunk's
-///   own arithmetic: its block KIND is handed in as `trunk`, a repeater
-///   restores and dust decays -- the same walk the shared-prefix accounting
+///   own arithmetic: its whole block state is handed in as `trunk`, so a
+///   repeater restores only when the ride follows its axis and dust decays --
+///   the same walk the shared-prefix accounting
 ///   applies to a ridden line, cell for cell (the first draft handed in
 ///   per-cell strengths from a positional walk of the whole route, which
 ///   crosses branch boundaries and is wrong on both sides of every one);
@@ -4452,6 +4514,7 @@ fn route_in_order(
     }
 
     candidate.routes = routes;
+    cohere_gate_terminals(&mut candidate);
     Ok(candidate)
 }
 
@@ -5021,6 +5084,7 @@ fn negotiate_charging(
                 .iter()
                 .map(|signal| laid.remove(signal).expect("every net was laid"))
                 .collect();
+            cohere_gate_terminals(&mut candidate);
             // Unreachable unless the incremental bookkeeping and the sweep
             // disagree, which is the one thing the sweep exists to catch --
             // and it is reported rather than returned, because an illegal plan
@@ -6501,6 +6565,105 @@ mod tests {
         );
         assert_eq!(terminal_style(&corner), TerminalStyle::RepeaterIntoSupport);
         assert_eq!(terminal_style(&weak), TerminalStyle::RepeaterIntoSupport);
+    }
+
+    fn shared_support_candidate(
+        left_kind: RouteTerminalKind,
+        right_kind: RouteTerminalKind,
+    ) -> PlanCandidate {
+        use crate::redstone::world::block::Facing;
+
+        let support = Anchor { x: 2, y: 1, z: 2 };
+        let left_socket = Anchor { x: 1, y: 1, z: 2 };
+        let right_socket = Anchor { x: 3, y: 1, z: 2 };
+        let route = |id: &str,
+                     predecessor: Anchor,
+                     socket: Anchor,
+                     kind: RouteTerminalKind,
+                     toward_support: Facing| {
+            Route::from_legacy(
+                id.to_string(),
+                vec![predecessor, socket],
+                vec![RouteTerminal {
+                    sink: RouteSink {
+                        gate: "out".to_string(),
+                        input_index: usize::from(id == "right"),
+                        anchor: socket,
+                    },
+                    kind,
+                    repeaters: u64::from(kind == RouteTerminalKind::RepeaterIntoSupport),
+                }],
+                vec![
+                    compile::dust(),
+                    if kind == RouteTerminalKind::RepeaterIntoSupport {
+                        compile::repeater(toward_support)
+                    } else {
+                        compile::dust()
+                    },
+                ],
+                vec![compile::stone(), compile::stone()],
+            )
+        };
+        PlanCandidate::with_primitive_nodes(
+            vec![support],
+            vec![PrimitiveNode {
+                id: "gate:out".to_string(),
+                anchor: support,
+                realisation: NodeRealisation::Primitive(Primitive::Torch),
+                footprint: vec![support, left_socket, right_socket],
+                conductors: vec![support, left_socket, right_socket],
+                pinned: false,
+                output_pin: None,
+            }],
+            vec![
+                route(
+                    "left",
+                    Anchor { x: 0, y: 1, z: 2 },
+                    left_socket,
+                    left_kind,
+                    Facing::East,
+                ),
+                route(
+                    "right",
+                    Anchor { x: 4, y: 1, z: 2 },
+                    right_socket,
+                    right_kind,
+                    Facing::West,
+                ),
+            ],
+        )
+    }
+
+    #[test]
+    fn a_shared_support_never_mixes_repeater_and_dust_terminals() {
+        use crate::redstone::world::block::Facing;
+
+        let mut candidate = shared_support_candidate(
+            RouteTerminalKind::RepeaterIntoSupport,
+            RouteTerminalKind::DirectedDustIntoSupport,
+        );
+
+        cohere_gate_terminals(&mut candidate);
+
+        assert_eq!(
+            candidate.routes[1].terminals[0].kind,
+            RouteTerminalKind::RepeaterIntoSupport
+        );
+        assert_eq!(candidate.routes[1].terminals[0].repeaters, 1);
+        assert_eq!(candidate.routes[1].realisation[1], compile::repeater(Facing::West));
+    }
+
+    #[test]
+    fn an_all_dust_shared_support_stays_all_dust() {
+        let mut candidate = shared_support_candidate(
+            RouteTerminalKind::DirectedDustIntoSupport,
+            RouteTerminalKind::DirectedDustIntoSupport,
+        );
+        let before = candidate.clone();
+
+        cohere_gate_terminals(&mut candidate);
+
+        assert_eq!(candidate, before);
     }
 
     /// A facing nobody chose must not be indistinguishable from one somebody
@@ -8350,6 +8513,80 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The axis guard still admits the diode's ordinary input-to-output path.
+    ///
+    /// This is the positive half of the contract: tightening the trunk ride
+    /// must not turn a correctly aligned repeater into a wall. The literal
+    /// three-cell path is the only shortest answer, so the assertion cannot
+    /// pass by quietly routing around the component.
+    #[test]
+    fn a_trunk_repeater_is_ridden_forward() {
+        let laid = vec![
+            Anchor { x: 0, y: 1, z: 0 },
+            Anchor { x: 1, y: 1, z: 0 },
+            Anchor { x: 2, y: 1, z: 0 },
+        ];
+        let mut reservation = Reservation::new();
+        reserve_path(&mut reservation, "me", &laid);
+        let mut trunk: BTreeMap<Anchor, crate::redstone::world::block::BlockState> =
+            laid.iter().map(|&cell| (cell, compile::dust())).collect();
+        trunk.insert(laid[1], compile::repeater(Facing::East));
+
+        let route = Route::new("me".to_string(), laid.clone());
+        let own_join = OwnJoinCheck::for_branch(OwnJoinPolicy::Off, &route, &reservation);
+        let congestion = Congestion::default();
+        let path = strength_aware_astar(
+            laid[0],
+            laid[2],
+            laid[2],
+            "me",
+            &reservation,
+            &own_join,
+            &Prices::RipUp(&congestion),
+            &trunk,
+            crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
+        )
+        .expect("the repeater's input-to-output axis is a legal ride");
+        assert_eq!(path, laid, "the aligned trunk is the direct route");
+    }
+
+    /// The same diode cannot be ridden from its output back to its input.
+    ///
+    /// With the axis checks removed the direct reversed trunk is the unique
+    /// shortest answer. A legal search must detour instead, so this catches
+    /// the opposite-face entry independently of the sideways corpse above.
+    #[test]
+    fn a_trunk_repeater_is_not_ridden_backwards() {
+        let laid = vec![
+            Anchor { x: 0, y: 1, z: 0 },
+            Anchor { x: 1, y: 1, z: 0 },
+            Anchor { x: 2, y: 1, z: 0 },
+        ];
+        let mut reservation = Reservation::new();
+        reserve_path(&mut reservation, "me", &laid);
+        let mut trunk: BTreeMap<Anchor, crate::redstone::world::block::BlockState> =
+            laid.iter().map(|&cell| (cell, compile::dust())).collect();
+        trunk.insert(laid[1], compile::repeater(Facing::East));
+
+        let reversed = vec![laid[2], laid[1], laid[0]];
+        let route = Route::new("me".to_string(), laid);
+        let own_join = OwnJoinCheck::for_branch(OwnJoinPolicy::Off, &route, &reservation);
+        let congestion = Congestion::default();
+        let path = strength_aware_astar(
+            reversed[0],
+            reversed[2],
+            reversed[2],
+            "me",
+            &reservation,
+            &own_join,
+            &Prices::RipUp(&congestion),
+            &trunk,
+            crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH,
+        )
+        .expect("a detour around the backwards diode remains available");
+        assert_ne!(path, reversed, "a diode cannot conduct output-to-input");
     }
 
     /// A long straight corridor carries: the refresh model admits what
@@ -10879,7 +11116,7 @@ mod tests {
                     }
                 }
             }
-            // The other half, and the one the 41 extra edges lived in: how much
+            // The other half, and the one the recorded extra edges lived in: how much
             // of the built world did nobody promise anything about?
             let mut unclaimed: std::collections::BTreeMap<String, usize> = Default::default();
             let mut unclaimed_total = 0usize;
@@ -13942,6 +14179,23 @@ mod tests {
                 let size = candidate_world_size(&candidate);
                 let verified = realise_without_verifying(&candidate, &netlist, size)
                     .expect("the candidate realised once already");
+                let coupling = crate::compile::coupling::extra_edges(
+                    &verified.realised.world,
+                    &verified.reservation,
+                    &netlist,
+                    &verified.nets,
+                    &verified.realised.ports.gate_output_positions,
+                    &verified.realised.ports.input_positions,
+                );
+                eprintln!(
+                    "  coupling: {} extra edge(s), {} contaminated cell(s), {} foreign read(s)",
+                    coupling.extra_edges.len(),
+                    coupling.contaminated_cells,
+                    coupling.foreign_readers.len()
+                );
+                if !coupling.is_clean() {
+                    eprintln!("{}", coupling.describe());
+                }
                 let judged: std::collections::HashMap<Position, u8> = {
                     use std::collections::{HashMap, HashSet};
                     let nets = &verified.nets;
@@ -20533,7 +20787,7 @@ mod tests {
 
 
     // ---------------------------------------------------------------
-    // 2 -- the 41 extra edges
+    // 2 -- the recorded extra edges
     // ---------------------------------------------------------------
 
     /// One `EXTRA EDGE` line of `docs/derived/realised-graph-extras.md`.
@@ -21037,7 +21291,7 @@ mod tests {
                 }
             };
         }
-        say!("\n== THE 41 EXTRA EDGES ==");
+        say!("\n== THE RECORDED EXTRA EDGES ==");
         let edges = recorded_extra_edges();
         say!("   the artifact records {} extra edge(s)", edges.len());
         // The same six the extras record was taken over, with the same
@@ -21246,16 +21500,16 @@ mod tests {
     /// 0 of 4 in-plane steps open on each, and 0 of all twelve including the
     /// climbing ones. The four servable landings stay 4-of-4 BLOCK OVERLAP.
     ///
-    /// ## 2 -- the 41 extra edges. **The geometry is caught; the ownership is not.**
+    /// ## 2 -- the 40 extra edges. **The geometry is caught; the ownership is not.**
     ///
-    /// 41 of 41 rebuilt and judged. `keep_out`'s twelve cells cover the offset
-    /// of **0**; the derived two-hop range covers **41**. But a rule keyed on
+    /// 40 of 40 rebuilt and judged. `keep_out`'s twelve cells cover the offset
+    /// of **0**; the derived two-hop range covers **40**. But a rule keyed on
     /// the plan-time [`Reservation::owner`] would have refused **0** -- in
-    /// every one of the 41 the emitting cell and the contaminated cell have the
+    /// every one of the 40 the emitting cell and the contaminated cell have the
     /// *same* reservation owner, because a gate's body and its input sockets
     /// are one owner and the whole mechanism happens inside one of them. Keyed
-    /// on **net** ownership, which the plan-time map does not carry: 41, of
-    /// which 37 in a world `compile` ships. And 41 of 41 are emitted by a
+    /// on **net** ownership, which the plan-time map does not carry: 40, of
+    /// which 36 in a world `compile` ships. And 40 of 40 are emitted by a
     /// **repeater**, chosen by `realise_branch_from` after `reserve_path` wrote
     /// the entry such a rule reads.
     ///
@@ -21426,9 +21680,9 @@ mod tests {
             builds.insert(((*name).to_string(), *legacy), built);
         }
 
-        // --- 2: the 41 extra edges ----------------------------------
+        // --- 2: the recorded extra edges -----------------------------
         eprintln!("
-== THE 41 EXTRA EDGES ==");
+== THE RECORDED EXTRA EDGES ==");
         let extras = extras_arithmetic(true);
         eprintln!("   {extras:#?}");
 
@@ -21520,10 +21774,10 @@ mod tests {
 
     /// **The other side of the hypothesis, and this half holds.**
     ///
-    /// Every one of the 41 recorded extra edges is at an offset today's twelve
+    /// Every one of the 40 recorded extra edges is at an offset today's twelve
     /// cells do not cover and the derived two-hop range does. What that buys is
     /// then bounded by two things this pins as well: the plan-time reservation's
-    /// ownership is per *gate body*, not per net, and every one of the 41 is
+    /// ownership is per *gate body*, not per net, and every one of the 40 is
     /// emitted by a repeater whose existence is decided after the entry such a
     /// rule would read is written.
     #[test]
@@ -21547,11 +21801,11 @@ mod tests {
         assert_eq!(
             seen_by_keep_out, 0,
             "and today's twelve-cell halo covers the offset of NONE of them -- every one 
-             of the 41 is two cells away, which is the hop `keep_out` does not have"
+             of the 40 is two cells away, which is the hop `keep_out` does not have"
         );
         assert_eq!(
-            by_net_shipping, 37,
-            "37 of them are in a world `compile` ships, which is the artifact's own count"
+            by_net_shipping, 36,
+            "36 of them are in a world `compile` ships, which is the artifact's own count"
         );
         assert_eq!(
             by_owner, 0,
@@ -21587,7 +21841,7 @@ mod tests {
                 "full_adder",
                 build_full_adder_netlist().0,
                 false,
-                [578, 6936, 6196, 926, 186, 264],
+                [578, 6936, 6190, 935, 189, 264],
             ),
             (
                 "segment_a",

@@ -1058,8 +1058,10 @@ fn sweep_report() -> String {
          crossing listed above rather than a new coupling; what it adds is that the \
          contamination does not merely sit on a wire, it reaches a diode that forwards \
          it.\n\
-         * `and4` and `verilog:and4` are clean on both paths. Every other circuit is not, \
-         on every path that can build it.\n\n\
+         * `and4` and `verilog:and4` are clean on both paths, and `full_adder` is now \
+         clean on the relaxation path. Its legacy path still has edges; every larger \
+         relaxation case in this sweep fails to build, while its legacy path still has \
+         edges.\n\n\
          **NOT MEASURED here: whether any of this changes what a circuit computes.** \
          Every one of these circuits passes its truth table today \
          (`tests/reference_circuits.rs`, `tests/seven_segment.rs`, \
@@ -1377,19 +1379,14 @@ fn confirm_with_the_simulator(
 /// face of the same block -- and from there back up that route's own run until
 /// a repeater stops it. The netlist joins those two nets nowhere.
 ///
-/// `full_adder` is confirmed on both paths and `segment_a` on the one it ships,
-/// which covers a relaxation-placed circuit and an emitter-placed one. The two
-/// decoders are extracted but **not** simulator-confirmed here; that is stated
-/// in the report rather than implied, and the reason is runtime, not doubt.
+/// The relaxation planner now coheres every ordinary gate's terminal material,
+/// so its `full_adder` is clean. The surviving legacy `full_adder` and
+/// `segment_a` cases are confirmed here. The two decoders are extracted but
+/// **not** simulator-confirmed here; that is stated in the report rather than
+/// implied, and the reason is runtime, not doubt.
 #[test]
 fn the_extra_edges_are_real_when_the_simulator_runs_the_circuit() {
-    let cases: [(&str, Netlist, Path, usize); 3] = [
-        (
-            "full_adder / relaxation (SHIPS)",
-            build_full_adder_netlist().0,
-            Path::Relaxation,
-            1,
-        ),
+    let cases: [(&str, Netlist, Path, usize); 2] = [
         (
             "full_adder / legacy",
             build_full_adder_netlist().0,
