@@ -166,15 +166,17 @@ mod tests {
         let output =
             primitive_output_terminal(Primitive::Torch, CellFacing::NORTH, anchor).unwrap();
 
-        assert_eq!(output.support, Anchor { x: 4, y: 2, z: 7 });
-        assert_eq!(output.route_anchor, Anchor { x: 4, y: 2, z: 6 });
+        // The torch at z=7 drives the block at z=6; the route's first dust
+        // sits past that block at z=5 and the corridor runs on from there.
+        assert_eq!(output.support, Anchor { x: 4, y: 2, z: 6 });
+        assert_eq!(output.route_anchor, Anchor { x: 4, y: 2, z: 5 });
         assert_eq!(output.allowed_exit, Facing::North);
         assert_eq!(
             source_escape_corridor(output.route_anchor, output.allowed_exit),
             [
-                Anchor { x: 4, y: 2, z: 5 },
                 Anchor { x: 4, y: 2, z: 4 },
                 Anchor { x: 4, y: 2, z: 3 },
+                Anchor { x: 4, y: 2, z: 2 },
             ]
         );
     }

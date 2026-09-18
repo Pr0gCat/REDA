@@ -526,6 +526,25 @@ fn check_outputs(
             state.lit
         };
         if actual != expected {
+            if std::env::var_os("REDA_TRACE_SEED_WORLD").is_some() {
+                let (sx, sy, sz) = world.size();
+                eprintln!(
+                    "functional mismatch world dump: vector={vector:?} output={name} at=({x}, {y}, {z}) size=({sx}, {sy}, {sz})"
+                );
+                for wy in 0..sy {
+                    for wz in 0..sz {
+                        for wx in 0..sx {
+                            let block = world.get(wx, wy, wz);
+                            if block.kind != BlockKind::Air {
+                                eprintln!(
+                                    "  ({wx}, {wy}, {wz}) {:?} facing={:?} power={} lit={}",
+                                    block.kind, block.facing, block.power, block.lit
+                                );
+                            }
+                        }
+                    }
+                }
+            }
             return Err(CandidateCertificationError::FunctionalMismatch {
                 manifest_index,
                 output: name.clone(),

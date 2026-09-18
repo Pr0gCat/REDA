@@ -22,7 +22,7 @@ use crate::compile::fragment_synth::search::{
 };
 use crate::compile::fragment_synth::seed::{
     compile_sparse_seed_variant_with_services, InstancePlacementOverride, SeedError, SeedInput,
-    SeedRoutingFailure, SeedServices, SeedVariant,
+    SeedRepairRefusal, SeedRoutingFailure, SeedServices, SeedVariant,
 };
 use crate::compile::fragment_synth::timing_graph::{
     RealisedTimingGraph, TimingArc, TimingArcKind, TimingGraphError,
@@ -197,6 +197,19 @@ fn terminal_for_seed_error(error: &SeedError, work: &mut CapWorkCounters) -> Pro
             ProposalTerminal::RouterCapExhausted
         }
         SeedError::PlacementExhausted { .. } => ProposalTerminal::BacktrackCapExhausted,
+        // The repair loop retries router-cap refusals; when it gives up on
+        // one, the cap is still what stopped the proposal.
+        SeedError::SeedExhausted {
+            final_refusal:
+                SeedRepairRefusal::Routing(SeedRoutingFailure {
+                    work_used: Some(work_used),
+                    ..
+                }),
+            ..
+        } => {
+            work.router_expansions = *work_used;
+            ProposalTerminal::RouterCapExhausted
+        }
         SeedError::SeedExhausted { .. } => ProposalTerminal::BacktrackCapExhausted,
         SeedError::Verification(_) => ProposalTerminal::VerificationFailed,
         SeedError::Certification(CandidateCertificationError::Equivalence(

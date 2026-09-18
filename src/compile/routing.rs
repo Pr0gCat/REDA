@@ -1441,6 +1441,17 @@ fn select_terminal_kind(
     isolation_proven: bool,
 ) -> RouteTerminalKind {
     match requirement {
+        // A bare merge lands on another route's dust one cell past the
+        // terminal, so the terminal must still carry at least 2 for the
+        // junction to read 1.  The legacy planner picks BareMergeRepeater
+        // itself from its landing strength; a caller that cannot know the
+        // path length in advance asks for dust and gets the refresh only when
+        // the budget says the join would otherwise read zero.
+        TerminalRequirement::Exact(RouteTerminalKind::BareMergeDust)
+            if budget_needs_repeater || predecessor_strength < 3 =>
+        {
+            RouteTerminalKind::BareMergeRepeater
+        }
         TerminalRequirement::Exact(kind) => kind,
         TerminalRequirement::Repeater => RouteTerminalKind::RepeaterIntoSupport,
         TerminalRequirement::DirectedDust => RouteTerminalKind::DirectedDustIntoSupport,

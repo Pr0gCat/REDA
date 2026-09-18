@@ -415,6 +415,11 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
                 )
             })
             .collect();
+        // Two declared outputs can read one logical signal (a duplicated
+        // driver, or a netlist that exports the same net twice), and a
+        // signal has one track.  Their lamps still need distinct homes, so a
+        // lateral already taken by an earlier port steps down by one pitch.
+        let mut taken_output_laterals = BTreeSet::new();
         let automatic_outputs = request
             .graph
             .declared_outputs
@@ -432,9 +437,12 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
                     .iter()
                     .find(|assignment| assignment.sink == PhysicalSink::DeclaredOutput(port))
                     .map(|assignment| assignment.signal);
-                let lateral = signal
+                let mut lateral = signal
                     .and_then(|signal| track_laterals.get(&signal).copied())
                     .unwrap_or(0);
+                while !taken_output_laterals.insert(lateral) {
+                    lateral = lateral.saturating_add(TRACK_PITCH);
+                }
                 (port, frame_to_world(frame, output_forward, lateral))
             })
             .collect();
@@ -2714,21 +2722,21 @@ mod tests {
         let input = variant.port(crate::compile::physical::PortKind::TorchInput);
         let output = variant.port(crate::compile::physical::PortKind::TorchOutput);
 
-        assert_eq!(pose.facing, CellFacing::NORTH);
-        assert_eq!(pose.preferred_origin, Anchor { x: 0, y: 1, z: 6 });
+        assert_eq!(pose.facing, CellFacing::EAST);
+        assert_eq!(pose.preferred_origin, Anchor { x: 3, y: 1, z: 6 });
         assert_eq!(input.position, Position::new(0, 0, 0));
-        assert_eq!(output.position, Position::new(0, 0, -1));
+        assert_eq!(output.position, Position::new(1, 0, 0));
         assert_eq!(
             input.position.offset(input.direction),
-            Position::new(0, 0, 1)
+            Position::new(-1, 0, 0)
         );
         assert_eq!(
             output.position.offset(output.direction),
-            Position::new(0, 0, -2)
+            Position::new(2, 0, 0)
         );
         assert_eq!(
             super::input_terminal(Primitive::Torch, pose.facing, pose.preferred_origin),
-            Anchor { x: 0, y: 1, z: 7 }
+            Anchor { x: 2, y: 1, z: 6 }
         );
         assert_eq!(
             crate::compile::fragment_synth::terminal_geometry::primitive_input_terminal(
@@ -2739,11 +2747,11 @@ mod tests {
             )
             .unwrap()
             .terminal,
-            Anchor { x: -1, y: 1, z: 6 }
+            Anchor { x: 3, y: 1, z: 5 }
         );
         assert_eq!(
             super::output_terminal(Primitive::Torch, pose.facing, pose.preferred_origin),
-            Anchor { x: 0, y: 1, z: 4 }
+            Anchor { x: 5, y: 1, z: 6 }
         );
     }
 
@@ -2782,7 +2790,7 @@ mod tests {
         let front = variant.port(crate::compile::physical::PortKind::RepeaterFront);
 
         assert_eq!(pose.facing, CellFacing::WEST);
-        assert_eq!(pose.preferred_origin, Anchor { x: 0, y: 1, z: 6 });
+        assert_eq!(pose.preferred_origin, Anchor { x: 3, y: 1, z: 6 });
         assert_eq!(rear.position, Position::new(0, 0, 0));
         assert_eq!(front.position, Position::new(0, 0, 0));
         assert_eq!(
@@ -2795,11 +2803,11 @@ mod tests {
         );
         assert_eq!(
             super::input_terminal(Primitive::Repeater, pose.facing, pose.preferred_origin),
-            Anchor { x: -1, y: 1, z: 6 }
+            Anchor { x: 2, y: 1, z: 6 }
         );
         assert_eq!(
             super::output_terminal(Primitive::Repeater, pose.facing, pose.preferred_origin),
-            Anchor { x: 1, y: 1, z: 6 }
+            Anchor { x: 4, y: 1, z: 6 }
         );
     }
 
@@ -2855,7 +2863,7 @@ mod tests {
     }
 
     #[test]
-    fn embedding_hint_penalty_changes_the_expected_pose() {
+    fn embedding_hint_penalty_scores_but_the_forward_axis_decides_the_pose() {
         let nodes = BTreeMap::from([
             (TemplateNode::Torch, Position::new(0, 0, 0)),
             (TemplateNode::SecondTorch, Position::new(4, 0, 0)),
@@ -2885,17 +2893,27 @@ mod tests {
             }],
         };
         let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
+        // The facing scorer keeps every cell's output on the frame's forward
+        // axis (see `facing_keeps_the_cell_output_on_the_dag_forward_axis`),
+        // so the hint penalty can rank poses but never turns a cell across
+        // the frame: with or without the hint, East stays East and North
+        // stays North.
         let without_hint = &graph.instances[0];
-        assert_eq!(
-            choose_instance_facing(without_hint, origin, source, target, Facing::East).unwrap(),
-            CellFacing::NORTH
-        );
         let mut with_hint = without_hint.clone();
         with_hint.expanded.topology.embedding_hints = vec![hint];
-        assert_eq!(
-            choose_instance_facing(&with_hint, origin, source, target, Facing::East).unwrap(),
-            CellFacing::EAST
-        );
+        for (forward, expected) in [
+            (Facing::East, CellFacing::EAST),
+            (Facing::North, CellFacing::NORTH),
+        ] {
+            assert_eq!(
+                choose_instance_facing(without_hint, origin, source, target, forward).unwrap(),
+                expected
+            );
+            assert_eq!(
+                choose_instance_facing(&with_hint, origin, source, target, forward).unwrap(),
+                expected
+            );
+        }
     }
 
     #[test]
