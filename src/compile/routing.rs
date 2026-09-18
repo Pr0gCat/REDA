@@ -597,7 +597,7 @@ impl RouterWork {
 
 impl PhysicalRouter for DurablePhysicalRouter {
     fn route(&self, request: RouteRequest<'_>) -> Result<RealisedRouteTree, RouterFailure> {
-        route_strict_with_policy(request, RoutingJoinPolicy::Off, |_| 0, |_, _, _| {})
+        route_seed_with_policy(request, RoutingJoinPolicy::Off, |_| 0, |_, _, _| {})
     }
 
     fn route_guided(
@@ -605,7 +605,7 @@ impl PhysicalRouter for DurablePhysicalRouter {
         request: RouteRequest<'_>,
         guidance: Option<RouteGuidance>,
     ) -> Result<RealisedRouteTree, RouterFailure> {
-        route_strict_with_policy(
+        route_seed_with_policy(
             request,
             RoutingJoinPolicy::Off,
             move |at| guidance.map_or(0, |guidance| guidance.penalty(*at)),
@@ -663,7 +663,7 @@ where
     Price: FnMut(&Anchor) -> u64,
     Claim: FnMut(Anchor, PhysicalReservationOwner, PhysicalReservationKind),
 {
-    route_with_local_policy(request, join_policy, false, price, claim)
+    route_with_local_policy(request, join_policy, false, false, price, claim)
 }
 
 /// Strict local route certification for newly generated fragment candidates.
@@ -681,13 +681,31 @@ where
     Price: FnMut(&Anchor) -> u64,
     Claim: FnMut(Anchor, PhysicalReservationOwner, PhysicalReservationKind),
 {
-    route_with_local_policy(request, join_policy, true, price, claim)
+    route_with_local_policy(request, join_policy, true, false, price, claim)
+}
+
+/// The seed's own route policy: strict local certification plus the
+/// seed-only rules (fanout tree roots, ring/floor reroutes, source-exit and
+/// terminal-feedback keep-outs).  Legacy `lay_net`/`try_move` never see these,
+/// so their layouts stay byte-exact.
+pub(crate) fn route_seed_with_policy<Price, Claim>(
+    request: RouteRequest<'_>,
+    join_policy: RoutingJoinPolicy,
+    price: Price,
+    claim: Claim,
+) -> Result<RealisedRouteTree, RouterFailure>
+where
+    Price: FnMut(&Anchor) -> u64,
+    Claim: FnMut(Anchor, PhysicalReservationOwner, PhysicalReservationKind),
+{
+    route_with_local_policy(request, join_policy, true, true, price, claim)
 }
 
 fn route_with_local_policy<Price, Claim>(
     request: RouteRequest<'_>,
     join_policy: RoutingJoinPolicy,
     strict_local: bool,
+    seed_rules: bool,
     mut price: Price,
     mut claim: Claim,
 ) -> Result<RealisedRouteTree, RouterFailure>
@@ -700,6 +718,7 @@ where
         request,
         join_policy,
         strict_local,
+        seed_rules,
         &mut work,
         &mut price,
         &mut claim,
@@ -711,6 +730,7 @@ fn route_ordered_attempt<Price, Claim>(
     request: RouteRequest<'_>,
     join_policy: RoutingJoinPolicy,
     strict_local: bool,
+    seed_rules: bool,
     work: &mut RouterWork,
     price: &mut Price,
     claim: &mut Claim,
@@ -741,6 +761,11 @@ where
     let mut staged_claims =
         Vec::<(Anchor, PhysicalReservationOwner, PhysicalReservationKind)>::new();
 
+    let reroute_limit = if seed_rules {
+        MAX_RING_REROUTES_PER_BRANCH
+    } else {
+        0
+    };
     for sink in request.sinks.as_slice() {
         let mut ring_forbidden = BTreeSet::new();
         let mut ring_reroutes = 0usize;
@@ -766,6 +791,7 @@ where
                 &own_join,
                 &ring_forbidden,
                 strict_local,
+                seed_rules,
                 work,
                 price,
             )?
@@ -781,7 +807,17 @@ where
                 request.id,
                 &path,
                 &mut reservations,
-                &mut |at, owner, kind| staged_claims.push((at, owner, kind)),
+                &mut |at, owner, kind| {
+                    // Seed reroutes roll a branch back, so its claims are
+                    // staged until the tree is accepted.  The legacy adapter
+                    // prices later sinks off the claims made so far, so it
+                    // must see them immediately.
+                    if seed_rules {
+                        staged_claims.push((at, owner, kind));
+                    } else {
+                        claim(at, owner, kind);
+                    }
+                },
             );
 
             let shared = path
@@ -814,7 +850,7 @@ where
                     .checked_sub(1)
                     .and_then(|index| path.get(index).copied())
                     .filter(|cell| *cell != start && *cell != sink.anchor);
-                if ring_reroutes < MAX_RING_REROUTES_PER_BRANCH {
+                if ring_reroutes < reroute_limit {
                     if let Some(reroute_cell) = reroute_cell {
                         if ring_forbidden.insert(reroute_cell) {
                             reservations = reservations_before;
@@ -844,10 +880,11 @@ where
                     category: RouterRefusalCategory::PhysicalInvariant,
                 });
             }
-            if let Some(overlap) =
-                branch_floor_overlap(&path[shared..], &cell_states, &floor_states)
+            if let Some(overlap) = seed_rules
+                .then(|| branch_floor_overlap(&path[shared..], &cell_states, &floor_states))
+                .flatten()
             {
-                if ring_reroutes < MAX_RING_REROUTES_PER_BRANCH
+                if ring_reroutes < reroute_limit
                     && overlap != start
                     && overlap != sink.anchor
                     && ring_forbidden.insert(overlap)
@@ -908,7 +945,9 @@ where
                                 if owner == request.id
                         )
                 });
-                if route_owns_floor && floor_states.insert(floor_at, floor).is_none() {
+                if (!seed_rules || route_owns_floor)
+                    && floor_states.insert(floor_at, floor).is_none()
+                {
                     floor_order.push(floor_at);
                 }
             }
@@ -965,7 +1004,17 @@ where
                 sink.anchor,
                 support,
                 &mut reservations,
-                &mut |at, owner, kind| staged_claims.push((at, owner, kind)),
+                &mut |at, owner, kind| {
+                    // Seed reroutes roll a branch back, so its claims are
+                    // staged until the tree is accepted.  The legacy adapter
+                    // prices later sinks off the claims made so far, so it
+                    // must see them immediately.
+                    if seed_rules {
+                        staged_claims.push((at, owner, kind));
+                    } else {
+                        claim(at, owner, kind);
+                    }
+                },
             );
             if strict_local {
                 certify_path(&request, sink, &path, &cell_states)?;
@@ -1038,7 +1087,7 @@ where
                         }),
                     _ => unreachable!(),
                 };
-                if ring_reroutes < MAX_RING_REROUTES_PER_BRANCH {
+                if ring_reroutes < reroute_limit {
                     if let Some(reroute_cell) = reroute_cell {
                         reservations = reservations_before;
                         cell_states = cell_states_before;
@@ -1187,7 +1236,12 @@ fn staircase_clearance_typed(from: Anchor, to: Anchor) -> Vec<Anchor> {
     }
 }
 
-fn self_obstructs_typed(previous: &BTreeMap<Anchor, Anchor>, at: Anchor, next: Anchor) -> bool {
+fn self_obstructs_typed(
+    previous: &BTreeMap<Anchor, Anchor>,
+    at: Anchor,
+    next: Anchor,
+    seed_rules: bool,
+) -> bool {
     let drop_blocker = (next.y < at.y).then(|| Anchor {
         x: next.x,
         y: at.y + 1,
@@ -1210,7 +1264,7 @@ fn self_obstructs_typed(previous: &BTreeMap<Anchor, Anchor>, at: Anchor, next: A
     let mut walk = Some(at);
     while let Some(cell) = walk {
         if Some(cell) == drop_blocker
-            || cell == floor_crushes_next
+            || (seed_rules && cell == floor_crushes_next)
             || cell == crushed_below
             || (cell == smothered && successor.is_some_and(|after: Anchor| after.y > cell.y))
         {
@@ -1267,6 +1321,7 @@ fn staircase_cell_is_blocked(
     to: Anchor,
     cell: Anchor,
     reservations: &PhysicalReservations,
+    seed_rules: bool,
 ) -> bool {
     let is_riser = to.y > from.y && cell.y == from.y;
     let Some(claim) = reservations.get(&cell) else {
@@ -1277,7 +1332,10 @@ fn staircase_cell_is_blocked(
             && claim.owner != PhysicalReservationOwner::RouteStair(route))
             || reservation_is_conductor(claim);
     }
-    if claim.owner == PhysicalReservationOwner::RouteStair(route) && reservation_is_air(claim) {
+    if seed_rules
+        && claim.owner == PhysicalReservationOwner::RouteStair(route)
+        && reservation_is_air(claim)
+    {
         return false;
     }
     true
@@ -1676,6 +1734,7 @@ fn search_path<Price>(
     own_join: &TypedOwnJoinCheck,
     forbidden: &BTreeSet<Anchor>,
     strict_local: bool,
+    seed_rules: bool,
     work: &mut RouterWork,
     price: &mut Price,
 ) -> Result<Option<Vec<Anchor>>, RouterFailure>
@@ -1690,10 +1749,17 @@ where
     };
     let max = Anchor {
         x: start.x.max(goal.x).saturating_add(margin),
-        y: start.y.max(goal.y).saturating_add(6),
+        y: start
+            .y
+            .max(goal.y)
+            .saturating_add(if seed_rules { 6 } else { 3 }),
         z: start.z.max(goal.z).saturating_add(margin),
     };
-    let roots = available_tree_roots(start, laid, forbidden);
+    let roots = if seed_rules {
+        available_tree_roots(start, laid, forbidden)
+    } else {
+        BTreeSet::from([start])
+    };
     let mut frontier = BTreeSet::new();
     let mut travelled = BTreeMap::new();
     for root in roots {
@@ -1705,9 +1771,13 @@ where
         });
         travelled.insert(root, 0);
     }
-    let mut previous = tree_parent.clone();
+    let mut previous = if seed_rules {
+        tree_parent.clone()
+    } else {
+        BTreeMap::new()
+    };
     let required_source_exit = step(start, request.source.allowed_exit);
-    let terminal_feedback_keep_out = strict_local.then(|| terminal_feedback_keep_out(sink));
+    let terminal_feedback_keep_out = seed_rules.then(|| terminal_feedback_keep_out(sink));
 
     while let Some(state) = frontier.iter().next().copied() {
         frontier.remove(&state);
@@ -1722,7 +1792,7 @@ where
             if forbidden.contains(&next) && next != start && next != goal {
                 continue;
             }
-            if strict_local && state.at == start && next != required_source_exit {
+            if seed_rules && state.at == start && next != required_source_exit {
                 continue;
             }
             if terminal_feedback_keep_out
@@ -1739,13 +1809,13 @@ where
                 y: goal.y.saturating_add(1),
                 ..goal
             };
-            if next == above_terminal || next == above_approach {
+            if seed_rules && (next == above_terminal || next == above_approach) {
                 continue;
             }
             if strict_local && next == sink.anchor && next != goal {
                 continue;
             }
-            if self_obstructs_typed(&previous, state.at, next) {
+            if self_obstructs_typed(&previous, state.at, next, seed_rules) {
                 continue;
             }
             if strict_local {
@@ -1786,7 +1856,14 @@ where
             let stair_blocked = staircase_clearance_typed(state.at, next)
                 .into_iter()
                 .any(|cell| {
-                    staircase_cell_is_blocked(request.id, state.at, next, cell, reservations)
+                    staircase_cell_is_blocked(
+                        request.id,
+                        state.at,
+                        next,
+                        cell,
+                        reservations,
+                        seed_rules,
+                    )
                 });
             if !anchor_free || stair_blocked {
                 continue;
@@ -1841,7 +1918,14 @@ where
                 let stair = staircase_clearance_typed(anchor, goal)
                     .into_iter()
                     .filter(|cell| {
-                        staircase_cell_is_blocked(request.id, anchor, goal, *cell, reservations)
+                        staircase_cell_is_blocked(
+                            request.id,
+                            anchor,
+                            goal,
+                            *cell,
+                            reservations,
+                            seed_rules,
+                        )
                     })
                     .collect::<Vec<_>>();
                 (
@@ -1898,7 +1982,7 @@ where
                 (
                     next,
                     reservations.get(&next).cloned(),
-                    self_obstructs_typed(&previous, required_source_exit, next),
+                    self_obstructs_typed(&previous, required_source_exit, next, seed_rules),
                     exact.as_ref().is_some_and(|state| {
                         !route_step_is_legal(start, required_source_exit, next, state)
                     }),
@@ -1927,6 +2011,7 @@ where
                                 next,
                                 *cell,
                                 reservations,
+                                seed_rules,
                             )
                         })
                         .collect::<Vec<_>>(),
@@ -3076,6 +3161,7 @@ mod tests {
             to,
             riser,
             &reservations,
+            true,
         ));
         assert!(!staircase_cell_is_blocked(
             route,
@@ -3083,6 +3169,7 @@ mod tests {
             to,
             mandatory_air,
             &reservations,
+            true,
         ));
     }
 

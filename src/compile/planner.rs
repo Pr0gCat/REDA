@@ -7270,8 +7270,11 @@ mod tests {
         }])
         .unwrap();
 
-        let tree = crate::compile::routing::DurablePhysicalRouter
-            .route(RouteRequest {
+        // Strict typed routing without the seed-only source-exit rule: the
+        // gate conductor sits exactly on the source's East exit cell, and this
+        // test is about reservation ownership, not the seed's escape policy.
+        let tree = crate::compile::routing::route_strict_with_policy(
+            RouteRequest {
                 id: route,
                 source,
                 sinks: &sinks,
@@ -7280,8 +7283,12 @@ mod tests {
                     max_node_expansions: 10_000,
                     max_queue_entries: 50_000,
                 },
-            })
-            .expect("the route detours around a gate-owned conductor");
+            },
+            crate::compile::routing::RoutingJoinPolicy::Off,
+            |_| 0,
+            |_, _, _| {},
+        )
+        .expect("the route detours around a gate-owned conductor");
 
         assert!(!tree.cells.iter().any(|cell| cell.at == blocked));
     }
