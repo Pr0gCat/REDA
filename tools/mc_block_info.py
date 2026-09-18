@@ -22,8 +22,9 @@ Usage:
     python tools/mc_block_info.py redstone_wall_torch --jar "C:\\path\\to\\1.20.1.jar"
     python tools/mc_block_info.py lever --models-only   # skip the blockstate dump
 
-By default it looks for a jar under the standard Windows launcher directory
-(`%APPDATA%/.minecraft/versions/<version>/<version>.jar`) and uses the
+By default it looks for a jar under the standard launcher directory
+(`%APPDATA%/.minecraft/versions/<version>/<version>.jar` on Windows,
+`~/Library/Application Support/minecraft/versions/` on macOS) and uses the
 first one found, preferring the highest-looking version string; pass --jar
 to point at a specific jar (a client jar -- not the dedicated server jar
 under minecraft-server/, which does not ship client assets) or --version to
@@ -38,6 +39,8 @@ import zipfile
 
 
 def default_versions_dir() -> str:
+    if sys.platform == "darwin":
+        return os.path.expanduser("~/Library/Application Support/minecraft/versions")
     appdata = os.environ.get("APPDATA") or os.path.expanduser("~/AppData/Roaming")
     return os.path.join(appdata, ".minecraft", "versions")
 

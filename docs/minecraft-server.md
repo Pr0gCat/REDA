@@ -202,6 +202,21 @@ server has started successfully; when it is running, its RCON listener is on
 localhost. The server directory is gitignored, so a fresh checkout still
 requires its owner to accept the EULA before it can run.
 
+## Rebuilding the 26.2 server on macOS
+
+`minecraft-server-26.2/` is gitignored, so a fresh clone on a Mac has none of
+it. Recreate it the same way, with two substitutions:
+
+- **JDK:** Temurin 25 for macOS (`os=mac`, `architecture=aarch64` on Apple
+  silicon, `x64` on Intel) from the same Adoptium API query; the `.tar.gz`
+  extracts to `jdk-25.x.y+z/Contents/Home/`. Move or symlink that `Home/`
+  to `minecraft-server-26.2/jdk25/` so `jdk25/bin/java` exists.
+- **`run-server.sh`:** the `JAVA=` line names `java.exe`; on macOS it is
+  `jdk25/bin/java`. `run-server.ps1` is not needed.
+
+`server.jar` is the same Mojang download as above (same SHA-1), and
+`eula.txt` must be accepted again by hand.
+
 ## Conformance probe suite
 
 `conformance/` (tracked, not gitignored -- it is ordinary project code, not

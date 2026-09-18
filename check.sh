@@ -7,7 +7,7 @@
 # crate reported clean -- cd186ad (SecondTorch) and a0b485c (IsolatingRepeater).
 # Checking both is the only thing that catches it.
 set -euo pipefail
-export PATH="/c/Users/LTY/.cargo/bin:$PATH"
+export PATH="$HOME/.cargo/bin:$PATH"
 cd "$(dirname "$0")"
 
 echo "== root: test =="
