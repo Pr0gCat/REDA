@@ -15,8 +15,9 @@ use crate::compile::fragment_synth::certification::{
     CandidateCertificationError, CertifiedCandidate, ExpandedCandidateCertifier,
 };
 use crate::compile::fragment_synth::channel_layout::{
-    deck_column_edges, plan_channel_layout, plan_deck_channel_layout, target_approach,
-    ChannelLayout, ChannelLayoutError, DeckNetGeometry, DeckSinkGeometry, NetGeometry,
+    bounded_route_clearance, deck_column_edges, plan_channel_layout, plan_deck_channel_layout,
+    target_approach, ChannelLayout, ChannelLayoutError, ClosedRegion, DeckNetGeometry,
+    DeckSinkGeometry, NetGeometry,
 };
 use crate::compile::fragment_synth::config::{CertificationConfig, SearchConfig};
 use crate::compile::fragment_synth::identity::{
@@ -27,8 +28,9 @@ use crate::compile::fragment_synth::instance_graph::{
     DuplicateRequest, InstanceGraph, PhysicalDriver, PhysicalSink, SynthesisError,
 };
 use crate::compile::fragment_synth::placement::{
-    analyse_instance_dag, horizontal_unit, BlockFacts, DeckId, SeedPlacementAnalysis,
-    SeedPlacementPlan, SeedPlacementRequest, SeedPlacer, VerticalTrunkLane,
+    analyse_instance_dag, horizontal_unit, junction_contributor_directions, BlockFacts, DeckId,
+    DeckPlan, SeedPlacementAnalysis, SeedPlacementPlan, SeedPlacementRequest, SeedPlacer,
+    VerticalTrunkLane,
 };
 use crate::compile::fragment_synth::placement::{LayoutRepair, PlacementFrame};
 use crate::compile::fragment_synth::realise::{
@@ -46,7 +48,7 @@ use crate::compile::metrics::Fingerprint;
 use crate::compile::physical::{self, PortKind};
 use crate::compile::planner::{IoFootprint, PortPlacements, PortRole};
 use crate::compile::routing::{
-    DelayedComponent, DelayedOwner, NonEmptyRouteSinks, PhysicalReservationKind,
+    keep_out_typed, DelayedComponent, DelayedOwner, NonEmptyRouteSinks, PhysicalReservationKind,
     PhysicalReservationOwner, PhysicalReservations, PhysicalRouter, ReservationStore,
     RouteEndpoint, RouteSink, RouterFailure, RouterLimitKind, RouterRefusalCategory,
     TerminalContract, TerminalRequirement, TransactionalRouteRequest,
@@ -467,48 +469,125 @@ fn with_channel_widening<T>(
                 repairs.push(LayoutRepair::WidenChannel { level, width });
                 repairs.sort();
             }
-            Err(SeedError::ChannelLayout(
-                refusal @ ChannelLayoutError::DeckChannelTooNarrow {
-                    deck,
-                    level,
-                    needed,
-                    available,
-                    ..
-                },
-            )) => {
-                // The same monotone growth as the legacy branch, but keyed
-                // by the analysis's stable global forward level: repacking
-                // may carry that level to another deck, and the width it has
-                // already earned must survive the move.  One level is one
-                // packed column, so this never widens an unrelated deck.
-                let previous = repairs.iter().find_map(|repair| match repair {
-                    LayoutRepair::WidenDeckChannel {
-                        level: known,
-                        width,
-                        ..
-                    } if *known == level => Some(*width),
-                    _ => None,
-                });
-                let width = match previous {
-                    Some(previous) => previous + (needed - available).max(1),
-                    None => needed + CHANNEL_ENDPOINT_CELLS,
+            Err(SeedError::ChannelLayout(error))
+                if matches!(
+                    error,
+                    ChannelLayoutError::DeckChannelTooNarrow { .. }
+                        | ChannelLayoutError::DeckChannelsTooNarrow { .. }
+                ) =>
+            {
+                let refusals = match error {
+                    refusal @ ChannelLayoutError::DeckChannelTooNarrow { .. } => vec![refusal],
+                    ChannelLayoutError::DeckChannelsTooNarrow { refusals } => refusals,
+                    _ => unreachable!(),
                 };
-                let already = previous.is_some_and(|previous| width <= previous);
+                let Some(first) = refusals.first().cloned() else {
+                    return Err(SeedError::Incomplete("empty deck channel refusal batch"));
+                };
                 widenings += 1;
-                if already || attempts >= cap || widenings > MAX_CHANNEL_WIDENINGS {
-                    // The bounded refusal is reported as it was measured, so
-                    // the deck, channel and lane count that ran out survive
-                    // into the caller's evidence.
+                if attempts >= cap || widenings > MAX_CHANNEL_WIDENINGS {
+                    return Err(SeedError::SeedExhausted {
+                        attempts_used: attempts,
+                        refusal: Box::new(SeedError::ChannelLayout(first)),
+                    });
+                }
+                for refusal in refusals {
+                    let ChannelLayoutError::DeckChannelTooNarrow {
+                        deck,
+                        level,
+                        needed,
+                        available,
+                        ..
+                    } = refusal
+                    else {
+                        unreachable!("a deck channel batch contains only single refusals")
+                    };
+                    // Stable global levels survive deterministic repacking;
+                    // update every independent shortfall found in this round.
+                    let previous = repairs.iter().find_map(|repair| match repair {
+                        LayoutRepair::WidenDeckChannel {
+                            level: known,
+                            width,
+                            ..
+                        } if *known == level => Some(*width),
+                        _ => None,
+                    });
+                    let width = match previous {
+                        Some(previous) => previous + (needed - available).max(1),
+                        None => needed + CHANNEL_ENDPOINT_CELLS + 1,
+                    };
+                    if previous.is_some_and(|previous| width <= previous) {
+                        return Err(SeedError::SeedExhausted {
+                            attempts_used: attempts,
+                            refusal: Box::new(SeedError::ChannelLayout(first)),
+                        });
+                    }
+                    repairs.retain(|repair| {
+                        !matches!(repair, LayoutRepair::WidenDeckChannel { level: known, .. } if *known == level)
+                    });
+                    repairs.push(LayoutRepair::WidenDeckChannel { deck, level, width });
+                }
+                repairs.sort();
+            }
+            Err(SeedError::ChannelLayout(
+                refusal @ (ChannelLayoutError::DeckCrossing { .. }
+                | ChannelLayoutError::DeckPlan { .. }),
+            )) => {
+                let level = match &refusal {
+                    ChannelLayoutError::DeckCrossing { level, .. }
+                    | ChannelLayoutError::DeckPlan { level, .. } => *level,
+                    _ => unreachable!(),
+                };
+                let repair = LayoutRepair::SplitDeckBefore { level };
+                widenings += 1;
+                if repairs.contains(&repair) || attempts >= cap || widenings > MAX_CHANNEL_WIDENINGS
+                {
                     return Err(SeedError::SeedExhausted {
                         attempts_used: attempts,
                         refusal: Box::new(SeedError::ChannelLayout(refusal)),
                     });
                 }
-                repairs.retain(|repair| {
-                    !matches!(repair, LayoutRepair::WidenDeckChannel { level: known, .. } if *known == level)
-                });
-                repairs.push(LayoutRepair::WidenDeckChannel { deck, level, width });
+                repairs.push(repair);
                 repairs.sort();
+            }
+            Err(SeedError::ChannelLayout(
+                refusal @ ChannelLayoutError::DeckTrunkCrossing { .. },
+            )) => {
+                let (level, source) = match &refusal {
+                    ChannelLayoutError::DeckTrunkCrossing { level, source, .. } => {
+                        (*level, *source)
+                    }
+                    _ => unreachable!(),
+                };
+                // The column named a net it can be rid of, so the first
+                // answer is to take that net out of it: its trunk lands its
+                // station after the column instead of before.  If the column
+                // refuses again for the same trunk, moving the trunk was not
+                // enough and the column itself has to be split, which is what
+                // every other deck crossing refusal already asks for.  Once
+                // both have been tried there is nothing further to offer.
+                let late = LayoutRepair::LateTrunkStation { source };
+                let split = LayoutRepair::SplitDeckBefore { level };
+                let next = if !repairs.contains(&late) {
+                    Some(late)
+                } else if !repairs.contains(&split) {
+                    Some(split)
+                } else {
+                    None
+                };
+                widenings += 1;
+                match next {
+                    Some(next) if attempts < cap && widenings <= MAX_CHANNEL_WIDENINGS => {
+                        repairs.push(next);
+                        repairs.sort();
+                    }
+                    _ => {
+                        return Err(SeedError::SeedExhausted {
+                            attempts_used: attempts,
+                            refusal: Box::new(SeedError::ChannelLayout(refusal)),
+                        })
+                    }
+                }
             }
             Err(error) => return Err(error),
         }
@@ -806,11 +885,14 @@ impl SparseSeedBuilder {
             &mut targets,
         )?;
 
+        // Reuse the exact one-sided decision made by the placer; recomputing
+        // it after level folding can prune a row that was packed at full gap.
         let sockets = assign_torch_sockets(
             &candidate,
             &placement_analysis,
             placement_plan.frame,
             &sources,
+            &placement_plan.one_sided_inputs,
         )?;
         refresh_primitive_targets(&candidate, &sockets, &mut targets)?;
         let mut reservations = reservations_for_components(&candidate)?;
@@ -1808,10 +1890,17 @@ fn place_junction_instance(
         },
     );
 
-    let directions = geometry::input_directions(facing);
+    // The same faces the placer reserved room for: a bounded junction with
+    // at most two contributors keeps them on the rear and one lateral side.
+    let directions =
+        junction_contributor_directions(facing, contributors.len(), footprint.is_some());
     let mut primitive_slot = 0usize;
     for (input_index, contributor) in contributors.iter().enumerate() {
-        let direction = directions[input_index];
+        // More contributors than a cell has faces is a refusal, not an
+        // index off the end of the face list.
+        let direction = *directions
+            .get(input_index)
+            .ok_or(SeedError::Incomplete("junction contributor face"))?;
         match *contributor {
             ContributorSpec::Landing(connection) => {
                 targets.insert(
@@ -2108,6 +2197,12 @@ fn socket_ordinal(sockets: &BTreeMap<ConnectionId, usize>, connection: Connectio
     sockets.get(&connection).copied().unwrap_or(0)
 }
 
+fn compact_socket_allowed(direction: Facing, frame: PlacementFrame, input_count: usize) -> bool {
+    input_count >= 3
+        || direction == frame.forward.opposite()
+        || direction == frame.lateral.opposite()
+}
+
 /// Assigns every torch input connection to one of the torch's three sockets
 /// so that the total distance from each driver's route anchor to the socket
 /// access cell is minimal.  Declaration order breaks ties, so the choice is a
@@ -2117,6 +2212,7 @@ fn assign_torch_sockets(
     analysis: &SeedPlacementAnalysis,
     frame: PlacementFrame,
     sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
+    compact_rows: &BTreeSet<InstanceId>,
 ) -> Result<BTreeMap<ConnectionId, usize>, SeedError> {
     use crate::compile::fragment_synth::placement::project_horizontal;
     let lateral_of = |at: Anchor| project_horizontal(at.x, at.z, frame.lateral);
@@ -2215,6 +2311,14 @@ fn assign_torch_sockets(
                 .ok_or(SeedError::Incomplete("torch socket placement"))?;
             let output = geometry::output_direction(placement.facing);
             let access_cells = (0..socket_count)
+                .filter(|&ordinal| {
+                    !compact_rows.contains(&instance.id)
+                        || compact_socket_allowed(
+                            geometry::input_directions(placement.facing)[ordinal],
+                            frame,
+                            inputs.len(),
+                        )
+                })
                 .map(|ordinal| {
                     let geometry = primitive_input_geometry(candidate, primitive, ordinal)?;
                     // The socket behind the torch faces the previous level;
@@ -2230,6 +2334,7 @@ fn assign_torch_sockets(
                         step_many(geometry.terminal, geometry.allowed_entry, 3)
                     };
                     Ok(SocketOption {
+                        ordinal,
                         access: step(geometry.terminal, geometry.allowed_entry),
                         behind,
                         conflicts,
@@ -2283,7 +2388,7 @@ fn assign_torch_sockets(
             );
             let (_, ordinals) = best.ok_or(SeedError::Incomplete("torch socket assignment"))?;
             for ((connection, _, driver), ordinal) in inputs.iter().zip(ordinals) {
-                sockets.insert(*connection, ordinal);
+                sockets.insert(*connection, access_cells[ordinal].ordinal);
                 claimed.extend(access_cells[ordinal].entry.iter().copied());
                 claimed_rows.push((sink_level, access_cells[ordinal].row, *driver));
             }
@@ -2293,6 +2398,7 @@ fn assign_torch_sockets(
 }
 
 struct SocketOption {
+    ordinal: usize,
     access: Anchor,
     behind: bool,
     conflicts: u64,
@@ -2539,19 +2645,81 @@ fn target_deck(target: &PendingTarget, analysis: &SeedPlacementAnalysis) -> Deck
         .unwrap_or(DeckId(0))
 }
 
-fn trunk_end_flags(
-    source_deck: DeckId,
-    deck: DeckId,
-    lane: &VerticalTrunkLane,
-) -> (bool, bool) {
-    let active = lane.first_deck < lane.last_deck
-        && lane.first_deck <= deck
-        && deck <= lane.last_deck;
+/// Lateral rows one vertical trunk corridor occupies.  The placer reserves
+/// `lateral - 1 ..= lateral + 1` around the lane's row-grid centre, so the
+/// cells the seed carves and the cells the cap charges have to span the same
+/// three rows or the two models drift apart.
+const TRUNK_LATERAL_ROWS: i32 = 3;
+
+fn trunk_laterals(lateral: i32) -> std::ops::RangeInclusive<i32> {
+    (lateral - TRUNK_LATERAL_ROWS / 2)..=(lateral + TRUNK_LATERAL_ROWS / 2)
+}
+
+fn trunk_end_flags(source_deck: DeckId, deck: DeckId, lane: &VerticalTrunkLane) -> (bool, bool) {
+    let active =
+        lane.first_deck < lane.last_deck && lane.first_deck <= deck && deck <= lane.last_deck;
     (
         active && source_deck != deck,
-        active
-            && (deck == source_deck || (lane.first_deck < deck && deck < lane.last_deck)),
+        active && (deck == source_deck || (lane.first_deck < deck && deck < lane.last_deck)),
     )
+}
+
+fn remove_floor_private_conflicts(layout: &mut ChannelLayout) {
+    let mut unavailable = layout
+        .private
+        .values()
+        .flatten()
+        .copied()
+        .collect::<BTreeSet<_>>();
+    for cells in layout.private.values() {
+        for &lower in cells {
+            let Some(y) = lower.y.checked_add(1) else {
+                continue;
+            };
+            for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let upper = Anchor {
+                    x: lower.x + dx,
+                    y,
+                    z: lower.z + dz,
+                };
+                if cells.contains(&upper) {
+                    unavailable.insert(Anchor { y, ..lower });
+                }
+            }
+        }
+    }
+    for floors in layout.floors.values_mut() {
+        floors.retain(|floor| !unavailable.contains(&floor.at));
+    }
+}
+
+fn protect_required_private_cells(
+    layout: &mut ChannelLayout,
+    required: &[(PhysicalEndpointId, Anchor)],
+) -> Result<(), ChannelLayoutError> {
+    let mut required = required.to_vec();
+    required.sort_by_key(|&(owner, at)| (at, owner));
+    let mut claims = BTreeMap::new();
+    for (owner, at) in required {
+        if let Some(first) = claims.insert(at, owner) {
+            if first != owner {
+                return Err(ChannelLayoutError::RequiredCellShared {
+                    at,
+                    first,
+                    second: owner,
+                });
+            }
+        }
+    }
+    for (at, owner) in claims {
+        layout.private.entry(owner).or_default().insert(at);
+        for (&other, cells) in &mut layout.private {
+            if other != owner {
+                cells.remove(&at);
+            }
+        }
+    }
+    Ok(())
 }
 
 fn real_leg_y_intervals(
@@ -2567,12 +2735,9 @@ fn real_leg_y_intervals(
             let approach = target_approach(&target.geometry());
             intervals.push((
                 source.route_anchor.y.min(approach.y),
-                source
-                    .route_anchor
-                    .y
-                    .max(approach.y)
-                    .checked_add(3)
-                    .ok_or(SeedError::Incomplete("footprint perimeter coordinate overflow"))?,
+                source.route_anchor.y.max(approach.y).checked_add(3).ok_or(
+                    SeedError::Incomplete("footprint perimeter coordinate overflow"),
+                )?,
             ));
         }
     }
@@ -2605,19 +2770,18 @@ fn bounded_materialization_cells(
         rows.saturating_add((i64::from(hi) - i64::from(lo) + 1) as u128)
     });
     let span = |lo: i32, hi: i32| u128::try_from(i64::from(hi) - i64::from(lo) + 1).unwrap_or(0);
+    const LATERAL_ROWS: u128 = TRUNK_LATERAL_ROWS as u128;
     let perimeter = if rows == 0 {
         0
     } else {
         let min_x = footprint.min_x.checked_sub(1).filter(|&x| x >= 0);
         let min_z = footprint.min_z.checked_sub(1).filter(|&z| z >= 0);
-        let max_x = footprint
-            .max_x
-            .checked_add(1)
-            .ok_or(SeedError::Incomplete("footprint perimeter coordinate overflow"))?;
-        let max_z = footprint
-            .max_z
-            .checked_add(1)
-            .ok_or(SeedError::Incomplete("footprint perimeter coordinate overflow"))?;
+        let max_x = footprint.max_x.checked_add(1).ok_or(SeedError::Incomplete(
+            "footprint perimeter coordinate overflow",
+        ))?;
+        let max_z = footprint.max_z.checked_add(1).ok_or(SeedError::Incomplete(
+            "footprint perimeter coordinate overflow",
+        ))?;
         rows.saturating_mul(
             span(footprint.min_x.max(0), footprint.max_x)
                 .saturating_mul(u128::from(min_z.is_some()) + u128::from(max_z >= 0))
@@ -2627,6 +2791,41 @@ fn bounded_materialization_cells(
     };
     let mut trunks = 0_u128;
     for lane in plan.vertical_trunks.values() {
+        if let Some(stations) = lane.station_forwards {
+            let active = plan
+                .decks
+                .range(lane.first_deck..=lane.last_deck)
+                .collect::<Vec<_>>();
+            let mut lane_cells = 0_u128;
+            for boundary in active.windows(2) {
+                let (&lower_id, lower) = boundary[0];
+                let (_, upper) = boundary[1];
+                let centre = stations[(lower_id.0 as usize) & 1];
+                lane_cells = lane_cells
+                    .saturating_add(
+                        span(centre - 1, centre + 1)
+                            .saturating_mul(span(lower.ground, upper.ground)),
+                    )
+                    .saturating_add(
+                        span(stations[0] - 1, stations[1] + 1)
+                            .saturating_mul(span(upper.ground - 1, upper.ground + 1)),
+                    );
+            }
+            // Each horizontal handoff overlaps its incoming shaft for two Y
+            // rows and, except at the top, the outgoing shaft for two more.
+            // Station pairs are one ROW_GRID apart, so those two shafts do
+            // not overlap each other and the subtraction stays exact.
+            if stations[0] <= stations[1] && stations[0].abs_diff(stations[1]) >= 3 {
+                let boundaries = active.len().saturating_sub(1) as u128;
+                lane_cells = lane_cells
+                    .saturating_sub(6 * boundaries)
+                    .saturating_sub(6 * boundaries.saturating_sub(1));
+            }
+            // Every shaft and handoff above is one forward/Y sheet repeated
+            // across the corridor's lateral rows.
+            trunks = trunks.saturating_add(lane_cells.saturating_mul(LATERAL_ROWS));
+            continue;
+        }
         let first = plan
             .decks
             .get(&lane.first_deck)
@@ -2639,7 +2838,7 @@ fn bounded_materialization_cells(
             .max_y;
         trunks = trunks.saturating_add(
             span(lane.min_forward, lane.max_forward)
-                .saturating_mul(3)
+                .saturating_mul(LATERAL_ROWS)
                 .saturating_mul(span(first, last)),
         );
     }
@@ -2674,14 +2873,12 @@ fn reserve_footprint_perimeter(
     }
     let min_x = footprint.min_x.checked_sub(1).filter(|&x| x >= 0);
     let min_z = footprint.min_z.checked_sub(1).filter(|&z| z >= 0);
-    let max_x = footprint
-        .max_x
-        .checked_add(1)
-        .ok_or(SeedError::Incomplete("footprint perimeter coordinate overflow"))?;
-    let max_z = footprint
-        .max_z
-        .checked_add(1)
-        .ok_or(SeedError::Incomplete("footprint perimeter coordinate overflow"))?;
+    let max_x = footprint.max_x.checked_add(1).ok_or(SeedError::Incomplete(
+        "footprint perimeter coordinate overflow",
+    ))?;
+    let max_z = footprint.max_z.checked_add(1).ok_or(SeedError::Incomplete(
+        "footprint perimeter coordinate overflow",
+    ))?;
     let mut reserve = |cell| {
         if reservations.get(&cell).is_none() {
             reservations.reserve(
@@ -2716,6 +2913,19 @@ fn reserve_footprint_perimeter(
         }
     }
     Ok(())
+}
+
+fn nearest_deck_column(columns: &[(i64, i32, i32)], forward: i32) -> Option<(i64, i32, i32)> {
+    columns.iter().copied().min_by_key(|&(level, min, max)| {
+        let distance = if forward < min {
+            min.abs_diff(forward)
+        } else if forward > max {
+            forward.abs_diff(max)
+        } else {
+            0
+        };
+        (distance, level)
+    })
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -2779,13 +2989,50 @@ fn plan_deck_channels(
     };
     let mut owned = BTreeMap::<PhysicalEndpointId, BTreeSet<Anchor>>::new();
     for lane in plan.vertical_trunks.values() {
-        let first = plan.decks[&lane.first_deck].ground;
-        let last = plan.decks[&lane.last_deck].max_y;
         let lateral = origin_lateral + lane.lateral;
-        for forward in (origin_forward + lane.min_forward)..=(origin_forward + lane.max_forward) {
-            for lateral in (lateral - 1)..=(lateral + 1) {
-                for y in first..=last {
-                    owned.entry(lane.owner).or_default().insert(cell(forward, lateral, y));
+        if let Some(stations) = lane.station_forwards {
+            let stations = stations.map(|station| origin_forward + station);
+            let active = plan
+                .decks
+                .range(lane.first_deck..=lane.last_deck)
+                .collect::<Vec<_>>();
+            for boundary in active.windows(2) {
+                let (&lower_id, lower) = boundary[0];
+                let (_, upper) = boundary[1];
+                let centre = stations[(lower_id.0 as usize) & 1];
+                for forward in (centre - 1)..=(centre + 1) {
+                    for lateral in trunk_laterals(lateral) {
+                        for y in lower.ground..=upper.ground {
+                            owned
+                                .entry(lane.owner)
+                                .or_default()
+                                .insert(cell(forward, lateral, y));
+                        }
+                    }
+                }
+                for forward in (stations[0] - 1)..=(stations[1] + 1) {
+                    for lateral in trunk_laterals(lateral) {
+                        for y in (upper.ground - 1)..=(upper.ground + 1) {
+                            owned
+                                .entry(lane.owner)
+                                .or_default()
+                                .insert(cell(forward, lateral, y));
+                        }
+                    }
+                }
+            }
+        } else {
+            let first = plan.decks[&lane.first_deck].ground;
+            let last = plan.decks[&lane.last_deck].max_y;
+            for forward in (origin_forward + lane.min_forward)..=(origin_forward + lane.max_forward)
+            {
+                for lateral in trunk_laterals(lateral) {
+                    for y in first..=last {
+                        owned
+                            .entry(lane.owner)
+                            .or_default()
+                            .insert(cell(forward, lateral, y));
+                    }
                 }
             }
         }
@@ -2793,7 +3040,8 @@ fn plan_deck_channels(
 
     let mut cross_deck_sinks = BTreeSet::new();
     for (route_index, route) in schedule.routes.iter().enumerate() {
-        let route_id = RouteId(u32::try_from(route_index).map_err(|_| SeedError::IdentityOverflow)?);
+        let route_id =
+            RouteId(u32::try_from(route_index).map_err(|_| SeedError::IdentityOverflow)?);
         let source_deck = source_deck(route.source, &plan.analysis);
         for (ordinal, target) in route.targets.iter().enumerate() {
             if target_deck(target, &plan.analysis) != source_deck {
@@ -2805,7 +3053,33 @@ fn plan_deck_channels(
         }
     }
 
+    let mut required = Vec::new();
+    if plan.io_footprint.is_some() {
+        required.extend(
+            owned
+                .iter()
+                .flat_map(|(&owner, cells)| cells.iter().copied().map(move |at| (owner, at))),
+        );
+        for route in &schedule.routes {
+            let source = sources
+                .get(&route.source)
+                .ok_or(SeedError::Incomplete("route source geometry"))?;
+            let source_exit = step(source.route_anchor, source.allowed_exit);
+            required.push((route.source, source_exit));
+            owned.entry(route.source).or_default().insert(source_exit);
+            for target in &route.targets {
+                let geometry = target.geometry();
+                let sink_approach = step(geometry.terminal, geometry.allowed_entry);
+                required.push((route.source, sink_approach));
+                owned
+                    .entry(route.source)
+                    .or_default()
+                    .insert(sink_approach);
+            }
+        }
+    }
     let mut merged = ChannelLayout::default();
+    let mut narrow_channels = Vec::new();
     for (&deck, deck_plan) in &plan.decks {
         let members = plan
             .analysis
@@ -2827,22 +3101,23 @@ fn plan_deck_channels(
             .map(|facts| facts.forward_level as i64)
             .max()
             .expect("a deck with a minimum member level has a maximum");
-        let (opening, _) = deck_column_edges(
-            candidate,
-            &plan.analysis,
-            plan.frame,
-            &members,
-            min_level,
-        )
-        .ok_or(SeedError::Incomplete("deck opening column edge"))?;
-        let (_, closing) = deck_column_edges(
-            candidate,
-            &plan.analysis,
-            plan.frame,
-            &members,
-            max_level,
-        )
-        .ok_or(SeedError::Incomplete("deck closing column edge"))?;
+        let columns = (min_level..=max_level)
+            .filter_map(|level| {
+                deck_column_edges(candidate, &plan.analysis, plan.frame, &members, level)
+                    .map(|(min, max)| (level, min, max))
+            })
+            .collect::<Vec<_>>();
+        let (_, opening, _) = columns
+            .first()
+            .copied()
+            .ok_or(SeedError::Incomplete("deck opening column edge"))?;
+        let (_, _, closing) = columns
+            .last()
+            .copied()
+            .ok_or(SeedError::Incomplete("deck closing column edge"))?;
+        let output_level = max_level
+            .checked_add(1)
+            .ok_or(SeedError::IdentityOverflow)?;
         let mut deck_nets = Vec::new();
         for route in &schedule.routes {
             let source_deck = source_deck(route.source, &plan.analysis);
@@ -2857,13 +3132,38 @@ fn plan_deck_channels(
                     level: route_target_instance(target)
                         .and_then(|instance| plan.analysis.nodes.get(&instance))
                         .map(|facts| facts.forward_level as i64)
-                        .unwrap_or(max_level + 1),
+                        .unwrap_or(output_level),
                     synthetic_trunk: false,
                 })
                 .collect::<Vec<_>>();
             let (source_is_synthetic_trunk, sink_is_synthetic_trunk) = lane
-                .map(|lane| trunk_end_flags(source_deck, deck, lane))
+                .map(|lane| {
+                    if lane.station_forwards.is_some() {
+                        let active = lane.first_deck <= deck && deck <= lane.last_deck;
+                        (
+                            active && source_deck != deck && !sinks.is_empty(),
+                            active && source_deck == deck,
+                        )
+                    } else {
+                        trunk_end_flags(source_deck, deck, lane)
+                    }
+                })
                 .unwrap_or((false, false));
+            let station = lane
+                .and_then(|lane| lane.station_forwards)
+                .map(|stations| stations[(deck.0 as usize) & 1])
+                .map(|station| {
+                    origin_forward
+                        .checked_add(station)
+                        .ok_or(SeedError::Incomplete("vertical trunk coordinate overflow"))
+                })
+                .transpose()?;
+            let station_column = station
+                .map(|forward| {
+                    nearest_deck_column(&columns, forward)
+                        .ok_or(SeedError::Incomplete("vertical trunk deck column"))
+                })
+                .transpose()?;
             if source_deck != deck
                 && sinks.is_empty()
                 && !source_is_synthetic_trunk
@@ -2883,34 +3183,45 @@ fn plan_deck_channels(
                 )
             } else {
                 let lane = lane.ok_or(SeedError::Incomplete("vertical trunk lane"))?;
+                let forward = station.unwrap_or(opening);
                 (
                     SourceGeometry {
                         route_anchor: cell(
-                            opening,
+                            forward,
                             origin_lateral + lane.lateral,
                             deck_plan.ground,
                         ),
-                        allowed_exit: plan.frame.forward.opposite(),
+                        allowed_exit: if station_column.is_some_and(|(_, min, _)| forward >= min) {
+                            plan.frame.forward.opposite()
+                        } else if forward < closing {
+                            plan.frame.forward
+                        } else {
+                            plan.frame.forward.opposite()
+                        },
                     },
-                    min_level,
+                    station_column.map_or(min_level, |(level, _, _)| level),
                 )
             };
             if sink_is_synthetic_trunk {
                 let lane = lane.expect("an active trunk has a lane");
-                let terminal = cell(
-                    closing,
-                    origin_lateral + lane.lateral,
-                    deck_plan.ground,
-                );
+                let forward = station.unwrap_or(closing);
+                let terminal = cell(forward, origin_lateral + lane.lateral, deck_plan.ground);
                 sinks.push(DeckSinkGeometry {
                     endpoint: route.source,
                     geometry: TargetGeometry {
                         terminal,
-                        allowed_entry: plan.frame.forward,
-                        support: Anchor { y: deck_plan.ground - 1, ..terminal },
+                        allowed_entry: if station_column.is_some_and(|(_, min, _)| forward >= min) {
+                            plan.frame.forward.opposite()
+                        } else {
+                            plan.frame.forward
+                        },
+                        support: Anchor {
+                            y: deck_plan.ground - 1,
+                            ..terminal
+                        },
                         requirement: TerminalRequirement::DirectedDust,
                     },
-                    level: max_level,
+                    level: station_column.map_or(max_level, |(level, _, _)| level),
                     synthetic_trunk: true,
                 });
             }
@@ -2924,7 +3235,8 @@ fn plan_deck_channels(
                 });
             }
         }
-        merged.merge(plan_deck_channel_layout(
+        let materialized_before_deck = *materialized;
+        match plan_deck_channel_layout(
             candidate,
             &plan.analysis,
             plan.frame,
@@ -2940,12 +3252,150 @@ fn plan_deck_channels(
             router,
             reservations,
             limits,
-        )?);
+        ) {
+            Ok(layout) => merged.merge(layout),
+            Err(refusal @ ChannelLayoutError::DeckChannelTooNarrow { .. }) => {
+                *materialized = materialized_before_deck;
+                narrow_channels.push(refusal);
+            }
+            Err(_) if !narrow_channels.is_empty() => {
+                return Err(ChannelLayoutError::DeckChannelsTooNarrow {
+                    refusals: narrow_channels,
+                }
+                .into());
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    if !narrow_channels.is_empty() {
+        return Err(ChannelLayoutError::DeckChannelsTooNarrow {
+            refusals: narrow_channels,
+        }
+        .into());
     }
     for (owner, mut cells) in owned {
         merged.private.entry(owner).or_default().append(&mut cells);
     }
+    if plan.io_footprint.is_some() {
+        protect_required_private_cells(&mut merged, &required)?;
+    }
+    remove_floor_private_conflicts(&mut merged);
+    // The decks state their own slabs, but the band between them was left
+    // open everywhere the trunks do not stand, so a route could slip across
+    // decks diagonally beside a shaft.  One box states the whole band closed
+    // and names every owned cell -- shafts and handoff stubs alike -- as its
+    // openings, which is the cross-deck hole set the approved spec wants.
+    // It costs one descriptor: no cell of it is ever enumerated.
+    if let Some((band, clearance_openings)) =
+        trunk_band_region(plan, &merged, origin_lateral, &cell)
+    {
+        let required = materialized
+            .checked_add(1)
+            .and_then(|used| used.checked_add(clearance_openings))
+            .unwrap_or(u64::MAX);
+        if required > limits.max_queue_entries {
+            return Err(ChannelLayoutError::MaterializationLimitExceeded {
+                required,
+                limit: limits.max_queue_entries,
+            }
+            .into());
+        }
+        merged.regions.insert(band);
+        *materialized = required;
+    }
     Ok((merged, cross_deck_sinks))
+}
+
+/// One closed box over the whole bounded trunk band, holed at every cell a
+/// net owns.  `None` when the plan has no trunk to band, which leaves the
+/// legacy unbanded layout exactly as it was.
+fn trunk_band_region(
+    plan: &SeedPlacementPlan,
+    merged: &ChannelLayout,
+    origin_lateral: i32,
+    cell: &impl Fn(i32, i32, i32) -> Anchor,
+) -> Option<(ClosedRegion, u64)> {
+    let footprint = plan.io_footprint?;
+    let lateral_lo = plan
+        .vertical_trunks
+        .values()
+        .map(|lane| origin_lateral + lane.lateral - 1)
+        .min()?;
+    let lateral_hi = plan
+        .vertical_trunks
+        .values()
+        .map(|lane| origin_lateral + lane.lateral + 1)
+        .max()?;
+    let active = |pick: fn(&DeckPlan) -> i32| {
+        plan.vertical_trunks
+            .values()
+            .flat_map(|lane| plan.decks.range(lane.first_deck..=lane.last_deck))
+            .map(move |(_, deck)| pick(deck))
+    };
+    let (y_lo, y_hi) = (
+        active(|deck| deck.ground).min()?,
+        active(|deck| deck.max_y).max()?,
+    );
+    let (forward_lo, forward_hi, _, _) =
+        footprint.projected(plan.frame.forward, plan.frame.lateral);
+    let near = cell(forward_lo, lateral_lo, y_lo);
+    let far = cell(forward_hi, lateral_hi, y_hi);
+    let min = Anchor {
+        x: near.x.min(far.x),
+        y: near.y.min(far.y),
+        z: near.z.min(far.z),
+    };
+    let max = Anchor {
+        x: near.x.max(far.x),
+        y: near.y.max(far.y),
+        z: near.z.max(far.z),
+    };
+    let inside = |at: &Anchor| {
+        (min.x..=max.x).contains(&at.x)
+            && (min.y..=max.y).contains(&at.y)
+            && (min.z..=max.z).contains(&at.z)
+    };
+    let mut openings = merged
+        .private
+        .values()
+        .flatten()
+        .filter(|at| inside(at))
+        .copied()
+        .collect::<BTreeSet<_>>();
+    let private_openings = openings.len();
+    for cells in merged.private.values() {
+        for &lower in cells {
+            let Some(y) = lower.y.checked_add(1) else {
+                continue;
+            };
+            for (dx, dz) in [(-1, 0), (1, 0), (0, -1), (0, 1)] {
+                let upper = Anchor {
+                    x: lower.x + dx,
+                    y,
+                    z: lower.z + dz,
+                };
+                if !cells.contains(&upper) {
+                    continue;
+                }
+                for support in [
+                    Anchor {
+                        y: lower.y,
+                        ..upper
+                    },
+                    Anchor {
+                        y: upper.y,
+                        ..lower
+                    },
+                ] {
+                    if inside(&support) {
+                        openings.insert(support);
+                    }
+                }
+            }
+        }
+    }
+    let clearance_openings = u64::try_from(openings.len() - private_openings).unwrap_or(u64::MAX);
+    Some((ClosedRegion { min, max, openings }, clearance_openings))
 }
 
 fn route_all(
@@ -3132,6 +3582,29 @@ fn route_all(
         })
         .collect();
     let schedule = RouteSchedule::build(obligations);
+    let mut required_route_cells = Vec::new();
+    if plan.io_footprint.is_some() {
+        for route in &schedule.routes {
+            let source = sources
+                .get(&route.source)
+                .ok_or(SeedError::Incomplete("route source geometry"))?;
+            required_route_cells.push((
+                route.source,
+                step(source.route_anchor, source.allowed_exit),
+            ));
+            required_route_cells.extend(route.targets.iter().map(|target| {
+                let geometry = target.geometry();
+                (
+                    route.source,
+                    step(geometry.terminal, geometry.allowed_entry),
+                )
+            }));
+        }
+    }
+    let required_route_clearance = required_route_cells
+        .iter()
+        .flat_map(|(_, cell)| std::iter::once(*cell).chain(keep_out_typed(*cell)))
+        .collect::<BTreeSet<_>>();
     let protected = sources
         .values()
         .map(|source| source.route_anchor)
@@ -3189,6 +3662,43 @@ fn route_all(
             );
         }
     }
+    // A bounded deck stated its slab as bounds instead of cells, so it is
+    // installed as one keep-out box per slab, holes and all.  Reservations
+    // already in the map keep their precedence over it.
+    for region in &layout.regions {
+        reservations.reserve_keep_out_box(
+            region.min,
+            region.max,
+            region.openings.clone(),
+            PhysicalReservationOwner::KeepOut(CHANNEL_LAYER_OWNER),
+        );
+    }
+    if std::env::var_os("REDA_PRIVATE_DIAGNOSTIC").is_some() {
+        eprintln!("vertical trunks={:?}", plan.vertical_trunks);
+        let owners = layout.private.iter().collect::<Vec<_>>();
+        let mut overlaps = Vec::new();
+        for (index, (left_owner, left)) in owners.iter().enumerate() {
+            for (right_owner, right) in owners.iter().skip(index + 1) {
+                let count = left.intersection(right).count();
+                if count != 0 {
+                    overlaps.push((count, **left_owner, **right_owner));
+                }
+            }
+        }
+        overlaps.sort_by_key(|entry| (std::cmp::Reverse(entry.0), entry.1, entry.2));
+        eprintln!("private overlap pairs={}", overlaps.len());
+        for (count, left_owner, right_owner) in overlaps.into_iter().take(20) {
+            let first = layout.private[&left_owner]
+                .intersection(&layout.private[&right_owner])
+                .take(3)
+                .copied()
+                .collect::<Vec<_>>();
+            eprintln!(
+                "private overlap {left_owner:?} / {right_owner:?}: count={count} first={first:?}"
+            );
+        }
+        panic!("private ownership diagnostic");
+    }
 
     for (route_index, scheduled_route) in schedule.routes.into_iter().enumerate() {
         let source_id = scheduled_route.source;
@@ -3230,25 +3740,183 @@ fn route_all(
             })
             .collect::<Result<Vec<_>, SeedError>>()?;
         let sinks = NonEmptyRouteSinks::new(sinks).map_err(|_| SeedError::EmptyRoute)?;
+        let own_protected = std::iter::once(source.route_anchor)
+            .chain(sinks.as_slice().iter().map(|sink| sink.anchor))
+            .collect::<BTreeSet<_>>();
+        let planned_bounds = (plan.io_footprint.is_some()
+            && sinks
+                .as_slice()
+                .iter()
+                .any(|sink| sink.anchor.y != source.route_anchor.y))
+        .then(|| layout.private.get(&source_id))
+        .flatten()
+        .and_then(|cells| {
+            let mut cells = cells.iter().copied();
+            let first = cells.next()?;
+            Some(cells.fold((first, first), |(min, max), at| {
+                (
+                    Anchor {
+                        x: min.x.min(at.x),
+                        y: min.y.min(at.y),
+                        z: min.z.min(at.z),
+                    },
+                    Anchor {
+                        x: max.x.max(at.x),
+                        y: max.y.max(at.y),
+                        z: max.z.max(at.z),
+                    },
+                )
+            }))
+        });
+        let route_source = RouteEndpoint {
+            id: source_id,
+            anchor: source.route_anchor,
+            allowed_exit: source.allowed_exit,
+            terminal: TerminalContract::Source {
+                signal_strength: MAX_SIGNAL_STRENGTH,
+            },
+        };
+        let planned_route_cells =
+            planned_bounds
+                .and_then(|_| layout.private.get(&source_id))
+                .map(|private| {
+                    let mut cells = private.clone();
+                    cells.insert(source.route_anchor);
+                    cells.extend(sinks.as_slice().iter().map(|sink| {
+                        crate::compile::routing::step(sink.anchor, sink.allowed_entry)
+                    }));
+                    cells
+                });
+        let planned_cells = planned_route_cells.as_ref().map(|cells| {
+            let mut planned = cells.clone();
+            planned.extend(cells.iter().copied().flat_map(keep_out_typed));
+            planned
+        });
         let routed = {
             let mut attempt = reservations.transaction();
-            reserve_foreign_private_cells(&mut attempt, &layout, source_id, &protected);
+            reserve_foreign_private_cells(
+                &mut attempt,
+                &layout,
+                source_id,
+                &protected,
+                &required_route_clearance,
+                None,
+            );
+            reserve_foreign_required_halos(
+                &mut attempt,
+                source_id,
+                &required_route_cells,
+                &own_protected,
+            );
             reserve_source_refresh(&mut attempt, source_id, &source, route)?;
+            if let Some(path) = std::env::var_os("REDA_ROUTE_REPLAY") {
+                let selected = std::env::var("REDA_ROUTE_REPLAY_ROUTE")
+                    .ok()
+                    .and_then(|raw| raw.parse::<u32>().ok());
+                if selected.is_none_or(|selected| selected == route.0) {
+                    let reservations = attempt.replay_snapshot();
+                    let replay = (
+                        route,
+                        &route_source,
+                        &sinks,
+                        &reservations,
+                        config.router_limits,
+                        layout.departures.get(&source_id),
+                        planned_bounds,
+                        layout.private.get(&source_id),
+                    );
+                    std::fs::write(
+                        path,
+                        serde_json::to_vec(&replay)
+                            .expect("a route replay snapshot must serialize"),
+                    )
+                    .expect("a route replay snapshot path must be writable");
+                }
+            }
             router.route_transactional(TransactionalRouteRequest {
                 id: route,
-                source: RouteEndpoint {
-                    id: source_id,
-                    anchor: source.route_anchor,
-                    allowed_exit: source.allowed_exit,
-                    terminal: TerminalContract::Source {
-                        signal_strength: MAX_SIGNAL_STRENGTH,
-                    },
-                },
+                source: route_source.clone(),
                 sinks: &sinks,
                 reservations: &mut attempt,
                 limits: config.router_limits,
                 no_refresh: layout.departures.get(&source_id),
+                planned_bounds,
+                planned_cells: planned_cells.as_ref(),
             })
+        };
+        let routed = match routed {
+            Err(initial @ RouterFailure::NoLocalRoute { .. })
+                if planned_route_cells.is_some() =>
+            {
+                let mut routed = Err(initial);
+                let mut expanded_planned_cells = planned_route_cells.clone();
+                for retry in 0..2 {
+                    expanded_planned_cells = expanded_planned_cells.map(bounded_route_clearance);
+                    let retry_bounds = if retry == 0 { planned_bounds } else { None };
+                    if retry != 0 {
+                        if let (Some(cells), Some(footprint)) =
+                            (expanded_planned_cells.as_mut(), plan.io_footprint)
+                        {
+                            cells.retain(|cell| footprint.contains_xz(*cell));
+                        }
+                    }
+                    let mut attempt = reservations.transaction();
+                    reserve_foreign_private_cells(
+                        &mut attempt,
+                        &layout,
+                        source_id,
+                        &protected,
+                        &required_route_clearance,
+                        expanded_planned_cells.as_ref(),
+                    );
+                    reserve_foreign_required_halos(
+                        &mut attempt,
+                        source_id,
+                        &required_route_cells,
+                        &own_protected,
+                    );
+                    reserve_source_refresh(&mut attempt, source_id, &source, route)?;
+                    if let Some(path) = std::env::var_os("REDA_ROUTE_REPLAY") {
+                        let selected = std::env::var("REDA_ROUTE_REPLAY_ROUTE")
+                            .ok()
+                            .and_then(|raw| raw.parse::<u32>().ok());
+                        if selected.is_none_or(|selected| selected == route.0) {
+                            let reservations = attempt.replay_snapshot();
+                            let replay = (
+                                route,
+                                &route_source,
+                                &sinks,
+                                &reservations,
+                                config.router_limits,
+                                layout.departures.get(&source_id),
+                                retry_bounds,
+                                layout.private.get(&source_id),
+                            );
+                            std::fs::write(
+                                path,
+                                serde_json::to_vec(&replay)
+                                    .expect("a route replay snapshot must serialize"),
+                            )
+                            .expect("a route replay snapshot path must be writable");
+                        }
+                    }
+                    routed = router.route_transactional(TransactionalRouteRequest {
+                        id: route,
+                        source: route_source.clone(),
+                        sinks: &sinks,
+                        reservations: &mut attempt,
+                        limits: config.router_limits,
+                        no_refresh: layout.departures.get(&source_id),
+                        planned_bounds: retry_bounds,
+                        planned_cells: expanded_planned_cells.as_ref(),
+                    });
+                    if !matches!(routed, Err(RouterFailure::NoLocalRoute { .. })) {
+                        break;
+                    }
+                }
+                routed
+            }
+            routed => routed,
         };
         let mut tree = match routed {
             Ok(tree) => tree,
@@ -3297,6 +3965,8 @@ fn reserve_foreign_private_cells(
     layout: &ChannelLayout,
     owner: PhysicalEndpointId,
     protected: &BTreeSet<Anchor>,
+    hard: &BTreeSet<Anchor>,
+    permitted: Option<&BTreeSet<Anchor>>,
 ) {
     let own = layout.private.get(&owner);
     for (&net, cells) in &layout.private {
@@ -3307,9 +3977,52 @@ fn reserve_foreign_private_cells(
             if protected.contains(&cell) || own.is_some_and(|own| own.contains(&cell)) {
                 continue;
             }
+            if !hard.contains(&cell)
+                && permitted.is_some_and(|permitted| permitted.contains(&cell))
+            {
+                continue;
+            }
             if attempt.get(&cell).is_none() {
                 attempt.reserve(
                     cell,
+                    PhysicalReservationOwner::Endpoint(net),
+                    PhysicalReservationKind::KeepOut,
+                );
+            }
+            let Some(y) = cell.y.checked_sub(1) else {
+                continue;
+            };
+            let support = Anchor { y, ..cell };
+            if !protected.contains(&support)
+                && !own.is_some_and(|own| own.contains(&support))
+                && (hard.contains(&support)
+                    || !permitted.is_some_and(|permitted| permitted.contains(&support)))
+                && attempt.get(&support).is_none()
+            {
+                attempt.reserve(
+                    support,
+                    PhysicalReservationOwner::KeepOut(CHANNEL_LAYER_OWNER),
+                    PhysicalReservationKind::KeepOut,
+                );
+            }
+        }
+    }
+}
+
+fn reserve_foreign_required_halos(
+    attempt: &mut impl ReservationStore,
+    owner: PhysicalEndpointId,
+    required: &[(PhysicalEndpointId, Anchor)],
+    own_terminals: &BTreeSet<Anchor>,
+) {
+    for &(net, cell) in required {
+        if net == owner {
+            continue;
+        }
+        for guard in keep_out_typed(cell) {
+            if !own_terminals.contains(&guard) && attempt.get(&guard).is_none() {
+                attempt.reserve(
+                    guard,
                     PhysicalReservationOwner::Endpoint(net),
                     PhysicalReservationKind::KeepOut,
                 );
@@ -3636,14 +4349,7 @@ fn topological_instance_order(graph: &InstanceGraph) -> Vec<InstanceId> {
 }
 
 fn repeater_facing_with_front(direction: Facing) -> Result<CellFacing, SeedError> {
-    (0..4u8)
-        .filter_map(CellFacing::from_index)
-        .find(|facing| {
-            physical::variants(Primitive::Repeater)[usize::from(facing.index())]
-                .port(PortKind::RepeaterFront)
-                .direction
-                == direction
-        })
+    crate::compile::fragment_synth::placement::repeater_facing_with_front(direction)
         .ok_or(SeedError::Incomplete("repeater front direction"))
 }
 
@@ -3795,11 +4501,12 @@ pub(crate) mod tests {
     use super::*;
     use crate::circuits::and4::build_and4_netlist;
     use crate::compile::fragment_synth::certification::CompleteCandidateCertifier;
+    use crate::compile::fragment_synth::channel_layout::ClosedRegion;
     use crate::compile::fragment_synth::legacy_adapter::{LegacyCandidateAdapter, LegacyOracle};
     use crate::compile::fragment_synth::placement::{
         deck_grounds, DeckId, DeckPlan, FloorplanMetrics, LateralWindow, NodeFacts,
-        PreferredInstancePose, SeedPlacementError, SeedPlacementPlan, SeedPlacementRequest, SeedPlacer,
-        TopologyAwareSeedPlacer, VerticalTrunkLane,
+        PreferredInstancePose, SeedPlacementError, SeedPlacementPlan, SeedPlacementRequest,
+        SeedPlacer, TopologyAwareSeedPlacer, VerticalTrunkLane,
     };
     use crate::compile::metrics::canonical_fingerprint;
     use crate::compile::planner::{PinRefusal, PortPin};
@@ -3808,6 +4515,37 @@ pub(crate) mod tests {
     };
     use crate::compile::topology::GateKind;
     use crate::compile::Gate;
+
+    /// Whether a bounded slab blocks `at`: inside its box and not one of its
+    /// own openings, the same cover [`PhysicalReservations::get`] applies to
+    /// the keep-out box the slab installs.
+    fn slab_closes(region: &ClosedRegion, at: Anchor) -> bool {
+        (region.min.x..=region.max.x).contains(&at.x)
+            && (region.min.y..=region.max.y).contains(&at.y)
+            && (region.min.z..=region.max.z).contains(&at.z)
+            && !region.openings.contains(&at)
+    }
+
+    #[test]
+    fn compact_torch_uses_rear_and_one_consistent_side() {
+        let frame = PlacementFrame {
+            forward: Facing::East,
+            lateral: Facing::South,
+            origin: Anchor { x: 0, y: 1, z: 0 },
+        };
+        let directions = geometry::input_directions(CellFacing::EAST);
+        let compact = directions
+            .into_iter()
+            .filter(|&direction| compact_socket_allowed(direction, frame, 2))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            compact,
+            vec![frame.lateral.opposite(), frame.forward.opposite()]
+        );
+        assert!(directions
+            .into_iter()
+            .all(|direction| compact_socket_allowed(direction, frame, 3)));
+    }
 
     #[test]
     fn placement_search_visits_stable_manhattan_shells_and_skips_collisions() {
@@ -3905,6 +4643,7 @@ pub(crate) mod tests {
         SeedPlacementPlan {
             frame: crate::compile::fragment_synth::placement::derive_frame(&BTreeMap::new()),
             analysis: analysis.clone(),
+            one_sided_inputs: BTreeSet::new(),
             window: LateralWindow::default(),
             io_footprint: footprint,
             instances,
@@ -4288,8 +5027,14 @@ pub(crate) mod tests {
         let resolved = ResolvedBlocks::resolve(&graph, ParentBlocks { compiled: &blocks })
             .expect("the block resolves");
         let facts = resolved.facts[&block_id];
-        assert_eq!(facts.height, compiled.bounds.max.y - compiled.bounds.min.y + 1);
-        assert_eq!(facts.width, compiled.bounds.max.x - compiled.bounds.min.x + 1);
+        assert_eq!(
+            facts.height,
+            compiled.bounds.max.y - compiled.bounds.min.y + 1
+        );
+        assert_eq!(
+            facts.width,
+            compiled.bounds.max.x - compiled.bounds.min.x + 1
+        );
 
         // An inverted Y span is no box at all, and the existing
         // block-resolution refusal is where that is said.
@@ -4642,7 +5387,9 @@ pub(crate) mod tests {
 
         let read = |world: &World, at: Anchor| world.get(at.x, at.y, at.z).power;
         let mut simulator = Simulator::new(world);
-        simulator.run_until_stable(200).expect("the two decks settle");
+        simulator
+            .run_until_stable(200)
+            .expect("the two decks settle");
         // The lever's own 15, one step of dust per row climbed.
         assert_eq!(
             read(simulator.world(), trunk),
@@ -4660,7 +5407,9 @@ pub(crate) mod tests {
         simulator
             .world_mut()
             .set(switch.x, switch.y, switch.z, compile::lever(false));
-        simulator.run_until_stable(200).expect("the trunk settles low");
+        simulator
+            .run_until_stable(200)
+            .expect("the trunk settles low");
         assert_eq!(read(simulator.world(), trunk), 0);
         assert_eq!(read(simulator.world(), upper_at), 0);
     }
@@ -4732,13 +5481,13 @@ pub(crate) mod tests {
 
         assert_eq!(seen.len(), 4);
         assert!(seen[0].is_empty());
-        // needed + CHANNEL_ENDPOINT_CELLS, then + (needed - available).
+        // Bounded columns consume one more free cell than the flat path.
         assert_eq!(
             seen[1],
             vec![LayoutRepair::WidenDeckChannel {
                 deck: DeckId(1),
                 level: 2,
-                width: 19 + CHANNEL_ENDPOINT_CELLS,
+                width: 19 + CHANNEL_ENDPOINT_CELLS + 1,
             }],
         );
         assert_eq!(
@@ -4746,7 +5495,7 @@ pub(crate) mod tests {
             vec![LayoutRepair::WidenDeckChannel {
                 deck: DeckId(1),
                 level: 2,
-                width: 21 + 10,
+                width: 22 + 10,
             }],
         );
         // One canonical repair for the level: the deck moved, the width grew.
@@ -4755,7 +5504,7 @@ pub(crate) mod tests {
             vec![LayoutRepair::WidenDeckChannel {
                 deck: DeckId(0),
                 level: 2,
-                width: 31 + 8,
+                width: 32 + 8,
             }],
         );
 
@@ -4791,6 +5540,180 @@ pub(crate) mod tests {
                 width: 19 + CHANNEL_ENDPOINT_CELLS,
             }],
         );
+    }
+
+    #[test]
+    fn bounded_channel_widening_repairs_one_batch_in_one_retry() {
+        let config = SearchConfig::checked_defaults();
+        let seen = RefCell::new(Vec::<Vec<LayoutRepair>>::new());
+        let round = Cell::new(0u32);
+
+        with_channel_widening(&config, |repairs| {
+            seen.borrow_mut().push(repairs.to_vec());
+            let attempt = round.get();
+            round.set(attempt + 1);
+            if attempt == 0 {
+                Err(SeedError::ChannelLayout(
+                    ChannelLayoutError::DeckChannelsTooNarrow {
+                        refusals: vec![
+                            ChannelLayoutError::DeckChannelTooNarrow {
+                                deck: DeckId(0),
+                                channel: 1,
+                                level: 2,
+                                available: 10,
+                                lanes: 4,
+                                needed: 16,
+                            },
+                            ChannelLayoutError::DeckChannelTooNarrow {
+                                deck: DeckId(3),
+                                channel: 2,
+                                level: 7,
+                                available: 7,
+                                lanes: 3,
+                                needed: 13,
+                            },
+                        ],
+                    },
+                ))
+            } else {
+                Ok(())
+            }
+        })
+        .expect("the whole batch is repaired by the second attempt");
+
+        assert_eq!(
+            seen.into_inner(),
+            vec![
+                vec![],
+                vec![
+                    LayoutRepair::WidenDeckChannel {
+                        deck: DeckId(0),
+                        level: 2,
+                        width: 16 + CHANNEL_ENDPOINT_CELLS + 1,
+                    },
+                    LayoutRepair::WidenDeckChannel {
+                        deck: DeckId(3),
+                        level: 7,
+                        width: 13 + CHANNEL_ENDPOINT_CELLS + 1,
+                    },
+                ],
+            ],
+        );
+    }
+
+    #[test]
+    fn bounded_crossing_refusal_splits_before_the_stable_level() {
+        let config = SearchConfig::checked_defaults();
+        let seen = RefCell::new(Vec::<Vec<LayoutRepair>>::new());
+        let round = Cell::new(0u32);
+        with_channel_widening(&config, |repairs| {
+            seen.borrow_mut().push(repairs.to_vec());
+            let attempt = round.get();
+            round.set(attempt + 1);
+            match attempt {
+                0 => Err(SeedError::ChannelLayout(ChannelLayoutError::DeckCrossing {
+                    deck: DeckId(2),
+                    level: 9,
+                    error: super::super::channel_plan::ChannelPlanError::NoCrossingRow {
+                        net: PhysicalEndpointId::PrimaryInput(PortId(0)),
+                        preferred: 12,
+                    },
+                })),
+                1 => Err(SeedError::ChannelLayout(ChannelLayoutError::DeckPlan {
+                    deck: DeckId(3),
+                    level: 12,
+                    error: super::super::channel_plan::ChannelPlanError::ConstraintCycle {
+                        nets: vec![PhysicalEndpointId::PrimaryInput(PortId(0))],
+                    },
+                })),
+                _ => Ok(()),
+            }
+        })
+        .expect("the split repair retries once");
+
+        assert_eq!(
+            seen.into_inner(),
+            vec![
+                vec![],
+                vec![LayoutRepair::SplitDeckBefore { level: 9 }],
+                vec![
+                    LayoutRepair::SplitDeckBefore { level: 9 },
+                    LayoutRepair::SplitDeckBefore { level: 12 },
+                ],
+            ],
+        );
+    }
+
+    /// A crossing refusal that names a deferrable trunk is answered by moving
+    /// that trunk first: it is the one net the column can actually be rid of,
+    /// and landing its station late costs the layout nothing but a longer
+    /// trunk.  Splitting the deck is the fallback, not the first answer,
+    /// because it re-packs every column above the split.
+    #[test]
+    fn a_deferrable_crossing_refusal_moves_the_trunk_before_splitting_the_deck() {
+        let config = SearchConfig::checked_defaults();
+        let source = PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance: InstanceId(1),
+            node: TopologyNodeId(0),
+        });
+        let refusal = || ChannelLayoutError::DeckTrunkCrossing {
+            deck: DeckId(0),
+            level: 4,
+            source,
+            error: super::super::channel_plan::ChannelPlanError::NoCrossingRow {
+                net: source,
+                preferred: 12,
+            },
+        };
+
+        let seen = RefCell::new(Vec::<Vec<LayoutRepair>>::new());
+        let round = Cell::new(0u32);
+        with_channel_widening(&config, |repairs| {
+            seen.borrow_mut().push(repairs.to_vec());
+            let attempt = round.get();
+            round.set(attempt + 1);
+            if attempt < 2 {
+                Err(SeedError::ChannelLayout(refusal()))
+            } else {
+                Ok(())
+            }
+        })
+        .expect("the trunk repair and then the split retry once each");
+
+        assert_eq!(
+            seen.into_inner(),
+            vec![
+                vec![],
+                vec![LayoutRepair::LateTrunkStation { source }],
+                // `SplitDeckBefore` was declared first, so it sorts first;
+                // the trunk repair is kept, not replaced.
+                vec![
+                    LayoutRepair::SplitDeckBefore { level: 4 },
+                    LayoutRepair::LateTrunkStation { source },
+                ],
+            ],
+        );
+
+        // A column that still refuses for the same trunk once both repairs
+        // are in hand has nothing left to be offered, and the refusal the
+        // caller sees is the column's own.
+        let exhausted = with_channel_widening(&config, |_| {
+            Err::<(), _>(SeedError::ChannelLayout(refusal()))
+        })
+        .expect_err("a column that keeps refusing the same trunk exhausts the seed");
+        match exhausted {
+            SeedError::SeedExhausted {
+                attempts_used,
+                refusal: preserved,
+            } => {
+                assert_eq!(attempts_used, 3);
+                match *preserved {
+                    SeedError::ChannelLayout(preserved) => assert_eq!(preserved, refusal()),
+                    other => panic!("the column's own refusal is preserved: {other:?}"),
+                }
+            }
+            other => panic!("the loop ends by exhaustion: {other:?}"),
+        }
     }
 
     #[test]
@@ -4923,7 +5846,10 @@ pub(crate) mod tests {
             routing_context(&failure, &sinks, &cross_deck),
         );
 
-        assert_eq!(evidence.context, SeedRoutingContext::VerticalTrunkUnroutable);
+        assert_eq!(
+            evidence.context,
+            SeedRoutingContext::VerticalTrunkUnroutable
+        );
         assert_eq!(evidence.category, RouterRefusalCategory::InvalidRequest);
         assert_eq!(evidence.limit_kind, Some(RouterLimitKind::NodeExpansions));
         assert_eq!(
@@ -5034,7 +5960,10 @@ pub(crate) mod tests {
             assert!(complete.get(&Anchor { x: 1, y, z: 0 }).is_some());
         }
 
-        let edge = IoFootprint { min_x: 0, ..footprint };
+        let edge = IoFootprint {
+            min_x: 0,
+            ..footprint
+        };
         let mut non_negative = PhysicalReservations::new();
         reserve_footprint_perimeter(Some(edge), &schedule, &sources, &mut non_negative)
             .expect("world-edge perimeter");
@@ -5057,10 +5986,12 @@ pub(crate) mod tests {
             requirement: TerminalRequirement::Repeater,
         };
         let route_schedule = RouteSchedule {
-            routes: vec![crate::compile::fragment_synth::route_schedule::ScheduledRoute {
-                source,
-                targets: vec![PendingTarget::DeclaredOutput(PortId(0), route_target)],
-            }],
+            routes: vec![
+                crate::compile::fragment_synth::route_schedule::ScheduledRoute {
+                    source,
+                    targets: vec![PendingTarget::DeclaredOutput(PortId(0), route_target)],
+                },
+            ],
         };
         let route_sources = BTreeMap::from([(source, route_source)]);
         let route_sinks = NonEmptyRouteSinks::new(vec![RouteSink {
@@ -5143,6 +6074,374 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_foreign_private_cell_reserves_its_support_but_not_speculative_halo() {
+        let owner = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let foreign = PhysicalEndpointId::PrimaryInput(PortId(1));
+        let cell = Anchor { x: 4, y: 2, z: 4 };
+        // A foreign candidate cell stays available, but its whole dust halo
+        // is not committed before the router chooses a real path.
+        let overlap = Anchor { x: 3, y: 2, z: 4 };
+        let guarded = Anchor { x: 5, y: 2, z: 4 };
+        let support = Anchor {
+            y: cell.y - 1,
+            ..cell
+        };
+        let mut layout = ChannelLayout::default();
+        layout.private.insert(owner, BTreeSet::from([overlap]));
+        layout.private.insert(foreign, BTreeSet::from([cell]));
+        let protected = BTreeSet::from([guarded]);
+
+        let mut attempt = PhysicalReservations::new();
+        reserve_foreign_private_cells(
+            &mut attempt,
+            &layout,
+            owner,
+            &protected,
+            &BTreeSet::new(),
+            None,
+        );
+
+        let claim = |at: &Anchor| attempt.get(at).map(|claim| claim.owner);
+        let foreign_cell = Some(PhysicalReservationOwner::Endpoint(foreign));
+        assert_eq!(claim(&cell), foreign_cell, "the cell itself is kept out");
+        assert_eq!(
+            attempt.get(&cell).map(|claim| claim.kind.clone()),
+            Some(PhysicalReservationKind::KeepOut),
+        );
+        assert_eq!(
+            claim(&support),
+            Some(PhysicalReservationOwner::KeepOut(CHANNEL_LAYER_OWNER)),
+            "the future conductor keeps its support available",
+        );
+        assert!(
+            keep_out_typed(cell)
+                .into_iter()
+                .all(|at| claim(&at).is_none()),
+            "unused candidate cells do not reserve speculative halo",
+        );
+        assert_eq!(claim(&overlap), None, "an own private cell stays free");
+        assert_eq!(claim(&guarded), None, "a protected coordinate stays free");
+        for outside in [
+            Anchor { x: 4, y: 2, z: 6 },
+            Anchor { x: 6, y: 2, z: 4 },
+            Anchor { x: 4, y: 4, z: 4 },
+        ] {
+            assert_eq!(claim(&outside), None, "{outside:?} is outside the halo");
+        }
+    }
+
+    #[test]
+    fn expanded_retry_crosses_private_corridors_but_not_endpoint_spines() {
+        let owner = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let foreign = PhysicalEndpointId::PrimaryInput(PortId(1));
+        let cell = Anchor { x: 4, y: 2, z: 4 };
+        let hard = Anchor { x: 8, ..cell };
+        let upper = Anchor { x: 12, ..cell };
+        let upper_support = Anchor {
+            y: upper.y - 1,
+            ..upper
+        };
+        let support = Anchor {
+            y: cell.y - 1,
+            ..cell
+        };
+        let mut layout = ChannelLayout::default();
+        layout
+            .private
+            .insert(foreign, BTreeSet::from([cell, hard, upper]));
+        let mut attempt = PhysicalReservations::new();
+        let permitted = BTreeSet::from([cell, hard, upper_support]);
+
+        reserve_foreign_private_cells(
+            &mut attempt,
+            &layout,
+            owner,
+            &BTreeSet::new(),
+            &BTreeSet::from([hard]),
+            Some(&permitted),
+        );
+
+        assert_eq!(attempt.get(&cell), None);
+        assert_eq!(
+            attempt.get(&hard).map(|claim| claim.owner),
+            Some(PhysicalReservationOwner::Endpoint(foreign)),
+        );
+        assert_eq!(
+            attempt.get(&upper).map(|claim| claim.owner),
+            Some(PhysicalReservationOwner::Endpoint(foreign)),
+        );
+        assert_eq!(
+            attempt.get(&upper_support),
+            None,
+            "a support cell inside the fallback corridor stays usable",
+        );
+        assert_eq!(
+            attempt
+                .get(&Anchor { y: hard.y - 1, ..hard })
+                .map(|claim| claim.owner),
+            Some(PhysicalReservationOwner::KeepOut(CHANNEL_LAYER_OWNER)),
+            "a hard endpoint spine keeps its support",
+        );
+        assert_eq!(
+            attempt.get(&support),
+            None,
+            "crossing the future corridor also needs its support cell",
+        );
+    }
+
+    #[test]
+    fn a_required_route_cell_belongs_only_to_its_owner() {
+        let earlier = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let required_owner = PhysicalEndpointId::PrimaryInput(PortId(1));
+        let required = Anchor { x: 4, y: 2, z: 4 };
+        let mut layout = ChannelLayout::default();
+        layout.private.insert(earlier, BTreeSet::from([required]));
+
+        protect_required_private_cells(&mut layout, &[(required_owner, required)]).unwrap();
+
+        assert!(!layout.private[&earlier].contains(&required));
+        assert!(layout.private[&required_owner].contains(&required));
+    }
+
+    #[test]
+    fn a_foreign_required_route_cell_reserves_its_halo_except_at_an_own_terminal() {
+        let owner = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let foreign = PhysicalEndpointId::PrimaryInput(PortId(1));
+        let required = Anchor { x: 4, y: 2, z: 4 };
+        let guards = keep_out_typed(required);
+        let own_terminal = guards[0];
+        let guarded = guards[1];
+        let mut attempt = PhysicalReservations::new();
+
+        reserve_foreign_required_halos(
+            &mut attempt,
+            owner,
+            &[(foreign, required)],
+            &BTreeSet::from([own_terminal]),
+        );
+
+        assert_eq!(attempt.get(&own_terminal), None);
+        assert_eq!(
+            attempt.get(&guarded).map(|claim| claim.owner),
+            Some(PhysicalReservationOwner::Endpoint(foreign)),
+        );
+    }
+
+    #[test]
+    fn deck_zero_private_cells_connect_a_backward_source_to_its_trunk() {
+        // The station fixture beside this one pins its source, so the source
+        // leaves through a port stub.  This one drives the other path: an
+        // unpinned primitive output that sits *forward* of its own trunk
+        // station, so every sink it has lies behind it and deck 0 has to hand
+        // it back through a channel.  Same frame, footprint, window and decks
+        // as that fixture; only the forward positions differ.
+        let ids = [InstanceId(0), InstanceId(1), InstanceId(2)];
+        let analysis = deck_analysis(&[
+            (ids[0], 0, DeckId(0)),
+            (ids[1], 1, DeckId(0)),
+            (ids[2], 0, DeckId(2)),
+        ]);
+        let candidate = one_cell_candidate(&[
+            (ids[0], Anchor { x: 8, y: 1, z: 4 }),
+            (ids[1], Anchor { x: 24, y: 1, z: 4 }),
+            (ids[2], Anchor { x: 8, y: 11, z: 4 }),
+        ]);
+        let owner = PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance: ids[1],
+            node: TopologyNodeId(0),
+        });
+        let connection = ConnectionId::External {
+            instance: ids[2],
+            input_index: 0,
+        };
+        let schedule = RouteSchedule {
+            routes: vec![
+                crate::compile::fragment_synth::route_schedule::ScheduledRoute {
+                    source: owner,
+                    targets: vec![PendingTarget::Connection(
+                        connection,
+                        TargetGeometry {
+                            terminal: Anchor { x: 8, y: 11, z: 4 },
+                            allowed_entry: Facing::West,
+                            support: Anchor { x: 9, y: 10, z: 4 },
+                            requirement: TerminalRequirement::DirectedDust,
+                        },
+                    )],
+                },
+            ],
+        };
+        let footprint = IoFootprint {
+            min_x: 0,
+            max_x: 30,
+            min_z: 0,
+            max_z: 20,
+        };
+        let mut plan = bounded_plan(&analysis, BTreeMap::new(), Some(footprint));
+        plan.frame = PlacementFrame {
+            forward: Facing::East,
+            lateral: Facing::South,
+            origin: Anchor { x: 0, y: 1, z: 0 },
+        };
+        plan.window = LateralWindow {
+            min: Some(0),
+            max: Some(10),
+        };
+        plan.decks = BTreeMap::from([
+            (
+                DeckId(0),
+                DeckPlan {
+                    ground: 1,
+                    min_y: 0,
+                    max_y: 4,
+                },
+            ),
+            (
+                DeckId(1),
+                DeckPlan {
+                    ground: 6,
+                    min_y: 5,
+                    max_y: 9,
+                },
+            ),
+            (
+                DeckId(2),
+                DeckPlan {
+                    ground: 11,
+                    min_y: 10,
+                    max_y: 14,
+                },
+            ),
+        ]);
+        // The station sits behind the source: the trunk it must reach is at
+        // forward 12 on deck 0, the source anchor at forward 24.
+        plan.vertical_trunks = BTreeMap::from([(
+            owner,
+            VerticalTrunkLane {
+                owner,
+                lateral: 12,
+                min_forward: 0,
+                max_forward: 30,
+                station_forwards: Some([12, 16]),
+                first_deck: DeckId(0),
+                last_deck: DeckId(2),
+            },
+        )]);
+        let sources = BTreeMap::from([(
+            owner,
+            SourceGeometry {
+                route_anchor: Anchor { x: 24, y: 1, z: 4 },
+                allowed_exit: Facing::East,
+            },
+        )]);
+
+        let limits = SearchConfig::checked_defaults().router_limits;
+        let mut materialized =
+            bounded_materialization_start(&plan, &schedule, &sources, limits.max_queue_entries)
+                .expect("the backward fixture fits the materialization cap");
+        let (layout, _) = plan_deck_channels(
+            &candidate,
+            &plan,
+            &schedule,
+            &sources,
+            &mut materialized,
+            &CountingRouter::default(),
+            &mut PhysicalReservations::new(),
+            limits,
+        )
+        .expect("deck channels plan");
+
+        // The cell the source actually leaves into, and the deck-0 trunk cell
+        // it has to be handed to.  Deck 0 takes stations[0].
+        let exit = Anchor { x: 25, y: 1, z: 4 };
+        let handoff = Anchor { x: 12, y: 1, z: 12 };
+        let private = layout
+            .private
+            .get(&owner)
+            .expect("the backward source has planned cells");
+        assert!(
+            private.contains(&exit),
+            "the source's own exit cell is planned",
+        );
+        assert!(
+            private.contains(&handoff),
+            "the deck-0 trunk handoff is planned",
+        );
+        // Walk the owner's planned cells with the router's real moves: one
+        // horizontal step, optionally climbing or descending one block.  A
+        // pure vertical neighbour is not a legal redstone staircase step.
+        let mut reached = BTreeSet::from([exit]);
+        let mut pending = vec![exit];
+        while let Some(at) = pending.pop() {
+            for horizontal in [
+                Anchor { x: at.x + 1, ..at },
+                Anchor { x: at.x - 1, ..at },
+                Anchor { z: at.z + 1, ..at },
+                Anchor { z: at.z - 1, ..at },
+            ] {
+                for y in [at.y - 1, at.y, at.y + 1] {
+                    let next = Anchor { y, ..horizontal };
+                    if private.contains(&next) && reached.insert(next) {
+                        pending.push(next);
+                    }
+                }
+            }
+        }
+        assert!(
+            reached.contains(&handoff),
+            "deck 0 hands the backward source to its trunk: {} of {} planned cells reachable from {exit:?}",
+            reached.len(),
+            private.len(),
+        );
+
+        let route = RouteId(0);
+        let mut reservations = PhysicalReservations::new();
+        for floor in layout.floors.get(&owner).into_iter().flatten() {
+            reservations.reserve(
+                floor.at,
+                PhysicalReservationOwner::RouteStair(route),
+                PhysicalReservationKind::Floor(floor.state.clone()),
+            );
+        }
+        for region in &layout.regions {
+            reservations.reserve_keep_out_box(
+                region.min,
+                region.max,
+                region.openings.clone(),
+                PhysicalReservationOwner::KeepOut(CHANNEL_LAYER_OWNER),
+            );
+        }
+        let sinks = NonEmptyRouteSinks::new(vec![RouteSink {
+            id: RoutedSinkId { route, ordinal: 0 },
+            endpoint: PhysicalEndpointId::Landing(connection),
+            anchor: Anchor { x: 8, y: 11, z: 4 },
+            allowed_entry: Facing::West,
+            terminal: TerminalContract::Sink {
+                target: crate::compile::routing::RouteTarget::Connection(connection),
+                support: Anchor { x: 9, y: 10, z: 4 },
+                requirement: TerminalRequirement::DirectedDust,
+            },
+        }])
+        .unwrap();
+        GuardedPhysicalRouter
+            .route(RouteRequest {
+                id: route,
+                source: RouteEndpoint {
+                    id: owner,
+                    anchor: sources[&owner].route_anchor,
+                    allowed_exit: sources[&owner].allowed_exit,
+                    terminal: TerminalContract::Source {
+                        signal_strength: MAX_SIGNAL_STRENGTH,
+                    },
+                },
+                sinks: &sinks,
+                reservations: &reservations,
+                limits,
+                no_refresh: layout.departures.get(&owner),
+            })
+            .expect("the router follows the planned deck-zero corridor into its trunk");
+    }
+
+    #[test]
     fn vertical_trunk_is_the_only_open_cross_deck_corridor() {
         let ids = [InstanceId(0), InstanceId(1), InstanceId(2)];
         let analysis = deck_analysis(&[
@@ -5178,21 +6477,23 @@ pub(crate) mod tests {
             requirement: TerminalRequirement::DirectedDust,
         };
         let schedule = RouteSchedule {
-            routes: vec![crate::compile::fragment_synth::route_schedule::ScheduledRoute {
-                source: owner,
-                targets: vec![
-                    PendingTarget::Connection(connection, target),
-                    PendingTarget::Connection(
-                        middle_connection,
-                        TargetGeometry {
-                            terminal: Anchor { x: 8, y: 6, z: 4 },
-                            allowed_entry: Facing::West,
-                            support: Anchor { x: 9, y: 5, z: 4 },
-                            requirement: TerminalRequirement::DirectedDust,
-                        },
-                    ),
-                ],
-            }],
+            routes: vec![
+                crate::compile::fragment_synth::route_schedule::ScheduledRoute {
+                    source: owner,
+                    targets: vec![
+                        PendingTarget::Connection(connection, target),
+                        PendingTarget::Connection(
+                            middle_connection,
+                            TargetGeometry {
+                                terminal: Anchor { x: 8, y: 6, z: 4 },
+                                allowed_entry: Facing::West,
+                                support: Anchor { x: 9, y: 5, z: 4 },
+                                requirement: TerminalRequirement::DirectedDust,
+                            },
+                        ),
+                    ],
+                },
+            ],
         };
         let frame = PlacementFrame {
             forward: Facing::East,
@@ -5209,12 +6510,33 @@ pub(crate) mod tests {
         plan.frame = frame;
         plan.window = LateralWindow {
             min: Some(0),
-            max: Some(8),
+            max: Some(10),
         };
         plan.decks = BTreeMap::from([
-            (DeckId(0), DeckPlan { ground: 1, min_y: 0, max_y: 4 }),
-            (DeckId(1), DeckPlan { ground: 6, min_y: 5, max_y: 9 }),
-            (DeckId(2), DeckPlan { ground: 11, min_y: 10, max_y: 14 }),
+            (
+                DeckId(0),
+                DeckPlan {
+                    ground: 1,
+                    min_y: 0,
+                    max_y: 4,
+                },
+            ),
+            (
+                DeckId(1),
+                DeckPlan {
+                    ground: 6,
+                    min_y: 5,
+                    max_y: 9,
+                },
+            ),
+            (
+                DeckId(2),
+                DeckPlan {
+                    ground: 11,
+                    min_y: 10,
+                    max_y: 14,
+                },
+            ),
         ]);
         plan.vertical_trunks = BTreeMap::from([(
             owner,
@@ -5223,6 +6545,7 @@ pub(crate) mod tests {
                 lateral: 12,
                 min_forward: 0,
                 max_forward: 30,
+                station_forwards: None,
                 first_deck: DeckId(0),
                 last_deck: DeckId(2),
             },
@@ -5265,13 +6588,9 @@ pub(crate) mod tests {
         let mut reservations = PhysicalReservations::new();
         let router = CountingRouter::default();
         let limits = SearchConfig::checked_defaults().router_limits;
-        let mut materialized = bounded_materialization_start(
-            &plan,
-            &schedule,
-            &sources,
-            limits.max_queue_entries,
-        )
-        .expect("the fixture fits the materialization cap");
+        let mut materialized =
+            bounded_materialization_start(&plan, &schedule, &sources, limits.max_queue_entries)
+                .expect("the fixture fits the materialization cap");
         let (layout, cross_deck) = plan_deck_channels(
             &candidate,
             &plan,
@@ -5284,10 +6603,17 @@ pub(crate) mod tests {
         )
         .expect("three deck channels plan");
 
-        assert_eq!(router.calls.get(), 0, "synthetic trunk ends are not pin stubs");
+        assert_eq!(
+            router.calls.get(),
+            4,
+            "each synthetic trunk end gets one physical handoff stub"
+        );
         assert_eq!(schedule.routes.len(), 1);
         assert_eq!(schedule.routes[0].targets.len(), 2);
-        assert_eq!(schedule.routes[0].targets[0].endpoint(), PhysicalEndpointId::Landing(connection));
+        assert_eq!(
+            schedule.routes[0].targets[0].endpoint(),
+            PhysicalEndpointId::Landing(connection)
+        );
         assert_eq!(
             schedule.routes[0].targets[1].endpoint(),
             PhysicalEndpointId::Landing(middle_connection)
@@ -5295,8 +6621,14 @@ pub(crate) mod tests {
         assert_eq!(
             cross_deck,
             BTreeSet::from([
-                RoutedSinkId { route: RouteId(0), ordinal: 0 },
-                RoutedSinkId { route: RouteId(0), ordinal: 1 },
+                RoutedSinkId {
+                    route: RouteId(0),
+                    ordinal: 0
+                },
+                RoutedSinkId {
+                    route: RouteId(0),
+                    ordinal: 1
+                },
             ])
         );
         let real_sinks = NonEmptyRouteSinks::new(vec![RouteSink {
@@ -5348,7 +6680,10 @@ pub(crate) mod tests {
             routing_context(&refusal, &real_sinks, &cross_deck),
             SeedRoutingContext::VerticalTrunkUnroutable
         );
-        let corridor = layout.private.get(&owner).expect("the owner has a private trunk");
+        let corridor = layout
+            .private
+            .get(&owner)
+            .expect("the owner has a private trunk");
         for x in 0..=30 {
             for z in 11..=13 {
                 for y in 1..=14 {
@@ -5356,13 +6691,38 @@ pub(crate) mod tests {
                 }
             }
         }
-        assert!(corridor.is_disjoint(&layout.closed));
+        // Each bounded deck states its slab as bounds, so the trunk's own
+        // cells are that slab's openings rather than cells it left out.
+        assert!(
+            layout.closed.is_empty(),
+            "a bounded plan enumerates no closed cell",
+        );
+        assert!(corridor
+            .iter()
+            .all(|at| !layout.regions.iter().any(|region| slab_closes(region, *at))));
         assert!(layout.lanes.keys().any(|(deck, _)| *deck == DeckId(1)));
         for ground in [1, 6, 11] {
-            assert!(layout.closed.iter().any(|at| at.y == ground && at.z == 10));
+            let beside = |x| Anchor {
+                x,
+                y: ground,
+                z: 10,
+            };
+            assert!(
+                layout.regions.iter().any(|region| {
+                    (region.min.x..=region.max.x).any(|x| slab_closes(region, beside(x)))
+                }),
+                "the deck at {ground} closes the row beside the trunk",
+            );
         }
-        assert!(layout.closed.iter().all(|at| footprint.contains_xz(*at)));
-        assert!(layout.private.values().flatten().all(|at| footprint.contains_xz(*at)));
+        assert!(layout
+            .regions
+            .iter()
+            .all(|region| footprint.contains_xz(region.min) && footprint.contains_xz(region.max)));
+        assert!(layout
+            .private
+            .values()
+            .flatten()
+            .all(|at| footprint.contains_xz(*at)));
         assert!(layout
             .floors
             .values()
@@ -5373,6 +6733,135 @@ pub(crate) mod tests {
             .values()
             .flatten()
             .all(|at| footprint.contains_xz(*at)));
+
+        {
+            let lane = plan
+                .vertical_trunks
+                .get_mut(&owner)
+                .expect("the fixture has one trunk");
+            lane.min_forward = 19;
+            lane.max_forward = 25;
+        }
+        let rectangular_materialization =
+            bounded_materialization_cells(&plan, &schedule, &sources).unwrap();
+        plan.vertical_trunks
+            .get_mut(&owner)
+            .expect("the fixture has one trunk")
+            .station_forwards = Some([20, 24]);
+        let station_materialization =
+            bounded_materialization_cells(&plan, &schedule, &sources).unwrap();
+        assert_eq!(
+            rectangular_materialization - station_materialization,
+            114,
+            "the cap charges the fixed shaft actually materialized, not its old bounding prism"
+        );
+        let router = CountingRouter::default();
+        let mut materialized =
+            bounded_materialization_start(&plan, &schedule, &sources, limits.max_queue_entries)
+                .expect("the fixed-shaft fixture fits the materialization cap");
+        let (layout, _) = plan_deck_channels(
+            &candidate,
+            &plan,
+            &schedule,
+            &sources,
+            &mut materialized,
+            &router,
+            &mut PhysicalReservations::new(),
+            limits,
+        )
+        .expect("fixed shaft connects to its endpoint decks");
+        assert_eq!(
+            router.calls.get(),
+            3,
+            "fixed shafts route their three distinct physical handoff stubs"
+        );
+        let corridor = layout
+            .private
+            .get(&owner)
+            .expect("the owner has a fixed shaft");
+        for x in 19..=21 {
+            for y in 1..=6 {
+                assert!(corridor.contains(&Anchor { x, y, z: 12 }));
+            }
+        }
+        for x in 23..=25 {
+            for y in 6..=11 {
+                assert!(corridor.contains(&Anchor { x, y, z: 12 }));
+            }
+        }
+        assert!(corridor.contains(&Anchor { x: 22, y: 6, z: 12 }));
+        assert!(!corridor.contains(&Anchor { x: 22, y: 3, z: 12 }));
+        // The placer reserves the shaft's three lateral rows, so the carved
+        // corridor has to occupy all three of them, not just the centre.
+        for z in 11..=13 {
+            assert!(corridor.contains(&Anchor { x: 20, y: 3, z }));
+        }
+        // The band around a fixed shaft is a closed prism: the gap beside the
+        // lower shaft is not a diagonal shortcut a route may take.
+        assert!(
+            layout
+                .regions
+                .iter()
+                .any(|region| slab_closes(region, Anchor { x: 22, y: 3, z: 12 })),
+            "the trunk band closes the cell beside the shaft",
+        );
+        // Every cell some net owns stays open through every region covering it.
+        assert!(layout
+            .private
+            .values()
+            .flatten()
+            .all(|at| !layout.regions.iter().any(|region| slab_closes(region, *at))));
+        assert!(layout.floors.iter().all(|(owner, floors)| floors
+            .iter()
+            .all(|floor| !layout.private[owner].contains(&floor.at))));
+
+        let lower = Anchor { x: 20, y: 3, z: 12 };
+        let upper = Anchor { x: 21, y: 4, z: 12 };
+        let mut diagonal = ChannelLayout::default();
+        diagonal
+            .private
+            .insert(owner, BTreeSet::from([lower, upper]));
+        let floor_owner = PhysicalEndpointId::PrimaryInput(PortId(1));
+        let safe_floor = Anchor { x: 22, y: 3, z: 12 };
+        diagonal.floors.insert(
+            floor_owner,
+            [
+                lower,
+                Anchor {
+                    y: upper.y,
+                    ..lower
+                },
+                safe_floor,
+            ]
+            .into_iter()
+            .map(|at| PlacedBlock {
+                at,
+                state: crate::compile::stone(),
+            })
+            .collect(),
+        );
+        remove_floor_private_conflicts(&mut diagonal);
+        assert_eq!(
+            diagonal.floors[&floor_owner]
+                .iter()
+                .map(|floor| floor.at)
+                .collect::<Vec<_>>(),
+            vec![safe_floor]
+        );
+        let (band, added) = trunk_band_region(&plan, &diagonal, 0, &|x, z, y| Anchor { x, y, z })
+            .expect("the fixed shaft has a trunk band");
+        assert_eq!(added, 2);
+        assert!(band.openings.contains(&Anchor { x: 21, y: 3, z: 12 }));
+        assert!(band.openings.contains(&Anchor { x: 20, y: 4, z: 12 }));
+    }
+
+    #[test]
+    fn trunk_station_attaches_to_the_nearest_deck_column() {
+        let columns = [(0, 0, 2), (1, 10, 12), (2, 20, 22)];
+
+        assert_eq!(nearest_deck_column(&columns, 9), Some((1, 10, 12)));
+        assert_eq!(nearest_deck_column(&columns, 16), Some((1, 10, 12)));
+        assert_eq!(nearest_deck_column(&columns, 100), Some((2, 20, 22)));
     }
 
     #[test]
@@ -5390,17 +6879,26 @@ pub(crate) mod tests {
             (ids[2], Anchor { x: 4, y: 6, z: 4 }),
             (ids[3], Anchor { x: 9, y: 6, z: 16 }),
         ]);
-        let source = |instance| PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
-            instance,
-            node: TopologyNodeId(0),
-        });
+        let source = |instance| {
+            PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+                instance,
+                node: TopologyNodeId(0),
+            })
+        };
         let target = |instance, at| {
             PendingTarget::Connection(
-                ConnectionId::External { instance, input_index: 0 },
+                ConnectionId::External {
+                    instance,
+                    input_index: 0,
+                },
                 TargetGeometry {
                     terminal: at,
                     allowed_entry: Facing::West,
-                    support: Anchor { x: at.x + 1, y: at.y - 1, z: at.z },
+                    support: Anchor {
+                        x: at.x + 1,
+                        y: at.y - 1,
+                        z: at.z,
+                    },
                     requirement: TerminalRequirement::DirectedDust,
                 },
             )
@@ -5417,7 +6915,12 @@ pub(crate) mod tests {
                 },
             ],
         };
-        let footprint = IoFootprint { min_x: 0, max_x: 20, min_z: 0, max_z: 20 };
+        let footprint = IoFootprint {
+            min_x: 0,
+            max_x: 20,
+            min_z: 0,
+            max_z: 20,
+        };
         let mut plan = bounded_plan(&analysis, BTreeMap::new(), Some(footprint));
         plan.frame = PlacementFrame {
             forward: Facing::East,
@@ -5425,12 +6928,38 @@ pub(crate) mod tests {
             origin: Anchor { x: 0, y: 1, z: 0 },
         };
         plan.decks = BTreeMap::from([
-            (DeckId(0), DeckPlan { ground: 1, min_y: 0, max_y: 4 }),
-            (DeckId(1), DeckPlan { ground: 6, min_y: 5, max_y: 9 }),
+            (
+                DeckId(0),
+                DeckPlan {
+                    ground: 1,
+                    min_y: 0,
+                    max_y: 4,
+                },
+            ),
+            (
+                DeckId(1),
+                DeckPlan {
+                    ground: 6,
+                    min_y: 5,
+                    max_y: 9,
+                },
+            ),
         ]);
         let sources = BTreeMap::from([
-            (source(ids[0]), SourceGeometry { route_anchor: Anchor { x: 4, y: 1, z: 4 }, allowed_exit: Facing::East }),
-            (source(ids[2]), SourceGeometry { route_anchor: Anchor { x: 4, y: 6, z: 4 }, allowed_exit: Facing::East }),
+            (
+                source(ids[0]),
+                SourceGeometry {
+                    route_anchor: Anchor { x: 4, y: 1, z: 4 },
+                    allowed_exit: Facing::East,
+                },
+            ),
+            (
+                source(ids[2]),
+                SourceGeometry {
+                    route_anchor: Anchor { x: 4, y: 6, z: 4 },
+                    allowed_exit: Facing::East,
+                },
+            ),
         ]);
         let mut upper_only = plan.clone();
         upper_only.decks.retain(|deck, _| *deck == DeckId(1));
@@ -5523,6 +7052,7 @@ pub(crate) mod tests {
             Ok(SeedPlacementPlan {
                 frame: crate::compile::fragment_synth::placement::derive_frame(_request.pins),
                 analysis: _request.analysis.clone(),
+                one_sided_inputs: BTreeSet::new(),
                 window: LateralWindow::default(),
                 io_footprint: None,
                 instances: BTreeMap::from([(

@@ -8,6 +8,7 @@ use thiserror::Error;
 use crate::compile::fragment_synth::candidate::endpoint_for_driver;
 use crate::compile::fragment_synth::channel_plan::{
     bounded_turnaround_allowance, channel_width, lane_count, legacy_turnaround_allowance,
+    FORWARD_MARGIN,
 };
 use crate::compile::fragment_synth::identity::{ConnectionId, InstanceId, PrimitiveId};
 use crate::compile::fragment_synth::identity::{PhysicalEndpointId, PortId};
@@ -69,6 +70,8 @@ pub(crate) struct VerticalTrunkLane {
     /// Inclusive frame-relative footprint span the corridor may use.
     pub min_forward: i32,
     pub max_forward: i32,
+    /// Alternating fixed shaft centres when the one-dimensional band cannot fit.
+    pub station_forwards: Option<[i32; 2]>,
     pub first_deck: DeckId,
     pub last_deck: DeckId,
 }
@@ -219,6 +222,22 @@ pub(crate) enum LayoutRepair {
         level: i64,
         width: i32,
     },
+    SplitDeckBefore {
+        level: i64,
+    },
+    /// `source`'s vertical trunk must give up the preference that lands its
+    /// station ahead of deck zero's last real column.  Appended after every
+    /// existing variant so their order and their `Ord` ranking are unchanged.
+    ///
+    /// The early landing is what puts the trunk's source line in the channel
+    /// before that column, and so what puts the net among the column's own
+    /// crossing demands.  A net the column cannot seat and that no widening
+    /// can help is one to take out of the column instead: without the
+    /// preference the trunk ranks its stations by distance alone, exactly as
+    /// a trunk that feeds no pinned output always has.
+    LateTrunkStation {
+        source: PhysicalEndpointId,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -239,6 +258,9 @@ pub(crate) struct SeedPlacementPlan {
     /// macros do not fit the lateral window side by side is folded into
     /// consecutive columns, and the levels after it move up.
     pub analysis: SeedPlacementAnalysis,
+    /// Instances whose inputs were restricted to the rear and one lateral
+    /// side when their rows were packed.
+    pub one_sided_inputs: BTreeSet<InstanceId>,
     /// Lateral bounds every block must respect.
     pub window: LateralWindow,
     /// The rectangle a complete pin set draws, and `None` for every partial
@@ -317,7 +339,10 @@ pub(crate) struct TopologyAwareSeedPlacer;
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum FrameOutcome {
     Placed(SeedPlacementPlan),
-    BandTooNarrow { required: i32 },
+    BandTooNarrow {
+        required: i32,
+        grid_turnaround: bool,
+    },
     NoFit,
 }
 
@@ -416,6 +441,16 @@ const ENDPOINT_CELLS_PER_CHANNEL: i32 = 2;
 /// of those entries is three cells deep, and the two entry lines must not
 /// touch, so facing terminals need eight cells between them.
 const LATERAL_GAP: i32 = 10;
+/// A one-torch macro with at most two inputs can keep its only side approach
+/// on the same side as every neighbour.  Five cells then snap to an
+/// eight-cell row-grid pitch, leaving three clear cells past the four-cell
+/// approach.
+const COMPACT_LATERAL_GAP: i32 = 5;
+/// How many faces a macro laid out at [`COMPACT_LATERAL_GAP`] may be
+/// approached on: the rear, and the one lateral side the whole level packs
+/// against.  A third approach would have to come from the neighbour's own
+/// gap, which only [`LATERAL_GAP`] leaves room for.
+const COMPACT_APPROACHES: usize = 2;
 /// Lateral pitch of net tracks; a multiple of the row grid so automatic
 /// boundaries land on grid rows.
 const TRACK_PITCH: i32 = 8;
@@ -424,6 +459,11 @@ const TRACK_PITCH: i32 = 8;
 /// different nets can then never be adjacent, and a dogleg always finds a
 /// free row between two grid rows.
 pub(crate) const ROW_GRID: i32 = 4;
+const TRUNK_GRID_LATERAL_PITCH: i32 = 2;
+// A station pair owns `first - 1 ..= second + 1`; eight cells leave one
+// untouched cell between neighbouring pairs in the shared switchbox.
+const TRUNK_GRID_FORWARD_PITCH: i32 = 8;
+const TRUNK_ROW_GUARD: i32 = 2;
 
 impl TopologyAwareSeedPlacer {
     /// The plan with explicit minimum channel widths (keyed like
@@ -432,6 +472,8 @@ impl TopologyAwareSeedPlacer {
         &self,
         request: SeedPlacementRequest<'_>,
         minimum_widths: &BTreeMap<i64, i32>,
+        split_before: &BTreeSet<i64>,
+        late_trunk_stations: &BTreeSet<PhysicalEndpointId>,
     ) -> Result<SeedPlacementPlan, SeedPlacementError> {
         // The frame points from the inputs toward the outputs.  When the
         // levels with their channels do not fit ahead of the pins there (a
@@ -472,17 +514,27 @@ impl TopologyAwareSeedPlacer {
         let mut refusal = None;
         for (index, frame) in candidates.into_iter().enumerate() {
             let mut band = 0;
+            let mut grid_turnaround = false;
             loop {
                 match self.plan_in_frame(
                     request,
                     minimum_widths,
+                    split_before,
+                    late_trunk_stations,
                     frame,
                     index == 0,
                     footprint,
                     band,
+                    grid_turnaround,
                 ) {
                     Ok(FrameOutcome::Placed(plan)) => return Ok(plan),
-                    Ok(FrameOutcome::BandTooNarrow { required }) => band = required,
+                    Ok(FrameOutcome::BandTooNarrow {
+                        required,
+                        grid_turnaround: required_turnaround,
+                    }) => {
+                        band = required;
+                        grid_turnaround = required_turnaround;
+                    }
                     Ok(FrameOutcome::NoFit) => break,
                     Err(error)
                         if footprint.is_some()
@@ -511,12 +563,20 @@ impl TopologyAwareSeedPlacer {
         &self,
         request: SeedPlacementRequest<'_>,
         minimum_widths: &BTreeMap<i64, i32>,
+        split_before: &BTreeSet<i64>,
+        late_trunk_stations: &BTreeSet<PhysicalEndpointId>,
         frame: PlacementFrame,
         direct: bool,
         footprint: Option<IoFootprint>,
         band: i32,
+        grid_turnaround: bool,
     ) -> Result<FrameOutcome, SeedPlacementError> {
         let analysis = request.analysis;
+        let band_step = if grid_turnaround {
+            TRUNK_GRID_LATERAL_PITCH
+        } else {
+            ROW_GRID
+        };
         let intervals = net_intervals(request.graph, analysis);
         let tracks = colour_intervals(&intervals);
         let track_laterals = track_laterals(request.graph, request.pins, frame, &tracks);
@@ -524,7 +584,9 @@ impl TopologyAwareSeedPlacer {
             .graph
             .instances
             .iter()
-            .map(|instance| macro_envelope(instance).map(|size| (instance.id, size)))
+            .map(|instance| {
+                macro_envelope(instance, footprint.is_some()).map(|size| (instance.id, size))
+            })
             .collect::<Result<BTreeMap<_, _>, _>>()?;
         for block in &request.graph.blocks {
             // The caller derives `block_facts` and the analysis's block
@@ -606,6 +668,24 @@ impl TopologyAwareSeedPlacer {
         // Lateral positions first: they do not depend on the column spacing,
         // and the channel widths depend on them.
         let mut laterals = BTreeMap::<InstanceId, i32>::new();
+        // Bounded rows admit junctions whose approaches are constrained to
+        // one side. Unbounded rows keep the original torch-only rule.
+        let compact_candidates = if footprint.is_some() {
+            compact_approach_instances(request.graph, analysis)
+        } else {
+            request
+                .graph
+                .instances
+                .iter()
+                .filter(|instance| compact_one_torch(instance))
+                .map(|instance| instance.id)
+                .collect()
+        };
+        let mut one_sided_inputs = if footprint.is_none() {
+            compact_candidates.clone()
+        } else {
+            BTreeSet::new()
+        };
         for &level in level_bounds.keys() {
             let mut ids = analysis
                 .order
@@ -619,7 +699,11 @@ impl TopologyAwareSeedPlacer {
                 .copied()
                 .map(|id| (id, lanes[&id], bounds[&id]))
                 .collect::<Vec<_>>();
-            let legalized = legalize_laterals(&entries)?;
+            let compact = ids.iter().all(|id| compact_candidates.contains(id));
+            if compact && footprint.is_some() {
+                one_sided_inputs.extend(ids.iter().copied());
+            }
+            let legalized = legalize_laterals(&entries, compact)?;
             for id in ids {
                 laterals.insert(id, legalized[&id]);
             }
@@ -829,12 +913,17 @@ impl TopologyAwareSeedPlacer {
             .iter()
             .map(|(&level, bounds)| bounds.forward_span() + channel_at(level as i64))
             .sum::<i32>();
-        // Pinned outputs ahead of the levels must leave room for every
-        // column and channel, and the levels must end inside the world and
-        // ahead of every pinned input; otherwise the caller turns the frame.
-        if direct {
-            if let Some((output_min, _)) = pinned_output_forward_extent(request, frame) {
-                if output_min > cursor && cursor + total > output_min {
+        // The legacy one-deck layout keeps every column ahead of its pinned
+        // outputs. A bounded layout instead packs against the footprint wall;
+        // pins stay protected by their typed clearance tunnels on deck zero.
+        let pinned_output_limit = direct
+            .then(|| pinned_output_forward_extent(request, frame))
+            .flatten()
+            .map(|(output_min, _)| output_min)
+            .filter(|&output_min| output_min > cursor);
+        if footprint.is_none() {
+            if let Some(output_min) = pinned_output_limit {
+                if cursor + total > output_min {
                     return Ok(FrameOutcome::NoFit);
                 }
             }
@@ -873,10 +962,18 @@ impl TopologyAwareSeedPlacer {
                             .expect("every level in level_bounds has at least one macro");
                         DeckColumn {
                             owner,
-                            lead: channel_at(level as i64 - 1),
-                            cost: level_bounds.forward_span() + channel_at(level as i64),
-                            close: bounded_turnaround_allowance(
+                            break_before: split_before.contains(&(level as i64)),
+                            // A deck above the base one restarts the cursor
+                            // at the projected forward start, so it begins
+                            // behind no channel of its own: the preceding
+                            // one belongs to the deck the earlier column
+                            // left, which already paid for it.
+                            lead: 0,
+                            cost: level_bounds.forward_span() - 1 + channel_at(level as i64),
+                            close: deck_close(
+                                channel_at(level as i64),
                                 channel_lanes.get(&(level as i64)).copied().unwrap_or(0),
+                                grid_turnaround,
                             ),
                         }
                     })
@@ -884,7 +981,24 @@ impl TopologyAwareSeedPlacer {
                 let capacity = limit
                     .checked_sub(cursor)
                     .ok_or(SeedPlacementError::CoordinateOverflow)?;
-                pack_decks(&columns, capacity)?
+                match pack_decks(&columns, capacity) {
+                    Ok(decks) => decks,
+                    Err(SeedPlacementError::LateralWindowTooNarrow { .. }) if !grid_turnaround => {
+                        return Ok(FrameOutcome::BandTooNarrow {
+                            required: band,
+                            grid_turnaround: true,
+                        });
+                    }
+                    Err(SeedPlacementError::LateralWindowTooNarrow { .. }) => {
+                        return Ok(FrameOutcome::BandTooNarrow {
+                            required: band
+                                .checked_add(band_step)
+                                .ok_or(SeedPlacementError::CoordinateOverflow)?,
+                            grid_turnaround: true,
+                        });
+                    }
+                    Err(error) => return Err(error),
+                }
             }
             _ => {
                 if let Some(limit) = limit {
@@ -922,6 +1036,29 @@ impl TopologyAwareSeedPlacer {
                 .checked_add(level_bounds.max_forward)
                 .and_then(|value| value.checked_add(channel_at(level as i64)))
                 .ok_or(SeedPlacementError::CoordinateOverflow)?;
+        }
+        let mut deck_edges = BTreeMap::<DeckId, (i32, i32)>::new();
+        // Where each deck's furthest-forward real column begins: the first
+        // cell of its last column, not that column's origin.  `columns` runs
+        // in level order and the cursor above only moves forward within one
+        // deck, so the last level a deck holds is its furthest column and
+        // the last write wins.
+        let mut deck_last_column_openings = BTreeMap::<DeckId, i32>::new();
+        for (&level, &column) in &columns {
+            let edge = column + level_bounds[&level].max_forward;
+            deck_edges
+                .entry(level_decks[&level])
+                .and_modify(|(first, last)| {
+                    *first = (*first).min(column);
+                    *last = (*last).max(edge);
+                })
+                .or_insert((column, edge));
+            deck_last_column_openings.insert(
+                level_decks[&level],
+                column
+                    .checked_add(level_bounds[&level].min_forward)
+                    .ok_or(SeedPlacementError::CoordinateOverflow)?,
+            );
         }
 
         let mut frame_origins = BTreeMap::<InstanceId, (i32, i32)>::new();
@@ -967,24 +1104,90 @@ impl TopologyAwareSeedPlacer {
             .zip(deck_grounds(frame.origin.y, &locals)?)
             .collect::<BTreeMap<DeckId, DeckPlan>>();
 
+        let origin_forward = project_horizontal(frame.origin.x, frame.origin.z, frame.forward);
         let mut trunk_decks = BTreeMap::<PhysicalEndpointId, (DeckId, DeckId)>::new();
+        let mut trunk_endpoint_hulls =
+            BTreeMap::<PhysicalEndpointId, BTreeMap<DeckId, (i32, i32)>>::new();
+        let mut trunk_output_laterals = BTreeMap::<PhysicalEndpointId, BTreeSet<i32>>::new();
         if footprint.is_some() {
             for assignment in &request.graph.assignments {
                 let Some(owner) = endpoint_for_driver(&assignment.driver) else {
                     continue;
                 };
-                let source_deck = match &assignment.driver {
-                    PhysicalDriver::PrimaryInput(_) => DeckId(0),
+                let (source_deck, source_hull) = match &assignment.driver {
+                    PhysicalDriver::PrimaryInput(port) => {
+                        let forward =
+                            match request.pins.get(&PhysicalEndpointId::PrimaryInput(*port)) {
+                                Some(pin) => project_horizontal(pin.at.x, pin.at.z, frame.forward)
+                                    .checked_sub(origin_forward)
+                                    .ok_or(SeedPlacementError::CoordinateOverflow)?,
+                                None => deck_edges[&DeckId(0)].0,
+                            };
+                        (DeckId(0), (forward, forward))
+                    }
                     PhysicalDriver::Instance(driver) => {
-                        instance_decks[&instance_driver_owner(driver)]
+                        let instance = instance_driver_owner(driver);
+                        let forward = frame_origins[&instance].0;
+                        (
+                            instance_decks[&instance],
+                            (
+                                forward
+                                    .checked_add(bounds[&instance].min_forward)
+                                    .ok_or(SeedPlacementError::CoordinateOverflow)?,
+                                forward
+                                    .checked_add(bounds[&instance].max_forward)
+                                    .ok_or(SeedPlacementError::CoordinateOverflow)?,
+                            ),
+                        )
                     }
                 };
-                let sink_deck = match assignment.sink {
-                    PhysicalSink::InstanceInput { instance, .. } => instance_decks[&instance],
-                    PhysicalSink::DeclaredOutput(_) => DeckId(0),
+                let (sink_deck, sink_hull) = match assignment.sink {
+                    PhysicalSink::InstanceInput { instance, .. } => {
+                        let forward = frame_origins[&instance].0;
+                        (
+                            instance_decks[&instance],
+                            (
+                                forward
+                                    .checked_add(bounds[&instance].min_forward)
+                                    .ok_or(SeedPlacementError::CoordinateOverflow)?,
+                                forward
+                                    .checked_add(bounds[&instance].max_forward)
+                                    .ok_or(SeedPlacementError::CoordinateOverflow)?,
+                            ),
+                        )
+                    }
+                    PhysicalSink::DeclaredOutput(port) => {
+                        let forward =
+                            match request.pins.get(&PhysicalEndpointId::DeclaredOutput(port)) {
+                                Some(pin) => project_horizontal(pin.at.x, pin.at.z, frame.forward)
+                                    .checked_sub(origin_forward)
+                                    .ok_or(SeedPlacementError::CoordinateOverflow)?,
+                                None => deck_edges[&DeckId(0)].1,
+                            };
+                        (DeckId(0), (forward, forward))
+                    }
                 };
+                for (deck, (lo, hi)) in [(source_deck, source_hull), (sink_deck, sink_hull)] {
+                    trunk_endpoint_hulls
+                        .entry(owner)
+                        .or_default()
+                        .entry(deck)
+                        .and_modify(|(known_lo, known_hi)| {
+                            *known_lo = (*known_lo).min(lo);
+                            *known_hi = (*known_hi).max(hi);
+                        })
+                        .or_insert((lo, hi));
+                }
                 if source_deck == sink_deck {
                     continue;
+                }
+                if let PhysicalSink::DeclaredOutput(port) = assignment.sink {
+                    if let Some(pin) = request.pins.get(&PhysicalEndpointId::DeclaredOutput(port)) {
+                        trunk_output_laterals
+                            .entry(owner)
+                            .or_default()
+                            .insert(lateral_projection(frame, pin.net_cell(PortRole::Output)));
+                    }
                 }
                 trunk_decks
                     .entry(owner)
@@ -998,16 +1201,81 @@ impl TopologyAwareSeedPlacer {
 
         let mut vertical_trunks = BTreeMap::new();
         if !trunk_decks.is_empty() {
-            let demand = i32::try_from(trunk_decks.len())
-                .ok()
-                .and_then(|count| count.checked_mul(ROW_GRID))
+            let mut endpoint_counts = BTreeMap::<DeckId, usize>::new();
+            for &(first, last) in trunk_decks.values() {
+                *endpoint_counts.entry(first).or_default() += 1;
+                if last != first {
+                    *endpoint_counts.entry(last).or_default() += 1;
+                }
+            }
+            let trunk_spans = trunk_decks
+                .values()
+                .map(|(first, last)| {
+                    Ok((
+                        decks[first].ground,
+                        decks[last]
+                            .max_y
+                            .checked_add(TRUNK_ROW_GUARD)
+                            .ok_or(SeedPlacementError::CoordinateOverflow)?,
+                    ))
+                })
+                .collect::<Result<Vec<_>, SeedPlacementError>>()?;
+            let one_dimensional_demand = trunk_band_demand(&trunk_spans, 1, ROW_GRID)
                 .ok_or(SeedPlacementError::CoordinateOverflow)?;
+            let one_dimensional_ceiling = full_window
+                .width()
+                .and_then(|width| width.checked_sub(2 * WINDOW_MARGIN + ROW_GRID + 1))
+                .unwrap_or(0);
+            if one_dimensional_demand > one_dimensional_ceiling && !grid_turnaround {
+                return Ok(FrameOutcome::BandTooNarrow {
+                    required: band,
+                    grid_turnaround: true,
+                });
+            }
+            let station_pairs = if one_dimensional_demand > one_dimensional_ceiling {
+                let hi = limit
+                    .and_then(|limit| limit.checked_sub(1))
+                    .ok_or(SeedPlacementError::NoDeckLayoutFits)?;
+                let lo = start;
+                if lo > hi {
+                    return Err(SeedPlacementError::NoDeckLayoutFits);
+                }
+                (lo..=hi)
+                    .step_by(TRUNK_GRID_FORWARD_PITCH as usize)
+                    .filter_map(|first| {
+                        first
+                            .checked_add(ROW_GRID)
+                            .filter(|second| *second <= hi)
+                            .map(|second| [first, second])
+                    })
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            if one_dimensional_demand > one_dimensional_ceiling && station_pairs.is_empty() {
+                return Err(SeedPlacementError::NoDeckLayoutFits);
+            }
+            let demand = trunk_band_demand(
+                &trunk_spans,
+                if station_pairs.is_empty() {
+                    1
+                } else {
+                    station_pairs.len()
+                },
+                if station_pairs.is_empty() {
+                    ROW_GRID
+                } else {
+                    TRUNK_GRID_LATERAL_PITCH
+                },
+            )
+            .ok_or(SeedPlacementError::CoordinateOverflow)?;
             if band < demand {
                 return Ok(FrameOutcome::BandTooNarrow {
                     required: demand.max(
-                        band.checked_add(ROW_GRID)
+                        band.checked_add(band_step)
                             .ok_or(SeedPlacementError::CoordinateOverflow)?,
                     ),
+                    grid_turnaround,
                 });
             }
 
@@ -1037,9 +1305,7 @@ impl TopologyAwareSeedPlacer {
             }
 
             let footprint = footprint.expect("trunks exist only for a complete footprint");
-            let origin_forward = project_horizontal(frame.origin.x, frame.origin.z, frame.forward);
-            let origin_lateral =
-                project_horizontal(frame.origin.x, frame.origin.z, frame.lateral);
+            let origin_lateral = project_horizontal(frame.origin.x, frame.origin.z, frame.lateral);
             let (absolute_min_forward, absolute_max_forward, _, _) =
                 footprint.projected(frame.forward, frame.lateral);
             let min_forward = absolute_min_forward
@@ -1057,7 +1323,9 @@ impl TopologyAwareSeedPlacer {
                         PhysicalEndpointId::DeclaredOutput(_) => PortRole::Output,
                         _ => return None,
                     };
-                    Some(crate::compile::planner::effective_tunnel(*pin, role, footprint))
+                    Some(crate::compile::planner::effective_tunnel(
+                        *pin, role, footprint,
+                    ))
                 })
                 .flatten()
                 .map(|cell| {
@@ -1072,41 +1340,130 @@ impl TopologyAwareSeedPlacer {
                     ))
                 })
                 .collect::<Result<Vec<_>, SeedPlacementError>>()?;
-            let mut used = BTreeSet::new();
-            for (owner, (first_deck, last_deck)) in trunk_decks {
+            let mut used = BTreeMap::<(i32, Option<[i32; 2]>), Vec<(i32, i32)>>::new();
+            // The pins one trunk feeds, as the inclusive lateral hull of
+            // their rows.
+            let output_hull = |owner: &PhysicalEndpointId| -> Option<(i32, i32)> {
+                let laterals = trunk_output_laterals.get(owner)?;
+                Some((
+                    laterals.iter().next().copied()?,
+                    laterals.iter().next_back().copied()?,
+                ))
+            };
+            // Deck zero's last real column, which an output-bound trunk has
+            // to land ahead of.  A deck with no column of its own leaves
+            // nothing to land ahead of, and every candidate ranks alike.
+            let last_column_opening = deck_last_column_openings.get(&DeckId(0)).copied();
+            let mut ordered = trunk_decks.into_iter().collect::<Vec<_>>();
+            // Trunks that feed a pinned output choose their row first and in
+            // their pins' own lateral order, so the rows they land on follow
+            // the pins instead of the order the decks happened to give them;
+            // every other trunk keeps the order it always had.
+            ordered.sort_by_key(|(owner, (first, last))| {
+                let hull = output_hull(owner);
+                (
+                    hull.is_none(),
+                    hull,
+                    decks[first].ground,
+                    decks[last].max_y,
+                    *owner,
+                )
+            });
+            for (owner, (first_deck, last_deck)) in ordered {
+                // A trunk the channel plan asked to land late gives up the
+                // early preference and ranks its stations by distance alone,
+                // exactly like a trunk that feeds no pinned output.  Nothing
+                // else about the trunk changes: it keeps the same candidate
+                // rows, the same band and the same guard against every other
+                // trunk it may share a row with.
+                let force_late = late_trunk_stations.contains(&owner);
+                let output_bound = trunk_output_laterals.contains_key(&owner) && !force_late;
                 let min_y = decks[&first_deck].ground;
                 let max_y = decks[&last_deck].max_y;
-                let lateral = (0..(band / ROW_GRID))
+                let pitch = if station_pairs.is_empty() {
+                    ROW_GRID
+                } else {
+                    TRUNK_GRID_LATERAL_PITCH
+                };
+                let laterals = (0..(band / pitch))
                     .filter_map(|index| {
                         band_lo
-                            .checked_add(1)?
-                            .checked_add(index.checked_mul(ROW_GRID)?)
+                            .checked_add(i32::from(station_pairs.is_empty()))?
+                            .checked_add(index.checked_mul(pitch)?)
                     })
-                    .filter(|centre| centre.checked_add(1).is_some_and(|high| high <= band_hi))
-                    .find(|centre| {
-                        !used.contains(centre)
+                    .filter(|centre| {
+                        centre
+                            .checked_add(i32::from(station_pairs.is_empty()))
+                            .is_some_and(|high| high <= band_hi)
+                    });
+                let forwards = if station_pairs.is_empty() {
+                    vec![None]
+                } else {
+                    station_pairs.iter().copied().map(Some).collect()
+                };
+                let station = laterals
+                    .flat_map(|lateral| {
+                        forwards
+                            .iter()
+                            .copied()
+                            .map(move |forward| (lateral, forward))
+                    })
+                    .filter(|&(centre, station_forwards)| {
+                        used.iter()
+                            .filter(|((other_centre, other_forwards), _)| {
+                                *other_forwards == station_forwards
+                                    && (*other_centre - centre).abs() < ROW_GRID
+                            })
+                            .all(|(_, intervals)| {
+                                intervals.iter().all(|&(lo, hi)| {
+                                    i64::from(max_y) + i64::from(TRUNK_ROW_GUARD) < i64::from(lo)
+                                        || i64::from(hi) + i64::from(TRUNK_ROW_GUARD)
+                                            < i64::from(min_y)
+                                })
+                            })
                             && !tunnels.iter().any(|&(forward, lateral, y)| {
-                                (min_forward..=max_forward).contains(&forward)
+                                let (corridor_min, corridor_max) = station_forwards
+                                    .map(|[first, last]| (first - 1, last + 1))
+                                    .unwrap_or((min_forward, max_forward));
+                                (corridor_min..=corridor_max).contains(&forward)
                                     && (centre - 1..=centre + 1).contains(&lateral)
                                     && (min_y..=max_y).contains(&y)
                             })
+                    })
+                    .min_by_key(|&(_, station_forwards)| {
+                        (
+                            trunk_station_side_penalty(
+                                station_forwards,
+                                output_bound,
+                                force_late,
+                                last_column_opening,
+                            ),
+                            trunk_station_cost(station_forwards, trunk_endpoint_hulls.get(&owner)),
+                        )
                     });
-                let Some(lateral) = lateral else {
+                let Some((lateral, station_forwards)) = station else {
                     return Ok(FrameOutcome::BandTooNarrow {
                         required: demand.max(
-                            band.checked_add(ROW_GRID)
+                            band.checked_add(band_step)
                                 .ok_or(SeedPlacementError::CoordinateOverflow)?,
                         ),
+                        grid_turnaround,
                     });
                 };
-                used.insert(lateral);
+                used.entry((lateral, station_forwards))
+                    .or_default()
+                    .push((min_y, max_y));
+                let (lane_min_forward, lane_max_forward) = station_forwards
+                    .map(|[first, last]| (first - 1, last + 1))
+                    .unwrap_or((min_forward, max_forward));
                 vertical_trunks.insert(
                     owner,
                     VerticalTrunkLane {
                         owner,
                         lateral,
-                        min_forward,
-                        max_forward,
+                        min_forward: lane_min_forward,
+                        max_forward: lane_max_forward,
+                        station_forwards,
                         first_deck,
                         last_deck,
                     },
@@ -1234,7 +1591,10 @@ impl TopologyAwareSeedPlacer {
                         .ok_or(SeedPlacementError::CoordinateOverflow)?,
                 };
                 let lateral = settle_row(wanted);
-                Ok((port, frame_to_world(frame, output_forward, lateral, frame.origin.y)))
+                Ok((
+                    port,
+                    frame_to_world(frame, output_forward, lateral, frame.origin.y),
+                ))
             })
             .collect::<Result<BTreeMap<_, _>, SeedPlacementError>>()?;
 
@@ -1258,6 +1618,7 @@ impl TopologyAwareSeedPlacer {
             fingerprint,
             frame,
             analysis: folded,
+            one_sided_inputs,
             window,
             io_footprint: footprint,
             decks,
@@ -1272,7 +1633,12 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
         &self,
         request: SeedPlacementRequest<'_>,
     ) -> Result<SeedPlacementPlan, SeedPlacementError> {
-        self.plan_with_widths(request, &BTreeMap::new())
+        self.plan_with_widths(
+            request,
+            &BTreeMap::new(),
+            &BTreeSet::new(),
+            &BTreeSet::new(),
+        )
     }
 
     fn plan_with_repairs(
@@ -1285,6 +1651,20 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
         // level-keyed minimum: a bounded repair's deck is a diagnostic, not
         // a second key the placer could widen independently.
         let mut minimum_widths = BTreeMap::<i64, i32>::new();
+        let split_before = repairs
+            .iter()
+            .filter_map(|repair| match repair {
+                LayoutRepair::SplitDeckBefore { level } => Some(*level),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
+        let late_trunk_stations = repairs
+            .iter()
+            .filter_map(|repair| match repair {
+                LayoutRepair::LateTrunkStation { source } => Some(*source),
+                _ => None,
+            })
+            .collect::<BTreeSet<_>>();
         for repair in repairs {
             let (level, width) = match *repair {
                 LayoutRepair::WidenChannel { level, width }
@@ -1296,7 +1676,12 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
                 .and_modify(|known| *known = (*known).max(width))
                 .or_insert(width);
         }
-        let mut plan = self.plan_with_widths(request, &minimum_widths)?;
+        let mut plan = self.plan_with_widths(
+            request,
+            &minimum_widths,
+            &split_before,
+            &late_trunk_stations,
+        )?;
         let repairs = repairs.iter().copied().collect::<BTreeSet<_>>();
         if repairs.is_empty() {
             return Ok(plan);
@@ -1332,9 +1717,12 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
                         )?;
                     }
                 }
-                // Both widening repairs were already consumed into
-                // `minimum_widths` above; neither moves an owner.
-                LayoutRepair::WidenChannel { .. } | LayoutRepair::WidenDeckChannel { .. } => {}
+                // These were all consumed into the arguments of
+                // `plan_with_widths` above; none of them moves an owner.
+                LayoutRepair::WidenChannel { .. }
+                | LayoutRepair::WidenDeckChannel { .. }
+                | LayoutRepair::SplitDeckBefore { .. }
+                | LayoutRepair::LateTrunkStation { .. } => {}
                 LayoutRepair::SeparateOwners {
                     source_owner,
                     sink_owner,
@@ -1474,9 +1862,78 @@ fn checked_step_many(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct DeckColumn {
     owner: InstanceId,
+    break_before: bool,
     lead: i32,
     cost: i32,
     close: i32,
+}
+
+fn deck_close(channel: i32, lanes: usize, _grid_turnaround: bool) -> i32 {
+    bounded_turnaround_allowance(lanes)
+        .max(channel - ENDPOINT_CELLS_PER_CHANNEL + FORWARD_MARGIN)
+        .saturating_sub(channel)
+}
+
+fn trunk_band_demand(
+    spans: &[(i32, i32)],
+    forward_slots: usize,
+    lateral_pitch: i32,
+) -> Option<i32> {
+    let rows = lane_count(spans).div_ceil(forward_slots.max(1));
+    i32::try_from(rows).ok()?.checked_mul(lateral_pitch)
+}
+
+fn trunk_station_cost(
+    station_forwards: Option<[i32; 2]>,
+    endpoint_hulls: Option<&BTreeMap<DeckId, (i32, i32)>>,
+) -> u64 {
+    let (Some(stations), Some(hulls)) = (station_forwards, endpoint_hulls) else {
+        return 0;
+    };
+    hulls.iter().fold(0_u64, |cost, (deck, &(lo, hi))| {
+        let station = stations[(deck.0 as usize) & 1];
+        let distance = if station < lo {
+            station.abs_diff(lo)
+        } else if station > hi {
+            station.abs_diff(hi)
+        } else {
+            0
+        };
+        cost.saturating_add(u64::from(distance))
+    }) / u64::try_from(TRUNK_GRID_FORWARD_PITCH).expect("positive trunk-grid pitch")
+}
+
+/// Whether a candidate station lands too late for the trunk offered it.
+///
+/// A trunk that feeds a pinned output has to arrive before deck zero's *last*
+/// real column.  Its source line then lies in the internal channel that runs
+/// up to that column -- a channel between two real columns, which a widening
+/// repair can still grow -- and the crossing rows carry it through that last
+/// column onto its pin's own row, so the channel that ends at the pins is a
+/// straight ground run.  A trunk landing past that column reorders inside the
+/// pinned channel instead, whose far edge is a pin: no repair can widen it.
+///
+/// The threshold is the last real column and not the first: landing ahead of
+/// the first one pushes every output trunk into the channel the input pins
+/// close, which is just as unwidenable from the other side.
+///
+/// `false` ranks first, so an early landing is the preferred one.  A trunk
+/// with no station pair has no early landing to prefer, and a trunk that
+/// feeds no pinned output keeps the ranking it always had.
+fn trunk_station_side_penalty(
+    station_forwards: Option<[i32; 2]>,
+    output_bound: bool,
+    force_late: bool,
+    last_column_opening: Option<i32>,
+) -> bool {
+    let (Some([low, high]), Some(opening)) = (station_forwards, last_column_opening) else {
+        return true;
+    };
+    if force_late {
+        low < opening
+    } else {
+        !(output_bound && high < opening)
+    }
 }
 
 /// One `DeckId` per ordered column: consecutive columns fill the deck they
@@ -1506,7 +1963,7 @@ fn pack_decks(columns: &[DeckColumn], capacity: i32) -> Result<Vec<DeckId>, Seed
     for column in columns {
         let cost = i64::from(column.cost);
         let close = i64::from(column.close);
-        if placed > 0 && lead + used + cost + close > capacity {
+        if placed > 0 && (column.break_before || lead + used + cost + close > capacity) {
             deck = deck
                 .checked_add(1)
                 .ok_or(SeedPlacementError::CoordinateOverflow)?;
@@ -1604,8 +2061,12 @@ fn floorplan_metrics(
         let max_lateral = lateral
             .checked_add(macro_bounds.max_lateral)
             .ok_or_else(overflow)?;
-        let min_y = ground.checked_add(macro_bounds.min_y).ok_or_else(overflow)?;
-        let max_y = ground.checked_add(macro_bounds.max_y).ok_or_else(overflow)?;
+        let min_y = ground
+            .checked_add(macro_bounds.min_y)
+            .ok_or_else(overflow)?;
+        let max_y = ground
+            .checked_add(macro_bounds.max_y)
+            .ok_or_else(overflow)?;
         union = Some(match union {
             None => (
                 min_forward,
@@ -2114,7 +2575,13 @@ fn confine_laterals(
 
 fn legalize_laterals(
     entries: &[(InstanceId, i32, MacroBounds)],
+    compact: bool,
 ) -> Result<BTreeMap<InstanceId, i32>, SeedPlacementError> {
+    let gap = if compact {
+        COMPACT_LATERAL_GAP
+    } else {
+        LATERAL_GAP
+    };
     let mut next_min_lateral: Option<i32> = None;
     let mut origins = BTreeMap::new();
     for &(instance, preferred, bounds) in entries {
@@ -2137,11 +2604,68 @@ fn legalize_laterals(
         next_min_lateral = Some(
             origin
                 .checked_add(bounds.max_lateral)
-                .and_then(|maximum| maximum.checked_add(LATERAL_GAP))
+                .and_then(|maximum| maximum.checked_add(gap))
                 .ok_or(SeedPlacementError::CoordinateOverflow)?,
         );
     }
     Ok(origins)
+}
+
+/// Every instance whose whole level can be laid out at
+/// [`COMPACT_LATERAL_GAP`] instead of [`LATERAL_GAP`].
+///
+/// A level qualifies only when every node standing on it is an ordinary
+/// macro -- a block is an opaque certified layout whose approaches this
+/// placer cannot read, so one block holds its level at the full gap -- and
+/// every one of those macros both has a bounded body the shared direction
+/// helper keeps on the rear and the single packed lateral side, and is fed
+/// by no more incoming connections than those two faces can take.
+pub(crate) fn compact_approach_instances(
+    graph: &InstanceGraph,
+    analysis: &SeedPlacementAnalysis,
+) -> BTreeSet<InstanceId> {
+    let mut incoming = BTreeMap::<InstanceId, usize>::new();
+    for assignment in &graph.assignments {
+        if let PhysicalSink::InstanceInput { instance, .. } = assignment.sink {
+            *incoming.entry(instance).or_default() += 1;
+        }
+    }
+    let ready = graph
+        .instances
+        .iter()
+        .filter(|instance| {
+            compact_approach_macro(instance, incoming.get(&instance.id).copied().unwrap_or(0))
+        })
+        .map(|instance| instance.id)
+        .collect::<BTreeSet<_>>();
+    let mut levels = BTreeMap::<u64, Vec<InstanceId>>::new();
+    for (&id, facts) in &analysis.nodes {
+        levels.entry(facts.forward_level).or_default().push(id);
+    }
+    levels
+        .into_values()
+        .filter(|members| members.iter().all(|id| ready.contains(id)))
+        .flatten()
+        .collect()
+}
+
+/// Whether one macro's own actual bounded geometry, and everything that
+/// arrives at it, fit the rear and one lateral side.
+fn compact_approach_macro(instance: &Instance, incoming: usize) -> bool {
+    incoming <= COMPACT_APPROACHES
+        && match &instance.expanded.topology.output {
+            // A junction whose contributors the shared helper folds onto two
+            // faces is exactly the junction `junction_envelope` measures as
+            // one cell out each way.
+            OutputSpec::Junction { contributors, .. } => contributors.len() <= COMPACT_APPROACHES,
+            OutputSpec::Primitive(_) => compact_one_torch(instance),
+        }
+}
+
+pub(crate) fn compact_one_torch(instance: &Instance) -> bool {
+    instance.expanded.topology.primitives.len() == 1
+        && instance.expanded.topology.primitives[0].primitive == Primitive::Torch
+        && instance.expanded.topology.connections.len() <= COMPACT_APPROACHES
 }
 
 fn net_intervals(graph: &InstanceGraph, analysis: &SeedPlacementAnalysis) -> Vec<NetInterval> {
@@ -2396,7 +2920,158 @@ fn primitive_positions(instance: &Instance) -> BTreeMap<PrimitiveId, Position> {
         .collect()
 }
 
-fn macro_envelope(instance: &Instance) -> Result<MacroEnvelope, SeedPlacementError> {
+/// The world direction each junction contributor arrives on, in declared
+/// contributor order.
+///
+/// `geometry::input_directions` offers the two lateral faces first and the
+/// rear last, which spreads a two-contributor junction across both of its
+/// sides.  That costs a full [`LATERAL_GAP`] on each side, so a bounded
+/// junction with at most [`COMPACT_APPROACHES`] contributors instead keeps
+/// them on the rear and the single lateral side the level packs against --
+/// the side the frame's lateral axis runs away from, which is the side
+/// every other compact macro is approached from too.  Three contributors
+/// need all three faces and keep the legacy order, and an unbounded layout
+/// keeps it whatever the arity.
+///
+/// One function, because the envelope the placer reserves and the body the
+/// seed builds have to name the same faces: this is the only place either
+/// one asks.
+pub(crate) fn junction_contributor_directions(
+    facing: CellFacing,
+    contributors: usize,
+    bounded: bool,
+) -> Vec<Facing> {
+    let directions = geometry::input_directions(facing);
+    if !bounded || contributors > COMPACT_APPROACHES {
+        return directions.to_vec();
+    }
+    // `choose_instance_facing` keeps a junction's output on the frame's
+    // forward axis, so the packed side is its counter-clockwise side.
+    let forward = facing.direction();
+    let approach = clockwise(forward).opposite();
+    directions
+        .into_iter()
+        .filter(|&direction| direction == forward.opposite() || direction == approach)
+        .collect()
+}
+
+/// The cell facing whose repeater drives the cell in `direction`, or `None`
+/// for a direction no horizontal variant fronts onto.
+pub(crate) fn repeater_facing_with_front(direction: Facing) -> Option<CellFacing> {
+    (0..4u8).filter_map(CellFacing::from_index).find(|facing| {
+        physical::variants(Primitive::Repeater)[usize::from(facing.index())]
+            .port(PortKind::RepeaterFront)
+            .direction
+            == direction
+    })
+}
+
+/// The envelope of the body `place_junction_instance` actually builds: the
+/// junction dust, the stone that supports it, and -- at exactly the faces
+/// [`junction_contributor_directions`] hands that builder -- a landing's
+/// terminal cell or an isolating repeater's own variant blocks and ports.
+///
+/// The generic envelope cannot see any of that.  It measures
+/// `topology.primitives` on `primitive_positions`' four-cell lane grid,
+/// which for a junction is neither where the repeaters stand nor everything
+/// that is placed: a bare merge has no primitives at all and measures as one
+/// cell with nothing under it.
+fn junction_envelope(
+    instance: &Instance,
+    contributors: &[ContributorSpec],
+) -> Result<MacroEnvelope, SeedPlacementError> {
+    let mut by_facing = [HorizontalBounds::default(); 4];
+    let mut vertical = None::<(i32, i32)>;
+    for facing in [
+        CellFacing::NORTH,
+        CellFacing::EAST,
+        CellFacing::SOUTH,
+        CellFacing::WEST,
+    ] {
+        // The junction dust and the stone it stands on, before any
+        // contributor: they are the whole of a junction with none.
+        let mut cells = vec![Position::new(0, 0, 0), Position::new(0, -1, 0)];
+        let directions = junction_contributor_directions(facing, contributors.len(), true);
+        for (index, contributor) in contributors.iter().enumerate() {
+            // More contributors than a cell has faces is a topology this
+            // placer cannot stand up, not a reason to index off the end.
+            let direction =
+                *directions
+                    .get(index)
+                    .ok_or(SeedPlacementError::UnresolvedTopology {
+                        instance: instance.id,
+                    })?;
+            let at = Position::new(0, 0, 0).offset(direction);
+            match contributor {
+                // A landing is a route terminal, not hardware: the one cell
+                // the router lands its dust in, supported by the junction.
+                ContributorSpec::Landing(_) => cells.push(at),
+                ContributorSpec::Primitive(_) => {
+                    let repeater = repeater_facing_with_front(direction.opposite()).ok_or(
+                        SeedPlacementError::MissingPhysicalVariant {
+                            primitive: Primitive::Repeater,
+                        },
+                    )?;
+                    let variants = physical::variants(Primitive::Repeater);
+                    if variants.is_empty() {
+                        return Err(SeedPlacementError::MissingPhysicalVariant {
+                            primitive: Primitive::Repeater,
+                        });
+                    }
+                    let variant = &variants[usize::from(repeater.index())];
+                    cells.extend(
+                        variant
+                            .blocks
+                            .iter()
+                            .map(|block| block.position)
+                            .chain(variant.ports.iter().map(|port| port.position))
+                            .map(|point| {
+                                Position::new(at.x + point.x, at.y + point.y, at.z + point.z)
+                            }),
+                    );
+                }
+            }
+        }
+        let mut bounds = None::<HorizontalBounds>;
+        for cell in cells {
+            vertical = Some(match vertical {
+                Some((min, max)) => (min.min(cell.y), max.max(cell.y)),
+                None => (cell.y, cell.y),
+            });
+            bounds = Some(match bounds {
+                Some(bounds) => HorizontalBounds {
+                    min_x: bounds.min_x.min(cell.x),
+                    max_x: bounds.max_x.max(cell.x),
+                    min_z: bounds.min_z.min(cell.z),
+                    max_z: bounds.max_z.max(cell.z),
+                },
+                None => HorizontalBounds {
+                    min_x: cell.x,
+                    max_x: cell.x,
+                    min_z: cell.z,
+                    max_z: cell.z,
+                },
+            });
+        }
+        by_facing[usize::from(facing.index())] = bounds.unwrap_or_default();
+    }
+    let (min_y, max_y) = vertical.unwrap_or((0, 0));
+    Ok(MacroEnvelope {
+        by_facing,
+        min_y,
+        max_y,
+    })
+}
+
+fn macro_envelope(instance: &Instance, bounded: bool) -> Result<MacroEnvelope, SeedPlacementError> {
+    // Only a bounded layout measures a junction for what it is: an
+    // unbounded one keeps the lane-grid envelope it has always reserved, so
+    // its poses and fingerprints do not move.
+    if bounded {
+        if let OutputSpec::Junction { contributors, .. } = &instance.expanded.topology.output {
+            return junction_envelope(instance, contributors);
+        }
+    }
     let positions = primitive_positions(instance);
     let mut by_facing = [HorizontalBounds::default(); 4];
     let mut vertical = None::<(i32, i32)>;
@@ -3376,10 +4051,13 @@ mod tests {
                 TopologyAwareSeedPlacer.plan_in_frame(
                     request,
                     &BTreeMap::new(),
+                    &BTreeSet::new(),
+                    &BTreeSet::new(),
                     frame,
                     false,
                     footprint,
                     0,
+                    false,
                 ),
                 Err(SeedPlacementError::NoDeckLayoutFits),
                 "a turned frame starts beyond the pin on its own far wall"
@@ -3396,6 +4074,7 @@ mod tests {
     use crate::compile::fragment_synth::instance_graph::{
         DuplicateRequest, InstanceGraph, LogicalSignalId, PhysicalDriver, PhysicalSink,
     };
+    use crate::compile::fragment_synth::topology::ContributorSpec;
     use crate::compile::geometry::{Anchor, CellFacing};
     use crate::compile::planner::{PortPin, PortRole};
     use crate::compile::topology::{EmbeddingHint, Primitive, TemplateNode};
@@ -4265,6 +4944,17 @@ mod tests {
             plan.instances[&InstanceId(0)].preferred_origin.x,
             plan.instances[&InstanceId(1)].preferred_origin.x
         );
+        assert_eq!(
+            (plan.instances[&InstanceId(0)].preferred_origin.z
+                - plan.instances[&InstanceId(1)].preferred_origin.z)
+                .abs(),
+            8,
+            "the legacy unbounded one-torch pitch stays compact",
+        );
+        assert_eq!(
+            plan.one_sided_inputs,
+            BTreeSet::from([InstanceId(0), InstanceId(1)])
+        );
     }
 
     #[test]
@@ -4295,8 +4985,8 @@ mod tests {
             &[],
         )
         .unwrap();
-        let torch = super::macro_envelope(&torch_graph.instances[0]).unwrap();
-        let repeaters = super::macro_envelope(&repeater_graph.instances[0]).unwrap();
+        let torch = super::macro_envelope(&torch_graph.instances[0], false).unwrap();
+        let repeaters = super::macro_envelope(&repeater_graph.instances[0], false).unwrap();
         let torch_bounds = torch.oriented_bounds(CellFacing::NORTH, Facing::East);
         let repeater_bounds = repeaters.oriented_bounds(CellFacing::SOUTH, Facing::East);
 
@@ -4323,10 +5013,13 @@ mod tests {
             }
         );
 
-        let origins = legalize_laterals(&[
-            (InstanceId(0), 0, torch_bounds),
-            (InstanceId(1), 0, repeater_bounds),
-        ])
+        let origins = legalize_laterals(
+            &[
+                (InstanceId(0), 0, torch_bounds),
+                (InstanceId(1), 0, repeater_bounds),
+            ],
+            false,
+        )
         .unwrap();
 
         assert_eq!(origins[&InstanceId(0)], 0);
@@ -4344,6 +5037,191 @@ mod tests {
             origins[&InstanceId(1)],
         );
         assert!(torch_cells.is_disjoint(&repeater_cells));
+    }
+
+    /// Exactly the cells `place_junction_instance` claims for a junction
+    /// whose dust sits at the origin: the dust, the stone under it, and per
+    /// contributor either the landing terminal cell or the whole isolating
+    /// repeater, on the face the shared direction helper hands the seed.
+    fn junction_body_cells(
+        contributors: &[ContributorSpec],
+        facing: CellFacing,
+    ) -> BTreeSet<(i32, i32, i32)> {
+        use super::*;
+        let mut cells = BTreeSet::from([(0, 0, 0), (0, -1, 0)]);
+        let directions = junction_contributor_directions(facing, contributors.len(), true);
+        for (index, contributor) in contributors.iter().enumerate() {
+            let direction = directions[index];
+            let at = Position::new(0, 0, 0).offset(direction);
+            match contributor {
+                ContributorSpec::Landing(_) => {
+                    cells.insert((at.x, at.y, at.z));
+                }
+                ContributorSpec::Primitive(_) => {
+                    let repeater = repeater_facing_with_front(direction.opposite())
+                        .expect("a horizontal direction has a repeater facing");
+                    let variant =
+                        &physical::variants(Primitive::Repeater)[usize::from(repeater.index())];
+                    cells.extend(
+                        variant
+                            .blocks
+                            .iter()
+                            .map(|block| block.position)
+                            .chain(variant.ports.iter().map(|port| port.position))
+                            .map(|point| (at.x + point.x, at.y + point.y, at.z + point.z)),
+                    );
+                }
+            }
+        }
+        cells
+    }
+
+    fn two_input_merge_graph(isolation_mask: u64) -> InstanceGraph {
+        use super::*;
+        InstanceGraph::with_variants(
+            &Netlist {
+                inputs: vec!["a".into(), "b".into()],
+                outputs: vec!["y".into()],
+                gates: vec![Gate::merge("y", &["a", "b"])],
+            },
+            &Library::default_library(),
+            &BTreeMap::from([(
+                InstanceId(0),
+                ImplementationKey::Merge {
+                    isolation_mask: InputMask::new(isolation_mask),
+                },
+            )]),
+            &[],
+        )
+        .unwrap()
+    }
+
+    /// The one thing the envelope and the seed's junction builder have to
+    /// agree on.  A bounded pair of contributors folds onto the rear and the
+    /// single lateral side the level packs against -- never onto both
+    /// laterals, which is what costs a full gap on each side -- while three
+    /// contributors, and every unbounded junction whatever its arity, keep
+    /// the legacy `input_directions` order they have always had.
+    #[test]
+    fn contributor_faces_fold_only_for_a_bounded_pair() {
+        use super::*;
+        for facing in [
+            CellFacing::NORTH,
+            CellFacing::EAST,
+            CellFacing::SOUTH,
+            CellFacing::WEST,
+        ] {
+            let legacy = geometry::input_directions(facing).to_vec();
+            let forward = facing.direction();
+            let packed = clockwise(forward).opposite();
+
+            assert_eq!(
+                junction_contributor_directions(facing, 2, true),
+                legacy
+                    .iter()
+                    .copied()
+                    .filter(|&direction| direction == packed || direction == forward.opposite())
+                    .collect::<Vec<_>>(),
+                "a bounded pair keeps the declared order of the two faces it folds onto",
+            );
+            assert_eq!(
+                junction_contributor_directions(facing, 2, true),
+                vec![packed, forward.opposite()],
+            );
+            for contributors in 0..=3 {
+                assert_eq!(
+                    junction_contributor_directions(facing, contributors, false),
+                    legacy,
+                    "an unbounded junction never moves a contributor",
+                );
+            }
+            assert_eq!(junction_contributor_directions(facing, 3, true), legacy);
+        }
+    }
+
+    /// A junction is not built from `primitive_positions`' four-cell lane
+    /// grid.  `place_junction_instance` stands a dust cell on a stone
+    /// support and hangs every contributor off the face
+    /// `junction_contributor_directions` names -- a bare merge has no
+    /// primitives at all and would otherwise measure as a single cell with
+    /// nothing under it.  A bounded plan reserves the envelope and then
+    /// refuses anything that escapes it, so the envelope has to contain
+    /// that body: for the bare merge (two landings), the mixed one (a
+    /// repeater and a landing) and the fully isolated one (two repeaters).
+    #[test]
+    fn bounded_junction_envelopes_contain_the_body_the_seed_builds() {
+        use super::*;
+        for mask in [0b00, 0b01, 0b11] {
+            let graph = two_input_merge_graph(mask);
+            let instance = &graph.instances[0];
+            let OutputSpec::Junction { contributors, .. } = &instance.expanded.topology.output
+            else {
+                panic!("a merge implementation outputs a junction");
+            };
+            let envelope = macro_envelope(instance, true).unwrap();
+
+            // A junction's output leaves along its cell facing, so the only
+            // frame that ever selects a facing is the one pointing that way.
+            for facing in [
+                CellFacing::NORTH,
+                CellFacing::EAST,
+                CellFacing::SOUTH,
+                CellFacing::WEST,
+            ] {
+                let forward = facing.direction();
+                let bounds = envelope.oriented_bounds(facing, forward);
+                for cell in junction_body_cells(contributors, facing) {
+                    let (x, y, z) = cell;
+                    let along = project_horizontal(x, z, forward);
+                    let across = project_horizontal(x, z, clockwise(forward));
+                    assert!(
+                        (bounds.min_forward..=bounds.max_forward).contains(&along)
+                            && (bounds.min_lateral..=bounds.max_lateral).contains(&across)
+                            && (bounds.min_y..=bounds.max_y).contains(&y),
+                        "mask {mask:#04b} facing {facing:?}: cell {cell:?} at forward {along}, lateral {across} escapes {bounds:?}",
+                    );
+                }
+            }
+
+            // The east-facing literal: the dust at the origin, the stone
+            // below it, and two contributors one cell out on the rear (west)
+            // and on the lateral side the level packs against (north).
+            assert_eq!(
+                envelope.oriented_bounds(CellFacing::EAST, Facing::East),
+                MacroBounds {
+                    min_forward: -1,
+                    max_forward: 0,
+                    min_lateral: -1,
+                    max_lateral: 0,
+                    min_y: -1,
+                    max_y: 0,
+                },
+                "mask {mask:#04b}",
+            );
+        }
+    }
+
+    #[test]
+    fn compact_one_torch_rows_use_eight_cell_pitch() {
+        use super::*;
+        let one_cell = MacroBounds::default();
+        let entries = [
+            (InstanceId(0), 0, one_cell),
+            (InstanceId(1), 0, one_cell),
+            (InstanceId(2), 0, one_cell),
+        ];
+
+        let compact = legalize_laterals(&entries, true).unwrap();
+        assert_eq!(
+            compact.values().copied().collect::<Vec<_>>(),
+            vec![0, 8, 16]
+        );
+
+        let ordinary = legalize_laterals(&entries, false).unwrap();
+        assert_eq!(
+            ordinary.values().copied().collect::<Vec<_>>(),
+            vec![0, 12, 24]
+        );
     }
 
     /// A macro is a box, not a rectangle: the deck it stands on has to know
@@ -4382,7 +5260,7 @@ mod tests {
         .unwrap();
 
         // `TORCH_*_BLOCKS` and `TORCH_*_PORTS` put every cell on y = 0.
-        let torch = macro_envelope(&torch_graph.instances[0]).unwrap();
+        let torch = macro_envelope(&torch_graph.instances[0], false).unwrap();
         assert_eq!((torch.min_y, torch.max_y), (0, 0));
         assert_eq!(
             torch.oriented_bounds(CellFacing::NORTH, Facing::East),
@@ -4404,7 +5282,7 @@ mod tests {
 
         // `REPEATER_*_BLOCKS` carry their solid support at `DOWN`, so the
         // macro reaches one row below the row its diode sits on.
-        let repeaters = macro_envelope(&repeater_graph.instances[0]).unwrap();
+        let repeaters = macro_envelope(&repeater_graph.instances[0], false).unwrap();
         assert_eq!((repeaters.min_y, repeaters.max_y), (-1, 0));
         let repeater_bounds = repeaters.oriented_bounds(CellFacing::SOUTH, Facing::East);
         assert_eq!((repeater_bounds.min_y, repeater_bounds.max_y), (-1, 0));
@@ -4436,6 +5314,7 @@ mod tests {
         use super::*;
         let col = |owner, lead, cost| DeckColumn {
             owner: InstanceId(owner),
+            break_before: false,
             lead,
             cost,
             close: 0,
@@ -4508,6 +5387,278 @@ mod tests {
         );
     }
 
+    /// The pack weighs an upper deck against the very cells the placer then
+    /// spends on it.  A deck above the base one restarts the cursor at the
+    /// projected forward start, so the channel behind its first column is
+    /// never materialised there: charging it refuses boards the placer would
+    /// fill, and the band retry that answers that refusal only grows, since
+    /// no band ever makes a phantom channel smaller.
+    ///
+    /// This board is exactly one column plus its turnaround wide -- the pack
+    /// sees a cost of 12 and a close of 6 against a capacity of 18 -- so each
+    /// column fits alone on a deck of its own unless the 11-cell channel
+    /// before it is charged on top of that.
+    #[test]
+    fn upper_decks_are_weighed_against_the_cursor_they_restart() {
+        use super::*;
+        let (graph, analysis, facts, mut pins) = folded_deck_chain_fixture(4);
+        pins.insert(
+            PhysicalEndpointId::DeclaredOutput(PortId(0)),
+            pin(
+                Anchor {
+                    x: 42,
+                    y: 1,
+                    z: 200,
+                },
+                Facing::East,
+            ),
+        );
+        let request = SeedPlacementRequest {
+            graph: &graph,
+            analysis: &analysis,
+            pins: &pins,
+            block_facts: &facts,
+        };
+        let frame = PlacementFrame {
+            forward: Facing::East,
+            lateral: Facing::South,
+            origin: pin(Anchor { x: 10, y: 1, z: 20 }, Facing::East).net_cell(PortRole::Input),
+        };
+        let mut band = 0;
+        let mut grid_turnaround = false;
+        let mut rounds = 0;
+        let plan = loop {
+            rounds += 1;
+            assert!(
+                rounds <= 8,
+                "the band only grows while the pack refuses a deck the placer would fill",
+            );
+            match TopologyAwareSeedPlacer
+                .plan_in_frame(
+                    request,
+                    &BTreeMap::new(),
+                    &BTreeSet::new(),
+                    &BTreeSet::new(),
+                    frame,
+                    true,
+                    io_footprint(request),
+                    band,
+                    grid_turnaround,
+                )
+                .expect("the direct frame is valid")
+            {
+                FrameOutcome::Placed(plan) => break plan,
+                FrameOutcome::BandTooNarrow {
+                    required,
+                    grid_turnaround: required_turnaround,
+                } => {
+                    band = required;
+                    grid_turnaround = required_turnaround;
+                }
+                FrameOutcome::NoFit => panic!("the pinned board holds one column per deck"),
+            }
+        };
+
+        assert!(
+            plan.decks.len() > 1,
+            "a board one column wide folds this chain onto decks",
+        );
+        // `cursor = start` on every deck transition: the first column of
+        // each deck stands at the one projected forward start, which is
+        // exactly the capacity the pack must have weighed it against.
+        let mut starts = BTreeMap::<DeckId, i32>::new();
+        for (id, pose) in &plan.instances {
+            starts
+                .entry(plan.analysis.nodes[id].deck)
+                .and_modify(|start| *start = (*start).min(pose.preferred_origin.x))
+                .or_insert(pose.preferred_origin.x);
+        }
+        assert_eq!(
+            starts.values().copied().collect::<BTreeSet<_>>().len(),
+            1,
+            "no deck begins behind a channel of its own: {starts:?}",
+        );
+    }
+
+    #[test]
+    fn deck_close_only_reserves_the_tail_after_the_paid_channel() {
+        use super::*;
+        let derived = channel_width(1) + ENDPOINT_CELLS_PER_CHANNEL;
+        assert_eq!(
+            deck_close(derived, 1, false),
+            bounded_turnaround_allowance(1) - derived
+        );
+
+        assert_eq!(
+            deck_close(ROUTING_CHANNEL, 4, true),
+            bounded_turnaround_allowance(4) - ROUTING_CHANNEL,
+            "an overlapping station grid adds no separate tail"
+        );
+
+        let repaired = 60;
+        assert_eq!(
+            deck_close(repaired, 2, false),
+            FORWARD_MARGIN - ENDPOINT_CELLS_PER_CHANNEL,
+            "a widened channel already paid for its own free cells"
+        );
+    }
+
+    #[test]
+    fn overlapping_trunk_grid_does_not_change_a_wide_channel_tail() {
+        use super::*;
+        let wide = channel_width(6) + ENDPOINT_CELLS_PER_CHANNEL;
+        assert_eq!(deck_close(wide, 6, true), deck_close(wide, 6, false));
+    }
+
+    /// A bounded channel is the derived one: its free cells must still carry
+    /// every lane crossing it.  `ROUTING_CHANNEL` only scores facings before
+    /// those lanes are known, and from three lanes up it is narrower than the
+    /// free span they need, so it is no upper bound on a real channel.
+    #[test]
+    fn bounded_channels_keep_the_free_span_their_lanes_need() {
+        use super::*;
+        use crate::compile::fragment_synth::channel_plan::channel_free_span;
+        let needed = |lanes| channel_free_span(lanes) + ENDPOINT_CELLS_PER_CHANNEL + 1;
+        for lanes in 1..=12 {
+            assert!(
+                channel_width(lanes) + ENDPOINT_CELLS_PER_CHANNEL >= needed(lanes),
+                "the derived width for {lanes} lanes is short of {}",
+                needed(lanes)
+            );
+            assert_eq!(
+                ROUTING_CHANNEL >= needed(lanes),
+                lanes < 3,
+                "a nominal facing depth is no cap for a {lanes}-lane channel"
+            );
+        }
+
+        // Three level-0 macros fan into one level-1 macro, so three trunks
+        // cross the one interior channel of this bounded board.
+        let graph = InstanceGraph::one_to_one(
+            &Netlist {
+                inputs: vec!["a".into(), "b".into(), "c".into()],
+                outputs: vec!["y".into()],
+                gates: vec![
+                    nor("m0", &["a"]),
+                    nor("m1", &["b"]),
+                    nor("m2", &["c"]),
+                    nor("y", &["m0", "m1", "m2"]),
+                ],
+            },
+            &Library::default_library(),
+        )
+        .unwrap();
+        let analysis = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
+        let facts = BTreeMap::new();
+        let pins = BTreeMap::from([
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(0)),
+                pin(Anchor { x: 10, y: 1, z: 20 }, Facing::East),
+            ),
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(1)),
+                pin(Anchor { x: 10, y: 1, z: 40 }, Facing::East),
+            ),
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(2)),
+                pin(Anchor { x: 10, y: 1, z: 60 }, Facing::East),
+            ),
+            (
+                PhysicalEndpointId::DeclaredOutput(PortId(0)),
+                pin(
+                    Anchor {
+                        x: 120,
+                        y: 1,
+                        z: 40,
+                    },
+                    Facing::East,
+                ),
+            ),
+        ]);
+        let plan = TopologyAwareSeedPlacer
+            .plan(SeedPlacementRequest {
+                graph: &graph,
+                analysis: &analysis,
+                pins: &pins,
+                block_facts: &facts,
+            })
+            .expect("a complete pin set bounds this board");
+        assert!(plan.io_footprint.is_some(), "the pin set is complete");
+        assert_eq!(plan.frame.forward, Facing::East, "forward is the x axis");
+
+        // The free cells between the two columns are the channel the three
+        // trunks cross.
+        let cells = |id: &InstanceId| {
+            let instance = graph
+                .instances
+                .iter()
+                .find(|instance| instance.id == *id)
+                .expect("the plan places this graph's instances");
+            let pose = plan.instances[id];
+            let bounds = macro_envelope(instance, true)
+                .expect("a torch has a physical variant")
+                .oriented_bounds(pose.facing, plan.frame.forward);
+            (
+                pose.preferred_origin.x + bounds.min_forward,
+                pose.preferred_origin.x + bounds.max_forward,
+            )
+        };
+        let levels = |level: u64| {
+            plan.analysis
+                .nodes
+                .iter()
+                .filter(move |(_, facts)| facts.forward_level == level)
+                .map(|(id, _)| cells(id))
+        };
+        let column_end = levels(0).map(|(_, end)| end).max().expect("a first level");
+        let next_start = levels(1)
+            .map(|(start, _)| start)
+            .min()
+            .expect("a second level");
+        assert!(
+            next_start - column_end - 1 >= needed(3),
+            "the interior channel holds {} free cells, short of the {} three lanes need",
+            next_start - column_end - 1,
+            needed(3)
+        );
+    }
+
+    #[test]
+    fn packed_column_cost_matches_the_cursor_step() {
+        use super::*;
+        let bounds = MacroBounds {
+            min_forward: -1,
+            max_forward: 3,
+            min_lateral: 0,
+            max_lateral: 0,
+            min_y: 0,
+            max_y: 0,
+        };
+        let channel = channel_width(6) + ENDPOINT_CELLS_PER_CHANNEL;
+        let cursor = 100;
+        let column = cursor - bounds.min_forward;
+        let next = column + bounds.max_forward + channel;
+        assert_eq!(bounds.forward_span() - 1 + channel, next - cursor);
+    }
+
+    #[test]
+    fn trunk_grid_uses_forward_slots_before_growing_the_band() {
+        let spans = vec![(0, 10); 30];
+        assert_eq!(
+            super::trunk_band_demand(&spans, 1, super::ROW_GRID),
+            Some(120)
+        );
+        assert_eq!(
+            super::trunk_band_demand(&spans, 5, super::TRUNK_GRID_LATERAL_PITCH),
+            Some(12)
+        );
+        let overflow = vec![(0, 10); 31];
+        assert_eq!(
+            super::trunk_band_demand(&overflow, 5, super::TRUNK_GRID_LATERAL_PITCH),
+            Some(14)
+        );
+    }
+
     /// The real placer on a board too short for its own chain: the levels
     /// that fit stay on the base deck and the one that does not opens the
     /// deck above, at a ground derived from the macros' own height.
@@ -4553,7 +5704,14 @@ mod tests {
             ),
             (
                 PhysicalEndpointId::DeclaredOutput(PortId(0)),
-                pin(Anchor { x: 72, y: 1, z: output_z }, Facing::East),
+                pin(
+                    Anchor {
+                        x: 72,
+                        y: 1,
+                        z: output_z,
+                    },
+                    Facing::East,
+                ),
             ),
         ]);
         if block_first_lane {
@@ -4567,6 +5725,59 @@ mod tests {
             );
         }
         (graph, analysis, facts, pins)
+    }
+
+    fn folded_deck_chain_fixture(
+        gates: usize,
+    ) -> (
+        InstanceGraph,
+        SeedPlacementAnalysis,
+        BTreeMap<InstanceId, BlockFacts>,
+        BTreeMap<PhysicalEndpointId, PortPin>,
+    ) {
+        use super::*;
+        let mut chain = Vec::with_capacity(gates);
+        for index in 0..gates {
+            let output = if index + 1 == gates {
+                "y".to_string()
+            } else {
+                format!("m{index}")
+            };
+            let input = if index == 0 {
+                "a".to_string()
+            } else {
+                format!("m{}", index - 1)
+            };
+            chain.push(nor(&output, &[&input]));
+        }
+        let graph = InstanceGraph::one_to_one(
+            &Netlist {
+                inputs: vec!["a".into()],
+                outputs: vec!["y".into()],
+                gates: chain,
+            },
+            &Library::default_library(),
+        )
+        .unwrap();
+        let analysis = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
+        let pins = BTreeMap::from([
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(0)),
+                pin(Anchor { x: 10, y: 1, z: 20 }, Facing::East),
+            ),
+            (
+                PhysicalEndpointId::DeclaredOutput(PortId(0)),
+                pin(
+                    Anchor {
+                        x: 72,
+                        y: 1,
+                        z: 200,
+                    },
+                    Facing::East,
+                ),
+            ),
+        ]);
+        (graph, analysis, BTreeMap::new(), pins)
     }
 
     fn folded_two_deck_plan() -> super::SeedPlacementPlan {
@@ -4595,14 +5806,31 @@ mod tests {
         let footprint = io_footprint(request);
         let mut bands = Vec::new();
         let mut band = 0;
+        let mut grid_turnaround = false;
         let plan = loop {
             bands.push(band);
             match TopologyAwareSeedPlacer
-                .plan_in_frame(request, &BTreeMap::new(), frame, true, footprint, band)
+                .plan_in_frame(
+                    request,
+                    &BTreeMap::new(),
+                    &BTreeSet::new(),
+                    &BTreeSet::new(),
+                    frame,
+                    true,
+                    footprint,
+                    band,
+                    grid_turnaround,
+                )
                 .expect("the direct frame is valid")
             {
                 FrameOutcome::Placed(plan) => break plan,
-                FrameOutcome::BandTooNarrow { required } => band = required,
+                FrameOutcome::BandTooNarrow {
+                    required,
+                    grid_turnaround: required_turnaround,
+                } => {
+                    band = required;
+                    grid_turnaround = required_turnaround;
+                }
                 FrameOutcome::NoFit => panic!("the canonical direct frame fits"),
             }
         };
@@ -4652,10 +5880,13 @@ mod tests {
             .plan_in_frame(
                 request,
                 &BTreeMap::new(),
+                &BTreeSet::new(),
+                &BTreeSet::new(),
                 frame,
                 true,
                 io_footprint(request),
                 12,
+                false,
             )
             .expect("the widened band fits")
         else {
@@ -4687,6 +5918,120 @@ mod tests {
         );
     }
 
+    #[test]
+    fn vertical_trunks_reuse_rows_when_their_deck_spans_do_not_overlap() {
+        use super::*;
+        let (graph, analysis, facts, pins) = folded_deck_chain_fixture(10);
+        let request = SeedPlacementRequest {
+            graph: &graph,
+            analysis: &analysis,
+            pins: &pins,
+            block_facts: &facts,
+        };
+        let frame = PlacementFrame {
+            forward: Facing::East,
+            lateral: Facing::South,
+            origin: pin(Anchor { x: 10, y: 1, z: 20 }, Facing::East).net_cell(PortRole::Input),
+        };
+        let FrameOutcome::Placed(plan) = TopologyAwareSeedPlacer
+            .plan_in_frame(
+                request,
+                &BTreeMap::new(),
+                &BTreeSet::new(),
+                &BTreeSet::new(),
+                frame,
+                true,
+                io_footprint(request),
+                40,
+                false,
+            )
+            .expect("the direct frame is valid")
+        else {
+            panic!("the wide board has room to expose vertical-row reuse");
+        };
+        let lanes = plan.vertical_trunks.values().collect::<Vec<_>>();
+        let rows = lanes
+            .iter()
+            .map(|lane| lane.lateral)
+            .collect::<BTreeSet<_>>();
+
+        assert!(
+            lanes.len() > rows.len(),
+            "at least two height-disjoint trunks must share a row: decks={}, lanes={lanes:?}",
+            plan.decks.len()
+        );
+        for (index, first) in lanes.iter().enumerate() {
+            for second in lanes.iter().skip(index + 1) {
+                if (first.lateral - second.lateral).abs() > 3 {
+                    continue;
+                }
+                let first_y = (
+                    plan.decks[&first.first_deck].ground,
+                    plan.decks[&first.last_deck].max_y,
+                );
+                let second_y = (
+                    plan.decks[&second.first_deck].ground,
+                    plan.decks[&second.last_deck].max_y,
+                );
+                assert!(first_y.1 + 2 < second_y.0 || second_y.1 + 2 < first_y.0);
+            }
+        }
+    }
+
+    #[test]
+    fn trunk_station_cost_follows_endpoint_hulls() {
+        use super::{trunk_station_cost, DeckId};
+
+        let hulls = BTreeMap::from([(DeckId(0), (78, 82)), (DeckId(1), (82, 86))]);
+
+        assert!(
+            trunk_station_cost(Some([78, 82]), Some(&hulls))
+                < trunk_station_cost(Some([14, 18]), Some(&hulls))
+        );
+        assert_eq!(trunk_station_cost(None, Some(&hulls)), 0);
+    }
+
+    /// Deck zero's last real column opens at 49 here, and the trunk grid
+    /// offers station pairs on both sides of it.  The cost above cannot tell
+    /// those two sides apart on its own -- it only measures the distance to
+    /// the trunk's own endpoint hulls -- so an output-bound trunk was free to
+    /// land past the column, where its source line falls into the one channel
+    /// that ends at the pins and can never be widened.
+    #[test]
+    fn output_bound_trunks_rank_a_station_before_the_last_column_first() {
+        use super::{trunk_station_cost, trunk_station_side_penalty, DeckId};
+
+        let opening = Some(49);
+        let early = Some([37, 41]);
+        let straddling = Some([45, 49]);
+        let late = Some([53, 57]);
+        // A trunk whose own endpoints sit past that column, which is what a
+        // driver on an upper deck feeding a pinned output looks like.
+        let hulls = BTreeMap::from([(DeckId(0), (53, 57)), (DeckId(1), (53, 57))]);
+
+        // The cost alone does not merely tie the two sides: it prefers the
+        // late one, because the endpoints it measures against are past the
+        // column too.  That is the ranking this preference has to override.
+        assert!(trunk_station_cost(late, Some(&hulls)) < trunk_station_cost(early, Some(&hulls)),);
+
+        // An output-bound trunk ranks the early pair ahead of the late one.
+        assert!(!trunk_station_side_penalty(early, true, false, opening));
+        assert!(trunk_station_side_penalty(late, true, false, opening));
+
+        // The refusal-driven repair requires the opposite side.
+        assert!(trunk_station_side_penalty(early, false, true, opening));
+        assert!(trunk_station_side_penalty(straddling, false, true, opening));
+        assert!(!trunk_station_side_penalty(late, false, true, opening));
+
+        // A trunk that feeds no pinned output ranks both alike, as before.
+        assert!(trunk_station_side_penalty(early, false, false, opening));
+        assert!(trunk_station_side_penalty(late, false, false, opening));
+
+        // No station pair and no column are both "no early landing to have".
+        assert!(trunk_station_side_penalty(None, true, false, opening));
+        assert!(trunk_station_side_penalty(early, true, false, None));
+    }
+
     /// The fold itself: which deck each column landed on, where those decks
     /// sit, where the columns stand, and what volume the plan asks for.
     #[test]
@@ -4702,8 +6047,8 @@ mod tests {
         let levels = [InstanceId(0), InstanceId(1), InstanceId(2)]
             .map(|id| plan.analysis.nodes[&id].forward_level);
         assert_eq!(levels, [0, 1, 2]);
-        let decks = [InstanceId(0), InstanceId(1), InstanceId(2)]
-            .map(|id| plan.analysis.nodes[&id].deck);
+        let decks =
+            [InstanceId(0), InstanceId(1), InstanceId(2)].map(|id| plan.analysis.nodes[&id].deck);
         assert_eq!(decks, [DeckId(0), DeckId(0), DeckId(1)]);
 
         // A torch stands on its own ground row, so every deck reserves one
@@ -4757,6 +6102,50 @@ mod tests {
                 vertical_trunk_lanes: 2,
             }
         );
+    }
+
+    #[test]
+    fn bounded_direct_frame_folds_before_rejecting_one_deck_output_overlap() {
+        use super::*;
+        let graph = InstanceGraph::one_to_one(
+            &Netlist {
+                inputs: vec!["a".into()],
+                outputs: vec!["y".into()],
+                gates: vec![
+                    nor("m0", &["a"]),
+                    nor("m1", &["m0"]),
+                    nor("m2", &["m1"]),
+                    nor("m3", &["m2"]),
+                    nor("y", &["m3"]),
+                ],
+            },
+            &Library::default_library(),
+        )
+        .unwrap();
+        let analysis = analyse_instance_dag(&graph, &BTreeMap::new()).unwrap();
+        let facts = BTreeMap::new();
+        let pins = BTreeMap::from([
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(0)),
+                pin(Anchor { x: 10, y: 1, z: 20 }, Facing::East),
+            ),
+            (
+                PhysicalEndpointId::DeclaredOutput(PortId(0)),
+                pin(Anchor { x: 67, y: 1, z: 60 }, Facing::East),
+            ),
+        ]);
+
+        let plan = TopologyAwareSeedPlacer
+            .plan(SeedPlacementRequest {
+                graph: &graph,
+                analysis: &analysis,
+                pins: &pins,
+                block_facts: &facts,
+            })
+            .expect("separately fitting columns may fold before the output");
+
+        assert!(plan.floorplan.deck_count >= 2);
+        assert_eq!(plan.frame.forward, Facing::East);
     }
 
     /// A deck is only a plan until the poses say so: every macro's

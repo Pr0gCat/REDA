@@ -36,7 +36,7 @@ pub(crate) const fn legacy_turnaround_allowance() -> i32 {
 
 /// Free forward cells a turnaround channel needs for this many lanes.
 pub(crate) fn bounded_turnaround_channel(lanes: usize) -> i32 {
-    channel_width(lanes)
+    channel_width(lanes).min(LEGACY_TURNAROUND_CHANNEL)
 }
 
 /// Forward cells a bounded turnaround takes: its channel and the closed
@@ -121,6 +121,11 @@ pub(crate) fn lane_forward(channel_start: i32, lane: usize) -> i32 {
 /// on both sides and three cells per lane.
 pub(crate) fn channel_width(lane_count: usize) -> i32 {
     2 * LANE_MARGIN + LANE_PITCH * i32::try_from(lane_count.max(1)).unwrap_or(i32::MAX / LANE_PITCH)
+}
+
+/// Free cells needed between the channel's endpoint cells for these lanes.
+pub(crate) fn channel_free_span(lane_count: usize) -> i32 {
+    LANE_PITCH * i32::try_from(lane_count).unwrap_or(i32::MAX / 4) + 2 * LANE_MARGIN - 2
 }
 
 /// Forward coordinate of a lane counted from the end edge.
@@ -707,5 +712,8 @@ mod tests {
             bounded_turnaround_allowance(3),
             bounded_turnaround_channel(3) + FORWARD_MARGIN
         );
+        assert_eq!(bounded_turnaround_channel(11), 39);
+        assert_eq!(bounded_turnaround_channel(14), LEGACY_TURNAROUND_CHANNEL);
+        assert_eq!(bounded_turnaround_allowance(14), 48);
     }
 }

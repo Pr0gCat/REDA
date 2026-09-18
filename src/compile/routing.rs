@@ -2,7 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::compile::fragment_synth::identity::{
@@ -31,7 +31,7 @@ pub struct PlacedBlock {
     pub state: BlockState,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum RouteTerminalKind {
     RepeaterIntoSupport,
     DirectedDustIntoSupport,
@@ -115,7 +115,7 @@ pub struct RealisedRouteBranch {
     pub terminal: TerminalRecord,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum RouteTarget {
     Connection(ConnectionId),
     DeclaredOutput(PortId),
@@ -136,13 +136,13 @@ impl RealisedRouteTree {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouterLimits {
     pub max_node_expansions: u64,
     pub max_queue_entries: u64,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TerminalContract {
     Source {
         signal_strength: u8,
@@ -181,7 +181,7 @@ impl TerminalContract {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TerminalRequirement {
     Automatic,
     Repeater,
@@ -189,7 +189,7 @@ pub enum TerminalRequirement {
     Exact(RouteTerminalKind),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouteEndpoint {
     pub id: PhysicalEndpointId,
     pub anchor: Anchor,
@@ -198,7 +198,7 @@ pub struct RouteEndpoint {
     pub terminal: TerminalContract,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RouteSink {
     pub id: RoutedSinkId,
     pub endpoint: PhysicalEndpointId,
@@ -212,7 +212,7 @@ pub struct RouteSink {
 #[error("a physical route request must contain at least one sink")]
 pub struct EmptyRouteSinks;
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NonEmptyRouteSinks(Vec<RouteSink>);
 
 impl NonEmptyRouteSinks {
@@ -229,7 +229,7 @@ impl NonEmptyRouteSinks {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum PhysicalReservationOwner {
     Route(RouteId),
     RouteStair(RouteId),
@@ -238,7 +238,7 @@ pub enum PhysicalReservationOwner {
     KeepOut(u32),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PhysicalReservationKind {
     Conductor(BlockState),
     Floor(BlockState),
@@ -246,15 +246,33 @@ pub enum PhysicalReservationKind {
     KeepOut,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PhysicalReservation {
     pub owner: PhysicalReservationOwner,
     pub kind: PhysicalReservationKind,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+struct KeepOutBox {
+    min: Anchor,
+    max: Anchor,
+    openings: BTreeSet<Anchor>,
+    claim: PhysicalReservation,
+}
+
+impl KeepOutBox {
+    fn contains(&self, at: Anchor) -> bool {
+        (self.min.x..=self.max.x).contains(&at.x)
+            && (self.min.y..=self.max.y).contains(&at.y)
+            && (self.min.z..=self.max.z).contains(&at.z)
+            && !self.openings.contains(&at)
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PhysicalReservations {
     cells: BTreeMap<Anchor, PhysicalReservation>,
+    keep_out_boxes: Vec<KeepOutBox>,
 }
 
 impl PhysicalReservations {
@@ -268,10 +286,29 @@ impl PhysicalReservations {
         owner: PhysicalReservationOwner,
         kind: PhysicalReservationKind,
     ) -> Option<PhysicalReservation> {
-        if self.cells.contains_key(&at) {
+        if self.get(&at).is_some() {
             return None;
         }
         self.cells.insert(at, PhysicalReservation { owner, kind })
+    }
+
+    pub(crate) fn reserve_keep_out_box(
+        &mut self,
+        min: Anchor,
+        max: Anchor,
+        openings: BTreeSet<Anchor>,
+        owner: PhysicalReservationOwner,
+    ) {
+        assert!(min.x <= max.x && min.y <= max.y && min.z <= max.z);
+        self.keep_out_boxes.push(KeepOutBox {
+            min,
+            max,
+            openings,
+            claim: PhysicalReservation {
+                owner,
+                kind: PhysicalReservationKind::KeepOut,
+            },
+        });
     }
 
     fn reserve_if_free(
@@ -280,7 +317,7 @@ impl PhysicalReservations {
         owner: PhysicalReservationOwner,
         kind: PhysicalReservationKind,
     ) -> bool {
-        if self.cells.contains_key(&at) {
+        if self.get(&at).is_some() {
             return false;
         }
         self.cells.insert(at, PhysicalReservation { owner, kind });
@@ -348,7 +385,12 @@ impl PhysicalReservations {
     }
 
     pub fn get(&self, at: &Anchor) -> Option<&PhysicalReservation> {
-        self.cells.get(at)
+        self.cells.get(at).or_else(|| {
+            self.keep_out_boxes
+                .iter()
+                .find(|closed| closed.contains(*at))
+                .map(|closed| &closed.claim)
+        })
     }
 
     pub(crate) fn transaction(&mut self) -> ReservationTransaction<'_> {
@@ -368,6 +410,7 @@ impl PhysicalReservations {
                 })
                 .map(|(&at, claim)| (at, claim.clone()))
                 .collect(),
+            keep_out_boxes: Vec::new(),
         }
     }
 }
@@ -392,8 +435,35 @@ impl ReservationTransaction<'_> {
         self.reservations.requested_route_conductors(route)
     }
 
-    fn as_reservations(&self) -> &PhysicalReservations {
+    pub(crate) fn as_reservations(&self) -> &PhysicalReservations {
         self.reservations
+    }
+
+    pub(crate) fn replay_snapshot(
+        &self,
+    ) -> (
+        Vec<(Anchor, PhysicalReservation)>,
+        Vec<(Anchor, Anchor, BTreeSet<Anchor>, PhysicalReservation)>,
+    ) {
+        (
+            self.reservations
+                .cells
+                .iter()
+                .map(|(&at, claim)| (at, claim.clone()))
+                .collect(),
+            self.reservations
+                .keep_out_boxes
+                .iter()
+                .map(|region| {
+                    (
+                        region.min,
+                        region.max,
+                        region.openings.clone(),
+                        region.claim.clone(),
+                    )
+                })
+                .collect(),
+        )
     }
 }
 
@@ -485,7 +555,7 @@ impl ReservationStore for ReservationTransaction<'_> {
         owner: PhysicalReservationOwner,
         kind: PhysicalReservationKind,
     ) -> Option<PhysicalReservation> {
-        if self.reservations.cells.contains_key(&at) {
+        if self.reservations.get(&at).is_some() {
             return None;
         }
         self.remember(at);
@@ -500,7 +570,7 @@ impl ReservationStore for ReservationTransaction<'_> {
         owner: PhysicalReservationOwner,
         kind: PhysicalReservationKind,
     ) -> bool {
-        if self.reservations.cells.contains_key(&at) {
+        if self.reservations.get(&at).is_some() {
             return false;
         }
         self.remember(at);
@@ -585,6 +655,8 @@ pub struct TransactionalRouteRequest<'request, 'reservations> {
     pub reservations: &'request mut ReservationTransaction<'reservations>,
     pub limits: RouterLimits,
     pub no_refresh: Option<&'request BTreeSet<Anchor>>,
+    pub planned_bounds: Option<(Anchor, Anchor)>,
+    pub planned_cells: Option<&'request BTreeSet<Anchor>>,
 }
 
 impl TransactionalRouteRequest<'_, '_> {
@@ -885,6 +957,7 @@ struct SearchState {
     estimate: u64,
     travelled: u64,
     at: Anchor,
+    entered: u8,
 }
 
 #[derive(Debug, Default)]
@@ -1039,6 +1112,8 @@ where
         requested_route_conductors,
         limits,
         no_refresh,
+        None,
+        None,
         join_policy,
         physics,
         strict_local,
@@ -1067,6 +1142,8 @@ where
         reservations,
         limits,
         no_refresh,
+        planned_bounds,
+        planned_cells,
     } = request;
     let requested_route_conductors = reservations.requested_route_conductors(id);
     route_with_reservation_store(
@@ -1077,6 +1154,8 @@ where
         requested_route_conductors,
         limits,
         no_refresh,
+        planned_bounds,
+        planned_cells,
         join_policy,
         physics,
         strict_local,
@@ -1094,6 +1173,8 @@ fn route_with_reservation_store<Reservations, Price, Claim>(
     requested_route_conductors: PhysicalReservations,
     limits: RouterLimits,
     no_refresh: Option<&BTreeSet<Anchor>>,
+    planned_bounds: Option<(Anchor, Anchor)>,
+    planned_cells: Option<&BTreeSet<Anchor>>,
     join_policy: RoutingJoinPolicy,
     physics: RoutePhysics,
     strict_local: bool,
@@ -1147,6 +1228,8 @@ where
             &own_join,
             physics,
             strict_local,
+            planned_bounds,
+            planned_cells,
             &mut work,
             &mut price,
         )?
@@ -1158,27 +1241,8 @@ where
         if path.last() != Some(&sink.anchor) {
             path.push(sink.anchor);
         }
-        reserve_typed_path(request.id, &path, reservations, &mut claim);
-
-        let shared = path
-            .iter()
-            .take_while(|anchor| cell_states.contains_key(anchor))
-            .count();
-        let mut carried = source_strength;
-        let mut previous_cell = request.source.anchor;
-        let mut trunk_repeaters = 0u64;
-        for anchor in &path[..shared] {
-            let state = cell_states
-                .get(anchor)
-                .expect("a shared prefix has an exact laid state");
-            if state.kind == BlockKind::Repeater {
-                carried = MAX_SIGNAL_STRENGTH;
-                trunk_repeaters += 1;
-            } else {
-                carried = carried.saturating_sub(1);
-            }
-            previous_cell = *anchor;
-        }
+        let (mut shared, mut carried, mut previous_cell, mut trunk_repeaters) =
+            shared_trunk_prefix(&path, &cell_states, request.source.anchor, source_strength);
         let mut laid = realise_branch_from_with_boundary_policy(
             previous_cell,
             carried,
@@ -1225,21 +1289,8 @@ where
                     PhysicalReservationKind::Conductor(state),
                 );
             }
-            carried = source_strength;
-            previous_cell = request.source.anchor;
-            trunk_repeaters = 0;
-            for anchor in &path[..shared] {
-                let state = cell_states
-                    .get(anchor)
-                    .expect("a shared prefix has an exact laid state");
-                if state.kind == BlockKind::Repeater {
-                    carried = MAX_SIGNAL_STRENGTH;
-                    trunk_repeaters += 1;
-                } else {
-                    carried = carried.saturating_sub(1);
-                }
-                previous_cell = *anchor;
-            }
+            (shared, carried, previous_cell, trunk_repeaters) =
+                shared_trunk_prefix(&path, &cell_states, request.source.anchor, source_strength);
             laid = realise_branch_from_with_boundary_policy(
                 previous_cell,
                 carried,
@@ -1249,8 +1300,54 @@ where
                 request.no_refresh,
             );
         }
-        if shared > 0 && shared < path.len() {
-            departures.insert(path[shared - 1]);
+        // The cheapest geometry is not always a circuit: no repeater can stand
+        // on a stair, so a long diagonal run of legal cells still runs the
+        // signal out.  Retry just this failure with the strength-aware kernel,
+        // in the same box under the same limits and rules, and keep the first
+        // path unless the retry really carries.  Nothing is reserved until one
+        // of them is chosen, so the refused path leaves no trace.
+        if !laid.carries {
+            if let Some(mut retry) = search_carrying_path(
+                &request,
+                sink,
+                start,
+                approach,
+                &cell_states,
+                reservations,
+                &own_join,
+                physics,
+                strict_local,
+                planned_bounds,
+                planned_cells,
+                source_strength,
+                &mut work,
+                &mut price,
+            )? {
+                if retry.last() != Some(&sink.anchor) {
+                    retry.push(sink.anchor);
+                }
+                let (retry_shared, retry_carried, retry_previous, retry_repeaters) =
+                    shared_trunk_prefix(
+                        &retry,
+                        &cell_states,
+                        request.source.anchor,
+                        source_strength,
+                    );
+                let retried = realise_branch_from_with_boundary_policy(
+                    retry_previous,
+                    retry_carried,
+                    &retry[retry_shared..],
+                    strict_local,
+                    physics.reserve_for_bend_runs,
+                    request.no_refresh,
+                );
+                if retried.carries {
+                    path = retry;
+                    shared = retry_shared;
+                    trunk_repeaters = retry_repeaters;
+                    laid = retried;
+                }
+            }
         }
         if !laid.carries {
             return Err(RouterFailure::Refused {
@@ -1259,6 +1356,10 @@ where
                 sink: Some(sink.id),
                 category: RouterRefusalCategory::PhysicalInvariant,
             });
+        }
+        reserve_typed_path(request.id, &path, reservations, &mut claim);
+        if shared > 0 && shared < path.len() {
+            departures.insert(path[shared - 1]);
         }
         let budget_needs_repeater = laid
             .blocks
@@ -1477,7 +1578,7 @@ fn owned_by_route(owner: PhysicalReservationOwner, route: RouteId) -> bool {
     matches!(owner, PhysicalReservationOwner::Route(owner) if owner == route)
 }
 
-fn staircase_clearance_typed(from: Anchor, to: Anchor) -> Vec<Anchor> {
+pub(crate) fn staircase_clearance_typed(from: Anchor, to: Anchor) -> Vec<Anchor> {
     if to.y == from.y {
         return Vec::new();
     }
@@ -1500,6 +1601,17 @@ fn ancestry_from(previous: &BTreeMap<Anchor, Anchor>, at: Anchor, ancestry: &mut
     ancestry.extend(std::iter::successors(Some(at), |cell| {
         previous.get(cell).copied()
     }));
+}
+
+fn search_ancestry_from(
+    previous: &BTreeMap<(Anchor, u8), (Anchor, u8)>,
+    at: (Anchor, u8),
+    ancestry: &mut Vec<Anchor>,
+) {
+    ancestry.clear();
+    ancestry.extend(
+        std::iter::successors(Some(at), |cell| previous.get(cell).copied()).map(|cell| cell.0),
+    );
 }
 
 fn can_reorder_candidate_checks(at: Anchor, next: Anchor) -> bool {
@@ -1616,10 +1728,23 @@ fn staircase_cell_is_blocked(
     {
         return false;
     }
+    // A slab's keep-out is the one foreign claim that guarantees durable air:
+    // nothing is ever built into it, so the step's headroom stays clear.  An
+    // endpoint's keep-out guards a body that may still be filled, and every
+    // other claim is a conductor, a floor or air someone else depends on.
+    if matches!(claim.owner, PhysicalReservationOwner::KeepOut(_))
+        && claim.kind == PhysicalReservationKind::KeepOut
+    {
+        return false;
+    }
     true
 }
 
-fn keep_out_typed(anchor: Anchor) -> Vec<Anchor> {
+/// The twelve cells a conductor at `anchor` reads for foreign dust: each
+/// horizontal neighbour and the cell above and below it.  A cell is only
+/// usable as a conductor while every one of them is clear, so whoever owns
+/// the cell owns this halo with it.
+pub(crate) fn keep_out_typed(anchor: Anchor) -> Vec<Anchor> {
     let mut cells = Vec::with_capacity(12);
     for neighbour in horizontal_neighbours_typed(anchor) {
         cells.push(neighbour);
@@ -1654,6 +1779,38 @@ fn horizontal_neighbours_typed(anchor: Anchor) -> [Anchor; 4] {
             ..anchor
         },
     ]
+}
+
+/// Replay the trunk prefix this branch shares with the branches before it:
+/// how many cells it shares, the strength it arrives at the fork with, the
+/// cell it leaves from, and how many of the trunk's repeaters it counts as
+/// its own.
+fn shared_trunk_prefix(
+    path: &[Anchor],
+    cell_states: &BTreeMap<Anchor, BlockState>,
+    source: Anchor,
+    source_strength: u8,
+) -> (usize, u8, Anchor, u64) {
+    let shared = path
+        .iter()
+        .take_while(|anchor| cell_states.contains_key(anchor))
+        .count();
+    let mut carried = source_strength;
+    let mut previous_cell = source;
+    let mut trunk_repeaters = 0u64;
+    for anchor in &path[..shared] {
+        let state = cell_states
+            .get(anchor)
+            .expect("a shared prefix has an exact laid state");
+        if state.kind == BlockKind::Repeater {
+            carried = MAX_SIGNAL_STRENGTH;
+            trunk_repeaters += 1;
+        } else {
+            carried = carried.saturating_sub(1);
+        }
+        previous_cell = *anchor;
+    }
+    (shared, carried, previous_cell, trunk_repeaters)
 }
 
 fn reserve_typed_path<Claim>(
@@ -1996,6 +2153,190 @@ impl TypedOwnJoinCheck {
     }
 }
 
+/// The box both searches for one branch are clipped to.
+fn search_bounds(
+    start: Anchor,
+    goal: Anchor,
+    planned_bounds: Option<(Anchor, Anchor)>,
+) -> (Anchor, Anchor) {
+    let margin = planned_bounds.map_or_else(
+        || manhattan(start, goal).saturating_add(2),
+        |_| {
+            u64::from(start.x.abs_diff(goal.x))
+                .saturating_add(u64::from(start.z.abs_diff(goal.z)))
+                .saturating_add(2)
+        },
+    ) as i32;
+    let mut min = Anchor {
+        x: start.x.min(goal.x).saturating_sub(margin),
+        y: start.y.min(goal.y),
+        z: start.z.min(goal.z).saturating_sub(margin),
+    };
+    let mut max = Anchor {
+        x: start.x.max(goal.x).saturating_add(margin),
+        y: start.y.max(goal.y).saturating_add(3),
+        z: start.z.max(goal.z).saturating_add(margin),
+    };
+    if let Some((planned_min, planned_max)) = planned_bounds {
+        min.x = min.x.min(planned_min.x.saturating_sub(2));
+        min.y = min.y.min(planned_min.y);
+        min.z = min.z.min(planned_min.z.saturating_sub(2));
+        max.x = max.x.max(planned_max.x.saturating_add(2));
+        max.y = max.y.max(planned_max.y.saturating_add(3));
+        max.z = max.z.max(planned_max.z.saturating_add(2));
+    }
+    (min, max)
+}
+
+/// Everything the per-candidate admission test reads.  The carrying-path
+/// retry shares it so it admits exactly the cells the first search did: same
+/// box, same physical candidate checks, same self-obstruction, same
+/// strict-local step legality, same own-join policy.
+struct CandidateContext<'a, 'r, R> {
+    request: &'a RouteRequest<'r>,
+    sink: &'a RouteSink,
+    start: Anchor,
+    goal: Anchor,
+    min: Anchor,
+    max: Anchor,
+    planned_cells: Option<&'a BTreeSet<Anchor>>,
+    laid: &'a BTreeMap<Anchor, BlockState>,
+    reservations: &'a R,
+    own_join: &'a TypedOwnJoinCheck,
+    physics: RoutePhysics,
+    strict_local: bool,
+}
+
+impl<R: ReservationStore> CandidateContext<'_, '_, R> {
+    fn admits(&self, ancestry: &[Anchor], at: Anchor, next: Anchor) -> bool {
+        if self.strict_local && next == self.sink.anchor && next != self.goal {
+            return false;
+        }
+        let candidate_is_blocked = || {
+            next.x < self.min.x
+                || next.x > self.max.x
+                || next.y < self.min.y
+                || next.y > self.max.y
+                || next.z < self.min.z
+                || next.z > self.max.z
+                || self
+                    .planned_cells
+                    .is_some_and(|planned| !planned.contains(&next))
+                || !anchor_is_free_for_typed(
+                    self.request.id,
+                    next,
+                    self.start,
+                    self.goal,
+                    self.sink.anchor,
+                    self.reservations,
+                )
+                || staircase_clearance_typed(at, next).into_iter().any(|cell| {
+                    staircase_cell_is_blocked(
+                        self.request.id,
+                        at,
+                        next,
+                        cell,
+                        self.reservations,
+                        self.physics.reuse_own_stair_clearance,
+                    )
+                })
+        };
+        let reorder_checks = can_reorder_candidate_checks(at, next);
+        if reorder_checks && candidate_is_blocked() {
+            return false;
+        }
+        if self_obstructs_typed(ancestry, at, next, self.physics.own_floor_of_earlier) {
+            return false;
+        }
+        if self.strict_local {
+            if let Some(&before) = ancestry.get(1) {
+                let exact = self.laid.get(&at).cloned().or_else(|| {
+                    self.request.reservations.get(&at).and_then(|claim| {
+                        owned_by_route(claim.owner, self.request.id)
+                            .then_some(&claim.kind)
+                            .and_then(|kind| match kind {
+                                PhysicalReservationKind::Conductor(state) => Some(state.clone()),
+                                _ => None,
+                            })
+                    })
+                });
+                if exact
+                    .as_ref()
+                    .is_some_and(|at_state| !route_step_is_legal(before, at, next, at_state))
+                {
+                    return false;
+                }
+            }
+        }
+        if self
+            .own_join
+            .blocks(next, at, self.start, self.goal, self.reservations, ancestry)
+        {
+            return false;
+        }
+        if !reorder_checks && candidate_is_blocked() {
+            return false;
+        }
+        true
+    }
+}
+
+/// Retry one branch whose cheapest geometric path cannot carry its signal.
+/// Same box, same limits and the same admission test as the first search;
+/// only the cost model changes, to the strength-aware kernel seeded with the
+/// branch's real source strength and the trunk this route has already laid.
+#[allow(clippy::too_many_arguments)]
+fn search_carrying_path<Price>(
+    request: &RouteRequest<'_>,
+    sink: &RouteSink,
+    start: Anchor,
+    goal: Anchor,
+    laid: &BTreeMap<Anchor, BlockState>,
+    reservations: &impl ReservationStore,
+    own_join: &TypedOwnJoinCheck,
+    physics: RoutePhysics,
+    strict_local: bool,
+    planned_bounds: Option<(Anchor, Anchor)>,
+    planned_cells: Option<&BTreeSet<Anchor>>,
+    source_strength: u8,
+    work: &mut RouterWork,
+    price: &mut Price,
+) -> Result<Option<Vec<Anchor>>, RouterFailure>
+where
+    Price: FnMut(&Anchor) -> u64,
+{
+    let (min, max) = search_bounds(start, goal, planned_bounds);
+    let context = CandidateContext {
+        request,
+        sink,
+        start,
+        goal,
+        min,
+        max,
+        planned_cells,
+        laid,
+        reservations,
+        own_join,
+        physics,
+        strict_local,
+    };
+    let mut ancestry = Vec::new();
+    strength_aware_astar_charged(
+        start,
+        goal,
+        laid,
+        source_strength,
+        |chain, at, next| {
+            ancestry_from(chain, at, &mut ancestry);
+            context.admits(&ancestry, at, next)
+        },
+        |at: &Anchor| price(at),
+        work,
+        Some((request, sink.id)),
+        2,
+    )
+}
+
 #[allow(clippy::too_many_arguments)]
 fn search_path<Price>(
     request: &RouteRequest<'_>,
@@ -2007,6 +2348,8 @@ fn search_path<Price>(
     own_join: &TypedOwnJoinCheck,
     physics: RoutePhysics,
     strict_local: bool,
+    planned_bounds: Option<(Anchor, Anchor)>,
+    planned_cells: Option<&BTreeSet<Anchor>>,
     work: &mut RouterWork,
     price: &mut Price,
 ) -> Result<Option<Vec<Anchor>>, RouterFailure>
@@ -2014,16 +2357,20 @@ where
     Price: FnMut(&Anchor) -> u64,
 {
     work.queue(request, sink.id)?;
-    let margin = manhattan(start, goal).saturating_add(2) as i32;
-    let min = Anchor {
-        x: start.x.min(goal.x).saturating_sub(margin),
-        y: start.y.min(goal.y),
-        z: start.z.min(goal.z).saturating_sub(margin),
-    };
-    let max = Anchor {
-        x: start.x.max(goal.x).saturating_add(margin),
-        y: start.y.max(goal.y).saturating_add(3),
-        z: start.z.max(goal.z).saturating_add(margin),
+    let (min, max) = search_bounds(start, goal, planned_bounds);
+    let context = CandidateContext {
+        request,
+        sink,
+        start,
+        goal,
+        min,
+        max,
+        planned_cells,
+        laid,
+        reservations,
+        own_join,
+        physics,
+        strict_local,
     };
     let heuristic = |at| {
         if strict_local {
@@ -2036,85 +2383,29 @@ where
         estimate: heuristic(start),
         travelled: 0,
         at: start,
+        entered: 4,
     }]);
-    let mut travelled = BTreeMap::from([(start, 0u64)]);
-    let mut previous = BTreeMap::<Anchor, Anchor>::new();
+    let mut travelled = BTreeMap::from([((start, 4), 0u64)]);
+    let mut previous = BTreeMap::<(Anchor, u8), (Anchor, u8)>::new();
     let mut ancestry = Vec::new();
 
     while let Some(state) = frontier.iter().next().copied() {
         frontier.remove(&state);
         if state.at == goal {
-            return Ok(Some(reconstruct_path(previous, goal)));
+            return Ok(Some(reconstruct_search_path(
+                previous,
+                (goal, state.entered),
+            )));
         }
-        if travelled.get(&state.at) != Some(&state.travelled) {
+        let state_key = (state.at, state.entered);
+        if travelled.get(&state_key) != Some(&state.travelled) {
             continue;
         }
         work.expand(request, sink.id)?;
-        ancestry_from(&previous, state.at, &mut ancestry);
+        search_ancestry_from(&previous, state_key, &mut ancestry);
         for next in neighbours(state.at) {
-            if strict_local && next == sink.anchor && next != goal {
-                continue;
-            }
-            let candidate_is_blocked = || {
-                next.x < min.x
-                    || next.x > max.x
-                    || next.y < min.y
-                    || next.y > max.y
-                    || next.z < min.z
-                    || next.z > max.z
-                    || !anchor_is_free_for_typed(
-                        request.id,
-                        next,
-                        start,
-                        goal,
-                        sink.anchor,
-                        reservations,
-                    )
-                    || staircase_clearance_typed(state.at, next)
-                        .into_iter()
-                        .any(|cell| {
-                            staircase_cell_is_blocked(
-                                request.id,
-                                state.at,
-                                next,
-                                cell,
-                                reservations,
-                                physics.reuse_own_stair_clearance,
-                            )
-                        })
-            };
-            let reorder_checks = can_reorder_candidate_checks(state.at, next);
-            if reorder_checks && candidate_is_blocked() {
-                continue;
-            }
-            if self_obstructs_typed(&ancestry, state.at, next, physics.own_floor_of_earlier) {
-                continue;
-            }
-            if strict_local {
-                if let Some(&before) = ancestry.get(1) {
-                    let exact = laid.get(&state.at).cloned().or_else(|| {
-                        request.reservations.get(&state.at).and_then(|claim| {
-                            owned_by_route(claim.owner, request.id)
-                                .then_some(&claim.kind)
-                                .and_then(|kind| match kind {
-                                    PhysicalReservationKind::Conductor(state) => {
-                                        Some(state.clone())
-                                    }
-                                    _ => None,
-                                })
-                        })
-                    });
-                    if exact.as_ref().is_some_and(|at_state| {
-                        !route_step_is_legal(before, state.at, next, at_state)
-                    }) {
-                        continue;
-                    }
-                }
-            }
-            if own_join.blocks(next, state.at, start, goal, reservations, &ancestry) {
-                continue;
-            }
-            if !reorder_checks && candidate_is_blocked() {
+            let admitted = context.admits(&ancestry, state.at, next);
+            if !admitted {
                 continue;
             }
             // Preserve the legacy distance kernel exactly while it is routed
@@ -2133,20 +2424,143 @@ where
                 .travelled
                 .saturating_add(step_cost)
                 .saturating_add(price(&next));
+            let entered = if strict_local {
+                entered_code(state.at, next)
+            } else {
+                4
+            };
+            let next_key = (next, entered);
             if travelled
-                .get(&next)
+                .get(&next_key)
                 .is_some_and(|known| *known <= next_travelled)
             {
                 continue;
             }
             work.queue(request, sink.id)?;
-            travelled.insert(next, next_travelled);
-            previous.insert(next, state.at);
+            travelled.insert(next_key, next_travelled);
+            previous.insert(next_key, state_key);
             frontier.insert(SearchState {
                 estimate: next_travelled.saturating_add(heuristic(next)),
                 travelled: next_travelled,
                 at: next,
+                entered,
             });
+        }
+    }
+    #[cfg(test)]
+    if std::env::var_os("REDA_ROUTE_DIAGNOSTIC").is_some() {
+        if let Some((&best, _)) = travelled
+            .iter()
+            .min_by_key(|((at, _), travelled)| (route_lower_bound(*at, goal), **travelled, *at))
+        {
+            search_ancestry_from(&previous, best, &mut ancestry);
+            eprintln!(
+                "closest={best:?} goal={goal:?} reached={} ancestry={}",
+                travelled.len(),
+                ancestry.len()
+            );
+            for y in min.y..=max.y {
+                let at_y = travelled
+                    .keys()
+                    .filter_map(|(at, _)| (at.y == y).then_some(*at))
+                    .collect::<BTreeSet<_>>();
+                if !at_y.is_empty() {
+                    eprintln!(
+                        "reached y={y} count={} x={:?}..{:?} z={:?}..{:?}",
+                        at_y.len(),
+                        at_y.iter().map(|at| at.x).min(),
+                        at_y.iter().map(|at| at.x).max(),
+                        at_y.iter().map(|at| at.z).min(),
+                        at_y.iter().map(|at| at.z).max(),
+                    );
+                }
+            }
+            for next in neighbours(best.0) {
+                let below = Anchor {
+                    y: next.y - 1,
+                    ..next
+                };
+                let stair = staircase_clearance_typed(best.0, next)
+                    .into_iter()
+                    .map(|cell| (cell, reservations.get(&cell).cloned()))
+                    .collect::<Vec<_>>();
+                eprintln!(
+                    "next={next:?} admitted={} claim={:?} below={:?} stair={stair:?}",
+                    context.admits(&ancestry, best.0, next),
+                    reservations.get(&next),
+                    reservations.get(&below),
+                );
+            }
+            let lowest = travelled
+                .keys()
+                .map(|(at, _)| at.y)
+                .min()
+                .unwrap_or(best.0.y);
+            let mut shown = 0;
+            for &state_key in travelled.keys().filter(|(at, _)| at.y == lowest) {
+                let mut local_ancestry = Vec::new();
+                search_ancestry_from(&previous, state_key, &mut local_ancestry);
+                for next in neighbours(state_key.0)
+                    .into_iter()
+                    .filter(|next| next.y < state_key.0.y)
+                {
+                    let admitted = context.admits(&local_ancestry, state_key.0, next);
+                    let claim = reservations.get(&next);
+                    eprintln!(
+                        "lowest from={:?} next={next:?} admitted={admitted} claim={claim:?}",
+                        state_key.0,
+                    );
+                    shown += 1;
+                    if shown == 24 {
+                        break;
+                    }
+                }
+                if shown == 24 {
+                    break;
+                }
+            }
+            for y in goal.y - 2..=goal.y + 2 {
+                eprintln!("slice y={y}");
+                for z in goal.z - 6..=goal.z + 6 {
+                    let row = (goal.x - 8..=goal.x + 8)
+                        .map(|x| {
+                            let at = Anchor { x, y, z };
+                            if at == goal {
+                                'G'
+                            } else if (0..=4).any(|entered| travelled.contains_key(&(at, entered)))
+                            {
+                                'o'
+                            } else {
+                                match reservations.get(&at) {
+                                    None => '.',
+                                    Some(PhysicalReservation {
+                                        owner: PhysicalReservationOwner::KeepOut(owner),
+                                        kind: PhysicalReservationKind::KeepOut,
+                                    }) if *owner == u32::MAX - 1 => '|',
+                                    Some(PhysicalReservation {
+                                        owner: PhysicalReservationOwner::KeepOut(_),
+                                        kind: PhysicalReservationKind::KeepOut,
+                                    }) => '#',
+                                    Some(PhysicalReservation {
+                                        owner: PhysicalReservationOwner::Endpoint(_),
+                                        ..
+                                    }) => 'E',
+                                    Some(PhysicalReservation {
+                                        kind: PhysicalReservationKind::Floor(_),
+                                        ..
+                                    }) => 'F',
+                                    Some(PhysicalReservation {
+                                        kind: PhysicalReservationKind::MandatoryAir,
+                                        ..
+                                    }) => 'A',
+                                    Some(_) => 'X',
+                                }
+                            }
+                        })
+                        .collect::<String>();
+                    eprintln!("z={z:>3} {row}");
+                }
+            }
         }
     }
     Ok(None)
@@ -2210,13 +2624,16 @@ fn sink_connection(sink: &RouteSink) -> Result<ConnectionId, RouterFailure> {
     }
 }
 
-fn reconstruct_path(previous: BTreeMap<Anchor, Anchor>, goal: Anchor) -> Vec<Anchor> {
+fn reconstruct_search_path(
+    previous: BTreeMap<(Anchor, u8), (Anchor, u8)>,
+    goal: (Anchor, u8),
+) -> Vec<Anchor> {
     let mut path = vec![goal];
     while let Some(parent) = previous.get(path.last().expect("path is non-empty")) {
         path.push(*parent);
     }
     path.reverse();
-    path
+    path.into_iter().map(|cell| cell.0).collect()
 }
 
 fn neighbours(anchor: Anchor) -> [Anchor; 12] {
@@ -2252,7 +2669,7 @@ fn route_lower_bound(from: Anchor, to: Anchor) -> u64 {
     horizontal.max(u64::from(from.y.abs_diff(to.y)))
 }
 
-fn step(at: Anchor, direction: Facing) -> Anchor {
+pub(crate) fn step(at: Anchor, direction: Facing) -> Anchor {
     match direction {
         Facing::North => Anchor { z: at.z - 1, ..at },
         Facing::South => Anchor { z: at.z + 1, ..at },
@@ -2507,13 +2924,51 @@ pub(crate) fn strength_aware_astar<Allowed, Price>(
     goal: Anchor,
     trunk: &BTreeMap<Anchor, BlockState>,
     source_strength: u8,
-    mut allowed: Allowed,
-    mut price: Price,
+    allowed: Allowed,
+    price: Price,
 ) -> Option<Vec<Anchor>>
 where
     Allowed: FnMut(&BTreeMap<Anchor, Anchor>, Anchor, Anchor) -> bool,
     Price: FnMut(&Anchor) -> u64,
 {
+    strength_aware_astar_charged(
+        start,
+        goal,
+        trunk,
+        source_strength,
+        allowed,
+        price,
+        &mut RouterWork::default(),
+        None,
+        1,
+    )
+    .ok()
+    .flatten()
+}
+
+/// The kernel above, charging a request's router limits as it goes.  The
+/// planner's caller passes no charge and so cannot fail; the router's
+/// carrying retry passes its own request, which bounds the retry exactly
+/// like the first search.
+#[allow(clippy::too_many_arguments)]
+fn strength_aware_astar_charged<Allowed, Price>(
+    start: Anchor,
+    goal: Anchor,
+    trunk: &BTreeMap<Anchor, BlockState>,
+    source_strength: u8,
+    mut allowed: Allowed,
+    mut price: Price,
+    work: &mut RouterWork,
+    charge: Option<(&RouteRequest<'_>, RoutedSinkId)>,
+    minimum_goal_strength: u8,
+) -> Result<Option<Vec<Anchor>>, RouterFailure>
+where
+    Allowed: FnMut(&BTreeMap<Anchor, Anchor>, Anchor, Anchor) -> bool,
+    Price: FnMut(&Anchor) -> u64,
+{
+    if let Some((request, sink)) = charge {
+        work.queue(request, sink)?;
+    }
     let start_state = StrengthSearchState {
         estimate: manhattan(start, goal),
         travelled: 0,
@@ -2529,7 +2984,7 @@ where
 
     while let Some(state) = frontier.iter().next().copied() {
         frontier.remove(&state);
-        if state.anchor == goal {
+        if state.anchor == goal && state.carried >= minimum_goal_strength {
             let mut path = vec![state.anchor];
             let mut walk = (state.anchor, state.entered, state.carried, state.travelled);
             while let Some(&up) = parent.get(&walk) {
@@ -2537,7 +2992,10 @@ where
                 walk = up;
             }
             path.reverse();
-            return Some(path);
+            return Ok(Some(path));
+        }
+        if let Some((request, sink)) = charge {
+            work.expand(request, sink)?;
         }
         let chain: BTreeMap<Anchor, Anchor> = {
             let mut chain = BTreeMap::new();
@@ -2616,6 +3074,9 @@ where
                 (next, entered, carried, next_travelled),
                 (state.anchor, state.entered, state.carried, state.travelled),
             );
+            if let Some((request, sink)) = charge {
+                work.queue(request, sink)?;
+            }
             frontier.insert(StrengthSearchState {
                 estimate: next_travelled.saturating_add(manhattan(next, goal)),
                 travelled: next_travelled,
@@ -2625,7 +3086,7 @@ where
             });
         }
     }
-    None
+    Ok(None)
 }
 
 #[cfg(test)]
@@ -2672,6 +3133,271 @@ mod tests {
                 requirement: TerminalRequirement::Repeater,
             },
         }
+    }
+
+    #[test]
+    fn replay_snapshot_serializes_coordinate_claims_as_entries() {
+        let mut reservations = PhysicalReservations::new();
+        reservations.reserve(
+            at(3, 1, 4),
+            PhysicalReservationOwner::Route(RouteId(9)),
+            PhysicalReservationKind::KeepOut,
+        );
+        let transaction = reservations.transaction();
+
+        let encoded = serde_json::to_vec(&transaction.replay_snapshot()).unwrap();
+
+        assert!(!encoded.is_empty());
+    }
+
+    #[test]
+    fn captured_route_three_replays_without_a_local_route_failure() {
+        type Replay = (
+            RouteId,
+            RouteEndpoint,
+            NonEmptyRouteSinks,
+            (
+                Vec<(Anchor, PhysicalReservation)>,
+                Vec<(Anchor, Anchor, BTreeSet<Anchor>, PhysicalReservation)>,
+            ),
+            RouterLimits,
+            Option<BTreeSet<Anchor>>,
+            Option<(Anchor, Anchor)>,
+            BTreeSet<Anchor>,
+        );
+        let bytes = std::fs::read("target/route3-current-replay.json").unwrap();
+        let (id, source, sinks, (cells, regions), limits, no_refresh, planned_bounds, mut corridor): Replay =
+            serde_json::from_slice(&bytes).unwrap();
+        let private = corridor.clone();
+        for y in 0..=20 {
+            let at_y = corridor
+                .iter()
+                .filter(|at| at.y == y)
+                .copied()
+                .collect::<Vec<_>>();
+            if !at_y.is_empty() {
+                eprintln!(
+                    "private y={y} count={} x={:?}..{:?} z={:?}..{:?}",
+                    at_y.len(),
+                    at_y.iter().map(|at| at.x).min(),
+                    at_y.iter().map(|at| at.x).max(),
+                    at_y.iter().map(|at| at.z).min(),
+                    at_y.iter().map(|at| at.z).max(),
+                );
+            }
+        }
+        corridor.insert(source.anchor);
+        corridor.extend(
+            sinks
+                .as_slice()
+                .iter()
+                .map(|sink| step(sink.anchor, sink.allowed_entry)),
+        );
+        corridor.extend(corridor.clone().into_iter().flat_map(keep_out_typed));
+        corridor.extend(corridor.clone().into_iter().flat_map(keep_out_typed));
+        corridor.extend(corridor.clone().into_iter().flat_map(keep_out_typed));
+        corridor.extend(corridor.clone().into_iter().flat_map(keep_out_typed));
+        let goal = step(
+            sinks.as_slice()[0].anchor,
+            sinks.as_slice()[0].allowed_entry,
+        );
+        let mut reached = BTreeSet::from([source.anchor]);
+        let mut frontier = std::collections::VecDeque::from([source.anchor]);
+        while let Some(at) = frontier.pop_front() {
+            for next in neighbours(at) {
+                if private.contains(&next) && reached.insert(next) {
+                    frontier.push_back(next);
+                }
+            }
+        }
+        assert!(
+            reached.contains(&goal),
+            "corridor disconnected: reached={} closest={:?} goal={goal:?}",
+            reached.len(),
+            reached.iter().min_by_key(|at| manhattan(**at, goal)),
+        );
+        let mut reservations = PhysicalReservations {
+            cells: cells.into_iter().collect(),
+            keep_out_boxes: regions
+                .into_iter()
+                .map(|(min, max, openings, claim)| KeepOutBox {
+                    min,
+                    max,
+                    openings,
+                    claim,
+                })
+                .collect(),
+        };
+        reservations.keep_out_boxes.clear();
+        for y in 15..=18 {
+            eprintln!(
+                "blocked own y{y}={:#?}",
+                private
+                    .iter()
+                    .filter(|at| at.y == y)
+                    .filter_map(|at| reservations.get(at).map(|claim| (*at, claim.clone())))
+                    .collect::<Vec<_>>()
+            );
+        }
+        eprintln!(
+            "private crossing={:#?}",
+            private
+                .iter()
+                .filter(|at| (100..=108).contains(&at.x) && (15..=18).contains(&at.y))
+                .map(|at| (*at, reservations.get(at).cloned()))
+                .collect::<Vec<_>>()
+        );
+        panic!("route three ownership diagnostic");
+        let result = {
+            let mut transaction = reservations.transaction();
+            GuardedPhysicalRouter.route_transactional(TransactionalRouteRequest {
+                id,
+                source,
+                sinks: &sinks,
+                reservations: &mut transaction,
+                limits,
+                no_refresh: no_refresh.as_ref(),
+                planned_bounds,
+                planned_cells: None,
+            })
+        };
+
+        assert!(result.is_ok(), "{result:?}");
+    }
+
+    #[test]
+    fn captured_last_route_replays_without_a_local_route_failure() {
+        type Replay = (
+            RouteId,
+            RouteEndpoint,
+            NonEmptyRouteSinks,
+            (
+                Vec<(Anchor, PhysicalReservation)>,
+                Vec<(Anchor, Anchor, BTreeSet<Anchor>, PhysicalReservation)>,
+            ),
+            RouterLimits,
+            Option<BTreeSet<Anchor>>,
+            Option<(Anchor, Anchor)>,
+            BTreeSet<Anchor>,
+        );
+        let bytes = std::fs::read("target/route-last-replay.json").unwrap();
+        let (id, source, sinks, (cells, regions), limits, no_refresh, planned_bounds, corridor):
+            Replay = serde_json::from_slice(&bytes).unwrap();
+        let mut owned = corridor.clone();
+        owned.insert(step(source.anchor, source.allowed_exit));
+        owned.extend(
+            sinks
+                .as_slice()
+                .iter()
+                .map(|sink| step(sink.anchor, sink.allowed_entry)),
+        );
+        let mut base_planned_cells = owned;
+        base_planned_cells.insert(source.anchor);
+        let mut primary_planned_cells = base_planned_cells.clone();
+        primary_planned_cells.extend(
+            base_planned_cells
+                .iter()
+                .copied()
+                .flat_map(keep_out_typed),
+        );
+        let reservations = PhysicalReservations {
+            cells: cells.into_iter().collect(),
+            keep_out_boxes: regions
+                .into_iter()
+                .map(|(min, max, openings, claim)| KeepOutBox {
+                    min,
+                    max,
+                    openings,
+                    claim,
+                })
+                .collect(),
+        };
+        let mut planned_cells = base_planned_cells;
+        for _ in 0..4 {
+            planned_cells.extend(planned_cells.clone().into_iter().flat_map(keep_out_typed));
+        }
+        let mut wider_planned_cells = planned_cells.clone();
+        for _ in 0..1 {
+            wider_planned_cells.extend(
+                wider_planned_cells
+                    .clone()
+                    .into_iter()
+                    .flat_map(keep_out_typed),
+            );
+        }
+        let channel_claims = reservations
+            .cells
+            .iter()
+            .filter(|(at, claim)| {
+                planned_cells.contains(at)
+                    && matches!(claim.owner, PhysicalReservationOwner::KeepOut(u32::MAX))
+            })
+            .map(|(at, _)| *at)
+            .collect::<Vec<_>>();
+        eprintln!(
+            "{} channel claims in planned cells: {:?}",
+            channel_claims.len(),
+            &channel_claims[..channel_claims.len().min(120)]
+        );
+        let mut route_claims = BTreeMap::<RouteId, usize>::new();
+        for (at, claim) in &reservations.cells {
+            if !planned_cells.contains(at) {
+                continue;
+            }
+            if let PhysicalReservationOwner::Route(route) = claim.owner {
+                *route_claims.entry(route).or_default() += 1;
+            }
+        }
+        eprintln!("route claims in planned cells: {route_claims:?}");
+        let route_halos = reservations
+            .cells
+            .iter()
+            .filter_map(|(at, claim)| {
+                let PhysicalReservationOwner::KeepOut(owner) = claim.owner else {
+                    return None;
+                };
+                if claim.kind != PhysicalReservationKind::KeepOut
+                    || !wider_planned_cells.contains(at)
+                {
+                    return None;
+                }
+                horizontal_neighbours_typed(*at)
+                    .into_iter()
+                    .any(|neighbour| {
+                        matches!(
+                            reservations.get(&neighbour),
+                            Some(PhysicalReservation {
+                                owner: PhysicalReservationOwner::Route(route),
+                                kind: PhysicalReservationKind::Conductor(_),
+                            }) if route.0 == owner
+                        )
+                    })
+                    .then_some(*at)
+            })
+            .collect::<BTreeSet<_>>();
+        eprintln!("route halos in wider planned cells: {}", route_halos.len());
+        for (label, cells, bounds) in [(
+            "full reservations, five rings",
+            &wider_planned_cells,
+            None,
+        )] {
+            let mut trial = reservations.clone();
+            let result = {
+                let mut transaction = trial.transaction();
+                GuardedPhysicalRouter.route_transactional(TransactionalRouteRequest {
+                    id,
+                    source: source.clone(),
+                    sinks: &sinks,
+                    reservations: &mut transaction,
+                    limits,
+                    no_refresh: no_refresh.as_ref(),
+                    planned_bounds: bounds,
+                    planned_cells: Some(cells),
+                })
+            };
+            eprintln!("{label}: {result:?}");
+        }
+        panic!("route half isolation complete");
     }
 
     #[test]
@@ -2741,6 +3467,141 @@ mod tests {
     }
 
     #[test]
+    fn compact_keep_out_box_blocks_cells_except_its_openings() {
+        let owner = PhysicalReservationOwner::KeepOut(17);
+        let opening = at(2, 2, 2);
+        let explicit = at(3, 2, 2);
+        let mut reservations = PhysicalReservations::new();
+        reservations.reserve(
+            explicit,
+            PhysicalReservationOwner::KeepOut(99),
+            PhysicalReservationKind::MandatoryAir,
+        );
+        reservations.reserve_keep_out_box(
+            at(1, 1, 1),
+            at(3, 3, 3),
+            BTreeSet::from([opening]),
+            owner,
+        );
+
+        assert_eq!(
+            reservations.get(&at(1, 1, 1)),
+            Some(&PhysicalReservation {
+                owner,
+                kind: PhysicalReservationKind::KeepOut,
+            }),
+        );
+        assert!(reservations.get(&opening).is_none());
+        assert_eq!(
+            reservations.get(&explicit),
+            Some(&PhysicalReservation {
+                owner: PhysicalReservationOwner::KeepOut(99),
+                kind: PhysicalReservationKind::MandatoryAir,
+            }),
+            "an explicit reservation keeps precedence over the box",
+        );
+        assert!(reservations.get(&at(4, 2, 2)).is_none());
+
+        {
+            let mut transaction = reservations.transaction();
+            assert!(!transaction.reserve_if_free(
+                at(1, 1, 1),
+                PhysicalReservationOwner::Route(RouteId(1)),
+                PhysicalReservationKind::Conductor(crate::compile::dust()),
+            ));
+            assert!(transaction.reserve_if_free(
+                opening,
+                PhysicalReservationOwner::Route(RouteId(1)),
+                PhysicalReservationKind::Conductor(crate::compile::dust()),
+            ));
+        }
+        assert!(reservations.get(&opening).is_none());
+        assert!(reservations.get(&at(1, 1, 1)).is_some());
+    }
+
+    #[test]
+    fn an_opening_in_one_box_does_not_open_an_overlapping_box() {
+        let overlap = at(2, 2, 2);
+        let mut reservations = PhysicalReservations::new();
+        reservations.reserve_keep_out_box(
+            at(1, 1, 1),
+            at(3, 3, 3),
+            BTreeSet::from([overlap]),
+            PhysicalReservationOwner::KeepOut(1),
+        );
+        reservations.reserve_keep_out_box(
+            at(2, 2, 2),
+            at(4, 4, 4),
+            BTreeSet::new(),
+            PhysicalReservationOwner::KeepOut(2),
+        );
+
+        assert_eq!(
+            reservations.get(&overlap).map(|claim| claim.owner),
+            Some(PhysicalReservationOwner::KeepOut(2)),
+        );
+    }
+
+    #[test]
+    fn a_side_arrival_does_not_hide_the_rear_approach_of_an_own_repeater() {
+        let route = RouteId(13);
+        let source = endpoint(route);
+        let typed_sink = sink(route, 0, at(3, 1, 1));
+        let sinks = NonEmptyRouteSinks::new(vec![typed_sink.clone()]).unwrap();
+        let repeater = at(2, 1, 0);
+        let goal = at(2, 1, 1);
+        let mut exact = BlockState::air();
+        exact.kind = BlockKind::Repeater;
+        exact.name = "minecraft:repeater".to_string();
+        exact.facing = Some(Facing::North);
+        exact.delay = 1;
+        exact.lit = true;
+        let mut reservations = PhysicalReservations::new();
+        reservations.reserve_conductor(repeater, route, exact);
+        reservations.reserve_keep_out_box(
+            at(1, 1, 0),
+            at(3, 2, 2),
+            BTreeSet::from([at(1, 1, 0), repeater, goal]),
+            PhysicalReservationOwner::KeepOut(1),
+        );
+        let request = RouteRequest {
+            id: route,
+            source: source.clone(),
+            sinks: &sinks,
+            reservations: &reservations,
+            limits: RouterLimits {
+                max_node_expansions: 10_000,
+                max_queue_entries: 50_000,
+            },
+            no_refresh: None,
+        };
+        let laid = BTreeMap::new();
+        let own_join =
+            TypedOwnJoinCheck::for_branch(RoutingJoinPolicy::Off, route, &laid, &reservations);
+        let path = search_path(
+            &request,
+            &typed_sink,
+            source.anchor,
+            goal,
+            &laid,
+            &reservations,
+            &own_join,
+            RoutePhysics::LEGACY,
+            true,
+            None,
+            None,
+            &mut RouterWork::default(),
+            &mut |_: &Anchor| 0,
+        )
+        .unwrap()
+        .expect("the rear approach through the own repeater is legal");
+
+        assert!(path
+            .windows(3)
+            .any(|window| window == [at(2, 1, -1), repeater, goal]));
+    }
+
+    #[test]
     fn transactional_fallback_preserves_route_owned_overrides() {
         struct OwnedOnlyRouter;
 
@@ -2778,6 +3639,8 @@ mod tests {
                         max_queue_entries: 1,
                     },
                     no_refresh: None,
+                    planned_bounds: None,
+                    planned_cells: None,
                 })
                 .unwrap_err()
         };
@@ -3258,6 +4121,114 @@ mod tests {
     }
 
     #[test]
+    fn a_stair_that_runs_the_signal_out_is_retried_for_a_carrying_path() {
+        let route = RouteId(22);
+        let limits = RouterLimits {
+            max_node_expansions: 200_000,
+            max_queue_entries: 1_000_000,
+        };
+        // Climbing fourteen decks from (0,1,0) to the approach (14,15,0) is a
+        // legal diagonal stair and the cheapest path there is, but every cell
+        // of it is a bend, so no repeater can stand on it and the dust runs
+        // out one cell short of the terminal.  A longer path that buys a
+        // straight run to refresh on does carry.
+        let climbing = NonEmptyRouteSinks::new(vec![sink(route, 0, at(15, 15, 0))]).unwrap();
+        let tree = GuardedPhysicalRouter
+            .route(RouteRequest {
+                id: route,
+                source: endpoint(route),
+                sinks: &climbing,
+                reservations: &PhysicalReservations::new(),
+                limits,
+                no_refresh: None,
+            })
+            .expect("a carrying path exists even though the cheapest one does not carry");
+        let terminal = climbing.as_slice()[0].anchor;
+        assert!(
+            tree.cells
+                .iter()
+                .any(|cell| cell.at != terminal && cell.state.kind == BlockKind::Repeater),
+            "the chosen path refreshes before its terminal, which the stair cannot",
+        );
+
+        // A cheap path that already carries is still the first choice: the
+        // retry never runs and the straight run is returned unchanged.
+        let flat = NonEmptyRouteSinks::new(vec![sink(route, 0, at(5, 1, 0))]).unwrap();
+        let straight = GuardedPhysicalRouter
+            .route(RouteRequest {
+                id: route,
+                source: endpoint(route),
+                sinks: &flat,
+                reservations: &PhysicalReservations::new(),
+                limits,
+                no_refresh: None,
+            })
+            .expect("a short flat run carries on its own");
+        assert_eq!(
+            straight.branches[0].path,
+            (0..=5).map(|x| at(x, 1, 0)).collect::<Vec<_>>(),
+        );
+    }
+
+    #[test]
+    fn a_slab_keep_out_is_durable_headroom_for_an_up_step() {
+        // The only path out of the source is (0,1,0) -> (1,1,0) -> (2,2,0):
+        // an up-step whose riser is (2,1,0) and whose headroom is (1,2,0).
+        let route = RouteId(21);
+        let head = at(1, 2, 0);
+        let corridor = [
+            at(0, 1, 0),
+            at(1, 1, 0),
+            at(2, 1, 0),
+            at(2, 2, 0),
+            at(3, 2, 0),
+        ];
+        let walled = |claim: PhysicalReservationOwner| {
+            let mut reservations = PhysicalReservations::new();
+            for x in -2..=6 {
+                for y in 1..=5 {
+                    for z in -2..=2 {
+                        let cell = at(x, y, z);
+                        if corridor.contains(&cell) || cell == head {
+                            continue;
+                        }
+                        reservations.reserve(
+                            cell,
+                            PhysicalReservationOwner::KeepOut(1),
+                            PhysicalReservationKind::KeepOut,
+                        );
+                    }
+                }
+            }
+            reservations.reserve(head, claim, PhysicalReservationKind::KeepOut);
+            reservations
+        };
+        let sinks = NonEmptyRouteSinks::new(vec![sink(route, 0, at(3, 2, 0))]).unwrap();
+        let limits = RouterLimits {
+            max_node_expansions: 10_000,
+            max_queue_entries: 50_000,
+        };
+        let route_through = |reservations: &PhysicalReservations| {
+            GuardedPhysicalRouter.route(RouteRequest {
+                id: route,
+                source: endpoint(route),
+                sinks: &sinks,
+                reservations,
+                limits,
+                no_refresh: None,
+            })
+        };
+
+        // A slab's own keep-out is durable air: the step may use it as headroom.
+        assert!(route_through(&walled(PhysicalReservationOwner::KeepOut(1))).is_ok());
+        // An endpoint's keep-out guards a body that may still be built into.
+        assert!(route_through(&walled(PhysicalReservationOwner::Endpoint(
+            PhysicalEndpointId::Junction(InstanceId(3))
+        )))
+        .is_err());
+    }
+
+    #[test]
     fn a_later_branch_can_reuse_its_own_stair_clearance() {
         let route = RouteId(9);
         let from = at(0, 1, 0);
@@ -3365,6 +4336,18 @@ mod tests {
         assert!(neighbours(start)
             .into_iter()
             .all(|next| route_lower_bound(start, raised) <= 1 + route_lower_bound(next, raised)));
+    }
+
+    #[test]
+    fn explicit_planned_bounds_expand_the_endpoint_box() {
+        let start = at(0, 1, 0);
+        let planned = (at(-50, 1, 0), at(1, 6, 0));
+        let (legacy_min, _) = search_bounds(start, at(1, 1, 0), None);
+        let (planned_min, _) = search_bounds(start, at(1, 6, 0), Some(planned));
+
+        assert!(legacy_min.x > -50);
+        assert_eq!(planned_min.x, -52);
+        assert_eq!(search_bounds(start, at(1, 100, 0), Some(planned)).1.x, 4);
     }
 
     #[test]
