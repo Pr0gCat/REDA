@@ -175,9 +175,7 @@ fn source_meaning(
     values: &BTreeMap<PrimitiveId, BooleanMeaning>,
 ) -> Option<BooleanMeaning> {
     match source {
-        ConnectionSource::ExternalInput { input_index } => {
-            Some(BooleanMeaning::Input(input_index))
-        }
+        ConnectionSource::ExternalInput { input_index } => Some(BooleanMeaning::Input(input_index)),
         ConnectionSource::Primitive(primitive) => values.get(&primitive).cloned(),
     }
 }

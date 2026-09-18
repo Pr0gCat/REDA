@@ -1,9 +1,10 @@
 use std::path::PathBuf;
 
 use reda::compile::fragment_synth::benchmark::{
-    build_acceptance_report, deterministic_budget_orders, legacy_benchmark_evaluator,
-    shipping_config_source, BenchmarkBaseline,
+    build_acceptance_report, deterministic_budget_orders, evaluate_fragment_budget,
+    legacy_benchmark_evaluator, shipping_config_source, BenchmarkBaseline,
 };
+use reda::compile::fragment_synth::{compile_fragment_synth, SynthesisBudget, SynthesisInput};
 
 const CASES: [&str; 6] = [
     "and4",
@@ -33,6 +34,66 @@ fn replacement_corpus_is_complete_and_has_checked_pinned_glyph_io() {
     );
     let pinned = evaluator.fixture("pinned:verilog:seven_segment").unwrap();
     assert_eq!(pinned.placements().iter().count(), 11);
+}
+
+#[test]
+fn topology_aware_seed_v2_and4_quality() {
+    let evaluator = legacy_benchmark_evaluator().unwrap();
+    let fixture = evaluator.fixture("and4").unwrap();
+    let result = compile_fragment_synth(
+        SynthesisInput {
+            lowered: fixture.lowered_netlist(),
+            source_provenance: None,
+            pins: Some(fixture.placements()),
+        },
+        SynthesisBudget::Evaluations(0),
+    )
+    .expect("and4 budget-zero seed must route and certify");
+    let measured = evaluator.evaluate_world("and4", &result.compiled).unwrap();
+    let ticks = measured.max_observed_settle_game_ticks_on_manifest.unwrap();
+    let blocks = measured.physical.unwrap().non_air_blocks;
+
+    assert!(
+        ticks <= 36,
+        "and4 measured {ticks} ticks, expected at most 36"
+    );
+    assert!(
+        blocks <= 944,
+        "and4 measured {blocks} non-air blocks, expected at most 944"
+    );
+}
+
+#[test]
+fn topology_aware_seed_v2_budget_zero_corpus_certifies() {
+    let evaluator = legacy_benchmark_evaluator().unwrap();
+    let run = evaluate_fragment_budget(&evaluator, &baseline(), 0);
+    let failures = run
+        .cases
+        .iter()
+        .filter(|case| !case.compiled_and_certified)
+        .map(|case| (case.name.as_str(), case.error.as_deref()))
+        .collect::<Vec<_>>();
+
+    for case in &run.cases {
+        let ticks = case
+            .measured
+            .as_ref()
+            .and_then(|measured| measured.max_observed_settle_game_ticks_on_manifest);
+        let blocks = case
+            .measured
+            .as_ref()
+            .and_then(|measured| measured.physical.as_ref())
+            .map(|physical| physical.non_air_blocks);
+        println!(
+            "budget-zero {}: certified={} ticks={ticks:?} blocks={blocks:?}",
+            case.name, case.compiled_and_certified,
+        );
+    }
+
+    assert!(
+        failures.is_empty(),
+        "budget-zero acceptance failures: {failures:#?}"
+    );
 }
 
 #[test]

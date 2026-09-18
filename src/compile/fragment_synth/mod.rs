@@ -14,6 +14,7 @@ pub(crate) mod route_schedule;
 mod search;
 pub(crate) mod seed;
 pub(crate) mod services;
+pub(crate) mod terminal_geometry;
 pub mod timing_graph;
 pub mod topology;
 pub mod verify;

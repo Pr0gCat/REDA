@@ -129,11 +129,14 @@ impl Observer {
     pub fn new(watched: impl IntoIterator<Item = (Position, String)>) -> Self {
         let mut registrations = BTreeMap::<Position, Vec<WatchRegistration>>::new();
         for (position, label) in watched {
-            registrations.entry(position).or_default().push(WatchRegistration {
-                id: None,
-                display_label: Some(label.clone()),
-                label,
-            });
+            registrations
+                .entry(position)
+                .or_default()
+                .push(WatchRegistration {
+                    id: None,
+                    display_label: Some(label.clone()),
+                    label,
+                });
         }
         Self {
             watched: registrations,
@@ -152,11 +155,14 @@ impl Observer {
                 .display_label
                 .clone()
                 .unwrap_or_else(|| format!("{:?}", site.id));
-            registrations.entry(position).or_default().push(WatchRegistration {
-                id: Some(site.id),
-                label,
-                display_label: site.display_label,
-            });
+            registrations
+                .entry(position)
+                .or_default()
+                .push(WatchRegistration {
+                    id: Some(site.id),
+                    label,
+                    display_label: site.display_label,
+                });
         }
         for registrations in registrations.values_mut() {
             registrations.sort_by_key(|registration| registration.id);
@@ -266,7 +272,10 @@ mod tests {
         let mut observer = Observer::new(vec![(pos, "x".to_string())]);
         observer.reset(&world);
 
-        assert!(observer.log().is_empty(), "reset must not itself produce an observation");
+        assert!(
+            observer.log().is_empty(),
+            "reset must not itself produce an observation"
+        );
     }
 
     #[test]
@@ -277,8 +286,10 @@ mod tests {
         world.set(watched.x, watched.y, watched.z, torch(true));
         world.set(quiet.x, quiet.y, quiet.z, torch(false));
 
-        let mut observer =
-            Observer::new(vec![(watched, "watched".to_string()), (quiet, "quiet".to_string())]);
+        let mut observer = Observer::new(vec![
+            (watched, "watched".to_string()),
+            (quiet, "quiet".to_string()),
+        ]);
         observer.reset(&world);
 
         // Flip only `watched`.
@@ -287,7 +298,12 @@ mod tests {
 
         assert_eq!(
             observer.log(),
-            &[Observation { tick: 7, position: watched, label: "watched".to_string(), value: false }]
+            &[Observation {
+                tick: 7,
+                position: watched,
+                label: "watched".to_string(),
+                value: false
+            }]
         );
     }
 
@@ -304,7 +320,10 @@ mod tests {
         observer.sample(&world, 2);
         observer.sample(&world, 3);
 
-        assert!(observer.log().is_empty(), "nothing changed, so nothing should be logged");
+        assert!(
+            observer.log().is_empty(),
+            "nothing changed, so nothing should be logged"
+        );
     }
 
     #[test]
@@ -329,14 +348,26 @@ mod tests {
         world.set(position.x, position.y, position.z, torch(true));
         observer.sample(&world, 9);
 
-        assert_eq!(observer.watched_count(), 1, "the physical cell is sampled once");
-        assert_eq!(observer.typed_log().len(), 2, "both typed identities survive");
+        assert_eq!(
+            observer.watched_count(),
+            1,
+            "the physical cell is sampled once"
+        );
+        assert_eq!(
+            observer.typed_log().len(),
+            2,
+            "both typed identities survive"
+        );
         assert_eq!(observer.typed_log()[0].id, primitive);
         assert_eq!(observer.typed_log()[1].id, instance);
         assert!(observer
             .typed_log()
             .iter()
             .all(|event| event.display_label.as_deref() == Some("same")));
-        assert_eq!(observer.log().len(), 2, "the compatibility projection also stays lossless");
+        assert_eq!(
+            observer.log().len(),
+            2,
+            "the compatibility projection also stays lossless"
+        );
     }
 }

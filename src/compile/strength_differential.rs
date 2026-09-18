@@ -275,11 +275,13 @@ impl GroupReport {
         self.readings
             .iter()
             .filter(|reading| reading.class != CellClass::Floor)
-            .filter_map(|reading| match (reading.walk_reaches(), reading.attributed()) {
-                (false, true) => Some((Direction::FalseRefusal, reading)),
-                (true, false) => Some((Direction::FalsePass, reading)),
-                _ => None,
-            })
+            .filter_map(
+                |reading| match (reading.walk_reaches(), reading.attributed()) {
+                    (false, true) => Some((Direction::FalseRefusal, reading)),
+                    (true, false) => Some((Direction::FalsePass, reading)),
+                    _ => None,
+                },
+            )
             .collect()
     }
 
@@ -639,7 +641,11 @@ pub(crate) fn every_source(
 /// support is now fed by nothing at all, so `component::torch_should_be_lit`
 /// settles it lit on its own -- and `OriginIsolation::emits` records whether it
 /// really did rather than assuming it.
-pub(crate) fn isolation_world(base: &World, all_sources: &BTreeSet<Position>, keep: Position) -> World {
+pub(crate) fn isolation_world(
+    base: &World,
+    all_sources: &BTreeSet<Position>,
+    keep: Position,
+) -> World {
     let mut world = base.clone();
     for &source in all_sources {
         if source == keep {
@@ -694,7 +700,13 @@ pub(crate) fn measure(
         input_positions,
     );
     let groups = MergeGroups::build(netlist, nets);
-    let supports = sink_supports(realised_world, netlist, nets, &groups, gate_output_positions);
+    let supports = sink_supports(
+        realised_world,
+        netlist,
+        nets,
+        &groups,
+        gate_output_positions,
+    );
 
     let replica_verdict =
         replica_refusal(realised_world, netlist, nets, &walks, gate_output_positions);
@@ -832,7 +844,9 @@ pub(crate) fn measure(
                 walk: walk.strength.get(&cell).copied().unwrap_or(0),
                 live: observed(live_world, cell),
                 control: observed(&control_world, cell),
-                solo: best_solo(&isolations, cell).map(|(_, value)| value).unwrap_or(0),
+                solo: best_solo(&isolations, cell)
+                    .map(|(_, value)| value)
+                    .unwrap_or(0),
                 solo_origin: best_solo(&isolations, cell).map(|(origin, _)| origin),
                 live_strong: observed_strong(live_world, cell),
             });

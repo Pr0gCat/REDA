@@ -44,7 +44,11 @@ impl Factorisation {
     /// Factorise `matrix`, given row-major as `order * order`. Only the lower
     /// triangle is read.
     pub fn of(matrix: &[f64], order: usize) -> Result<Factorisation, NotPositiveDefinite> {
-        assert_eq!(matrix.len(), order * order, "matrix is not {order} by {order}");
+        assert_eq!(
+            matrix.len(),
+            order * order,
+            "matrix is not {order} by {order}"
+        );
         let mut lower = vec![0.0; order * order];
         for j in 0..order {
             let mut diagonal = matrix[j * order + j];
@@ -76,7 +80,12 @@ impl Factorisation {
     /// iterate the slice -- is the one thing this must not do.
     #[allow(clippy::needless_range_loop)]
     pub fn solve(&self, rhs: &mut [f64]) {
-        assert_eq!(rhs.len(), self.order, "right-hand side is not {} long", self.order);
+        assert_eq!(
+            rhs.len(),
+            self.order,
+            "right-hand side is not {} long",
+            self.order
+        );
         for i in 0..self.order {
             let mut sum = rhs[i];
             for k in 0..i {
@@ -143,8 +152,16 @@ mod tests {
             // rest there, so that is where they stay.
             let mut rhs = [7.0 * anchor, 7.0 * anchor];
             factorisation.solve(&mut rhs);
-            assert!((rhs[0] - 7.0).abs() < 1e-12, "anchor {anchor} landed at {}", rhs[0]);
-            assert!((rhs[1] - 7.0).abs() < 1e-12, "anchor {anchor} landed at {}", rhs[1]);
+            assert!(
+                (rhs[0] - 7.0).abs() < 1e-12,
+                "anchor {anchor} landed at {}",
+                rhs[0]
+            );
+            assert!(
+                (rhs[1] - 7.0).abs() < 1e-12,
+                "anchor {anchor} landed at {}",
+                rhs[1]
+            );
         }
     }
 
@@ -166,12 +183,16 @@ mod tests {
         let matrix = [4.0, 1.0, 0.5, 1.0, 3.0, 0.25, 0.5, 0.25, 2.0];
         let first = {
             let mut rhs = [1.0, 2.0, 3.0];
-            Factorisation::of(&matrix, 3).expect("positive definite").solve(&mut rhs);
+            Factorisation::of(&matrix, 3)
+                .expect("positive definite")
+                .solve(&mut rhs);
             rhs
         };
         let second = {
             let mut rhs = [1.0, 2.0, 3.0];
-            Factorisation::of(&matrix, 3).expect("positive definite").solve(&mut rhs);
+            Factorisation::of(&matrix, 3)
+                .expect("positive definite")
+                .solve(&mut rhs);
             rhs
         };
         assert_eq!(first.map(f64::to_bits), second.map(f64::to_bits));

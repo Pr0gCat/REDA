@@ -217,7 +217,9 @@ fn select(args: &[String], circuits: &[NamedCircuit]) -> Result<SelectedCircuit,
         });
     }
 
-    let requested = args.first().expect("select is only called with at least one argument");
+    let requested = args
+        .first()
+        .expect("select is only called with at least one argument");
 
     if let Some(circuit) = verilog::find(requested) {
         let (netlist, output_labels) = circuit
@@ -240,7 +242,10 @@ fn select(args: &[String], circuits: &[NamedCircuit]) -> Result<SelectedCircuit,
         });
     }
 
-    Err(format!("unknown circuit '{requested}'\n\n{}", usage(circuits)))
+    Err(format!(
+        "unknown circuit '{requested}'\n\n{}",
+        usage(circuits)
+    ))
 }
 
 fn facing_str(f: Option<Facing>) -> &'static str {
@@ -322,7 +327,12 @@ fn main() {
         std::process::exit(1);
     }
 
-    let SelectedCircuit { name, netlist, output_labels, lowering_path } = match select(&args, &circuits) {
+    let SelectedCircuit {
+        name,
+        netlist,
+        output_labels,
+        lowering_path,
+    } = match select(&args, &circuits) {
         Ok(selected) => selected,
         Err(message) => {
             eprintln!("{message}");
@@ -372,7 +382,11 @@ fn main() {
         println!("GATEOUT {gate_name} {x} {y} {z}");
     }
     for gate in &netlist.gates {
-        let inputs = if gate.inputs.is_empty() { "-".to_string() } else { gate.inputs.join(",") };
+        let inputs = if gate.inputs.is_empty() {
+            "-".to_string()
+        } else {
+            gate.inputs.join(",")
+        };
         println!("GATE {} {inputs} {}", gate.output, gate.kind.wire_name());
     }
 

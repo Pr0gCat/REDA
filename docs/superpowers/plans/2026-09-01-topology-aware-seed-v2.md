@@ -355,8 +355,8 @@ otherwise => LayoutRepair::SeparateOwners { source_owner, sink_owner };
 
 Canonicalize and deduplicate repairs before rebuilding. A duplicate repair terminates with `SeedExhausted`. Certification failure is returned directly and is not converted into geometry guessing.
 
-Treat only typed verifier `CrossRouteConnectivity` as repairable by adding
-`ExclusiveGuardedTrack` for the later movable route source. Return every other
+Treat only typed verifier `CrossRouteConnectivity` and `CrossRouteCoupling` as
+repairable by adding `ExclusiveGuardedTrack` for the later movable route source. Return every other
 verification failure directly. `SeedExhausted` records attempts used and the
 final typed router or cross-route refusal, and maps to the existing seed
 backtrack-cap terminal reason.

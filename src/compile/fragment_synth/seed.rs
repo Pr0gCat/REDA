@@ -24,14 +24,18 @@ use crate::compile::fragment_synth::instance_graph::{
     DuplicateRequest, InstanceGraph, PhysicalDriver, PhysicalSink, SynthesisError,
 };
 use crate::compile::fragment_synth::placement::{
-    analyse_instance_dag, SeedPlacementAnalysis, SeedPlacementPlan, SeedPlacementRequest,
-    SeedPlacer,
+    analyse_instance_dag, LayoutOwner, LayoutRepair, RunwayDirection, SeedPlacementAnalysis,
+    SeedPlacementError, SeedPlacementPlan, SeedPlacementRequest, SeedPlacer, SeparationAxis,
 };
 use crate::compile::fragment_synth::realise::{ExpandedAdapterError, ExpandedCandidateAdapter};
 use crate::compile::fragment_synth::route_schedule::{
-    RouteObligation, RouteSchedule, TargetObligation,
+    RouteObligation, RouteSchedule, RouteScheduleError, TargetObligation,
 };
 use crate::compile::fragment_synth::services::{SeedEmitter, SeedVerifier};
+use crate::compile::fragment_synth::terminal_geometry::{
+    primitive_input_terminal, primitive_output_terminal, source_escape_corridor,
+    PrimitiveTerminalError,
+};
 use crate::compile::fragment_synth::topology::{
     ConnectionSource, ConnectionTarget, ContributorSpec, OutputSpec,
 };
@@ -41,9 +45,9 @@ use crate::compile::physical::{self, PortKind};
 use crate::compile::planner::{PortPlacements, PortRole};
 use crate::compile::routing::{
     DelayedComponent, DelayedOwner, NonEmptyRouteSinks, PhysicalReservationKind,
-    PhysicalReservationOwner, PhysicalReservations, PhysicalRouter, RouteEndpoint, RouteRequest,
-    RouteSink, RouterFailure, RouterLimitKind, RouterRefusalCategory, TerminalContract,
-    TerminalRequirement,
+    PhysicalReservationOwner, PhysicalReservations, PhysicalRouter, RouteEndpoint, RouteGuidance,
+    RouteRequest, RouteSink, RouterFailure, RouterLimitKind, RouterRefusalCategory,
+    TerminalContract, TerminalRequirement,
 };
 use crate::compile::topology::{Library, Primitive};
 use crate::compile::verification::ExpandedPhysicalError;
@@ -53,6 +57,9 @@ use crate::redstone::simulator::propagate::MAX_SIGNAL_STRENGTH;
 use crate::redstone::world::block::{BlockKind, BlockState, Facing};
 
 const ORIGIN_WORLD_MARGIN: i32 = 16;
+const MAX_LAYOUT_REPAIR_ATTEMPTS: u64 = 16;
+const MIN_ROUTE_PRECEDENCE_REPAIRS: u64 = 16;
+const MAX_ROUTE_PRECEDENCE_REPAIRS: u64 = 128;
 
 #[derive(Clone, Copy)]
 pub(crate) struct SeedInput<'a> {
@@ -98,6 +105,8 @@ pub(crate) enum SeedError {
     InvalidPins(#[source] crate::compile::planner::PlannerError),
     #[error("physical placement at {at:?} overlaps another seed component")]
     PlacementCollision { at: Anchor },
+    #[error("seed placement planning failed: {0}")]
+    PlacementPlan(#[from] SeedPlacementError),
     #[error(
         "seed placement exhausted at instance {instance:?}, primitive {primitive:?}, radius {radius}"
     )]
@@ -108,6 +117,15 @@ pub(crate) enum SeedError {
     },
     #[error("typed route construction failed: {0}")]
     Routing(#[source] SeedRoutingFailure),
+    #[error("route schedule construction failed: {0}")]
+    RouteSchedule(#[from] RouteScheduleError),
+    #[error("repairable seed attempt failed: {0}")]
+    Repairable(#[source] SeedRepairRefusal),
+    #[error("seed repair exhausted after {attempts_used} attempts: {final_refusal}")]
+    SeedExhausted {
+        attempts_used: u64,
+        final_refusal: SeedRepairRefusal,
+    },
     #[error("typed route sink set was unexpectedly empty")]
     EmptyRoute,
     #[error("expanded candidate adaptation failed: {0}")]
@@ -122,6 +140,8 @@ pub(crate) enum SeedError {
     IdentityOverflow,
     #[error("seed topology is internally incomplete: {0}")]
     Incomplete(&'static str),
+    #[error("physical input terminal is invalid: {0}")]
+    PrimitiveTerminal(#[from] PrimitiveTerminalError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -130,32 +150,91 @@ pub(crate) struct SeedRoutingFailure {
     pub route: RouteId,
     pub source: PhysicalEndpointId,
     pub sink: RoutedSinkId,
+    pub sink_endpoint: PhysicalEndpointId,
+    pub fanout: usize,
     pub category: RouterRefusalCategory,
     pub limit_kind: Option<RouterLimitKind>,
     pub limit: Option<u64>,
     pub work_used: Option<u64>,
     pub plan_fingerprint: Fingerprint,
     pub source_at: Anchor,
+    pub source_exit: Facing,
+    pub precedence_blocker: Option<PhysicalEndpointId>,
+    pub source_escape_obstructed: bool,
     pub sink_at: Anchor,
+    pub sink_entry: Option<Facing>,
 }
 
 impl std::fmt::Display for SeedRoutingFailure {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             formatter,
-            "scheduled route {} ({:?}) from {:?} at {:?} failed at {:?} at {:?} as {:?}",
+            "scheduled route {} ({:?}) from {:?} at {:?} exiting {:?} failed at {:?} at {:?} entering {:?} as {:?}",
             self.scheduled_index,
             self.route,
             self.source,
             self.source_at,
+            self.source_exit,
             self.sink,
             self.sink_at,
+            self.sink_entry,
             self.category
         )
     }
 }
 
 impl std::error::Error for SeedRoutingFailure {}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SeedRepairRefusal {
+    Routing(SeedRoutingFailure),
+    CrossRouteConnectivity {
+        first: RouteId,
+        second: RouteId,
+        first_source: PhysicalEndpointId,
+        second_source: PhysicalEndpointId,
+        at: Anchor,
+        guarded_source: PhysicalEndpointId,
+    },
+    CrossRouteCoupling {
+        source_route: RouteId,
+        foreign: RouteId,
+        source_endpoint: PhysicalEndpointId,
+        foreign_endpoint: PhysicalEndpointId,
+        at: Anchor,
+        guarded_source: PhysicalEndpointId,
+    },
+}
+
+impl std::fmt::Display for SeedRepairRefusal {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Routing(failure) => failure.fmt(formatter),
+            Self::CrossRouteConnectivity {
+                first,
+                second,
+                at,
+                guarded_source,
+                ..
+            } => write!(
+                formatter,
+                "routes {first:?} and {second:?} connect at {at:?}; guard {guarded_source:?}"
+            ),
+            Self::CrossRouteCoupling {
+                source_route,
+                foreign,
+                at,
+                guarded_source,
+                ..
+            } => write!(
+                formatter,
+                "route {source_route:?} couples to {foreign:?} at {at:?}; guard {guarded_source:?}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SeedRepairRefusal {}
 
 pub(crate) struct SparseSeedBuilder;
 
@@ -205,6 +284,18 @@ impl PlanTranslation {
             .map(|pose| pose.preferred_origin)
             .chain(plan.automatic_inputs.values().copied())
             .chain(plan.automatic_outputs.values().copied())
+            .chain(plan.owner_offsets.iter().filter_map(|(owner, offset)| {
+                let instance = match owner {
+                    LayoutOwner::Primitive(primitive) => primitive.instance,
+                    LayoutOwner::Junction(instance) => *instance,
+                    LayoutOwner::Boundary(_) | LayoutOwner::Instance(_) => return None,
+                };
+                plan.instances.get(&instance).map(|pose| Anchor {
+                    x: pose.preferred_origin.x.saturating_add(offset.x),
+                    y: pose.preferred_origin.y.saturating_add(offset.y),
+                    z: pose.preferred_origin.z.saturating_add(offset.z),
+                })
+            }))
             .collect::<Vec<_>>();
         let min_x = anchors.iter().map(|anchor| anchor.x).min().unwrap_or(0);
         let min_z = anchors.iter().map(|anchor| anchor.z).min().unwrap_or(0);
@@ -256,6 +347,42 @@ impl PlacementSearch {
     }
 }
 
+#[derive(Debug)]
+struct SeedRepairBudget {
+    layout_attempts_used: u64,
+    layout_attempt_limit: u64,
+    route_precedence_repairs_used: u64,
+    route_precedence_repair_limit: u64,
+}
+
+impl SeedRepairBudget {
+    fn new(layout_attempt_limit: u64, route_precedence_repair_limit: u64) -> Self {
+        Self {
+            layout_attempts_used: 1,
+            layout_attempt_limit,
+            route_precedence_repairs_used: 0,
+            route_precedence_repair_limit,
+        }
+    }
+
+    fn try_charge(&mut self, repair: &LayoutRepair) -> bool {
+        if matches!(repair, LayoutRepair::RouteBefore { .. }) {
+            if self.route_precedence_repairs_used >= self.route_precedence_repair_limit {
+                return false;
+            }
+            self.route_precedence_repairs_used =
+                self.route_precedence_repairs_used.saturating_add(1);
+            true
+        } else {
+            if self.layout_attempts_used >= self.layout_attempt_limit {
+                return false;
+            }
+            self.layout_attempts_used = self.layout_attempts_used.saturating_add(1);
+            true
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 enum PendingTarget {
     Connection(ConnectionId, TargetGeometry),
@@ -286,6 +413,13 @@ impl PendingTarget {
     fn geometry(&self) -> TargetGeometry {
         match self {
             Self::Connection(_, geometry) | Self::DeclaredOutput(_, geometry) => *geometry,
+        }
+    }
+
+    fn endpoint(&self) -> PhysicalEndpointId {
+        match self {
+            Self::Connection(connection, _) => PhysicalEndpointId::Landing(*connection),
+            Self::DeclaredOutput(port, _) => PhysicalEndpointId::DeclaredOutput(*port),
         }
     }
 }
@@ -341,6 +475,61 @@ impl SparseSeedBuilder {
             }
         }
 
+        let mut repairs = BTreeSet::new();
+        let mut attempts_used = 0u64;
+        let attempt_limit = services
+            .search_config
+            .max_seed_backtracks
+            .min(MAX_LAYOUT_REPAIR_ATTEMPTS);
+        let route_precedence_repair_limit = u64::try_from(instances.instances.len())
+            .unwrap_or(u64::MAX)
+            .saturating_mul(2)
+            .clamp(MIN_ROUTE_PRECEDENCE_REPAIRS, MAX_ROUTE_PRECEDENCE_REPAIRS);
+        let mut repair_budget = SeedRepairBudget::new(attempt_limit, route_precedence_repair_limit);
+        loop {
+            attempts_used = attempts_used.saturating_add(1);
+            match Self::build_attempt(
+                input,
+                services,
+                variant,
+                instances.clone(),
+                &repairs.iter().copied().collect::<Vec<_>>(),
+            ) {
+                Ok(certified) => return Ok(certified),
+                Err(SeedError::Repairable(refusal)) => {
+                    let repair = next_layout_repair(&refusal, &repairs)?;
+                    if std::env::var_os("REDA_TRACE_SEED_REPAIRS").is_some() {
+                        eprintln!(
+                            "seed attempt {attempts_used}: refusal={refusal:?}; repair={repair:?}"
+                        );
+                    }
+                    if repairs.contains(&repair) || !repair_budget.try_charge(&repair) {
+                        return Err(SeedError::SeedExhausted {
+                            attempts_used,
+                            final_refusal: refusal,
+                        });
+                    }
+                    repairs.insert(repair);
+                }
+                Err(error) => {
+                    if std::env::var_os("REDA_TRACE_SEED_REPAIRS").is_some() {
+                        eprintln!(
+                            "seed attempt {attempts_used}: terminal={error:?}; repairs={repairs:?}"
+                        );
+                    }
+                    return Err(error);
+                }
+            }
+        }
+    }
+
+    fn build_attempt(
+        input: SeedInput<'_>,
+        services: SeedServices<'_>,
+        variant: &SeedVariant,
+        instances: InstanceGraph,
+        repairs: &[LayoutRepair],
+    ) -> Result<CertifiedCandidate, SeedError> {
         let mut candidate =
             ExpandedPhysicalCandidate::empty(instances, input.pins.cloned().unwrap_or_default());
         candidate.bind_pin_contracts(input.lowered)?;
@@ -348,14 +537,14 @@ impl SparseSeedBuilder {
             .map_err(SeedError::InvalidPins)?;
         let placement_analysis = analyse_instance_dag(&candidate.instances)
             .map_err(|_| SeedError::Incomplete("seed placement analysis"))?;
-        let placement_plan = services
-            .placer
-            .plan(SeedPlacementRequest {
+        let placement_plan = services.placer.plan_with_repairs(
+            SeedPlacementRequest {
                 graph: &candidate.instances,
                 analysis: &placement_analysis,
                 pins: &candidate.pin_contracts,
-            })
-            .map_err(|_| SeedError::Incomplete("seed placement plan"))?;
+            },
+            repairs,
+        )?;
         let plan_translation =
             PlanTranslation::for_unpinned(&placement_plan, !candidate.pin_contracts.is_empty());
 
@@ -384,24 +573,77 @@ impl SparseSeedBuilder {
         )?;
 
         let mut reservations = reservations_for_components(&candidate)?;
-        reserve_route_endpoints(&mut reservations, &candidate, &sources, &targets);
-        route_all(
+        reserve_route_endpoints(&mut reservations, &candidate, &sources, &targets)?;
+        if let Err(error) = route_all(
             &mut candidate,
             services.router,
             services.search_config,
             &placement_analysis,
-            &placement_plan.fingerprint,
+            &placement_plan,
+            plan_translation,
             &sources,
             &targets,
+            repairs,
             &mut reservations,
-        )?;
+        ) {
+            return match error {
+                SeedError::Routing(failure) => {
+                    Err(SeedError::Repairable(SeedRepairRefusal::Routing(failure)))
+                }
+                other => Err(other),
+            };
+        }
+        if let Some(failure) =
+            route_ownership_failure(&candidate, &sources, &placement_plan.fingerprint)?
+        {
+            return Err(SeedError::Repairable(SeedRepairRefusal::Routing(failure)));
+        }
         candidate.validate_shape()?;
         candidate.validate_physical_ownership()?;
 
         let adapter = ExpandedCandidateAdapter::new(&candidate)?;
         let size = adapter.deterministic_world_size()?;
         let emitted = services.emitter.emit(&adapter, size)?;
-        services.verifier.verify(&candidate, &emitted)?;
+        match services.verifier.verify(&candidate, &emitted) {
+            Ok(()) => {}
+            Err(ExpandedPhysicalError::CrossRouteConnectivity { first, second, at }) => {
+                if std::env::var_os("REDA_TRACE_SEED_REPAIRS").is_some() {
+                    eprintln!(
+                        "cross-route connectivity: first={first:?}/{:?} second={second:?}/{:?} at={at:?} owner={:?}",
+                        candidate.routes.get(&first).map(|tree| tree.source),
+                        candidate.routes.get(&second).map(|tree| tree.source),
+                        emitted.owner_at(at),
+                    );
+                }
+                return Err(SeedError::Repairable(cross_route_connectivity_refusal(
+                    &candidate, first, second, at, repairs,
+                )?));
+            }
+            Err(ExpandedPhysicalError::CrossRouteCoupling {
+                source_route,
+                foreign,
+                at,
+            }) => {
+                let (source_endpoint, foreign_endpoint, guarded_source) = cross_route_sources(
+                    &candidate,
+                    source_route,
+                    foreign,
+                    &candidate.pin_contracts,
+                    repairs,
+                )?;
+                return Err(SeedError::Repairable(
+                    SeedRepairRefusal::CrossRouteCoupling {
+                        source_route,
+                        foreign,
+                        source_endpoint,
+                        foreign_endpoint,
+                        at,
+                        guarded_source,
+                    },
+                ));
+            }
+            Err(error) => return Err(SeedError::Verification(error)),
+        }
 
         let certification = CertificationConfig::from_search(services.search_config);
         services
@@ -411,12 +653,376 @@ impl SparseSeedBuilder {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SeedPhysicalOwner {
+    Primitive(PrimitiveId),
+    Boundary(PhysicalEndpointId),
+    Route(RouteId),
+    Junction(InstanceId),
+}
+
+fn claim_seed_owner(
+    ledger: &mut BTreeMap<Anchor, SeedPhysicalOwner>,
+    at: Anchor,
+    owner: SeedPhysicalOwner,
+) -> Option<(SeedPhysicalOwner, SeedPhysicalOwner)> {
+    match ledger.insert(at, owner) {
+        Some(first) if first != owner => Some((first, owner)),
+        _ => None,
+    }
+}
+
+fn route_ownership_failure(
+    candidate: &ExpandedPhysicalCandidate,
+    sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
+    plan_fingerprint: &Fingerprint,
+) -> Result<Option<SeedRoutingFailure>, SeedError> {
+    let mut ledger = BTreeMap::<Anchor, SeedPhysicalOwner>::new();
+    let mut conflict = None;
+    let mut claim = |at: Anchor, owner: SeedPhysicalOwner| {
+        if let Some((first, second)) = claim_seed_owner(&mut ledger, at, owner) {
+            let route = match (first, owner) {
+                (SeedPhysicalOwner::Route(route), _) | (_, SeedPhysicalOwner::Route(route)) => {
+                    Some(route)
+                }
+                _ => None,
+            };
+            if conflict.is_none() {
+                if std::env::var_os("REDA_TRACE_SEED_REPAIRS").is_some() {
+                    eprintln!(
+                        "physical ownership conflict: at={at:?} first={first:?} second={second:?}"
+                    );
+                }
+                conflict = route.map(|route| (route, at));
+            }
+        }
+    };
+    for (&id, placement) in &candidate.placements {
+        for block in &placement.blocks {
+            claim(block.at, SeedPhysicalOwner::Primitive(id));
+        }
+    }
+    for (&endpoint, boundary) in &candidate.boundaries {
+        for block in &boundary.blocks {
+            claim(block.at, SeedPhysicalOwner::Boundary(endpoint));
+        }
+    }
+    for (&route, tree) in &candidate.routes {
+        for block in tree.cells.iter().chain(&tree.floors) {
+            claim(block.at, SeedPhysicalOwner::Route(route));
+        }
+    }
+    for (&instance, junction) in &candidate.junctions {
+        for block in &junction.cells {
+            claim(block.at, SeedPhysicalOwner::Junction(instance));
+        }
+    }
+    let Some((route, at)) = conflict else {
+        return Ok(None);
+    };
+    let tree = candidate
+        .routes
+        .get(&route)
+        .ok_or(SeedError::Incomplete("ownership-conflict route"))?;
+    let above = Anchor { y: at.y + 1, ..at };
+    let branch = tree
+        .branches
+        .iter()
+        .find(|branch| branch.path.contains(&at) || branch.path.contains(&above))
+        .or_else(|| tree.branches.first())
+        .ok_or(SeedError::EmptyRoute)?;
+    let sink_endpoint = match branch.target {
+        crate::compile::routing::RouteTarget::Connection(connection) => {
+            PhysicalEndpointId::Landing(connection)
+        }
+        crate::compile::routing::RouteTarget::DeclaredOutput(port) => {
+            PhysicalEndpointId::DeclaredOutput(port)
+        }
+    };
+    let source_at = sources
+        .get(&tree.source)
+        .map(|geometry| geometry.route_anchor)
+        .ok_or(SeedError::Incomplete("ownership-conflict source geometry"))?;
+    let source_exit = sources
+        .get(&tree.source)
+        .map(|geometry| geometry.allowed_exit)
+        .ok_or(SeedError::Incomplete("ownership-conflict source geometry"))?;
+    let sink_entry = branch
+        .path
+        .iter()
+        .rev()
+        .copied()
+        .find(|at| *at != branch.terminal.at)
+        .and_then(|approach| horizontal_direction_between(branch.terminal.at, approach));
+    Ok(Some(SeedRoutingFailure {
+        scheduled_index: usize::try_from(route.0).map_err(|_| SeedError::IdentityOverflow)?,
+        route,
+        source: tree.source,
+        sink: branch.sink,
+        sink_endpoint,
+        fanout: tree.branches.len(),
+        category: RouterRefusalCategory::PhysicalInvariant,
+        limit_kind: None,
+        limit: None,
+        work_used: None,
+        plan_fingerprint: plan_fingerprint.clone(),
+        source_at,
+        source_exit,
+        precedence_blocker: None,
+        source_escape_obstructed: false,
+        sink_at: branch.terminal.at,
+        sink_entry,
+    }))
+}
+
+fn horizontal_direction_between(from: Anchor, to: Anchor) -> Option<Facing> {
+    match (to.x - from.x, to.y - from.y, to.z - from.z) {
+        (0, 0, -1) => Some(Facing::North),
+        (0, 0, 1) => Some(Facing::South),
+        (1, 0, 0) => Some(Facing::East),
+        (-1, 0, 0) => Some(Facing::West),
+        _ => None,
+    }
+}
+
+fn next_layout_repair(
+    refusal: &SeedRepairRefusal,
+    repairs: &BTreeSet<LayoutRepair>,
+) -> Result<LayoutRepair, SeedError> {
+    let repair = match refusal {
+        SeedRepairRefusal::CrossRouteConnectivity {
+            first_source,
+            second_source,
+            guarded_source,
+            ..
+        } => {
+            let guard = LayoutRepair::ExclusiveGuardedTrack {
+                source: *guarded_source,
+            };
+            if repairs.contains(&guard) {
+                next_owner_separation(
+                    repairs,
+                    layout_owner_for_endpoint(*first_source),
+                    layout_owner_for_endpoint(*second_source),
+                    SeparationAxis::Lateral,
+                )
+            } else {
+                guard
+            }
+        }
+        SeedRepairRefusal::CrossRouteCoupling {
+            source_endpoint,
+            foreign_endpoint,
+            guarded_source,
+            ..
+        } => {
+            let guard = LayoutRepair::ExclusiveGuardedTrack {
+                source: *guarded_source,
+            };
+            if repairs.contains(&guard) {
+                next_owner_separation(
+                    repairs,
+                    layout_owner_for_endpoint(*source_endpoint),
+                    layout_owner_for_endpoint(*foreign_endpoint),
+                    SeparationAxis::Lateral,
+                )
+            } else {
+                guard
+            }
+        }
+        SeedRepairRefusal::Routing(failure) => {
+            let preparation = LayoutRepair::ExclusiveGuardedTrack {
+                source: failure.source,
+            };
+            let promotion = LayoutRepair::EarlyTreeSinkAndEscape {
+                source: failure.source,
+                sink: failure.sink_endpoint,
+            };
+            if let Some(blocker) = failure.precedence_blocker {
+                let precedence = LayoutRepair::RouteBefore {
+                    source: failure.source,
+                    blocker,
+                };
+                if !repairs.contains(&precedence)
+                    && !route_precedence_would_cycle(repairs, failure.source, blocker)
+                {
+                    return Ok(precedence);
+                }
+            }
+            if failure.fanout > 1 && !repairs.contains(&preparation) {
+                preparation
+            } else if failure.fanout > 1 && !repairs.contains(&promotion) {
+                promotion
+            } else {
+                let source_owner = layout_owner_for_endpoint(failure.source);
+                let sink_owner = layout_owner_for_endpoint(failure.sink_endpoint);
+                let axis = if failure.category == RouterRefusalCategory::NoLocalRoute
+                    && failure.precedence_blocker.is_none()
+                {
+                    runway_direction(failure.source_exit)
+                        .map(SeparationAxis::Runway)
+                        .unwrap_or(SeparationAxis::Lateral)
+                } else {
+                    SeparationAxis::Lateral
+                };
+                next_owner_separation(repairs, source_owner, sink_owner, axis)
+            }
+        }
+    };
+    Ok(repair)
+}
+
+fn runway_direction(facing: Facing) -> Option<RunwayDirection> {
+    match facing {
+        Facing::North => Some(RunwayDirection::North),
+        Facing::South => Some(RunwayDirection::South),
+        Facing::East => Some(RunwayDirection::East),
+        Facing::West => Some(RunwayDirection::West),
+        Facing::Up | Facing::Down => None,
+    }
+}
+
+fn route_precedence_would_cycle(
+    repairs: &BTreeSet<LayoutRepair>,
+    source: PhysicalEndpointId,
+    blocker: PhysicalEndpointId,
+) -> bool {
+    let mut pending = vec![blocker];
+    let mut visited = BTreeSet::new();
+    while let Some(endpoint) = pending.pop() {
+        if endpoint == source {
+            return true;
+        }
+        if !visited.insert(endpoint) {
+            continue;
+        }
+        pending.extend(repairs.iter().filter_map(|repair| match repair {
+            LayoutRepair::RouteBefore {
+                source: edge_source,
+                blocker: edge_blocker,
+            } if *edge_source == endpoint => Some(*edge_blocker),
+            _ => None,
+        }));
+    }
+    false
+}
+
+fn next_owner_separation(
+    repairs: &BTreeSet<LayoutRepair>,
+    source_owner: LayoutOwner,
+    sink_owner: LayoutOwner,
+    axis: SeparationAxis,
+) -> LayoutRepair {
+    let ordinal = repairs
+        .iter()
+        .filter_map(|repair| match repair {
+            LayoutRepair::SeparateOwners {
+                source_owner: candidate_source,
+                sink_owner: candidate_sink,
+                axis: candidate_axis,
+                ordinal,
+            } if *candidate_source == source_owner
+                && *candidate_sink == sink_owner
+                && *candidate_axis == axis =>
+            {
+                Some(*ordinal)
+            }
+            _ => None,
+        })
+        .max()
+        .map_or(0, |ordinal| ordinal.saturating_add(1));
+    LayoutRepair::SeparateOwners {
+        source_owner,
+        sink_owner,
+        axis,
+        ordinal,
+    }
+}
+
+fn layout_owner_for_endpoint(endpoint: PhysicalEndpointId) -> LayoutOwner {
+    match endpoint {
+        PhysicalEndpointId::PrimaryInput(_) | PhysicalEndpointId::DeclaredOutput(_) => {
+            LayoutOwner::Boundary(endpoint)
+        }
+        PhysicalEndpointId::PrimitiveOutput(primitive) => LayoutOwner::Instance(primitive.instance),
+        PhysicalEndpointId::Junction(instance) => LayoutOwner::Instance(instance),
+        PhysicalEndpointId::Landing(connection) => LayoutOwner::Instance(match connection {
+            ConnectionId::External { instance, .. } | ConnectionId::Internal { instance, .. } => {
+                instance
+            }
+        }),
+    }
+}
+
+fn cross_route_connectivity_refusal(
+    candidate: &ExpandedPhysicalCandidate,
+    first: RouteId,
+    second: RouteId,
+    at: Anchor,
+    repairs: &[LayoutRepair],
+) -> Result<SeedRepairRefusal, SeedError> {
+    let (first_source, second_source, guarded_source) =
+        cross_route_sources(candidate, first, second, &candidate.pin_contracts, repairs)?;
+    Ok(SeedRepairRefusal::CrossRouteConnectivity {
+        first,
+        second,
+        first_source,
+        second_source,
+        at,
+        guarded_source,
+    })
+}
+
+fn cross_route_sources(
+    candidate: &ExpandedPhysicalCandidate,
+    first: RouteId,
+    second: RouteId,
+    pins: &BTreeMap<PhysicalEndpointId, crate::compile::planner::PortPin>,
+    repairs: &[LayoutRepair],
+) -> Result<(PhysicalEndpointId, PhysicalEndpointId, PhysicalEndpointId), SeedError> {
+    let first_source = candidate
+        .routes
+        .get(&first)
+        .map(|tree| tree.source)
+        .ok_or(SeedError::Incomplete("cross-route first source"))?;
+    let second_source = candidate
+        .routes
+        .get(&second)
+        .map(|tree| tree.source)
+        .ok_or(SeedError::Incomplete("cross-route second source"))?;
+    let mut routes = [first, second];
+    routes.sort();
+    for route in routes.into_iter().rev() {
+        let source = candidate
+            .routes
+            .get(&route)
+            .map(|tree| tree.source)
+            .ok_or(SeedError::Incomplete("cross-route source"))?;
+        if !pins.contains_key(&source)
+            && !repairs.contains(&LayoutRepair::ExclusiveGuardedTrack { source })
+        {
+            return Ok((first_source, second_source, source));
+        }
+    }
+    for route in routes.into_iter().rev() {
+        let source = candidate
+            .routes
+            .get(&route)
+            .map(|tree| tree.source)
+            .ok_or(SeedError::Incomplete("cross-route source"))?;
+        if !pins.contains_key(&source) {
+            return Ok((first_source, second_source, source));
+        }
+    }
+    Err(SeedError::Incomplete("movable cross-route source"))
+}
+
 fn reserve_route_endpoints(
     reservations: &mut PhysicalReservations,
     candidate: &ExpandedPhysicalCandidate,
     sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
     targets: &BTreeMap<PhysicalSink, TargetGeometry>,
-) {
+) -> Result<(), SeedError> {
     for (&endpoint, source) in sources {
         if reservations.get(&source.route_anchor).is_none() {
             reservations.reserve(
@@ -450,6 +1056,36 @@ fn reserve_route_endpoints(
         .map(|source| source.route_anchor)
         .chain(targets.values().map(|target| target.terminal))
         .collect::<BTreeSet<_>>();
+    for &endpoint in candidate.boundaries.keys() {
+        match endpoint {
+            PhysicalEndpointId::PrimaryInput(_) => {
+                let source = sources
+                    .get(&endpoint)
+                    .ok_or(SeedError::Incomplete("boundary source geometry"))?;
+                let body = step(source.route_anchor, source.allowed_exit.opposite());
+                reserve_boundary_terminal_sides(
+                    reservations,
+                    endpoint,
+                    body,
+                    source.route_anchor,
+                    &endpoints,
+                );
+            }
+            PhysicalEndpointId::DeclaredOutput(port) => {
+                let target = targets
+                    .get(&PhysicalSink::DeclaredOutput(port))
+                    .ok_or(SeedError::Incomplete("boundary target geometry"))?;
+                reserve_boundary_terminal_sides(
+                    reservations,
+                    endpoint,
+                    target.support,
+                    target.terminal,
+                    &endpoints,
+                );
+            }
+            _ => return Err(SeedError::Incomplete("boundary endpoint identity")),
+        }
+    }
     for (&primitive, placement) in &candidate.placements {
         let Some(specification) = candidate
             .instances
@@ -492,6 +1128,34 @@ fn reserve_route_endpoints(
                 );
             }
         }
+    }
+    Ok(())
+}
+
+fn reserve_boundary_terminal_sides(
+    reservations: &mut PhysicalReservations,
+    endpoint: PhysicalEndpointId,
+    body: Anchor,
+    handover: Anchor,
+    protected: &BTreeSet<Anchor>,
+) {
+    for direction in [
+        Facing::North,
+        Facing::South,
+        Facing::East,
+        Facing::West,
+        Facing::Up,
+        Facing::Down,
+    ] {
+        let side = step(body, direction);
+        if side == handover || protected.contains(&side) || reservations.get(&side).is_some() {
+            continue;
+        }
+        reservations.reserve(
+            side,
+            PhysicalReservationOwner::Endpoint(endpoint),
+            PhysicalReservationKind::KeepOut,
+        );
     }
 }
 
@@ -789,17 +1453,21 @@ fn place_instances(
             .copied()
             .ok_or(SeedError::Incomplete("planned instance pose"))?;
         let placement_override = placement_overrides.get(&instance.id).copied();
-        let base = plan_translation.apply(Anchor {
-            x: planned
-                .preferred_origin
-                .x
-                .saturating_add(placement_override.map_or(0, |choice| choice.dx)),
-            z: planned
-                .preferred_origin
-                .z
-                .saturating_add(placement_override.map_or(0, |choice| choice.dz)),
-            ..planned.preferred_origin
-        });
+        let base = apply_plan_owner_offset(
+            plan_translation.apply(Anchor {
+                x: planned
+                    .preferred_origin
+                    .x
+                    .saturating_add(placement_override.map_or(0, |choice| choice.dx)),
+                z: planned
+                    .preferred_origin
+                    .z
+                    .saturating_add(placement_override.map_or(0, |choice| choice.dz)),
+                ..planned.preferred_origin
+            }),
+            plan,
+            LayoutOwner::Instance(instance.id),
+        );
         let gate = &netlist.gates
             [usize::try_from(instance.logical_gate.0).map_err(|_| SeedError::IdentityOverflow)?];
 
@@ -813,7 +1481,7 @@ fn place_instances(
                     &instance,
                     gate,
                     contributors,
-                    base,
+                    apply_plan_owner_offset(base, plan, LayoutOwner::Junction(instance.id)),
                     facing,
                     occupied,
                     sources,
@@ -828,11 +1496,15 @@ fn place_instances(
                 for specification in &instance.expanded.topology.primitives {
                     let local = positions[&specification.id];
                     let (dx, dy, dz) = geometry::rotate((local.x, local.y, local.z), facing);
-                    let anchor = Anchor {
-                        x: base.x.saturating_add(dx),
-                        y: base.y.saturating_add(dy),
-                        z: base.z.saturating_add(dz),
-                    };
+                    let anchor = apply_plan_owner_offset(
+                        Anchor {
+                            x: base.x.saturating_add(dx),
+                            y: base.y.saturating_add(dy),
+                            z: base.z.saturating_add(dz),
+                        },
+                        plan,
+                        LayoutOwner::Primitive(specification.id),
+                    );
                     place_primitive_searched(
                         candidate,
                         specification.id,
@@ -868,6 +1540,19 @@ fn place_instances(
         }
     }
     Ok(())
+}
+
+fn apply_plan_owner_offset(anchor: Anchor, plan: &SeedPlacementPlan, owner: LayoutOwner) -> Anchor {
+    let offset = plan
+        .owner_offsets
+        .get(&owner)
+        .copied()
+        .unwrap_or(Anchor { x: 0, y: 0, z: 0 });
+    Anchor {
+        x: anchor.x.saturating_add(offset.x),
+        y: anchor.y.saturating_add(offset.y),
+        z: anchor.z.saturating_add(offset.z),
+    }
 }
 
 fn topology_primitive_positions(
@@ -980,7 +1665,6 @@ fn place_junction_instance(
     );
 
     let directions = geometry::input_directions(facing);
-    let mut primitive_slot = 0usize;
     for (input_index, contributor) in contributors.iter().enumerate() {
         let direction = directions[input_index];
         match *contributor {
@@ -1024,8 +1708,7 @@ fn place_junction_instance(
                         ConnectionId::Internal { .. } => None,
                     })
                     .ok_or(SeedError::Incomplete("isolating repeater input"))?;
-                let rear = primitive_input_geometry(candidate, primitive, primitive_slot)?;
-                primitive_slot += 1;
+                let rear = primitive_input_geometry(candidate, primitive, 0)?;
                 targets.insert(
                     PhysicalSink::InstanceInput {
                         instance: instance.id,
@@ -1147,10 +1830,6 @@ fn commit_primitive(
     sources: &mut BTreeMap<PhysicalEndpointId, SourceGeometry>,
     blocks: Vec<PlacedBlock>,
 ) -> Result<(), SeedError> {
-    let variants = physical::variants(primitive);
-    let variant = variants
-        .get(usize::from(facing.index()))
-        .ok_or(SeedError::Incomplete("physical primitive variant"))?;
     claim_blocks(occupied, &blocks)?;
     let delayed = blocks
         .iter()
@@ -1176,13 +1855,8 @@ fn commit_primitive(
         },
     );
 
-    let output_kind = match primitive {
-        Primitive::Torch => PortKind::TorchOutput,
-        Primitive::Repeater => PortKind::RepeaterFront,
-        _ => return Err(SeedError::Incomplete("unsupported seed primitive output")),
-    };
-    let output = variant.port(output_kind);
-    let output_at = translate(anchor, output.position);
+    let output = primitive_output_terminal(primitive, facing, anchor)?;
+    let output_at = output.support;
     candidate.observations.insert(
         ObservationId::PrimitiveOutput(id),
         VerifiedObservation {
@@ -1198,8 +1872,8 @@ fn commit_primitive(
     sources.insert(
         PhysicalEndpointId::PrimitiveOutput(id),
         SourceGeometry {
-            route_anchor: step(output_at, output.direction),
-            allowed_exit: output.direction,
+            route_anchor: output.route_anchor,
+            allowed_exit: output.allowed_exit,
         },
     );
     Ok(())
@@ -1273,38 +1947,23 @@ fn primitive_input_geometry(
         .flat_map(|instance| &instance.expanded.topology.primitives)
         .find(|specification| specification.id == primitive)
         .ok_or(SeedError::Incomplete("primitive specification"))?;
-    let variant = physical::variants(specification.primitive)
-        .get(usize::from(placement.variant))
-        .ok_or(SeedError::Incomplete("primitive variant"))?;
-    match specification.primitive {
-        Primitive::Torch => {
-            let support = translate(
-                placement.anchor,
-                variant.port(PortKind::TorchInput).position,
-            );
-            let directions = geometry::input_directions(placement.facing);
-            let direction = *directions
-                .get(ordinal)
-                .ok_or(SeedError::Incomplete("torch input socket"))?;
-            Ok(TargetGeometry {
-                terminal: step(support, direction),
-                allowed_entry: direction,
-                support,
-                requirement: TerminalRequirement::Repeater,
-            })
-        }
-        Primitive::Repeater => {
-            let rear = variant.port(PortKind::RepeaterRear);
-            let support = translate(placement.anchor, rear.position);
-            Ok(TargetGeometry {
-                terminal: step(support, rear.direction),
-                allowed_entry: rear.direction,
-                support,
-                requirement: TerminalRequirement::DirectedDust,
-            })
-        }
-        _ => Err(SeedError::Incomplete("unsupported primitive input")),
-    }
+    let input = primitive_input_terminal(
+        specification.primitive,
+        placement.facing,
+        placement.anchor,
+        ordinal,
+    )?;
+    let requirement = match specification.primitive {
+        Primitive::Torch => TerminalRequirement::Repeater,
+        Primitive::Repeater => TerminalRequirement::DirectedDust,
+        _ => return Err(SeedError::Incomplete("unsupported primitive input")),
+    };
+    Ok(TargetGeometry {
+        terminal: input.terminal,
+        allowed_entry: input.allowed_entry,
+        support: input.support,
+        requirement,
+    })
 }
 
 fn route_source_instance(source: PhysicalEndpointId) -> Option<InstanceId> {
@@ -1380,14 +2039,43 @@ fn route_target_slack(
     }
 }
 
+fn route_guidance_for_source(
+    graph: &InstanceGraph,
+    source: PhysicalEndpointId,
+    plan: &SeedPlacementPlan,
+    plan_translation: PlanTranslation,
+) -> Option<RouteGuidance> {
+    let signal = match source {
+        PhysicalEndpointId::PrimaryInput(port) => {
+            crate::compile::fragment_synth::instance_graph::LogicalSignalId::PrimaryInput(port)
+        }
+        _ => {
+            graph
+                .assignments
+                .iter()
+                .find(|assignment| endpoint_for_driver(&assignment.driver) == Some(source))?
+                .signal
+        }
+    };
+    Some(RouteGuidance {
+        origin: plan_translation.apply(plan.frame.origin),
+        lateral: plan.frame.lateral,
+        track: *plan.signal_tracks.get(&signal)?,
+        half_width: 2,
+        penalty_per_block: 2,
+    })
+}
+
 fn route_all(
     candidate: &mut ExpandedPhysicalCandidate,
     router: &dyn PhysicalRouter,
     config: &SearchConfig,
     analysis: &SeedPlacementAnalysis,
-    plan_fingerprint: &Fingerprint,
+    plan: &SeedPlacementPlan,
+    plan_translation: PlanTranslation,
     sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
     targets: &BTreeMap<PhysicalSink, TargetGeometry>,
+    repairs: &[LayoutRepair],
     reservations: &mut PhysicalReservations,
 ) -> Result<(), SeedError> {
     let mut grouped = BTreeMap::<PhysicalEndpointId, Vec<PendingTarget>>::new();
@@ -1457,22 +2145,35 @@ fn route_all(
             .push(PendingTarget::DeclaredOutput(port, geometry));
     }
     for pending in grouped.values().flatten() {
-        let (endpoint, geometry) = match pending {
-            PendingTarget::Connection(connection, geometry) => {
-                (PhysicalEndpointId::Landing(*connection), *geometry)
-            }
-            PendingTarget::DeclaredOutput(port, geometry) => {
-                (PhysicalEndpointId::DeclaredOutput(*port), *geometry)
-            }
-        };
+        let geometry = pending.geometry();
         if reservations.get(&geometry.terminal).is_none() {
             reservations.reserve(
                 geometry.terminal,
-                PhysicalReservationOwner::Endpoint(endpoint),
+                PhysicalReservationOwner::Endpoint(pending.endpoint()),
                 PhysicalReservationKind::KeepOut,
             );
         }
     }
+    let mut reserved_sink_approaches = BTreeMap::new();
+    for (&source, pending_targets) in &grouped {
+        for pending in pending_targets {
+            let geometry = pending.geometry();
+            let endpoint = pending.endpoint();
+            let guards = reserve_scheduled_sink_approach(
+                reservations,
+                endpoint,
+                geometry.terminal,
+                geometry.allowed_entry,
+                target_is_promoted(repairs, source, endpoint),
+            );
+            if !guards.is_empty() {
+                reserved_sink_approaches.insert(endpoint, guards);
+            }
+        }
+    }
+    let scheduled_sources = grouped.keys().copied().collect::<BTreeSet<_>>();
+    let reserved_source_escapes =
+        reserve_scheduled_source_escapes(reservations, sources, &scheduled_sources)?;
 
     let output_level = analysis
         .nodes
@@ -1490,7 +2191,7 @@ fn route_all(
                 .map(|target| {
                     let target_level = route_target_level(&target, analysis, output_level);
                     TargetObligation {
-                        promoted: false,
+                        promoted: target_is_promoted(repairs, source, target.endpoint()),
                         structural_slack_ticks: route_target_slack(source, &target, analysis),
                         forward_distance: target_level.saturating_sub(source_level),
                         key: target.key(),
@@ -1510,8 +2211,17 @@ fn route_all(
                 .unwrap_or(0);
             RouteObligation {
                 source,
-                pinned_boundary_escape: matches!(source, PhysicalEndpointId::PrimaryInput(_))
-                    && candidate.pin_contracts.contains_key(&source),
+                must_precede: repairs
+                    .iter()
+                    .filter_map(|repair| match repair {
+                        LayoutRepair::RouteBefore {
+                            source: repaired_source,
+                            blocker,
+                        } if *repaired_source == source => Some(*blocker),
+                        _ => None,
+                    })
+                    .collect(),
+                boundary_escape: matches!(source, PhysicalEndpointId::PrimaryInput(_)),
                 structural_slack_ticks,
                 fanout: targets.len(),
                 level_span,
@@ -1519,10 +2229,11 @@ fn route_all(
             }
         })
         .collect();
-    let schedule = RouteSchedule::build(obligations);
+    let schedule = RouteSchedule::build(obligations)?;
     let protected = sources
         .values()
         .map(|source| source.route_anchor)
+        .chain(reserved_source_escapes.values().flatten().copied())
         .chain(
             schedule
                 .routes
@@ -1534,11 +2245,13 @@ fn route_all(
 
     for (route_index, scheduled_route) in schedule.routes.into_iter().enumerate() {
         let source_id = scheduled_route.source;
-        let pending = scheduled_route.targets;
         let route = RouteId(u32::try_from(route_index).map_err(|_| SeedError::IdentityOverflow)?);
         let source = *sources
             .get(&source_id)
             .ok_or(SeedError::Incomplete("route source geometry"))?;
+        let guidance =
+            route_guidance_for_source(&candidate.instances, source_id, plan, plan_translation);
+        let pending = scheduled_route.targets;
         let sinks = pending
             .iter()
             .enumerate()
@@ -1573,6 +2286,24 @@ fn route_all(
             .collect::<Result<Vec<_>, SeedError>>()?;
         let sinks = NonEmptyRouteSinks::new(sinks).map_err(|_| SeedError::EmptyRoute)?;
         let mut attempt_reservations = reservations.clone();
+        for target in &pending {
+            let endpoint = target.endpoint();
+            let Some(guards) = reserved_sink_approaches.get(&endpoint) else {
+                continue;
+            };
+            for &guard in guards {
+                if !attempt_reservations.release_endpoint_keep_out(guard, endpoint) {
+                    return Err(SeedError::Incomplete("sink approach reservation"));
+                }
+            }
+        }
+        if let Some(source_escapes) = reserved_source_escapes.get(&source_id) {
+            for &source_escape in source_escapes {
+                if !attempt_reservations.release_endpoint_keep_out(source_escape, source_id) {
+                    return Err(SeedError::Incomplete("source escape reservation"));
+                }
+            }
+        }
         if matches!(source_id, PhysicalEndpointId::Junction(_))
             && !attempt_reservations.promote_endpoint_conductor(
                 source.route_anchor,
@@ -1598,33 +2329,92 @@ fn route_all(
                 }
             }
         }
-        let mut tree = match router.route(RouteRequest {
-            id: route,
-            source: RouteEndpoint {
-                id: source_id,
-                anchor: source.route_anchor,
-                allowed_exit: source.allowed_exit,
-                terminal: TerminalContract::Source {
-                    signal_strength: MAX_SIGNAL_STRENGTH,
+        let mut tree = match router.route_guided(
+            RouteRequest {
+                id: route,
+                source: RouteEndpoint {
+                    id: source_id,
+                    anchor: source.route_anchor,
+                    allowed_exit: source.allowed_exit,
+                    terminal: TerminalContract::Source {
+                        signal_strength: MAX_SIGNAL_STRENGTH,
+                    },
                 },
+                sinks: &sinks,
+                reservations: &attempt_reservations,
+                limits: config.router_limits,
             },
-            sinks: &sinks,
-            reservations: &attempt_reservations,
-            limits: config.router_limits,
-        }) {
+            guidance,
+        ) {
             Ok(tree) => tree,
             Err(failure) => {
+                let source_escape_blocking_route = source_escape_blocking_route(
+                    &attempt_reservations,
+                    route,
+                    source.route_anchor,
+                    source.allowed_exit,
+                );
+                let source_escape_obstructed = source_escape_blocking_route.is_some();
+                let failed_sink = explicit_failure_sink(&sinks, &failure)
+                    .and_then(|id| sinks.as_slice().iter().find(|sink| sink.id == id));
+                let sink_approach_blocking_route = failed_sink.and_then(|sink| {
+                    sink_approach_blocking_route(
+                        &attempt_reservations,
+                        route,
+                        source.route_anchor,
+                        sink.anchor,
+                        sink.allowed_entry,
+                    )
+                    .or_else(|| {
+                        matches!(failure, RouterFailure::NoLocalRoute { .. })
+                            .then(|| {
+                                nearby_sink_blocking_route(
+                                    &attempt_reservations,
+                                    route,
+                                    sink.anchor,
+                                    sink.allowed_entry,
+                                )
+                            })
+                            .flatten()
+                    })
+                });
+                let precedence_blocker = source_escape_blocking_route
+                    .or(sink_approach_blocking_route)
+                    .and_then(|blocker| candidate.routes.get(&blocker).map(|tree| tree.source));
                 return Err(SeedError::Routing(seed_routing_failure(
                     route_index,
                     route,
                     source_id,
                     source.route_anchor,
+                    source.allowed_exit,
+                    precedence_blocker,
+                    source_escape_obstructed,
                     &sinks,
                     &failure,
-                    plan_fingerprint,
-                )))
+                    &plan.fingerprint,
+                )));
             }
         };
+        if let Some((_, sink)) = route_self_overlap(&tree) {
+            let failure = RouterFailure::Refused {
+                route,
+                source: source_id,
+                sink: Some(sink),
+                category: RouterRefusalCategory::PhysicalInvariant,
+            };
+            return Err(SeedError::Routing(seed_routing_failure(
+                route_index,
+                route,
+                source_id,
+                source.route_anchor,
+                source.allowed_exit,
+                None,
+                false,
+                &sinks,
+                &failure,
+                &plan.fingerprint,
+            )));
+        }
         refresh_exact_route_delays(&mut tree);
 
         for (target, branch) in pending.iter().zip(&tree.branches) {
@@ -1648,16 +2438,57 @@ fn route_all(
     Ok(())
 }
 
-fn seed_routing_failure(
-    scheduled_index: usize,
-    route: RouteId,
+fn target_is_promoted(
+    repairs: &[LayoutRepair],
     source: PhysicalEndpointId,
-    source_at: Anchor,
+    sink: PhysicalEndpointId,
+) -> bool {
+    repairs.contains(&LayoutRepair::ExclusiveGuardedTrack { source })
+        || repairs.contains(&LayoutRepair::EarlyTreeSinkAndEscape { source, sink })
+}
+
+fn route_self_overlap(
+    tree: &crate::compile::routing::RealisedRouteTree,
+) -> Option<(Anchor, RoutedSinkId)> {
+    let floors = tree
+        .floors
+        .iter()
+        .map(|block| block.at)
+        .collect::<BTreeSet<_>>();
+    let at = tree
+        .cells
+        .iter()
+        .map(|block| block.at)
+        .find(|at| floors.contains(at))?;
+    let above = Anchor { y: at.y + 1, ..at };
+    let sink = tree
+        .branches
+        .iter()
+        .find(|branch| branch.path.contains(&at) || branch.path.contains(&above))
+        .or_else(|| tree.branches.first())?
+        .sink;
+    if std::env::var_os("REDA_TRACE_SEED_REPAIRS").is_some() {
+        let branches = tree
+            .branches
+            .iter()
+            .filter(|branch| branch.path.contains(&at) || branch.path.contains(&above))
+            .map(|branch| branch.sink)
+            .collect::<Vec<_>>();
+        eprintln!(
+            "route self overlap: route={:?} at={at:?} cell={:?} floor={:?} branches={branches:?} selected_sink={sink:?}",
+            tree.id,
+            tree.cells.iter().find(|block| block.at == at),
+            tree.floors.iter().find(|block| block.at == at),
+        );
+    }
+    Some((at, sink))
+}
+
+fn explicit_failure_sink(
     sinks: &NonEmptyRouteSinks,
     failure: &RouterFailure,
-    plan_fingerprint: &Fingerprint,
-) -> SeedRoutingFailure {
-    let explicit_sink = match failure {
+) -> Option<RoutedSinkId> {
+    match failure {
         RouterFailure::RouterLimitExceeded { sink, .. }
         | RouterFailure::NoLocalRoute { sink, .. }
         | RouterFailure::RingClosure { sink, .. } => Some(*sink),
@@ -1672,7 +2503,22 @@ fn seed_routing_failure(
                     ))
             })
             .map(|sink| sink.id),
-    };
+    }
+}
+
+fn seed_routing_failure(
+    scheduled_index: usize,
+    route: RouteId,
+    source: PhysicalEndpointId,
+    source_at: Anchor,
+    source_exit: Facing,
+    precedence_blocker: Option<PhysicalEndpointId>,
+    source_escape_obstructed: bool,
+    sinks: &NonEmptyRouteSinks,
+    failure: &RouterFailure,
+    plan_fingerprint: &Fingerprint,
+) -> SeedRoutingFailure {
+    let explicit_sink = explicit_failure_sink(sinks, failure);
     let fallback = &sinks.as_slice()[0];
     let sink = explicit_sink.unwrap_or(fallback.id);
     let sink_at = sinks
@@ -1681,6 +2527,17 @@ fn seed_routing_failure(
         .find(|candidate| candidate.id == sink)
         .map(|candidate| candidate.anchor)
         .unwrap_or(fallback.anchor);
+    let sink_endpoint = sinks
+        .as_slice()
+        .iter()
+        .find(|candidate| candidate.id == sink)
+        .map(|candidate| candidate.endpoint)
+        .unwrap_or(fallback.endpoint);
+    let sink_entry = sinks
+        .as_slice()
+        .iter()
+        .find(|candidate| candidate.id == sink)
+        .map(|candidate| candidate.allowed_entry);
     let (limit_kind, limit, work_used) = match failure {
         RouterFailure::RouterLimitExceeded {
             kind,
@@ -1695,13 +2552,431 @@ fn seed_routing_failure(
         route,
         source,
         sink,
+        sink_endpoint,
+        fanout: sinks.as_slice().len(),
         category: failure.category(),
         limit_kind,
         limit,
         work_used,
         plan_fingerprint: plan_fingerprint.clone(),
         source_at,
+        source_exit,
+        precedence_blocker,
+        source_escape_obstructed,
         sink_at,
+        sink_entry,
+    }
+}
+
+fn source_escape_blocking_route(
+    reservations: &PhysicalReservations,
+    current: RouteId,
+    source_at: Anchor,
+    allowed_exit: Facing,
+) -> Option<RouteId> {
+    fn foreign_route_owner(
+        reservation: &crate::compile::routing::PhysicalReservation,
+        current: RouteId,
+    ) -> Option<RouteId> {
+        match reservation.owner {
+            PhysicalReservationOwner::Route(route)
+            | PhysicalReservationOwner::RouteStair(route)
+                if route != current =>
+            {
+                Some(route)
+            }
+            _ => None,
+        }
+    }
+
+    let exit = step(source_at, allowed_exit);
+    if let Some(blocker) = reservations
+        .get(&exit)
+        .and_then(|reservation| foreign_route_owner(reservation, current))
+    {
+        return Some(blocker);
+    }
+
+    let below = Anchor {
+        y: exit.y - 1,
+        ..exit
+    };
+    if let Some(blocker) = reservations.get(&below).and_then(|reservation| {
+        matches!(
+            reservation.kind,
+            PhysicalReservationKind::Conductor(_) | PhysicalReservationKind::MandatoryAir
+        )
+        .then(|| foreign_route_owner(reservation, current))
+        .flatten()
+    }) {
+        return Some(blocker);
+    }
+
+    for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
+        let neighbour = step(exit, direction);
+        for at in [
+            neighbour,
+            Anchor {
+                y: neighbour.y + 1,
+                ..neighbour
+            },
+            Anchor {
+                y: neighbour.y - 1,
+                ..neighbour
+            },
+        ] {
+            let Some(reservation) = reservations.get(&at) else {
+                continue;
+            };
+            if !matches!(reservation.kind, PhysicalReservationKind::Conductor(_)) {
+                continue;
+            }
+            if let Some(blocker) = foreign_route_owner(reservation, current) {
+                return Some(blocker);
+            }
+        }
+    }
+    None
+}
+
+fn sink_approach_blocking_route(
+    reservations: &PhysicalReservations,
+    current: RouteId,
+    source_at: Anchor,
+    terminal: Anchor,
+    allowed_entry: Facing,
+) -> Option<RouteId> {
+    let foreign_route_owner =
+        |reservation: &crate::compile::routing::PhysicalReservation| match reservation.owner {
+            PhysicalReservationOwner::Route(route)
+            | PhysicalReservationOwner::RouteStair(route)
+                if route != current =>
+            {
+                Some(route)
+            }
+            _ => None,
+        };
+    let approach = step(terminal, allowed_entry);
+    if approach != source_at {
+        if let Some(blocker) = reservations.get(&approach).and_then(foreign_route_owner) {
+            return Some(blocker);
+        }
+    }
+    let below = Anchor {
+        y: approach.y - 1,
+        ..approach
+    };
+    if let Some(blocker) = reservations.get(&below).and_then(|reservation| {
+        matches!(
+            reservation.kind,
+            PhysicalReservationKind::Conductor(_) | PhysicalReservationKind::MandatoryAir
+        )
+        .then(|| foreign_route_owner(reservation))
+        .flatten()
+    }) {
+        return Some(blocker);
+    }
+    for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
+        let neighbour = step(approach, direction);
+        for at in [
+            neighbour,
+            Anchor {
+                y: neighbour.y + 1,
+                ..neighbour
+            },
+            Anchor {
+                y: neighbour.y - 1,
+                ..neighbour
+            },
+        ] {
+            if at == source_at || at == terminal {
+                continue;
+            }
+            let Some(reservation) = reservations.get(&at) else {
+                continue;
+            };
+            if !matches!(reservation.kind, PhysicalReservationKind::Conductor(_)) {
+                continue;
+            }
+            if let Some(blocker) = foreign_route_owner(reservation) {
+                return Some(blocker);
+            }
+        }
+    }
+    None
+}
+
+fn nearby_sink_blocking_route(
+    reservations: &PhysicalReservations,
+    current: RouteId,
+    terminal: Anchor,
+    allowed_entry: Facing,
+) -> Option<RouteId> {
+    let approach = step(terminal, allowed_entry);
+    for distance in 2_i32..=3 {
+        for dx in -distance..=distance {
+            let dz = distance - dx.abs();
+            for signed_dz in if dz == 0 { vec![0] } else { vec![-dz, dz] } {
+                for dy in -1..=2 {
+                    let at = Anchor {
+                        x: approach.x.saturating_add(dx),
+                        y: approach.y.saturating_add(dy),
+                        z: approach.z.saturating_add(signed_dz),
+                    };
+                    let Some(reservation) = reservations.get(&at) else {
+                        continue;
+                    };
+                    if !matches!(reservation.kind, PhysicalReservationKind::Conductor(_)) {
+                        continue;
+                    }
+                    if let PhysicalReservationOwner::Route(route) = reservation.owner {
+                        if route != current {
+                            return Some(route);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+fn reserve_source_escape_footprint(
+    reservations: &mut PhysicalReservations,
+    source: PhysicalEndpointId,
+    source_at: Anchor,
+    allowed_exit: Facing,
+) -> Vec<Anchor> {
+    let (core, halo) = source_escape_footprint(source_at, allowed_exit);
+    core.into_iter()
+        .chain(halo)
+        .filter(|at| {
+            if reservations.get(at).is_some() {
+                return false;
+            }
+            reservations.reserve(
+                *at,
+                PhysicalReservationOwner::Endpoint(source),
+                PhysicalReservationKind::KeepOut,
+            );
+            true
+        })
+        .collect()
+}
+
+fn reserve_scheduled_source_escapes(
+    reservations: &mut PhysicalReservations,
+    sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
+    scheduled: &BTreeSet<PhysicalEndpointId>,
+) -> Result<BTreeMap<PhysicalEndpointId, Vec<Anchor>>, SeedError> {
+    let footprints = scheduled
+        .iter()
+        .copied()
+        .map(|endpoint| {
+            let source = sources
+                .get(&endpoint)
+                .ok_or(SeedError::Incomplete("scheduled source geometry"))?;
+            Ok((
+                endpoint,
+                source_escape_footprint(source.route_anchor, source.allowed_exit),
+            ))
+        })
+        .collect::<Result<BTreeMap<_, _>, SeedError>>()?;
+    let mut guarded = BTreeMap::<PhysicalEndpointId, Vec<Anchor>>::new();
+    for halo_phase in [false, true] {
+        for (&endpoint, (core, halo)) in &footprints {
+            let cells = if halo_phase { halo } else { core };
+            for &at in cells {
+                if let Some(reservation) = reservations.get(&at) {
+                    if reservation.owner != PhysicalReservationOwner::Endpoint(endpoint)
+                        && std::env::var_os("REDA_TRACE_SOURCE_GUARDS").is_some()
+                    {
+                        eprintln!(
+                            "source guard conflict: endpoint={endpoint:?} phase={} at={at:?} reservation={:?}",
+                            if halo_phase { "halo" } else { "core" },
+                            reservation,
+                        );
+                    }
+                    continue;
+                }
+                reservations.reserve(
+                    at,
+                    PhysicalReservationOwner::Endpoint(endpoint),
+                    PhysicalReservationKind::KeepOut,
+                );
+                guarded.entry(endpoint).or_default().push(at);
+            }
+        }
+    }
+    for cells in guarded.values_mut() {
+        cells.sort();
+    }
+    Ok(guarded)
+}
+
+fn source_escape_footprint(
+    source_at: Anchor,
+    allowed_exit: Facing,
+) -> (BTreeSet<Anchor>, BTreeSet<Anchor>) {
+    let [exit, runway, mouth] = source_escape_corridor(source_at, allowed_exit);
+    let core = BTreeSet::from([
+        exit,
+        Anchor {
+            y: exit.y - 1,
+            ..exit
+        },
+        runway,
+        Anchor {
+            y: runway.y - 1,
+            ..runway
+        },
+        mouth,
+        Anchor {
+            y: mouth.y - 1,
+            ..mouth
+        },
+    ]);
+    let mut halo = BTreeSet::new();
+    for center in [exit, runway, mouth] {
+        for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
+            let neighbour = step(center, direction);
+            for dy in [-1, 0, 1] {
+                halo.insert(Anchor {
+                    y: neighbour.y + dy,
+                    ..neighbour
+                });
+            }
+        }
+    }
+    halo.retain(|at| !core.contains(at));
+    (core, halo)
+}
+
+fn reserve_sink_approach_footprint(
+    reservations: &mut PhysicalReservations,
+    endpoint: PhysicalEndpointId,
+    terminal: Anchor,
+    allowed_entry: Facing,
+) -> Vec<Anchor> {
+    let approach = step(terminal, allowed_entry);
+    let mut footprint = BTreeSet::from([
+        approach,
+        Anchor {
+            y: approach.y - 1,
+            ..approach
+        },
+    ]);
+    for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
+        let neighbour = step(approach, direction);
+        footprint.insert(neighbour);
+        footprint.insert(Anchor {
+            y: neighbour.y + 1,
+            ..neighbour
+        });
+        footprint.insert(Anchor {
+            y: neighbour.y - 1,
+            ..neighbour
+        });
+    }
+    footprint
+        .into_iter()
+        .filter(|at| *at != terminal)
+        .filter(|at| {
+            if reservations.get(at).is_some() {
+                return false;
+            }
+            reservations.reserve(
+                *at,
+                PhysicalReservationOwner::Endpoint(endpoint),
+                PhysicalReservationKind::KeepOut,
+            );
+            true
+        })
+        .collect()
+}
+
+fn reserve_sink_runway_footprint(
+    reservations: &mut PhysicalReservations,
+    endpoint: PhysicalEndpointId,
+    terminal: Anchor,
+    allowed_entry: Facing,
+) -> Vec<Anchor> {
+    let approach = step(terminal, allowed_entry);
+    let runway = step(approach, allowed_entry);
+    [
+        approach,
+        Anchor {
+            y: approach.y - 1,
+            ..approach
+        },
+        runway,
+        Anchor {
+            y: runway.y - 1,
+            ..runway
+        },
+    ]
+    .into_iter()
+    .filter(|at| {
+        if reservations.get(at).is_some() {
+            return false;
+        }
+        reservations.reserve(
+            *at,
+            PhysicalReservationOwner::Endpoint(endpoint),
+            PhysicalReservationKind::KeepOut,
+        );
+        true
+    })
+    .collect()
+}
+
+fn reserve_exclusive_sink_approach_footprint(
+    reservations: &mut PhysicalReservations,
+    endpoint: PhysicalEndpointId,
+    terminal: Anchor,
+    allowed_entry: Facing,
+) -> Vec<Anchor> {
+    let mut guarded =
+        reserve_sink_approach_footprint(reservations, endpoint, terminal, allowed_entry);
+    let approach = step(terminal, allowed_entry);
+    for dx in -2_i32..=2 {
+        for dz in -2_i32..=2 {
+            if dx.abs() + dz.abs() != 2 {
+                continue;
+            }
+            for dy in -1_i32..=2 {
+                let at = Anchor {
+                    x: approach.x.saturating_add(dx),
+                    y: approach.y.saturating_add(dy),
+                    z: approach.z.saturating_add(dz),
+                };
+                if at == terminal || reservations.get(&at).is_some() {
+                    continue;
+                }
+                reservations.reserve(
+                    at,
+                    PhysicalReservationOwner::Endpoint(endpoint),
+                    PhysicalReservationKind::KeepOut,
+                );
+                guarded.push(at);
+            }
+        }
+    }
+    guarded.sort();
+    guarded
+}
+
+fn reserve_scheduled_sink_approach(
+    reservations: &mut PhysicalReservations,
+    endpoint: PhysicalEndpointId,
+    terminal: Anchor,
+    allowed_entry: Facing,
+    exclusive: bool,
+) -> Vec<Anchor> {
+    if exclusive {
+        reserve_exclusive_sink_approach_footprint(reservations, endpoint, terminal, allowed_entry)
+    } else {
+        reserve_sink_runway_footprint(reservations, endpoint, terminal, allowed_entry)
     }
 }
 
@@ -1781,8 +3056,7 @@ fn reserve_route(
         );
     }
     for block in &tree.cells {
-        for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
-            let halo = step(block.at, direction);
+        for halo in route_conductor_clearance(block.at) {
             if protected.contains(&halo) || reservations.get(&halo).is_some() {
                 continue;
             }
@@ -1793,6 +3067,20 @@ fn reserve_route(
             );
         }
     }
+}
+
+fn route_conductor_clearance(at: Anchor) -> BTreeSet<Anchor> {
+    let mut clearance = BTreeSet::new();
+    for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
+        let neighbour = step(at, direction);
+        for dy in -1..=1 {
+            clearance.insert(Anchor {
+                y: neighbour.y.saturating_add(dy),
+                ..neighbour
+            });
+        }
+    }
+    clearance
 }
 
 fn topological_instance_order(graph: &InstanceGraph) -> Vec<InstanceId> {
@@ -1978,6 +3266,7 @@ mod tests {
     use super::*;
     use crate::circuits::and4::build_and4_netlist;
     use crate::compile::emission::{EmittedWorld, PhysicalCandidateView};
+    use crate::compile::fragment_synth::benchmark::legacy_benchmark_evaluator;
     use crate::compile::fragment_synth::certification::CompleteCandidateCertifier;
     use crate::compile::fragment_synth::legacy_adapter::{LegacyCandidateAdapter, LegacyOracle};
     use crate::compile::fragment_synth::placement::{
@@ -1988,6 +3277,382 @@ mod tests {
     use crate::compile::metrics::canonical_fingerprint;
     use crate::compile::routing::{DurablePhysicalRouter, RealisedRouteTree};
     use crate::compile::Gate;
+
+    #[test]
+    fn unpinned_plan_translation_covers_primitive_owner_offsets() {
+        let instance = InstanceId(0);
+        let primitive = PrimitiveId {
+            instance,
+            node: crate::compile::fragment_synth::identity::TopologyNodeId(0),
+        };
+        let plan = SeedPlacementPlan {
+            frame: crate::compile::fragment_synth::placement::PlacementFrame {
+                forward: Facing::East,
+                lateral: Facing::South,
+                origin: Anchor { x: 0, y: 1, z: 0 },
+            },
+            signal_tracks: BTreeMap::new(),
+            instances: BTreeMap::from([(
+                instance,
+                PreferredInstancePose {
+                    preferred_origin: Anchor { x: 0, y: 1, z: 0 },
+                    facing: CellFacing::NORTH,
+                },
+            )]),
+            automatic_inputs: BTreeMap::new(),
+            automatic_outputs: BTreeMap::new(),
+            owner_offsets: BTreeMap::from([(
+                LayoutOwner::Primitive(primitive),
+                Anchor {
+                    x: -24,
+                    y: 0,
+                    z: -18,
+                },
+            )]),
+            fingerprint: canonical_fingerprint(b"translated-owner-offset"),
+        };
+
+        let translation = PlanTranslation::for_unpinned(&plan, false);
+
+        assert_eq!(translation.dx, ORIGIN_WORLD_MARGIN + 24);
+        assert_eq!(translation.dz, ORIGIN_WORLD_MARGIN + 18);
+        assert_eq!(
+            translation.apply(Anchor {
+                x: -24,
+                y: 1,
+                z: -18,
+            }),
+            Anchor {
+                x: ORIGIN_WORLD_MARGIN,
+                y: 1,
+                z: ORIGIN_WORLD_MARGIN,
+            }
+        );
+    }
+
+    #[test]
+    fn route_guidance_uses_the_planned_signal_track_after_world_translation() {
+        let netlist = not_netlist();
+        let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
+        let analysis = analyse_instance_dag(&graph).unwrap();
+        let plan = TopologyAwareSeedPlacer
+            .plan(SeedPlacementRequest {
+                graph: &graph,
+                analysis: &analysis,
+                pins: &BTreeMap::new(),
+            })
+            .unwrap();
+        let translation = PlanTranslation { dx: 11, dz: 17 };
+
+        let guidance = route_guidance_for_source(
+            &graph,
+            PhysicalEndpointId::PrimaryInput(PortId(0)),
+            &plan,
+            translation,
+        )
+        .unwrap();
+
+        assert_eq!(guidance.origin, translation.apply(plan.frame.origin));
+        assert_eq!(guidance.lateral, plan.frame.lateral);
+        assert_eq!(
+            guidance.track,
+            plan.signal_tracks
+                [&crate::compile::fragment_synth::instance_graph::LogicalSignalId::PrimaryInput(
+                    PortId(0)
+                )]
+        );
+    }
+
+    #[test]
+    fn route_guidance_recovers_the_logical_track_for_an_instance_driver() {
+        let netlist = not_netlist();
+        let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
+        let analysis = analyse_instance_dag(&graph).unwrap();
+        let plan = TopologyAwareSeedPlacer
+            .plan(SeedPlacementRequest {
+                graph: &graph,
+                analysis: &analysis,
+                pins: &BTreeMap::new(),
+            })
+            .unwrap();
+        let output_signal =
+            crate::compile::fragment_synth::instance_graph::LogicalSignalId::GateOutput(
+                crate::compile::fragment_synth::identity::GateIndex(0),
+            );
+        let source = graph
+            .assignments
+            .iter()
+            .find(|assignment| assignment.signal == output_signal)
+            .and_then(|assignment| endpoint_for_driver(&assignment.driver))
+            .unwrap();
+
+        let guidance =
+            route_guidance_for_source(&graph, source, &plan, PlanTranslation { dx: 0, dz: 0 })
+                .unwrap();
+
+        assert_eq!(guidance.track, plan.signal_tracks[&output_signal]);
+    }
+
+    #[test]
+    fn repair_owner_mapping_keeps_cell_topology_atomic() {
+        let instance = InstanceId(7);
+        let primitive = PrimitiveId {
+            instance,
+            node: crate::compile::fragment_synth::identity::TopologyNodeId(3),
+        };
+        let landing = PhysicalEndpointId::Landing(ConnectionId::External {
+            instance,
+            input_index: 1,
+        });
+
+        assert_eq!(
+            layout_owner_for_endpoint(PhysicalEndpointId::PrimitiveOutput(primitive)),
+            LayoutOwner::Instance(instance),
+        );
+        assert_eq!(
+            layout_owner_for_endpoint(PhysicalEndpointId::Junction(instance)),
+            LayoutOwner::Instance(instance),
+        );
+        assert_eq!(
+            layout_owner_for_endpoint(landing),
+            LayoutOwner::Instance(instance),
+        );
+        assert_eq!(
+            layout_owner_for_endpoint(PhysicalEndpointId::PrimaryInput(PortId(2))),
+            LayoutOwner::Boundary(PhysicalEndpointId::PrimaryInput(PortId(2))),
+        );
+    }
+
+    #[test]
+    fn precedence_repair_rejects_direct_and_indirect_cycles() {
+        let first = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let second = PhysicalEndpointId::PrimaryInput(PortId(1));
+        let third = PhysicalEndpointId::PrimaryInput(PortId(2));
+        let repairs = BTreeSet::from([
+            LayoutRepair::RouteBefore {
+                source: first,
+                blocker: second,
+            },
+            LayoutRepair::RouteBefore {
+                source: second,
+                blocker: third,
+            },
+        ]);
+
+        assert!(route_precedence_would_cycle(&repairs, second, first));
+        assert!(route_precedence_would_cycle(&repairs, third, first));
+        assert!(!route_precedence_would_cycle(&repairs, first, third));
+        assert!(route_precedence_would_cycle(&repairs, first, first));
+    }
+
+    #[test]
+    fn schedule_learning_has_a_separate_bounded_budget_from_layout_repairs() {
+        let source = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let blocker = PhysicalEndpointId::PrimaryInput(PortId(1));
+        let precedence = LayoutRepair::RouteBefore { source, blocker };
+        let layout = LayoutRepair::ExclusiveGuardedTrack { source };
+        let mut budget = SeedRepairBudget::new(2, 2);
+
+        assert!(budget.try_charge(&precedence));
+        assert!(budget.try_charge(&precedence));
+        assert!(!budget.try_charge(&precedence));
+        assert!(budget.try_charge(&layout));
+        assert!(!budget.try_charge(&layout));
+    }
+
+    #[test]
+    fn ownership_ledger_ignores_repeated_claims_from_the_same_owner() {
+        let at = Anchor { x: 7, y: 2, z: 9 };
+        let route = SeedPhysicalOwner::Route(RouteId(3));
+        let primitive = SeedPhysicalOwner::Primitive(PrimitiveId {
+            instance: InstanceId(4),
+            node: crate::compile::fragment_synth::identity::TopologyNodeId(0),
+        });
+        let mut ledger = BTreeMap::new();
+
+        assert_eq!(claim_seed_owner(&mut ledger, at, route), None);
+        assert_eq!(claim_seed_owner(&mut ledger, at, route), None);
+        assert_eq!(
+            claim_seed_owner(&mut ledger, at, primitive),
+            Some((route, primitive))
+        );
+    }
+
+    #[test]
+    fn cross_route_refusal_names_the_driver_cells_instead_of_arbitrary_sinks() {
+        let first = RouteId(9);
+        let second = RouteId(16);
+        let first_source = PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance: InstanceId(4),
+            node: crate::compile::fragment_synth::identity::TopologyNodeId(0),
+        });
+        let second_source = PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance: InstanceId(17),
+            node: crate::compile::fragment_synth::identity::TopologyNodeId(0),
+        });
+        let candidate = ExpandedPhysicalCandidate {
+            instances: InstanceGraph {
+                instances: Vec::new(),
+                assignments: Vec::new(),
+                primary_inputs: Vec::new(),
+                declared_outputs: Vec::new(),
+            },
+            placements: BTreeMap::new(),
+            boundaries: BTreeMap::new(),
+            connections: BTreeMap::new(),
+            routes: BTreeMap::from([
+                (
+                    first,
+                    RealisedRouteTree {
+                        id: first,
+                        source: first_source,
+                        cells: Vec::new(),
+                        floors: Vec::new(),
+                        branches: Vec::new(),
+                    },
+                ),
+                (
+                    second,
+                    RealisedRouteTree {
+                        id: second,
+                        source: second_source,
+                        cells: Vec::new(),
+                        floors: Vec::new(),
+                        branches: Vec::new(),
+                    },
+                ),
+            ]),
+            junctions: BTreeMap::new(),
+            observations: BTreeMap::new(),
+            pins: PortPlacements::default(),
+            pin_contracts: BTreeMap::new(),
+            pin_name_bindings: BTreeMap::new(),
+        };
+
+        assert_eq!(
+            cross_route_connectivity_refusal(
+                &candidate,
+                first,
+                second,
+                Anchor { x: 53, y: 1, z: 56 },
+                &[],
+            )
+            .unwrap(),
+            SeedRepairRefusal::CrossRouteConnectivity {
+                first,
+                second,
+                first_source,
+                second_source,
+                at: Anchor { x: 53, y: 1, z: 56 },
+                guarded_source: second_source,
+            }
+        );
+    }
+
+    #[test]
+    fn routing_repairs_precede_then_prepare_the_whole_fanout_before_one_sink() {
+        let source = PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance: InstanceId(5),
+            node: crate::compile::fragment_synth::identity::TopologyNodeId(0),
+        });
+        let sink_endpoint = PhysicalEndpointId::Landing(ConnectionId::External {
+            instance: InstanceId(7),
+            input_index: 1,
+        });
+        let blocker = PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance: InstanceId(6),
+            node: crate::compile::fragment_synth::identity::TopologyNodeId(0),
+        });
+        let failure = SeedRoutingFailure {
+            scheduled_index: 3,
+            route: RouteId(3),
+            source,
+            sink: RoutedSinkId {
+                route: RouteId(3),
+                ordinal: 0,
+            },
+            sink_endpoint,
+            fanout: 6,
+            category: RouterRefusalCategory::NoLocalRoute,
+            limit_kind: None,
+            limit: None,
+            work_used: None,
+            plan_fingerprint: canonical_fingerprint(b"fanout-repair-policy"),
+            source_at: Anchor { x: 31, y: 1, z: 46 },
+            source_exit: Facing::East,
+            precedence_blocker: Some(blocker),
+            source_escape_obstructed: false,
+            sink_at: Anchor { x: 36, y: 1, z: 17 },
+            sink_entry: Some(Facing::South),
+        };
+        let refusal = SeedRepairRefusal::Routing(failure);
+
+        let promotion = LayoutRepair::EarlyTreeSinkAndEscape {
+            source,
+            sink: sink_endpoint,
+        };
+        let preparation = LayoutRepair::ExclusiveGuardedTrack { source };
+        let precedence = LayoutRepair::RouteBefore { source, blocker };
+        assert_eq!(
+            next_layout_repair(&refusal, &BTreeSet::new()).unwrap(),
+            precedence,
+        );
+        assert_eq!(
+            next_layout_repair(&refusal, &BTreeSet::from([precedence])).unwrap(),
+            preparation,
+        );
+        assert_eq!(
+            next_layout_repair(&refusal, &BTreeSet::from([precedence, preparation])).unwrap(),
+            promotion,
+        );
+
+        let SeedRepairRefusal::Routing(mut unblocked) = refusal.clone() else {
+            unreachable!()
+        };
+        unblocked.fanout = 1;
+        unblocked.precedence_blocker = None;
+        assert_eq!(
+            next_layout_repair(&SeedRepairRefusal::Routing(unblocked), &BTreeSet::new(),).unwrap(),
+            LayoutRepair::SeparateOwners {
+                source_owner: LayoutOwner::Instance(InstanceId(5)),
+                sink_owner: LayoutOwner::Instance(InstanceId(7)),
+                axis: SeparationAxis::Runway(RunwayDirection::East),
+                ordinal: 0,
+            },
+        );
+        assert_eq!(
+            next_layout_repair(
+                &refusal,
+                &BTreeSet::from([precedence, preparation, promotion]),
+            )
+            .unwrap(),
+            LayoutRepair::SeparateOwners {
+                source_owner: LayoutOwner::Instance(InstanceId(5)),
+                sink_owner: LayoutOwner::Instance(InstanceId(7)),
+                axis: SeparationAxis::Lateral,
+                ordinal: 0,
+            },
+        );
+    }
+
+    #[test]
+    fn source_wide_fanout_preparation_promotes_every_sink_of_that_source() {
+        let source = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let other_source = PhysicalEndpointId::PrimaryInput(PortId(1));
+        let first_sink = PhysicalEndpointId::Landing(ConnectionId::External {
+            instance: InstanceId(2),
+            input_index: 0,
+        });
+        let second_sink = PhysicalEndpointId::Landing(ConnectionId::External {
+            instance: InstanceId(3),
+            input_index: 1,
+        });
+        let repairs = [LayoutRepair::ExclusiveGuardedTrack { source }];
+
+        assert!(target_is_promoted(&repairs, source, first_sink));
+        assert!(target_is_promoted(&repairs, source, second_sink));
+        assert!(!target_is_promoted(&repairs, other_source, first_sink));
+    }
 
     #[test]
     fn placement_search_visits_stable_manhattan_shells_and_skips_collisions() {
@@ -2175,6 +3840,9 @@ mod tests {
             route,
             source,
             source_at,
+            Facing::East,
+            None,
+            false,
             &sinks,
             &failure,
             &plan_fingerprint,
@@ -2196,7 +3864,354 @@ mod tests {
         );
         assert_eq!(evidence.plan_fingerprint, plan_fingerprint);
         assert_eq!(evidence.source_at, source_at);
+        assert_eq!(evidence.source_exit, Facing::East);
         assert_eq!(evidence.sink_at, Anchor { x: 9, y: 2, z: 7 });
+    }
+
+    #[test]
+    fn source_escape_blocker_is_found_in_the_allowed_exit_halo() {
+        let current = RouteId(9);
+        let blocker = RouteId(2);
+        let source_at = Anchor { x: 24, y: 1, z: 35 };
+        let exit = step(source_at, Facing::East);
+        let mut reservations = PhysicalReservations::new();
+        reservations.reserve(
+            exit,
+            PhysicalReservationOwner::KeepOut(blocker.0),
+            PhysicalReservationKind::KeepOut,
+        );
+        reservations.reserve_conductor(step(exit, Facing::North), blocker, compile::dust());
+
+        assert_eq!(
+            source_escape_blocking_route(&reservations, current, source_at, Facing::East),
+            Some(blocker),
+        );
+    }
+
+    #[test]
+    fn route_clearance_blocks_dust_that_could_climb_from_an_adjacent_layer() {
+        let conductor = Anchor { x: 28, y: 2, z: 34 };
+
+        let clearance = route_conductor_clearance(conductor);
+
+        assert!(clearance.contains(&Anchor { x: 29, y: 1, z: 34 }));
+        assert!(clearance.contains(&Anchor { x: 29, y: 2, z: 34 }));
+        assert!(clearance.contains(&Anchor { x: 29, y: 3, z: 34 }));
+        assert!(!clearance.contains(&Anchor { x: 28, y: 1, z: 34 }));
+    }
+
+    #[test]
+    fn sink_approach_blocker_is_found_in_the_strict_goal_halo() {
+        let current = RouteId(22);
+        let blocker = RouteId(14);
+        let source_at = Anchor { x: 31, y: 1, z: 58 };
+        let terminal = Anchor { x: 36, y: 1, z: 32 };
+        let approach = step(terminal, Facing::North);
+        let mut reservations = PhysicalReservations::new();
+        reservations.reserve_conductor(
+            Anchor {
+                y: approach.y + 1,
+                z: approach.z - 1,
+                ..approach
+            },
+            blocker,
+            compile::dust(),
+        );
+
+        assert_eq!(
+            sink_approach_blocking_route(
+                &reservations,
+                current,
+                source_at,
+                terminal,
+                Facing::North,
+            ),
+            Some(blocker),
+        );
+    }
+
+    #[test]
+    fn no_local_sink_finds_the_nearest_foreign_route_outside_its_strict_halo() {
+        let current = RouteId(3);
+        let blocker = RouteId(2);
+        let terminal = Anchor { x: 59, y: 1, z: 38 };
+        let approach = step(terminal, Facing::West);
+        let mut reservations = PhysicalReservations::new();
+        reservations.reserve_conductor(
+            Anchor {
+                z: approach.z - 2,
+                ..approach
+            },
+            blocker,
+            compile::dust(),
+        );
+
+        assert_eq!(
+            sink_approach_blocking_route(
+                &reservations,
+                current,
+                Anchor { x: 18, y: 1, z: 39 },
+                terminal,
+                Facing::West,
+            ),
+            None,
+        );
+        assert_eq!(
+            nearby_sink_blocking_route(&reservations, current, terminal, Facing::West),
+            Some(blocker),
+        );
+    }
+
+    #[test]
+    fn reserved_source_escape_covers_the_strict_exit_clearance() {
+        let source = PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance: InstanceId(5),
+            node: crate::compile::fragment_synth::identity::TopologyNodeId(0),
+        });
+        let source_at = Anchor { x: 24, y: 1, z: 35 };
+        let exit = step(source_at, Facing::East);
+        let observed_blocker_at = step(exit, Facing::North);
+        let runway = step(exit, Facing::East);
+        let mouth = step(runway, Facing::East);
+        let runway_side_halo = step(runway, Facing::North);
+        let mut reservations = PhysicalReservations::new();
+        reservations.reserve(
+            source_at,
+            PhysicalReservationOwner::Endpoint(source),
+            PhysicalReservationKind::KeepOut,
+        );
+
+        let guarded =
+            reserve_source_escape_footprint(&mut reservations, source, source_at, Facing::East);
+
+        assert!(guarded.contains(&exit));
+        assert!(guarded.contains(&observed_blocker_at));
+        assert!(guarded.contains(&runway));
+        assert!(guarded.contains(&mouth));
+        assert!(guarded.contains(&runway_side_halo));
+        let (core, _) = source_escape_footprint(source_at, Facing::East);
+        assert!(core.contains(&mouth));
+        assert_eq!(
+            reservations
+                .get(&observed_blocker_at)
+                .map(|claim| claim.owner),
+            Some(PhysicalReservationOwner::Endpoint(source)),
+        );
+        assert!(!guarded.contains(&step(source_at, Facing::West)));
+    }
+
+    #[test]
+    fn every_source_core_is_reserved_before_any_other_source_halo() {
+        let first = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let second = PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance: InstanceId(2),
+            node: crate::compile::fragment_synth::identity::TopologyNodeId(0),
+        });
+        let sources = BTreeMap::from([
+            (
+                first,
+                SourceGeometry {
+                    route_anchor: Anchor { x: 0, y: 1, z: 0 },
+                    allowed_exit: Facing::East,
+                },
+            ),
+            (
+                second,
+                SourceGeometry {
+                    route_anchor: Anchor { x: 1, y: 1, z: 1 },
+                    allowed_exit: Facing::East,
+                },
+            ),
+        ]);
+        let scheduled = BTreeSet::from([first, second]);
+        let second_exit = Anchor { x: 2, y: 1, z: 1 };
+        let mut reservations = PhysicalReservations::new();
+
+        let guarded =
+            reserve_scheduled_source_escapes(&mut reservations, &sources, &scheduled).unwrap();
+
+        assert!(guarded[&second].contains(&second_exit));
+        assert!(!guarded[&first].contains(&second_exit));
+        assert_eq!(
+            reservations.get(&second_exit).map(|claim| claim.owner),
+            Some(PhysicalReservationOwner::Endpoint(second)),
+        );
+    }
+
+    #[test]
+    fn reserved_sink_approach_covers_the_strict_goal_clearance() {
+        let endpoint = PhysicalEndpointId::Landing(ConnectionId::External {
+            instance: InstanceId(7),
+            input_index: 0,
+        });
+        let terminal = Anchor {
+            x: 134,
+            y: 1,
+            z: 118,
+        };
+        let approach = step(terminal, Facing::West);
+        let halo_blocker = Anchor {
+            y: approach.y + 1,
+            z: approach.z - 1,
+            ..approach
+        };
+        let outer_cell = Anchor {
+            z: approach.z - 2,
+            ..approach
+        };
+        let mut reservations = PhysicalReservations::new();
+        reservations.reserve(
+            terminal,
+            PhysicalReservationOwner::Endpoint(endpoint),
+            PhysicalReservationKind::KeepOut,
+        );
+
+        let guarded =
+            reserve_sink_approach_footprint(&mut reservations, endpoint, terminal, Facing::West);
+
+        assert!(guarded.contains(&approach));
+        assert!(guarded.contains(&halo_blocker));
+        assert!(!guarded.contains(&outer_cell));
+        assert_eq!(
+            reservations.get(&halo_blocker).map(|claim| claim.owner),
+            Some(PhysicalReservationOwner::Endpoint(endpoint)),
+        );
+        assert!(!guarded.contains(&terminal));
+    }
+
+    #[test]
+    fn reserved_sink_outer_ring_leaves_an_elevated_crossing_open() {
+        let endpoint = PhysicalEndpointId::Landing(ConnectionId::External {
+            instance: InstanceId(38),
+            input_index: 2,
+        });
+        let terminal = Anchor { x: 62, y: 1, z: 31 };
+        let approach = step(terminal, Facing::West);
+        let outer_same_level = Anchor {
+            z: approach.z - 2,
+            ..approach
+        };
+        let elevated_crossing = Anchor {
+            y: approach.y + 1,
+            ..outer_same_level
+        };
+        let mut reservations = PhysicalReservations::new();
+        reservations.reserve(
+            terminal,
+            PhysicalReservationOwner::Endpoint(endpoint),
+            PhysicalReservationKind::KeepOut,
+        );
+
+        let guarded =
+            reserve_sink_approach_footprint(&mut reservations, endpoint, terminal, Facing::West);
+
+        assert!(!guarded.contains(&outer_same_level));
+        assert!(!guarded.contains(&elevated_crossing));
+        assert!(reservations.get(&elevated_crossing).is_none());
+    }
+
+    #[test]
+    fn exclusive_sink_track_reserves_the_outer_elevated_crossing() {
+        let endpoint = PhysicalEndpointId::Landing(ConnectionId::External {
+            instance: InstanceId(38),
+            input_index: 2,
+        });
+        let terminal = Anchor { x: 62, y: 1, z: 31 };
+        let approach = step(terminal, Facing::West);
+        let outer_same_level = Anchor {
+            z: approach.z - 2,
+            ..approach
+        };
+        let elevated_crossing = Anchor {
+            y: approach.y + 1,
+            ..outer_same_level
+        };
+        let mut reservations = PhysicalReservations::new();
+        reservations.reserve(
+            terminal,
+            PhysicalReservationOwner::Endpoint(endpoint),
+            PhysicalReservationKind::KeepOut,
+        );
+
+        let guarded = reserve_exclusive_sink_approach_footprint(
+            &mut reservations,
+            endpoint,
+            terminal,
+            Facing::West,
+        );
+
+        assert!(guarded.contains(&outer_same_level));
+        assert!(guarded.contains(&elevated_crossing));
+        assert_eq!(
+            reservations
+                .get(&elevated_crossing)
+                .map(|claim| claim.owner),
+            Some(PhysicalReservationOwner::Endpoint(endpoint)),
+        );
+    }
+
+    #[test]
+    fn ordinary_scheduled_sink_reserves_its_runway_without_the_exclusive_outer_ring() {
+        let endpoint = PhysicalEndpointId::Landing(ConnectionId::External {
+            instance: InstanceId(41),
+            input_index: 0,
+        });
+        let terminal = Anchor { x: 70, y: 1, z: 40 };
+        let approach = step(terminal, Facing::West);
+        let runway = step(approach, Facing::West);
+        let side_halo = Anchor {
+            z: approach.z - 1,
+            ..approach
+        };
+        let outer_elevated = Anchor {
+            x: approach.x,
+            y: approach.y + 1,
+            z: approach.z - 2,
+        };
+        let mut reservations = PhysicalReservations::new();
+
+        let guarded = reserve_scheduled_sink_approach(
+            &mut reservations,
+            endpoint,
+            terminal,
+            Facing::West,
+            false,
+        );
+
+        assert!(guarded.contains(&approach));
+        assert!(guarded.contains(&runway));
+        assert!(!guarded.contains(&side_halo));
+        assert!(!guarded.contains(&outer_elevated));
+    }
+
+    #[test]
+    fn boundary_terminal_reserves_every_face_except_its_named_handover() {
+        let endpoint = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let body = Anchor { x: 16, y: 1, z: 16 };
+        let handover = step(body, Facing::East);
+        let mut reservations = PhysicalReservations::new();
+        let protected = BTreeSet::from([handover]);
+
+        reserve_boundary_terminal_sides(&mut reservations, endpoint, body, handover, &protected);
+
+        assert!(reservations.get(&handover).is_none());
+        for direction in [
+            Facing::North,
+            Facing::South,
+            Facing::West,
+            Facing::Up,
+            Facing::Down,
+        ] {
+            assert_eq!(
+                reservations
+                    .get(&step(body, direction))
+                    .map(|claim| (claim.owner, &claim.kind,)),
+                Some((
+                    PhysicalReservationOwner::Endpoint(endpoint),
+                    &PhysicalReservationKind::KeepOut,
+                )),
+            );
+        }
     }
 
     #[test]
@@ -2219,6 +4234,9 @@ mod tests {
             route,
             source,
             source_at,
+            Facing::East,
+            None,
+            false,
             &sinks,
             &failure,
             &plan_fingerprint,
@@ -2245,6 +4263,12 @@ mod tests {
         ) -> Result<SeedPlacementPlan, SeedPlacementError> {
             self.calls.set(self.calls.get() + 1);
             Ok(SeedPlacementPlan {
+                frame: crate::compile::fragment_synth::placement::PlacementFrame {
+                    forward: Facing::East,
+                    lateral: Facing::South,
+                    origin: Anchor { x: 0, y: 1, z: 0 },
+                },
+                signal_tracks: BTreeMap::new(),
                 instances: BTreeMap::from([(
                     InstanceId(0),
                     PreferredInstancePose {
@@ -2261,6 +4285,7 @@ mod tests {
                         z: 83,
                     },
                 )]),
+                owner_offsets: BTreeMap::new(),
                 fingerprint: canonical_fingerprint(b"literal-seed-plan"),
             })
         }
@@ -2642,6 +4667,15 @@ mod tests {
     }
 
     #[test]
+    fn segment_a_seed_routes_and_certifies_without_closing_a_refresh_ring() {
+        let evaluator = legacy_benchmark_evaluator().unwrap();
+        let fixture = evaluator.fixture("segment_a").unwrap();
+
+        build_with_pins(fixture.lowered_netlist(), Some(fixture.placements()))
+            .expect("segment_a has legal routing space and must certify at the seed budget");
+    }
+
+    #[test]
     fn pinned_and4_preserves_caller_cells_and_handover_directions() {
         let (netlist, _) = build_and4_netlist();
         let input_at = Anchor { x: 21, y: 1, z: 62 };
@@ -2950,15 +4984,6 @@ mod tests {
             })
         }
         let expected = vec![
-            (primitive_output(0), vec![external_landing(3, 0)]),
-            (primitive_output(1), vec![external_landing(3, 1)]),
-            (primitive_output(2), vec![external_landing(3, 2)]),
-            (primitive_output(3), vec![external_landing(4, 0)]),
-            (primitive_output(4), vec![external_landing(6, 0)]),
-            (
-                primitive_output(6),
-                vec![PhysicalEndpointId::DeclaredOutput(PortId(0))],
-            ),
             (
                 PhysicalEndpointId::PrimaryInput(PortId(0)),
                 vec![external_landing(0, 0)],
@@ -2971,11 +4996,20 @@ mod tests {
                 PhysicalEndpointId::PrimaryInput(PortId(2)),
                 vec![external_landing(2, 0)],
             ),
-            (primitive_output(5), vec![external_landing(6, 1)]),
             (
                 PhysicalEndpointId::PrimaryInput(PortId(3)),
                 vec![external_landing(5, 0)],
             ),
+            (primitive_output(0), vec![external_landing(3, 0)]),
+            (primitive_output(1), vec![external_landing(3, 1)]),
+            (primitive_output(2), vec![external_landing(3, 2)]),
+            (primitive_output(3), vec![external_landing(4, 0)]),
+            (primitive_output(4), vec![external_landing(6, 0)]),
+            (
+                primitive_output(6),
+                vec![PhysicalEndpointId::DeclaredOutput(PortId(0))],
+            ),
+            (primitive_output(5), vec![external_landing(6, 1)]),
         ];
         assert_eq!(observed, expected);
 
@@ -3009,5 +5043,133 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn schedule_repairs_change_only_the_named_sink_or_route_precedence() {
+        use crate::compile::topology::GateKind;
+
+        let netlist = Netlist {
+            inputs: vec!["a".into()],
+            outputs: vec!["y".into(), "z".into()],
+            gates: vec![
+                gate("source", &["a"], "n", GateKind::Nor(1)),
+                gate("left", &["n"], "y", GateKind::Nor(1)),
+                gate("right", &["n"], "z", GateKind::Nor(1)),
+            ],
+        };
+        let library = Library::default_library();
+        let config = SearchConfig::checked_defaults();
+        let schedule_for = |repairs: &[LayoutRepair]| {
+            let router = RecordingRouter::default();
+            let instances =
+                InstanceGraph::with_variants(&netlist, &library, &BTreeMap::new(), &[]).unwrap();
+            let _ = SparseSeedBuilder::build_attempt(
+                SeedInput {
+                    lowered: &netlist,
+                    source_provenance: None,
+                    pins: None,
+                },
+                SeedServices {
+                    library: &library,
+                    placer: &TopologyAwareSeedPlacer,
+                    router: &router,
+                    emitter: &DurableSeedEmitter,
+                    verifier: &DurableSeedVerifier,
+                    certifier: &CompleteCandidateCertifier,
+                    search_config: &config,
+                },
+                &SeedVariant::default(),
+                instances,
+                repairs,
+            );
+            let requests = router.requests.borrow();
+            requests
+                .iter()
+                .map(|request| {
+                    (
+                        request.source,
+                        request
+                            .sinks
+                            .iter()
+                            .map(|(endpoint, _)| *endpoint)
+                            .collect::<Vec<_>>(),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+
+        let fanout_source = PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance: InstanceId(0),
+            node: crate::compile::fragment_synth::identity::TopologyNodeId(0),
+        });
+        let left_landing = PhysicalEndpointId::Landing(ConnectionId::External {
+            instance: InstanceId(1),
+            input_index: 0,
+        });
+        let right_landing = PhysicalEndpointId::Landing(ConnectionId::External {
+            instance: InstanceId(2),
+            input_index: 0,
+        });
+
+        let baseline = schedule_for(&[]);
+        let fanout_index = baseline
+            .iter()
+            .position(|(source, _)| *source == fanout_source)
+            .expect("baseline schedule must route the grouped fanout source");
+        assert_eq!(
+            baseline[fanout_index].1,
+            vec![left_landing, right_landing],
+            "baseline fanout tree must order the named sink second",
+        );
+
+        let promoted = schedule_for(&[LayoutRepair::EarlyTreeSinkAndEscape {
+            source: fanout_source,
+            sink: right_landing,
+        }]);
+        assert_eq!(promoted.len(), baseline.len());
+        assert_eq!(
+            promoted[fanout_index].1,
+            vec![right_landing, left_landing],
+            "naming the non-first sink must move exactly it to ordinal 0",
+        );
+        for (index, (route, baseline_route)) in promoted.iter().zip(&baseline).enumerate() {
+            assert_eq!(
+                route.0, baseline_route.0,
+                "route-level schedule order changed at scheduled index {index}",
+            );
+            if index != fanout_index {
+                assert_eq!(
+                    route.1, baseline_route.1,
+                    "unrelated route at scheduled index {index} was reordered",
+                );
+            }
+        }
+
+        let precedence_source = baseline
+            .last()
+            .expect("test schedule must contain a later route")
+            .0;
+        let precedence_blocker = baseline
+            .first()
+            .expect("test schedule must contain an earlier route")
+            .0;
+        assert_ne!(precedence_source, precedence_blocker);
+        let precedence = schedule_for(&[LayoutRepair::RouteBefore {
+            source: precedence_source,
+            blocker: precedence_blocker,
+        }]);
+        let source_index = precedence
+            .iter()
+            .position(|(source, _)| *source == precedence_source)
+            .expect("repaired source must stay scheduled");
+        let blocker_index = precedence
+            .iter()
+            .position(|(source, _)| *source == precedence_blocker)
+            .expect("blocker source must stay scheduled");
+        assert!(
+            source_index < blocker_index,
+            "RouteBefore must move its source ahead of the named blocker",
+        );
     }
 }

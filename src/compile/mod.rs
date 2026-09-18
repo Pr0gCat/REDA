@@ -1551,18 +1551,12 @@ impl std::error::Error for CompileError {}
 pub struct CircuitObservations {
     pub primary_inputs:
         BTreeMap<fragment_synth::identity::PortId, fragment_synth::identity::ObservationSite>,
-    pub primitive_outputs: BTreeMap<
-        fragment_synth::identity::PrimitiveId,
-        fragment_synth::identity::ObservationSite,
-    >,
-    pub instance_outputs: BTreeMap<
-        fragment_synth::identity::InstanceId,
-        fragment_synth::identity::ObservationSite,
-    >,
-    pub junction_outputs: BTreeMap<
-        fragment_synth::identity::InstanceId,
-        fragment_synth::identity::ObservationSite,
-    >,
+    pub primitive_outputs:
+        BTreeMap<fragment_synth::identity::PrimitiveId, fragment_synth::identity::ObservationSite>,
+    pub instance_outputs:
+        BTreeMap<fragment_synth::identity::InstanceId, fragment_synth::identity::ObservationSite>,
+    pub junction_outputs:
+        BTreeMap<fragment_synth::identity::InstanceId, fragment_synth::identity::ObservationSite>,
     pub declared_outputs:
         BTreeMap<fragment_synth::identity::PortId, fragment_synth::identity::ObservationSite>,
 }
@@ -1573,19 +1567,29 @@ impl CircuitObservations {
         for (&id, verified) in &candidate.observations {
             match id {
                 fragment_synth::identity::ObservationId::PrimaryInput(port) => {
-                    observations.primary_inputs.insert(port, verified.site.clone());
+                    observations
+                        .primary_inputs
+                        .insert(port, verified.site.clone());
                 }
                 fragment_synth::identity::ObservationId::PrimitiveOutput(primitive) => {
-                    observations.primitive_outputs.insert(primitive, verified.site.clone());
+                    observations
+                        .primitive_outputs
+                        .insert(primitive, verified.site.clone());
                 }
                 fragment_synth::identity::ObservationId::InstanceOutput(instance) => {
-                    observations.instance_outputs.insert(instance, verified.site.clone());
+                    observations
+                        .instance_outputs
+                        .insert(instance, verified.site.clone());
                 }
                 fragment_synth::identity::ObservationId::JunctionOutput(instance) => {
-                    observations.junction_outputs.insert(instance, verified.site.clone());
+                    observations
+                        .junction_outputs
+                        .insert(instance, verified.site.clone());
                 }
                 fragment_synth::identity::ObservationId::DeclaredOutput(port) => {
-                    observations.declared_outputs.insert(port, verified.site.clone());
+                    observations
+                        .declared_outputs
+                        .insert(port, verified.site.clone());
                 }
             }
         }
@@ -1594,16 +1598,39 @@ impl CircuitObservations {
 
     pub fn sites(
         &self,
-    ) -> BTreeMap<
-        fragment_synth::identity::ObservationId,
-        fragment_synth::identity::ObservationSite,
-    > {
+    ) -> BTreeMap<fragment_synth::identity::ObservationId, fragment_synth::identity::ObservationSite>
+    {
         let mut sites = BTreeMap::new();
-        sites.extend(self.primary_inputs.values().cloned().map(|site| (site.id, site)));
-        sites.extend(self.primitive_outputs.values().cloned().map(|site| (site.id, site)));
-        sites.extend(self.instance_outputs.values().cloned().map(|site| (site.id, site)));
-        sites.extend(self.junction_outputs.values().cloned().map(|site| (site.id, site)));
-        sites.extend(self.declared_outputs.values().cloned().map(|site| (site.id, site)));
+        sites.extend(
+            self.primary_inputs
+                .values()
+                .cloned()
+                .map(|site| (site.id, site)),
+        );
+        sites.extend(
+            self.primitive_outputs
+                .values()
+                .cloned()
+                .map(|site| (site.id, site)),
+        );
+        sites.extend(
+            self.instance_outputs
+                .values()
+                .cloned()
+                .map(|site| (site.id, site)),
+        );
+        sites.extend(
+            self.junction_outputs
+                .values()
+                .cloned()
+                .map(|site| (site.id, site)),
+        );
+        sites.extend(
+            self.declared_outputs
+                .values()
+                .cloned()
+                .map(|site| (site.id, site)),
+        );
         sites
     }
 

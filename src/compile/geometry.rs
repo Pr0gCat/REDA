@@ -191,9 +191,7 @@ mod tests {
                 let really_used: Vec<Position> = cell
                     .input_offsets
                     .iter()
-                    .map(|&(dx, dy, dz)| {
-                        Position::new(origin.0 + dx, origin.1 + dy, origin.2 + dz)
-                    })
+                    .map(|&(dx, dy, dz)| Position::new(origin.0 + dx, origin.1 + dy, origin.2 + dz))
                     .collect();
 
                 assert_eq!(

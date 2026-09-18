@@ -35,10 +35,9 @@ use std::collections::{BTreeMap, HashMap};
 
 use super::{
     approach_column, band_ramp_length, band_y, bent_path_cells, build_floorplan, build_nets,
-    cell_geometry_by_input_count, effective_band, geometry, reserve_columns, resolve_bypass_and_geometry,
-    CompileError, CompiledCircuit, Exit, Floorplan, Net, Netlist, PlannerKind, Source,
-    BYPASS_QUERY_MAX_DISTANCE, GATE_Y,
-    RAMP_REST_INTERVAL,
+    cell_geometry_by_input_count, effective_band, geometry, reserve_columns,
+    resolve_bypass_and_geometry, CompileError, CompiledCircuit, Exit, Floorplan, Net, Netlist,
+    PlannerKind, Source, BYPASS_QUERY_MAX_DISTANCE, GATE_Y, RAMP_REST_INTERVAL,
 };
 use crate::redstone::simulator::position::Position;
 use crate::redstone::world::block::{BlockKind, Facing};
@@ -91,8 +90,13 @@ pub enum RoutePart {
     Bypass,
 }
 
-pub const ALL_PARTS: [RoutePart; 5] =
-    [RoutePart::Column, RoutePart::Ramp, RoutePart::Track, RoutePart::GateEntry, RoutePart::Bypass];
+pub const ALL_PARTS: [RoutePart; 5] = [
+    RoutePart::Column,
+    RoutePart::Ramp,
+    RoutePart::Track,
+    RoutePart::GateEntry,
+    RoutePart::Bypass,
+];
 
 /// One part's contribution: how many blocks (dust + repeaters), and how many
 /// of those blocks are repeaters.
@@ -105,7 +109,10 @@ pub struct PartTotals {
 impl std::ops::Add for PartTotals {
     type Output = PartTotals;
     fn add(self, other: PartTotals) -> PartTotals {
-        PartTotals { length: self.length + other.length, repeaters: self.repeaters + other.repeaters }
+        PartTotals {
+            length: self.length + other.length,
+            repeaters: self.repeaters + other.repeaters,
+        }
     }
 }
 
@@ -137,7 +144,9 @@ impl EdgeRoute {
     }
 
     pub fn total(&self) -> PartTotals {
-        ALL_PARTS.iter().fold(PartTotals::default(), |acc, &p| acc + self.part(p))
+        ALL_PARTS
+            .iter()
+            .fold(PartTotals::default(), |acc, &p| acc + self.part(p))
     }
 }
 
@@ -155,7 +164,14 @@ pub struct RoutingReport {
 
 /// `(floorplan, nets, row Z, per-channel track Z, per-channel track count,
 /// per-net bypass flag)`.
-type Geometry = (Floorplan, Vec<Net>, Vec<i32>, Vec<Vec<i32>>, Vec<usize>, Vec<bool>);
+type Geometry = (
+    Floorplan,
+    Vec<Net>,
+    Vec<i32>,
+    Vec<Vec<i32>>,
+    Vec<usize>,
+    Vec<bool>,
+);
 
 /// Recompute the floorplan, nets (with columns and tracks already assigned),
 /// Z layout and bypass decisions for `netlist` -- the same stages `compile`
@@ -177,7 +193,9 @@ fn recompute_geometry(netlist: &Netlist) -> Result<Geometry, CompileError> {
             return Err(CompileError::UndrivenSignal(output.clone()));
         }
     }
-    let order = netlist.topological_order().ok_or(CompileError::CyclicNetlist)?;
+    let order = netlist
+        .topological_order()
+        .ok_or(CompileError::CyclicNetlist)?;
 
     let mut producer_of: HashMap<&str, usize> = HashMap::new();
     for (index, gate) in netlist.gates.iter().enumerate() {
@@ -209,8 +227,14 @@ fn recompute_geometry(netlist: &Netlist) -> Result<Geometry, CompileError> {
 
 fn classify(world: &World, pos: Position) -> PartTotals {
     match world.get(pos.x, pos.y, pos.z).kind {
-        BlockKind::Repeater => PartTotals { length: 1, repeaters: 1 },
-        BlockKind::RedstoneWire => PartTotals { length: 1, repeaters: 0 },
+        BlockKind::Repeater => PartTotals {
+            length: 1,
+            repeaters: 1,
+        },
+        BlockKind::RedstoneWire => PartTotals {
+            length: 1,
+            repeaters: 0,
+        },
         _ => PartTotals::default(),
     }
 }
@@ -229,7 +253,12 @@ fn classify(world: &World, pos: Position) -> PartTotals {
 ///
 /// [`refuse_a_foreign_layout`] is what stops such a call reaching here; this
 /// bound is what stops the *next* way of reaching it from being a hang.
-fn scan_dust_run(world: &World, start: Position, direction: Facing, stop_before: Position) -> PartTotals {
+fn scan_dust_run(
+    world: &World,
+    start: Position,
+    direction: Facing,
+    stop_before: Position,
+) -> PartTotals {
     let (size_x, size_y, size_z) = world.size();
     let mut totals = PartTotals::default();
     let mut pos = start.offset(direction);
@@ -254,14 +283,21 @@ fn scan_dust_run(world: &World, start: Position, direction: Facing, stop_before:
 /// per cell, with no assumption about which of them (if any) turned out to
 /// need a repeater.
 fn scan_bent_path(world: &World, start: Position, waypoints: &[Position]) -> PartTotals {
-    bent_path_cells(start, waypoints).into_iter().fold(PartTotals::default(), |acc, pos| acc + classify(world, pos))
+    bent_path_cells(start, waypoints)
+        .into_iter()
+        .fold(PartTotals::default(), |acc, pos| acc + classify(world, pos))
 }
 
 /// Mirrors the last leg of `emit`'s ordinary (non-bypass) Columns pass: from
 /// a track/ramp `landing`, an optional sideways bend onto the socket's own X
 /// (skipped for a south input, whose socket already sits on `landing`'s own
 /// column -- see `approach_column`'s doc comment), then the socket.
-fn scan_socket_entry(world: &World, landing: Position, socket: Position, row_z_gate: i32) -> PartTotals {
+fn scan_socket_entry(
+    world: &World,
+    landing: Position,
+    socket: Position,
+    row_z_gate: i32,
+) -> PartTotals {
     let mut waypoints: Vec<Position> = Vec::new();
     if socket.x != landing.x {
         waypoints.push(Position::new(landing.x, landing.y, row_z_gate));
@@ -293,7 +329,11 @@ fn scan_bypass(
 ) -> PartTotals {
     let (pin, source_facing) = source;
     let start = super::bypass_source_start(netlist, net, pin, exit_x, source_facing);
-    let extra_hop = if start != pin { classify(world, start) } else { PartTotals::default() };
+    let extra_hop = if start != pin {
+        classify(world, start)
+    } else {
+        PartTotals::default()
+    };
 
     let mut waypoints: Vec<Position> = Vec::new();
     if start.x != exit_x {
@@ -448,14 +488,13 @@ fn source_pin(
 /// `scan_dust_run` carries its own bound as well, for the reason that function
 /// gives: one of these two guards has to be the one that is wrong before a
 /// hang comes back, not both at once.
-fn refuse_a_foreign_layout(
-    compiled: &CompiledCircuit,
-    report: &str,
-) -> Result<(), CompileError> {
+fn refuse_a_foreign_layout(compiled: &CompiledCircuit, report: &str) -> Result<(), CompileError> {
     if compiled.planner_kind() == PlannerKind::Legacy {
         return Ok(());
     }
-    Err(CompileError::NotALegacyLayout { report: report.to_string() })
+    Err(CompileError::NotALegacyLayout {
+        report: report.to_string(),
+    })
 }
 
 /// Decompose every real netlist edge of a compiled circuit into its physical
@@ -465,7 +504,10 @@ fn refuse_a_foreign_layout(
 /// Refuses anything the emitter did not lay out; see
 /// [`refuse_a_foreign_layout`] for why that refusal is load-bearing rather
 /// than tidy.
-pub fn analyze(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<RoutingReport, CompileError> {
+pub fn analyze(
+    netlist: &Netlist,
+    compiled: &CompiledCircuit,
+) -> Result<RoutingReport, CompileError> {
     refuse_a_foreign_layout(compiled, "`routing_stats::analyze`")?;
     let (plan, nets, row_z, track_z, track_count, bypass) = recompute_geometry(netlist)?;
     let cell_of_count = cell_geometry_by_input_count(netlist);
@@ -486,18 +528,34 @@ pub fn analyze(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<RoutingR
             let (gate, input_index) = net.sinks[0][0];
             let exit_x = approach_column(plan.centre_x[gate], input_index);
             let row_z_gate = row_z[plan.row_of[gate]];
-            let cell = &cell_of_count[&(netlist.gates[gate].inputs.len(), geometry::CellFacing::NORTH)];
+            let cell = &cell_of_count[&(
+                netlist.gates[gate].inputs.len(),
+                geometry::CellFacing::NORTH,
+            )];
             let (dx, dy, dz) = cell.input_offsets[input_index];
             let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
 
             let mut parts: BTreeMap<RoutePart, PartTotals> = BTreeMap::new();
             parts.insert(
                 RoutePart::Bypass,
-                scan_bypass(world, netlist, net, (pin, source_facing), exit_x, socket, row_z_gate),
+                scan_bypass(
+                    world,
+                    netlist,
+                    net,
+                    (pin, source_facing),
+                    exit_x,
+                    socket,
+                    row_z_gate,
+                ),
             );
 
             let sink_label = format!("{}.in[{}]", netlist.gates[gate].output, input_index);
-            edges.push(EdgeRoute { source: source_label, sink: sink_label, hops: 1, parts });
+            edges.push(EdgeRoute {
+                source: source_label,
+                sink: sink_label,
+                hops: 1,
+                parts,
+            });
             continue;
         }
 
@@ -539,16 +597,22 @@ pub fn analyze(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<RoutingR
                             scan_track_to(world, net.entry_column(i), hop_x, band_y(eff_band), z);
 
                         let top = Position::new(hop_x, band_y(eff_band), z);
-                        *parts.entry(RoutePart::Ramp).or_default() += scan_ramp(world, top, Facing::North, GATE_Y);
+                        *parts.entry(RoutePart::Ramp).or_default() +=
+                            scan_ramp(world, top, Facing::North, GATE_Y);
 
                         let landing = Position::new(hop_x, GATE_Y, z - ramp_length);
                         let next_channel = net.channels[i + 1];
                         let next_band = net.tracks[i + 1];
                         let eff_next_band = effective_band(&track_count, next_channel, next_band);
                         let next_z = track_z[next_channel][next_band];
-                        let next_entry = Position::new(hop_x, GATE_Y, next_z + band_ramp_length(eff_next_band));
-                        *parts.entry(RoutePart::Column).or_default() +=
-                            scan_dust_run(world, landing, Facing::North, next_entry.offset(Facing::North));
+                        let next_entry =
+                            Position::new(hop_x, GATE_Y, next_z + band_ramp_length(eff_next_band));
+                        *parts.entry(RoutePart::Column).or_default() += scan_dust_run(
+                            world,
+                            landing,
+                            Facing::North,
+                            next_entry.offset(Facing::North),
+                        );
                     } else {
                         // Final slot: the real socket this edge ends at.
                         let exit_x = approach_column(plan.centre_x[gate], input_index);
@@ -556,25 +620,39 @@ pub fn analyze(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<RoutingR
                             scan_track_to(world, net.entry_column(i), exit_x, band_y(eff_band), z);
 
                         let top = Position::new(exit_x, band_y(eff_band), z);
-                        *parts.entry(RoutePart::Ramp).or_default() += scan_ramp(world, top, Facing::North, GATE_Y);
+                        *parts.entry(RoutePart::Ramp).or_default() +=
+                            scan_ramp(world, top, Facing::North, GATE_Y);
 
                         let landing = Position::new(exit_x, GATE_Y, z - ramp_length);
                         let row_z_gate = row_z[plan.row_of[gate]];
-                        let cell = &cell_of_count[&(netlist.gates[gate].inputs.len(), geometry::CellFacing::NORTH)];
+                        let cell = &cell_of_count[&(
+                            netlist.gates[gate].inputs.len(),
+                            geometry::CellFacing::NORTH,
+                        )];
                         let (dx, dy, dz) = cell.input_offsets[input_index];
-                        let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
+                        let socket =
+                            Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
                         *parts.entry(RoutePart::GateEntry).or_default() +=
                             scan_socket_entry(world, landing, socket, row_z_gate);
                     }
                 }
 
                 let sink_label = format!("{}.in[{}]", netlist.gates[gate].output, input_index);
-                edges.push(EdgeRoute { source: source_label.clone(), sink: sink_label, hops: slot + 1, parts });
+                edges.push(EdgeRoute {
+                    source: source_label.clone(),
+                    sink: sink_label,
+                    hops: slot + 1,
+                    parts,
+                });
             }
         }
     }
 
-    Ok(RoutingReport { edges, channel_count: track_count.len(), track_count })
+    Ok(RoutingReport {
+        edges,
+        channel_count: track_count.len(),
+        track_count,
+    })
 }
 
 // ---------------------------------------------------------------------
@@ -604,11 +682,21 @@ pub fn distinct_totals_by_part(
             let (gate, input_index) = net.sinks[0][0];
             let exit_x = approach_column(plan.centre_x[gate], input_index);
             let row_z_gate = row_z[plan.row_of[gate]];
-            let cell = &cell_of_count[&(netlist.gates[gate].inputs.len(), geometry::CellFacing::NORTH)];
+            let cell = &cell_of_count[&(
+                netlist.gates[gate].inputs.len(),
+                geometry::CellFacing::NORTH,
+            )];
             let (dx, dy, dz) = cell.input_offsets[input_index];
             let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
-            *total.entry(RoutePart::Bypass).or_default() +=
-                scan_bypass(world, netlist, net, (pin, source_facing), exit_x, socket, row_z_gate);
+            *total.entry(RoutePart::Bypass).or_default() += scan_bypass(
+                world,
+                netlist,
+                net,
+                (pin, source_facing),
+                exit_x,
+                socket,
+                row_z_gate,
+            );
             continue;
         }
 
@@ -623,7 +711,8 @@ pub fn distinct_totals_by_part(
                 *total.entry(RoutePart::Column).or_default() +=
                     scan_dust_run(world, pin, Facing::North, entry.offset(Facing::North));
             }
-            *total.entry(RoutePart::Ramp).or_default() += scan_ramp(world, entry, Facing::North, band_y(eff_band));
+            *total.entry(RoutePart::Ramp).or_default() +=
+                scan_ramp(world, entry, Facing::North, band_y(eff_band));
 
             let (lo, hi) = net.span(slot, &plan.centre_x);
             *total.entry(RoutePart::Track).or_default() +=
@@ -631,15 +720,22 @@ pub fn distinct_totals_by_part(
 
             for exit in net.exits(slot, &plan.centre_x) {
                 let top = Position::new(exit.x(), band_y(eff_band), z);
-                *total.entry(RoutePart::Ramp).or_default() += scan_ramp(world, top, Facing::North, GATE_Y);
+                *total.entry(RoutePart::Ramp).or_default() +=
+                    scan_ramp(world, top, Facing::North, GATE_Y);
                 let landing = Position::new(exit.x(), GATE_Y, z - ramp_length);
 
                 match exit {
-                    Exit::Socket { gate, input_index, .. } => {
+                    Exit::Socket {
+                        gate, input_index, ..
+                    } => {
                         let row_z_gate = row_z[plan.row_of[gate]];
-                        let cell = &cell_of_count[&(netlist.gates[gate].inputs.len(), geometry::CellFacing::NORTH)];
+                        let cell = &cell_of_count[&(
+                            netlist.gates[gate].inputs.len(),
+                            geometry::CellFacing::NORTH,
+                        )];
                         let (dx, dy, dz) = cell.input_offsets[input_index];
-                        let socket = Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
+                        let socket =
+                            Position::new(plan.centre_x[gate] + dx, GATE_Y + dy, row_z_gate + dz);
                         *total.entry(RoutePart::GateEntry).or_default() +=
                             scan_socket_entry(world, landing, socket, row_z_gate);
                     }
@@ -648,9 +744,14 @@ pub fn distinct_totals_by_part(
                         let next_band = net.tracks[next_slot];
                         let eff_next_band = effective_band(&track_count, next_channel, next_band);
                         let next_z = track_z[next_channel][next_band];
-                        let next_entry = Position::new(x, GATE_Y, next_z + band_ramp_length(eff_next_band));
-                        *total.entry(RoutePart::Column).or_default() +=
-                            scan_dust_run(world, landing, Facing::North, next_entry.offset(Facing::North));
+                        let next_entry =
+                            Position::new(x, GATE_Y, next_z + band_ramp_length(eff_next_band));
+                        *total.entry(RoutePart::Column).or_default() += scan_dust_run(
+                            world,
+                            landing,
+                            Facing::North,
+                            next_entry.offset(Facing::North),
+                        );
                     }
                 }
             }
@@ -661,9 +762,14 @@ pub fn distinct_totals_by_part(
 }
 
 /// The grand total across every part -- see `distinct_totals_by_part`.
-pub fn distinct_totals(netlist: &Netlist, compiled: &CompiledCircuit) -> Result<PartTotals, CompileError> {
+pub fn distinct_totals(
+    netlist: &Netlist,
+    compiled: &CompiledCircuit,
+) -> Result<PartTotals, CompileError> {
     let by_part = distinct_totals_by_part(netlist, compiled)?;
-    Ok(ALL_PARTS.iter().fold(PartTotals::default(), |acc, p| acc + by_part.get(p).copied().unwrap_or_default()))
+    Ok(ALL_PARTS.iter().fold(PartTotals::default(), |acc, p| {
+        acc + by_part.get(p).copied().unwrap_or_default()
+    }))
 }
 
 #[cfg(test)]
@@ -671,7 +777,9 @@ mod tests {
     use super::*;
     use crate::circuits::and4::build_and4_netlist;
     use crate::circuits::full_adder::build_full_adder_netlist;
-    use crate::circuits::seven_segment::{build_seven_segment_netlist, build_single_segment_netlist};
+    use crate::circuits::seven_segment::{
+        build_seven_segment_netlist, build_single_segment_netlist,
+    };
     use crate::compile::{compile, compile_legacy};
 
     /// The one load-bearing check for this whole module: `distinct_totals`'s
@@ -779,7 +887,13 @@ mod tests {
             Facing::North,
             Position::new(5, 1, 2),
         );
-        assert_eq!(totals, PartTotals { length: 6, repeaters: 0 });
+        assert_eq!(
+            totals,
+            PartTotals {
+                length: 6,
+                repeaters: 0
+            }
+        );
     }
 
     #[test]
@@ -809,7 +923,12 @@ mod tests {
         assert!(!report.edges.is_empty());
         for edge in &report.edges {
             let total = edge.total();
-            assert!(total.length > 0, "{} -> {}: length must be positive", edge.source, edge.sink);
+            assert!(
+                total.length > 0,
+                "{} -> {}: length must be positive",
+                edge.source,
+                edge.sink
+            );
         }
     }
 
@@ -864,16 +983,25 @@ mod tests {
                 continue;
             }
             let ramp = edge.part(RoutePart::Ramp);
-            let tracks = bands_by_source
-                .get(&edge.source)
-                .unwrap_or_else(|| panic!("{}: net must have been recorded by recompute_geometry", edge.source));
-            let expected_length: i64 =
-                tracks[..edge.hops].iter().map(|&band| 2 * band_ramp_length(band) as i64).sum();
+            let tracks = bands_by_source.get(&edge.source).unwrap_or_else(|| {
+                panic!(
+                    "{}: net must have been recorded by recompute_geometry",
+                    edge.source
+                )
+            });
+            let expected_length: i64 = tracks[..edge.hops]
+                .iter()
+                .map(|&band| 2 * band_ramp_length(band) as i64)
+                .sum();
             assert_eq!(
                 ramp.length, expected_length,
-                "{} -> {}: ramp length must match the bands it actually climbed", edge.source, edge.sink
+                "{} -> {}: ramp length must match the bands it actually climbed",
+                edge.source, edge.sink
             );
-            assert_eq!(ramp.repeaters, 0, "a dust staircase ramp must never place a repeater");
+            assert_eq!(
+                ramp.repeaters, 0,
+                "a dust staircase ramp must never place a repeater"
+            );
         }
     }
 
@@ -887,7 +1015,15 @@ mod tests {
         let (and4, _) = build_and4_netlist();
         let compiled = compile_legacy(&and4).expect("and4 must compile");
         let report = analyze(&and4, &compiled).expect("and4 must analyze");
-        let bypassed = report.edges.iter().filter(|e| e.part(RoutePart::Bypass).length > 0).count();
-        assert!(bypassed > 0, "expected at least one bypassed edge on and4, got 0 of {}", report.edges.len());
+        let bypassed = report
+            .edges
+            .iter()
+            .filter(|e| e.part(RoutePart::Bypass).length > 0)
+            .count();
+        assert!(
+            bypassed > 0,
+            "expected at least one bypassed edge on and4, got 0 of {}",
+            report.edges.len()
+        );
     }
 }

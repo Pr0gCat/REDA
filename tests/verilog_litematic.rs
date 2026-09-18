@@ -57,7 +57,9 @@ fn verilog_litematic_uses_the_same_optimised_lowering_as_mc_dump() {
         "the pasteable .litematic and mc_dump must use one lowering path"
     );
     assert!(
-        scratch.join("output/verilog_seven_segment.litematic").is_file(),
+        scratch
+            .join("output/verilog_seven_segment.litematic")
+            .is_file(),
         "build_circuit must actually write the requested schematic"
     );
 

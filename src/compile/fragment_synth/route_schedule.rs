@@ -1,4 +1,9 @@
-use std::cmp::Reverse;
+use std::{
+    cmp::Reverse,
+    collections::{BTreeMap, BTreeSet},
+};
+
+use thiserror::Error;
 
 use crate::compile::fragment_synth::identity::PhysicalEndpointId;
 
@@ -14,7 +19,8 @@ pub(crate) struct TargetObligation<T> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct RouteObligation<T> {
     pub source: PhysicalEndpointId,
-    pub pinned_boundary_escape: bool,
+    pub must_precede: BTreeSet<PhysicalEndpointId>,
+    pub boundary_escape: bool,
     pub structural_slack_ticks: u64,
     pub fanout: usize,
     pub level_span: u64,
@@ -32,20 +38,97 @@ pub(crate) struct RouteSchedule<T> {
     pub routes: Vec<ScheduledRoute<T>>,
 }
 
+#[derive(Debug, Clone, Error, PartialEq, Eq)]
+pub(crate) enum RouteScheduleError {
+    #[error("duplicate route obligation for endpoint {endpoint:?}")]
+    DuplicateEndpoint { endpoint: PhysicalEndpointId },
+    #[error("route {route_source:?} must precede unknown endpoint {referenced:?}")]
+    UnknownEndpoint {
+        route_source: PhysicalEndpointId,
+        referenced: PhysicalEndpointId,
+    },
+    #[error("route {route_source:?} cannot precede itself")]
+    SelfPrecedence { route_source: PhysicalEndpointId },
+    #[error("route precedence cycle leaves blocked endpoints {remaining:?}")]
+    PrecedenceCycle { remaining: Vec<PhysicalEndpointId> },
+}
+
 impl<T> RouteSchedule<T> {
-    pub fn build(mut obligations: Vec<RouteObligation<T>>) -> Self {
+    pub fn build(mut obligations: Vec<RouteObligation<T>>) -> Result<Self, RouteScheduleError> {
         obligations.sort_by_key(|route| {
             (
-                Reverse(route.pinned_boundary_escape),
+                Reverse(route.boundary_escape),
                 route.structural_slack_ticks,
                 Reverse(route.fanout),
                 Reverse(route.level_span),
                 route.source,
             )
         });
-        let routes = obligations
+
+        let mut source_indices = BTreeMap::new();
+        for (index, route) in obligations.iter().enumerate() {
+            if source_indices.insert(route.source, index).is_some() {
+                return Err(RouteScheduleError::DuplicateEndpoint {
+                    endpoint: route.source,
+                });
+            }
+        }
+
+        let mut outgoing = vec![Vec::new(); obligations.len()];
+        let mut indegree = vec![0usize; obligations.len()];
+        for (source_index, route) in obligations.iter().enumerate() {
+            for referenced in &route.must_precede {
+                if *referenced == route.source {
+                    return Err(RouteScheduleError::SelfPrecedence {
+                        route_source: route.source,
+                    });
+                }
+                let Some(&target_index) = source_indices.get(referenced) else {
+                    return Err(RouteScheduleError::UnknownEndpoint {
+                        route_source: route.source,
+                        referenced: *referenced,
+                    });
+                };
+                outgoing[source_index].push(target_index);
+                indegree[target_index] += 1;
+            }
+        }
+
+        let mut ready = indegree
+            .iter()
+            .enumerate()
+            .filter_map(|(index, degree)| (*degree == 0).then_some(index))
+            .collect::<BTreeSet<_>>();
+        let mut topological_order = Vec::with_capacity(obligations.len());
+        while let Some(index) = ready.iter().next().copied() {
+            ready.remove(&index);
+            topological_order.push(index);
+            for &target_index in &outgoing[index] {
+                indegree[target_index] -= 1;
+                if indegree[target_index] == 0 {
+                    ready.insert(target_index);
+                }
+            }
+        }
+
+        if topological_order.len() != obligations.len() {
+            let remaining = indegree
+                .iter()
+                .enumerate()
+                .filter_map(|(index, degree)| (*degree > 0).then_some(obligations[index].source))
+                .collect();
+            return Err(RouteScheduleError::PrecedenceCycle { remaining });
+        }
+
+        let mut ranks = vec![0usize; obligations.len()];
+        for (rank, index) in topological_order.into_iter().enumerate() {
+            ranks[index] = rank;
+        }
+        let mut ranked = obligations.into_iter().enumerate().collect::<Vec<_>>();
+        ranked.sort_by_key(|(index, _)| ranks[*index]);
+        let routes = ranked
             .into_iter()
-            .map(|route| {
+            .map(|(_, route)| {
                 let mut targets = route.targets;
                 targets.sort_by_key(|target| {
                     (
@@ -61,13 +144,15 @@ impl<T> RouteSchedule<T> {
                 }
             })
             .collect();
-        Self { routes }
+        Ok(Self { routes })
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{RouteObligation, RouteSchedule, TargetObligation};
+    use std::collections::BTreeSet;
+
+    use super::{RouteObligation, RouteSchedule, RouteScheduleError, TargetObligation};
     use crate::compile::fragment_synth::identity::{
         InstanceId, PhysicalEndpointId, PortId, PrimitiveId, TopologyNodeId,
     };
@@ -88,7 +173,8 @@ mod tests {
     ) -> RouteObligation<u32> {
         RouteObligation {
             source,
-            pinned_boundary_escape: pinned,
+            must_precede: BTreeSet::new(),
+            boundary_escape: pinned,
             structural_slack_ticks: slack,
             fanout,
             level_span: span,
@@ -118,6 +204,10 @@ mod tests {
         }
     }
 
+    fn schedule<T>(obligations: Vec<RouteObligation<T>>) -> RouteSchedule<T> {
+        RouteSchedule::build(obligations).expect("test schedule should be valid")
+    }
+
     #[test]
     fn route_priority_is_pinned_then_slack_fanout_span_and_source_id() {
         let obligations = vec![
@@ -129,7 +219,7 @@ mod tests {
             route(PhysicalEndpointId::PrimaryInput(PortId(9)), true, 99, 1, 1),
         ];
 
-        let schedule = RouteSchedule::build(obligations);
+        let schedule = schedule(obligations);
         let expected = vec![
             PhysicalEndpointId::PrimaryInput(PortId(9)),
             source(4),
@@ -149,10 +239,78 @@ mod tests {
     }
 
     #[test]
+    fn one_precedence_constraint_moves_only_what_dependency_requires() {
+        let pinned = PhysicalEndpointId::PrimaryInput(PortId(9));
+        let mut repaired = route(source(1), false, 8, 3, 20);
+        repaired.must_precede.insert(pinned);
+        let schedule = schedule(vec![
+            route(source(5), false, 2, 9, 40),
+            route(source(4), false, 2, 9, 40),
+            repaired,
+            route(pinned, true, 99, 1, 1),
+        ]);
+
+        assert_eq!(
+            schedule
+                .routes
+                .iter()
+                .map(|route| route.source)
+                .collect::<Vec<_>>(),
+            vec![source(4), source(5), source(1), pinned],
+        );
+    }
+
+    #[test]
+    fn precedence_constraints_accumulate_into_a_chain() {
+        let mut first = route(source(1), false, 9, 1, 1);
+        let mut second = route(source(2), false, 8, 1, 1);
+        first.must_precede.insert(source(2));
+        second.must_precede.insert(source(3));
+
+        let schedule = schedule(vec![
+            route(source(3), false, 0, 1, 1),
+            second,
+            first,
+            route(source(4), false, 4, 1, 1),
+        ]);
+
+        assert_eq!(
+            schedule
+                .routes
+                .iter()
+                .map(|route| route.source)
+                .collect::<Vec<_>>(),
+            vec![source(4), source(1), source(2), source(3)],
+        );
+    }
+
+    #[test]
+    fn available_routes_keep_the_canonical_priority_tie_break() {
+        let mut constrained = route(source(1), false, 8, 1, 1);
+        constrained.must_precede.insert(source(3));
+        let schedule = schedule(vec![
+            route(source(2), false, 2, 1, 1),
+            route(source(3), false, 0, 1, 1),
+            constrained,
+            route(source(4), false, 1, 1, 1),
+        ]);
+
+        assert_eq!(
+            schedule
+                .routes
+                .iter()
+                .map(|route| route.source)
+                .collect::<Vec<_>>(),
+            vec![source(4), source(2), source(1), source(3)],
+        );
+    }
+
+    #[test]
     fn fanout_targets_use_slack_then_decreasing_forward_distance_then_key() {
         let obligation = RouteObligation {
             source: source(0),
-            pinned_boundary_escape: false,
+            must_precede: BTreeSet::new(),
+            boundary_escape: false,
             structural_slack_ticks: 0,
             fanout: 4,
             level_span: 30,
@@ -163,7 +321,7 @@ mod tests {
                 target(34, 1, 30, (0, 34, 0)),
             ],
         };
-        let schedule = RouteSchedule::build(vec![obligation]);
+        let schedule = schedule(vec![obligation]);
         assert_eq!(schedule.routes[0].targets, vec![34, 35, 32, 4]);
     }
 
@@ -171,7 +329,8 @@ mod tests {
     fn promoted_sink_leads_only_its_own_route_tree() {
         let route_a = RouteObligation {
             source: source(1),
-            pinned_boundary_escape: false,
+            must_precede: BTreeSet::new(),
+            boundary_escape: false,
             structural_slack_ticks: 0,
             fanout: 3,
             level_span: 10,
@@ -183,19 +342,20 @@ mod tests {
         };
         let route_b = RouteObligation {
             source: source(2),
-            pinned_boundary_escape: false,
+            must_precede: BTreeSet::new(),
+            boundary_escape: false,
             structural_slack_ticks: 3,
             fanout: 2,
             level_span: 10,
             targets: vec![target(20, 1, 4, (0, 20, 0)), target(21, 0, 4, (0, 21, 0))],
         };
 
-        let baseline = RouteSchedule::build(vec![route_a.clone(), route_b.clone()]);
+        let baseline = schedule(vec![route_a.clone(), route_b.clone()]);
         assert_eq!(baseline.routes[0].targets, vec![12, 11, 10]);
 
         let mut promoted_route_a = route_a;
         promoted_route_a.targets[0] = promoted_target(10, 2, 5, (0, 10, 0));
-        let schedule = RouteSchedule::build(vec![promoted_route_a, route_b]);
+        let schedule = schedule(vec![promoted_route_a, route_b]);
 
         assert_eq!(schedule.routes[0].targets, vec![10, 12, 11]);
         assert_eq!(
@@ -218,7 +378,8 @@ mod tests {
         let obligations = vec![
             RouteObligation {
                 source: source(1),
-                pinned_boundary_escape: false,
+                must_precede: BTreeSet::new(),
+                boundary_escape: false,
                 structural_slack_ticks: 0,
                 fanout: 4,
                 level_span: 30,
@@ -231,7 +392,8 @@ mod tests {
             },
             RouteObligation {
                 source: source(2),
-                pinned_boundary_escape: false,
+                must_precede: BTreeSet::new(),
+                boundary_escape: false,
                 structural_slack_ticks: 5,
                 fanout: 2,
                 level_span: 4,
@@ -239,7 +401,7 @@ mod tests {
             },
         ];
 
-        let schedule = RouteSchedule::build(obligations);
+        let schedule = schedule(obligations);
 
         assert_eq!(
             schedule
@@ -257,7 +419,8 @@ mod tests {
     fn reversing_insertion_order_stays_canonical_with_promotion() {
         let forward = vec![RouteObligation {
             source: source(1),
-            pinned_boundary_escape: false,
+            must_precede: BTreeSet::new(),
+            boundary_escape: false,
             structural_slack_ticks: 0,
             fanout: 4,
             level_span: 12,
@@ -273,9 +436,9 @@ mod tests {
             route.targets.reverse();
         }
 
-        let schedule = RouteSchedule::build(forward);
-        assert_eq!(schedule.routes[0].targets, vec![43, 41, 40, 42]);
-        assert_eq!(schedule, RouteSchedule::build(reversed));
+        let forward_schedule = schedule(forward);
+        assert_eq!(forward_schedule.routes[0].targets, vec![43, 41, 40, 42]);
+        assert_eq!(forward_schedule, schedule(reversed));
     }
 
     #[test]
@@ -295,9 +458,45 @@ mod tests {
         for route in &mut reversed {
             route.targets.reverse();
         }
+        assert_eq!(schedule(forward), schedule(reversed));
+    }
+
+    #[test]
+    fn unknown_precedence_endpoint_is_rejected_with_evidence() {
+        let mut obligation = route(source(1), false, 0, 1, 1);
+        obligation.must_precede.insert(source(99));
         assert_eq!(
-            RouteSchedule::build(forward),
-            RouteSchedule::build(reversed)
+            RouteSchedule::build(vec![obligation]),
+            Err(RouteScheduleError::UnknownEndpoint {
+                route_source: source(1),
+                referenced: source(99),
+            })
+        );
+    }
+
+    #[test]
+    fn self_precedence_is_rejected() {
+        let mut obligation = route(source(1), false, 0, 1, 1);
+        obligation.must_precede.insert(source(1));
+        assert_eq!(
+            RouteSchedule::build(vec![obligation]),
+            Err(RouteScheduleError::SelfPrecedence {
+                route_source: source(1)
+            })
+        );
+    }
+
+    #[test]
+    fn precedence_cycle_is_rejected_in_canonical_order() {
+        let mut first = route(source(1), false, 8, 1, 1);
+        let mut second = route(source(2), false, 0, 1, 1);
+        first.must_precede.insert(source(2));
+        second.must_precede.insert(source(1));
+        assert_eq!(
+            RouteSchedule::build(vec![first, second]),
+            Err(RouteScheduleError::PrecedenceCycle {
+                remaining: vec![source(2), source(1)],
+            })
         );
     }
 }

@@ -344,7 +344,10 @@ pub struct BodyGraph {
 /// everywhere it is really written.
 pub fn pin_hops(body: &Body) -> i32 {
     match body.what {
-        BodyKind::Primitive { kind: Primitive::Torch, .. } => 2,
+        BodyKind::Primitive {
+            kind: Primitive::Torch,
+            ..
+        } => 2,
         BodyKind::InputTerminal { .. } => 2,
         // An output terminal is a sink, not a source: the spring from its
         // producer attaches at the caller's own cell, zero hops out.
@@ -375,7 +378,10 @@ pub fn attach_offset(attach: Attach, body: &Body) -> [f64; 3] {
             [step.x as f64, step.y as f64, step.z as f64]
         }
         Attach::Port(kind) => {
-            let BodyKind::Primitive { kind: primitive, .. } = body.what else {
+            let BodyKind::Primitive {
+                kind: primitive, ..
+            } = body.what
+            else {
                 unreachable!("a junction has no `physical` port; use Socket or Pin")
             };
             let port = physical::variants(primitive)[usize::from(facing.index())].port(kind);
@@ -432,7 +438,10 @@ pub fn cells(body: &Body) -> Vec<Cell> {
     if let BodyKind::OutputTerminal { toward } = body.what {
         let handover = Position::new(0, 0, 0).offset(toward.opposite());
         return vec![
-            Cell { offset: (0, 0, 0), carries: body.inputs.clone() },
+            Cell {
+                offset: (0, 0, 0),
+                carries: body.inputs.clone(),
+            },
             Cell {
                 offset: (handover.x, handover.y, handover.z),
                 carries: body.inputs.clone(),
@@ -595,7 +604,11 @@ pub fn build(
         .filter(|name| pinned.get(name).is_some())
         .collect();
     let node_count = netlist.gates.len() + netlist.inputs.len() + pinned_outputs.len();
-    assert_eq!(start.len(), node_count, "one start anchor per candidate node");
+    assert_eq!(
+        start.len(),
+        node_count,
+        "one start anchor per candidate node"
+    );
 
     let mut bodies: Vec<Body> = Vec::new();
     let mut nodes: Vec<Vec<usize>> = vec![Vec::new(); node_count];
@@ -953,7 +966,11 @@ mod tests {
             "nothing leaves the junction, so its consumer was wired past it"
         );
         assert_eq!(
-            graph.pulls.iter().filter(|pull| pull.to.0 == junction).count(),
+            graph
+                .pulls
+                .iter()
+                .filter(|pull| pull.to.0 == junction)
+                .count(),
             2,
             "both branches must arrive at the junction"
         );
@@ -990,7 +1007,12 @@ mod tests {
             .iter()
             .find(|weld| matches!(weld, Weld::AtSocket { junction: j, .. } if *j == junction))
             .expect("the isolated branch is welded");
-        let Weld::AtSocket { repeater, input_index, .. } = *weld else {
+        let Weld::AtSocket {
+            repeater,
+            input_index,
+            ..
+        } = *weld
+        else {
             unreachable!("matched AtSocket above")
         };
 
@@ -998,7 +1020,10 @@ mod tests {
         assert!(
             matches!(
                 graph.bodies[repeater].what,
-                BodyKind::Primitive { kind: Primitive::Repeater, .. }
+                BodyKind::Primitive {
+                    kind: Primitive::Repeater,
+                    ..
+                }
             ),
             "a weld must hold a repeater"
         );
@@ -1019,7 +1044,10 @@ mod tests {
         assert!(
             !graph.bodies.iter().any(|body| matches!(
                 body.what,
-                BodyKind::Primitive { kind: Primitive::Lamp, .. }
+                BodyKind::Primitive {
+                    kind: Primitive::Lamp,
+                    ..
+                }
             )),
             "a lamp's position is its producer's, not its own"
         );
@@ -1042,7 +1070,10 @@ mod tests {
         };
         let graph = built(&netlist);
 
-        assert_eq!(graph.anchor_body.len(), netlist.gates.len() + netlist.inputs.len());
+        assert_eq!(
+            graph.anchor_body.len(),
+            netlist.gates.len() + netlist.inputs.len()
+        );
         assert_eq!(graph.nodes.len(), graph.anchor_body.len());
         for (node, &body) in graph.anchor_body.iter().enumerate() {
             assert!(
@@ -1072,12 +1103,17 @@ mod tests {
         let built = build(&netlist, &graph, &start, &placements).expect("builds");
 
         let terminal = built.anchor_body[1];
-        assert!(built.bodies[terminal].pinned, "a pinned input must be a pinned body");
+        assert!(
+            built.bodies[terminal].pinned,
+            "a pinned input must be a pinned body"
+        );
         assert_eq!(built.bodies[terminal].position, [40.0, 1.0, 9.0]);
         assert!(
             matches!(
                 built.bodies[terminal].what,
-                BodyKind::InputTerminal { toward: Facing::North }
+                BodyKind::InputTerminal {
+                    toward: Facing::North
+                }
             ),
             "a pin declares a terminal, not a lever"
         );
@@ -1086,7 +1122,10 @@ mod tests {
             Facing::North,
             "the reading repeater stands in the one cell `toward` names"
         );
-        assert!(!built.bodies[built.anchor_body[0]].pinned, "nothing pinned the gate");
+        assert!(
+            !built.bodies[built.anchor_body[0]].pinned,
+            "nothing pinned the gate"
+        );
 
         // The caller's own cell is claimed and written by nobody: no floor
         // either, because whatever the caller builds may want that cell.
@@ -1120,26 +1159,44 @@ mod tests {
         let start = vec![Anchor { x: 0, y: 1, z: 0 }; 3];
         let built = build(&netlist, &graph, &start, &placements).expect("builds");
 
-        assert_eq!(built.anchor_body.len(), 3, "gate, input, and the output's terminal");
+        assert_eq!(
+            built.anchor_body.len(),
+            3,
+            "gate, input, and the output's terminal"
+        );
         let terminal = built.anchor_body[2];
-        assert!(built.bodies[terminal].pinned, "a pinned output must be a pinned body");
+        assert!(
+            built.bodies[terminal].pinned,
+            "a pinned output must be a pinned body"
+        );
         assert_eq!(built.bodies[terminal].position, [40.0, 1.0, 9.0]);
         assert!(
             matches!(
                 built.bodies[terminal].what,
-                BodyKind::OutputTerminal { toward: Facing::South }
+                BodyKind::OutputTerminal {
+                    toward: Facing::South
+                }
             ),
             "a pin declares a terminal, not a nailed-down gate"
         );
-        assert!(!built.bodies[built.anchor_body[0]].pinned, "the producing gate stays free");
+        assert!(
+            !built.bodies[built.anchor_body[0]].pinned,
+            "the producing gate stays free"
+        );
 
         let pull = built
             .pulls
             .iter()
             .find(|pull| pull.to.0 == terminal)
             .expect("the producer's pin is sprung to the terminal");
-        assert_eq!(pull.from.0, built.anchor_body[0], "the spring leaves the producer");
-        assert_eq!(pull.rest, 0.0, "zero rest: the gate is pulled all the way in");
+        assert_eq!(
+            pull.from.0, built.anchor_body[0],
+            "the spring leaves the producer"
+        );
+        assert_eq!(
+            pull.rest, 0.0,
+            "zero rest: the gate is pulled all the way in"
+        );
         assert_eq!(
             attach_offset(Attach::Pin, &built.bodies[terminal]),
             [0.0, 0.0, 0.0],
@@ -1147,7 +1204,11 @@ mod tests {
         );
 
         let cells = cells(&built.bodies[terminal]);
-        assert_eq!(cells.len(), 3, "the caller's cell, the handover, and its floor");
+        assert_eq!(
+            cells.len(),
+            3,
+            "the caller's cell, the handover, and its floor"
+        );
         assert_eq!(
             cells[0].carries,
             vec!["out".to_string()],
@@ -1155,8 +1216,9 @@ mod tests {
         );
         // The signal travels south, so it is delivered from the north.
         assert!(
-            cells.iter().any(|cell| cell.offset == (0, 0, -1)
-                && cell.carries == vec!["out".to_string()]),
+            cells
+                .iter()
+                .any(|cell| cell.offset == (0, 0, -1) && cell.carries == vec!["out".to_string()]),
             "the delivery repeater stands in the one cell opposite `toward`"
         );
         assert!(
@@ -1186,7 +1248,10 @@ mod tests {
         let built = build(&netlist, &graph, &start, &placements).expect("builds");
 
         let gate = built.anchor_body[0];
-        assert!(!built.bodies[gate].pinned, "gate pinning was removed with the old meaning");
+        assert!(
+            !built.bodies[gate].pinned,
+            "gate pinning was removed with the old meaning"
+        );
         assert_eq!(
             built.bodies[gate].position,
             [0.0, 1.0, 0.0],
@@ -1238,7 +1303,11 @@ mod tests {
             .into_iter()
             .find(|cell| cell.offset == (0, 0, 0))
             .expect("a lever occupies its own cell");
-        assert_eq!(origin.carries, vec!["a".to_string()], "a lever is not inert");
+        assert_eq!(
+            origin.carries,
+            vec!["a".to_string()],
+            "a lever is not inert"
+        );
     }
 
     /// The rule the 2026-08-12 full adder broke, tested on the body it broke
@@ -1402,7 +1471,9 @@ mod vertical_offsets {
                     };
                     for cell in cells(&body) {
                         seen += 1;
-                        if cell.carries.is_empty() { continue; }
+                        if cell.carries.is_empty() {
+                            continue;
+                        }
                         conducting += 1;
                         worst = worst.max(cell.offset.1.abs());
                     }
@@ -1413,7 +1484,13 @@ mod vertical_offsets {
             worst, 0,
             "a conducting cell {worst} levels off its body breaks snap's vertical argument"
         );
-        assert!(conducting > 0, "nothing carried a net, so nothing was checked");
-        assert!(seen > conducting, "no inert cells, so the filter proved nothing");
+        assert!(
+            conducting > 0,
+            "nothing carried a net, so nothing was checked"
+        );
+        assert!(
+            seen > conducting,
+            "no inert cells, so the filter proved nothing"
+        );
     }
 }

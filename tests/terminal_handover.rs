@@ -598,7 +598,10 @@ fn toward_names_one_handover_cell_per_role_and_they_are_opposite() {
 
         // Across both roles, only the `toward` axis contains handover cells.
         // This says nothing about ownership or inert occupancy elsewhere.
-        let handovers = [handover(toward, Role::Output), handover(toward, Role::Input)];
+        let handovers = [
+            handover(toward, Role::Output),
+            handover(toward, Role::Input),
+        ];
         for direction in ALL_SIX {
             let neighbour = p.offset(direction);
             let is_handover = handovers.contains(&neighbour);
@@ -1184,12 +1187,18 @@ fn dust_beside_the_pinned_cell_misses_the_weak_and_the_nearly_spent() {
              so a weakly powered caller block is invisible"
         );
 
-        assert_eq!(sensed_strength(toward, CallerState::Lever, Reader::Dust), 14);
+        assert_eq!(
+            sensed_strength(toward, CallerState::Lever, Reader::Dust),
+            14
+        );
         assert_eq!(
             sensed_strength(toward, CallerState::RedstoneBlock, Reader::Dust),
             14
         );
-        assert_eq!(sensed_strength(toward, CallerState::Torch, Reader::Dust), 14);
+        assert_eq!(
+            sensed_strength(toward, CallerState::Torch, Reader::Dust),
+            14
+        );
         assert_eq!(
             sensed_strength(toward, CallerState::StronglyPoweredBlock, Reader::Dust),
             14
@@ -1200,7 +1209,10 @@ fn dust_beside_the_pinned_cell_misses_the_weak_and_the_nearly_spent() {
             "toward {toward:?}: the caller's own wire decays across the \
              boundary like any other"
         );
-        assert_eq!(sensed_strength(toward, CallerState::Nothing, Reader::Dust), 0);
+        assert_eq!(
+            sensed_strength(toward, CallerState::Nothing, Reader::Dust),
+            0
+        );
     }
 }
 

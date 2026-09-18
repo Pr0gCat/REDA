@@ -31,14 +31,14 @@
 
 use std::collections::BTreeSet;
 
-use crate::compile::{self, Netlist};
 use crate::compile::planner::{
     self, candidate_world_size, plan_negotiated_on_schedule, PortPlacements, PresentSchedule,
     NEGOTIATION_ROUNDS,
 };
 use crate::compile::strength_differential::{every_source, isolation_world};
-use crate::redstone::simulator::differential::{resettle_differential, CellDiff, Resettle};
+use crate::compile::{self, Netlist};
 use crate::redstone::simulator::connectivity::dust_connections;
+use crate::redstone::simulator::differential::{resettle_differential, CellDiff, Resettle};
 use crate::redstone::simulator::position::{Position, HORIZONTAL};
 use crate::redstone::simulator::Simulator;
 use crate::redstone::world::block::BlockKind;
@@ -57,7 +57,11 @@ fn set_lever(simulator: &mut Simulator, position: (i32, i32, i32), on: bool) {
         .world()
         .get(position.0, position.1, position.2)
         .clone();
-    assert_eq!(state.kind, BlockKind::Lever, "input position must hold a lever");
+    assert_eq!(
+        state.kind,
+        BlockKind::Lever,
+        "input position must hold a lever"
+    );
     state.lit = on;
     simulator
         .world_mut()
@@ -77,15 +81,13 @@ fn describe(world: &World, diff: &CellDiff) -> String {
         let cell = diff.position;
         let mut edges: Vec<String> = Vec::new();
         for facing in HORIZONTAL {
-            let out: BTreeSet<Position> =
-                dust_connections(world, cell, facing).iter().collect();
+            let out: BTreeSet<Position> = dust_connections(world, cell, facing).iter().collect();
             for candidate in [
                 cell.offset(facing),
                 cell.offset(facing).up(),
                 cell.offset(facing).down(),
             ] {
-                if world.get(candidate.x, candidate.y, candidate.z).kind
-                    != BlockKind::RedstoneWire
+                if world.get(candidate.x, candidate.y, candidate.z).kind != BlockKind::RedstoneWire
                 {
                     continue;
                 }
@@ -155,12 +157,9 @@ fn the_reported_world() -> World {
         PresentSchedule::SHIPPING,
     )
     .expect("negotiated full_adder routes");
-    let parts = planner::realise_without_verifying(
-        &candidate,
-        &netlist,
-        candidate_world_size(&candidate),
-    )
-    .expect("it realises");
+    let parts =
+        planner::realise_without_verifying(&candidate, &netlist, candidate_world_size(&candidate))
+            .expect("it realises");
     let world = &parts.realised.world;
     let ports = &parts.realised.ports;
 
@@ -172,7 +171,11 @@ fn the_reported_world() -> World {
     let origin = ports.gate_output_positions[&g11.output];
     let origin = Position::new(origin.0, origin.1, origin.2);
 
-    let sources = every_source(&netlist, &ports.gate_output_positions, &ports.input_positions);
+    let sources = every_source(
+        &netlist,
+        &ports.gate_output_positions,
+        &ports.input_positions,
+    );
     let mut isolated = isolation_world(world, &sources, origin);
 
     let repeater = Position::new(56, 1, 91);
@@ -283,8 +286,8 @@ fn sweep_compiled(
     netlist: &Netlist,
     verbose: bool,
 ) -> (usize, usize, usize, Vec<String>) {
-    let compiled = compile::compile(netlist)
-        .unwrap_or_else(|error| panic!("{name} must compile: {error}"));
+    let compiled =
+        compile::compile(netlist).unwrap_or_else(|error| panic!("{name} must compile: {error}"));
     let inputs: Vec<(String, (i32, i32, i32))> = netlist
         .inputs
         .iter()
@@ -313,9 +316,17 @@ fn sweep_compiled(
         }
         simulator
             .run_until_stable(MAX_TICKS)
-            .unwrap_or_else(|error| panic!("{name} must settle at {mask:0width$b}: {error:?}", width = inputs.len()));
+            .unwrap_or_else(|error| {
+                panic!(
+                    "{name} must settle at {mask:0width$b}: {error:?}",
+                    width = inputs.len()
+                )
+            });
         let settled = simulator.world().clone();
-        let (result, line) = diff_line(&format!("{name} mask {mask:0width$b}", width = inputs.len()), &settled);
+        let (result, line) = diff_line(
+            &format!("{name} mask {mask:0width$b}", width = inputs.len()),
+            &settled,
+        );
 
         vectors += 1;
         if !result.diffs.is_empty() {
@@ -434,8 +445,7 @@ fn resettle_differential_on_the_negotiated_plans() {
                 .run_until_stable(MAX_TICKS)
                 .unwrap_or_else(|error| panic!("{name} must settle at {mask:04b}: {error:?}"));
             let settled = simulator.world().clone();
-            let (result, line) =
-                diff_line(&format!("{name} mask {mask:04b}"), &settled);
+            let (result, line) = diff_line(&format!("{name} mask {mask:04b}"), &settled);
             if !result.diffs.is_empty() {
                 vectors_with_diffs += 1;
                 total_stale += result.diffs.len();
@@ -466,12 +476,9 @@ fn resettle_differential_on_and4s_240_transitions() {
     let (netlist, _) = build_and4_netlist();
     let candidate = planner::plan_from_netlist(&netlist, &PortPlacements::default())
         .expect("and4 must be placeable");
-    let realised = planner::realise_and_verify(
-        &candidate,
-        &netlist,
-        candidate_world_size(&candidate),
-    )
-    .expect("and4 must be legal");
+    let realised =
+        planner::realise_and_verify(&candidate, &netlist, candidate_world_size(&candidate))
+            .expect("and4 must be legal");
 
     let set_inputs = |simulator: &mut Simulator, mask: u8| {
         for (bit, name) in ["a", "b", "c", "d"].iter().enumerate() {
@@ -493,15 +500,19 @@ fn resettle_differential_on_and4s_240_transitions() {
             }
             let mut simulator = Simulator::new(realised.world.clone());
             set_inputs(&mut simulator, from);
-            simulator.run_until_stable(MAX_TICKS).expect("settles at from");
+            simulator
+                .run_until_stable(MAX_TICKS)
+                .expect("settles at from");
             for (label, mask) in [("from", from), ("to", to)] {
                 if label == "to" {
                     set_inputs(&mut simulator, to);
-                    simulator.run_until_stable(MAX_TICKS).expect("settles at to");
+                    simulator
+                        .run_until_stable(MAX_TICKS)
+                        .expect("settles at to");
                 }
                 let settled = simulator.world().clone();
-                let result = resettle_differential(&settled, MAX_TICKS)
-                    .expect("the oracle settles");
+                let result =
+                    resettle_differential(&settled, MAX_TICKS).expect("the oracle settles");
                 if !result.diffs.is_empty() {
                     settles_with_diffs += 1;
                     total_stale += result.diffs.len();
@@ -551,7 +562,11 @@ fn resettle_differential_on_the_isolation_worlds() {
         negotiated: bool,
     }
     let cases = vec![
-        IsolationCase { name: "and4", netlist: build_and4_netlist().0, negotiated: false },
+        IsolationCase {
+            name: "and4",
+            netlist: build_and4_netlist().0,
+            negotiated: false,
+        },
         IsolationCase {
             name: "full_adder",
             netlist: build_full_adder_netlist().0,
@@ -589,8 +604,11 @@ fn resettle_differential_on_the_isolation_worlds() {
         .expect("it realises");
         let world = &parts.realised.world;
         let ports = &parts.realised.ports;
-        let sources =
-            every_source(&case.netlist, &ports.gate_output_positions, &ports.input_positions);
+        let sources = every_source(
+            &case.netlist,
+            &ports.gate_output_positions,
+            &ports.input_positions,
+        );
 
         let mut worlds_with_diffs = 0usize;
         let mut total_stale = 0usize;
@@ -655,7 +673,11 @@ fn resettle_differential_on_the_injected_isolation_worlds() {
     let cases: Vec<(&'static str, Netlist, bool)> = vec![
         ("and4", build_and4_netlist().0, false),
         ("full_adder", build_full_adder_netlist().0, false),
-        ("full_adder [NEGOTIATED]", build_full_adder_netlist().0, true),
+        (
+            "full_adder [NEGOTIATED]",
+            build_full_adder_netlist().0,
+            true,
+        ),
     ];
 
     let mut settles = 0usize;
@@ -686,8 +708,11 @@ fn resettle_differential_on_the_injected_isolation_worlds() {
         .expect("it realises");
         let world = &parts.realised.world;
         let ports = &parts.realised.ports;
-        let sources =
-            every_source(&netlist, &ports.gate_output_positions, &ports.input_positions);
+        let sources = every_source(
+            &netlist,
+            &ports.gate_output_positions,
+            &ports.input_positions,
+        );
 
         // The repeaters and ramps, found the way genuine_decay finds them.
         let mut injections: Vec<(&'static str, Position, BlockState)> = Vec::new();
@@ -760,4 +785,3 @@ fn resettle_differential_on_the_injected_isolation_worlds() {
          {stale_zero_worlds} contain a stale ZERO -- the reading genuine_decay counts a bite by"
     );
 }
-

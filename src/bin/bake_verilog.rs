@@ -31,7 +31,10 @@ use reda::circuits::verilog::{baked, CIRCUITS};
 fn main() -> ExitCode {
     let mut changed = 0usize;
     for circuit in CIRCUITS {
-        eprintln!("synthesizing {} from {} ...", circuit.name, circuit.source_path);
+        eprintln!(
+            "synthesizing {} from {} ...",
+            circuit.name, circuit.source_path
+        );
         let (netlist, output_labels) = match circuit.synthesize() {
             Ok(result) => result,
             Err(error) => {
@@ -54,7 +57,11 @@ fn main() -> ExitCode {
 
         let previous = std::fs::read_to_string(circuit.baked_path).unwrap_or_default();
         if previous == rendered {
-            eprintln!("  {} is already up to date ({} gates)", circuit.baked_path, netlist.gates.len());
+            eprintln!(
+                "  {} is already up to date ({} gates)",
+                circuit.baked_path,
+                netlist.gates.len()
+            );
             continue;
         }
         if let Err(error) = std::fs::write(circuit.baked_path, &rendered) {
@@ -70,6 +77,9 @@ fn main() -> ExitCode {
         changed += 1;
     }
 
-    eprintln!("{changed} of {} baked netlist(s) rewritten.", CIRCUITS.len());
+    eprintln!(
+        "{changed} of {} baked netlist(s) rewritten.",
+        CIRCUITS.len()
+    );
     ExitCode::SUCCESS
 }

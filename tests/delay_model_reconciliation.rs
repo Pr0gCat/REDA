@@ -38,18 +38,18 @@ use reda::circuits::seven_segment::{
     build_seven_segment_netlist, build_single_segment_netlist, INPUT_NAMES as DECODER_INPUTS,
 };
 use reda::circuits::verilog;
-use reda::compile::lowering::{lower, lower_optimised};
 use reda::compile::fragment_synth::legacy_adapter::LegacyCandidateAdapter;
 use reda::compile::fragment_synth::timing_graph::{
     ExactDelay, RealisedTimingGraph, TimingArcKind, TimingNodeId,
 };
 use reda::compile::fragment_synth::verify::certify_expanded_structure;
+use reda::compile::lowering::{lower, lower_optimised};
 use reda::compile::planner::{seed_from_legacy, NodeRealisation, PlanCandidate};
 use reda::compile::routing_stats::{self, PartTotals, RoutePart, ALL_PARTS};
-use reda::compile::{compile, compile_legacy, CompiledCircuit, Netlist, PlannerKind};
 use reda::compile::topology::Library;
-use reda::redstone::simulator::component::TORCH_DELAY_GAME_TICKS;
+use reda::compile::{compile, compile_legacy, CompiledCircuit, Netlist, PlannerKind};
 use reda::redstone::simulator::component::repeater_delay_game_ticks;
+use reda::redstone::simulator::component::TORCH_DELAY_GAME_TICKS;
 use reda::redstone::simulator::Simulator;
 use reda::redstone::world::block::BlockKind;
 use reda::timing::{
@@ -90,12 +90,15 @@ fn planner_edges(candidate: &PlanCandidate) -> BTreeMap<String, Vec<PlannerEdge>
         for terminal in route.terminals() {
             let sink = terminal.sink.gate.as_str();
             let gate_cost = u64::from(!is_merge.get(sink).copied().unwrap_or(false));
-            edges.entry(owner.to_string()).or_default().push(PlannerEdge {
-                sink: sink.to_string(),
-                input_index: terminal.sink.input_index,
-                repeaters: terminal.repeaters,
-                gate_cost,
-            });
+            edges
+                .entry(owner.to_string())
+                .or_default()
+                .push(PlannerEdge {
+                    sink: sink.to_string(),
+                    input_index: terminal.sink.input_index,
+                    repeaters: terminal.repeaters,
+                    gate_cost,
+                });
         }
     }
     edges
@@ -118,7 +121,8 @@ fn longest(
     let mut best_index = None;
     if let Some(outgoing) = edges.get(signal) {
         for (index, edge) in outgoing.iter().enumerate() {
-            let weight = edge.repeaters + edge.gate_cost + longest(&edge.sink, edges, memo, visiting);
+            let weight =
+                edge.repeaters + edge.gate_cost + longest(&edge.sink, edges, memo, visiting);
             // `Iterator::max` keeps the LAST maximum; mirror that with `>=`.
             if weight >= best || best_index.is_none() {
                 best = weight;
@@ -168,12 +172,19 @@ fn walk(edges: BTreeMap<String, Vec<PlannerEdge>>) -> (u64, Vec<PlannerEdge>, St
 fn sweep(compiled: &CompiledCircuit, input_names: &[&str]) -> Vec<TransitionResult> {
     let watched = watch_all_nets(compiled);
     let mut simulator = Simulator::new(compiled.world.clone());
-    simulator.run_until_stable(MAX_TICKS).expect("settles before the first reading");
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("settles before the first reading");
     simulator.attach_observer(watched);
 
     let levers: HashMap<&str, (i32, i32, i32)> = input_names
         .iter()
-        .map(|&name| (name, *compiled.input_positions.get(name).expect("declared input")))
+        .map(|&name| {
+            (
+                name,
+                *compiled.input_positions.get(name).expect("declared input"),
+            )
+        })
         .collect();
 
     let mut transitions = Vec::new();
@@ -187,9 +198,15 @@ fn sweep(compiled: &CompiledCircuit, input_names: &[&str]) -> Vec<TransitionResu
             let mut state = simulator.world().get(at.0, at.1, at.2).clone();
             state.lit = on;
             simulator.world_mut().set(at.0, at.1, at.2, state);
-            simulator.run_until_stable(MAX_TICKS).expect("settles after a lever move");
+            simulator
+                .run_until_stable(MAX_TICKS)
+                .expect("settles after a lever move");
             let settle = simulator.current_tick() - start_tick;
-            transitions.push(observations_to_result(simulator.observations(), start_tick, settle));
+            transitions.push(observations_to_result(
+                simulator.observations(),
+                start_tick,
+                settle,
+            ));
         }
     }
     transitions
@@ -203,7 +220,9 @@ fn sweep(compiled: &CompiledCircuit, input_names: &[&str]) -> Vec<TransitionResu
 fn sweep_all_pairs(compiled: &CompiledCircuit, input_names: &[&str]) -> Vec<TransitionResult> {
     let watched = watch_all_nets(compiled);
     let mut simulator = Simulator::new(compiled.world.clone());
-    simulator.run_until_stable(MAX_TICKS).expect("settles before the first reading");
+    simulator
+        .run_until_stable(MAX_TICKS)
+        .expect("settles before the first reading");
     simulator.attach_observer(watched);
 
     let levers: Vec<(i32, i32, i32)> = input_names
@@ -233,7 +252,11 @@ fn sweep_all_pairs(compiled: &CompiledCircuit, input_names: &[&str]) -> Vec<Tran
             apply(&mut simulator, to);
             simulator.run_until_stable(MAX_TICKS).expect("settles");
             let settle = simulator.current_tick() - start_tick;
-            transitions.push(observations_to_result(simulator.observations(), start_tick, settle));
+            transitions.push(observations_to_result(
+                simulator.observations(),
+                start_tick,
+                settle,
+            ));
         }
     }
     transitions
@@ -252,7 +275,10 @@ fn false_path_check(label: &str, netlist: &Netlist, input_names: &[&str]) {
         summary.critical_path_gate_count,
         summary.critical_path_repeater_count,
     );
-    eprintln!("{label}: all-pairs critical path = {}", summary.critical_path.join(" -> "));
+    eprintln!(
+        "{label}: all-pairs critical path = {}",
+        summary.critical_path.join(" -> ")
+    );
 
     let mut seen: BTreeMap<String, (u64, usize)> = BTreeMap::new();
     let mut detail: Vec<(u64, String)> = Vec::new();
@@ -273,7 +299,9 @@ fn false_path_check(label: &str, netlist: &Netlist, input_names: &[&str]) {
         entry.0 = entry.0.max(transition.settle_game_ticks);
         entry.1 += 1;
 
-        let latest_net = ticks.iter().max_by_key(|&(name, tick)| (*tick, name.clone()));
+        let latest_net = ticks
+            .iter()
+            .max_by_key(|&(name, tick)| (*tick, name.clone()));
         let outputs_at: Vec<String> = netlist
             .outputs
             .iter()
@@ -373,17 +401,17 @@ fn report_on(label: &str, netlist: &Netlist, world: &CompiledCircuit, input_name
         "{label}: MEASURED worst settle = {} game ticks (transition #{}, output `{}`)",
         summary.worst_settle_game_ticks, summary.worst_transition_index, summary.critical_output
     );
-    eprintln!("{label}: MEASURED critical path = {}", summary.critical_path.join(" -> "));
+    eprintln!(
+        "{label}: MEASURED critical path = {}",
+        summary.critical_path.join(" -> ")
+    );
     eprintln!(
         "{label}: timing model = {} non-merge gates + {:?} repeaters -> {:?} predicted",
         summary.critical_path_gate_count,
         summary.critical_path_repeater_count,
         summary.critical_path_model_game_ticks
     );
-    eprintln!(
-        "{label}: glitches by output = {:?}",
-        summary.glitch_counts
-    );
+    eprintln!("{label}: glitches by output = {:?}", summary.glitch_counts);
 
     // The bare (no-lamp) quantity the planner's delay term is comparable to.
     if let Some(repeaters) = summary.critical_path_repeater_count {
@@ -412,7 +440,10 @@ fn report_on(label: &str, netlist: &Netlist, world: &CompiledCircuit, input_name
     let planner_path: Vec<String> = std::iter::once(start.clone())
         .chain(hops.iter().map(|hop| hop.sink.clone()))
         .collect();
-    eprintln!("{label}: PLANNER critical path = {}", planner_path.join(" -> "));
+    eprintln!(
+        "{label}: PLANNER critical path = {}",
+        planner_path.join(" -> ")
+    );
     let planner_gates: u64 = hops.iter().map(|hop| hop.gate_cost).sum();
     let planner_repeaters: u64 = hops.iter().map(|hop| hop.repeaters).sum();
     eprintln!(
@@ -432,7 +463,11 @@ fn report_on(label: &str, netlist: &Netlist, world: &CompiledCircuit, input_name
         let Some(owner) = route.owner() else { continue };
         for terminal in route.terminals() {
             terminal_repeaters.insert(
-                (owner.to_string(), terminal.sink.gate.clone(), terminal.sink.input_index),
+                (
+                    owner.to_string(),
+                    terminal.sink.gate.clone(),
+                    terminal.sink.input_index,
+                ),
                 terminal.repeaters,
             );
         }
@@ -462,7 +497,10 @@ fn report_on(label: &str, netlist: &Netlist, world: &CompiledCircuit, input_name
                 continue;
             };
             let sink_label = format!("{sink_output}.in[{input_index}]");
-            let edge = stats.edges.iter().find(|e| e.source == *source && e.sink == sink_label);
+            let edge = stats
+                .edges
+                .iter()
+                .find(|e| e.source == *source && e.sink == sink_label);
             let planned = terminal_repeaters
                 .get(&(source.clone(), sink_output.clone(), input_index))
                 .copied();
@@ -517,7 +555,11 @@ fn report_on(label: &str, netlist: &Netlist, world: &CompiledCircuit, input_name
     for (owner, list) in corrected.iter_mut() {
         for edge in list.iter_mut() {
             let sink_label = format!("{}.in[{}]", edge.sink, edge.input_index);
-            match stats.edges.iter().find(|e| &e.source == owner && e.sink == sink_label) {
+            match stats
+                .edges
+                .iter()
+                .find(|e| &e.source == owner && e.sink == sink_label)
+            {
                 Some(found) => edge.repeaters = found.total().repeaters as u64,
                 None => unresolved += 1,
             }
@@ -580,11 +622,15 @@ fn report_on(label: &str, netlist: &Netlist, world: &CompiledCircuit, input_name
             .filter_map(|(name, timing)| timing.arrival_tick().map(|t| (name.as_str(), t)))
             .collect();
         for gate in &netlist.gates {
-            let Some(&sink_tick) = ticks.get(gate.output.as_str()) else { continue };
+            let Some(&sink_tick) = ticks.get(gate.output.as_str()) else {
+                continue;
+            };
             let mut latest: Option<(usize, &str, u64)> = None;
             let mut ambiguous = false;
             for (input_index, input) in gate.inputs.iter().enumerate() {
-                let Some(&tick) = ticks.get(input.as_str()) else { continue };
+                let Some(&tick) = ticks.get(input.as_str()) else {
+                    continue;
+                };
                 match latest {
                     Some((_, _, best)) if tick == best => ambiguous = true,
                     Some((_, _, best)) if tick < best => {}
@@ -594,7 +640,9 @@ fn report_on(label: &str, netlist: &Netlist, world: &CompiledCircuit, input_name
                     }
                 }
             }
-            let Some((input_index, source, source_tick)) = latest else { continue };
+            let Some((input_index, source, source_tick)) = latest else {
+                continue;
+            };
             if ambiguous {
                 continue;
             }
@@ -606,7 +654,9 @@ fn report_on(label: &str, netlist: &Netlist, world: &CompiledCircuit, input_name
                 .edges
                 .iter()
                 .find(|e| e.source == *source && e.sink == sink_label)
-                .map(|e| TORCH_DELAY_GAME_TICKS as i64 * (e.total().repeaters as i64 + gate_cost as i64));
+                .map(|e| {
+                    TORCH_DELAY_GAME_TICKS as i64 * (e.total().repeaters as i64 + gate_cost as i64)
+                });
             let planned = terminal_repeaters
                 .get(&(source.to_string(), gate.output.clone(), input_index))
                 .map(|&r| TORCH_DELAY_GAME_TICKS as i64 * (r + gate_cost) as i64);
@@ -677,14 +727,21 @@ fn report_on(label: &str, netlist: &Netlist, world: &CompiledCircuit, input_name
     for line in world_bad.iter().take(20) {
         eprintln!("    {line}");
     }
-    eprintln!("  planner terminal.repeaters model: {planner_ok} agree, {} edges disagree", planner_bad.len());
+    eprintln!(
+        "  planner terminal.repeaters model: {planner_ok} agree, {} edges disagree",
+        planner_bad.len()
+    );
     for (edge, (delta, count)) in &planner_bad {
-        eprintln!("    {edge}: measured is {delta} game ticks more than planner, on {count} transitions");
+        eprintln!(
+            "    {edge}: measured is {delta} game ticks more than planner, on {count} transitions"
+        );
     }
 
     eprintln!("--- {label}: per-edge measured delta vs each model (worst transition) ---");
     for gate in &netlist.gates {
-        let Some(&sink_tick) = arrivals.get(gate.output.as_str()) else { continue };
+        let Some(&sink_tick) = arrivals.get(gate.output.as_str()) else {
+            continue;
+        };
         // Which input gated it: the latest-arriving one.
         let latest = gate
             .inputs
@@ -693,7 +750,9 @@ fn report_on(label: &str, netlist: &Netlist, world: &CompiledCircuit, input_name
             .max()
             .unwrap_or(0);
         for (input_index, input) in gate.inputs.iter().enumerate() {
-            let Some(&source_tick) = arrivals.get(input.as_str()) else { continue };
+            let Some(&source_tick) = arrivals.get(input.as_str()) else {
+                continue;
+            };
             let sink_label = format!("{}.in[{input_index}]", gate.output);
             let world = stats
                 .edges
@@ -753,8 +812,16 @@ fn assert_realised_timing_reconciles(label: &str, netlist: &Netlist) {
                         }
                 })
                 .collect::<Vec<_>>();
-            assert_eq!(matching.len(), 1, "{label}: one route arc per concrete sink");
-            assert_eq!(matching[0].delay, ExactDelay(expected), "{label}: exact route delay");
+            assert_eq!(
+                matching.len(),
+                1,
+                "{label}: one route arc per concrete sink"
+            );
+            assert_eq!(
+                matching[0].delay,
+                ExactDelay(expected),
+                "{label}: exact route delay"
+            );
         }
     }
 
@@ -799,7 +866,11 @@ fn assert_realised_timing_reconciles(label: &str, netlist: &Netlist) {
                                 }
                     })
                     .expect("one primitive arc per signal-carrying landing");
-                assert_eq!(arc.delay, ExactDelay(expected), "{label}: topology delay once");
+                assert_eq!(
+                    arc.delay,
+                    ExactDelay(expected),
+                    "{label}: topology delay once"
+                );
             }
         }
     }
@@ -812,7 +883,11 @@ fn assert_realised_timing_reconciles(label: &str, netlist: &Netlist) {
             .collect::<Vec<_>>();
         assert_eq!(bindings.len(), 1, "{label}: one explicit output binding");
         assert_eq!(bindings[0].kind, TimingArcKind::OutputBinding);
-        assert_eq!(bindings[0].delay, ExactDelay(0), "{label}: no generic output charge");
+        assert_eq!(
+            bindings[0].delay,
+            ExactDelay(0),
+            "{label}: no generic output charge"
+        );
     }
     let timing = graph.analyse().expect("timing analysis remains acyclic");
     if label == "full_adder" {
@@ -852,8 +927,7 @@ fn assert_realised_timing_reconciles(label: &str, netlist: &Netlist) {
             .arcs
             .values()
             .find(|arc| {
-                arc.to == predecessor.from
-                    && arc.from == TimingNodeId::PrimitiveOutput(g19_output)
+                arc.to == predecessor.from && arc.from == TimingNodeId::PrimitiveOutput(g19_output)
             })
             .expect("g19 route reaches g21 input zero");
         assert_eq!(g19_route.delay, ExactDelay(6));
@@ -956,8 +1030,13 @@ fn false_path_and4() {
 fn terminal_repeaters_are_every_repeater_on_the_path() {
     let seven = build_seven_segment_netlist().0;
     let vand4 = lower(&verilog::find("verilog:and4").unwrap().baked_netlist().0).unwrap();
-    let vseven =
-        lower_optimised(&verilog::find("verilog:seven_segment").unwrap().baked_netlist().0).unwrap();
+    let vseven = lower_optimised(
+        &verilog::find("verilog:seven_segment")
+            .unwrap()
+            .baked_netlist()
+            .0,
+    )
+    .unwrap();
     let circuits: Vec<(&str, Netlist)> = vec![
         ("and4", build_and4_netlist().0),
         ("full_adder", build_full_adder_netlist().0),
@@ -977,23 +1056,37 @@ fn terminal_repeaters_are_every_repeater_on_the_path() {
             let Some(owner) = route.owner() else { continue };
             for terminal in route.terminals() {
                 terminal_repeaters.insert(
-                    (owner.to_string(), terminal.sink.gate.clone(), terminal.sink.input_index),
+                    (
+                        owner.to_string(),
+                        terminal.sink.gate.clone(),
+                        terminal.sink.input_index,
+                    ),
                     terminal.repeaters,
                 );
             }
         }
 
-        let (mut obey, mut ramp_seen, mut total_missing, mut total_world) = (0usize, 0usize, 0i64, 0usize);
+        let (mut obey, mut ramp_seen, mut total_missing, mut total_world) =
+            (0usize, 0usize, 0i64, 0usize);
         let mut violations = Vec::new();
         for edge in &stats.edges {
             let (gate, index) = edge
                 .sink
                 .rsplit_once(".in[")
-                .map(|(gate, rest)| (gate.to_string(), rest.trim_end_matches(']').parse::<usize>().unwrap()))
+                .map(|(gate, rest)| {
+                    (
+                        gate.to_string(),
+                        rest.trim_end_matches(']').parse::<usize>().unwrap(),
+                    )
+                })
                 .expect("sink label shape");
-            let Some(&planned) = terminal_repeaters.get(&(edge.source.clone(), gate.clone(), index))
+            let Some(&planned) =
+                terminal_repeaters.get(&(edge.source.clone(), gate.clone(), index))
             else {
-                violations.push(format!("{} -> {}: no terminal recorded", edge.source, edge.sink));
+                violations.push(format!(
+                    "{} -> {}: no terminal recorded",
+                    edge.source, edge.sink
+                ));
                 continue;
             };
             let world = edge.total().repeaters;
@@ -1020,7 +1113,10 @@ fn terminal_repeaters_are_every_repeater_on_the_path() {
         for line in &violations {
             eprintln!("    VIOLATION {line}");
         }
-        assert!(violations.is_empty(), "{label}: the invariant does not hold");
+        assert!(
+            violations.is_empty(),
+            "{label}: the invariant does not hold"
+        );
     }
 }
 
@@ -1048,7 +1144,11 @@ fn the_unified3d_path_delay_term() {
     let vand4 = lower(&verilog::find("verilog:and4").unwrap().baked_netlist().0).unwrap();
     let circuits: Vec<(&str, Netlist, Vec<&str>)> = vec![
         ("and4", build_and4_netlist().0, AND4_INPUTS.to_vec()),
-        ("full_adder", build_full_adder_netlist().0, ADDER_INPUTS.to_vec()),
+        (
+            "full_adder",
+            build_full_adder_netlist().0,
+            ADDER_INPUTS.to_vec(),
+        ),
         ("verilog:and4", vand4, vec!["a", "b", "c", "d"]),
     ];
 
@@ -1110,7 +1210,11 @@ fn unified3d_terminal_repeaters_against_the_simulator() {
     let vand4 = lower(&verilog::find("verilog:and4").unwrap().baked_netlist().0).unwrap();
     let circuits: Vec<(&str, Netlist, Vec<&str>)> = vec![
         ("and4", build_and4_netlist().0, AND4_INPUTS.to_vec()),
-        ("full_adder", build_full_adder_netlist().0, ADDER_INPUTS.to_vec()),
+        (
+            "full_adder",
+            build_full_adder_netlist().0,
+            ADDER_INPUTS.to_vec(),
+        ),
         ("verilog:and4", vand4, vec!["a", "b", "c", "d"]),
     ];
 
@@ -1124,7 +1228,11 @@ fn unified3d_terminal_repeaters_against_the_simulator() {
             let Some(owner) = route.owner() else { continue };
             for terminal in route.terminals() {
                 terminal_repeaters.insert(
-                    (owner.to_string(), terminal.sink.gate.clone(), terminal.sink.input_index),
+                    (
+                        owner.to_string(),
+                        terminal.sink.gate.clone(),
+                        terminal.sink.input_index,
+                    ),
                     terminal.repeaters,
                 );
             }
@@ -1140,11 +1248,15 @@ fn unified3d_terminal_repeaters_against_the_simulator() {
                 .filter_map(|(name, timing)| timing.arrival_tick().map(|t| (name.as_str(), t)))
                 .collect();
             for gate in &netlist.gates {
-                let Some(&sink_tick) = ticks.get(gate.output.as_str()) else { continue };
+                let Some(&sink_tick) = ticks.get(gate.output.as_str()) else {
+                    continue;
+                };
                 let mut latest: Option<(usize, &str, u64)> = None;
                 let mut ambiguous = false;
                 for (input_index, input) in gate.inputs.iter().enumerate() {
-                    let Some(&tick) = ticks.get(input.as_str()) else { continue };
+                    let Some(&tick) = ticks.get(input.as_str()) else {
+                        continue;
+                    };
                     match latest {
                         Some((_, _, best)) if tick == best => ambiguous = true,
                         Some((_, _, best)) if tick < best => {}
@@ -1154,7 +1266,9 @@ fn unified3d_terminal_repeaters_against_the_simulator() {
                         }
                     }
                 }
-                let Some((input_index, source, source_tick)) = latest else { continue };
+                let Some((input_index, source, source_tick)) = latest else {
+                    continue;
+                };
                 if ambiguous {
                     continue;
                 }
@@ -1196,8 +1310,13 @@ fn false_path_verilog_and4() {
 
 #[test]
 fn false_path_verilog_seven_segment() {
-    let netlist =
-        lower_optimised(&verilog::find("verilog:seven_segment").unwrap().baked_netlist().0).unwrap();
+    let netlist = lower_optimised(
+        &verilog::find("verilog:seven_segment")
+            .unwrap()
+            .baked_netlist()
+            .0,
+    )
+    .unwrap();
     false_path_check("verilog:seven_segment", &netlist, &DECODER_INPUTS);
 }
 
@@ -1210,8 +1329,13 @@ fn is_there_a_unified3d_path_for_the_legacy_circuits() {
     use reda::compile::planner::{plan_from_netlist, PortPlacements};
     use std::time::Instant;
 
-    let vseven =
-        lower_optimised(&verilog::find("verilog:seven_segment").unwrap().baked_netlist().0).unwrap();
+    let vseven = lower_optimised(
+        &verilog::find("verilog:seven_segment")
+            .unwrap()
+            .baked_netlist()
+            .0,
+    )
+    .unwrap();
     let circuits: Vec<(&str, Netlist)> = vec![
         ("segment_a", build_single_segment_netlist(0).0),
         ("seven_segment", build_seven_segment_netlist().0),
@@ -1226,7 +1350,10 @@ fn is_there_a_unified3d_path_for_the_legacy_circuits() {
                 started.elapsed(),
                 candidate.cost().delay
             ),
-            Err(error) => eprintln!("{label}: refuses to plan in {:?} -- {error}", started.elapsed()),
+            Err(error) => eprintln!(
+                "{label}: refuses to plan in {:?} -- {error}",
+                started.elapsed()
+            ),
         }
     }
 }

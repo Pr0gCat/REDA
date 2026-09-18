@@ -315,10 +315,7 @@ impl Simulator {
 
     /// Attach an identity-preserving observer. Several sites may share one
     /// coordinate or one display label and still produce independent events.
-    pub fn attach_typed_observer(
-        &mut self,
-        watched: impl IntoIterator<Item = ObservationSite>,
-    ) {
+    pub fn attach_typed_observer(&mut self, watched: impl IntoIterator<Item = ObservationSite>) {
         let mut observer = Observer::typed(watched);
         observer.reset(&self.world);
         self.observer = Some(observer);
@@ -1008,7 +1005,12 @@ mod tests {
 
         // 前方（輸出端）放一個一直充能的紅石塊 -- 如果中繼器誤把它當輸入，
         // 就會被觸發開啟
-        world.set(3, 0, 2, named("minecraft:redstone_block", BlockKind::RedstoneBlock));
+        world.set(
+            3,
+            0,
+            2,
+            named("minecraft:redstone_block", BlockKind::RedstoneBlock),
+        );
 
         let mut simulator = Simulator::new(world);
         for _ in 0..10 {
@@ -1270,7 +1272,12 @@ mod tests {
         // sides does not.
         let mut world = World::new(5, 5, 5);
         let repeater_pos = Position::new(2, 0, 2);
-        world.set(repeater_pos.x, repeater_pos.y, repeater_pos.z, repeater(Facing::North, 1, false));
+        world.set(
+            repeater_pos.x,
+            repeater_pos.y,
+            repeater_pos.z,
+            repeater(Facing::North, 1, false),
+        );
 
         let mut on_lever = lever();
         on_lever.lit = true;
@@ -1284,7 +1291,10 @@ mod tests {
             .expect("a lever feeding a repeater's input must settle");
 
         assert!(
-            simulator.world().get(repeater_pos.x, repeater_pos.y, repeater_pos.z).lit,
+            simulator
+                .world()
+                .get(repeater_pos.x, repeater_pos.y, repeater_pos.z)
+                .lit,
             "facing=North must read its input from the north, where the lit lever sits"
         );
         assert!(
@@ -1310,7 +1320,12 @@ mod tests {
         // the south.
         let mut world = World::new(5, 5, 5);
         let comparator_pos = Position::new(2, 0, 2);
-        world.set(comparator_pos.x, comparator_pos.y, comparator_pos.z, comparator(Facing::North, 0, false));
+        world.set(
+            comparator_pos.x,
+            comparator_pos.y,
+            comparator_pos.z,
+            comparator(Facing::North, 0, false),
+        );
 
         let mut on_lever = lever();
         on_lever.lit = true;
@@ -1324,7 +1339,11 @@ mod tests {
             .expect("a lever feeding a comparator's rear input must settle");
 
         assert!(
-            simulator.world().get(comparator_pos.x, comparator_pos.y, comparator_pos.z).power > 0,
+            simulator
+                .world()
+                .get(comparator_pos.x, comparator_pos.y, comparator_pos.z)
+                .power
+                > 0,
             "facing=North must read its main signal from the north, where the lit lever sits"
         );
         assert!(

@@ -65,7 +65,10 @@ const CELL_PINS: &[(&str, &[&str])] = &[
 ];
 
 fn pins_for(cell_type: &str) -> Option<&'static [&'static str]> {
-    CELL_PINS.iter().find(|&&(name, _)| name == cell_type).map(|&(_, pins)| pins)
+    CELL_PINS
+        .iter()
+        .find(|&&(name, _)| name == cell_type)
+        .map(|&(_, pins)| pins)
 }
 
 /// Yosys calls the output of its combinational simple cells `Y`, but a
@@ -98,7 +101,9 @@ enum Bit {
 fn parse_bit(value: &Value) -> Result<Bit, FrontendError> {
     match value {
         Value::Number(n) => {
-            let id = n.as_i64().ok_or_else(|| unsupported(format!("net id `{n}` is not an integer")))?;
+            let id = n
+                .as_i64()
+                .ok_or_else(|| unsupported(format!("net id `{n}` is not an integer")))?;
             Ok(Bit::Net(id))
         }
         Value::String(s) => match s.as_str() {
@@ -109,20 +114,28 @@ fn parse_bit(value: &Value) -> Result<Bit, FrontendError> {
                  a real net in redstone"
             ))),
         },
-        other => Err(unsupported(format!("unexpected bit value in yosys JSON: {other}"))),
+        other => Err(unsupported(format!(
+            "unexpected bit value in yosys JSON: {other}"
+        ))),
     }
 }
 
 fn as_object<'a>(value: &'a Value, what: &str) -> Result<&'a Map<String, Value>, FrontendError> {
-    value.as_object().ok_or_else(|| unsupported(format!("expected {what} to be a JSON object")))
+    value
+        .as_object()
+        .ok_or_else(|| unsupported(format!("expected {what} to be a JSON object")))
 }
 
 fn as_array<'a>(value: &'a Value, what: &str) -> Result<&'a Vec<Value>, FrontendError> {
-    value.as_array().ok_or_else(|| unsupported(format!("expected {what} to be a JSON array")))
+    value
+        .as_array()
+        .ok_or_else(|| unsupported(format!("expected {what} to be a JSON array")))
 }
 
 fn as_str<'a>(value: &'a Value, what: &str) -> Result<&'a str, FrontendError> {
-    value.as_str().ok_or_else(|| unsupported(format!("expected {what} to be a JSON string")))
+    value
+        .as_str()
+        .ok_or_else(|| unsupported(format!("expected {what} to be a JSON string")))
 }
 
 /// The single bit on `pin` of a cell's `connections` object. Every Yosys
@@ -130,7 +143,11 @@ fn as_str<'a>(value: &'a Value, what: &str) -> Result<&'a str, FrontendError> {
 /// `$_*_` family -- so a pin that is not exactly 1 bit wide means Yosys
 /// emitted something this frontend does not expect (a word-level `$and`,
 /// say, which means `techmap` did not run).
-fn single_bit<'a>(connections: &'a Map<String, Value>, pin: &str, cell_name: &str) -> Result<&'a Value, FrontendError> {
+fn single_bit<'a>(
+    connections: &'a Map<String, Value>,
+    pin: &str,
+    cell_name: &str,
+) -> Result<&'a Value, FrontendError> {
     let bits = connections
         .get(pin)
         .ok_or_else(|| unsupported(format!("cell `{cell_name}` has no `{pin}` connection")))?;
@@ -196,10 +213,11 @@ impl<'a> Context<'a> {
             )));
         }
 
-        let cell = self
-            .driver_of
-            .remove(&net_id)
-            .ok_or_else(|| unsupported(format!("net {net_id} is driven by neither a primary input nor a cell")))?;
+        let cell = self.driver_of.remove(&net_id).ok_or_else(|| {
+            unsupported(format!(
+                "net {net_id} is driven by neither a primary input nor a cell"
+            ))
+        })?;
         let name = self.build_cell(&cell)?;
 
         self.in_progress.remove(&net_id);
@@ -219,7 +237,12 @@ impl<'a> Context<'a> {
     /// rejects a constant there by name rather than guessing which
     /// simplification Yosys meant. In practice `opt` has already removed
     /// them; this is the path that says so out loud if it ever has not.
-    fn resolve_input_pin(&mut self, connections: &Map<String, Value>, pin: &str, cell_name: &str) -> Result<Option<String>, FrontendError> {
+    fn resolve_input_pin(
+        &mut self,
+        connections: &Map<String, Value>,
+        pin: &str,
+        cell_name: &str,
+    ) -> Result<Option<String>, FrontendError> {
         let bit = single_bit(connections, pin, cell_name)?;
         match parse_bit(bit)? {
             Bit::Net(id) => Ok(Some(self.resolve(id)?)),
@@ -234,7 +257,11 @@ impl<'a> Context<'a> {
     /// Every pin of `cell`, resolved, in the cell type's own declaration
     /// order. `None` entries are constant-0 pins, left in place so the
     /// caller can decide whether folding one is sound for its kind.
-    fn inputs_of(&mut self, cell: &CellInfo<'a>, pins: &[&str]) -> Result<Vec<Option<String>>, FrontendError> {
+    fn inputs_of(
+        &mut self,
+        cell: &CellInfo<'a>,
+        pins: &[&str],
+    ) -> Result<Vec<Option<String>>, FrontendError> {
         let mut resolved = Vec::with_capacity(pins.len());
         for &pin in pins {
             resolved.push(self.resolve_input_pin(cell.connections, pin, &cell.name)?);
@@ -254,7 +281,9 @@ impl<'a> Context<'a> {
     /// compiles, to the wrong circuit.
     fn build_cell(&mut self, cell: &CellInfo<'a>) -> Result<String, FrontendError> {
         let Some(kind) = topology::gate_kind_for_yosys_cell(cell.cell_type) else {
-            let known: Vec<&str> = topology::known_yosys_cell_types().map(|(name, _)| name).collect();
+            let known: Vec<&str> = topology::known_yosys_cell_types()
+                .map(|(name, _)| name)
+                .collect();
             return Err(unsupported(format!(
                 "cell `{}` has type `{}`, which this project's topology library has no realization \
                  for. Supported: {known:?}. (A `$__ZERO`/`$__ONE` drives a hard-wired constant and \
@@ -263,8 +292,12 @@ impl<'a> Context<'a> {
                 cell.name, cell.cell_type
             )));
         };
-        let pins = pins_for(cell.cell_type)
-            .unwrap_or_else(|| panic!("`{}` has a GateKind but no pin names -- CELL_PINS is out of step", cell.cell_type));
+        let pins = pins_for(cell.cell_type).unwrap_or_else(|| {
+            panic!(
+                "`{}` has a GateKind but no pin names -- CELL_PINS is out of step",
+                cell.cell_type
+            )
+        });
         let resolved = self.inputs_of(cell, pins)?;
 
         match kind {
@@ -295,7 +328,10 @@ impl<'a> Context<'a> {
                     // `OR(x) == x` is a bare wire, not a gate of any kind --
                     // this cell's net becomes a plain alias for its one
                     // surviving input rather than a new gate.
-                    1 => Ok(inputs.into_iter().next().expect("checked: exactly one input")),
+                    1 => Ok(inputs
+                        .into_iter()
+                        .next()
+                        .expect("checked: exactly one input")),
                     _ => Ok(self.builder.merge(&inputs)),
                 }
             }
@@ -337,16 +373,35 @@ impl<'a> Context<'a> {
 /// Returns the netlist together with a lookup from each declared output
 /// port's name (bit-indexed as `"name[i]"` for a multi-bit port) to that
 /// output's actual signal name in `netlist.outputs`.
-pub(super) fn netlist_from_json(json: &Value, top_module: &str) -> Result<(Netlist, HashMap<String, String>), FrontendError> {
-    let modules = as_object(json.get("modules").ok_or_else(|| unsupported("yosys JSON has no `modules` key"))?, "`modules`")?;
+pub(super) fn netlist_from_json(
+    json: &Value,
+    top_module: &str,
+) -> Result<(Netlist, HashMap<String, String>), FrontendError> {
+    let modules = as_object(
+        json.get("modules")
+            .ok_or_else(|| unsupported("yosys JSON has no `modules` key"))?,
+        "`modules`",
+    )?;
 
     let module = modules.get(top_module).ok_or_else(|| {
         let available: Vec<&str> = modules.keys().map(String::as_str).collect();
-        unsupported(format!("yosys JSON has no module named `{top_module}`; found: {available:?}"))
+        unsupported(format!(
+            "yosys JSON has no module named `{top_module}`; found: {available:?}"
+        ))
     })?;
 
-    let ports = as_object(module.get("ports").ok_or_else(|| unsupported("module has no `ports` key"))?, "`ports`")?;
-    let cells = as_object(module.get("cells").ok_or_else(|| unsupported("module has no `cells` key"))?, "`cells`")?;
+    let ports = as_object(
+        module
+            .get("ports")
+            .ok_or_else(|| unsupported("module has no `ports` key"))?,
+        "`ports`",
+    )?;
+    let cells = as_object(
+        module
+            .get("cells")
+            .ok_or_else(|| unsupported("module has no `cells` key"))?,
+        "`cells`",
+    )?;
 
     // One bit-name per bit of a port: bare `name` for a 1-bit port (every
     // port in this project's own reference circuits), `name[i]` for a wider
@@ -357,7 +412,9 @@ pub(super) fn netlist_from_json(json: &Value, top_module: &str) -> Result<(Netli
         if bits.len() == 1 {
             vec![port_name.to_string()]
         } else {
-            (0..bits.len()).map(|i| format!("{port_name}[{i}]")).collect()
+            (0..bits.len())
+                .map(|i| format!("{port_name}[{i}]"))
+                .collect()
         }
     }
 
@@ -366,11 +423,19 @@ pub(super) fn netlist_from_json(json: &Value, top_module: &str) -> Result<(Netli
     let mut input_names: HashSet<String> = HashSet::new();
 
     for (port_name, port) in ports {
-        let direction = as_str(port.get("direction").ok_or_else(|| unsupported(format!("port `{port_name}` has no `direction`")))?, "port direction")?;
+        let direction = as_str(
+            port.get("direction")
+                .ok_or_else(|| unsupported(format!("port `{port_name}` has no `direction`")))?,
+            "port direction",
+        )?;
         if direction != "input" {
             continue;
         }
-        let bits = as_array(port.get("bits").ok_or_else(|| unsupported(format!("port `{port_name}` has no `bits`")))?, "port bits")?;
+        let bits = as_array(
+            port.get("bits")
+                .ok_or_else(|| unsupported(format!("port `{port_name}` has no `bits`")))?,
+            "port bits",
+        )?;
         for (name, bit) in bit_names(port_name, bits).into_iter().zip(bits.iter()) {
             match parse_bit(bit)? {
                 Bit::Net(id) => {
@@ -392,12 +457,27 @@ pub(super) fn netlist_from_json(json: &Value, top_module: &str) -> Result<(Netli
     // regardless of how Yosys happened to name it.
     let mut driver_of: HashMap<i64, CellInfo> = HashMap::new();
     for (cell_name, cell) in cells {
-        let cell_type = as_str(cell.get("type").ok_or_else(|| unsupported(format!("cell `{cell_name}` has no `type`")))?, "cell type")?;
-        let connections = as_object(cell.get("connections").ok_or_else(|| unsupported(format!("cell `{cell_name}` has no `connections`")))?, "cell connections")?;
+        let cell_type = as_str(
+            cell.get("type")
+                .ok_or_else(|| unsupported(format!("cell `{cell_name}` has no `type`")))?,
+            "cell type",
+        )?;
+        let connections = as_object(
+            cell.get("connections")
+                .ok_or_else(|| unsupported(format!("cell `{cell_name}` has no `connections`")))?,
+            "cell connections",
+        )?;
         let out_bit = single_bit(connections, output_pin_for(cell_type), cell_name)?;
         match parse_bit(out_bit)? {
             Bit::Net(id) => {
-                driver_of.insert(id, CellInfo { name: cell_name.clone(), cell_type, connections });
+                driver_of.insert(
+                    id,
+                    CellInfo {
+                        name: cell_name.clone(),
+                        cell_type,
+                        connections,
+                    },
+                );
             }
             Bit::Zero | Bit::One => {
                 return Err(unsupported(format!("cell `{cell_name}` ({cell_type}) has a constant output, which is never something ABC needs written to a real net")));
@@ -419,11 +499,19 @@ pub(super) fn netlist_from_json(json: &Value, top_module: &str) -> Result<(Netli
     let mut port_map: HashMap<String, String> = HashMap::new();
 
     for (port_name, port) in ports {
-        let direction = as_str(port.get("direction").ok_or_else(|| unsupported(format!("port `{port_name}` has no `direction`")))?, "port direction")?;
+        let direction = as_str(
+            port.get("direction")
+                .ok_or_else(|| unsupported(format!("port `{port_name}` has no `direction`")))?,
+            "port direction",
+        )?;
         if direction != "output" {
             continue;
         }
-        let bits = as_array(port.get("bits").ok_or_else(|| unsupported(format!("port `{port_name}` has no `bits`")))?, "port bits")?;
+        let bits = as_array(
+            port.get("bits")
+                .ok_or_else(|| unsupported(format!("port `{port_name}` has no `bits`")))?,
+            "port bits",
+        )?;
         for (name, bit) in bit_names(port_name, bits).into_iter().zip(bits.iter()) {
             let signal = match parse_bit(bit)? {
                 Bit::Net(id) => resolve_output_net(&mut ctx, id)?,
@@ -445,10 +533,17 @@ pub(super) fn netlist_from_json(json: &Value, top_module: &str) -> Result<(Netli
         // signals a real gap in this reader's assumptions rather than
         // ordinary leftover synthesis debris.
         let leftover: Vec<&str> = ctx.driver_of.values().map(|c| c.name.as_str()).collect();
-        return Err(unsupported(format!("{} cell(s) are never used to drive any output: {leftover:?}", leftover.len())));
+        return Err(unsupported(format!(
+            "{} cell(s) are never used to drive any output: {leftover:?}",
+            leftover.len()
+        )));
     }
 
-    let netlist = Netlist { inputs, outputs, gates: ctx.builder.into_gates() };
+    let netlist = Netlist {
+        inputs,
+        outputs,
+        gates: ctx.builder.into_gates(),
+    };
     Ok((netlist, port_map))
 }
 
@@ -480,7 +575,9 @@ fn resolve_output_net(ctx: &mut Context<'_>, net_id: i64) -> Result<String, Fron
         // sharing the same net (fan-out to two output ports).
         return Ok(name);
     }
-    Err(unsupported(format!("output net {net_id} is driven by neither a primary input nor a cell")))
+    Err(unsupported(format!(
+        "output net {net_id} is driven by neither a primary input nor a cell"
+    )))
 }
 
 #[cfg(test)]
@@ -496,10 +593,18 @@ mod tests {
     #[test]
     fn every_known_cell_type_has_pin_names_and_vice_versa() {
         for (cell_type, kind) in topology::known_yosys_cell_types() {
-            let pins = pins_for(cell_type).unwrap_or_else(|| panic!("{cell_type} has no CELL_PINS entry"));
-            assert!(!pins.contains(&"Y"), "{cell_type}: `Y` is the output, not an input pin");
+            let pins =
+                pins_for(cell_type).unwrap_or_else(|| panic!("{cell_type} has no CELL_PINS entry"));
+            assert!(
+                !pins.contains(&"Y"),
+                "{cell_type}: `Y` is the output, not an input pin"
+            );
             if let Some(fixed) = kind.fixed_arity() {
-                assert_eq!(pins.len(), fixed, "{cell_type}: {kind:?} takes {fixed} input(s)");
+                assert_eq!(
+                    pins.len(),
+                    fixed,
+                    "{cell_type}: {kind:?} takes {fixed} input(s)"
+                );
             } else {
                 // `Nor`/`Or` carry a declared arity that constant folding is
                 // free to shrink; the pin list is the *declared* one.
@@ -537,7 +642,8 @@ mod tests {
             }
         });
 
-        let (netlist, port_map) = netlist_from_json(&json, "top").expect("a lone $_BUF_ cell must synthesize");
+        let (netlist, port_map) =
+            netlist_from_json(&json, "top").expect("a lone $_BUF_ cell must synthesize");
 
         assert_eq!(netlist.inputs, vec!["a".to_string()]);
         assert_eq!(netlist.gates.len(), 1, "one Yosys cell is one netlist gate");
@@ -571,11 +677,15 @@ mod tests {
             }
         });
 
-        let (netlist, output_labels) = netlist_from_json(&json, "top").expect("a $_DFF_P_ must be a supported gate-level cell");
+        let (netlist, output_labels) = netlist_from_json(&json, "top")
+            .expect("a $_DFF_P_ must be a supported gate-level cell");
 
         assert_eq!(netlist.gates.len(), 1);
         assert_eq!(netlist.gates[0].kind, GateKind::DffPosedge);
-        assert_eq!(netlist.gates[0].inputs, vec!["d".to_string(), "clk".to_string()]);
+        assert_eq!(
+            netlist.gates[0].inputs,
+            vec!["d".to_string(), "clk".to_string()]
+        );
         assert_eq!(output_labels["q"], netlist.gates[0].output);
         assert_eq!(crate::compile::lowering::lower(&netlist).unwrap(), netlist);
     }
@@ -602,7 +712,8 @@ mod tests {
             }
         });
 
-        let (netlist, _) = netlist_from_json(&json, "top").expect("a lone $_MUX_ cell must synthesize");
+        let (netlist, _) =
+            netlist_from_json(&json, "top").expect("a lone $_MUX_ cell must synthesize");
         assert_eq!(netlist.gates.len(), 1);
         assert_eq!(netlist.gates[0].kind, GateKind::Mux);
         assert_eq!(
@@ -634,10 +745,19 @@ mod tests {
             }
         });
 
-        let (netlist, port_map) = netlist_from_json(&json, "top").expect("NOR with one constant-0 pin must synthesize");
+        let (netlist, port_map) =
+            netlist_from_json(&json, "top").expect("NOR with one constant-0 pin must synthesize");
 
-        assert_eq!(netlist.gates.len(), 1, "folding must not synthesize an extra gate");
-        assert_eq!(netlist.gates[0].inputs, vec!["a".to_string()], "the folded B pin must not appear");
+        assert_eq!(
+            netlist.gates.len(),
+            1,
+            "folding must not synthesize an extra gate"
+        );
+        assert_eq!(
+            netlist.gates[0].inputs,
+            vec!["a".to_string()],
+            "the folded B pin must not appear"
+        );
         assert_eq!(netlist.gates[0].kind, GateKind::Nor(1));
         assert_eq!(port_map["y"], netlist.gates[0].output);
     }
@@ -668,7 +788,10 @@ mod tests {
             Ok(_) => panic!("a constant pin on an $_AND_ must not be silently folded"),
             Err(error) => error.to_string(),
         };
-        assert!(message.contains("and0"), "error must name the cell: {message}");
+        assert!(
+            message.contains("and0"),
+            "error must name the cell: {message}"
+        );
         assert!(message.contains('B'), "error must name the pin: {message}");
     }
 
@@ -699,7 +822,13 @@ mod tests {
             Ok(_) => panic!("an unmapped cell type must not silently synthesize"),
             Err(error) => error.to_string(),
         };
-        assert!(message.contains("tbuf0"), "error must name the cell: {message}");
-        assert!(message.contains("$_TBUF_"), "error must name the cell's type: {message}");
+        assert!(
+            message.contains("tbuf0"),
+            "error must name the cell: {message}"
+        );
+        assert!(
+            message.contains("$_TBUF_"),
+            "error must name the cell's type: {message}"
+        );
     }
 }

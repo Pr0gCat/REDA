@@ -172,7 +172,10 @@ impl VerilogCircuit {
     /// header tells you not to hand-edit.
     pub fn baked_netlist(&self) -> (Netlist, Vec<(String, String)>) {
         let baked = baked::parse(self.baked).unwrap_or_else(|error| {
-            panic!("{}'s baked netlist ({}) does not parse: {error}", self.name, self.baked_path)
+            panic!(
+                "{}'s baked netlist ({}) does not parse: {error}",
+                self.name, self.baked_path
+            )
         });
         (baked.netlist, baked.output_labels)
     }
@@ -301,7 +304,10 @@ pub mod baked {
     impl std::error::Error for FormatError {}
 
     fn parse_error(line: usize, message: impl Into<String>) -> FormatError {
-        FormatError::Parse { line, message: message.into() }
+        FormatError::Parse {
+            line,
+            message: message.into(),
+        }
     }
 
     /// Write `netlist` (and its output labels) as the baked file for
@@ -323,7 +329,9 @@ pub mod baked {
     ) -> Result<String, FormatError> {
         let check = |name: &str, what: &str| -> Result<(), FormatError> {
             if name.is_empty() || name.split_whitespace().count() != 1 {
-                Err(FormatError::Unrenderable(format!("{what} `{name}` is empty or contains whitespace")))
+                Err(FormatError::Unrenderable(format!(
+                    "{what} `{name}` is empty or contains whitespace"
+                )))
             } else {
                 Ok(())
             }
@@ -335,7 +343,9 @@ pub mod baked {
         out.push_str("#\n");
         out.push_str("# The gate-level netlist Yosys produced for the source named below, read\n");
         out.push_str("# back by `reda::frontend`. It is checked in so a build that cannot run\n");
-        out.push_str("# Yosys -- the browser viewer's wasm32 build above all -- can still load a\n");
+        out.push_str(
+            "# Yosys -- the browser viewer's wasm32 build above all -- can still load a\n",
+        );
         out.push_str("# synthesised circuit. A stale copy would misrepresent this project's own\n");
         out.push_str("# compiler, so `the_baked_netlists_match_fresh_synthesis` re-synthesizes\n");
         out.push_str("# and fails unless a fresh run renders byte-for-byte identically to this\n");
@@ -343,7 +353,9 @@ pub mod baked {
         out.push_str("#\n");
         out.push_str("# A gate's kind is `topology::GateKind::wire_name`. Two of them are what\n");
         out.push_str("# redstone builds directly: `gate nor y <- a b` is NOR(a, b) driving `y`,\n");
-        out.push_str("# and `gate merge y <- a b` is a wire merge -- no torch and no gate body at\n");
+        out.push_str(
+            "# and `gate merge y <- a b` is a wire merge -- no torch and no gate body at\n",
+        );
         out.push_str("# all, just the point where `a`'s and `b`'s dust are allowed to touch.\n");
         out.push_str("# Every other kind (`and`, `nand`, `xor`, `mux`, ...) is gate level, and\n");
         out.push_str("# `compile::lowering` expands it into those two.\n");
@@ -360,7 +372,10 @@ pub mod baked {
             plural(netlist.inputs.len(), "input"),
             plural(netlist.outputs.len(), "output")
         ));
-        out.push_str(&format!("# cells: {}\n", crate::compile::lowering::format_histogram(netlist)));
+        out.push_str(&format!(
+            "# cells: {}\n",
+            crate::compile::lowering::format_histogram(netlist)
+        ));
 
         check(circuit.name, "circuit name")?;
         check(circuit.source_path, "source path")?;
@@ -384,7 +399,11 @@ pub mod baked {
             for input in &gate.inputs {
                 check(input, "gate input")?;
             }
-            out.push_str(&format!("gate {} {} <-", gate.kind.wire_name(), gate.output));
+            out.push_str(&format!(
+                "gate {} {} <-",
+                gate.kind.wire_name(),
+                gate.output
+            ));
             for input in &gate.inputs {
                 out.push(' ');
                 out.push_str(input);
@@ -413,7 +432,11 @@ pub mod baked {
         let mut circuit: Option<String> = None;
         let mut source_path: Option<String> = None;
         let mut top_module: Option<String> = None;
-        let mut netlist = Netlist { inputs: Vec::new(), outputs: Vec::new(), gates: Vec::new() };
+        let mut netlist = Netlist {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+            gates: Vec::new(),
+        };
         let mut output_labels: Vec<(String, String)> = Vec::new();
 
         for (index, raw) in text.lines().enumerate() {
@@ -423,12 +446,21 @@ pub mod baked {
                 continue;
             }
             let mut words = line.split_whitespace();
-            let directive = words.next().expect("a non-empty trimmed line has a first word");
+            let directive = words
+                .next()
+                .expect("a non-empty trimmed line has a first word");
 
-            let once = |slot: &mut Option<String>, value: Option<&str>, what: &str| -> Result<(), FormatError> {
-                let value = value.ok_or_else(|| parse_error(line_number, format!("`{what}` needs a value")))?;
+            let once = |slot: &mut Option<String>,
+                        value: Option<&str>,
+                        what: &str|
+             -> Result<(), FormatError> {
+                let value = value
+                    .ok_or_else(|| parse_error(line_number, format!("`{what}` needs a value")))?;
                 if slot.is_some() {
-                    return Err(parse_error(line_number, format!("`{what}` appears more than once")));
+                    return Err(parse_error(
+                        line_number,
+                        format!("`{what}` appears more than once"),
+                    ));
                 }
                 *slot = Some(value.to_string());
                 Ok(())
@@ -439,23 +471,34 @@ pub mod baked {
                 "source" => once(&mut source_path, words.next(), "source")?,
                 "top" => once(&mut top_module, words.next(), "top")?,
                 "input" => {
-                    let name = words.next().ok_or_else(|| parse_error(line_number, "`input` needs a name"))?;
+                    let name = words
+                        .next()
+                        .ok_or_else(|| parse_error(line_number, "`input` needs a name"))?;
                     netlist.inputs.push(name.to_string());
                 }
                 "output" => {
-                    let name = words.next().ok_or_else(|| parse_error(line_number, "`output` needs a name"))?;
+                    let name = words
+                        .next()
+                        .ok_or_else(|| parse_error(line_number, "`output` needs a name"))?;
                     netlist.outputs.push(name.to_string());
                 }
                 "label" => {
-                    let port = words.next().ok_or_else(|| parse_error(line_number, "`label` needs a port name"))?;
-                    let signal =
-                        words.next().ok_or_else(|| parse_error(line_number, "`label` needs a signal name"))?;
+                    let port = words
+                        .next()
+                        .ok_or_else(|| parse_error(line_number, "`label` needs a port name"))?;
+                    let signal = words
+                        .next()
+                        .ok_or_else(|| parse_error(line_number, "`label` needs a signal name"))?;
                     output_labels.push((port.to_string(), signal.to_string()));
                 }
                 "gate" => {
-                    let kind_name =
-                        words.next().ok_or_else(|| parse_error(line_number, "`gate` needs a kind"))?.to_string();
-                    let output = words.next().ok_or_else(|| parse_error(line_number, "`gate` needs an output"))?;
+                    let kind_name = words
+                        .next()
+                        .ok_or_else(|| parse_error(line_number, "`gate` needs a kind"))?
+                        .to_string();
+                    let output = words
+                        .next()
+                        .ok_or_else(|| parse_error(line_number, "`gate` needs an output"))?;
                     match words.next() {
                         Some("<-") => {}
                         other => {
@@ -471,8 +514,10 @@ pub mod baked {
                     // arity-free in the text while a fixed-arity kind is
                     // still checked: `and g0 <- a b c` is rejected rather
                     // than silently reinterpreted.
-                    let kind = GateKind::from_wire_name(&kind_name, inputs.len())
-                        .ok_or_else(|| parse_error(line_number, format!("unknown gate kind `{kind_name}`")))?;
+                    let kind =
+                        GateKind::from_wire_name(&kind_name, inputs.len()).ok_or_else(|| {
+                            parse_error(line_number, format!("unknown gate kind `{kind_name}`"))
+                        })?;
                     if kind.arity() != inputs.len() {
                         return Err(parse_error(
                             line_number,
@@ -483,20 +528,34 @@ pub mod baked {
                             ),
                         ));
                     }
-                    netlist.gates.push(Gate { name: output.to_string(), inputs, output: output.to_string(), kind });
+                    netlist.gates.push(Gate {
+                        name: output.to_string(),
+                        inputs,
+                        output: output.to_string(),
+                        kind,
+                    });
                     continue; // `gate` consumed the rest of the line by design
                 }
                 other => {
-                    return Err(parse_error(line_number, format!("unknown directive `{other}`")));
+                    return Err(parse_error(
+                        line_number,
+                        format!("unknown directive `{other}`"),
+                    ));
                 }
             }
 
             if let Some(extra) = words.next() {
-                return Err(parse_error(line_number, format!("unexpected extra word `{extra}`")));
+                return Err(parse_error(
+                    line_number,
+                    format!("unexpected extra word `{extra}`"),
+                ));
             }
         }
 
-        let missing = |what: &str| FormatError::Parse { line: 0, message: format!("no `{what}` directive") };
+        let missing = |what: &str| FormatError::Parse {
+            line: 0,
+            message: format!("no `{what}` directive"),
+        };
         Ok(BakedNetlist {
             circuit: circuit.ok_or_else(|| missing("circuit"))?,
             source_path: source_path.ok_or_else(|| missing("source"))?,
@@ -527,9 +586,16 @@ mod tests {
                 "{} is not verilog:-prefixed",
                 circuit.name
             );
-            assert!(find(circuit.name).is_some(), "{} is not findable", circuit.name);
+            assert!(
+                find(circuit.name).is_some(),
+                "{} is not findable",
+                circuit.name
+            );
         }
-        assert!(find("and4").is_none(), "a hand-written circuit's name must not resolve here");
+        assert!(
+            find("and4").is_none(),
+            "a hand-written circuit's name must not resolve here"
+        );
     }
 
     /// The embedded source is byte-identical to the fixture
@@ -568,8 +634,16 @@ mod tests {
     fn every_baked_file_parses() {
         for circuit in CIRCUITS {
             let (netlist, labels) = circuit.baked_netlist();
-            assert!(!netlist.gates.is_empty(), "{}'s baked netlist has no gates", circuit.name);
-            assert!(!netlist.outputs.is_empty(), "{}'s baked netlist declares no output", circuit.name);
+            assert!(
+                !netlist.gates.is_empty(),
+                "{}'s baked netlist has no gates",
+                circuit.name
+            );
+            assert!(
+                !netlist.outputs.is_empty(),
+                "{}'s baked netlist declares no output",
+                circuit.name
+            );
             assert_eq!(
                 labels.len(),
                 netlist.outputs.len(),
@@ -586,7 +660,11 @@ mod tests {
             // The frontend guarantees this (see `NetlistBuilder`), and the
             // format relies on it -- a gate line carries one name, not two.
             for gate in &netlist.gates {
-                assert_eq!(gate.name, gate.output, "{}: a gate's name and output must agree", circuit.name);
+                assert_eq!(
+                    gate.name, gate.output,
+                    "{}: a gate's name and output must agree",
+                    circuit.name
+                );
             }
         }
     }
@@ -601,7 +679,11 @@ mod tests {
     fn baked_header_agrees_with_its_catalog_entry() {
         for circuit in CIRCUITS {
             let baked = baked::parse(circuit.baked).expect("a checked-in baked file parses");
-            assert_eq!(baked.circuit, circuit.name, "{}: baked under a different name", circuit.name);
+            assert_eq!(
+                baked.circuit, circuit.name,
+                "{}: baked under a different name",
+                circuit.name
+            );
             assert_eq!(
                 baked.source_path, circuit.source_path,
                 "{}: baked from a different source path",
@@ -631,16 +713,29 @@ mod tests {
     fn the_baked_seven_segment_is_a_gate_level_circuit_not_a_wall_of_nors() {
         use crate::compile::topology::GateKind;
 
-        let (netlist, _) = find("verilog:seven_segment").expect("catalog entry must exist").baked_netlist();
-        assert_eq!(netlist.gates.len(), 31, "gate count has moved -- re-check the whole size ladder");
+        let (netlist, _) = find("verilog:seven_segment")
+            .expect("catalog entry must exist")
+            .baked_netlist();
+        assert_eq!(
+            netlist.gates.len(),
+            31,
+            "gate count has moved -- re-check the whole size ladder"
+        );
         assert_eq!(
             crate::compile::lowering::format_histogram(&netlist),
             "nor2:3 merge2:6 and:5 nand:9 andnot:6 ornot:1 mux:1",
             "the decoder's cell-type histogram has moved"
         );
 
-        let gate_level = netlist.gates.iter().filter(|gate| !gate.kind.is_realisable()).count();
-        assert_eq!(gate_level, 22, "22 of the 31 cells have no redstone realisation of their own");
+        let gate_level = netlist
+            .gates
+            .iter()
+            .filter(|gate| !gate.kind.is_realisable())
+            .count();
+        assert_eq!(
+            gate_level, 22,
+            "22 of the 31 cells have no redstone realisation of their own"
+        );
         assert!(
             netlist.gates.iter().any(|gate| gate.kind == GateKind::Mux),
             "the decoder's one $_MUX_ is the cell the cost-table spec left as an open question -- \
@@ -664,11 +759,24 @@ mod tests {
     fn render_and_parse_round_trip_every_catalog_entry() {
         for circuit in CIRCUITS {
             let (netlist, labels) = circuit.baked_netlist();
-            let rendered = baked::render(circuit, &netlist, &labels).expect("a baked netlist re-renders");
-            assert_eq!(rendered, circuit.baked, "{}: re-rendering is not the identity", circuit.name);
+            let rendered =
+                baked::render(circuit, &netlist, &labels).expect("a baked netlist re-renders");
+            assert_eq!(
+                rendered, circuit.baked,
+                "{}: re-rendering is not the identity",
+                circuit.name
+            );
             let reparsed = baked::parse(&rendered).expect("what render wrote, parse reads");
-            assert_eq!(reparsed.netlist, netlist, "{}: netlist did not survive the round trip", circuit.name);
-            assert_eq!(reparsed.output_labels, labels, "{}: labels did not survive the round trip", circuit.name);
+            assert_eq!(
+                reparsed.netlist, netlist,
+                "{}: netlist did not survive the round trip",
+                circuit.name
+            );
+            assert_eq!(
+                reparsed.output_labels, labels,
+                "{}: labels did not survive the round trip",
+                circuit.name
+            );
         }
     }
 
@@ -678,12 +786,24 @@ mod tests {
     #[test]
     fn the_reader_rejects_what_the_writer_would_never_produce() {
         let good = "circuit c\nsource s\ntop t\ninput a\ngate nor g0 <- a\noutput g0\nlabel y g0\n";
-        assert!(baked::parse(good).is_ok(), "the minimal well-formed file must parse");
+        assert!(
+            baked::parse(good).is_ok(),
+            "the minimal well-formed file must parse"
+        );
 
         for (bad, why) in [
-            ("circuit c\nsource s\ntop t\nwidget a\n", "unknown directive"),
-            ("circuit c\nsource s\ntop t\ngate xor g0 <- a\n", "unknown gate kind"),
-            ("circuit c\nsource s\ntop t\ngate nor g0 a\n", "missing `<-`"),
+            (
+                "circuit c\nsource s\ntop t\nwidget a\n",
+                "unknown directive",
+            ),
+            (
+                "circuit c\nsource s\ntop t\ngate xor g0 <- a\n",
+                "unknown gate kind",
+            ),
+            (
+                "circuit c\nsource s\ntop t\ngate nor g0 a\n",
+                "missing `<-`",
+            ),
             ("circuit c\nsource s\ntop t\ninput a b\n", "extra word"),
             ("circuit c\nsource s\ntop t\ncircuit d\n", "repeated header"),
             ("source s\ntop t\n", "missing `circuit`"),

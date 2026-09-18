@@ -21,7 +21,7 @@ use super::fragment_synth::topology::ConnectionTarget;
 use super::fragment_synth::verify::certify_expanded_structure;
 use super::planner::{self, PlanCandidate, PlannerError, RealisedCandidate};
 use super::routing::route_step_is_legal;
-use super::topology::Library;
+use super::topology::{Library, Primitive};
 use super::{Net, Netlist, Reservation};
 use crate::compile::geometry::Anchor;
 use crate::redstone::rules::taxonomy::BlockPower;
@@ -1229,13 +1229,47 @@ fn typed_route_groups(candidate: &ExpandedPhysicalCandidate) -> BTreeMap<RouteId
             .cloned()
             .unwrap_or_default();
         for contributor in &junction.contributors {
-            if let PhysicalEndpointId::Landing(connection) = contributor {
-                if let Some(binding) = candidate.connections.get(connection) {
-                    joined.push(binding.route);
+            match contributor {
+                PhysicalEndpointId::Landing(connection) => {
+                    if let Some(binding) = candidate.connections.get(connection) {
+                        joined.push(binding.route);
+                    }
+                }
+                contributor => {
+                    if let Some(routes) = routes_by_source.get(contributor) {
+                        joined.extend(routes);
+                    }
                 }
             }
         }
         union_all(&mut parent, &joined);
+    }
+    for instance in &candidate.instances.instances {
+        let mut routes_by_primitive = BTreeMap::<PrimitiveId, Vec<RouteId>>::new();
+        for connection in &instance.expanded.topology.connections {
+            let ConnectionTarget::Primitive(primitive) = connection.target else {
+                continue;
+            };
+            let Some(binding) = candidate.connections.get(&connection.id) else {
+                continue;
+            };
+            routes_by_primitive
+                .entry(primitive)
+                .or_default()
+                .push(binding.route);
+        }
+        for (primitive, routes) in routes_by_primitive {
+            let is_torch_input_merge = instance
+                .expanded
+                .topology
+                .primitives
+                .iter()
+                .find(|specification| specification.id == primitive)
+                .is_some_and(|specification| specification.primitive == Primitive::Torch);
+            if is_torch_input_merge && routes.len() > 1 {
+                union_all(&mut parent, &routes);
+            }
+        }
     }
     parent
 }

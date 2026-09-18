@@ -197,6 +197,7 @@ fn terminal_for_seed_error(error: &SeedError, work: &mut CapWorkCounters) -> Pro
             ProposalTerminal::RouterCapExhausted
         }
         SeedError::PlacementExhausted { .. } => ProposalTerminal::BacktrackCapExhausted,
+        SeedError::SeedExhausted { .. } => ProposalTerminal::BacktrackCapExhausted,
         SeedError::Verification(_) => ProposalTerminal::VerificationFailed,
         SeedError::Certification(CandidateCertificationError::Equivalence(
             EquivalenceError::ProofExhausted { used, .. },
@@ -219,14 +220,18 @@ fn terminal_for_seed_error(error: &SeedError, work: &mut CapWorkCounters) -> Pro
         }) => ProposalTerminal::CertificationCapExhausted,
         SeedError::Certification(_) => ProposalTerminal::VerificationFailed,
         SeedError::Routing(_)
+        | SeedError::RouteSchedule(_)
+        | SeedError::Repairable(_)
         | SeedError::ProvenanceWidth { .. }
         | SeedError::InstanceGraph(_)
         | SeedError::Candidate(_)
         | SeedError::InvalidPins(_)
+        | SeedError::PlacementPlan(_)
         | SeedError::PlacementCollision { .. }
         | SeedError::EmptyRoute
         | SeedError::Adapter(_)
         | SeedError::Emission(_)
+        | SeedError::PrimitiveTerminal(_)
         | SeedError::IdentityOverflow
         | SeedError::Incomplete(_) => ProposalTerminal::Refused,
     }
