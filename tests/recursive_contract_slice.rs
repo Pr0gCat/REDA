@@ -4,6 +4,7 @@
 
 use std::thread;
 
+use reda::compile::fragment_synth::composition::{compose_chunk_worlds, PortalContract};
 use reda::compile::fragment_synth::{compile_fragment_synth, SynthesisBudget, SynthesisInput};
 use reda::compile::planner::{Anchor, PortPlacements};
 use reda::compile::{drive_caller_cell, probe_caller_cell, Gate, Netlist};
@@ -142,61 +143,9 @@ fn solve(child: &Child) -> ChildResult {
     }
 }
 
-fn merge(worlds: &[&World], minimum_size: (i32, i32, i32)) -> World {
-    let size = worlds.iter().fold(minimum_size, |acc, world| {
-        let s = world.size();
-        (acc.0.max(s.0), acc.1.max(s.1), acc.2.max(s.2))
-    });
-    let mut merged = World::new(size.0, size.1, size.2);
-    for (child, world) in worlds.iter().enumerate() {
-        for ((x, y, z), incoming) in cells(world) {
-            assert_eq!(
-                merged.get(x, y, z).kind,
-                BlockKind::Air,
-                "child {child} overlaps another child at ({x}, {y}, {z})"
-            );
-            merged.set(x, y, z, incoming);
-        }
-    }
-    merged
-}
-
-fn assert_separated(first: &ChildResult, second: &ChildResult) {
-    for (mine, _) in &first.blocks {
-        for (other, _) in &second.blocks {
-            let gap = (mine.0 - other.0)
-                .abs()
-                .max((mine.1 - other.1).abs())
-                .max((mine.2 - other.2).abs());
-            assert!(
-                gap >= 2,
-                "child cells {mine:?} and {other:?} violate the empty halo"
-            );
-        }
-    }
-}
-
 fn step(at: (i32, i32, i32), facing: Facing) -> (i32, i32, i32) {
     let at = Position::new(at.0, at.1, at.2).offset(facing);
     (at.x, at.y, at.z)
-}
-
-fn assert_repeater(world: &World, at: (i32, i32, i32), facing: Facing) {
-    assert!(
-        world.index(at.0, at.1, at.2).is_some(),
-        "handover {at:?} is out of bounds"
-    );
-    let state = world.get(at.0, at.1, at.2);
-    assert_eq!(
-        state.kind,
-        BlockKind::Repeater,
-        "missing handover at {at:?}"
-    );
-    assert_eq!(
-        state.facing,
-        Some(facing),
-        "wrong handover facing at {at:?}"
-    );
 }
 
 fn assert_air(world: &World, at: (i32, i32, i32)) {
@@ -205,16 +154,6 @@ fn assert_air(world: &World, at: (i32, i32, i32)) {
         "air cell {at:?} is out of bounds"
     );
     assert_eq!(world.get(at.0, at.1, at.2).kind, BlockKind::Air);
-}
-
-fn assert_portal(portal: (i32, i32, i32), first: &World, second: &World, merged: &World) {
-    let delivery = step(portal, Facing::North);
-    let reader = step(portal, Facing::South);
-    assert_repeater(first, delivery, Facing::North);
-    assert_repeater(second, reader, Facing::North);
-    for facing in [Facing::East, Facing::West, Facing::Up, Facing::Down] {
-        assert_air(merged, step(portal, facing));
-    }
 }
 
 fn assert_terminal(world: &World, at: (i32, i32, i32), handover: Facing) {
@@ -233,33 +172,31 @@ fn assert_terminal(world: &World, at: (i32, i32, i32), handover: Facing) {
     }
 }
 
-fn stone() -> BlockState {
-    let mut state = BlockState::air();
-    state.kind = BlockKind::Solid;
-    state.name = "minecraft:stone".into();
-    state
-}
-
 /// Merge chained children in stable order, certify every portal, then seal
 /// each portal with an inert solid block.
 fn compose(children: &[ChildResult]) -> World {
-    for (i, first) in children.iter().enumerate() {
-        for second in &children[i + 1..] {
-            assert_separated(first, second);
-        }
-    }
     let worlds: Vec<&World> = children.iter().map(|c| &c.world).collect();
     let root_out = boundary(children.len());
-    let mut world = merge(&worlds, (root_out.0 + 2, root_out.1 + 2, root_out.2 + 2));
-    for (i, pair) in children.windows(2).enumerate() {
-        let portal = boundary(i + 1);
-        assert_eq!((pair[0].output, pair[1].input), (portal, portal));
-        assert_portal(portal, &pair[0].world, &pair[1].world, &world);
-        assert!(world.index(portal.0, portal.1, portal.2).is_some());
-        world.set(portal.0, portal.1, portal.2, stone());
-        assert_eq!(world.get(portal.0, portal.1, portal.2), &stone());
-    }
-    world
+    let portals: Vec<_> = children
+        .windows(2)
+        .enumerate()
+        .map(|(i, pair)| {
+            let at = boundary(i + 1);
+            assert_eq!((pair[0].output, pair[1].input), (at, at));
+            PortalContract {
+                at,
+                producer: i,
+                consumer: i + 1,
+                delivery_face: Facing::North,
+            }
+        })
+        .collect();
+    compose_chunk_worlds(
+        &worlds,
+        &portals,
+        (root_out.0 + 2, root_out.1 + 2, root_out.2 + 2),
+    )
+    .expect("valid child contracts must compose")
 }
 
 /// Drive the root input low/high/low and assert the root output tracks it.

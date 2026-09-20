@@ -2,6 +2,7 @@ mod api;
 pub mod benchmark;
 pub mod candidate;
 pub mod certification;
+pub mod composition;
 pub mod config;
 mod fragment;
 pub mod identity;
