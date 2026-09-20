@@ -313,7 +313,7 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
             let target = frame_to_world(frame, max_span + ROUTING_CHANNEL, lateral);
             facings.insert(
                 instance.id,
-                choose_instance_facing_with_tracks(
+                choose_instance_facing(
                     instance,
                     origin,
                     source,
@@ -1375,18 +1375,7 @@ fn primitive_positions(instance: &Instance) -> BTreeMap<PrimitiveId, Position> {
         .collect()
 }
 
-fn macro_envelope(instance: &Instance) -> Result<MacroEnvelope, SeedPlacementError> {
-    macro_envelope_with_access(instance, false)
-}
-
 fn macro_access_envelope(instance: &Instance) -> Result<MacroEnvelope, SeedPlacementError> {
-    macro_envelope_with_access(instance, true)
-}
-
-fn macro_envelope_with_access(
-    instance: &Instance,
-    include_access: bool,
-) -> Result<MacroEnvelope, SeedPlacementError> {
     let positions = primitive_positions(instance);
     let mut by_facing = [HorizontalBounds::default(); 4];
     for facing in [
@@ -1429,9 +1418,6 @@ fn macro_envelope_with_access(
             }
             for port in variant.ports {
                 include(port.position);
-                if !include_access {
-                    continue;
-                }
                 let terminal = port.position.offset(port.direction);
                 let approach = terminal.offset(port.direction);
                 include(terminal);
@@ -1440,36 +1426,31 @@ fn macro_envelope_with_access(
                     include(approach.offset(direction));
                 }
             }
-            if include_access {
-                let primitive_anchor = Anchor {
-                    x: base_x,
-                    y: 0,
-                    z: base_z,
-                };
-                for ordinal in 0..instance
-                    .expanded
-                    .topology
-                    .connections
-                    .iter()
-                    .filter(|connection| {
-                        connection.target == ConnectionTarget::Primitive(primitive.id)
-                    })
-                    .count()
-                {
-                    let input = primitive_input_terminal(
-                        primitive.primitive,
-                        facing,
-                        primitive_anchor,
-                        ordinal,
-                    )?;
-                    let terminal =
-                        Position::new(input.terminal.x, input.terminal.y, input.terminal.z);
-                    let approach = terminal.offset(input.allowed_entry);
-                    include(terminal);
-                    include(approach);
-                    for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
-                        include(approach.offset(direction));
-                    }
+            let primitive_anchor = Anchor {
+                x: base_x,
+                y: 0,
+                z: base_z,
+            };
+            for ordinal in 0..instance
+                .expanded
+                .topology
+                .connections
+                .iter()
+                .filter(|connection| connection.target == ConnectionTarget::Primitive(primitive.id))
+                .count()
+            {
+                let input = primitive_input_terminal(
+                    primitive.primitive,
+                    facing,
+                    primitive_anchor,
+                    ordinal,
+                )?;
+                let terminal = Position::new(input.terminal.x, input.terminal.y, input.terminal.z);
+                let approach = terminal.offset(input.allowed_entry);
+                include(terminal);
+                include(approach);
+                for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
+                    include(approach.offset(direction));
                 }
             }
         }
@@ -1479,28 +1460,6 @@ fn macro_envelope_with_access(
 }
 
 fn choose_instance_facing(
-    instance: &Instance,
-    origin: Anchor,
-    source: Anchor,
-    target: Anchor,
-    forward: Facing,
-) -> Result<CellFacing, SeedPlacementError> {
-    choose_instance_facing_with_tracks(
-        instance,
-        origin,
-        source,
-        target,
-        PlacementFrame {
-            forward,
-            lateral: clockwise(forward),
-            origin,
-        },
-        &BTreeMap::new(),
-        None,
-    )
-}
-
-fn choose_instance_facing_with_tracks(
     instance: &Instance,
     origin: Anchor,
     source: Anchor,
@@ -2082,11 +2041,10 @@ mod tests {
     use crate::redstone::world::block::Facing;
 
     use super::{
-        analyse_instance_dag, choose_instance_facing, choose_instance_facing_with_tracks,
-        colour_intervals, derive_frame, hint_penalty, instance_owner_collides, lateral_projection,
-        legalize_laterals, logical_signal_for_owner, macro_access_envelope, EdgeFacts, LayoutOwner,
-        LayoutRepair, MacroBounds, NetInterval, PlacementFrame, RunwayDirection,
-        SeedPlacementError, SeedPlacementRequest, SeedPlacer, SeparationAxis,
+        analyse_instance_dag, choose_instance_facing, colour_intervals, derive_frame, hint_penalty,
+        instance_owner_collides, lateral_projection, logical_signal_for_owner,
+        macro_access_envelope, EdgeFacts, LayoutOwner, LayoutRepair, NetInterval, PlacementFrame,
+        RunwayDirection, SeedPlacementError, SeedPlacementRequest, SeedPlacer, SeparationAxis,
         TopologyAwareSeedPlacer, TRACK_PITCH,
     };
 
@@ -3221,7 +3179,7 @@ mod tests {
             lateral: Facing::South,
             origin,
         };
-        let facing = choose_instance_facing_with_tracks(
+        let facing = choose_instance_facing(
             instance,
             origin,
             Anchor { x: -6, y: 1, z: 0 },
@@ -3298,11 +3256,37 @@ mod tests {
             (Facing::North, CellFacing::NORTH),
         ] {
             assert_eq!(
-                choose_instance_facing(without_hint, origin, source, target, forward).unwrap(),
+                choose_instance_facing(
+                    without_hint,
+                    origin,
+                    source,
+                    target,
+                    PlacementFrame {
+                        forward,
+                        lateral: super::clockwise(forward),
+                        origin,
+                    },
+                    &BTreeMap::new(),
+                    None,
+                )
+                .unwrap(),
                 expected
             );
             assert_eq!(
-                choose_instance_facing(&with_hint, origin, source, target, forward).unwrap(),
+                choose_instance_facing(
+                    &with_hint,
+                    origin,
+                    source,
+                    target,
+                    PlacementFrame {
+                        forward,
+                        lateral: super::clockwise(forward),
+                        origin,
+                    },
+                    &BTreeMap::new(),
+                    None,
+                )
+                .unwrap(),
                 expected
             );
         }
@@ -3385,106 +3369,5 @@ mod tests {
             plan.instances[&InstanceId(0)].preferred_origin.x,
             plan.instances[&InstanceId(1)].preferred_origin.x
         );
-    }
-
-    #[test]
-    fn oriented_negative_bounds_legalize_actual_different_facing_footprints() {
-        let library = Library::default_library();
-        let torch_graph = InstanceGraph::one_to_one(
-            &Netlist {
-                inputs: vec!["a".into()],
-                outputs: vec!["y".into()],
-                gates: vec![nor("y", &["a"])],
-            },
-            &library,
-        )
-        .unwrap();
-        let repeater_graph = InstanceGraph::with_variants(
-            &Netlist {
-                inputs: vec!["a".into(), "b".into(), "c".into()],
-                outputs: vec!["y".into()],
-                gates: vec![Gate::merge("y", &["a", "b", "c"])],
-            },
-            &library,
-            &BTreeMap::from([(
-                InstanceId(0),
-                ImplementationKey::Merge {
-                    isolation_mask: InputMask::new(0b111),
-                },
-            )]),
-            &[],
-        )
-        .unwrap();
-        let torch = super::macro_envelope(&torch_graph.instances[0]).unwrap();
-        let repeaters = super::macro_envelope(&repeater_graph.instances[0]).unwrap();
-        let torch_bounds = torch.oriented_bounds(CellFacing::NORTH, Facing::East);
-        let repeater_bounds = repeaters.oriented_bounds(CellFacing::SOUTH, Facing::East);
-
-        assert_eq!(
-            torch_bounds,
-            MacroBounds {
-                min_forward: 0,
-                max_forward: 0,
-                min_lateral: -1,
-                max_lateral: 0,
-            }
-        );
-        assert_eq!(
-            repeater_bounds,
-            MacroBounds {
-                min_forward: 0,
-                max_forward: 0,
-                min_lateral: -8,
-                max_lateral: 0,
-            }
-        );
-
-        let origins = legalize_laterals(&[
-            (InstanceId(0), 0, torch_bounds),
-            (InstanceId(1), 0, repeater_bounds),
-        ])
-        .unwrap();
-
-        assert_eq!(origins[&InstanceId(0)], 0);
-        assert_eq!(origins[&InstanceId(1)], 14);
-        let torch_cells = actual_block_footprint(
-            &torch_graph.instances[0],
-            CellFacing::NORTH,
-            origins[&InstanceId(0)],
-        );
-        let repeater_cells = actual_block_footprint(
-            &repeater_graph.instances[0],
-            CellFacing::SOUTH,
-            origins[&InstanceId(1)],
-        );
-        assert!(torch_cells.is_disjoint(&repeater_cells));
-    }
-
-    fn actual_block_footprint(
-        instance: &crate::compile::fragment_synth::instance_graph::Instance,
-        facing: CellFacing,
-        lateral_origin: i32,
-    ) -> BTreeSet<(i32, i32)> {
-        let positions = super::primitive_positions(instance);
-        instance
-            .expanded
-            .topology
-            .primitives
-            .iter()
-            .flat_map(|primitive| {
-                let local = positions[&primitive.id];
-                let (base_x, _, base_z) =
-                    crate::compile::geometry::rotate((local.x, local.y, local.z), facing);
-                crate::compile::physical::variants(primitive.primitive)[usize::from(facing.index())]
-                    .blocks
-                    .iter()
-                    .map(move |block| {
-                        (
-                            base_x + block.position.x,
-                            lateral_origin + base_z + block.position.z,
-                        )
-                    })
-            })
-            .collect()
     }
 }

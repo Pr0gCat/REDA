@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Task 9 is the first production caller of these Task-8 facades.
-
 //! Sealed durable services used by the independent sparse-seed builder.
 
 use crate::compile::emission::{

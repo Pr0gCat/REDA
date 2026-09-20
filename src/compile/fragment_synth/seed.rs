@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Task 9 is the first production caller of this Task-8 seam.
-
 //! Independent deterministic sparse-seed construction.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -3140,29 +3138,6 @@ fn nearby_sink_blocking_route(
     None
 }
 
-fn reserve_source_escape_footprint(
-    reservations: &mut PhysicalReservations,
-    source: PhysicalEndpointId,
-    source_at: Anchor,
-    allowed_exit: Facing,
-) -> Vec<Anchor> {
-    let (core, halo) = source_escape_footprint(source_at, allowed_exit);
-    core.into_iter()
-        .chain(halo)
-        .filter(|at| {
-            if reservations.get(at).is_some() {
-                return false;
-            }
-            reservations.reserve(
-                *at,
-                PhysicalReservationOwner::Endpoint(source),
-                PhysicalReservationKind::KeepOut,
-            );
-            true
-        })
-        .collect()
-}
-
 fn reserve_scheduled_source_escapes(
     reservations: &mut PhysicalReservations,
     sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
@@ -3627,35 +3602,6 @@ fn step(at: Anchor, direction: Facing) -> Anchor {
         Facing::West => Anchor { x: at.x - 1, ..at },
         Facing::Up => Anchor { y: at.y + 1, ..at },
         Facing::Down => Anchor { y: at.y - 1, ..at },
-    }
-}
-
-fn step_many(at: Anchor, direction: Facing, distance: i32) -> Anchor {
-    match direction {
-        Facing::North => Anchor {
-            z: at.z.saturating_sub(distance),
-            ..at
-        },
-        Facing::South => Anchor {
-            z: at.z.saturating_add(distance),
-            ..at
-        },
-        Facing::East => Anchor {
-            x: at.x.saturating_add(distance),
-            ..at
-        },
-        Facing::West => Anchor {
-            x: at.x.saturating_sub(distance),
-            ..at
-        },
-        Facing::Up => Anchor {
-            y: at.y.saturating_add(distance),
-            ..at
-        },
-        Facing::Down => Anchor {
-            y: at.y.saturating_sub(distance),
-            ..at
-        },
     }
 }
 
@@ -4975,44 +4921,6 @@ mod tests {
             nearby_source_blocking_route(&own_route, current, source_at, Facing::East),
             None,
         );
-    }
-
-    #[test]
-    fn reserved_source_escape_covers_the_strict_exit_clearance() {
-        let source = PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
-            instance: InstanceId(5),
-            node: crate::compile::fragment_synth::identity::TopologyNodeId(0),
-        });
-        let source_at = Anchor { x: 24, y: 1, z: 35 };
-        let exit = step(source_at, Facing::East);
-        let observed_blocker_at = step(exit, Facing::North);
-        let runway = step(exit, Facing::East);
-        let mouth = step(runway, Facing::East);
-        let runway_side_halo = step(runway, Facing::North);
-        let mut reservations = PhysicalReservations::new();
-        reservations.reserve(
-            source_at,
-            PhysicalReservationOwner::Endpoint(source),
-            PhysicalReservationKind::KeepOut,
-        );
-
-        let guarded =
-            reserve_source_escape_footprint(&mut reservations, source, source_at, Facing::East);
-
-        assert!(guarded.contains(&exit));
-        assert!(guarded.contains(&observed_blocker_at));
-        assert!(guarded.contains(&runway));
-        assert!(guarded.contains(&mouth));
-        assert!(guarded.contains(&runway_side_halo));
-        let (core, _) = source_escape_footprint(source_at, Facing::East);
-        assert!(core.contains(&mouth));
-        assert_eq!(
-            reservations
-                .get(&observed_blocker_at)
-                .map(|claim| claim.owner),
-            Some(PhysicalReservationOwner::Endpoint(source)),
-        );
-        assert!(!guarded.contains(&step(source_at, Facing::West)));
     }
 
     #[test]
