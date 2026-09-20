@@ -58,8 +58,8 @@ use crate::redstone::world::block::{BlockKind, BlockState, Facing};
 
 const ORIGIN_WORLD_MARGIN: i32 = 16;
 const MAX_LAYOUT_REPAIR_ATTEMPTS: u64 = 16;
-const MIN_ROUTE_PRECEDENCE_REPAIRS: u64 = 16;
-const MAX_ROUTE_PRECEDENCE_REPAIRS: u64 = 128;
+const MIN_ROUTE_SCHEDULE_REPAIRS: u64 = 16;
+const MAX_ROUTE_SCHEDULE_REPAIRS: u64 = 128;
 
 #[derive(Clone, Copy)]
 pub(crate) struct SeedInput<'a> {
@@ -159,6 +159,7 @@ pub(crate) struct SeedRoutingFailure {
     pub plan_fingerprint: Fingerprint,
     pub source_at: Anchor,
     pub source_exit: Facing,
+    pub frame_forward: Facing,
     pub precedence_blocker: Option<PhysicalEndpointId>,
     pub source_escape_obstructed: bool,
     pub sink_at: Anchor,
@@ -195,6 +196,11 @@ pub(crate) enum SeedRepairRefusal {
         second_source: PhysicalEndpointId,
         at: Anchor,
         guarded_source: PhysicalEndpointId,
+        /// The placement frame's forward direction at the time of this
+        /// refusal, so a runway-axis escalation pushes along the layout's
+        /// actual forward/back direction instead of a fixed world compass
+        /// direction (which only matches on a pinless, default-East frame).
+        frame_forward: Facing,
     },
     CrossRouteCoupling {
         source_route: RouteId,
@@ -203,6 +209,8 @@ pub(crate) enum SeedRepairRefusal {
         foreign_endpoint: PhysicalEndpointId,
         at: Anchor,
         guarded_source: PhysicalEndpointId,
+        /// See `CrossRouteConnectivity::frame_forward`.
+        frame_forward: Facing,
     },
 }
 
@@ -351,35 +359,75 @@ impl PlacementSearch {
 struct SeedRepairBudget {
     layout_attempts_used: u64,
     layout_attempt_limit: u64,
-    route_precedence_repairs_used: u64,
-    route_precedence_repair_limit: u64,
+    route_schedule_repairs_used: u64,
+    route_schedule_repair_limit: u64,
+    total_repairs_used: u64,
+    total_repair_limit: u64,
+}
+
+/// Bounds route-schedule repair attempts by the instance-count-derived
+/// 16..128 window, capped by the caller's `max_seed_backtracks` directly.
+/// This must NOT be capped by the (much smaller, fixed) checked layout
+/// attempt cap: the two repair kinds have independent per-category budgets,
+/// and only the caller's own cap should ever shrink the schedule window.
+fn route_schedule_repair_limit(instance_count: usize, max_seed_backtracks: u64) -> u64 {
+    u64::try_from(instance_count)
+        .unwrap_or(u64::MAX)
+        .saturating_mul(2)
+        .clamp(MIN_ROUTE_SCHEDULE_REPAIRS, MAX_ROUTE_SCHEDULE_REPAIRS)
+        .min(max_seed_backtracks)
 }
 
 impl SeedRepairBudget {
-    fn new(layout_attempt_limit: u64, route_precedence_repair_limit: u64) -> Self {
+    fn new(
+        layout_attempt_limit: u64,
+        route_schedule_repair_limit: u64,
+        total_repair_limit: u64,
+    ) -> Self {
         Self {
+            // The checked 16-attempt layout window includes the initial
+            // zero-repair build, leaving at most 15 geometric moves.
             layout_attempts_used: 1,
             layout_attempt_limit,
-            route_precedence_repairs_used: 0,
-            route_precedence_repair_limit,
+            route_schedule_repairs_used: 0,
+            route_schedule_repair_limit,
+            total_repairs_used: 1,
+            total_repair_limit,
         }
     }
 
+    /// Charges one repair against its category budget, and (only on success)
+    /// against the caller's global `max_seed_backtracks` cap, so neither
+    /// category can alone -- nor the two combined -- exceed it.
     fn try_charge(&mut self, repair: &LayoutRepair) -> bool {
-        if matches!(repair, LayoutRepair::RouteBefore { .. }) {
-            if self.route_precedence_repairs_used >= self.route_precedence_repair_limit {
-                return false;
-            }
-            self.route_precedence_repairs_used =
-                self.route_precedence_repairs_used.saturating_add(1);
-            true
-        } else {
-            if self.layout_attempts_used >= self.layout_attempt_limit {
-                return false;
-            }
-            self.layout_attempts_used = self.layout_attempts_used.saturating_add(1);
-            true
+        if self.total_repairs_used >= self.total_repair_limit {
+            return false;
         }
+        let charged = match repair {
+            LayoutRepair::ExclusiveGuardedTrack { .. }
+            | LayoutRepair::EarlyTreeSinkAndEscape { .. }
+            | LayoutRepair::RouteBefore { .. } => {
+                if self.route_schedule_repairs_used >= self.route_schedule_repair_limit {
+                    false
+                } else {
+                    self.route_schedule_repairs_used =
+                        self.route_schedule_repairs_used.saturating_add(1);
+                    true
+                }
+            }
+            LayoutRepair::SeparateOwners { .. } => {
+                if self.layout_attempts_used >= self.layout_attempt_limit {
+                    false
+                } else {
+                    self.layout_attempts_used = self.layout_attempts_used.saturating_add(1);
+                    true
+                }
+            }
+        };
+        if charged {
+            self.total_repairs_used = self.total_repairs_used.saturating_add(1);
+        }
+        charged
     }
 }
 
@@ -481,11 +529,15 @@ impl SparseSeedBuilder {
             .search_config
             .max_seed_backtracks
             .min(MAX_LAYOUT_REPAIR_ATTEMPTS);
-        let route_precedence_repair_limit = u64::try_from(instances.instances.len())
-            .unwrap_or(u64::MAX)
-            .saturating_mul(2)
-            .clamp(MIN_ROUTE_PRECEDENCE_REPAIRS, MAX_ROUTE_PRECEDENCE_REPAIRS);
-        let mut repair_budget = SeedRepairBudget::new(attempt_limit, route_precedence_repair_limit);
+        let route_schedule_repair_limit = route_schedule_repair_limit(
+            instances.instances.len(),
+            services.search_config.max_seed_backtracks,
+        );
+        let mut repair_budget = SeedRepairBudget::new(
+            attempt_limit,
+            route_schedule_repair_limit,
+            services.search_config.max_seed_backtracks,
+        );
         loop {
             attempts_used = attempts_used.saturating_add(1);
             match Self::build_attempt(
@@ -593,9 +645,12 @@ impl SparseSeedBuilder {
                 other => Err(other),
             };
         }
-        if let Some(failure) =
-            route_ownership_failure(&candidate, &sources, &placement_plan.fingerprint)?
-        {
+        if let Some(failure) = route_ownership_failure(
+            &candidate,
+            &sources,
+            &placement_plan.fingerprint,
+            placement_plan.frame.forward,
+        )? {
             return Err(SeedError::Repairable(SeedRepairRefusal::Routing(failure)));
         }
         candidate.validate_shape()?;
@@ -616,7 +671,12 @@ impl SparseSeedBuilder {
                     );
                 }
                 return Err(SeedError::Repairable(cross_route_connectivity_refusal(
-                    &candidate, first, second, at, repairs,
+                    &candidate,
+                    first,
+                    second,
+                    at,
+                    repairs,
+                    placement_plan.frame.forward,
                 )?));
             }
             Err(ExpandedPhysicalError::CrossRouteCoupling {
@@ -639,6 +699,7 @@ impl SparseSeedBuilder {
                         foreign_endpoint,
                         at,
                         guarded_source,
+                        frame_forward: placement_plan.frame.forward,
                     },
                 ));
             }
@@ -676,6 +737,7 @@ fn route_ownership_failure(
     candidate: &ExpandedPhysicalCandidate,
     sources: &BTreeMap<PhysicalEndpointId, SourceGeometry>,
     plan_fingerprint: &Fingerprint,
+    frame_forward: Facing,
 ) -> Result<Option<SeedRoutingFailure>, SeedError> {
     let mut ledger = BTreeMap::<Anchor, SeedPhysicalOwner>::new();
     let mut conflict = None;
@@ -768,6 +830,7 @@ fn route_ownership_failure(
         plan_fingerprint: plan_fingerprint.clone(),
         source_at,
         source_exit,
+        frame_forward,
         precedence_blocker: None,
         source_escape_obstructed: false,
         sink_at: branch.terminal.at,
@@ -794,17 +857,34 @@ fn next_layout_repair(
             first_source,
             second_source,
             guarded_source,
+            frame_forward,
             ..
         } => {
+            let blocker = if guarded_source == first_source {
+                *second_source
+            } else {
+                *first_source
+            };
+            let precedence = LayoutRepair::RouteBefore {
+                source: *guarded_source,
+                blocker,
+            };
+            if !repairs.contains(&precedence)
+                && !route_precedence_would_cycle(repairs, *guarded_source, blocker)
+            {
+                return Ok(precedence);
+            }
             let guard = LayoutRepair::ExclusiveGuardedTrack {
                 source: *guarded_source,
             };
             if repairs.contains(&guard) {
+                let source_owner = layout_owner_for_endpoint(*first_source);
+                let sink_owner = layout_owner_for_endpoint(*second_source);
                 next_owner_separation(
                     repairs,
-                    layout_owner_for_endpoint(*first_source),
-                    layout_owner_for_endpoint(*second_source),
-                    SeparationAxis::Lateral,
+                    source_owner,
+                    sink_owner,
+                    next_separation_axis(repairs, source_owner, sink_owner, *frame_forward),
                 )
             } else {
                 guard
@@ -814,17 +894,20 @@ fn next_layout_repair(
             source_endpoint,
             foreign_endpoint,
             guarded_source,
+            frame_forward,
             ..
         } => {
             let guard = LayoutRepair::ExclusiveGuardedTrack {
                 source: *guarded_source,
             };
             if repairs.contains(&guard) {
+                let source_owner = layout_owner_for_endpoint(*source_endpoint);
+                let sink_owner = layout_owner_for_endpoint(*foreign_endpoint);
                 next_owner_separation(
                     repairs,
-                    layout_owner_for_endpoint(*source_endpoint),
-                    layout_owner_for_endpoint(*foreign_endpoint),
-                    SeparationAxis::Lateral,
+                    source_owner,
+                    sink_owner,
+                    next_separation_axis(repairs, source_owner, sink_owner, *frame_forward),
                 )
             } else {
                 guard
@@ -855,13 +938,13 @@ fn next_layout_repair(
                 promotion
             } else {
                 let source_owner = layout_owner_for_endpoint(failure.source);
-                let sink_owner = layout_owner_for_endpoint(failure.sink_endpoint);
-                let axis = if failure.category == RouterRefusalCategory::NoLocalRoute
-                    && failure.precedence_blocker.is_none()
-                {
-                    runway_direction(failure.source_exit)
-                        .map(SeparationAxis::Runway)
-                        .unwrap_or(SeparationAxis::Lateral)
+                let sink_owner = failure
+                    .precedence_blocker
+                    .map(layout_owner_for_endpoint)
+                    .filter(|owner| *owner != source_owner)
+                    .unwrap_or_else(|| layout_owner_for_endpoint(failure.sink_endpoint));
+                let axis = if failure.category == RouterRefusalCategory::NoLocalRoute {
+                    next_separation_axis(repairs, source_owner, sink_owner, failure.frame_forward)
                 } else {
                     SeparationAxis::Lateral
                 };
@@ -905,6 +988,42 @@ fn route_precedence_would_cycle(
         }));
     }
     false
+}
+
+/// Chooses the separation axis for a coupling/connectivity repair between
+/// `source_owner` and `sink_owner`. A purely lateral push repeatedly failed
+/// to clear a route-vs-route coupling seen in practice (`segment_a`, an
+/// *automatic* -- not pinned -- primary input coupling against a moved
+/// instance's output): translating an owner sideways doesn't help when the
+/// two routes are forced through the same corridor along the layout's
+/// forward axis. Try the lateral axis once, then use successive ordinals to
+/// explore both owners and signs along the placement frame's *actual*
+/// forward runway, not a fixed world compass direction.
+fn next_separation_axis(
+    repairs: &BTreeSet<LayoutRepair>,
+    source_owner: LayoutOwner,
+    sink_owner: LayoutOwner,
+    frame_forward: Facing,
+) -> SeparationAxis {
+    // `frame_forward` is always horizontal (see `derive_frame`); East is an
+    // unreachable fallback kept only to avoid a panic on that invariant.
+    let runway =
+        SeparationAxis::Runway(runway_direction(frame_forward).unwrap_or(RunwayDirection::East));
+    if repairs.iter().any(|repair| {
+        matches!(
+            repair,
+            LayoutRepair::SeparateOwners {
+                source_owner: candidate_source,
+                sink_owner: candidate_sink,
+                axis: SeparationAxis::Lateral,
+                ..
+            } if *candidate_source == source_owner && *candidate_sink == sink_owner
+        )
+    }) {
+        runway
+    } else {
+        SeparationAxis::Lateral
+    }
 }
 
 fn next_owner_separation(
@@ -960,6 +1079,7 @@ fn cross_route_connectivity_refusal(
     second: RouteId,
     at: Anchor,
     repairs: &[LayoutRepair],
+    frame_forward: Facing,
 ) -> Result<SeedRepairRefusal, SeedError> {
     let (first_source, second_source, guarded_source) =
         cross_route_sources(candidate, first, second, &candidate.pin_contracts, repairs)?;
@@ -970,6 +1090,7 @@ fn cross_route_connectivity_refusal(
         second_source,
         at,
         guarded_source,
+        frame_forward,
     })
 }
 
@@ -1070,6 +1191,15 @@ fn reserve_route_endpoints(
                     source.route_anchor,
                     &endpoints,
                 );
+                if let Some(pin) = candidate.pin_contracts.get(&endpoint) {
+                    reserve_boundary_terminal_sides(
+                        reservations,
+                        endpoint,
+                        pin.at,
+                        pin.handover(PortRole::Input),
+                        &endpoints,
+                    );
+                }
             }
             PhysicalEndpointId::DeclaredOutput(port) => {
                 let target = targets
@@ -1104,18 +1234,24 @@ fn reserve_route_endpoints(
             placement.anchor,
             variant.port(PortKind::TorchInput).position,
         );
+        let owner =
+            PhysicalReservationOwner::KeepOut(primitive.instance.0 ^ u32::from(primitive.node.0));
         for direction in geometry::input_directions(placement.facing) {
             let socket = step(support, direction);
             if !endpoints.contains(&socket) && reservations.get(&socket).is_none() {
-                reservations.reserve(
-                    socket,
-                    PhysicalReservationOwner::KeepOut(
-                        primitive.instance.0 ^ u32::from(primitive.node.0),
-                    ),
-                    PhysicalReservationKind::KeepOut,
-                );
+                reservations.reserve(socket, owner, PhysicalReservationKind::KeepOut);
             }
         }
+        let output = variant.port(PortKind::TorchOutput);
+        let torch = translate(placement.anchor, output.position);
+        reserve_torch_isolation(
+            reservations,
+            owner,
+            support,
+            torch,
+            output.direction,
+            &endpoints,
+        );
     }
     for junction in candidate.junctions.values() {
         for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
@@ -1130,6 +1266,69 @@ fn reserve_route_endpoints(
         }
     }
     Ok(())
+}
+
+/// A wall torch drives every face except the wall it hangs on: strongly
+/// upward, weakly to its two sides and downward (see `structural_output`'s
+/// `WallTorch` arm).  Its support block is the torch's *input*, so dust on
+/// top of the support would drive the gate from above.  Nothing else keeps
+/// a foreign route off those cells: the torch and support are plain keep-out
+/// cells (occupancy only), the router's conductor halo checks horizontal
+/// neighbours, and no layout repair (guard, lateral, runway) moves a route
+/// off a torch it happens to hug or bridge.
+///
+/// The cells above the torch, above the support, and on the torch's two
+/// sides are all air in the placed cell, so they become mandatory air: that
+/// keeps them empty and, through the router's "nothing stands on mandatory
+/// air" rule, keeps dust off the cells above them too (a keep-out would let
+/// a route float dust one block up with no floor).  The cell below the torch
+/// becomes keep-out.  The front cell (`step(torch, exit)`, the route anchor)
+/// and the support's own sockets are left to the endpoint and socket
+/// reservations, and any cell that is a protected endpoint or already
+/// claimed is skipped, in the same fixed order every time.
+fn reserve_torch_isolation(
+    reservations: &mut PhysicalReservations,
+    owner: PhysicalReservationOwner,
+    support: Anchor,
+    torch: Anchor,
+    exit: Facing,
+    protected: &BTreeSet<Anchor>,
+) {
+    let mut claim = |at: Anchor, kind: PhysicalReservationKind| {
+        if protected.contains(&at) || reservations.get(&at).is_some() {
+            return;
+        }
+        reservations.reserve(at, owner, kind);
+    };
+    let above = |at: Anchor| Anchor {
+        y: at.y.saturating_add(1),
+        ..at
+    };
+    claim(above(torch), PhysicalReservationKind::MandatoryAir);
+    claim(above(support), PhysicalReservationKind::MandatoryAir);
+    for direction in torch_side_directions(exit) {
+        claim(
+            step(torch, direction),
+            PhysicalReservationKind::MandatoryAir,
+        );
+    }
+    claim(
+        Anchor {
+            y: torch.y.saturating_sub(1),
+            ..torch
+        },
+        PhysicalReservationKind::KeepOut,
+    );
+}
+
+/// The two horizontal directions perpendicular to a torch's output
+/// direction, in a fixed order.
+fn torch_side_directions(exit: Facing) -> [Facing; 2] {
+    match exit {
+        Facing::North | Facing::South => [Facing::West, Facing::East],
+        Facing::East | Facing::West => [Facing::North, Facing::South],
+        Facing::Up | Facing::Down => [Facing::North, Facing::South],
+    }
 }
 
 fn reserve_boundary_terminal_sides(
@@ -1168,6 +1367,11 @@ fn place_boundaries(
     sources: &mut BTreeMap<PhysicalEndpointId, SourceGeometry>,
     targets: &mut BTreeMap<PhysicalSink, TargetGeometry>,
 ) -> Result<(), SeedError> {
+    for pin in candidate.pin_contracts.values() {
+        if !occupied.insert(pin.at) {
+            return Err(SeedError::PlacementCollision { at: pin.at });
+        }
+    }
     for (index, name) in netlist.inputs.iter().enumerate() {
         let port = PortId(u32::try_from(index).map_err(|_| SeedError::IdentityOverflow)?);
         let endpoint = PhysicalEndpointId::PrimaryInput(port);
@@ -2191,7 +2395,10 @@ fn route_all(
                 .map(|target| {
                     let target_level = route_target_level(&target, analysis, output_level);
                     TargetObligation {
-                        promoted: target_is_promoted(repairs, source, target.endpoint()),
+                        promoted: repairs.contains(&LayoutRepair::EarlyTreeSinkAndEscape {
+                            source,
+                            sink: target.endpoint(),
+                        }),
                         structural_slack_ticks: route_target_slack(source, &target, analysis),
                         forward_distance: target_level.saturating_sub(source_level),
                         key: target.key(),
@@ -2380,6 +2587,18 @@ fn route_all(
                 });
                 let precedence_blocker = source_escape_blocking_route
                     .or(sink_approach_blocking_route)
+                    .or_else(|| {
+                        matches!(failure, RouterFailure::NoLocalRoute { .. })
+                            .then(|| {
+                                nearby_source_blocking_route(
+                                    &attempt_reservations,
+                                    route,
+                                    source.route_anchor,
+                                    source.allowed_exit,
+                                )
+                            })
+                            .flatten()
+                    })
                     .and_then(|blocker| candidate.routes.get(&blocker).map(|tree| tree.source));
                 return Err(SeedError::Routing(seed_routing_failure(
                     route_index,
@@ -2387,6 +2606,7 @@ fn route_all(
                     source_id,
                     source.route_anchor,
                     source.allowed_exit,
+                    plan.frame.forward,
                     precedence_blocker,
                     source_escape_obstructed,
                     &sinks,
@@ -2408,6 +2628,7 @@ fn route_all(
                 source_id,
                 source.route_anchor,
                 source.allowed_exit,
+                plan.frame.forward,
                 None,
                 false,
                 &sinks,
@@ -2512,6 +2733,7 @@ fn seed_routing_failure(
     source: PhysicalEndpointId,
     source_at: Anchor,
     source_exit: Facing,
+    frame_forward: Facing,
     precedence_blocker: Option<PhysicalEndpointId>,
     source_escape_obstructed: bool,
     sinks: &NonEmptyRouteSinks,
@@ -2561,6 +2783,7 @@ fn seed_routing_failure(
         plan_fingerprint: plan_fingerprint.clone(),
         source_at,
         source_exit,
+        frame_forward,
         precedence_blocker,
         source_escape_obstructed,
         sink_at,
@@ -2633,6 +2856,79 @@ fn source_escape_blocking_route(
             }
             if let Some(blocker) = foreign_route_owner(reservation, current) {
                 return Some(blocker);
+            }
+        }
+    }
+    None
+}
+
+fn nearby_source_blocking_route(
+    reservations: &PhysicalReservations,
+    current: RouteId,
+    source_at: Anchor,
+    allowed_exit: Facing,
+) -> Option<RouteId> {
+    let foreign_route_owner =
+        |reservation: &crate::compile::routing::PhysicalReservation| match reservation.owner {
+            PhysicalReservationOwner::Route(route)
+            | PhysicalReservationOwner::RouteStair(route)
+                if route != current =>
+            {
+                Some(route)
+            }
+            _ => None,
+        };
+    let directions = [Facing::West, Facing::East, Facing::North, Facing::South];
+
+    for center in source_escape_corridor(source_at, allowed_exit) {
+        for direction in directions {
+            let sideways = step(center, direction);
+            for dy in [0, 1, -1] {
+                let next = Anchor {
+                    y: sideways.y + dy,
+                    ..sideways
+                };
+                if next == source_at {
+                    continue;
+                }
+                if let Some(blocker) = reservations.get(&next).and_then(foreign_route_owner) {
+                    return Some(blocker);
+                }
+                let below = Anchor {
+                    y: next.y - 1,
+                    ..next
+                };
+                if let Some(blocker) = reservations.get(&below).and_then(|reservation| {
+                    matches!(
+                        reservation.kind,
+                        PhysicalReservationKind::Conductor(_)
+                            | PhysicalReservationKind::MandatoryAir
+                    )
+                    .then(|| foreign_route_owner(reservation))
+                    .flatten()
+                }) {
+                    return Some(blocker);
+                }
+                for keep_out_direction in directions {
+                    let keep_out_side = step(next, keep_out_direction);
+                    for keep_out_dy in [0, 1, -1] {
+                        let at = Anchor {
+                            y: keep_out_side.y + keep_out_dy,
+                            ..keep_out_side
+                        };
+                        if at == source_at {
+                            continue;
+                        }
+                        let Some(reservation) = reservations.get(&at) else {
+                            continue;
+                        };
+                        if matches!(reservation.kind, PhysicalReservationKind::Conductor(_)) {
+                            if let Some(blocker) = foreign_route_owner(reservation) {
+                                return Some(blocker);
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -3006,7 +3302,7 @@ fn reservations_for_components(
 ) -> Result<PhysicalReservations, SeedError> {
     let mut reservations = PhysicalReservations::new();
     let mut ordinal = 0u32;
-    for block in candidate
+    for (block, kind) in candidate
         .placements
         .values()
         .flat_map(|placement| &placement.blocks)
@@ -3016,21 +3312,22 @@ fn reservations_for_components(
                 .values()
                 .flat_map(|boundary| &boundary.blocks),
         )
-        .chain(
-            candidate
-                .junctions
-                .values()
-                .flat_map(|junction| &junction.cells),
-        )
+        .map(|block| (block, PhysicalReservationKind::KeepOut))
+        .chain(candidate.junctions.values().flat_map(|junction| {
+            junction.cells.iter().map(|block| {
+                let kind = if block.at == junction.at {
+                    PhysicalReservationKind::Conductor(block.state.clone())
+                } else {
+                    PhysicalReservationKind::KeepOut
+                };
+                (block, kind)
+            })
+        }))
     {
         if reservations.get(&block.at).is_some() {
             return Err(SeedError::PlacementCollision { at: block.at });
         }
-        reservations.reserve(
-            block.at,
-            PhysicalReservationOwner::KeepOut(ordinal),
-            PhysicalReservationKind::KeepOut,
-        );
+        reservations.reserve(block.at, PhysicalReservationOwner::KeepOut(ordinal), kind);
         ordinal = ordinal.saturating_add(1);
     }
     Ok(reservations)
@@ -3275,7 +3572,7 @@ mod tests {
     };
     use crate::compile::fragment_synth::services::{DurableSeedEmitter, DurableSeedVerifier};
     use crate::compile::metrics::canonical_fingerprint;
-    use crate::compile::routing::{DurablePhysicalRouter, RealisedRouteTree};
+    use crate::compile::routing::{DurablePhysicalRouter, PhysicalReservation, RealisedRouteTree};
     use crate::compile::Gate;
 
     #[test]
@@ -3448,16 +3745,67 @@ mod tests {
     #[test]
     fn schedule_learning_has_a_separate_bounded_budget_from_layout_repairs() {
         let source = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let sink = PhysicalEndpointId::DeclaredOutput(PortId(0));
         let blocker = PhysicalEndpointId::PrimaryInput(PortId(1));
         let precedence = LayoutRepair::RouteBefore { source, blocker };
-        let layout = LayoutRepair::ExclusiveGuardedTrack { source };
-        let mut budget = SeedRepairBudget::new(2, 2);
+        let guard = LayoutRepair::ExclusiveGuardedTrack { source };
+        let promotion = LayoutRepair::EarlyTreeSinkAndEscape { source, sink };
+        let layout = LayoutRepair::SeparateOwners {
+            source_owner: LayoutOwner::Boundary(source),
+            sink_owner: LayoutOwner::Boundary(sink),
+            axis: SeparationAxis::Lateral,
+            ordinal: 0,
+        };
+        let mut budget = SeedRepairBudget::new(2, 2, 10);
 
         assert!(budget.try_charge(&precedence));
-        assert!(budget.try_charge(&precedence));
-        assert!(!budget.try_charge(&precedence));
+        assert!(budget.try_charge(&guard));
+        assert!(!budget.try_charge(&promotion));
         assert!(budget.try_charge(&layout));
         assert!(!budget.try_charge(&layout));
+    }
+
+    #[test]
+    fn total_repair_budget_caps_layout_and_schedule_repairs_combined() {
+        let source = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let sink = PhysicalEndpointId::DeclaredOutput(PortId(0));
+        let blocker = PhysicalEndpointId::PrimaryInput(PortId(1));
+        let precedence = LayoutRepair::RouteBefore { source, blocker };
+        let layout = LayoutRepair::SeparateOwners {
+            source_owner: LayoutOwner::Boundary(source),
+            sink_owner: LayoutOwner::Boundary(sink),
+            axis: SeparationAxis::Lateral,
+            ordinal: 0,
+        };
+        // Both category budgets are generous (10 each), but the global cap of
+        // 3 (matching `max_seed_backtracks`) must still bind first: the
+        // initial attempt already consumes one slot, leaving room for
+        // exactly two more charges regardless of which category they are in.
+        let mut budget = SeedRepairBudget::new(10, 10, 3);
+
+        assert!(budget.try_charge(&precedence));
+        assert!(budget.try_charge(&layout));
+        assert!(!budget.try_charge(&precedence));
+        assert!(!budget.try_charge(&layout));
+    }
+
+    #[test]
+    fn route_schedule_repair_limit_is_capped_by_max_seed_backtracks_not_the_layout_cap() {
+        // Default (huge) `max_seed_backtracks`: the instance-derived 16..128
+        // window is unconstrained, so a large instance count still reaches
+        // the 128 ceiling.
+        assert_eq!(route_schedule_repair_limit(100, 1_000_000), 128);
+        // ...and a tiny instance count still gets the 16-repair floor.
+        assert_eq!(route_schedule_repair_limit(1, 1_000_000), 16);
+        // A generous `max_seed_backtracks` that still exceeds the fixed
+        // layout attempt cap (16) must NOT be truncated down to it: the
+        // schedule window is allowed to exceed 16.
+        assert_eq!(route_schedule_repair_limit(100, 20), 20);
+        assert!(20 > MAX_LAYOUT_REPAIR_ATTEMPTS);
+        // A small `max_seed_backtracks` caps the window directly.
+        assert_eq!(route_schedule_repair_limit(100, 3), 3);
+        // Zero budget is preserved.
+        assert_eq!(route_schedule_repair_limit(0, 0), 0);
     }
 
     #[test]
@@ -3529,15 +3877,17 @@ mod tests {
             pin_name_bindings: BTreeMap::new(),
         };
 
+        let refusal = cross_route_connectivity_refusal(
+            &candidate,
+            first,
+            second,
+            Anchor { x: 53, y: 1, z: 56 },
+            &[],
+            Facing::East,
+        )
+        .unwrap();
         assert_eq!(
-            cross_route_connectivity_refusal(
-                &candidate,
-                first,
-                second,
-                Anchor { x: 53, y: 1, z: 56 },
-                &[],
-            )
-            .unwrap(),
+            refusal,
             SeedRepairRefusal::CrossRouteConnectivity {
                 first,
                 second,
@@ -3545,7 +3895,172 @@ mod tests {
                 second_source,
                 at: Anchor { x: 53, y: 1, z: 56 },
                 guarded_source: second_source,
+                frame_forward: Facing::East,
             }
+        );
+
+        let precedence = LayoutRepair::RouteBefore {
+            source: second_source,
+            blocker: first_source,
+        };
+        assert_eq!(
+            next_layout_repair(&refusal, &BTreeSet::new()).unwrap(),
+            precedence,
+        );
+        assert_eq!(
+            next_layout_repair(&refusal, &BTreeSet::from([precedence])).unwrap(),
+            LayoutRepair::ExclusiveGuardedTrack {
+                source: second_source,
+            },
+        );
+    }
+
+    #[test]
+    fn cross_route_coupling_guards_directly_without_route_precedence() {
+        let source_endpoint = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let foreign_endpoint = PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance: InstanceId(0),
+            node: crate::compile::fragment_synth::identity::TopologyNodeId(0),
+        });
+        let refusal = SeedRepairRefusal::CrossRouteCoupling {
+            source_route: RouteId(0),
+            foreign: RouteId(1),
+            source_endpoint,
+            foreign_endpoint,
+            at: Anchor { x: 12, y: 1, z: 8 },
+            guarded_source: source_endpoint,
+            // segment_a's coupling primary input is automatic (unpinned),
+            // whose default frame happens to be East-forward; this is the
+            // "East" literal case, not a hardcoded world direction.
+            frame_forward: Facing::East,
+        };
+
+        assert_eq!(
+            next_layout_repair(&refusal, &BTreeSet::new()).unwrap(),
+            LayoutRepair::ExclusiveGuardedTrack {
+                source: source_endpoint,
+            },
+        );
+        let source_owner = layout_owner_for_endpoint(source_endpoint);
+        let foreign_owner = layout_owner_for_endpoint(foreign_endpoint);
+        let guard = LayoutRepair::ExclusiveGuardedTrack {
+            source: source_endpoint,
+        };
+        let lateral_separation = next_owner_separation(
+            &BTreeSet::new(),
+            source_owner,
+            foreign_owner,
+            SeparationAxis::Lateral,
+        );
+        assert_eq!(
+            next_layout_repair(&refusal, &BTreeSet::from([guard])).unwrap(),
+            lateral_separation,
+        );
+
+        // A recurring coupling after the lateral push already tried must
+        // escalate to a runway (forward/back) separation along the frame's
+        // own forward direction (East here) instead of minting another,
+        // likely-just-as-futile, lateral ordinal.
+        assert_eq!(
+            next_layout_repair(&refusal, &BTreeSet::from([guard, lateral_separation])).unwrap(),
+            next_owner_separation(
+                &BTreeSet::from([guard, lateral_separation]),
+                source_owner,
+                foreign_owner,
+                SeparationAxis::Runway(RunwayDirection::East),
+            ),
+        );
+    }
+
+    #[test]
+    fn cross_route_coupling_escalates_along_the_frames_forward_direction_not_a_fixed_compass() {
+        // Same fixture as
+        // `cross_route_coupling_guards_directly_without_route_precedence`,
+        // but with a North-forward frame (e.g. a pinned or oriented
+        // layout), to prove the escalation direction is threaded from the
+        // refusal's own `frame_forward` rather than hardcoded to East.
+        let source_endpoint = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let foreign_endpoint = PhysicalEndpointId::PrimitiveOutput(PrimitiveId {
+            instance: InstanceId(0),
+            node: crate::compile::fragment_synth::identity::TopologyNodeId(0),
+        });
+        let refusal = SeedRepairRefusal::CrossRouteCoupling {
+            source_route: RouteId(0),
+            foreign: RouteId(1),
+            source_endpoint,
+            foreign_endpoint,
+            at: Anchor { x: 12, y: 1, z: 8 },
+            guarded_source: source_endpoint,
+            frame_forward: Facing::North,
+        };
+        let source_owner = layout_owner_for_endpoint(source_endpoint);
+        let foreign_owner = layout_owner_for_endpoint(foreign_endpoint);
+        let guard = LayoutRepair::ExclusiveGuardedTrack {
+            source: source_endpoint,
+        };
+        let lateral_separation = next_owner_separation(
+            &BTreeSet::new(),
+            source_owner,
+            foreign_owner,
+            SeparationAxis::Lateral,
+        );
+
+        assert_eq!(
+            next_layout_repair(&refusal, &BTreeSet::from([guard, lateral_separation])).unwrap(),
+            next_owner_separation(
+                &BTreeSet::from([guard, lateral_separation]),
+                source_owner,
+                foreign_owner,
+                SeparationAxis::Runway(RunwayDirection::North),
+            ),
+        );
+    }
+
+    #[test]
+    fn separation_axis_escalates_from_lateral_to_the_frames_actual_forward_runway() {
+        let source_owner = LayoutOwner::Boundary(PhysicalEndpointId::PrimaryInput(PortId(0)));
+        let sink_owner = LayoutOwner::Instance(InstanceId(2));
+        let unrelated_owner = LayoutOwner::Instance(InstanceId(9));
+
+        // No prior attempt for this pair: start with the cheaper lateral
+        // push, regardless of the frame's forward direction.
+        for frame_forward in [Facing::East, Facing::North, Facing::South, Facing::West] {
+            assert_eq!(
+                next_separation_axis(&BTreeSet::new(), source_owner, sink_owner, frame_forward),
+                SeparationAxis::Lateral,
+            );
+        }
+
+        let lateral = LayoutRepair::SeparateOwners {
+            source_owner,
+            sink_owner,
+            axis: SeparationAxis::Lateral,
+            ordinal: 0,
+        };
+        let repairs = BTreeSet::from([lateral]);
+
+        // The lateral push already recurred: escalate to a runway push
+        // along the *frame's own* forward direction. East, North, and
+        // South frames must each escalate along their own axis, not all
+        // collapse onto one hardcoded world direction.
+        assert_eq!(
+            next_separation_axis(&repairs, source_owner, sink_owner, Facing::East),
+            SeparationAxis::Runway(RunwayDirection::East),
+        );
+        assert_eq!(
+            next_separation_axis(&repairs, source_owner, sink_owner, Facing::North),
+            SeparationAxis::Runway(RunwayDirection::North),
+        );
+        assert_eq!(
+            next_separation_axis(&repairs, source_owner, sink_owner, Facing::South),
+            SeparationAxis::Runway(RunwayDirection::South),
+        );
+
+        // A lateral attempt for a *different* owner pair must not affect
+        // this pair's axis choice.
+        assert_eq!(
+            next_separation_axis(&repairs, source_owner, unrelated_owner, Facing::North),
+            SeparationAxis::Lateral,
         );
     }
 
@@ -3580,6 +4095,7 @@ mod tests {
             plan_fingerprint: canonical_fingerprint(b"fanout-repair-policy"),
             source_at: Anchor { x: 31, y: 1, z: 46 },
             source_exit: Facing::East,
+            frame_forward: Facing::North,
             precedence_blocker: Some(blocker),
             source_escape_obstructed: false,
             sink_at: Anchor { x: 36, y: 1, z: 17 },
@@ -3611,25 +4127,54 @@ mod tests {
         };
         unblocked.fanout = 1;
         unblocked.precedence_blocker = None;
+        let lateral = LayoutRepair::SeparateOwners {
+            source_owner: LayoutOwner::Instance(InstanceId(5)),
+            sink_owner: LayoutOwner::Instance(InstanceId(7)),
+            axis: SeparationAxis::Lateral,
+            ordinal: 0,
+        };
         assert_eq!(
-            next_layout_repair(&SeedRepairRefusal::Routing(unblocked), &BTreeSet::new(),).unwrap(),
-            LayoutRepair::SeparateOwners {
-                source_owner: LayoutOwner::Instance(InstanceId(5)),
-                sink_owner: LayoutOwner::Instance(InstanceId(7)),
-                axis: SeparationAxis::Runway(RunwayDirection::East),
-                ordinal: 0,
-            },
+            next_layout_repair(
+                &SeedRepairRefusal::Routing(unblocked.clone()),
+                &BTreeSet::new(),
+            )
+            .unwrap(),
+            lateral,
         );
         assert_eq!(
             next_layout_repair(
-                &refusal,
-                &BTreeSet::from([precedence, preparation, promotion]),
+                &SeedRepairRefusal::Routing(unblocked),
+                &BTreeSet::from([lateral]),
             )
             .unwrap(),
             LayoutRepair::SeparateOwners {
                 source_owner: LayoutOwner::Instance(InstanceId(5)),
                 sink_owner: LayoutOwner::Instance(InstanceId(7)),
-                axis: SeparationAxis::Lateral,
+                axis: SeparationAxis::Runway(RunwayDirection::North),
+                ordinal: 0,
+            },
+        );
+        let prepared = BTreeSet::from([precedence, preparation, promotion]);
+        let blocker_lateral = LayoutRepair::SeparateOwners {
+            source_owner: LayoutOwner::Instance(InstanceId(5)),
+            sink_owner: LayoutOwner::Instance(InstanceId(6)),
+            axis: SeparationAxis::Lateral,
+            ordinal: 0,
+        };
+        assert_eq!(
+            next_layout_repair(&refusal, &prepared).unwrap(),
+            blocker_lateral,
+        );
+        assert_eq!(
+            next_layout_repair(
+                &refusal,
+                &prepared.into_iter().chain([blocker_lateral]).collect(),
+            )
+            .unwrap(),
+            LayoutRepair::SeparateOwners {
+                source_owner: LayoutOwner::Instance(InstanceId(5)),
+                sink_owner: LayoutOwner::Instance(InstanceId(6)),
+                axis: SeparationAxis::Runway(RunwayDirection::North),
                 ordinal: 0,
             },
         );
@@ -3841,6 +4386,7 @@ mod tests {
             source,
             source_at,
             Facing::East,
+            Facing::North,
             None,
             false,
             &sinks,
@@ -3889,6 +4435,119 @@ mod tests {
     }
 
     #[test]
+    fn torch_isolation_reserves_tops_sides_and_underside_but_not_the_front() {
+        // East-facing torch: support at x=25, torch at x=26, exit East.
+        let support = Anchor { x: 25, y: 1, z: 40 };
+        let torch = Anchor { x: 26, y: 1, z: 40 };
+        let front = Anchor { x: 27, y: 1, z: 40 };
+        let owner = PhysicalReservationOwner::KeepOut(7);
+        let air = |at| (at, PhysicalReservationKind::MandatoryAir);
+        let keep_out = |at| (at, PhysicalReservationKind::KeepOut);
+        let expected = |claims: [(Anchor, PhysicalReservationKind); 5]| {
+            let mut reservations = PhysicalReservations::new();
+            for (at, kind) in claims {
+                reservations.reserve(at, owner, kind);
+            }
+            reservations
+        };
+        let mut reservations = PhysicalReservations::new();
+
+        reserve_torch_isolation(
+            &mut reservations,
+            owner,
+            support,
+            torch,
+            Facing::East,
+            &BTreeSet::from([front]),
+        );
+
+        assert_eq!(
+            reservations,
+            expected([
+                air(Anchor { x: 26, y: 2, z: 40 }),
+                air(Anchor { x: 25, y: 2, z: 40 }),
+                air(Anchor { x: 26, y: 1, z: 39 }),
+                air(Anchor { x: 26, y: 1, z: 41 }),
+                keep_out(Anchor { x: 26, y: 0, z: 40 }),
+            ])
+        );
+        assert_eq!(reservations.get(&front), None);
+        assert_eq!(reservations.get(&torch), None);
+        assert_eq!(reservations.get(&support), None);
+        assert_eq!(reservations.get(&Anchor { x: 24, y: 1, z: 40 }), None);
+
+        // A north-facing torch turns the sides onto the x axis.
+        let mut north = PhysicalReservations::new();
+        reserve_torch_isolation(
+            &mut north,
+            owner,
+            Anchor { x: 5, y: 1, z: 9 },
+            Anchor { x: 5, y: 1, z: 8 },
+            Facing::North,
+            &BTreeSet::new(),
+        );
+        assert_eq!(
+            north,
+            expected([
+                air(Anchor { x: 5, y: 2, z: 8 }),
+                air(Anchor { x: 5, y: 2, z: 9 }),
+                air(Anchor { x: 4, y: 1, z: 8 }),
+                air(Anchor { x: 6, y: 1, z: 8 }),
+                keep_out(Anchor { x: 5, y: 0, z: 8 }),
+            ])
+        );
+    }
+
+    #[test]
+    fn torch_isolation_skips_protected_endpoints_and_earlier_claims() {
+        let support = Anchor { x: 25, y: 1, z: 40 };
+        let torch = Anchor { x: 26, y: 1, z: 40 };
+        let owner = PhysicalReservationOwner::KeepOut(7);
+        let side = Anchor { x: 26, y: 1, z: 39 };
+        let above_support = Anchor { x: 25, y: 2, z: 40 };
+
+        // A protected endpoint on a side cell (a neighbouring landing) wins.
+        let mut protected = PhysicalReservations::new();
+        reserve_torch_isolation(
+            &mut protected,
+            owner,
+            support,
+            torch,
+            Facing::East,
+            &BTreeSet::from([side]),
+        );
+        assert_eq!(protected.get(&side), None);
+        assert_eq!(
+            protected.get(&Anchor { x: 26, y: 1, z: 41 }),
+            Some(&PhysicalReservation {
+                owner,
+                kind: PhysicalReservationKind::MandatoryAir,
+            })
+        );
+
+        // An earlier claim is left exactly as it was; the rest is still made.
+        let mut occupied = PhysicalReservations::new();
+        occupied.reserve_conductor(above_support, RouteId(3), compile::dust());
+        let before = occupied.get(&above_support).cloned();
+        reserve_torch_isolation(
+            &mut occupied,
+            owner,
+            support,
+            torch,
+            Facing::East,
+            &BTreeSet::new(),
+        );
+        assert_eq!(occupied.get(&above_support), before.as_ref());
+        assert_eq!(
+            occupied.get(&Anchor { x: 26, y: 2, z: 40 }),
+            Some(&PhysicalReservation {
+                owner,
+                kind: PhysicalReservationKind::MandatoryAir,
+            })
+        );
+    }
+
+    #[test]
     fn route_clearance_blocks_dust_that_could_climb_from_an_adjacent_layer() {
         let conductor = Anchor { x: 28, y: 2, z: 34 };
 
@@ -3898,6 +4557,117 @@ mod tests {
         assert!(clearance.contains(&Anchor { x: 29, y: 2, z: 34 }));
         assert!(clearance.contains(&Anchor { x: 29, y: 3, z: 34 }));
         assert!(!clearance.contains(&Anchor { x: 28, y: 1, z: 34 }));
+    }
+
+    #[test]
+    fn component_reservations_expose_junction_dust_as_a_conductor() {
+        let junction_at = Anchor { x: 28, y: 2, z: 34 };
+        let support_at = Anchor {
+            y: junction_at.y - 1,
+            ..junction_at
+        };
+        let junction = InstanceId(8);
+        let mut candidate = ExpandedPhysicalCandidate::empty(
+            InstanceGraph {
+                instances: Vec::new(),
+                assignments: Vec::new(),
+                primary_inputs: Vec::new(),
+                declared_outputs: Vec::new(),
+            },
+            PortPlacements::default(),
+        );
+        candidate.junctions.insert(
+            junction,
+            RealisedJunction {
+                id: junction,
+                at: junction_at,
+                facing: CellFacing::NORTH,
+                contributors: Vec::new(),
+                cells: vec![
+                    PlacedBlock {
+                        at: support_at,
+                        state: compile::stone(),
+                    },
+                    PlacedBlock {
+                        at: junction_at,
+                        state: compile::dust(),
+                    },
+                ],
+            },
+        );
+
+        let reservations = reservations_for_components(&candidate).unwrap();
+
+        assert!(matches!(
+            reservations.get(&junction_at),
+            Some(PhysicalReservation {
+                kind: PhysicalReservationKind::Conductor(state),
+                ..
+            }) if *state == compile::dust()
+        ));
+        assert!(matches!(
+            reservations.get(&support_at),
+            Some(PhysicalReservation {
+                kind: PhysicalReservationKind::KeepOut,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn pinned_input_reserves_every_caller_cell_face_except_the_handover() {
+        let endpoint = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let pin = crate::compile::planner::PortPin {
+            at: Anchor { x: 40, y: 2, z: 70 },
+            toward: Facing::North,
+        };
+        let handover = pin.handover(PortRole::Input);
+        let net = pin.net_cell(PortRole::Input);
+        let mut candidate = ExpandedPhysicalCandidate::empty(
+            InstanceGraph {
+                instances: Vec::new(),
+                assignments: Vec::new(),
+                primary_inputs: Vec::new(),
+                declared_outputs: Vec::new(),
+            },
+            PortPlacements::default(),
+        );
+        candidate.boundaries.insert(
+            endpoint,
+            BoundaryPlacement {
+                endpoint,
+                delayed: None,
+                blocks: Vec::new(),
+            },
+        );
+        candidate.pin_contracts.insert(endpoint, pin);
+        let sources = BTreeMap::from([(
+            endpoint,
+            SourceGeometry {
+                route_anchor: net,
+                allowed_exit: pin.toward,
+            },
+        )]);
+        let mut reservations = PhysicalReservations::new();
+
+        reserve_route_endpoints(&mut reservations, &candidate, &sources, &BTreeMap::new()).unwrap();
+
+        for direction in [
+            Facing::North,
+            Facing::South,
+            Facing::East,
+            Facing::West,
+            Facing::Up,
+            Facing::Down,
+        ] {
+            let face = step(pin.at, direction);
+            if face != handover {
+                assert!(
+                    reservations.get(&face).is_some(),
+                    "unpinned caller-cell face {face:?} can couple to the driven input"
+                );
+            }
+        }
     }
 
     #[test]
@@ -3959,6 +4729,92 @@ mod tests {
         assert_eq!(
             nearby_sink_blocking_route(&reservations, current, terminal, Facing::West),
             Some(blocker),
+        );
+    }
+
+    #[test]
+    fn no_local_source_finds_foreign_routes_just_beyond_its_escape_corridor() {
+        let current = RouteId(77);
+        let first_blocker = RouteId(54);
+        let second_blocker = RouteId(56);
+        let source_at = Anchor {
+            x: 92,
+            y: 1,
+            z: 158,
+        };
+        let mut reservations = PhysicalReservations::new();
+        reservations.reserve_conductor(
+            Anchor {
+                x: 92,
+                y: 3,
+                z: 157,
+            },
+            first_blocker,
+            compile::dust(),
+        );
+        assert_eq!(
+            source_escape_blocking_route(&reservations, current, source_at, Facing::East),
+            None,
+        );
+        assert_eq!(
+            nearby_source_blocking_route(&reservations, current, source_at, Facing::East),
+            Some(first_blocker),
+        );
+
+        let mut mouth_only = PhysicalReservations::new();
+        mouth_only.reserve_conductor(
+            Anchor {
+                x: 97,
+                y: 2,
+                z: 158,
+            },
+            second_blocker,
+            compile::dust(),
+        );
+        assert_eq!(
+            nearby_source_blocking_route(&mouth_only, current, source_at, Facing::East),
+            Some(second_blocker),
+        );
+
+        assert_eq!(
+            nearby_source_blocking_route(
+                &PhysicalReservations::new(),
+                current,
+                source_at,
+                Facing::East,
+            ),
+            None,
+        );
+
+        let stair_blocker = RouteId(57);
+        let mut stair = PhysicalReservations::new();
+        stair.reserve(
+            Anchor {
+                x: 96,
+                y: 0,
+                z: 158,
+            },
+            PhysicalReservationOwner::RouteStair(stair_blocker),
+            PhysicalReservationKind::MandatoryAir,
+        );
+        assert_eq!(
+            nearby_source_blocking_route(&stair, current, source_at, Facing::East),
+            Some(stair_blocker),
+        );
+
+        let mut own_route = PhysicalReservations::new();
+        own_route.reserve_conductor(
+            Anchor {
+                x: 92,
+                y: 3,
+                z: 157,
+            },
+            current,
+            compile::dust(),
+        );
+        assert_eq!(
+            nearby_source_blocking_route(&own_route, current, source_at, Facing::East),
+            None,
         );
     }
 
@@ -4235,6 +5091,7 @@ mod tests {
             source,
             source_at,
             Facing::East,
+            Facing::North,
             None,
             false,
             &sinks,
@@ -4521,6 +5378,139 @@ mod tests {
             self.calls.set(self.calls.get() + 1);
             DurableSeedVerifier.verify(candidate, emitted)
         }
+    }
+
+    /// Forces the first `forced_failures` real verifications to instead
+    /// report a repairable cross-route connectivity conflict, so the
+    /// `SparseSeedBuilder::build_variant` retry loop can be driven
+    /// deterministically without depending on router/placement internals.
+    #[derive(Default)]
+    struct FlakyVerifier {
+        forced_failures: Cell<u32>,
+        calls: Cell<u32>,
+    }
+
+    impl SeedVerifier for FlakyVerifier {
+        fn verify(
+            &self,
+            candidate: &ExpandedPhysicalCandidate,
+            emitted: &EmittedWorld,
+        ) -> Result<(), ExpandedPhysicalError> {
+            self.calls.set(self.calls.get() + 1);
+            if self.forced_failures.get() > 0 {
+                self.forced_failures.set(self.forced_failures.get() - 1);
+                return Err(ExpandedPhysicalError::CrossRouteConnectivity {
+                    first: RouteId(0),
+                    second: RouteId(1),
+                    at: Anchor { x: 0, y: 1, z: 0 },
+                });
+            }
+            DurableSeedVerifier.verify(candidate, emitted)
+        }
+    }
+
+    #[test]
+    fn build_variant_repairs_a_single_verifier_refusal_and_certifies_on_the_fresh_rebuild() {
+        let netlist = not_netlist();
+        let library = Library::default_library();
+        let config = SearchConfig::checked_defaults();
+        let router = CountingRouter::default();
+        let verifier = FlakyVerifier {
+            forced_failures: Cell::new(1),
+            calls: Cell::new(0),
+        };
+
+        let certified = compile_sparse_seed_with_services(
+            SeedInput {
+                lowered: &netlist,
+                source_provenance: None,
+                pins: None,
+            },
+            SeedServices {
+                library: &library,
+                placer: &TopologyAwareSeedPlacer,
+                router: &router,
+                emitter: &DurableSeedEmitter,
+                verifier: &verifier,
+                certifier: &CompleteCandidateCertifier,
+                search_config: &config,
+            },
+        )
+        .expect("the second, repaired attempt must certify");
+
+        assert_eq!(
+            verifier.calls.get(),
+            2,
+            "one forced refusal, one clean retry"
+        );
+        assert_eq!(router.calls.get(), 4, "both attempts must fully re-route");
+        assert_eq!(
+            certified.candidate().instances.instances.len(),
+            netlist.gates.len()
+        );
+    }
+
+    #[test]
+    fn build_variant_exhausts_deterministically_when_the_verifier_never_recovers() {
+        let netlist = not_netlist();
+        let library = Library::default_library();
+        let mut config = SearchConfig::checked_defaults();
+        config.max_seed_backtracks = 3;
+
+        let run = || {
+            let verifier = FlakyVerifier {
+                forced_failures: Cell::new(u32::MAX),
+                calls: Cell::new(0),
+            };
+            compile_sparse_seed_with_services(
+                SeedInput {
+                    lowered: &netlist,
+                    source_provenance: None,
+                    pins: None,
+                },
+                SeedServices {
+                    library: &library,
+                    placer: &TopologyAwareSeedPlacer,
+                    router: &DurablePhysicalRouter,
+                    emitter: &DurableSeedEmitter,
+                    verifier: &verifier,
+                    certifier: &CompleteCandidateCertifier,
+                    search_config: &config,
+                },
+            )
+            .expect_err("a verifier that never recovers must exhaust the repair budget")
+        };
+
+        let first = run();
+        let second = run();
+
+        let (
+            SeedError::SeedExhausted {
+                attempts_used: first_attempts,
+                final_refusal: first_refusal,
+            },
+            SeedError::SeedExhausted {
+                attempts_used: second_attempts,
+                final_refusal: second_refusal,
+            },
+        ) = (first, second)
+        else {
+            panic!("expected SeedExhausted from an always-failing verifier");
+        };
+        assert_eq!(
+            first_attempts, second_attempts,
+            "attempt count must be deterministic"
+        );
+        assert_eq!(
+            first_refusal, second_refusal,
+            "final refusal must be deterministic"
+        );
+        assert!(
+            first_attempts <= config.max_seed_backtracks,
+            "the global total-attempt cap must bind: combined layout and \
+             schedule repairs cannot exceed max_seed_backtracks"
+        );
+        assert_eq!(first_attempts, 3);
     }
 
     #[derive(Default)]
@@ -5123,10 +6113,15 @@ mod tests {
             "baseline fanout tree must order the named sink second",
         );
 
-        let promoted = schedule_for(&[LayoutRepair::EarlyTreeSinkAndEscape {
-            source: fanout_source,
-            sink: right_landing,
-        }]);
+        let promoted = schedule_for(&[
+            LayoutRepair::ExclusiveGuardedTrack {
+                source: fanout_source,
+            },
+            LayoutRepair::EarlyTreeSinkAndEscape {
+                source: fanout_source,
+                sink: right_landing,
+            },
+        ]);
         assert_eq!(promoted.len(), baseline.len());
         assert_eq!(
             promoted[fanout_index].1,

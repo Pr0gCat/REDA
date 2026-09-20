@@ -644,14 +644,19 @@ fn verify_typed_connectivity(
     candidate: &ExpandedPhysicalCandidate,
     emitted: &EmittedWorld,
 ) -> Result<(), ExpandedPhysicalError> {
-    let parent = typed_route_groups(candidate);
+    let parent = source_route_groups(candidate);
+    let junction_cells = candidate
+        .junctions
+        .values()
+        .map(|junction| Position::new(junction.at.x, junction.at.y, junction.at.z))
+        .collect::<HashSet<_>>();
 
     let world = &emitted.world;
     let mut visited = HashSet::<Position>::new();
     for flat in world.positions_of(BlockKind::RedstoneWire) {
         let (x, y, z) = world.decode(flat);
         let start = Position::new(x, y, z);
-        if !visited.insert(start) {
+        if junction_cells.contains(&start) || !visited.insert(start) {
             continue;
         }
         let mut queue = VecDeque::from([start]);
@@ -668,7 +673,7 @@ fn verify_typed_connectivity(
             }
             for direction in [Facing::North, Facing::South, Facing::East, Facing::West] {
                 for next in dust_connections(world, position, direction).iter() {
-                    if visited.insert(next) {
+                    if !junction_cells.contains(&next) && visited.insert(next) {
                         queue.push_back(next);
                     }
                 }
@@ -1207,21 +1212,13 @@ fn source_observation(
 }
 
 fn typed_route_groups(candidate: &ExpandedPhysicalCandidate) -> BTreeMap<RouteId, RouteId> {
-    let mut parent = candidate
-        .routes
-        .keys()
-        .copied()
-        .map(|route| (route, route))
-        .collect::<BTreeMap<_, _>>();
+    let mut parent = source_route_groups(candidate);
     let mut routes_by_source = BTreeMap::<PhysicalEndpointId, Vec<RouteId>>::new();
     for route in candidate.routes.values() {
         routes_by_source
             .entry(route.source)
             .or_default()
             .push(route.id);
-    }
-    for routes in routes_by_source.values() {
-        union_all(&mut parent, routes);
     }
     for junction in candidate.junctions.values() {
         let mut joined = routes_by_source
@@ -1270,6 +1267,26 @@ fn typed_route_groups(candidate: &ExpandedPhysicalCandidate) -> BTreeMap<RouteId
                 union_all(&mut parent, &routes);
             }
         }
+    }
+    parent
+}
+
+fn source_route_groups(candidate: &ExpandedPhysicalCandidate) -> BTreeMap<RouteId, RouteId> {
+    let mut parent = candidate
+        .routes
+        .keys()
+        .copied()
+        .map(|route| (route, route))
+        .collect::<BTreeMap<_, _>>();
+    let mut routes_by_source = BTreeMap::<PhysicalEndpointId, Vec<RouteId>>::new();
+    for route in candidate.routes.values() {
+        routes_by_source
+            .entry(route.source)
+            .or_default()
+            .push(route.id);
+    }
+    for routes in routes_by_source.values() {
+        union_all(&mut parent, routes);
     }
     parent
 }
@@ -1506,6 +1523,129 @@ mod tests {
                 if [first, second].into_iter().collect::<std::collections::BTreeSet<_>>()
                     == [RouteId(0), RouteId(1)].into_iter().collect()
         ));
+    }
+
+    #[test]
+    fn junction_contributors_may_join_only_at_the_junction_cell() {
+        let first = RouteId(0);
+        let second = RouteId(1);
+        let first_connection = ConnectionId::External {
+            instance: InstanceId(0),
+            input_index: 0,
+        };
+        let second_connection = ConnectionId::External {
+            instance: InstanceId(0),
+            input_index: 1,
+        };
+        let first_sink = RoutedSinkId {
+            route: first,
+            ordinal: 0,
+        };
+        let second_sink = RoutedSinkId {
+            route: second,
+            ordinal: 0,
+        };
+        let mut candidate =
+            candidate_with_path(vec![(Anchor { x: 2, y: 1, z: 2 }, crate::compile::dust())]);
+        candidate.routes.get_mut(&first).unwrap().branches[0].target =
+            RouteTarget::Connection(first_connection);
+        let mut second_tree = candidate.routes[&first].clone();
+        second_tree.id = second;
+        second_tree.source = PhysicalEndpointId::PrimaryInput(PortId(1));
+        second_tree.branches[0].sink = second_sink;
+        second_tree.branches[0].terminal.sink = second_sink;
+        second_tree.branches[0].target = RouteTarget::Connection(second_connection);
+        candidate.routes.insert(second, second_tree);
+        candidate.connections.insert(
+            first_connection,
+            ConnectionBinding {
+                id: first_connection,
+                source: PhysicalEndpointId::PrimaryInput(PortId(0)),
+                landing: PhysicalEndpointId::Landing(first_connection),
+                route: first,
+                sink: first_sink,
+            },
+        );
+        candidate.connections.insert(
+            second_connection,
+            ConnectionBinding {
+                id: second_connection,
+                source: PhysicalEndpointId::PrimaryInput(PortId(1)),
+                landing: PhysicalEndpointId::Landing(second_connection),
+                route: second,
+                sink: second_sink,
+            },
+        );
+        let junction = InstanceId(0);
+        let junction_at = Anchor { x: 5, y: 1, z: 5 };
+        candidate.junctions.insert(
+            junction,
+            RealisedJunction {
+                id: junction,
+                at: junction_at,
+                facing: crate::compile::geometry::CellFacing::NORTH,
+                contributors: vec![
+                    PhysicalEndpointId::Landing(first_connection),
+                    PhysicalEndpointId::Landing(second_connection),
+                ],
+                cells: vec![PlacedBlock {
+                    at: junction_at,
+                    state: crate::compile::dust(),
+                }],
+            },
+        );
+
+        let shortcut = emit_typed(
+            &ShortedRoutes {
+                blocks: vec![
+                    (
+                        Anchor { x: 2, y: 1, z: 2 },
+                        crate::compile::dust(),
+                        PhysicalBlockRole::RouteConductor(first),
+                    ),
+                    (
+                        Anchor { x: 3, y: 1, z: 2 },
+                        crate::compile::dust(),
+                        PhysicalBlockRole::RouteConductor(second),
+                    ),
+                ],
+            },
+            (8, 4, 8),
+        )
+        .unwrap();
+        assert!(matches!(
+            verify_typed_connectivity(&candidate, &shortcut),
+            Err(ExpandedPhysicalError::CrossRouteConnectivity { first: a, second: b, .. })
+                if [a, b]
+                    .into_iter()
+                    .collect::<std::collections::BTreeSet<_>>()
+                    == [first, second].into_iter().collect()
+        ));
+
+        let legitimate = emit_typed(
+            &ShortedRoutes {
+                blocks: vec![
+                    (
+                        Anchor { x: 4, y: 1, z: 5 },
+                        crate::compile::dust(),
+                        PhysicalBlockRole::RouteConductor(first),
+                    ),
+                    (
+                        junction_at,
+                        crate::compile::dust(),
+                        PhysicalBlockRole::Junction(junction),
+                    ),
+                    (
+                        Anchor { x: 6, y: 1, z: 5 },
+                        crate::compile::dust(),
+                        PhysicalBlockRole::RouteConductor(second),
+                    ),
+                ],
+            },
+            (8, 4, 8),
+        )
+        .unwrap();
+        assert_eq!(verify_typed_connectivity(&candidate, &legitimate), Ok(()));
     }
 
     #[test]

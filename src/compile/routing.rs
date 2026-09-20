@@ -3148,6 +3148,63 @@ mod tests {
     }
 
     #[test]
+    fn torch_isolation_blocks_foreign_dust_on_support_top_sides_and_underside_only() {
+        // East-facing torch: support (25,1,40), torch (26,1,40), front /
+        // route anchor (27,1,40).  Mirrors `seed::reserve_torch_isolation`.
+        let torch_owner = PhysicalReservationOwner::KeepOut(7);
+        let mut reservations = PhysicalReservations::new();
+        for cell in [at(26, 2, 40), at(25, 2, 40), at(26, 1, 39), at(26, 1, 41)] {
+            reservations.reserve(cell, torch_owner, PhysicalReservationKind::MandatoryAir);
+        }
+        reservations.reserve(at(26, 0, 40), torch_owner, PhysicalReservationKind::KeepOut);
+
+        let foreign = RouteId(3);
+        let foreign_start = at(10, 1, 40);
+        let foreign_goal = at(40, 1, 40);
+        let foreign_support = at(41, 1, 40);
+        let foreign_free = |cell: Anchor, reservations: &PhysicalReservations| {
+            anchor_is_free_for_typed(
+                foreign,
+                cell,
+                foreign_start,
+                foreign_goal,
+                foreign_support,
+                reservations,
+            )
+        };
+        let blocked = [
+            at(26, 2, 40), // above the torch
+            at(26, 3, 40), // dust standing on the torch's overhead cell
+            at(25, 2, 40), // on top of the support
+            at(25, 3, 40), // dust standing on the support's overhead cell
+            at(26, 1, 39), // torch side
+            at(26, 2, 39), // dust standing on a torch side cell
+            at(26, 1, 41), // torch side
+            at(26, 2, 41), // dust standing on a torch side cell
+            at(26, 0, 40), // below the torch
+        ];
+        for cell in blocked {
+            assert!(foreign_free(cell, &PhysicalReservations::new()), "{cell:?}");
+            assert!(!foreign_free(cell, &reservations), "{cell:?}");
+        }
+        // The front cell and its onward runway stay open to a route that
+        // starts there: the own route's exit is never blocked.
+        let own = RouteId(4);
+        let route_anchor = at(27, 1, 40);
+        let runway = at(28, 1, 40);
+        assert!(anchor_is_free_for_typed(
+            own,
+            runway,
+            route_anchor,
+            foreign_goal,
+            foreign_support,
+            &reservations,
+        ));
+        assert!(foreign_free(route_anchor, &reservations));
+        assert!(foreign_free(at(27, 3, 40), &reservations));
+    }
+
+    #[test]
     fn later_fanout_branch_can_reuse_its_own_stair_clearance() {
         let route = RouteId(9);
         let from = at(0, 1, 0);

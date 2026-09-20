@@ -74,6 +74,11 @@ pub(crate) enum SeedPlacementError {
     UnsupportedRepairs,
     #[error("layout repair cannot separate the same owner {owner:?}")]
     SameRepairOwner { owner: LayoutOwner },
+    #[error("layout repair found no legal separation between {source_owner:?} and {sink_owner:?}")]
+    SeparationExhausted {
+        source_owner: LayoutOwner,
+        sink_owner: LayoutOwner,
+    },
     #[error("physical input terminal is invalid: {0}")]
     PrimitiveTerminal(#[from] PrimitiveTerminalError),
 }
@@ -133,9 +138,6 @@ pub(crate) enum LayoutRepair {
     EarlyTreeSinkAndEscape {
         source: PhysicalEndpointId,
         sink: PhysicalEndpointId,
-    },
-    ReserveSourceEscape {
-        source: PhysicalEndpointId,
     },
     RouteBefore {
         source: PhysicalEndpointId,
@@ -481,10 +483,38 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
         let baseline = plan.clone();
         let frame = derive_frame(request.pins);
         for repair in &repairs {
+            if let LayoutRepair::SeparateOwners {
+                source_owner,
+                sink_owner,
+                axis,
+                ordinal,
+            } = *repair
+            {
+                if source_owner == sink_owner {
+                    return Err(SeedPlacementError::SameRepairOwner {
+                        owner: source_owner,
+                    });
+                }
+                if repairs.iter().any(|candidate| {
+                    matches!(
+                        candidate,
+                        LayoutRepair::SeparateOwners {
+                            source_owner: candidate_source,
+                            sink_owner: candidate_sink,
+                            axis: candidate_axis,
+                            ordinal: candidate_ordinal,
+                        } if *candidate_source == source_owner
+                            && *candidate_sink == sink_owner
+                            && *candidate_axis == axis
+                            && *candidate_ordinal > ordinal
+                    )
+                }) {
+                    continue;
+                }
+            }
             match *repair {
                 LayoutRepair::ExclusiveGuardedTrack { .. } => {}
                 LayoutRepair::EarlyTreeSinkAndEscape { .. } => {}
-                LayoutRepair::ReserveSourceEscape { .. } => {}
                 LayoutRepair::RouteBefore { .. } => {}
                 LayoutRepair::SeparateOwners {
                     source_owner,
@@ -492,11 +522,6 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
                     axis,
                     ordinal,
                 } => {
-                    if source_owner == sink_owner {
-                        return Err(SeedPlacementError::SameRepairOwner {
-                            owner: source_owner,
-                        });
-                    }
                     let direction = match axis {
                         SeparationAxis::Lateral => frame.lateral,
                         SeparationAxis::Runway(direction) => direction.facing(),
@@ -512,15 +537,30 @@ impl SeedPlacer for TopologyAwareSeedPlacer {
                             _ => 1,
                         },
                     };
-                    let _ = separate_owners_legalized(
+                    let before = plan.clone();
+                    if !separate_owners_legalized(
                         &mut plan,
                         source_owner,
                         sink_owner,
                         request,
                         direction,
                         preferred_sign,
-                        i32::from(ordinal).saturating_add(1),
-                    )?;
+                        i32::from(ordinal),
+                    )? {
+                        return Err(SeedPlacementError::SeparationExhausted {
+                            source_owner,
+                            sink_owner,
+                        });
+                    }
+                    // A signal's track is the lateral of its output support
+                    // or net cell, not of the owner's origin, so the track
+                    // follows the owner by the same frame-relative lateral
+                    // delta the legalized move applied.  An owner that did
+                    // not move (the other half of the pair, or a pinned
+                    // boundary) keeps its baseline track untouched.
+                    for owner in [source_owner, sink_owner] {
+                        shift_owner_signal_track(&mut plan, &before, owner, request)?;
+                    }
                 }
             }
         }
@@ -582,6 +622,49 @@ fn owner_anchor(
     }
 }
 
+fn shift_owner_signal_track(
+    plan: &mut SeedPlacementPlan,
+    before: &SeedPlacementPlan,
+    owner: LayoutOwner,
+    request: SeedPlacementRequest<'_>,
+) -> Result<(), SeedPlacementError> {
+    let Some(signal) = logical_signal_for_owner(request.graph, owner) else {
+        return Ok(());
+    };
+    let (Some(previous), Some(current)) = (
+        owner_anchor(before, owner, request.pins),
+        owner_anchor(plan, owner, request.pins),
+    ) else {
+        return Ok(());
+    };
+    let delta = lateral_projection(plan.frame, current)
+        .checked_sub(lateral_projection(plan.frame, previous))
+        .ok_or(SeedPlacementError::CoordinateOverflow)?;
+    if delta == 0 {
+        return Ok(());
+    }
+    if let Some(track) = plan.signal_tracks.get_mut(&signal) {
+        *track = track
+            .checked_add(delta)
+            .ok_or(SeedPlacementError::CoordinateOverflow)?;
+    }
+    Ok(())
+}
+
+fn logical_signal_for_owner(graph: &InstanceGraph, owner: LayoutOwner) -> Option<LogicalSignalId> {
+    match owner {
+        LayoutOwner::Boundary(PhysicalEndpointId::PrimaryInput(port)) => {
+            Some(LogicalSignalId::PrimaryInput(port))
+        }
+        LayoutOwner::Instance(instance) => graph
+            .instances
+            .iter()
+            .find(|candidate| candidate.id == instance)
+            .map(|candidate| LogicalSignalId::GateOutput(candidate.logical_gate)),
+        LayoutOwner::Boundary(_) | LayoutOwner::Primitive(_) | LayoutOwner::Junction(_) => None,
+    }
+}
+
 fn move_owner_legalized(
     plan: &mut SeedPlacementPlan,
     owner: LayoutOwner,
@@ -616,29 +699,45 @@ fn separate_owners_legalized(
     request: SeedPlacementRequest<'_>,
     direction: Facing,
     preferred_sign: i32,
-    first_shell: i32,
+    first_attempt: i32,
 ) -> Result<bool, SeedPlacementError> {
     let shell_count = i32::try_from(request.graph.instances.len())
         .unwrap_or(i32::MAX)
         .saturating_mul(2)
         .max(8);
-    for shell in first_shell..=first_shell.saturating_add(shell_count) {
+    // One ordinal names one alternative pose: both signs for the sink, then
+    // both signs for the source, before advancing to the next shell. Only
+    // the highest ordinal for a pair/axis is replayed above, so these are
+    // alternatives rather than cumulative moves.
+    let candidates = [
+        (sink_owner, preferred_sign),
+        (sink_owner, -preferred_sign),
+        (source_owner, -preferred_sign),
+        (source_owner, preferred_sign),
+    ];
+    let final_attempt = first_attempt
+        .saturating_add(1)
+        .saturating_mul(4)
+        .saturating_add(shell_count.saturating_mul(4));
+    let mut legal = 0;
+    for attempt in 0..=final_attempt {
+        let shell = attempt.div_euclid(4).saturating_add(1);
         let magnitude = TRACK_PITCH.saturating_mul(shell);
-        for (owner, sign) in [
-            (sink_owner, preferred_sign),
-            (sink_owner, -preferred_sign),
-            (source_owner, -preferred_sign),
-            (source_owner, preferred_sign),
-        ] {
-            if move_owner_legalized(
-                plan,
-                owner,
-                request,
-                direction,
-                magnitude.saturating_mul(sign),
-            )? {
+        let candidate = usize::try_from(attempt.rem_euclid(4)).unwrap_or(0);
+        let (owner, sign) = candidates[candidate];
+        let mut trial = plan.clone();
+        if move_owner_legalized(
+            &mut trial,
+            owner,
+            request,
+            direction,
+            magnitude.saturating_mul(sign),
+        )? {
+            if legal == first_attempt {
+                *plan = trial;
                 return Ok(true);
             }
+            legal = legal.saturating_add(1);
         }
     }
     Ok(false)
@@ -1984,10 +2083,11 @@ mod tests {
 
     use super::{
         analyse_instance_dag, choose_instance_facing, choose_instance_facing_with_tracks,
-        colour_intervals, derive_frame, hint_penalty, instance_owner_collides, legalize_laterals,
-        macro_access_envelope, EdgeFacts, LayoutOwner, LayoutRepair, MacroBounds, NetInterval,
-        PlacementFrame, RunwayDirection, SeedPlacementError, SeedPlacementRequest, SeedPlacer,
-        SeparationAxis, TopologyAwareSeedPlacer, TRACK_PITCH,
+        colour_intervals, derive_frame, hint_penalty, instance_owner_collides, lateral_projection,
+        legalize_laterals, logical_signal_for_owner, macro_access_envelope, EdgeFacts, LayoutOwner,
+        LayoutRepair, MacroBounds, NetInterval, PlacementFrame, RunwayDirection,
+        SeedPlacementError, SeedPlacementRequest, SeedPlacer, SeparationAxis,
+        TopologyAwareSeedPlacer, TRACK_PITCH,
     };
 
     fn nor(output: &str, inputs: &[&str]) -> Gate {
@@ -2033,6 +2133,14 @@ mod tests {
             pins: &pins,
         };
         let baseline = TopologyAwareSeedPlacer.plan(request).unwrap();
+        let assert_same_layout = |plan: &super::SeedPlacementPlan| {
+            assert_eq!(plan.frame, baseline.frame);
+            assert_eq!(plan.signal_tracks, baseline.signal_tracks);
+            assert_eq!(plan.instances, baseline.instances);
+            assert_eq!(plan.automatic_inputs, baseline.automatic_inputs);
+            assert_eq!(plan.automatic_outputs, baseline.automatic_outputs);
+            assert_eq!(plan.owner_offsets, baseline.owner_offsets);
+        };
         assert_eq!(
             baseline,
             TopologyAwareSeedPlacer
@@ -2048,8 +2156,7 @@ mod tests {
                 }],
             )
             .unwrap();
-        assert_eq!(exclusive.instances, baseline.instances);
-        assert_eq!(exclusive.owner_offsets, baseline.owner_offsets);
+        assert_same_layout(&exclusive);
         assert_ne!(exclusive.fingerprint, baseline.fingerprint);
 
         let early = TopologyAwareSeedPlacer
@@ -2061,10 +2168,22 @@ mod tests {
                 }],
             )
             .unwrap();
-        assert_eq!(early.instances, baseline.instances);
-        assert_eq!(early.owner_offsets, baseline.owner_offsets);
+        assert_same_layout(&early);
         assert_ne!(early.fingerprint, baseline.fingerprint);
         assert_ne!(early.fingerprint, exclusive.fingerprint);
+
+        let precedence = TopologyAwareSeedPlacer
+            .plan_with_repairs(
+                request,
+                &[LayoutRepair::RouteBefore {
+                    source: primitive_source(0),
+                    blocker: primitive_source(1),
+                }],
+            )
+            .unwrap();
+        assert_same_layout(&precedence);
+        assert_ne!(precedence.fingerprint, baseline.fingerprint);
+        assert_ne!(precedence.fingerprint, exclusive.fingerprint);
 
         let separated = TopologyAwareSeedPlacer
             .plan_with_repairs(
@@ -2114,6 +2233,149 @@ mod tests {
     }
 
     #[test]
+    fn separate_owners_repair_shifts_the_moved_owner_track_by_its_lateral_delta() {
+        let graph = two_stage_graph();
+        let analysis = analyse_instance_dag(&graph).unwrap();
+        let pins = BTreeMap::new();
+        let request = SeedPlacementRequest {
+            graph: &graph,
+            analysis: &analysis,
+            pins: &pins,
+        };
+        let baseline = TopologyAwareSeedPlacer.plan(request).unwrap();
+        let source_owner = LayoutOwner::Instance(InstanceId(0));
+        let sink_owner = LayoutOwner::Instance(InstanceId(1));
+        let repair = LayoutRepair::SeparateOwners {
+            source_owner,
+            sink_owner,
+            axis: SeparationAxis::Lateral,
+            ordinal: 0,
+        };
+
+        let repaired = TopologyAwareSeedPlacer
+            .plan_with_repairs(request, &[repair])
+            .unwrap();
+
+        let frame = baseline.frame;
+        let lateral_of = |plan: &super::SeedPlacementPlan, instance: u32| {
+            lateral_projection(
+                frame,
+                plan.instances[&InstanceId(instance)].preferred_origin,
+            )
+        };
+        let source_delta = lateral_of(&repaired, 0) - lateral_of(&baseline, 0);
+        let sink_delta = lateral_of(&repaired, 1) - lateral_of(&baseline, 1);
+        // The source stays put and the sink is pushed exactly one track
+        // pitch away from it; see
+        // `canonical_layout_repairs_move_exact_owners_and_bind_the_fingerprint`.
+        assert_eq!(source_delta, 0);
+        assert_eq!(sink_delta.abs(), TRACK_PITCH);
+
+        let source_signal = logical_signal_for_owner(&graph, source_owner).unwrap();
+        let sink_signal = logical_signal_for_owner(&graph, sink_owner).unwrap();
+        assert_eq!(
+            repaired.signal_tracks[&source_signal], baseline.signal_tracks[&source_signal],
+            "an unmoved owner keeps its baseline track"
+        );
+        assert_eq!(
+            repaired.signal_tracks[&sink_signal],
+            baseline.signal_tracks[&sink_signal] + sink_delta,
+            "a moved owner's track shifts by exactly its lateral delta"
+        );
+        let untouched = baseline
+            .signal_tracks
+            .iter()
+            .filter(|(signal, _)| **signal != source_signal && **signal != sink_signal)
+            .collect::<Vec<_>>();
+        assert!(!untouched.is_empty());
+        for (signal, track) in untouched {
+            assert_eq!(repaired.signal_tracks[signal], *track);
+        }
+    }
+
+    #[test]
+    fn separate_owners_repair_in_a_pinned_frame_shifts_tracks_frame_relatively() {
+        // A pinned input puts the frame origin far from the world origin and
+        // rotates the lateral axis.  Overwriting a track with the owner's
+        // absolute world lateral would bake the origin offset (and lose the
+        // output-support offset) into the track; a pinned boundary's track
+        // must not move at all because the pin itself cannot.
+        let graph = two_stage_graph();
+        let analysis = analyse_instance_dag(&graph).unwrap();
+        let pinned = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let pins = BTreeMap::from([(
+            pinned,
+            pin(
+                Anchor {
+                    x: 40,
+                    y: 1,
+                    z: -75,
+                },
+                Facing::South,
+            ),
+        )]);
+        let request = SeedPlacementRequest {
+            graph: &graph,
+            analysis: &analysis,
+            pins: &pins,
+        };
+        let baseline = TopologyAwareSeedPlacer.plan(request).unwrap();
+        let frame = baseline.frame;
+        assert_eq!(frame.forward, Facing::South);
+        assert_ne!(
+            lateral_projection(frame, Anchor { x: 0, y: 0, z: 0 }),
+            0,
+            "sanity: the frame origin must have a non-zero lateral so an absolute-world overwrite is observable"
+        );
+
+        let source_owner = LayoutOwner::Boundary(pinned);
+        let sink_owner = LayoutOwner::Instance(InstanceId(0));
+        let repair = LayoutRepair::SeparateOwners {
+            source_owner,
+            sink_owner,
+            axis: SeparationAxis::Lateral,
+            ordinal: 0,
+        };
+        let repaired = TopologyAwareSeedPlacer
+            .plan_with_repairs(request, &[repair])
+            .unwrap();
+
+        let sink_delta =
+            lateral_projection(frame, repaired.instances[&InstanceId(0)].preferred_origin)
+                - lateral_projection(frame, baseline.instances[&InstanceId(0)].preferred_origin);
+        assert_ne!(
+            sink_delta, 0,
+            "sanity: the instance must be the owner that moved"
+        );
+        assert_eq!(
+            repaired.instances[&InstanceId(1)],
+            baseline.instances[&InstanceId(1)]
+        );
+
+        let pinned_signal = logical_signal_for_owner(&graph, source_owner).unwrap();
+        let sink_signal = logical_signal_for_owner(&graph, sink_owner).unwrap();
+        assert_eq!(
+            repaired.signal_tracks[&pinned_signal],
+            baseline.signal_tracks[&pinned_signal]
+        );
+        assert_eq!(
+            repaired.signal_tracks[&pinned_signal],
+            lateral_projection(frame, pins[&pinned].net_cell(PortRole::Input)),
+            "a pinned input's track stays on its net cell, not its pin cell"
+        );
+        assert_eq!(
+            repaired.signal_tracks[&sink_signal],
+            baseline.signal_tracks[&sink_signal] + sink_delta
+        );
+        let untouched_signal =
+            logical_signal_for_owner(&graph, LayoutOwner::Instance(InstanceId(1))).unwrap();
+        assert_eq!(
+            repaired.signal_tracks[&untouched_signal],
+            baseline.signal_tracks[&untouched_signal]
+        );
+    }
+
+    #[test]
     fn repair_order_is_canonical_and_same_owner_separation_is_named() {
         let graph = two_stage_graph();
         let analysis = analyse_instance_dag(&graph).unwrap();
@@ -2153,6 +2415,136 @@ mod tests {
             Err(SeedPlacementError::SameRepairOwner {
                 owner: LayoutOwner::Instance(InstanceId(0))
             })
+        );
+    }
+
+    #[test]
+    fn separation_ordinals_explore_both_owners_and_signs_before_the_next_shell() {
+        let graph = two_stage_graph();
+        let analysis = analyse_instance_dag(&graph).unwrap();
+        let pins = BTreeMap::new();
+        let request = SeedPlacementRequest {
+            graph: &graph,
+            analysis: &analysis,
+            pins: &pins,
+        };
+        let baseline = TopologyAwareSeedPlacer.plan(request).unwrap();
+        let plan_for = |ordinals: &[u16]| {
+            let repairs = ordinals
+                .iter()
+                .map(|&ordinal| LayoutRepair::SeparateOwners {
+                    source_owner: LayoutOwner::Instance(InstanceId(0)),
+                    sink_owner: LayoutOwner::Instance(InstanceId(1)),
+                    axis: SeparationAxis::Lateral,
+                    ordinal,
+                })
+                .collect::<Vec<_>>();
+            TopologyAwareSeedPlacer
+                .plan_with_repairs(request, &repairs)
+                .unwrap()
+        };
+        let delta = |plan: &super::SeedPlacementPlan, instance| {
+            plan.instances[&instance].preferred_origin.z
+                - baseline.instances[&instance].preferred_origin.z
+        };
+        let poses = (0..=4)
+            .map(|ordinal| plan_for(&[ordinal]))
+            .collect::<Vec<_>>();
+        let first_sink_delta = delta(&poses[0], InstanceId(1));
+
+        assert_eq!(first_sink_delta.abs(), TRACK_PITCH);
+        assert_eq!(delta(&poses[0], InstanceId(0)), 0);
+        assert_eq!(delta(&poses[1], InstanceId(1)), -first_sink_delta);
+        assert_eq!(delta(&poses[1], InstanceId(0)), 0);
+        assert_eq!(delta(&poses[2], InstanceId(1)), 0);
+        assert_eq!(delta(&poses[2], InstanceId(0)), -first_sink_delta);
+        assert_eq!(delta(&poses[3], InstanceId(1)), 0);
+        assert_eq!(delta(&poses[3], InstanceId(0)), first_sink_delta);
+        assert_eq!(delta(&poses[4], InstanceId(1)), 2 * first_sink_delta);
+        assert_eq!(delta(&poses[4], InstanceId(0)), 0);
+
+        let history = plan_for(&[0, 1, 2]);
+        assert_eq!(history.instances, poses[2].instances);
+        assert_eq!(history.signal_tracks, poses[2].signal_tracks);
+        assert_ne!(
+            history.fingerprint, poses[2].fingerprint,
+            "repair history remains distinct evidence even when its latest alternative determines geometry"
+        );
+    }
+
+    #[test]
+    fn separation_ordinals_skip_illegal_poses_without_repeating_geometry() {
+        let graph = two_stage_graph();
+        let analysis = analyse_instance_dag(&graph).unwrap();
+        let pinned = PhysicalEndpointId::PrimaryInput(PortId(0));
+        let pins = BTreeMap::from([(pinned, pin(Anchor { x: 0, y: 1, z: 0 }, Facing::North))]);
+        let request = SeedPlacementRequest {
+            graph: &graph,
+            analysis: &analysis,
+            pins: &pins,
+        };
+        let plan_for = |ordinal| {
+            TopologyAwareSeedPlacer
+                .plan_with_repairs(
+                    request,
+                    &[LayoutRepair::SeparateOwners {
+                        source_owner: LayoutOwner::Instance(InstanceId(0)),
+                        sink_owner: LayoutOwner::Boundary(pinned),
+                        axis: SeparationAxis::Lateral,
+                        ordinal,
+                    }],
+                )
+                .unwrap()
+        };
+
+        assert_ne!(plan_for(0).instances, plan_for(1).instances);
+    }
+
+    #[test]
+    fn separate_owners_between_two_pinned_boundaries_fails_immediately_and_deterministically() {
+        let netlist = Netlist {
+            inputs: vec!["a".into(), "b".into()],
+            outputs: vec!["y".into()],
+            gates: vec![nor("y", &["a", "b"])],
+        };
+        let graph = InstanceGraph::one_to_one(&netlist, &Library::default_library()).unwrap();
+        let analysis = analyse_instance_dag(&graph).unwrap();
+        let pins = BTreeMap::from([
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(0)),
+                pin(Anchor { x: 0, y: 1, z: 0 }, Facing::North),
+            ),
+            (
+                PhysicalEndpointId::PrimaryInput(PortId(1)),
+                pin(Anchor { x: 2, y: 1, z: 0 }, Facing::North),
+            ),
+        ]);
+        let request = SeedPlacementRequest {
+            graph: &graph,
+            analysis: &analysis,
+            pins: &pins,
+        };
+        let source_owner = LayoutOwner::Boundary(PhysicalEndpointId::PrimaryInput(PortId(0)));
+        let sink_owner = LayoutOwner::Boundary(PhysicalEndpointId::PrimaryInput(PortId(1)));
+        let repair = LayoutRepair::SeparateOwners {
+            source_owner,
+            sink_owner,
+            axis: SeparationAxis::Lateral,
+            ordinal: 0,
+        };
+
+        let expected = Err(SeedPlacementError::SeparationExhausted {
+            source_owner,
+            sink_owner,
+        });
+        assert_eq!(
+            TopologyAwareSeedPlacer.plan_with_repairs(request, &[repair]),
+            expected
+        );
+        assert_eq!(
+            TopologyAwareSeedPlacer.plan_with_repairs(request, &[repair]),
+            expected,
+            "a fixed pin pair can never be separated, so the failure must be deterministic"
         );
     }
 
